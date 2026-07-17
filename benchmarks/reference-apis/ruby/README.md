@@ -2,6 +2,12 @@
 
 Ruby Rack application served by Puma.
 
+Implements the frozen contract in `benchmarks/shared/API-SPEC.md` (family C):
+all `/health`, `/download/{size}`, `/upload`, and `/api/*` endpoints. The
+shared dataset (`bench-data.json`, spec §2) is **required** — startup fails
+if it cannot be loaded. Worker policy (spec §3): `BENCH_WORKERS` maps to puma
+cluster workers (default = logical CPU count), 5:5 threads per worker.
+
 ## Why Puma (direct Rack, no Rails/Sinatra)?
 
 Puma is the most widely deployed Ruby application server in production. It is the

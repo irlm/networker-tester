@@ -2,6 +2,14 @@
 
 AletheBench reference HTTP server implemented in C++ using Boost.Beast and Boost.Asio with OpenSSL.
 
+Implements the frozen contract in `benchmarks/shared/API-SPEC.md` (family C):
+all `/health`, `/download/{size}`, `/upload`, and `/api/*` endpoints. The
+shared dataset (`bench-data.json`, spec §2) is **required** — startup fails
+if it cannot be loaded. Worker policy (spec §3): `BENCH_WORKERS` maps to the
+asio `io_context` thread-pool size (default = logical CPU count).
+`/api/delayed` uses an asio `steady_timer`, not `sleep_for`, so it never
+blocks a pool thread.
+
 ## Why Boost.Beast?
 
 Boost.Beast is the standard C++ HTTP library built on Boost.Asio, the de facto
@@ -22,7 +30,7 @@ The server is compiled with `-O3` (Release mode) for maximum throughput.
 |--------|-------------------|--------------------------------------------|
 | GET    | `/health`         | `{"status":"ok","runtime":"cpp","version":"<__cplusplus>"}` |
 | GET    | `/download/{size}`| Stream `size` bytes (0x42) in 8 KiB chunks |
-| POST   | `/upload`         | Read body, return `{"bytes_received": N}`  |
+| POST   | `/upload`         | Drain body, return `{"received_bytes": N}` |
 
 ## Building
 
@@ -30,7 +38,7 @@ The server is compiled with `-O3` (Release mode) for maximum throughput.
 
 ```bash
 # Install dependencies (Ubuntu/Debian)
-sudo apt-get install build-essential cmake libboost-system-dev libboost-dev libssl-dev
+sudo apt-get install build-essential cmake libboost-system-dev libboost-dev libssl-dev zlib1g-dev
 
 # Build
 bash build.sh

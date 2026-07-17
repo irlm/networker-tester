@@ -2,6 +2,13 @@
 
 AletheBench Python reference API using uvicorn + starlette.
 
+Implements the frozen contract in `benchmarks/shared/API-SPEC.md` (family C):
+all `/health`, `/download/{size}`, `/upload`, and `/api/*` endpoints. The
+shared dataset (`bench-data.json`, spec §2) is **required** — startup fails
+if it cannot be loaded. Worker policy (spec §3): `BENCH_WORKERS` maps to
+uvicorn `--workers` (default = logical CPU count). uvicorn has no HTTP/3, so
+the server does not advertise Alt-Svc.
+
 ## Why uvicorn + starlette?
 
 A pure-stdlib Python HTTP server (e.g. `http.server`) is single-threaded,

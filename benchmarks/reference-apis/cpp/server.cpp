@@ -1,26 +1,34 @@
 // server.cpp — C++ Boost.Beast + Boost.Asio SSL reference API for AletheBench.
 //
-// Endpoints:
-//   GET  /health               → {"status":"ok","runtime":"cpp","version":"<__cplusplus>"}
-//   GET  /download/{size}      → stream `size` bytes of 0x42 in 8192-byte chunks
-//   POST /upload               → consume body, return {"bytes_received": N}
-//   GET  /api/users            → paginated sorted user list
-//   POST /api/transform        → SHA-256 hash strings, reverse values
-//   GET  /api/aggregate        → stats over 10k generated points
-//   GET  /api/search           → regex search over 1k generated strings
-//   POST /api/upload/process   → CRC32 + SHA-256 + zlib compress body
-//   GET  /api/delayed          → sleep with optional light work
-//   GET  /api/validate         → checksums for verification
+// Conforms to benchmarks/shared/API-SPEC.md (frozen contract v1, family C).
 //
-// Listens on port 8443 (or BENCH_PORT) with TLS.
+// Endpoints:
+//   GET  /health               → byte-constant {"status":"ok","runtime":"cpp","version":...}
+//   GET  /download/{size}      → exactly `size` bytes of 0x42 in 8192-byte chunks
+//   POST /upload               → incremental drain, {"received_bytes":N}
+//   GET  /api/users            → bare array: sorted 100-user window, first 20
+//   POST /api/transform        → {"seed","hashed_fields","reversed_values"}
+//   GET  /api/aggregate        → quintile stats over the 10k shared timeseries
+//   GET  /api/search           → positional regex search over the shared corpus
+//   POST /api/upload/process   → CRC32 + SHA-256 + zlib(RFC 1950, level 6)
+//   GET  /api/delayed          → asio steady_timer delay, ms clamped [1,100]
+//   GET  /api/validate         → {"seed","checksums":<dataset expected_checksums>}
+//
+// Worker policy (spec §3): io_context pool threads = BENCH_WORKERS
+// (default = logical CPU count). Listens on BENCH_PORT (default 8443) TLS.
+// Dataset load failure is FATAL (spec §2) — there is no PRNG fallback.
 
 #include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
 #include <boost/beast.hpp>
 #include <boost/beast/ssl.hpp>
 #include <algorithm>
+#include <array>
+#include <cctype>
+#include <charconv>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -28,8 +36,7 @@
 #include <iostream>
 #include <map>
 #include <memory>
-#include <numeric>
-#include <random>
+#include <optional>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -67,44 +74,24 @@ static void init_log_level() {
     }
 }
 
-// ── Shared data ────────────────────────────────────────────────────────────
+[[noreturn]] static void bench_fatal(const std::string& msg) {
+    std::cerr << "FATAL: " << msg << std::endl;
+    std::exit(1);
+}
 
-static const char* FIRST_NAMES[] = {
-    "Alice", "Bob", "Carol", "Dave", "Eve", "Frank", "Grace", "Heidi",
-    "Ivan", "Judy", "Karl", "Laura", "Mallory", "Nina", "Oscar", "Peggy",
-    "Quentin", "Ruth", "Steve", "Trent", "Ursula", "Victor", "Wendy",
-    "Xander", "Yvonne", "Zack",
-};
-static const int NUM_FIRST = 26;
+// ── Constants (spec §5.2) ───────────────────────────────────────────────────
 
-static const char* LAST_NAMES[] = {
-    "Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller",
-    "Davis", "Rodriguez", "Martinez", "Hernandez", "Lopez", "Gonzalez",
-    "Wilson", "Anderson", "Thomas", "Taylor", "Moore", "Jackson", "Martin",
-};
-static const int NUM_LAST = 20;
-
-static const char* DEPARTMENTS[] = {
-    "Engineering", "Marketing", "Sales", "Finance", "HR",
-    "Operations", "Legal", "Support", "Design", "Product",
-};
-static const int NUM_DEPT = 10;
-
-static const char* SEARCH_WORDS[] = {
-    "network", "latency", "throughput", "bandwidth", "packet",
-    "routing", "firewall", "proxy", "endpoint", "server",
-    "client", "protocol", "socket", "buffer", "stream",
-    "timeout", "retry", "cache", "queue", "load",
-};
-static const int NUM_WORDS = 20;
-
-static const char* CATEGORIES[] = {"alpha", "beta", "gamma", "delta", "epsilon"};
-static const int NUM_CATS = 5;
+static constexpr std::size_t   DOWNLOAD_CHUNK = 8192;        // pinned chunk size
+static constexpr std::uint64_t DOWNLOAD_CAP   = 2147483648ULL; // 2 GiB cap
+static constexpr char          DOWNLOAD_FILL  = 0x42;        // pinned fill byte
 
 // Bearer token authentication
 static std::string bench_api_token;
 
-// ── Shared benchmark dataset (loaded once at startup) ──────────────────────
+// /health body — byte-constant, precomputed at startup (spec §5.1).
+static std::string g_health_body;
+
+// ── Shared benchmark dataset (spec §2, loaded once, failure = fatal) ───────
 
 struct BenchUser {
     int id;
@@ -112,30 +99,14 @@ struct BenchUser {
     std::string email;
     double score;
     std::string created_at;
-
-    std::string to_json() const {
-        std::ostringstream ss;
-        ss << "{\"id\":" << id
-           << ",\"name\":\"" << name << "\""
-           << ",\"email\":\"" << email << "\""
-           << ",\"score\":" << std::fixed << std::setprecision(2) << score
-           << ",\"created_at\":\"" << created_at << "\"}";
-        return ss.str();
-    }
 };
 
-struct BenchTimeseriesPoint {
-    double value;
-    std::string category;
-};
-
-static bool bench_data_loaded = false;
 static std::vector<BenchUser> bench_users;
 static std::vector<std::string> bench_search_corpus;
-static std::vector<BenchTimeseriesPoint> bench_timeseries;
+static std::vector<double> bench_ts_values; // dataset order (spec §5.6)
 static std::map<std::string, std::string> bench_checksums;
 
-// Minimal JSON helpers for parsing bench-data.json
+// Minimal JSON helpers for the fixed bench-data.json schema.
 static std::string extract_json_string(const std::string& obj, const std::string& key) {
     std::string search = "\"" + key + "\"";
     auto pos = obj.find(search);
@@ -158,7 +129,10 @@ static double extract_json_double(const std::string& obj, const std::string& key
     ++pos;
     while (pos < obj.size() && (obj[pos] == ' ' || obj[pos] == '\t')) ++pos;
     auto end = pos;
-    while (end < obj.size() && (std::isdigit(obj[end]) || obj[end] == '.' || obj[end] == '-' || obj[end] == 'e' || obj[end] == 'E' || obj[end] == '+')) ++end;
+    while (end < obj.size() &&
+           (std::isdigit(static_cast<unsigned char>(obj[end])) || obj[end] == '.' ||
+            obj[end] == '-' || obj[end] == 'e' || obj[end] == 'E' || obj[end] == '+'))
+        ++end;
     try { return std::stod(obj.substr(pos, end - pos)); } catch (...) { return 0.0; }
 }
 
@@ -171,7 +145,9 @@ static int extract_json_int(const std::string& obj, const std::string& key) {
     ++pos;
     while (pos < obj.size() && (obj[pos] == ' ' || obj[pos] == '\t')) ++pos;
     auto end = pos;
-    while (end < obj.size() && (std::isdigit(obj[end]) || obj[end] == '-')) ++end;
+    while (end < obj.size() &&
+           (std::isdigit(static_cast<unsigned char>(obj[end])) || obj[end] == '-'))
+        ++end;
     try { return std::stoi(obj.substr(pos, end - pos)); } catch (...) { return 0; }
 }
 
@@ -190,150 +166,168 @@ static size_t find_matching_bracket(const std::string& s, size_t open_pos, char 
     return std::string::npos;
 }
 
+// Count top-level objects inside the array at `key` (schema verification).
+static size_t count_array_objects(const std::string& content, const std::string& key) {
+    auto k = content.find("\"" + key + "\"");
+    if (k == std::string::npos) return 0;
+    auto arr_start = content.find('[', k);
+    auto arr_end = find_matching_bracket(content, arr_start, '[', ']');
+    if (arr_start == std::string::npos || arr_end == std::string::npos) return 0;
+    size_t count = 0, pos = arr_start + 1;
+    while (pos < arr_end) {
+        auto obj_start = content.find('{', pos);
+        if (obj_start == std::string::npos || obj_start > arr_end) break;
+        auto obj_end = find_matching_bracket(content, obj_start, '{', '}');
+        if (obj_end == std::string::npos) break;
+        ++count;
+        pos = obj_end + 1;
+    }
+    return count;
+}
+
+static void parse_dataset(const std::string& content, const std::string& source) {
+    // users
+    auto users_key = content.find("\"users\"");
+    if (users_key != std::string::npos) {
+        auto arr_start = content.find('[', users_key);
+        auto arr_end = find_matching_bracket(content, arr_start, '[', ']');
+        if (arr_start != std::string::npos && arr_end != std::string::npos) {
+            std::string arr = content.substr(arr_start + 1, arr_end - arr_start - 1);
+            size_t pos = 0;
+            while (pos < arr.size()) {
+                auto obj_start = arr.find('{', pos);
+                if (obj_start == std::string::npos) break;
+                auto obj_end = find_matching_bracket(arr, obj_start, '{', '}');
+                if (obj_end == std::string::npos) break;
+                std::string obj = arr.substr(obj_start + 1, obj_end - obj_start - 1);
+                BenchUser u;
+                u.id = extract_json_int(obj, "id");
+                u.name = extract_json_string(obj, "name");
+                u.email = extract_json_string(obj, "email");
+                u.score = extract_json_double(obj, "score");
+                u.created_at = extract_json_string(obj, "created_at");
+                bench_users.push_back(std::move(u));
+                pos = obj_end + 1;
+            }
+        }
+    }
+
+    // search_corpus (array of strings)
+    auto search_key = content.find("\"search_corpus\"");
+    if (search_key != std::string::npos) {
+        auto arr_start = content.find('[', search_key);
+        auto arr_end = find_matching_bracket(content, arr_start, '[', ']');
+        if (arr_start != std::string::npos && arr_end != std::string::npos) {
+            std::string arr = content.substr(arr_start + 1, arr_end - arr_start - 1);
+            size_t pos = 0;
+            while (pos < arr.size()) {
+                auto q_start = arr.find('"', pos);
+                if (q_start == std::string::npos) break;
+                auto q_end = q_start + 1;
+                while (q_end < arr.size() && !(arr[q_end] == '"' && arr[q_end - 1] != '\\')) ++q_end;
+                bench_search_corpus.push_back(arr.substr(q_start + 1, q_end - q_start - 1));
+                pos = q_end + 1;
+            }
+        }
+    }
+
+    // timeseries — only the `value` field is used (spec §5.6), dataset order.
+    auto ts_key = content.find("\"timeseries\"");
+    if (ts_key != std::string::npos) {
+        auto arr_start = content.find('[', ts_key);
+        auto arr_end = find_matching_bracket(content, arr_start, '[', ']');
+        if (arr_start != std::string::npos && arr_end != std::string::npos) {
+            std::string arr = content.substr(arr_start + 1, arr_end - arr_start - 1);
+            size_t pos = 0;
+            while (pos < arr.size()) {
+                auto obj_start = arr.find('{', pos);
+                if (obj_start == std::string::npos) break;
+                auto obj_end = find_matching_bracket(arr, obj_start, '{', '}');
+                if (obj_end == std::string::npos) break;
+                std::string obj = arr.substr(obj_start + 1, obj_end - obj_start - 1);
+                bench_ts_values.push_back(extract_json_double(obj, "value"));
+                pos = obj_end + 1;
+            }
+        }
+    }
+
+    // expected_checksums
+    auto cs_key = content.find("\"expected_checksums\"");
+    if (cs_key != std::string::npos) {
+        auto obj_start = content.find('{', cs_key);
+        auto obj_end = find_matching_bracket(content, obj_start, '{', '}');
+        if (obj_start != std::string::npos && obj_end != std::string::npos) {
+            std::string obj = content.substr(obj_start + 1, obj_end - obj_start - 1);
+            size_t pos = 0;
+            while (pos < obj.size()) {
+                auto k_start = obj.find('"', pos);
+                if (k_start == std::string::npos) break;
+                auto k_end = obj.find('"', k_start + 1);
+                if (k_end == std::string::npos) break;
+                std::string key = obj.substr(k_start + 1, k_end - k_start - 1);
+                auto colon = obj.find(':', k_end + 1);
+                if (colon == std::string::npos) break;
+                auto v_start = obj.find('"', colon + 1);
+                if (v_start == std::string::npos) break;
+                auto v_end = obj.find('"', v_start + 1);
+                if (v_end == std::string::npos) break;
+                bench_checksums[key] = obj.substr(v_start + 1, v_end - v_start - 1);
+                pos = v_end + 1;
+            }
+        }
+    }
+
+    // Verify the §2 schema counts — exit non-zero on mismatch.
+    if (extract_json_int(content, "_version") != 2)
+        bench_fatal("bench-data.json at " + source + ": _version != 2");
+    if (bench_users.size() != 100)
+        bench_fatal("bench-data.json at " + source + ": users != 100 (got " +
+                    std::to_string(bench_users.size()) + ")");
+    if (bench_search_corpus.size() != 1000)
+        bench_fatal("bench-data.json at " + source + ": search_corpus != 1000 (got " +
+                    std::to_string(bench_search_corpus.size()) + ")");
+    if (bench_ts_values.size() != 10000)
+        bench_fatal("bench-data.json at " + source + ": timeseries != 10000 (got " +
+                    std::to_string(bench_ts_values.size()) + ")");
+    if (count_array_objects(content, "transform_inputs") != 10)
+        bench_fatal("bench-data.json at " + source + ": transform_inputs != 10");
+    if (bench_checksums.size() != 4)
+        bench_fatal("bench-data.json at " + source + ": expected_checksums != 4 keys");
+}
+
+// Spec §2 resolution order; failure is fatal, no PRNG fallback.
 static void load_bench_data() {
-    std::vector<std::string> paths;
-    if (auto* env = std::getenv("BENCH_DATA_PATH")) {
-        paths.emplace_back(env);
+    std::string path;
+    if (auto* env = std::getenv("BENCH_DATA_PATH"); env && *env) {
+        // An explicitly configured path must exist and parse.
+        std::ifstream file(env);
+        if (!file.is_open())
+            bench_fatal(std::string("BENCH_DATA_PATH=") + env + " could not be opened");
+        path = env;
+    } else {
+        for (const char* p : {"/opt/bench/bench-data.json", "../shared/bench-data.json"}) {
+            std::ifstream file(p);
+            if (file.is_open()) { path = p; break; }
+        }
+        if (path.empty())
+            bench_fatal("bench-data.json not found (set BENCH_DATA_PATH or deploy "
+                        "/opt/bench/bench-data.json); reference implementations have "
+                        "no PRNG fallback (spec §2)");
     }
-    paths.emplace_back("/opt/bench/bench-data.json");
-    paths.emplace_back("../shared/bench-data.json");
 
-    for (const auto& p : paths) {
-        std::ifstream file(p);
-        if (!file.is_open()) continue;
+    std::ifstream file(path);
+    std::string content((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
+    file.close();
+    if (content.empty())
+        bench_fatal("bench-data.json at " + path + " is empty or unreadable");
 
-        std::string content((std::istreambuf_iterator<char>(file)),
-                            std::istreambuf_iterator<char>());
-        file.close();
-
-        // Parse users array
-        auto users_key = content.find("\"users\"");
-        if (users_key != std::string::npos) {
-            auto arr_start = content.find('[', users_key);
-            auto arr_end = find_matching_bracket(content, arr_start, '[', ']');
-            if (arr_start != std::string::npos && arr_end != std::string::npos) {
-                std::string arr = content.substr(arr_start + 1, arr_end - arr_start - 1);
-                size_t pos = 0;
-                while (pos < arr.size()) {
-                    auto obj_start = arr.find('{', pos);
-                    if (obj_start == std::string::npos) break;
-                    auto obj_end = find_matching_bracket(arr, obj_start, '{', '}');
-                    if (obj_end == std::string::npos) break;
-                    std::string obj = arr.substr(obj_start + 1, obj_end - obj_start - 1);
-                    BenchUser u;
-                    u.id = extract_json_int(obj, "id");
-                    u.name = extract_json_string(obj, "name");
-                    u.email = extract_json_string(obj, "email");
-                    u.score = extract_json_double(obj, "score");
-                    u.created_at = extract_json_string(obj, "created_at");
-                    bench_users.push_back(std::move(u));
-                    pos = obj_end + 1;
-                }
-            }
-        }
-
-        // Parse search_corpus array (array of strings)
-        auto search_key = content.find("\"search_corpus\"");
-        if (search_key != std::string::npos) {
-            auto arr_start = content.find('[', search_key);
-            auto arr_end = find_matching_bracket(content, arr_start, '[', ']');
-            if (arr_start != std::string::npos && arr_end != std::string::npos) {
-                std::string arr = content.substr(arr_start + 1, arr_end - arr_start - 1);
-                size_t pos = 0;
-                while (pos < arr.size()) {
-                    auto q_start = arr.find('"', pos);
-                    if (q_start == std::string::npos) break;
-                    auto q_end = q_start + 1;
-                    while (q_end < arr.size() && !(arr[q_end] == '"' && arr[q_end - 1] != '\\')) ++q_end;
-                    bench_search_corpus.push_back(arr.substr(q_start + 1, q_end - q_start - 1));
-                    pos = q_end + 1;
-                }
-            }
-        }
-
-        // Parse timeseries array
-        auto ts_key = content.find("\"timeseries\"");
-        if (ts_key != std::string::npos) {
-            auto arr_start = content.find('[', ts_key);
-            auto arr_end = find_matching_bracket(content, arr_start, '[', ']');
-            if (arr_start != std::string::npos && arr_end != std::string::npos) {
-                std::string arr = content.substr(arr_start + 1, arr_end - arr_start - 1);
-                size_t pos = 0;
-                while (pos < arr.size()) {
-                    auto obj_start = arr.find('{', pos);
-                    if (obj_start == std::string::npos) break;
-                    auto obj_end = find_matching_bracket(arr, obj_start, '{', '}');
-                    if (obj_end == std::string::npos) break;
-                    std::string obj = arr.substr(obj_start + 1, obj_end - obj_start - 1);
-                    BenchTimeseriesPoint pt;
-                    pt.value = extract_json_double(obj, "value");
-                    pt.category = extract_json_string(obj, "category");
-                    bench_timeseries.push_back(std::move(pt));
-                    pos = obj_end + 1;
-                }
-            }
-        }
-
-        // Parse expected_checksums object
-        auto cs_key = content.find("\"expected_checksums\"");
-        if (cs_key != std::string::npos) {
-            auto obj_start = content.find('{', cs_key);
-            auto obj_end = find_matching_bracket(content, obj_start, '{', '}');
-            if (obj_start != std::string::npos && obj_end != std::string::npos) {
-                std::string obj = content.substr(obj_start + 1, obj_end - obj_start - 1);
-                // Parse key-value pairs
-                size_t pos = 0;
-                while (pos < obj.size()) {
-                    auto k_start = obj.find('"', pos);
-                    if (k_start == std::string::npos) break;
-                    auto k_end = obj.find('"', k_start + 1);
-                    if (k_end == std::string::npos) break;
-                    std::string key = obj.substr(k_start + 1, k_end - k_start - 1);
-                    auto v_start = obj.find('"', k_end + 1);
-                    // skip the colon, find next quote
-                    v_start = obj.find('"', k_end + 2);
-                    if (v_start == std::string::npos) break;
-                    auto v_end = obj.find('"', v_start + 1);
-                    if (v_end == std::string::npos) break;
-                    bench_checksums[key] = obj.substr(v_start + 1, v_end - v_start - 1);
-                    pos = v_end + 1;
-                }
-            }
-        }
-
-        bench_data_loaded = true;
-        bench_log(LOG_INFO, "Loaded bench-data.json from " + p
-                  + " (" + std::to_string(bench_users.size()) + " users, "
-                  + std::to_string(bench_search_corpus.size()) + " corpus, "
-                  + std::to_string(bench_timeseries.size()) + " timeseries)");
-        return;
-    }
-    bench_log(LOG_WARN, "bench-data.json not found, falling back to per-language PRNG");
+    parse_dataset(content, path);
+    bench_log(LOG_INFO, "Loaded bench-data.json from " + path +
+              " (_version 2, 100 users, 1000 corpus, 10000 timeseries)");
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-
-static std::string cplusplus_version() {
-    return std::to_string(__cplusplus);
-}
-
-static std::string json_health() {
-    return R"({"status":"ok","runtime":"cpp","version":")" + cplusplus_version() + R"("})";
-}
-
-static std::string json_bytes_received(std::uint64_t n) {
-    return R"({"bytes_received":)" + std::to_string(n) + "}";
-}
-
-static std::string sha256_hex(const std::string& data) {
-    unsigned char hash[SHA256_DIGEST_LENGTH];
-    SHA256(reinterpret_cast<const unsigned char*>(data.data()), data.size(), hash);
-    std::ostringstream ss;
-    ss << std::hex << std::setfill('0');
-    for (int i = 0; i < SHA256_DIGEST_LENGTH; ++i)
-        ss << std::setw(2) << static_cast<int>(hash[i]);
-    return ss.str();
-}
 
 static std::string sha256_hex(const char* data, size_t len) {
     unsigned char hash[SHA256_DIGEST_LENGTH];
@@ -345,10 +339,19 @@ static std::string sha256_hex(const char* data, size_t len) {
     return ss.str();
 }
 
+static std::string sha256_hex(const std::string& data) {
+    return sha256_hex(data.data(), data.size());
+}
+
 static double now_ms() {
     return std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now().time_since_epoch()
     ).count();
+}
+
+// Spec §5.6: round half away from zero to 2 decimals (float64 semantics).
+static double r2(double x) {
+    return std::floor(x * 100.0 + 0.5) / 100.0;
 }
 
 static std::string format_double(double v, int precision) {
@@ -368,13 +371,40 @@ static std::string json_escape(const std::string& s) {
             case '\n': out += "\\n";  break;
             case '\r': out += "\\r";  break;
             case '\t': out += "\\t";  break;
-            default:   out += c;      break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\u%04x", c);
+                    out += buf;
+                } else {
+                    out += c;
+                }
+                break;
         }
     }
     return out;
 }
 
-// Parse query string into key-value pairs
+static std::string url_decode(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        char c = s[i];
+        if (c == '+') {
+            out += ' ';
+        } else if (c == '%' && i + 2 < s.size() &&
+                   std::isxdigit(static_cast<unsigned char>(s[i + 1])) &&
+                   std::isxdigit(static_cast<unsigned char>(s[i + 2]))) {
+            out += static_cast<char>(std::stoi(s.substr(i + 1, 2), nullptr, 16));
+            i += 2;
+        } else {
+            out += c;
+        }
+    }
+    return out;
+}
+
+// Parse query string into decoded key-value pairs
 static std::vector<std::pair<std::string, std::string>> parse_query(beast::string_view target) {
     std::vector<std::pair<std::string, std::string>> params;
     auto qpos = target.find('?');
@@ -386,9 +416,9 @@ static std::vector<std::pair<std::string, std::string>> parse_query(beast::strin
     while (std::getline(stream, pair, '&')) {
         auto eq = pair.find('=');
         if (eq != std::string::npos)
-            params.emplace_back(pair.substr(0, eq), pair.substr(eq + 1));
+            params.emplace_back(url_decode(pair.substr(0, eq)), url_decode(pair.substr(eq + 1)));
         else
-            params.emplace_back(pair, "");
+            params.emplace_back(url_decode(pair), "");
     }
     return params;
 }
@@ -400,6 +430,18 @@ static std::string get_param(const std::vector<std::pair<std::string, std::strin
     return def;
 }
 
+static int int_param(const std::vector<std::pair<std::string, std::string>>& params,
+                     const std::string& key, int def) {
+    for (auto& [k, v] : params) {
+        if (k != key) continue;
+        int out{};
+        auto [p, ec] = std::from_chars(v.data(), v.data() + v.size(), out);
+        if (ec == std::errc() && p == v.data() + v.size()) return out;
+        return def;
+    }
+    return def;
+}
+
 // Get path portion (before '?')
 static std::string get_path(beast::string_view target) {
     auto qpos = target.find('?');
@@ -407,101 +449,166 @@ static std::string get_path(beast::string_view target) {
     return std::string(target.substr(0, qpos));
 }
 
-// Parse a path like "/download/1048576" and extract the size.
-static std::uint64_t parse_download_size(beast::string_view target) {
-    constexpr beast::string_view prefix = "/download/";
-    if (target.size() <= prefix.size())
-        return 0;
-    if (target.substr(0, prefix.size()) != prefix)
-        return 0;
-    auto num_str = target.substr(prefix.size());
-    auto qpos = num_str.find('?');
-    if (qpos != beast::string_view::npos)
-        num_str = num_str.substr(0, qpos);
-    try {
-        return std::stoull(std::string(num_str));
-    } catch (...) {
-        return 0;
-    }
+// Parse "/download/{size}": nullopt = non-integer (→400), value clamped to cap.
+static std::optional<std::uint64_t> parse_download_size(const std::string& path) {
+    constexpr std::string_view prefix = "/download/";
+    std::string num = path.substr(prefix.size());
+    if (num.empty()) return std::nullopt;
+    std::uint64_t v{};
+    auto [p, ec] = std::from_chars(num.data(), num.data() + num.size(), v);
+    if (ec != std::errc() || p != num.data() + num.size()) return std::nullopt;
+    return std::min<std::uint64_t>(v, DOWNLOAD_CAP);
 }
 
-// Set API response headers
-static void set_api_headers(auto& res, double duration_ms, double auth_dur_ms = -1) {
+// The four benchmark headers required on every /api/* response (spec §1).
+static void set_api_headers(auto& res, double duration_ms) {
     res.set(http::field::content_type, "application/json");
-    std::string timing = "app;dur=" + format_double(duration_ms, 1);
-    if (auth_dur_ms >= 0) {
-        timing = "auth;dur=" + format_double(auth_dur_ms, 1) + ", " + timing;
-    }
-    res.set("Server-Timing", timing);
+    res.set("Server-Timing", "app;dur=" + format_double(duration_ms, 1));
     res.set(http::field::cache_control, "no-store, no-cache, must-revalidate");
     res.set("Timing-Allow-Origin", "*");
     res.set(http::field::access_control_allow_origin, "*");
 }
 
-// ── User generation ────────────────────────────────────────────────────────
-
-struct User {
-    int id;
-    std::string name;
-    std::string email;
-    int age;
-    std::string department;
-    double score;
-
-    std::string to_json() const {
-        return "{\"id\":" + std::to_string(id) +
-               ",\"name\":\"" + json_escape(name) + "\"" +
-               ",\"email\":\"" + json_escape(email) + "\"" +
-               ",\"age\":" + std::to_string(age) +
-               ",\"department\":\"" + json_escape(department) + "\"" +
-               ",\"score\":" + format_double(score, 2) + "}";
-    }
-
-    // For sorted JSON (key-sorted) used in validate checksum
-    std::string to_sorted_json() const {
-        return "{\"age\":" + std::to_string(age) +
-               ",\"department\":\"" + json_escape(department) + "\"" +
-               ",\"email\":\"" + json_escape(email) + "\"" +
-               ",\"id\":" + std::to_string(id) +
-               ",\"name\":\"" + json_escape(name) + "\"" +
-               ",\"score\":" + format_double(score, 2) + "}";
-    }
-};
-
-static std::vector<User> generate_users(std::mt19937& rng, int count = 100) {
-    std::vector<User> users;
-    users.reserve(count);
-    for (int i = 0; i < count; ++i) {
-        User u;
-        u.id = i + 1;
-        u.name = std::string(FIRST_NAMES[rng() % NUM_FIRST]) + " " + LAST_NAMES[rng() % NUM_LAST];
-        u.email = "user" + std::to_string(i + 1) + "@example.com";
-        u.age = 22 + static_cast<int>(rng() % 44); // 22..65
-        u.department = DEPARTMENTS[rng() % NUM_DEPT];
-        u.score = std::round((static_cast<double>(rng() % 10001) / 100.0) * 100.0) / 100.0;
-        users.push_back(std::move(u));
-    }
-    return users;
+static bool authorized(const http::fields& f) {
+    if (bench_api_token.empty()) return true;
+    auto it = f.find(http::field::authorization);
+    if (it == f.end()) return false;
+    return std::string(it->value()) == "Bearer " + bench_api_token;
 }
 
-// ── Request handler ─────────────────────────────────────────────────────────
+// ── Minimal top-level JSON object scanner (for /api/transform) ─────────────
+//
+// Captures the raw value text of each top-level key. Returns false when the
+// body is not a syntactically plausible JSON object (→ 400).
+
+static bool parse_top_level_object(const std::string& raw,
+                                   std::vector<std::pair<std::string, std::string>>& out) {
+    size_t pos = 0;
+    auto skip_ws = [&] {
+        while (pos < raw.size() && (raw[pos] == ' ' || raw[pos] == '\t' ||
+                                    raw[pos] == '\n' || raw[pos] == '\r'))
+            ++pos;
+    };
+    skip_ws();
+    if (pos >= raw.size() || raw[pos] != '{') return false;
+    ++pos;
+    skip_ws();
+    if (pos < raw.size() && raw[pos] == '}') return true; // empty object
+
+    while (pos < raw.size()) {
+        skip_ws();
+        if (pos >= raw.size() || raw[pos] != '"') return false;
+        ++pos;
+        std::string key;
+        while (pos < raw.size() && raw[pos] != '"') {
+            if (raw[pos] == '\\' && pos + 1 < raw.size()) { key += raw[pos + 1]; pos += 2; }
+            else { key += raw[pos]; ++pos; }
+        }
+        if (pos >= raw.size()) return false;
+        ++pos; // closing "
+        skip_ws();
+        if (pos >= raw.size() || raw[pos] != ':') return false;
+        ++pos;
+        skip_ws();
+        if (pos >= raw.size()) return false;
+
+        std::string value;
+        if (raw[pos] == '"') {
+            auto start = pos;
+            ++pos;
+            while (pos < raw.size() && !(raw[pos] == '"' && raw[pos - 1] != '\\')) ++pos;
+            if (pos >= raw.size()) return false;
+            ++pos;
+            value = raw.substr(start, pos - start);
+        } else if (raw[pos] == '{' || raw[pos] == '[') {
+            char open = raw[pos];
+            char close = (open == '{') ? '}' : ']';
+            auto end = find_matching_bracket(raw, pos, open, close);
+            if (end == std::string::npos) return false;
+            value = raw.substr(pos, end - pos + 1);
+            pos = end + 1;
+        } else {
+            auto start = pos;
+            while (pos < raw.size() && raw[pos] != ',' && raw[pos] != '}' &&
+                   raw[pos] != ' ' && raw[pos] != '\t' && raw[pos] != '\n' && raw[pos] != '\r')
+                ++pos;
+            value = raw.substr(start, pos - start);
+            if (value.empty()) return false;
+        }
+        out.emplace_back(std::move(key), std::move(value));
+        skip_ws();
+        if (pos < raw.size() && raw[pos] == ',') { ++pos; continue; }
+        if (pos < raw.size() && raw[pos] == '}') return true;
+        return false;
+    }
+    return false;
+}
+
+// Split a raw JSON array body "[a,b,...]" into raw element tokens.
+static bool split_json_array(const std::string& raw, std::vector<std::string>& out) {
+    size_t pos = 0;
+    while (pos < raw.size() && std::isspace(static_cast<unsigned char>(raw[pos]))) ++pos;
+    if (pos >= raw.size() || raw[pos] != '[') return false;
+    auto arr_end = find_matching_bracket(raw, pos, '[', ']');
+    if (arr_end == std::string::npos) return false;
+    ++pos;
+    while (pos < arr_end) {
+        while (pos < arr_end && (std::isspace(static_cast<unsigned char>(raw[pos])) || raw[pos] == ',')) ++pos;
+        if (pos >= arr_end) break;
+        size_t start = pos;
+        if (raw[pos] == '"') {
+            ++pos;
+            while (pos < arr_end && !(raw[pos] == '"' && raw[pos - 1] != '\\')) ++pos;
+            ++pos;
+        } else if (raw[pos] == '{' || raw[pos] == '[') {
+            char open = raw[pos];
+            char close = (open == '{') ? '}' : ']';
+            auto end = find_matching_bracket(raw, pos, open, close);
+            if (end == std::string::npos || end > arr_end) return false;
+            pos = end + 1;
+        } else {
+            while (pos < arr_end && raw[pos] != ',' &&
+                   !std::isspace(static_cast<unsigned char>(raw[pos])))
+                ++pos;
+        }
+        std::string tok = raw.substr(start, pos - start);
+        if (!tok.empty()) out.push_back(std::move(tok));
+    }
+    return true;
+}
+
+// Unescape a raw JSON string token (with surrounding quotes) to its text.
+static std::string unquote_json_string(const std::string& tok) {
+    if (tok.size() < 2 || tok.front() != '"') return tok;
+    std::string out;
+    std::size_t end = tok.size() - 1; // index of the closing quote
+    for (std::size_t i = 1; i < end; ++i) {
+        if (tok[i] == '\\' && i + 1 < end) {
+            char n = tok[i + 1];
+            switch (n) {
+                case 'n': out += '\n'; break;
+                case 'r': out += '\r'; break;
+                case 't': out += '\t'; break;
+                default:  out += n;    break;
+            }
+            ++i;
+        } else {
+            out += tok[i];
+        }
+    }
+    return out;
+}
+
+// ── Request handler (everything except /upload and /api/delayed, which the
+//    session handles itself for streaming drain / timer-based sleep) ────────
 
 template <class Send>
 void handle_request(http::request<http::string_body>&& req, Send&& send) {
-    auto const bad_request = [&req](beast::string_view why) {
-        http::response<http::string_body> res{http::status::bad_request, req.version()};
+    auto const json_error = [&req](http::status status, beast::string_view why) {
+        http::response<http::string_body> res{status, req.version()};
         res.set(http::field::content_type, "application/json");
         res.keep_alive(req.keep_alive());
         res.body() = R"({"error":")" + std::string(why) + R"("})";
-        res.prepare_payload();
-        return res;
-    };
-
-    auto const not_found = [&req]() {
-        http::response<http::string_body> res{http::status::not_found, req.version()};
-        res.set(http::field::content_type, "application/json");
-        res.keep_alive(req.keep_alive());
-        res.body() = R"({"error":"not found"})";
         res.prepare_payload();
         return res;
     };
@@ -510,555 +617,321 @@ void handle_request(http::request<http::string_body>&& req, Send&& send) {
     auto path = get_path(target);
     auto params = parse_query(target);
 
-    // Bearer token authentication
-    double auth_dur_ms = -1;
-    if (!bench_api_token.empty() && path != "/health") {
-        double auth_t0 = now_ms();
-        auto auth_it = req.find(http::field::authorization);
-        std::string expected = "Bearer " + bench_api_token;
-        if (auth_it == req.end() || std::string(auth_it->value()) != expected) {
-            auth_dur_ms = now_ms() - auth_t0;
-            http::response<http::string_body> res{http::status::unauthorized, req.version()};
-            res.set(http::field::content_type, "application/json");
-            res.set("Server-Timing", "auth;dur=" + format_double(auth_dur_ms, 1));
-            res.keep_alive(req.keep_alive());
-            res.body() = R"({"error":"unauthorized"})";
-            res.prepare_payload();
-            return send(std::move(res));
-        }
-        auth_dur_ms = now_ms() - auth_t0;
-    }
-
-    // GET /health
+    // GET /health — auth-exempt, constant-work (spec §5.1).
     if (req.method() == http::verb::get && path == "/health") {
         http::response<http::string_body> res{http::status::ok, req.version()};
         res.set(http::field::content_type, "application/json");
         res.keep_alive(req.keep_alive());
-        res.body() = json_health();
+        res.body() = g_health_body;
         res.prepare_payload();
         return send(std::move(res));
     }
 
-    // GET /download/{size}
-    if (req.method() == http::verb::get && target.starts_with("/download/")) {
-        auto size = parse_download_size(target);
-        if (size == 0) {
-            return send(bad_request("invalid size"));
+    // Bearer token authentication — every other route (spec §1).
+    if (!authorized(req)) {
+        http::response<http::string_body> res{http::status::unauthorized, req.version()};
+        res.set(http::field::content_type, "application/json");
+        res.keep_alive(req.keep_alive());
+        res.body() = R"({"error":"unauthorized"})";
+        res.prepare_payload();
+        return send(std::move(res));
+    }
+
+    // GET /download/{size} (spec §5.2).
+    if (req.method() == http::verb::get && path.rfind("/download/", 0) == 0) {
+        double t0 = now_ms();
+        auto size = parse_download_size(path);
+        if (!size) { // non-integer → 400
+            return send(json_error(http::status::bad_request, "invalid size"));
         }
 
         http::response<http::buffer_body> res;
         res.result(http::status::ok);
         res.version(req.version());
         res.set(http::field::content_type, "application/octet-stream");
-        res.content_length(size);
+        res.set("X-Download-Bytes", std::to_string(*size));
+        res.set("Server-Timing", "proc;dur=" + format_double(now_ms() - t0, 1));
+        res.content_length(*size);
         res.keep_alive(req.keep_alive());
 
         res.body().data = nullptr;
         res.body().size = 0;
         res.body().more = true;
 
-        return send(std::move(res), size);
+        return send(std::move(res), *size);
     }
 
-    // POST /upload
-    if (req.method() == http::verb::post && path == "/upload") {
-        auto bytes = req.body().size();
-        http::response<http::string_body> res{http::status::ok, req.version()};
-        res.set(http::field::content_type, "application/json");
-        res.keep_alive(req.keep_alive());
-        res.body() = json_bytes_received(bytes);
-        res.prepare_payload();
-        return send(std::move(res));
-    }
+    // ── JSON API endpoints (family C, spec §5.4-§5.10) ─────────────────────
 
-    // ── JSON API endpoints ─────────────────────────────────────────────────
-
-    // GET /api/users?page=N&sort=field&order=asc|desc
+    // GET /api/users?page=N&sort=<field>&order=<asc|desc>
     if (req.method() == http::verb::get && path == "/api/users") {
         double t0 = now_ms();
-        int page = std::max(1, std::atoi(get_param(params, "page", "1").c_str()));
+        std::int64_t page = std::max(1, int_param(params, "page", 1));
         std::string sort_field = get_param(params, "sort", "id");
-        std::string order = get_param(params, "order", "asc");
+        bool desc = get_param(params, "order", "asc") == "desc";
 
-        bool use_bench = bench_data_loaded && !bench_users.empty();
-        std::string users_json;
-        int total_users;
-
-        if (use_bench) {
-            // Use shared benchmark data — sort a copy of bench_users
-            auto bu = bench_users; // copy for sorting
-            if (sort_field == "name")
-                std::sort(bu.begin(), bu.end(), [](auto& a, auto& b) { return a.name < b.name; });
-            else if (sort_field == "email")
-                std::sort(bu.begin(), bu.end(), [](auto& a, auto& b) { return a.email < b.email; });
-            else if (sort_field == "score")
-                std::sort(bu.begin(), bu.end(), [](auto& a, auto& b) { return a.score < b.score; });
-            else
-                std::sort(bu.begin(), bu.end(), [](auto& a, auto& b) { return a.id < b.id; });
-
-            if (order == "desc")
-                std::reverse(bu.begin(), bu.end());
-
-            total_users = static_cast<int>(bu.size());
-            int page_size = 20;
-            int start_idx = (page - 1) * page_size;
-            int end_idx = std::min(start_idx + page_size, total_users);
-
-            users_json = "[";
-            for (int i = start_idx; i < end_idx; ++i) {
-                if (i > start_idx) users_json += ",";
-                users_json += bu[i].to_json();
-            }
-            users_json += "]";
-        } else {
-            std::mt19937 rng(page);
-            auto users = generate_users(rng);
-
-            // Sort
-            if (sort_field == "id")
-                std::sort(users.begin(), users.end(), [](auto& a, auto& b) { return a.id < b.id; });
-            else if (sort_field == "name")
-                std::sort(users.begin(), users.end(), [](auto& a, auto& b) { return a.name < b.name; });
-            else if (sort_field == "email")
-                std::sort(users.begin(), users.end(), [](auto& a, auto& b) { return a.email < b.email; });
-            else if (sort_field == "age")
-                std::sort(users.begin(), users.end(), [](auto& a, auto& b) { return a.age < b.age; });
-            else if (sort_field == "department")
-                std::sort(users.begin(), users.end(), [](auto& a, auto& b) { return a.department < b.department; });
-            else if (sort_field == "score")
-                std::sort(users.begin(), users.end(), [](auto& a, auto& b) { return a.score < b.score; });
-
-            if (order == "desc")
-                std::reverse(users.begin(), users.end());
-
-            total_users = static_cast<int>(users.size());
-            int page_size = 20;
-            int start_idx = (page - 1) * page_size;
-            int end_idx = std::min(start_idx + page_size, total_users);
-
-            users_json = "[";
-            for (int i = start_idx; i < end_idx; ++i) {
-                if (i > start_idx) users_json += ",";
-                users_json += users[i].to_json();
-            }
-            users_json += "]";
+        // 100-user window of the dataset; page beyond it → [] with 200.
+        std::vector<BenchUser> window;
+        std::size_t start = static_cast<std::size_t>(page - 1) * 100;
+        if (start < bench_users.size()) {
+            std::size_t end = std::min(start + 100, bench_users.size());
+            window.assign(bench_users.begin() + start, bench_users.begin() + end);
         }
 
-        int page_size = 20;
-        double duration_ms = now_ms() - t0;
-        std::string body = "{\"page\":" + std::to_string(page) +
-            ",\"page_size\":" + std::to_string(page_size) +
-            ",\"total\":" + std::to_string(total_users) +
-            ",\"sort\":\"" + sort_field + "\"" +
-            ",\"order\":\"" + order + "\"" +
-            ",\"users\":" + users_json + "}";
+        enum Field { F_ID, F_NAME, F_EMAIL, F_SCORE, F_CREATED };
+        Field f = F_ID;
+        if (sort_field == "name") f = F_NAME;
+        else if (sort_field == "email") f = F_EMAIL;
+        else if (sort_field == "score") f = F_SCORE;
+        else if (sort_field == "created_at") f = F_CREATED;
+        // (unrecognized values fall back to id)
+
+        // Stable sort — dataset order breaks ties; desc reverses the
+        // comparator so ties stay in dataset order (family C semantics).
+        std::stable_sort(window.begin(), window.end(),
+            [f, desc](const BenchUser& a, const BenchUser& b) {
+                int c = 0;
+                switch (f) {
+                    case F_NAME:    c = a.name.compare(b.name); break;       // bytewise
+                    case F_EMAIL:   c = a.email.compare(b.email); break;
+                    case F_CREATED: c = a.created_at.compare(b.created_at); break;
+                    case F_SCORE:   c = (a.score < b.score) ? -1 : (a.score > b.score ? 1 : 0); break;
+                    case F_ID:      c = (a.id < b.id) ? -1 : (a.id > b.id ? 1 : 0); break;
+                }
+                return desc ? c > 0 : c < 0;
+            });
+
+        // Bare JSON array of the first 20 users of the sorted window.
+        std::string body = "[";
+        std::size_t take = std::min<std::size_t>(20, window.size());
+        for (std::size_t i = 0; i < take; ++i) {
+            if (i > 0) body += ",";
+            const auto& u = window[i];
+            body += "{\"id\":" + std::to_string(u.id) +
+                    ",\"name\":\"" + json_escape(u.name) + "\"" +
+                    ",\"email\":\"" + json_escape(u.email) + "\"" +
+                    ",\"score\":" + format_double(u.score, 2) +
+                    ",\"created_at\":\"" + json_escape(u.created_at) + "\"}";
+        }
+        body += "]";
 
         http::response<http::string_body> res{http::status::ok, req.version()};
-        set_api_headers(res, duration_ms, auth_dur_ms);
+        set_api_headers(res, now_ms() - t0);
         res.keep_alive(req.keep_alive());
         res.body() = std::move(body);
         res.prepare_payload();
         return send(std::move(res));
     }
 
-    // POST /api/transform
+    // POST /api/transform — {"seed","hashed_fields","reversed_values"}.
     if (req.method() == http::verb::post && path == "/api/transform") {
         double t0 = now_ms();
-        auto& raw = req.body();
 
-        // Minimal JSON object parser: expects {"key":"value", ...}
-        // We parse key-value pairs where values can be strings or other types
-        if (raw.empty() || raw[0] != '{') {
-            double duration_ms = now_ms() - t0;
+        std::vector<std::pair<std::string, std::string>> kvs;
+        if (!parse_top_level_object(req.body(), kvs)) { // invalid JSON → 400
             http::response<http::string_body> res{http::status::bad_request, req.version()};
-            set_api_headers(res, duration_ms, auth_dur_ms);
+            set_api_headers(res, now_ms() - t0);
             res.keep_alive(req.keep_alive());
             res.body() = R"({"error":"invalid JSON"})";
             res.prepare_payload();
             return send(std::move(res));
         }
 
-        // Simple JSON key-value extraction
-        struct KV { std::string key; std::string value; bool is_string; };
-        std::vector<KV> kvs;
-        size_t pos = 1; // skip '{'
-        while (pos < raw.size()) {
-            // skip whitespace/commas
-            while (pos < raw.size() && (raw[pos] == ' ' || raw[pos] == ',' || raw[pos] == '\n' || raw[pos] == '\r' || raw[pos] == '\t'))
-                ++pos;
-            if (pos >= raw.size() || raw[pos] == '}') break;
-
-            // expect key as string
-            if (raw[pos] != '"') break;
-            ++pos;
-            std::string key;
-            while (pos < raw.size() && raw[pos] != '"') {
-                if (raw[pos] == '\\' && pos + 1 < raw.size()) { key += raw[pos + 1]; pos += 2; }
-                else { key += raw[pos]; ++pos; }
-            }
-            if (pos < raw.size()) ++pos; // skip closing "
-
-            // skip : and whitespace
-            while (pos < raw.size() && (raw[pos] == ':' || raw[pos] == ' ')) ++pos;
-
-            // parse value
-            if (pos < raw.size() && raw[pos] == '"') {
-                // string value
-                ++pos;
-                std::string val;
-                while (pos < raw.size() && raw[pos] != '"') {
-                    if (raw[pos] == '\\' && pos + 1 < raw.size()) { val += raw[pos + 1]; pos += 2; }
-                    else { val += raw[pos]; ++pos; }
-                }
-                if (pos < raw.size()) ++pos; // skip closing "
-                kvs.push_back({key, val, true});
-            } else {
-                // non-string value (number, bool, null, array, object)
-                std::string val;
-                int depth = 0;
-                while (pos < raw.size()) {
-                    char c = raw[pos];
-                    if (c == '{' || c == '[') ++depth;
-                    else if (c == '}' || c == ']') {
-                        if (depth == 0) break;
-                        --depth;
-                    } else if ((c == ',' || c == ' ') && depth == 0) break;
-                    val += c;
-                    ++pos;
-                }
-                kvs.push_back({key, val, false});
+        std::string seed = "0";
+        std::vector<std::string> fields;
+        std::vector<std::string> values;
+        for (auto& [k, v] : kvs) {
+            if (k == "seed" && !v.empty() && v != "null") {
+                seed = v;
+            } else if (k == "fields") {
+                std::vector<std::string> toks;
+                if (split_json_array(v, toks))
+                    for (auto& t : toks) fields.push_back(unquote_json_string(t));
+            } else if (k == "values") {
+                split_json_array(v, values); // raw tokens, passed through unmodified
             }
         }
 
-        std::string transformed = "{";
-        for (size_t i = 0; i < kvs.size(); ++i) {
-            if (i > 0) transformed += ",";
-            transformed += "\"" + json_escape(kvs[i].key) + "\":";
-            if (kvs[i].is_string) {
-                std::string reversed(kvs[i].value.rbegin(), kvs[i].value.rend());
-                std::string hashed = sha256_hex(kvs[i].value);
-                transformed += "{\"original_reversed\":\"" + json_escape(reversed) +
-                              "\",\"sha256\":\"" + hashed + "\"}";
-            } else {
-                transformed += kvs[i].value;
-            }
+        std::string hashed = "[";
+        for (std::size_t i = 0; i < fields.size(); ++i) {
+            if (i > 0) hashed += ",";
+            hashed += "\"" + sha256_hex(fields[i]) + "\"";
         }
-        transformed += "}";
+        hashed += "]";
 
-        double duration_ms = now_ms() - t0;
-        std::string body = "{\"original_fields\":" + std::to_string(kvs.size()) +
-            ",\"transformed\":" + transformed + "}";
+        std::string reversed = "[";
+        for (std::size_t i = 0; i < values.size(); ++i) {
+            if (i > 0) reversed += ",";
+            reversed += values[values.size() - 1 - i];
+        }
+        reversed += "]";
 
         http::response<http::string_body> res{http::status::ok, req.version()};
-        set_api_headers(res, duration_ms, auth_dur_ms);
+        set_api_headers(res, now_ms() - t0);
         res.keep_alive(req.keep_alive());
-        res.body() = std::move(body);
+        res.body() = "{\"seed\":" + seed +
+                     ",\"hashed_fields\":" + hashed +
+                     ",\"reversed_values\":" + reversed + "}";
         res.prepare_payload();
         return send(std::move(res));
     }
 
-    // GET /api/aggregate?range=start,end
+    // GET /api/aggregate — `range` accepted and ignored (spec §5.6).
     if (req.method() == http::verb::get && path == "/api/aggregate") {
         double t0 = now_ms();
-        std::string range_param = get_param(params, "range", "0,1000");
-        int range_start = 0, range_end = 1000;
-        auto comma = range_param.find(',');
-        if (comma != std::string::npos) {
-            range_start = std::atoi(range_param.substr(0, comma).c_str());
-            range_end = std::atoi(range_param.substr(comma + 1).c_str());
-        } else {
-            range_start = std::atoi(range_param.c_str());
+
+        auto values = bench_ts_values; // copy: sorting is part of the workload
+        std::sort(values.begin(), values.end());
+        std::size_t n = values.size();
+        double total = 0.0;
+        for (double v : values) total += v; // sequential sum over SORTED values
+
+        std::size_t chunk = n / 5;
+        std::string categories = "[";
+        for (std::size_t i = 0; i < 5; ++i) {
+            double s = 0.0;
+            for (std::size_t j = i * chunk; j < (i + 1) * chunk; ++j) s += values[j];
+            if (i > 0) categories += ",";
+            categories += "{\"category\":\"q" + std::to_string(i + 1) + "\"" +
+                          ",\"count\":" + std::to_string(chunk) +
+                          ",\"mean\":" + format_double(r2(s / static_cast<double>(chunk)), 2) +
+                          ",\"min\":" + format_double(r2(values[i * chunk]), 2) +
+                          ",\"max\":" + format_double(r2(values[(i + 1) * chunk - 1]), 2) + "}";
         }
+        categories += "]";
 
-        int count;
-        std::vector<double> values;
-        std::vector<int> assignments;
-
-        if (bench_data_loaded && !bench_timeseries.empty()) {
-            count = static_cast<int>(bench_timeseries.size());
-            values.resize(count);
-            assignments.resize(count);
-            for (int i = 0; i < count; ++i) {
-                values[i] = bench_timeseries[i].value;
-                // Map category string to index
-                int cat_idx = 0;
-                for (int c = 0; c < NUM_CATS; ++c) {
-                    if (bench_timeseries[i].category == CATEGORIES[c]) { cat_idx = c; break; }
-                }
-                assignments[i] = cat_idx;
-            }
-        } else {
-            std::mt19937 rng(range_start);
-            std::normal_distribution<double> dist(50.0, 15.0);
-            count = 10000;
-            values.resize(count);
-            for (int i = 0; i < count; ++i)
-                values[i] = dist(rng);
-
-            std::mt19937 cat_rng(range_start + 1);
-            assignments.resize(count);
-            for (int i = 0; i < count; ++i)
-                assignments[i] = cat_rng() % NUM_CATS;
-        }
-
-        auto sorted_vals = values;
-        std::sort(sorted_vals.begin(), sorted_vals.end());
-        double mean = std::accumulate(values.begin(), values.end(), 0.0) / count;
-        double p50 = sorted_vals[count / 2];
-        double p95 = sorted_vals[static_cast<int>(count * 0.95)];
-        double max_val = sorted_vals.back();
-
-        std::string groups = "{";
-        bool first_group = true;
-        for (int c = 0; c < NUM_CATS; ++c) {
-            std::vector<double> cat_vals;
-            for (int i = 0; i < count; ++i)
-                if (assignments[i] == c) cat_vals.push_back(values[i]);
-            if (cat_vals.empty()) continue;
-
-            std::sort(cat_vals.begin(), cat_vals.end());
-            double cat_mean = std::accumulate(cat_vals.begin(), cat_vals.end(), 0.0) / cat_vals.size();
-
-            if (!first_group) groups += ",";
-            first_group = false;
-            groups += "\"" + std::string(CATEGORIES[c]) + "\":{" +
-                "\"count\":" + std::to_string(cat_vals.size()) +
-                ",\"mean\":" + format_double(std::round(cat_mean * 10000) / 10000, 4) +
-                ",\"p50\":" + format_double(std::round(cat_vals[cat_vals.size() / 2] * 10000) / 10000, 4) +
-                ",\"max\":" + format_double(std::round(cat_vals.back() * 10000) / 10000, 4) + "}";
-        }
-        groups += "}";
-
-        double duration_ms = now_ms() - t0;
-        std::string body = "{\"range\":{\"start\":" + std::to_string(range_start) +
-            ",\"end\":" + std::to_string(range_end) + "}" +
-            ",\"total_points\":" + std::to_string(count) +
-            ",\"stats\":{\"mean\":" + format_double(std::round(mean * 10000) / 10000, 4) +
-            ",\"p50\":" + format_double(std::round(p50 * 10000) / 10000, 4) +
-            ",\"p95\":" + format_double(std::round(p95 * 10000) / 10000, 4) +
-            ",\"max\":" + format_double(std::round(max_val * 10000) / 10000, 4) + "}" +
-            ",\"groups\":" + groups + "}";
+        std::string body = "{\"total_points\":" + std::to_string(n) +
+            ",\"mean\":" + format_double(r2(total / static_cast<double>(n)), 2) +
+            ",\"p50\":" + format_double(r2(values[static_cast<std::size_t>(static_cast<double>(n) * 0.50)]), 2) +
+            ",\"p95\":" + format_double(r2(values[static_cast<std::size_t>(static_cast<double>(n) * 0.95)]), 2) +
+            ",\"max\":" + format_double(r2(values[n - 1]), 2) +
+            ",\"categories\":" + categories + "}";
 
         http::response<http::string_body> res{http::status::ok, req.version()};
-        set_api_headers(res, duration_ms, auth_dur_ms);
+        set_api_headers(res, now_ms() - t0);
         res.keep_alive(req.keep_alive());
         res.body() = std::move(body);
         res.prepare_payload();
         return send(std::move(res));
     }
 
-    // GET /api/search?q=term&limit=N
+    // GET /api/search?q=<term>&limit=N (spec §5.7).
     if (req.method() == http::verb::get && path == "/api/search") {
         double t0 = now_ms();
         std::string query = get_param(params, "q", "test");
-        int limit = std::max(1, std::atoi(get_param(params, "limit", "10").c_str()));
+        int limit = std::min(int_param(params, "limit", 20), 100);
+        if (limit < 0) limit = 0;
 
-        struct CorpusItem { int id; std::string text; };
-        std::vector<CorpusItem> corpus;
-
-        if (bench_data_loaded && !bench_search_corpus.empty()) {
-            corpus.reserve(bench_search_corpus.size());
-            for (size_t i = 0; i < bench_search_corpus.size(); ++i) {
-                corpus.push_back({static_cast<int>(i + 1), bench_search_corpus[i]});
-            }
-        } else {
-            std::mt19937 rng(42);
-            corpus.reserve(1000);
-            for (int i = 0; i < 1000; ++i) {
-                int word_count = 3 + static_cast<int>(rng() % 6); // 3..8
-                std::string phrase;
-                for (int j = 0; j < word_count; ++j) {
-                    if (j > 0) phrase += " ";
-                    phrase += SEARCH_WORDS[rng() % NUM_WORDS];
-                }
-                corpus.push_back({i + 1, std::move(phrase)});
-            }
+        // Case-sensitive regex; literal substring fallback on invalid pattern.
+        std::optional<std::regex> re;
+        try {
+            re.emplace(query);
+        } catch (const std::regex_error&) {
+            re.reset();
         }
 
-        // Case-insensitive literal search (std::regex is dangerously slow on pathological input)
-        std::string query_lower = query;
-        std::transform(query_lower.begin(), query_lower.end(), query_lower.begin(), ::tolower);
-
-        struct Result { int id; std::string text; double score; };
-        std::vector<Result> results;
-        for (auto& item : corpus) {
-            std::string text_lower = item.text;
-            std::transform(text_lower.begin(), text_lower.end(), text_lower.begin(), ::tolower);
-            auto pos = text_lower.find(query_lower);
-            if (pos != std::string::npos) {
-                double score = 1.0 / (1 + static_cast<double>(pos));
-                results.push_back({item.id, item.text, std::round(score * 10000) / 10000});
+        std::vector<std::pair<std::size_t, const std::string*>> matches;
+        for (const auto& item : bench_search_corpus) {
+            std::size_t pos;
+            if (re) {
+                std::smatch m;
+                if (!std::regex_search(item, m, *re)) continue;
+                pos = static_cast<std::size_t>(m.position(0));
+            } else {
+                auto found = item.find(query);
+                if (found == std::string::npos) continue;
+                pos = found;
             }
+            matches.emplace_back(pos, &item);
         }
+        std::sort(matches.begin(), matches.end(),
+            [](const auto& a, const auto& b) {
+                if (a.first != b.first) return a.first < b.first; // position asc
+                return *a.second < *b.second;                     // item asc bytewise
+            });
 
-        std::sort(results.begin(), results.end(), [](auto& a, auto& b) { return a.score > b.score; });
-        if (static_cast<int>(results.size()) > limit)
-            results.resize(limit);
-
-        std::string results_json = "[";
-        for (size_t i = 0; i < results.size(); ++i) {
-            if (i > 0) results_json += ",";
-            results_json += "{\"id\":" + std::to_string(results[i].id) +
-                ",\"text\":\"" + json_escape(results[i].text) + "\"" +
-                ",\"score\":" + format_double(results[i].score, 4) + "}";
+        std::size_t take = std::min<std::size_t>(static_cast<std::size_t>(limit), matches.size());
+        std::string results = "[";
+        for (std::size_t i = 0; i < take; ++i) {
+            if (i > 0) results += ",";
+            results += "{\"rank\":" + std::to_string(i + 1) +
+                       ",\"item\":\"" + json_escape(*matches[i].second) + "\"" +
+                       ",\"match_position\":" + std::to_string(matches[i].first) + "}";
         }
-        results_json += "]";
+        results += "]";
 
-        double duration_ms = now_ms() - t0;
         std::string body = "{\"query\":\"" + json_escape(query) + "\"" +
-            ",\"total_matches\":" + std::to_string(results.size()) +
-            ",\"limit\":" + std::to_string(limit) +
-            ",\"results\":" + results_json + "}";
+            ",\"total_matches\":" + std::to_string(matches.size()) + // BEFORE truncation
+            ",\"returned\":" + std::to_string(take) +
+            ",\"results\":" + results + "}";
 
         http::response<http::string_body> res{http::status::ok, req.version()};
-        set_api_headers(res, duration_ms, auth_dur_ms);
+        set_api_headers(res, now_ms() - t0);
         res.keep_alive(req.keep_alive());
         res.body() = std::move(body);
         res.prepare_payload();
         return send(std::move(res));
     }
 
-    // POST /api/upload/process
+    // POST /api/upload/process (spec §5.8).
     if (req.method() == http::verb::post && path == "/api/upload/process") {
         double t0 = now_ms();
         auto& body_data = req.body();
 
-        // CRC32
         uLong crc = crc32(0L, Z_NULL, 0);
-        crc = crc32(crc, reinterpret_cast<const Bytef*>(body_data.data()), static_cast<uInt>(body_data.size()));
+        crc = crc32(crc, reinterpret_cast<const Bytef*>(body_data.data()),
+                    static_cast<uInt>(body_data.size()));
 
-        // SHA-256
         std::string sha = sha256_hex(body_data.data(), body_data.size());
 
-        // zlib compress
+        // zlib (RFC 1950) at level 6.
         uLongf comp_len = compressBound(static_cast<uLong>(body_data.size()));
         std::vector<Bytef> compressed(comp_len);
-        compress(compressed.data(), &comp_len, reinterpret_cast<const Bytef*>(body_data.data()),
-                 static_cast<uLong>(body_data.size()));
+        compress2(compressed.data(), &comp_len,
+                  reinterpret_cast<const Bytef*>(body_data.data()),
+                  static_cast<uLong>(body_data.size()), 6);
 
-        size_t orig_size = body_data.size();
-        size_t comp_size = static_cast<size_t>(comp_len);
-        double ratio = static_cast<double>(comp_size) / std::max(orig_size, static_cast<size_t>(1));
-
-        // Format CRC32 as hex
         char crc_hex[9];
-        std::snprintf(crc_hex, sizeof(crc_hex), "%08lx", static_cast<unsigned long>(crc & 0xFFFFFFFF));
+        std::snprintf(crc_hex, sizeof(crc_hex), "%08lx",
+                      static_cast<unsigned long>(crc & 0xFFFFFFFF));
 
-        double duration_ms = now_ms() - t0;
-        std::string body = "{\"original_size\":" + std::to_string(orig_size) +
-            ",\"compressed_size\":" + std::to_string(comp_size) +
-            ",\"compression_ratio\":" + format_double(std::round(ratio * 10000) / 10000, 4) +
+        std::string body = "{\"original_size\":" + std::to_string(body_data.size()) +
+            ",\"compressed_size\":" + std::to_string(static_cast<std::size_t>(comp_len)) +
             ",\"crc32\":\"" + std::string(crc_hex) + "\"" +
             ",\"sha256\":\"" + sha + "\"}";
 
         http::response<http::string_body> res{http::status::ok, req.version()};
-        set_api_headers(res, duration_ms, auth_dur_ms);
+        set_api_headers(res, now_ms() - t0);
         res.keep_alive(req.keep_alive());
         res.body() = std::move(body);
         res.prepare_payload();
         return send(std::move(res));
     }
 
-    // GET /api/delayed?ms=N&work=light
-    if (req.method() == http::verb::get && path == "/api/delayed") {
-        double t0 = now_ms();
-        int ms = std::max(1, std::min(100, std::atoi(get_param(params, "ms", "100").c_str())));
-        std::string work = get_param(params, "work", "none");
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(ms));
-
-        if (work == "light") {
-            std::string data;
-            for (int i = 0; i < 100; ++i) data += "benchmark";
-            sha256_hex(data);
-        }
-
-        double actual_ms = now_ms() - t0;
-        std::string body = "{\"requested_ms\":" + std::to_string(ms) +
-            ",\"actual_ms\":" + format_double(std::round(actual_ms * 100) / 100, 2) +
-            ",\"work\":\"" + work + "\"}";
-
-        http::response<http::string_body> res{http::status::ok, req.version()};
-        set_api_headers(res, actual_ms, auth_dur_ms);
-        res.keep_alive(req.keep_alive());
-        res.body() = std::move(body);
-        res.prepare_payload();
-        return send(std::move(res));
-    }
-
-    // GET /api/validate?seed=42
+    // GET /api/validate?seed=N — echo dataset checksums (spec §5.10).
     if (req.method() == http::verb::get && path == "/api/validate") {
         double t0 = now_ms();
-        int seed = std::atoi(get_param(params, "seed", "42").c_str());
+        int seed = int_param(params, "seed", 42);
 
-        std::string users_hash_str, agg_hash_str, search_hash_str;
-
-        if (bench_data_loaded && !bench_checksums.empty()) {
-            auto it_u = bench_checksums.find("users_page1");
-            auto it_a = bench_checksums.find("aggregate_summary");
-            auto it_s = bench_checksums.find("search_network_top10");
-            users_hash_str = (it_u != bench_checksums.end()) ? it_u->second.substr(0, 16) : "";
-            agg_hash_str = (it_a != bench_checksums.end()) ? it_a->second.substr(0, 16) : "";
-            search_hash_str = (it_s != bench_checksums.end()) ? it_s->second.substr(0, 16) : "";
-        } else {
-            // Users checksum (page=1)
-            std::mt19937 rng1(1);
-            auto users = generate_users(rng1);
-            std::string users_json = "[";
-            for (size_t i = 0; i < users.size(); ++i) {
-                if (i > 0) users_json += ",";
-                users_json += users[i].to_sorted_json();
-            }
-            users_json += "]";
-            users_hash_str = sha256_hex(users_json).substr(0, 16);
-
-            // Aggregate checksum (start=0)
-            std::mt19937 rng2(0);
-            std::normal_distribution<double> dist(50.0, 15.0);
-            std::vector<double> values(10000);
-            for (int i = 0; i < 10000; ++i)
-                values[i] = std::round(dist(rng2) * 10000) / 10000;
-            std::sort(values.begin(), values.end());
-            std::string agg_json = "[";
-            for (size_t i = 0; i < values.size(); ++i) {
-                if (i > 0) agg_json += ",";
-                agg_json += format_double(values[i], 4);
-            }
-            agg_json += "]";
-            agg_hash_str = sha256_hex(agg_json).substr(0, 16);
-
-            // Search checksum
-            std::mt19937 rng3(42);
-            std::string search_json = "[";
-            for (int i = 0; i < 1000; ++i) {
-                int word_count = 3 + static_cast<int>(rng3() % 6);
-                std::string phrase;
-                for (int j = 0; j < word_count; ++j) {
-                    if (j > 0) phrase += " ";
-                    phrase += SEARCH_WORDS[rng3() % NUM_WORDS];
-                }
-                if (i > 0) search_json += ",";
-                search_json += "\"" + json_escape(phrase) + "\"";
-            }
-            search_json += "]";
-            search_hash_str = sha256_hex(search_json).substr(0, 16);
+        std::string checksums = "{";
+        bool first = true;
+        for (const auto& [k, v] : bench_checksums) {
+            if (!first) checksums += ",";
+            first = false;
+            checksums += "\"" + json_escape(k) + "\":\"" + json_escape(v) + "\"";
         }
-
-        double duration_ms = now_ms() - t0;
-        std::string body = "{\"seed\":" + std::to_string(seed) +
-            ",\"checksums\":{\"users_page1\":\"" + users_hash_str + "\"" +
-            ",\"aggregate_start0\":\"" + agg_hash_str + "\"" +
-            ",\"search_corpus\":\"" + search_hash_str + "\"}}";
+        checksums += "}";
 
         http::response<http::string_body> res{http::status::ok, req.version()};
-        set_api_headers(res, duration_ms, auth_dur_ms);
+        set_api_headers(res, now_ms() - t0);
         res.keep_alive(req.keep_alive());
-        res.body() = std::move(body);
+        res.body() = "{\"seed\":" + std::to_string(seed) +
+                     ",\"checksums\":" + checksums + "}";
         res.prepare_payload();
         return send(std::move(res));
     }
 
-    return send(not_found());
+    return send(json_error(http::status::not_found, "not found"));
 }
 
 // ── Session ─────────────────────────────────────────────────────────────────
@@ -1066,7 +939,18 @@ void handle_request(http::request<http::string_body>&& req, Send&& send) {
 class session : public std::enable_shared_from_this<session> {
     beast::ssl_stream<beast::tcp_stream> stream_;
     beast::flat_buffer buffer_;
-    http::request<http::string_body> req_;
+    // Header-first parsing: /upload drains its body incrementally through
+    // drain_buf_ (spec §5.3 — no wholesale buffering); everything else is
+    // converted to a string-body parser.
+    std::optional<http::request_parser<http::buffer_body>> hdr_parser_;
+    std::optional<http::request_parser<http::string_body>> body_parser_;
+    std::array<char, 65536> drain_buf_{};
+    std::uint64_t upload_received_ = 0;
+    double upload_t0_ = 0;
+    bool keep_alive_ = false;
+    unsigned version_ = 11;
+    bool has_request_id_ = false;
+    std::string request_id_;
 
 public:
     explicit session(tcp::socket&& socket, ssl::context& ctx)
@@ -1092,44 +976,179 @@ private:
     }
 
     void do_read() {
-        req_ = {};
+        hdr_parser_.emplace();
+        body_parser_.reset();
+        hdr_parser_->body_limit(DOWNLOAD_CAP); // spec cap; must be set pre-parse
         beast::get_lowest_layer(stream_).expires_after(std::chrono::seconds(30));
-        http::async_read(
-            stream_, buffer_, req_,
-            beast::bind_front_handler(&session::on_read, shared_from_this()));
+        http::async_read_header(
+            stream_, buffer_, *hdr_parser_,
+            beast::bind_front_handler(&session::on_read_header, shared_from_this()));
     }
 
-    void on_read(beast::error_code ec, std::size_t /*bytes_transferred*/) {
+    void on_read_header(beast::error_code ec, std::size_t /*bytes*/) {
+        if (ec == http::error::end_of_stream)
+            return do_close();
+        if (ec) { bench_log(LOG_ERROR, "read_header: " + ec.message()); return; }
+
+        auto const& hreq = hdr_parser_->get();
+        std::string path = get_path(hreq.target());
+
+        // POST /upload — drain incrementally, never buffering the whole body.
+        if (hreq.method() == http::verb::post && path == "/upload") {
+            if (!authorized(hreq)) {
+                http::response<http::string_body> res{http::status::unauthorized, hreq.version()};
+                res.set(http::field::content_type, "application/json");
+                res.keep_alive(false); // body not drained → connection must close
+                res.body() = R"({"error":"unauthorized"})";
+                res.prepare_payload();
+                return write_response(std::move(res));
+            }
+            upload_received_ = 0;
+            upload_t0_ = now_ms();
+            keep_alive_ = hreq.keep_alive();
+            version_ = hreq.version();
+            auto it = hreq.find("X-Networker-Request-Id");
+            has_request_id_ = (it != hreq.end());
+            if (has_request_id_) request_id_ = std::string(it->value());
+            return drain_upload();
+        }
+
+        // Everything else: read the remaining body into a string.
+        body_parser_.emplace(std::move(*hdr_parser_));
+        hdr_parser_.reset();
+        http::async_read(
+            stream_, buffer_, *body_parser_,
+            beast::bind_front_handler(&session::on_read_full, shared_from_this()));
+    }
+
+    void drain_upload() {
+        if (hdr_parser_->is_done())
+            return respond_upload();
+
+        hdr_parser_->get().body().data = drain_buf_.data();
+        hdr_parser_->get().body().size = drain_buf_.size();
+        beast::get_lowest_layer(stream_).expires_after(std::chrono::seconds(30));
+        http::async_read(
+            stream_, buffer_, *hdr_parser_,
+            [self = shared_from_this()](beast::error_code ec, std::size_t) {
+                if (ec == http::error::need_buffer) ec = {};
+                if (ec) { bench_log(LOG_ERROR, "upload read: " + ec.message()); return; }
+                self->upload_received_ +=
+                    self->drain_buf_.size() - self->hdr_parser_->get().body().size;
+                self->drain_upload();
+            });
+    }
+
+    void respond_upload() {
+        double recv_ms = now_ms() - upload_t0_;
+        http::response<http::string_body> res{http::status::ok, version_};
+        res.set(http::field::content_type, "application/json");
+        res.set("X-Networker-Received-Bytes", std::to_string(upload_received_));
+        res.set("Server-Timing", "recv;dur=" + format_double(recv_ms, 1));
+        if (has_request_id_)
+            res.set("X-Networker-Request-Id", request_id_);
+        res.keep_alive(keep_alive_);
+        res.body() = "{\"received_bytes\":" + std::to_string(upload_received_) + "}";
+        res.prepare_payload();
+        write_response(std::move(res));
+    }
+
+    void on_read_full(beast::error_code ec, std::size_t /*bytes*/) {
         if (ec == http::error::end_of_stream)
             return do_close();
         if (ec) { bench_log(LOG_ERROR, "read: " + ec.message()); return; }
 
-        handle_request(std::move(req_), [this](auto&& msg, std::uint64_t download_size = 0) {
-            using msg_type = std::decay_t<decltype(msg)>;
+        auto req = body_parser_->release();
+        body_parser_.reset();
 
-            if constexpr (std::is_same_v<msg_type, http::response<http::buffer_body>>) {
-                // Streaming download response
-                do_write_download(std::move(msg), download_size);
-            } else {
-                // Normal response — store in shared_ptr for lifetime
-                auto sp = std::make_shared<msg_type>(std::move(msg));
-                http::async_write(
-                    stream_, *sp,
-                    [self = shared_from_this(), sp](beast::error_code ec, std::size_t) {
-                        if (ec) { bench_log(LOG_ERROR, "write: " + ec.message()); return; }
-                        if (sp->need_eof())
-                            return self->do_close();
-                        self->do_read();
-                    });
-            }
-        });
+        // HEAD is served by the GET handler with the body stripped (the
+        // validator's header checks use HEAD, mirroring axum auto-HEAD).
+        bool const is_head = req.method() == http::verb::head;
+        if (is_head)
+            req.method(http::verb::get);
+
+        // GET /api/delayed — asio timer, never blocks a pool thread (spec §5.9).
+        if (req.method() == http::verb::get && get_path(req.target()) == "/api/delayed")
+            return handle_delayed(std::move(req));
+
+        handle_request(std::move(req),
+            [this, is_head](auto&& msg, std::uint64_t download_size = 0) {
+                using msg_type = std::decay_t<decltype(msg)>;
+                if (is_head)
+                    return write_head_response(msg);
+                if constexpr (std::is_same_v<msg_type, http::response<http::buffer_body>>) {
+                    do_write_download(std::move(msg), download_size);
+                } else {
+                    write_response(std::move(msg));
+                }
+            });
+    }
+
+    // Send only the headers of `res` (HEAD semantics: same headers, no body).
+    template <class Res>
+    void write_head_response(Res& res) {
+        http::response<http::empty_body> h;
+        h.result(res.result());
+        h.version(res.version());
+        for (auto const& f : res.base())
+            h.set(f.name_string(), f.value());
+        h.keep_alive(res.keep_alive());
+        write_response(std::move(h));
+    }
+
+    void handle_delayed(http::request<http::string_body>&& req) {
+        double t0 = now_ms();
+        if (!authorized(req)) {
+            http::response<http::string_body> res{http::status::unauthorized, req.version()};
+            res.set(http::field::content_type, "application/json");
+            res.keep_alive(req.keep_alive());
+            res.body() = R"({"error":"unauthorized"})";
+            res.prepare_payload();
+            return write_response(std::move(res));
+        }
+
+        auto params = parse_query(req.target());
+        int ms = std::clamp(int_param(params, "ms", 10), 1, 100); // spec §5.9 clamp
+        // `work` is reserved: accepted and ignored.
+        bool keep = req.keep_alive();
+        unsigned ver = req.version();
+
+        auto timer = std::make_shared<net::steady_timer>(stream_.get_executor());
+        timer->expires_after(std::chrono::milliseconds(ms));
+        timer->async_wait(
+            [self = shared_from_this(), timer, ms, t0, keep, ver](beast::error_code ec) {
+                if (ec) { bench_log(LOG_ERROR, "delayed timer: " + ec.message()); return; }
+                double actual = now_ms() - t0;
+                http::response<http::string_body> res{http::status::ok, ver};
+                set_api_headers(res, actual);
+                res.keep_alive(keep);
+                res.body() = "{\"requested_ms\":" + std::to_string(ms) +
+                             ",\"actual_ms\":" + format_double(actual, 2) + "}";
+                res.prepare_payload();
+                self->write_response(std::move(res));
+            });
+    }
+
+    template <class Response>
+    void write_response(Response&& msg) {
+        auto sp = std::make_shared<std::decay_t<Response>>(std::forward<Response>(msg));
+        http::async_write(
+            stream_, *sp,
+            [self = shared_from_this(), sp](beast::error_code ec, std::size_t) {
+                if (ec) { bench_log(LOG_ERROR, "write: " + ec.message()); return; }
+                if (sp->need_eof())
+                    return self->do_close();
+                self->do_read();
+            });
     }
 
     void do_write_download(http::response<http::buffer_body> header, std::uint64_t total) {
+        // Multi-GiB downloads legitimately exceed the 30 s read deadline;
+        // the next do_read() re-arms it.
+        beast::get_lowest_layer(stream_).expires_never();
         auto hdr = std::make_shared<http::response<http::buffer_body>>(std::move(header));
         auto sr  = std::make_shared<http::response_serializer<http::buffer_body>>(*hdr);
 
-        // Write the header first
         http::async_write_header(
             stream_, *sr,
             [self = shared_from_this(), hdr, sr, total](beast::error_code ec, std::size_t) {
@@ -1159,16 +1178,15 @@ private:
             return;
         }
 
-        constexpr std::size_t chunk_size = 8192;
-        // Static buffer filled with 0x42
+        // Static buffer filled with 0x42 (spec §5.2: pinned fill + chunk size).
         static const auto fill_buf = []() {
-            std::array<char, chunk_size> buf;
-            buf.fill(0x42);
+            std::array<char, DOWNLOAD_CHUNK> buf{};
+            buf.fill(DOWNLOAD_FILL);
             return buf;
         }();
 
         auto remaining = total - written;
-        auto to_write  = static_cast<std::size_t>(std::min<std::uint64_t>(remaining, chunk_size));
+        auto to_write  = static_cast<std::size_t>(std::min<std::uint64_t>(remaining, DOWNLOAD_CHUNK));
         bool is_last   = (written + to_write >= total);
 
         hdr->body().data = const_cast<char*>(fill_buf.data());
@@ -1241,11 +1259,15 @@ private:
 
 int main() {
     init_log_level();
-    load_bench_data();
+    load_bench_data(); // fatal on failure (spec §2)
+
+    // /health byte-constant body (spec §5.1).
+    g_health_body = std::string(R"({"status":"ok","runtime":"cpp","version":")") +
+                    std::to_string(__cplusplus) + "\"}";
 
     // Bearer token auth
-    const char* tok = getenv("BENCH_API_TOKEN");
-    if (tok) bench_api_token = tok;
+    if (const char* tok = std::getenv("BENCH_API_TOKEN"))
+        bench_api_token = tok;
 
     auto const cert_dir = []() -> std::string {
         if (auto* v = std::getenv("BENCH_CERT_DIR")) return v;
@@ -1258,7 +1280,15 @@ int main() {
         return 8443;
     }();
 
-    auto const threads = std::max<int>(1, static_cast<int>(std::thread::hardware_concurrency()));
+    // Worker policy (spec §3): io_context pool threads = BENCH_WORKERS,
+    // default = logical CPU count.
+    auto const threads = []() -> int {
+        if (auto* v = std::getenv("BENCH_WORKERS")) {
+            int n = std::atoi(v);
+            if (n > 0) return n;
+        }
+        return std::max<int>(1, static_cast<int>(std::thread::hardware_concurrency()));
+    }();
 
     // SSL context
     ssl::context ctx{ssl::context::tls_server};
@@ -1279,7 +1309,7 @@ int main() {
     bench_log(LOG_INFO, "C++ Boost.Beast server listening on port " + std::to_string(port)
               + " (" + std::to_string(threads) + " threads, C++" + std::to_string(__cplusplus) + ")");
 
-    // Run the I/O context on multiple threads
+    // Run the I/O context on the worker thread pool
     std::vector<std::thread> v;
     v.reserve(threads - 1);
     for (auto i = threads - 1; i > 0; --i)

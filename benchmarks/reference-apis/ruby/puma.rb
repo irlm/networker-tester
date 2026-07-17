@@ -1,14 +1,21 @@
 # Puma configuration for AletheBench Ruby reference API.
+#
+# Worker policy (API-SPEC.md §3): BENCH_WORKERS cluster workers
+# (default = logical CPU count), 5:5 threads per worker.
 
-cert_dir = ENV.fetch("BENCH_CERT_DIR", "/opt/bench")
+require 'etc'
 
-bind "ssl://0.0.0.0:8443?cert=#{cert_dir}/cert.pem&key=#{cert_dir}/key.pem&verify_mode=none"
+cert_dir = ENV.fetch('BENCH_CERT_DIR', '/opt/bench')
+port = ENV.fetch('BENCH_PORT', '8443')
 
-# Single process, no cluster — fair comparison with other single-process servers.
-workers 0
+bind "ssl://0.0.0.0:#{port}?cert=#{cert_dir}/cert.pem&key=#{cert_dir}/key.pem&verify_mode=none"
 
-# Thread pool: 4 minimum, 16 maximum.
-threads 4, 16
+workers Integer(ENV.fetch('BENCH_WORKERS') { Etc.nprocessors })
+threads 5, 5
+
+# Load the app (and the shared dataset) once in the master before forking —
+# dataset-load failures abort startup instead of crash-looping workers.
+preload_app!
 
 # Quiet startup logs.
-environment "production"
+environment 'production'

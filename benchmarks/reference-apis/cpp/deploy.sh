@@ -29,7 +29,7 @@ done
 
 echo "==> Installing build dependencies on $TARGET"
 ssh "$TARGET" "sudo apt-get update -qq && sudo apt-get install -y -qq \
-    build-essential cmake libboost-system-dev libboost-dev libssl-dev" < /dev/null
+    build-essential cmake libboost-system-dev libboost-dev libssl-dev zlib1g-dev" < /dev/null
 
 echo "==> Creating remote directory $REMOTE_DIR"
 ssh "$TARGET" "sudo mkdir -p $REMOTE_DIR && sudo chown \$(whoami) $REMOTE_DIR" < /dev/null
