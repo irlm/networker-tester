@@ -27,6 +27,13 @@ public partial class Agent
 
     public string ApiKey { get; set; } = null!;
 
+    /// <summary>
+    /// Lowercase-hex SHA-256 of <see cref="ApiKey"/> (V040) — the column agent
+    /// auth actually looks up. Nullable only for not-yet-migrated rows; V040
+    /// backfills every existing row and minting writes both columns.
+    /// </summary>
+    public string? ApiKeyHash { get; set; }
+
     public string? Tags { get; set; }
 
     public string ProjectId { get; set; } = null!;

@@ -150,10 +150,13 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<Program>, IAsync
     }
 
     // Point the booted control-plane app at the container instead of its
-    // default localhost connection string.
+    // default localhost connection string. Startup schema migrations are
+    // opted out: this fixture materializes the schema from the EF model's own
+    // DDL (above), so replaying the V0NN chain on top of it would collide.
     protected override void ConfigureWebHost(Microsoft.AspNetCore.Hosting.IWebHostBuilder builder)
     {
         builder.UseSetting("ConnectionStrings:Networker", _db.GetConnectionString());
+        builder.UseSetting("NETWORKER_RUN_MIGRATIONS", "0");
     }
 
     /// A client carrying a JWT for the seeded user, minted by the app's OWN

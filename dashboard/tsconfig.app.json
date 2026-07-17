@@ -7,6 +7,9 @@
     "module": "ESNext",
     "types": ["vite/client"],
     "skipLibCheck": true,
+    /* shared/modes.json drift guard (src/lib/modes-manifest.test.ts) imports
+       the repo-root manifest directly. */
+    "resolveJsonModule": true,
 
     /* Bundler mode */
     "moduleResolution": "bundler",

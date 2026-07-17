@@ -5,6 +5,8 @@ pub mod capture;
 pub mod cli;
 pub mod dispatch;
 pub mod metrics;
+#[cfg(test)]
+mod modes_manifest_guard;
 pub mod output;
 pub mod progress;
 pub mod runner;

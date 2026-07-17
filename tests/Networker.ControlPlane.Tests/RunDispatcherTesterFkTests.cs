@@ -138,6 +138,7 @@ public sealed class RunDispatcherTesterFkTests
                 last_heartbeat TEXT,
                 registered_at TEXT NOT NULL,
                 api_key TEXT NOT NULL,
+                api_key_hash TEXT,
                 tags TEXT,
                 project_id TEXT NOT NULL,
                 tester_id TEXT REFERENCES project_tester(tester_id)
