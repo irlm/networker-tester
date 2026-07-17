@@ -88,7 +88,7 @@ public static class MembersEndpoints
 
             if (!ValidRoles.Contains(req.Role))
             {
-                return Results.BadRequest(new { error = "Role must be admin, operator, or viewer" });
+                return ApiError.BadRequest("Role must be admin, operator, or viewer");
             }
 
             var email = req.Email ?? string.Empty;
@@ -100,7 +100,7 @@ public static class MembersEndpoints
 
             if (target is null)
             {
-                return Results.NotFound(new { error = "User not found with that email" });
+                return ApiError.NotFound("User not found with that email");
             }
 
             var existing = await db.ProjectMembers
@@ -139,14 +139,14 @@ public static class MembersEndpoints
         {
             if (!ValidRoles.Contains(req.Role))
             {
-                return Results.BadRequest(new { error = "Role must be admin, operator, or viewer" });
+                return ApiError.BadRequest("Role must be admin, operator, or viewer");
             }
 
             var member = await db.ProjectMembers
                 .FirstOrDefaultAsync(m => m.ProjectId == projectId && m.UserId == memberUserId, ct);
             if (member is null)
             {
-                return Results.NotFound(new { error = "Member not found" });
+                return ApiError.NotFound("Member not found");
             }
 
             // Demoting an admin: make sure they aren't the last one.
@@ -156,7 +156,7 @@ public static class MembersEndpoints
                     .CountAsync(m => m.ProjectId == projectId && m.Role == "admin", ct);
                 if (adminCount <= 1)
                 {
-                    return Results.BadRequest(new { error = "Cannot demote the last admin" });
+                    return ApiError.BadRequest("Cannot demote the last admin");
                 }
             }
 
@@ -178,7 +178,7 @@ public static class MembersEndpoints
                 .FirstOrDefaultAsync(m => m.ProjectId == projectId && m.UserId == memberUserId, ct);
             if (member is null)
             {
-                return Results.BadRequest(new { error = "Member not found" });
+                return ApiError.BadRequest("Member not found");
             }
 
             if (member.Role == "admin")
@@ -187,7 +187,7 @@ public static class MembersEndpoints
                     .CountAsync(m => m.ProjectId == projectId && m.Role == "admin", ct);
                 if (adminCount <= 1)
                 {
-                    return Results.BadRequest(new { error = "Cannot remove the last admin from a project" });
+                    return ApiError.BadRequest("Cannot remove the last admin from a project");
                 }
             }
 
@@ -265,7 +265,7 @@ public static class MembersEndpoints
             if (rows is null || rows.Count == 0)
             {
                 // Rust: empty CSV → 400 "No file field found or file is empty".
-                return Results.BadRequest(new { error = "No members provided" });
+                return ApiError.BadRequest("No members provided");
             }
 
             var imported = 0;
@@ -398,8 +398,8 @@ public static class MembersEndpoints
 
                 if (emailConfigured)
                 {
-                    // TODO(phase2): port crate::email::send_email (Azure
-                    // Communication Services). Until then the invite exists and
+                    // TODO(phase2): wire IEmailSender (Azure Communication
+                    // Services) here. Until then the invite exists and
                     // resolves; only the email delivery is stubbed.
                     logger.LogWarning(
                         "send-invites: email sending not yet implemented in the C# control plane " +
@@ -450,7 +450,7 @@ public static class MembersEndpoints
 
         if (updated == 0)
         {
-            return Results.NotFound(new { error = "No pending membership found" });
+            return ApiError.NotFound("No pending membership found");
         }
 
         return newStatus == "active"

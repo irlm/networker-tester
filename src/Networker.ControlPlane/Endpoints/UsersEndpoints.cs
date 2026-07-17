@@ -21,8 +21,8 @@ namespace Networker.ControlPlane.Endpoints;
 /// the frontend admin views consume) — <c>password_hash</c> and the reset-token
 /// columns are never serialized.</para>
 ///
-/// <para>Invite emails: the Rust side sends a setup link via
-/// <c>crate::email::send_email</c>. There is no mailer in the C# control plane
+/// <para>Invite emails: the retired Rust dashboard sent a setup link via its
+/// <c>email::send_email</c> helper. There is no mailer in the C# control plane
 /// yet, so the setup token is generated + stored (SHA-256 hash, 24h expiry,
 /// same as Rust) and the send is a loud TODO log.</para>
 /// </summary>
@@ -70,12 +70,11 @@ public static class UsersEndpoints
 
             if (!IsValidRole(req.Role))
             {
-                return Results.BadRequest(
-                    new { error = "Invalid role (must be admin, operator, or viewer)" });
+                return ApiError.BadRequest("Invalid role (must be admin, operator, or viewer)");
             }
             if (string.IsNullOrWhiteSpace(req.Email))
             {
-                return Results.BadRequest(new { error = "Email is required" });
+                return ApiError.BadRequest("Email is required");
             }
 
             var email = req.Email.Trim();
@@ -84,7 +83,7 @@ public static class UsersEndpoints
                 .AnyAsync(u => u.Email != null && u.Email.ToLower() == emailLower, ct);
             if (exists)
             {
-                return Results.Conflict(new { error = "Email already registered" });
+                return ApiError.Conflict("Email already registered");
             }
 
             // Setup token: 64 alphanumeric chars, stored SHA-256-hashed with a
@@ -125,7 +124,7 @@ public static class UsersEndpoints
         {
             if (!IsValidRole(req.Role))
             {
-                return Results.BadRequest(new { error = "Invalid role" });
+                return ApiError.BadRequest("Invalid role");
             }
 
             var n = await db.DashUsers
@@ -161,14 +160,14 @@ public static class UsersEndpoints
         {
             if (!IsValidRole(req.Role))
             {
-                return Results.BadRequest(new { error = "Invalid role" });
+                return ApiError.BadRequest("Invalid role");
             }
 
             // Prevent an admin from demoting themselves (Rust parity).
             var admin = ctx.GetAuthUser();
             if (admin is not null && admin.UserId == userId)
             {
-                return Results.BadRequest(new { error = "Cannot change your own role" });
+                return ApiError.BadRequest("Cannot change your own role");
             }
 
             var n = await db.DashUsers
@@ -189,7 +188,7 @@ public static class UsersEndpoints
             var admin = ctx.GetAuthUser();
             if (admin is not null && admin.UserId == userId)
             {
-                return Results.BadRequest(new { error = "Cannot disable your own account" });
+                return ApiError.BadRequest("Cannot disable your own account");
             }
 
             var n = await db.DashUsers

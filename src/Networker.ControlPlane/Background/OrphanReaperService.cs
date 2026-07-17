@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Networker.ControlPlane.Security;
 using Networker.Data;
 using Networker.Security;
 
@@ -287,7 +288,7 @@ public sealed class OrphanReaperService : BackgroundService
                 try
                 {
                     var plain = cipher.Decrypt(acct.CredentialsEnc, acct.CredentialsNonce);
-                    creds = ParseCreds(plain);
+                    creds = CredentialJson.ToMap(plain);
                 }
                 catch (Exception)
                 {
@@ -566,25 +567,6 @@ public sealed class OrphanReaperService : BackgroundService
         {
             return (null, null);
         }
-    }
-
-    /// <summary>Parse decrypted account credential JSON into a string→string map
-    /// (string values as-is, non-strings as raw JSON). Same shape as
-    /// <c>TesterPrecheckEndpoints.ParseCreds</c>.</summary>
-    private static Dictionary<string, string> ParseCreds(byte[] plain)
-    {
-        var map = new Dictionary<string, string>(StringComparer.Ordinal);
-        using var doc = JsonDocument.Parse(plain);
-        if (doc.RootElement.ValueKind == JsonValueKind.Object)
-        {
-            foreach (var prop in doc.RootElement.EnumerateObject())
-            {
-                map[prop.Name] = prop.Value.ValueKind == JsonValueKind.String
-                    ? prop.Value.GetString() ?? string.Empty
-                    : prop.Value.GetRawText();
-            }
-        }
-        return map;
     }
 
     // ── Azure CLI list/delete (az) — best-effort; missing CLI ⇒ empty/no-op ────

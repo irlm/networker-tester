@@ -54,13 +54,13 @@ public static class InvitesEndpoints
 
             if (!ValidRoles.Contains(req.Role))
             {
-                return Results.BadRequest(new { error = "role must be 'admin', 'operator', or 'viewer'" });
+                return ApiError.BadRequest("role must be 'admin', 'operator', or 'viewer'");
             }
 
             var email = req.Email ?? string.Empty;
             if (!email.Contains('@') || email.Length < 3)
             {
-                return Results.BadRequest(new { error = "Invalid email address" });
+                return ApiError.BadRequest("Invalid email address");
             }
 
             var rawToken = CollabTokens.Generate();
@@ -82,8 +82,9 @@ public static class InvitesEndpoints
 
             var inviteUrl = $"{CollabConfig.PublicUrl()}/invite/{rawToken}";
 
-            // TODO(phase2): port crate::email::send_email (best-effort invite
-            // email). The Rust side already tolerates send failures, so the
+            // TODO(phase2): wire IEmailSender for the best-effort invite email
+            // (the retired Rust dashboard sent it via its email::send_email
+            // helper). The Rust side already tolerated send failures, so the
             // response contract is unchanged by this stub.
             loggerFactory
                 .CreateLogger("Networker.ControlPlane.InvitesEndpoints")
@@ -156,7 +157,7 @@ public static class InvitesEndpoints
             var resolved = await ResolveInviteAsync(db, token, ct);
             if (resolved is null)
             {
-                return Results.NotFound(new { error = "Invite expired or invalid" });
+                return ApiError.NotFound("Invite expired or invalid");
             }
 
             return Results.Ok(new
@@ -200,7 +201,7 @@ public static class InvitesEndpoints
             var invite = await ResolveInviteAsync(db, token, ct);
             if (invite is null)
             {
-                return Results.NotFound(new { error = "Invite expired or invalid" });
+                return ApiError.NotFound("Invite expired or invalid");
             }
 
             Guid acceptedUserId;
@@ -242,9 +243,7 @@ public static class InvitesEndpoints
 
                     if (!valid)
                     {
-                        return Results.Json(
-                            new { error = "Invalid credentials" },
-                            statusCode: StatusCodes.Status401Unauthorized);
+                        return ApiError.Status(StatusCodes.Status401Unauthorized, "Invalid credentials");
                     }
 
                     acceptedUserId = account!.UserId;
@@ -253,9 +252,7 @@ public static class InvitesEndpoints
                 }
                 else
                 {
-                    return Results.Json(
-                        new { error = "Authentication required — provide Authorization header or current_password" },
-                        statusCode: StatusCodes.Status401Unauthorized);
+                    return ApiError.Status(StatusCodes.Status401Unauthorized, "Authentication required — provide Authorization header or current_password");
                 }
             }
             else
@@ -264,12 +261,12 @@ public static class InvitesEndpoints
                 // db::users::create_local_user: viewer / active / local).
                 if (payload.Password is null)
                 {
-                    return Results.BadRequest(new { error = "password is required to create an account" });
+                    return ApiError.BadRequest("password is required to create an account");
                 }
 
                 if (payload.Password.Length < 8)
                 {
-                    return Results.BadRequest(new { error = "Password must be at least 8 characters" });
+                    return ApiError.BadRequest("Password must be at least 8 characters");
                 }
 
                 var created = new DashUser

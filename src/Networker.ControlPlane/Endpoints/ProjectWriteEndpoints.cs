@@ -52,7 +52,7 @@ public static class ProjectWriteEndpoints
 
             if (string.IsNullOrWhiteSpace(req.Name))
             {
-                return Results.BadRequest(new { error = "Project name is required" });
+                return ApiError.BadRequest("Project name is required");
             }
 
             var slug = !string.IsNullOrWhiteSpace(req.Slug)
@@ -60,7 +60,7 @@ public static class ProjectWriteEndpoints
                 : ProjectSlug.Slugify(req.Name);
             if (slug.Length == 0)
             {
-                return Results.BadRequest(new { error = "Project slug is required" });
+                return ApiError.BadRequest("Project slug is required");
             }
 
             var now = DateTime.UtcNow;
@@ -97,7 +97,7 @@ public static class ProjectWriteEndpoints
             catch (DbUpdateException ex) when (IsUniqueViolation(ex))
             {
                 // UNIQUE(slug) → 409 so the frontend can prompt for another.
-                return Results.Conflict(new { error = "a project with this slug already exists" });
+                return ApiError.Conflict("a project with this slug already exists");
             }
 
             return Results.Created($"/api/projects/{project.ProjectId}", ToDto(project));
@@ -152,7 +152,7 @@ public static class ProjectWriteEndpoints
             }
             if (project.DeleteProtection)
             {
-                return Results.BadRequest(new { error = "Project has delete protection enabled" });
+                return ApiError.BadRequest("Project has delete protection enabled");
             }
 
             if (project.DeletedAt is null)

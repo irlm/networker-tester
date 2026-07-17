@@ -37,13 +37,13 @@ public static partial class TesterWriteEndpoints
 
         if (body is null)
         {
-            return Results.BadRequest(new { error = "postpone body required" });
+            return ApiError.BadRequest("postpone body required");
         }
 
         var tester = await LoadAsync(db, projectId, testerId, ct);
         if (tester is null)
         {
-            return Results.NotFound(new { error = "Tester not found" });
+            return ApiError.NotFound("Tester not found");
         }
 
         var now = DateTime.UtcNow;
@@ -54,7 +54,7 @@ public static partial class TesterWriteEndpoints
         }
         catch (ArgumentException ex)
         {
-            return Results.BadRequest(new { error = ex.Message });
+            return ApiError.BadRequest(ex.Message);
         }
 
         tester.NextShutdownAt = newNext;
@@ -117,20 +117,18 @@ public static partial class TesterWriteEndpoints
 
         if (body is null || (body.AutoShutdownEnabled is null && body.AutoShutdownLocalHour is null))
         {
-            return Results.BadRequest(new
-            {
-                error = "at least one of auto_shutdown_enabled or auto_shutdown_local_hour required",
-            });
+            return ApiError.BadRequest(
+                "at least one of auto_shutdown_enabled or auto_shutdown_local_hour required");
         }
         if (body.AutoShutdownLocalHour is { } h && (h < 0 || h > 23))
         {
-            return Results.BadRequest(new { error = "auto_shutdown_local_hour must be 0..=23" });
+            return ApiError.BadRequest("auto_shutdown_local_hour must be 0..=23");
         }
 
         var tester = await LoadAsync(db, projectId, testerId, ct);
         if (tester is null)
         {
-            return Results.NotFound(new { error = "Tester not found" });
+            return ApiError.NotFound("Tester not found");
         }
 
         var newEnabled = body.AutoShutdownEnabled ?? tester.AutoShutdownEnabled;

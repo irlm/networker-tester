@@ -48,16 +48,13 @@ public static class ShareLinksEndpoints
 
             if (req.ResourceType != "run")
             {
-                return Results.BadRequest(new { error = "resource_type must be 'run'" });
+                return ApiError.BadRequest("resource_type must be 'run'");
             }
 
             var maxDays = CollabConfig.ShareMaxDays();
             if (!ShareLinkRules.IsValidExpiryDays(req.ExpiresInDays, maxDays))
             {
-                return Results.BadRequest(new
-                {
-                    error = $"expires_in_days must be between 1 and {maxDays}",
-                });
+                return ApiError.BadRequest($"expires_in_days must be between 1 and {maxDays}");
             }
 
             var rawToken = CollabTokens.Generate();
@@ -145,10 +142,7 @@ public static class ShareLinksEndpoints
                     var maxDays = CollabConfig.ShareMaxDays();
                     if (!ShareLinkRules.IsValidExpiryDays(days, maxDays))
                     {
-                        return Results.BadRequest(new
-                        {
-                            error = $"expires_in_days must be between 1 and {maxDays}",
-                        });
+                        return ApiError.BadRequest($"expires_in_days must be between 1 and {maxDays}");
                     }
 
                     var newExpires = DateTime.UtcNow.AddDays(days);
@@ -158,7 +152,7 @@ public static class ShareLinksEndpoints
                     return Results.Ok(new { extended = true, expires_at = newExpires });
 
                 default:
-                    return Results.BadRequest(new { error = "action must be 'extend' or 'revoke'" });
+                    return ApiError.BadRequest("action must be 'extend' or 'revoke'");
             }
         }).RequireAuthorization(AuthPolicies.ProjectAdmin);
 
@@ -196,7 +190,7 @@ public static class ShareLinksEndpoints
                 .FirstOrDefaultAsync(s => s.TokenHash == tokenHash && !s.Revoked && s.ExpiresAt > now, ct);
             if (link is null)
             {
-                return Results.NotFound(new { error = "Link expired or invalid" });
+                return ApiError.NotFound("Link expired or invalid");
             }
 
             // Rust: UPDATE ... RETURNING bumps the counters on every resolve.
@@ -212,12 +206,12 @@ public static class ShareLinksEndpoints
 
             if (link.ResourceType != "run")
             {
-                return Results.NotFound(new { error = "Unknown resource type" });
+                return ApiError.NotFound("Unknown resource type");
             }
 
             if (link.ResourceId is not { } runId)
             {
-                return Results.NotFound(new { error = "Resource not found" });
+                return ApiError.NotFound("Resource not found");
             }
 
             // networker_common::TestRun serde shape (same projection as the
@@ -247,7 +241,7 @@ public static class ShareLinksEndpoints
 
             if (run is null)
             {
-                return Results.NotFound(new { error = "Resource not found" });
+                return ApiError.NotFound("Resource not found");
             }
 
             // Newest artifact for the run, if any (db::benchmark_artifacts::get_for_run).

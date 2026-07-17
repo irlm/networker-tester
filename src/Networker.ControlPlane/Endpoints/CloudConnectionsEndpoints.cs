@@ -69,14 +69,12 @@ public static class CloudConnectionsEndpoints
 
             if (string.IsNullOrWhiteSpace(req.Name))
             {
-                return Results.BadRequest(new { error = "name is required" });
+                return ApiError.BadRequest("name is required");
             }
             if (!ValidProviders.Contains(req.Provider))
             {
-                return Results.BadRequest(new
-                {
-                    error = $"Invalid provider '{req.Provider}'. Valid: {string.Join(", ", ValidProviders)}",
-                });
+                return ApiError.BadRequest(
+                    $"Invalid provider '{req.Provider}'. Valid: {string.Join(", ", ValidProviders)}");
             }
 
             var now = DateTime.UtcNow;
@@ -111,7 +109,7 @@ public static class CloudConnectionsEndpoints
                 .FirstOrDefaultAsync(x => x.ConnectionId == id && x.ProjectId == projectId, ct);
 
             return c is null
-                ? Results.NotFound(new { error = "Connection not found" })
+                ? ApiError.NotFound("Connection not found")
                 : Results.Ok(ToFullDto(c));
         }).RequireAuthorization(AuthPolicies.ProjectAdmin);
 
@@ -127,12 +125,12 @@ public static class CloudConnectionsEndpoints
                 .FirstOrDefaultAsync(x => x.ConnectionId == id && x.ProjectId == projectId, ct);
             if (conn is null)
             {
-                return Results.NotFound(new { error = "Connection not found" });
+                return ApiError.NotFound("Connection not found");
             }
 
             if (string.IsNullOrWhiteSpace(req.Name))
             {
-                return Results.BadRequest(new { error = "name is required" });
+                return ApiError.BadRequest("name is required");
             }
 
             conn.Name = req.Name;
@@ -156,7 +154,7 @@ public static class CloudConnectionsEndpoints
 
             return affected > 0
                 ? Results.Ok(new { deleted = true })
-                : Results.NotFound(new { error = "Connection not found" });
+                : ApiError.NotFound("Connection not found");
         }).RequireAuthorization(AuthPolicies.ProjectAdmin);
 
         // POST /api/projects/{projectId}/cloud-connections/{id}/validate.
@@ -174,7 +172,7 @@ public static class CloudConnectionsEndpoints
                 .FirstOrDefaultAsync(x => x.ConnectionId == id && x.ProjectId == projectId, ct);
             if (conn is null)
             {
-                return Results.NotFound(new { error = "Connection not found" });
+                return ApiError.NotFound("Connection not found");
             }
 
             var (status, error) = ValidateConfigStub(conn.Provider, conn.Config);

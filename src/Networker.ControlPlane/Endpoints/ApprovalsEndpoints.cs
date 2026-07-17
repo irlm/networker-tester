@@ -87,19 +87,19 @@ public static class ApprovalsEndpoints
 
             if (body.EffectiveApproved() is not { } approved)
             {
-                return Results.BadRequest(new { error = "body must carry a boolean 'approved'" });
+                return ApiError.BadRequest("body must carry a boolean 'approved'");
             }
 
             var approval = await db.CommandApprovals
                 .FirstOrDefaultAsync(a => a.ApprovalId == approvalId && a.ProjectId == projectId, ct);
             if (approval is null)
             {
-                return Results.NotFound(new { error = "Approval not found" });
+                return ApiError.NotFound("Approval not found");
             }
 
             if (approval.Status != "pending")
             {
-                return Results.Conflict(new { error = "Approval is no longer pending" });
+                return ApiError.Conflict("Approval is no longer pending");
             }
 
             var status = DecisionStatus(approved);
