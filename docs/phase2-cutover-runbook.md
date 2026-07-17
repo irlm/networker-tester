@@ -1,5 +1,14 @@
 # Phase 2 — M6 Cutover Runbook (Rust dashboard → C# control plane)
 
+> **Status (2026-07): the cutover is complete** — prod (alethedash.com) is
+> served by the C# control plane. This file stays at this path because the
+> nightly soak check and the decommission standing order reference its section
+> numbers. Sections 1–3 and 6 are historical; **§4 (soak checklist), §5
+> (rollback), and §7 (decommission criteria) remain operative** until the Rust
+> control-plane crates are decommissioned. Current architecture:
+> [`architecture.md`](architecture.md); release/deploy mechanics:
+> [`release-flow.md`](release-flow.md).
+
 Operational runbook for cutting production traffic over from the Rust
 `networker-dashboard` to the C# `Networker.ControlPlane`, hardening delivered in
 M6: **per-tick leader election** (Postgres advisory locks), **background-service

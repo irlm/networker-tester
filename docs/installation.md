@@ -5,10 +5,14 @@ start each major component in this repository.
 
 ## Components
 
-- `networker-tester`: CLI probe runner
-- `networker-endpoint`: HTTP/HTTPS/UDP target server
-- `networker-dashboard`: control plane API + static frontend hosting
-- `networker-agent`: dashboard-connected worker that runs tester jobs
+- `networker-tester` (Rust): CLI probe runner
+- `networker-endpoint` (Rust): HTTP/HTTPS/UDP target server
+- `Networker.ControlPlane` (C#): control plane API (`/api` + `/ws`) — prod runs this
+- `Networker.Agent` (C#): control-plane-connected worker that runs tester jobs
+- `dashboard/` (React): browser SPA — served static by nginx in prod, Vite dev server locally
+
+The legacy Rust control plane (`networker-dashboard`, `networker-agent`) is retired and off the
+release train; see [`architecture.md`](architecture.md#retired-components-rust-control-plane).
 
 ## Install from the Hosted Scripts
 
@@ -44,14 +48,19 @@ Invoke-WebRequest $GistUrl -OutFile "$env:TEMP\networker-install.ps1"
 ```bash
 git clone git@github.com:irlm/networker-tester.git
 cd networker-tester
-cargo build --release
+
+# Rust probe engine + endpoint
+cargo build --release -p networker-tester -p networker-endpoint
+
+# C# control plane + agent (requires .NET 10 SDK)
+dotnet build Networker.sln -c Release
 ```
 
 Binaries are written to:
 - `target/release/networker-tester`
 - `target/release/networker-endpoint`
-- `target/release/networker-dashboard`
-- `target/release/networker-agent`
+- `src/Networker.ControlPlane/bin/Release/net10.0/Networker.ControlPlane`
+- `src/Networker.Agent/bin/Release/net10.0/Networker.Agent`
 
 ## Local Quick Start
 
@@ -134,44 +143,56 @@ Example:
 ./target/release/networker-endpoint generate-site ./site --preset mixed --stack nginx
 ```
 
-### `networker-dashboard`
+### `Networker.ControlPlane` (C#)
 
-The dashboard server expects environment-based configuration for database, JWT, and frontend
-serving. It also runs DB migrations and may seed the first admin user.
-
-Typical local flow:
+The control plane runs DB migrations on startup, may seed the first admin
+user, and expects environment-based configuration. Typical local flow:
 
 ```bash
 # Start PostgreSQL (use the dashboard compose file, not docker-compose.db.yml which is for MSSQL tests)
 docker compose -f docker-compose.dashboard.yml up -d postgres
-cd dashboard && npm install && npm run build && cd ..
+
 DASHBOARD_JWT_SECRET=$(openssl rand -base64 32) \
-DASHBOARD_ADMIN_PASSWORD=admin \
-  cargo run -p networker-dashboard
+DASHBOARD_CREDENTIAL_KEY=$(openssl rand -hex 32) \
+ASPNETCORE_URLS=http://0.0.0.0:5030 \
+  dotnet run --project src/Networker.ControlPlane
 ```
 
-Required environment variables:
-- `DASHBOARD_JWT_SECRET`: signing key for JWT tokens (generate with `openssl rand -base64 32`)
-- `DASHBOARD_ADMIN_PASSWORD`: initial admin password (prompted interactively if unset)
+Required environment variables (fail-closed outside Development):
+- `DASHBOARD_JWT_SECRET`: HS256 signing key for JWT tokens (generate with `openssl rand -base64 32`)
+- `DASHBOARD_CREDENTIAL_KEY`: 64-hex AEAD key for cloud-account secrets (generate with `openssl rand -hex 32`)
 
 Optional:
-- `DASHBOARD_DB_URL`: PostgreSQL connection string (defaults to `postgres://networker:networker@localhost:5432/networker_dashboard`)
-- `DASHBOARD_PORT`: API listen port (defaults to 3000)
-- `DASHBOARD_ADMIN_EMAIL`: admin user email address
+- `DASHBOARD_DB_URL_NPGSQL`: Npgsql connection string (`Host=…;Database=…;Username=…;Password=…`; defaults to localhost dev values)
+- `ASPNETCORE_URLS`: listen address (defaults to `http://localhost:5000`; prod uses `:5030`)
+- `DASHBOARD_BACKGROUND_SERVICES`: set `0` for an API-only replica (no scheduler/watchdog/reaper loops)
+- `DASHBOARD_PUBLIC_URL`: public URL used in SSO callbacks and agent bootstrap
 
-### `networker-agent`
+### `Networker.Agent` (C#)
 
-The agent connects back to the dashboard over WebSocket and runs tester jobs on that machine.
+The agent connects back to the control plane over WebSocket and runs tester
+jobs on that machine.
 
 ```bash
-AGENT_API_KEY=dev-key cargo run -p networker-agent
+AGENT_API_KEY=dev-key AGENT_DASHBOARD_URL=ws://localhost:5030/ws/agent \
+  dotnet run --project src/Networker.Agent
 ```
 
 Required environment variables:
-- `AGENT_API_KEY`: authentication key matching an agent record in the dashboard database
+- `AGENT_API_KEY`: authentication key matching an agent record in the control-plane database (also accepted: `AGENT_APIKEY`)
 
 Optional:
-- `AGENT_DASHBOARD_URL`: WebSocket URL (defaults to `ws://localhost:3000/ws/agent`)
+- `AGENT_DASHBOARD_URL`: full agent WebSocket URL (defaults to `ws://localhost:3000/ws/agent`; also accepted: `AGENT_DASHBOARDURL`)
+
+### Frontend (`dashboard/`)
+
+```bash
+cd dashboard && npm install && npm run dev
+```
+
+The Vite dev server on port `5173` proxies `/api` and `/ws` to the control
+plane. In production, nginx serves the built SPA from disk and proxies
+`/api` + `/ws` to the control plane on port `5030`.
 
 ## Config Files
 
@@ -184,3 +205,4 @@ to choose the right starting point.
 - [`probes.md`](probes.md)
 - [`testing.md`](testing.md)
 - [`deploy-config.md`](deploy-config.md)
+- [`release-flow.md`](release-flow.md)

@@ -2,6 +2,15 @@
 
 Complete guide to deploy and configure AletheDash from scratch. Covers infrastructure, SSO, cloud federation, email, and ongoing operations.
 
+> **Current stack:** production runs the **C# control plane**
+> (`Networker.ControlPlane`, systemd service `alethedash-cs`, port `5030`
+> behind nginx) — not the retired Rust `networker-dashboard`. The
+> manual-setup and updating sections below install the C# stack. Where a
+> section still shows Rust-era details (env-var SSO configuration, the
+> `alethedash` service name) it is marked **[LEGACY]**. Ongoing operations:
+> [`phase2-cutover-runbook.md`](phase2-cutover-runbook.md); release/deploy
+> mechanics: [`release-flow.md`](release-flow.md).
+
 **Time estimate:** ~30 minutes for a fresh deployment.
 
 ---
@@ -46,7 +55,15 @@ az account set --subscription <subscription-id>
 
 ## 2. Quick Deploy
 
-The fastest way — creates everything in ~5 minutes:
+> **[LEGACY — script installs the retired Rust stack]**
+> `scripts/deploy-dashboard.sh` predates the C# cutover: it still downloads
+> the `networker-dashboard` binary (no longer published in current releases)
+> and creates the Rust-era `alethedash` service. Its infrastructure steps
+> (VM, PostgreSQL, nginx, SSL, SSO app registration, ACS) remain a useful
+> reference, but for the control plane itself follow
+> [Manual Setup](#3-manual-setup) below.
+
+The one-command path — creates everything in ~5 minutes:
 
 ```bash
 ./scripts/deploy-dashboard.sh \
@@ -137,62 +154,92 @@ sudo apt-get update && sudo apt-get install -y postgresql-16 nginx certbot pytho
 sudo -u postgres psql -c "CREATE USER alethedash WITH PASSWORD '<db-password>';"
 sudo -u postgres psql -c "CREATE DATABASE alethedash OWNER alethedash;"
 
-# Download latest release
+# Download latest release: the C# control plane + the built frontend
 cd /tmp
-curl -sL https://github.com/irlm/networker-tester/releases/latest/download/networker-dashboard-x86_64-unknown-linux-musl.tar.gz | tar xz
-curl -sL https://github.com/irlm/networker-tester/releases/latest/download/dashboard-frontend.tar.gz -o frontend.tar.gz
+curl -fsSL https://github.com/irlm/networker-tester/releases/latest/download/networker-controlplane-linux-x64.tar.gz -o controlplane.tar.gz
+curl -fsSL https://github.com/irlm/networker-tester/releases/latest/download/dashboard-frontend.tar.gz -o frontend.tar.gz
 
+# Control plane → /opt/alethedash-cs (self-contained; no .NET runtime install needed)
+sudo mkdir -p /opt/alethedash-cs
+sudo tar xzf controlplane.tar.gz -C /opt/alethedash-cs
+sudo chmod +x /opt/alethedash-cs/Networker.ControlPlane
+
+# Frontend → served static by nginx
 sudo mkdir -p /opt/alethedash/dashboard/dist
-sudo mv networker-dashboard /opt/alethedash/
-sudo chmod +x /opt/alethedash/networker-dashboard
 sudo tar xzf frontend.tar.gz -C /opt/alethedash/dashboard/dist/
+sudo chmod -R a+rX /opt/alethedash/dashboard/dist
 ```
 
 ### 3.4 Create Systemd Service
 
-```bash
-JWT_SECRET=$(openssl rand -base64 32)
+The control plane reads its configuration from `/etc/alethedash-cs.env`
+(the full variable reference is
+[`phase2-cutover-runbook.md`](phase2-cutover-runbook.md) §1.1):
 
-sudo tee /etc/systemd/system/alethedash.service << EOF
+```bash
+sudo tee /etc/alethedash-cs.env > /dev/null << EOF
+ASPNETCORE_ENVIRONMENT=Production
+ASPNETCORE_URLS=http://127.0.0.1:5030
+DASHBOARD_DB_URL_NPGSQL=Host=localhost;Port=5432;Database=alethedash;Username=alethedash;Password=<db-password>
+DASHBOARD_JWT_SECRET=$(openssl rand -base64 32)
+DASHBOARD_CREDENTIAL_KEY=$(openssl rand -hex 32)
+DASHBOARD_PUBLIC_URL=https://yourdomain.com
+EOF
+sudo chmod 600 /etc/alethedash-cs.env
+
+sudo tee /etc/systemd/system/alethedash-cs.service << 'EOF'
 [Unit]
-Description=AletheDash Dashboard
+Description=AletheDash Control Plane (C#)
 After=network.target postgresql.service
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/alethedash
-ExecStart=/opt/alethedash/networker-dashboard
+WorkingDirectory=/opt/alethedash-cs
+ExecStart=/opt/alethedash-cs/Networker.ControlPlane
+EnvironmentFile=/etc/alethedash-cs.env
 Restart=always
 RestartSec=5
-
-# Required
-Environment=DASHBOARD_DB_URL=postgres://alethedash:<db-password>@localhost:5432/alethedash
-Environment=DASHBOARD_JWT_SECRET=${JWT_SECRET}
-Environment=DASHBOARD_ADMIN_EMAIL=admin@yourcompany.com
-Environment=DASHBOARD_PORT=3000
-Environment=DASHBOARD_BIND_ADDR=127.0.0.1
-Environment=DASHBOARD_PUBLIC_URL=https://yourdomain.com
-Environment=DASHBOARD_STATIC_DIR=/opt/alethedash/dashboard/dist
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
 sudo systemctl daemon-reload
-sudo systemctl enable alethedash
-sudo systemctl start alethedash
+sudo systemctl enable alethedash-cs
+sudo systemctl start alethedash-cs
+
+# Readiness probe
+curl -sf http://localhost:5030/api/health/ready
 ```
 
+`DASHBOARD_JWT_SECRET` and `DASHBOARD_CREDENTIAL_KEY` are **fail-closed**
+outside Development — the service refuses to start without them.
+`DASHBOARD_PUBLIC_URL` is required for tester provisioning (without it, new
+tester agents are pointed at `ws://localhost:3000` and never come online).
+
 ### 3.5 Configure Nginx
+
+nginx serves the SPA static from disk and proxies only `/api` + `/ws` to the
+control plane on `:5030`:
 
 ```bash
 sudo tee /etc/nginx/sites-available/alethedash << 'EOF'
 server {
     listen 80;
     server_name yourdomain.com;
+
+    root /opt/alethedash/dashboard/dist;
+    index index.html;
+
+    # SPA: serve static files, fall back to index.html for client routes
     location / {
-        proxy_pass http://127.0.0.1:3000;
+        try_files $uri $uri/ /index.html;
+    }
+
+    # API + WebSockets → C# control plane
+    location ~ ^/(api|ws)/ {
+        proxy_pass http://127.0.0.1:5030;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -253,17 +300,17 @@ az ad app permission grant --id $APP_ID \
   --scope "openid email profile"
 ```
 
-### 4.3 Add Environment Variables
+### 4.3 Register the Provider
 
-Add to the systemd service:
+In the **C# control plane**, SSO providers are stored in the database (with
+the client secret encrypted at rest) and managed through the platform-admin
+UI or the `/api/sso-providers` admin API — no service restart needed. Enter
+the App ID, client secret, and tenant ID from 4.1 there.
 
-```bash
-Environment=SSO_MICROSOFT_CLIENT_ID=<app-id>
-Environment=SSO_MICROSOFT_CLIENT_SECRET=<client-secret>
-Environment=SSO_MICROSOFT_TENANT_ID=<tenant-id>
-```
-
-Then: `sudo systemctl daemon-reload && sudo systemctl restart alethedash`
+**[LEGACY — Rust dashboard only]** The old env-var route
+(`SSO_MICROSOFT_CLIENT_ID` / `SSO_MICROSOFT_CLIENT_SECRET` /
+`SSO_MICROSOFT_TENANT_ID` in the `alethedash` unit) applies only to the
+retired Rust service.
 
 ### 4.4 Verify
 
@@ -293,16 +340,14 @@ The login page should show "Continue with Microsoft." Click it to test.
 6. Click **Create**
 7. Copy the **Client ID** and **Client Secret**
 
-### 5.3 Add Environment Variables
+### 5.3 Register the Provider
 
-Add to the systemd service:
+As with Microsoft (see 4.3): add the Google client ID + secret through the
+platform-admin UI or the `/api/sso-providers` admin API — stored encrypted in
+the database, no restart needed.
 
-```bash
-Environment=SSO_GOOGLE_CLIENT_ID=<client-id>.apps.googleusercontent.com
-Environment=SSO_GOOGLE_CLIENT_SECRET=GOCSPX-<secret>
-```
-
-Then: `sudo systemctl daemon-reload && sudo systemctl restart alethedash`
+**[LEGACY — Rust dashboard only]** `SSO_GOOGLE_CLIENT_ID` /
+`SSO_GOOGLE_CLIENT_SECRET` env vars applied only to the retired Rust service.
 
 ### 5.4 Verify
 
@@ -360,14 +405,17 @@ az communication list-key \
 
 ### 6.4 Add Environment Variables
 
+Add to `/etc/alethedash-cs.env` (the C# control plane reads the same names
+the Rust dashboard used):
+
 ```bash
-Environment=DASHBOARD_ACS_CONNECTION_STRING=endpoint=https://...;accesskey=...
-Environment=DASHBOARD_ACS_SENDER=DoNotReply@<domain>.azurecomm.net
+DASHBOARD_ACS_CONNECTION_STRING=endpoint=https://...;accesskey=...
+DASHBOARD_ACS_SENDER=DoNotReply@<domain>.azurecomm.net
 ```
 
-Then restart the service.
+Then: `sudo systemctl restart alethedash-cs`
 
-**Note:** If ACS is not configured, password reset links are logged to the server console instead of emailed. Check logs with: `journalctl -u alethedash | grep "PASSWORD RESET LINK"`
+**Note:** If ACS is not configured, password reset links are logged to the server console instead of emailed. Check logs with: `journalctl -u alethedash-cs | grep "PASSWORD RESET LINK"`
 
 ---
 
@@ -591,70 +639,75 @@ This creates a new VM, restores the database + config, downloads the matching da
 
 ## 13. Updating
 
-### From the Dashboard UI
+### Automatic (the normal path)
 
-1. Go to **Settings**
-2. If an update is available, click **"Update to vX.Y.Z"**
-3. The dashboard downloads the new binary + frontend and restarts automatically
-
-### Via Azure DevOps Pipeline
-
-If configured, run the "Deploy AletheDash" pipeline from Azure DevOps.
-
-### Manual Update
+Production updates itself: every release tag triggers the Release workflow,
+whose `deploy` job ships the new control plane, endpoint, tester, and
+frontend to the VM, health-checks it, and auto-rolls-back on failure. See
+[`release-flow.md`](release-flow.md). To re-ship a specific version:
 
 ```bash
-# On the VM:
-TAG=v0.14.5  # or "latest"
-cd /tmp
-curl -sL https://github.com/irlm/networker-tester/releases/download/$TAG/networker-dashboard-x86_64-unknown-linux-musl.tar.gz | tar xz
-curl -sL https://github.com/irlm/networker-tester/releases/download/$TAG/dashboard-frontend.tar.gz -o frontend.tar.gz
+gh workflow run release.yml --field tag=vX.Y.Z
+```
 
-sudo systemctl stop alethedash
-sudo cp networker-dashboard /opt/alethedash/
-sudo chmod +x /opt/alethedash/networker-dashboard
+### Manual Update (on the VM)
+
+Mirrors what the deploy job does:
+
+```bash
+TAG=v0.28.32  # or the tag you want
+cd /tmp
+curl -fsSL https://github.com/irlm/networker-tester/releases/download/$TAG/networker-controlplane-linux-x64.tar.gz -o controlplane.tar.gz
+curl -fsSL https://github.com/irlm/networker-tester/releases/download/$TAG/dashboard-frontend.tar.gz -o frontend.tar.gz
+
+sudo systemctl stop alethedash-cs
+sudo rm -rf /opt/alethedash-cs.prevbuild
+sudo mv /opt/alethedash-cs /opt/alethedash-cs.prevbuild   # rollback copy
+sudo mkdir -p /opt/alethedash-cs
+sudo tar xzf controlplane.tar.gz -C /opt/alethedash-cs
+sudo chmod +x /opt/alethedash-cs/Networker.ControlPlane
+
 sudo rm -rf /opt/alethedash/dashboard/dist/*
 sudo tar xzf frontend.tar.gz -C /opt/alethedash/dashboard/dist/
-sudo systemctl start alethedash
+
+sudo systemctl start alethedash-cs
+curl -sf http://localhost:5030/api/health/ready
 ```
+
+If the readiness probe fails, restore `/opt/alethedash-cs.prevbuild` and
+restart.
 
 ---
 
 ## 14. Environment Variables
 
-### Required
+The authoritative reference for the C# control plane is
+[`phase2-cutover-runbook.md`](phase2-cutover-runbook.md) §1.1. Summary:
+
+### Required (fail-closed outside Development)
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `DASHBOARD_DB_URL` | PostgreSQL connection string | `postgres://user:pass@localhost:5432/dbname` |
-| `DASHBOARD_JWT_SECRET` | JWT signing key (32+ bytes) | `openssl rand -base64 32` |
-| `DASHBOARD_ADMIN_EMAIL` | Admin account email | `admin@company.com` |
+| `DASHBOARD_JWT_SECRET` | HS256 JWT signing key (32+ bytes) | `openssl rand -base64 32` |
+| `DASHBOARD_CREDENTIAL_KEY` | 64-hex AEAD key for cloud-account secrets | `openssl rand -hex 32` |
+| `DASHBOARD_DB_URL_NPGSQL` (or `ConnectionStrings__Networker`) | Npgsql connection string | `Host=localhost;Port=5432;Database=alethedash;Username=alethedash;Password=…` |
+| `ASPNETCORE_ENVIRONMENT` | `Production` in prod (unset counts as Production) | `Production` |
 
 ### Server
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DASHBOARD_PORT` | `3000` | HTTP listen port |
-| `DASHBOARD_BIND_ADDR` | `127.0.0.1` | Bind address |
-| `DASHBOARD_PUBLIC_URL` | — | Public URL for SSO callbacks |
-| `DASHBOARD_STATIC_DIR` | `./dashboard/dist` | Frontend files path |
-| `DASHBOARD_ADMIN_PASSWORD` | Random (printed to stderr) | Initial admin password |
-| `INSTALL_SH_PATH` | — | Path to install.sh for deploy wizard |
+| `ASPNETCORE_URLS` | `http://localhost:5000` | Listen address; prod uses `http://127.0.0.1:5030` behind nginx |
+| `DASHBOARD_PUBLIC_URL` | — | Public base URL — **required for tester provisioning** (derives the agent WebSocket URL) and SSO callbacks |
+| `DASHBOARD_BACKGROUND_SERVICES` | on | Set `0` for an API-only replica (no scheduler/watchdog/reaper loops) |
 
-### Microsoft SSO
+### SSO
 
-| Variable | Description |
-|----------|-------------|
-| `SSO_MICROSOFT_CLIENT_ID` | Azure AD App Registration client ID |
-| `SSO_MICROSOFT_CLIENT_SECRET` | Client secret |
-| `SSO_MICROSOFT_TENANT_ID` | Azure AD tenant ID (or `common` for multi-tenant) |
-
-### Google SSO
-
-| Variable | Description |
-|----------|-------------|
-| `SSO_GOOGLE_CLIENT_ID` | Google OAuth client ID |
-| `SSO_GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
+SSO providers are configured in the database via the platform-admin UI /
+`/api/sso-providers` (see sections 4–5), not env vars.
+**[LEGACY]** `SSO_MICROSOFT_*` / `SSO_GOOGLE_*` env vars applied only to the
+retired Rust dashboard, as did `DASHBOARD_DB_URL`, `DASHBOARD_PORT`,
+`DASHBOARD_BIND_ADDR`, `DASHBOARD_STATIC_DIR`, and `INSTALL_SH_PATH`.
 
 ### Email (Azure Communication Services)
 
@@ -680,11 +733,11 @@ sudo systemctl start alethedash
 
 ## 15. Troubleshooting
 
-### Dashboard won't start
+### Control plane won't start
 
 ```bash
 # Check logs
-journalctl -u alethedash --no-pager -n 50
+journalctl -u alethedash-cs --no-pager -n 50
 
 # Common issues:
 # - "DASHBOARD_JWT_SECRET must be set" → Add the env var
@@ -699,7 +752,7 @@ journalctl -u alethedash --no-pager -n 50
 # "AADSTS50011: redirect URI mismatch" → Update the app registration:
 az ad app update --id <app-id> --web-redirect-uris "https://yourdomain.com/api/auth/sso/callback"
 
-# "id_token_invalid" → Check SSO_MICROSOFT_TENANT_ID matches your tenant
+# "id_token_invalid" → Check the tenant ID on the SSO provider record matches your tenant
 
 # Google "redirect_uri_mismatch" → Add the URI in Google Cloud Console
 ```
@@ -719,7 +772,7 @@ az ad app update --id <app-id> --web-redirect-uris "https://yourdomain.com/api/a
 
 ```bash
 # Check logs
-journalctl -u alethedash | grep "deploy-vm\|VM deployment"
+journalctl -u alethedash-cs | grep "deploy-vm\|VM deployment"
 
 # "InvalidResourceGroupLocation" → Per-region RG already exists in different region
 # The script creates networker-testers-{region}-rg per region
@@ -731,8 +784,8 @@ journalctl -u alethedash | grep "deploy-vm\|VM deployment"
 
 ```bash
 # "Chrome not found" → Install Chrome on the tester VM:
-# The deploy script does this automatically in v0.14.5+
-# For older testers:
+# The provisioning bootstrap installs it automatically; if a tester
+# predates that, install manually:
 sudo apt-get install -y google-chrome-stable
 ```
 

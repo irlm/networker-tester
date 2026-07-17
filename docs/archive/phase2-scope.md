@@ -1,5 +1,8 @@
 # Phase 2 Build-Out Scope — C# Control Plane
 
+> **Historical — migration completed 2026-07; see [`architecture.md`](../architecture.md).**
+> This was the forward-looking M0–M6 build-out plan; the milestones shipped and the cutover is done.
+
 **Goal:** bring `src/Networker.ControlPlane` to full parity with the Rust
 `networker-dashboard` (~41.6k LOC) behind the *same* wire contract, then flip
 the frontend + agents over and **delete the Rust dashboard crate**. The Rust

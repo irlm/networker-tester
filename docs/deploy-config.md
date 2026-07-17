@@ -53,7 +53,7 @@ bash install.sh --deploy deploy.json
 | `tests` | object | no | Test configuration. Defaults to all modes, 5 runs. |
 | `packet_capture` | object | no | Optional packet capture on tester, endpoint, or both. Default is disabled. |
 | `impairment` | object | no | Optional benchmark impairment profile. Initial scoped support focuses on delay injection. |
-| `dashboard` | object | no | Dashboard control plane setup. Installs PostgreSQL, builds frontend, creates systemd service. |
+| `dashboard` | object | no | **Legacy.** Installs the retired Rust dashboard stack — see [the `dashboard` object](#dashboard-object-legacy). |
 
 ### `tester` object
 
@@ -260,10 +260,19 @@ Use `page_preset` to override `page_assets` and `page_asset_size` with a realist
 Each preset includes a realistic distribution of asset sizes — small tracking pixels, medium
 CSS/JS/fonts, and large images/bundles — rather than uniform-size assets.
 
-### `dashboard` object
+### `dashboard` object (legacy)
 
-Optional. When present, the installer sets up the dashboard control plane on the local machine.
-This includes PostgreSQL, the dashboard binary, the agent binary, and the React frontend.
+> **Legacy — do not use for new deployments.** This installer path sets up the
+> **retired Rust** `networker-dashboard` stack, whose binaries are no longer
+> published in releases (the release train ships the C# control plane instead;
+> only older tags carry Rust dashboard assets). The current control plane is
+> the C# `Networker.ControlPlane` — deployed to prod by the Release workflow
+> (see [`release-flow.md`](release-flow.md)) and operated per
+> [`phase2-cutover-runbook.md`](phase2-cutover-runbook.md). The `tester` and
+> `endpoints` objects above remain fully current.
+
+Optional. When present, the installer sets up the legacy dashboard control plane on the local
+machine. This includes PostgreSQL, the dashboard binary, the agent binary, and the React frontend.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
