@@ -21,9 +21,6 @@ public sealed class CommandHandler(ILogger<CommandHandler> logger)
 {
     private static readonly long ProcessStartTicks = Stopwatch.GetTimestamp();
 
-    private static readonly string AgentVersion =
-        typeof(CommandHandler).Assembly.GetName().Version?.ToString() ?? "0.0.0";
-
     /// <summary>Execute a command; returns the terminal <c>command_result</c>
     /// frame. Log lines (none for health today) stream via <paramref name="sink"/>.</summary>
     public CommandResultMessage Run(CommandMessage cmd, RawWebSocketClient.IFrameSink sink)
@@ -76,7 +73,7 @@ public sealed class CommandHandler(ILogger<CommandHandler> logger)
 
         var payload = new Dictionary<string, object?>
         {
-            ["version"] = AgentVersion,
+            ["version"] = AgentVersion.Current,
             ["os"] = os,
             ["arch"] = arch,
             ["uptime_secs"] = UptimeSecs(),

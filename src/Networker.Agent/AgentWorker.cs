@@ -36,9 +36,6 @@ public sealed class AgentWorker(
     /// <summary>Max concurrent probe runs — Rust <c>MAX_CONCURRENT_RUNS = 4</c>.</summary>
     private const int MaxConcurrentRuns = 4;
 
-    private static readonly string AgentVersion =
-        typeof(AgentWorker).Assembly.GetName().Version?.ToString() ?? "0.0.0";
-
     private readonly RawWebSocketClient _client = new(logger);
     private readonly ConcurrentDictionary<Guid, RunHandle> _running = new();
     private readonly SemaphoreSlim _runSlots = new(MaxConcurrentRuns, MaxConcurrentRuns);
@@ -108,7 +105,7 @@ public sealed class AgentWorker(
         {
             while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false))
             {
-                if (!sink.TrySend(new HeartbeatMessage(Load: null, Version: AgentVersion)))
+                if (!sink.TrySend(new HeartbeatMessage(Load: null, Version: AgentVersion.Current)))
                     break; // channel closed → connection gone
             }
         }

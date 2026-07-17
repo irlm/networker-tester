@@ -1,18 +1,42 @@
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json.Serialization;
 
 namespace Networker.Endpoint;
 
 /// <summary>
-/// Static server identity constants mirroring the Rust crate.
-/// Version matches the workspace <c>Cargo.toml</c> version field.
+/// Static server identity mirroring the Rust crate.
 /// </summary>
 public static class ServerInfo
 {
     public const string Service = "networker-endpoint";
 
-    /// <summary>Mirrors <c>CARGO_PKG_VERSION</c> (workspace version).</summary>
-    public const string Version = "0.28.28";
+    /// <summary>
+    /// The Rust analogue of <c>CARGO_PKG_VERSION</c>: derived from the assembly
+    /// version stamped by the repo-root <c>Directory.Build.props</c>
+    /// (single-sourced with the workspace <c>Cargo.toml</c>; CI enforces the
+    /// match). Normalized to a dotted triple ("0.28.31"). Never hardcode a
+    /// version string here.
+    /// </summary>
+    public static readonly string Version = FromAssembly(typeof(ServerInfo).Assembly);
+
+    private static string FromAssembly(Assembly assembly)
+    {
+        var info = assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion;
+        if (!string.IsNullOrWhiteSpace(info))
+        {
+            var v = info.Split('+')[0].Trim();
+            if (v.Length > 0)
+            {
+                return v;
+            }
+        }
+
+        var av = assembly.GetName().Version;
+        return av is null ? "0.0.0" : $"{av.Major}.{av.Minor}.{av.Build}";
+    }
 }
 
 /// <summary>

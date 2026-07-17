@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Networker.Contracts;
 using Xunit;
 
@@ -10,89 +11,83 @@ namespace Networker.Tests;
 /// timing field to 0/null and the whole system would "work" while reporting
 /// garbage. These tests fail loudly if a field stops round-tripping.
 ///
-/// The sample payload mirrors what <c>networker-tester --json-stdout</c> emits
-/// (schema_version + per-phase snake_case fields), including extra fields the
-/// C# layer does not model — proving the contract grows additively.
+/// The golden fixture (fixtures/tester-golden.json) is REAL output captured
+/// from <c>networker-tester --json-stdout</c> probing a local
+/// <c>networker-endpoint</c> — never hand-typed. Regenerate it with
+/// <c>scripts/regenerate-contract-golden.sh</c> whenever the tester's TestRun
+/// schema changes, and commit the result alongside the schema change. Because
+/// the payload is live capture, assertions are structural (fields present,
+/// timings positive, version well-formed) rather than pinned to exact values.
 /// </summary>
 public class ContractRoundTripTests
 {
-    private const string SampleTesterJson = """
-    {
-      "schema_version": "1.0",
-      "run_id": "9ba79159-be2e-4b2c-8989-c9c032b8a091",
-      "target_url": "https://www.cloudflare.com",
-      "target_host": "www.cloudflare.com",
-      "modes": ["http1"],
-      "client_version": "0.28.13",
-      "some_future_field": "the C# layer ignores this",
-      "attempts": [
-        {
-          "attempt_id": "a1",
-          "protocol": "http1",
-          "sequence_num": 0,
-          "success": true,
-          "dns": { "duration_ms": 8.4, "success": true },
-          "tcp": { "connect_duration_ms": 12.1, "success": true },
-          "tls": { "handshake_duration_ms": 148.6, "success": true, "protocol_version": "TLSv1.3" },
-          "http": {
-            "status_code": 200,
-            "negotiated_version": "HTTP/1.1",
-            "ttfb_ms": 107.8,
-            "total_duration_ms": 372.6
-          }
-        }
-      ]
-    }
-    """;
+    private static readonly string GoldenJson = File.ReadAllText(
+        Path.Combine(AppContext.BaseDirectory, "fixtures", "tester-golden.json"));
 
     private static ProbeRunResult Deserialize(string json) =>
         JsonSerializer.Deserialize(json, ProbeContractJsonContext.Default.ProbeRunResult)!;
 
     [Fact]
-    public void TopLevel_fields_round_trip()
+    public void Golden_top_level_fields_round_trip()
     {
-        var r = Deserialize(SampleTesterJson);
+        var r = Deserialize(GoldenJson);
 
         Assert.Equal("1.0", r.SchemaVersion);
-        Assert.Equal("9ba79159-be2e-4b2c-8989-c9c032b8a091", r.RunId);
-        Assert.Equal("https://www.cloudflare.com", r.TargetUrl);
-        Assert.Equal("www.cloudflare.com", r.TargetHost);
-        Assert.Equal("0.28.13", r.ClientVersion);
-        Assert.Equal(new[] { "http1" }, r.Modes);
-        Assert.Single(r.Attempts);
+        Assert.True(Guid.TryParse(r.RunId, out _), $"run_id not a UUID: '{r.RunId}'");
+        Assert.StartsWith("https://", r.TargetUrl);
+        Assert.False(string.IsNullOrWhiteSpace(r.TargetHost));
+        Assert.Contains("http1", r.Modes);
+        Assert.NotEmpty(r.Attempts);
+
+        // client_version is the tester's CARGO_PKG_VERSION — a dotted triple.
+        // Not pinned to an exact value so the fixture doesn't have to be
+        // regenerated on every release, only on schema changes.
+        Assert.Matches(new Regex(@"^\d+\.\d+\.\d+$"), r.ClientVersion);
     }
 
     [Fact]
-    public void Per_phase_timings_round_trip()
+    public void Golden_per_phase_timings_round_trip()
     {
-        var a = Deserialize(SampleTesterJson).Attempts[0];
+        var a = Deserialize(GoldenJson).Attempts[0];
 
         Assert.Equal("http1", a.Protocol);
         Assert.True(a.Success);
 
+        // Non-null with positive durations proves the snake_case field names
+        // still match — a naming mismatch would leave these 0/null.
         Assert.NotNull(a.Dns);
-        Assert.Equal(8.4, a.Dns!.DurationMs);
+        Assert.True(a.Dns!.Success);
+        Assert.True(a.Dns.DurationMs >= 0);
 
         Assert.NotNull(a.Tcp);
-        Assert.Equal(12.1, a.Tcp!.ConnectDurationMs);
+        Assert.True(a.Tcp!.Success);
+        Assert.True(a.Tcp.ConnectDurationMs > 0, "tcp.connect_duration_ms not positive");
 
         Assert.NotNull(a.Tls);
-        Assert.Equal(148.6, a.Tls!.HandshakeDurationMs);
+        Assert.True(a.Tls!.Success);
+        Assert.True(a.Tls.HandshakeDurationMs > 0, "tls.handshake_duration_ms not positive");
+        Assert.False(string.IsNullOrWhiteSpace(a.Tls.ProtocolVersion));
 
         Assert.NotNull(a.Http);
         Assert.Equal(200, a.Http!.StatusCode);
         Assert.Equal("HTTP/1.1", a.Http.NegotiatedVersion);
-        Assert.Equal(107.8, a.Http.TtfbMs);
-        Assert.Equal(372.6, a.Http.TotalDurationMs);
+        Assert.True(a.Http.TtfbMs > 0, "http.ttfb_ms not positive");
+        Assert.True(a.Http.TotalDurationMs > 0, "http.total_duration_ms not positive");
     }
 
     [Fact]
-    public void Unknown_rust_fields_are_ignored_not_thrown()
+    public void Golden_unmodelled_rust_fields_are_ignored_not_thrown()
     {
-        // "some_future_field" above is not modeled in C#. Deserialization must
-        // tolerate it so the Rust contract can add fields without breaking the
-        // agent — the whole point of the versioned, additive seam.
-        var ex = Record.Exception(() => Deserialize(SampleTesterJson));
+        // The real payload carries many fields the C# layer does not model
+        // (started_at, client_os, baseline, server_info, kernel TCP stats, …).
+        // Deserialization must tolerate all of them — the whole point of the
+        // versioned, additive seam. The raw JSON is checked to actually
+        // contain such fields, so this test cannot silently weaken.
+        using var doc = JsonDocument.Parse(GoldenJson);
+        Assert.True(doc.RootElement.TryGetProperty("started_at", out _),
+            "golden no longer carries unmodelled fields — regenerate it from the real tester");
+
+        var ex = Record.Exception(() => Deserialize(GoldenJson));
         Assert.Null(ex);
     }
 

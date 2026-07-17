@@ -25,6 +25,16 @@
     <ProjectReference Include="..\..\src\Networker.Agent\Networker.Agent.csproj" />
     <ProjectReference Include="..\..\src\Networker.ControlPlane\Networker.ControlPlane.csproj" />
     <ProjectReference Include="..\..\src\Networker.Data\Networker.Data.csproj" />
+    <!-- No Networker.Endpoint reference: its top-level Program would collide
+         with the ControlPlane's (CS0433) in WebApplicationFactory<Program>
+         tests. The endpoint's version single-sourcing is asserted in
+         tests/Networker.Endpoint.Tests/VersionSingleSourceTests.cs instead. -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Real tester output captured by scripts/regenerate-contract-golden.sh —
+         the contract golden for ContractRoundTripTests. -->
+    <Content Include="fixtures\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

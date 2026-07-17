@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Background;
@@ -110,13 +111,34 @@ public static class VersionEndpoints
     }
 
     /// <summary>
-    /// Compile-time version floor — kept in sync with the value wired into
-    /// <c>AddVersionRefresh(...)</c> in Program.cs (Rust <c>CARGO_PKG_VERSION</c>).
-    /// Public because the tester create flow stamps it into
-    /// <c>project_tester.installer_version</c>, matching Rust's
-    /// <c>env!("CARGO_PKG_VERSION")</c>.
+    /// Compile-time version floor (Rust <c>CARGO_PKG_VERSION</c>): derived from
+    /// the assembly version stamped by the repo-root
+    /// <c>Directory.Build.props</c> (single-sourced with <c>Cargo.toml</c>; CI
+    /// enforces the match), normalized to a dotted triple ("0.28.31"). Program.cs
+    /// wires this same value into <c>AddVersionRefresh(...)</c> and
+    /// <c>/api/health</c>; the tester create flow stamps it into
+    /// <c>project_tester.installer_version</c>. Never hardcode a version here.
     /// </summary>
-    public const string DashboardVersion = "0.28.30";
+    public static readonly string DashboardVersion =
+        FromAssembly(typeof(VersionEndpoints).Assembly);
+
+    private static string FromAssembly(Assembly assembly)
+    {
+        var info = assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion;
+        if (!string.IsNullOrWhiteSpace(info))
+        {
+            var v = info.Split('+')[0].Trim();
+            if (v.Length > 0)
+            {
+                return v;
+            }
+        }
+
+        var av = assembly.GetName().Version;
+        return av is null ? "0.0.0" : $"{av.Major}.{av.Minor}.{av.Build}";
+    }
 
     private const string TesterBinaryEnvVar = "AGENT_TESTERPATH";
 

@@ -1,0 +1,36 @@
+<Project>
+
+  <!--
+    Single source of truth for the C# assembly version.
+
+    <Version> below MUST equal the Cargo.toml workspace version — CI
+    (version-check job) enforces the match. The COMPLETE version-bump list for
+    this repo is exactly five files:
+
+      1. Cargo.toml            (workspace version)
+      2. CHANGELOG.md          (new ## [X.Y.Z] section)
+      3. install.sh            (INSTALLER_VERSION)
+      4. install.ps1           (InstallerVersion)
+      5. Directory.Build.props (this file, <Version>)
+
+    Everything else is DERIVED at build/run time and must never be hand-bumped:
+    the agent's heartbeat/self-reported version, the endpoint's ServerInfo +
+    /health version, the control plane's /api/health + /api/version
+    dashboard_version, and the version-refresh floor all read the
+    AssemblyInformationalVersion this file stamps.
+
+    Scoped to src/* and tests/* so the benchmarks/reference-apis projects
+    (own solution, own lifecycle) are untouched.
+  -->
+  <PropertyGroup Condition="$(MSBuildProjectDirectory.StartsWith('$(MSBuildThisFileDirectory)src')) Or $(MSBuildProjectDirectory.StartsWith('$(MSBuildThisFileDirectory)tests'))">
+    <Version>0.28.31</Version>
+    <AssemblyVersion>$(Version).0</AssemblyVersion>
+    <FileVersion>$(Version).0</FileVersion>
+    <InformationalVersion>$(Version)</InformationalVersion>
+    <!-- Keep InformationalVersion an exact dotted triple ("0.28.31"): without
+         this the SDK appends "+<git sha>", which would leak into the versions
+         the agent reports and the control plane's AgentVersionGate parses. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+</Project>
