@@ -11,12 +11,13 @@
 // The 6-way unguarded copy of this list already shipped bugs (#377-379);
 // this test exists so the next drift fails CI instead of production.
 
-import { readFileSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { familyOf, FAMILY_BY_MODE } from '../components/common/mode-family';
 import { RUNTIME_TEMPLATES } from '../components/wizard/testbed-constants';
+// The canonical manifest at the repo root — imported directly (vite/vitest
+// resolve JSON natively; resolveJsonModule covers tsc) so the guard always
+// reads the real file.
+import manifestJson from '../../../shared/modes.json';
 
 interface ManifestMode {
   id: string;
@@ -31,10 +32,7 @@ interface Manifest {
   cli_shorthands: Record<string, string[]>;
 }
 
-const here = dirname(fileURLToPath(import.meta.url));
-const manifest: Manifest = JSON.parse(
-  readFileSync(resolve(here, '../../../shared/modes.json'), 'utf-8'),
-);
+const manifest = manifestJson as unknown as Manifest;
 
 const modeIds = new Set(manifest.modes.map(m => m.id));
 const aliasKeys = new Set(
