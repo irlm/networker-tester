@@ -47,7 +47,7 @@ public static class DeploymentWriteEndpoints
         {
             if (body is null || string.IsNullOrWhiteSpace(body.Name) || body.Config is null)
             {
-                return Results.BadRequest(new { error = "name and config are required" });
+                return ApiError.BadRequest("name and config are required");
             }
 
             var configText = body.Config.ToJsonString();

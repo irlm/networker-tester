@@ -1,4 +1,3 @@
-using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Networker.ControlPlane.Realtime;
@@ -58,33 +57,5 @@ public static class AgentProtocolExtensions
     {
         services.AddSingleton<AgentConnectionRegistry>();
         return services;
-    }
-
-    /// <summary>
-    /// Convenience guard the integrator MAY call when hardening the JwtBearer
-    /// WebSocket shim: ensures the <c>access_token</c>-from-query handler never
-    /// fires for <c>/ws/agent</c> (agents authenticate by api-key, not JWT). The
-    /// shim added by <c>EventBusServiceCollectionExtensions.ConfigureJwtBearerForWebSockets</c>
-    /// already scopes itself to paths that carry an <c>access_token</c>, so this
-    /// is belt-and-braces — included so the exclusion is explicit and testable.
-    /// </summary>
-    public static void ExcludeAgentPathFromJwtQueryAuth(JwtBearerOptions options)
-    {
-        options.Events ??= new JwtBearerEvents();
-        var previous = options.Events.OnMessageReceived;
-        options.Events.OnMessageReceived = async context =>
-        {
-            if (previous is not null)
-            {
-                await previous(context);
-            }
-
-            // If a prior shim lifted a token from the query for the agent path,
-            // clear it — /ws/agent is api-key authenticated, never JWT.
-            if (context.HttpContext.Request.Path.StartsWithSegments("/ws/agent"))
-            {
-                context.Token = null;
-            }
-        };
     }
 }

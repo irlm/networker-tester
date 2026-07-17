@@ -52,26 +52,9 @@ public sealed record TesterQueueEntry(
     uint? EtaSeconds = null);
 
 // ── Inbound (client → server) ────────────────────────────────────────────────
-
-/// <summary>
-/// Inbound <c>subscribe_tester_queue</c>. The client asks to receive queue
-/// snapshots/updates for a set of testers within one project.
-/// </summary>
-public sealed record SubscribeTesterQueueMessage(
-    [property: JsonPropertyName("project_id")] string ProjectId,
-    [property: JsonPropertyName("tester_ids")] IReadOnlyList<string> TesterIds)
-{
-    [JsonPropertyName("type")]
-    public string Type { get; init; } = TesterQueueMessageTypes.SubscribeTesterQueue;
-}
-
-/// <summary>Inbound <c>unsubscribe_tester_queue</c>.</summary>
-public sealed record UnsubscribeTesterQueueMessage(
-    [property: JsonPropertyName("tester_ids")] IReadOnlyList<string> TesterIds)
-{
-    [JsonPropertyName("type")]
-    public string Type { get; init; } = TesterQueueMessageTypes.UnsubscribeTesterQueue;
-}
+// The inbound subscribe/unsubscribe frames have no record types: the SignalR
+// hub binds primitive arguments, and the raw-WS endpoint reads the JSON
+// document directly (switching on the TesterQueueMessageTypes tag).
 
 // ── Outbound (server → client) ───────────────────────────────────────────────
 

@@ -109,8 +109,8 @@ public static class AccountEndpoints
                     row.PasswordResetExpires = DateTime.UtcNow + AccountSecurity.ResetTokenLifetime;
                     await db.SaveChangesAsync(ct);
 
-                    // TODO(email): the Rust dashboard emails
-                    // {public_url}/reset-password?token={token} via crate::email.
+                    // TODO(email): the retired Rust dashboard emailed
+                    // {public_url}/reset-password?token={token} via its email module.
                     // Email delivery is not wired in the C# control plane yet —
                     // the token is stored (hashed) and the link is NOT logged
                     // (logging the raw token would defeat storing only the hash).

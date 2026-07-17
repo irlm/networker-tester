@@ -168,11 +168,11 @@ public static class AdminEndpoints
             }
             if (project.DeletedAt is null)
             {
-                return Results.BadRequest(new { error = "Workspace must be suspended before permanent deletion" });
+                return ApiError.BadRequest("Workspace must be suspended before permanent deletion");
             }
             if (project.DeleteProtection)
             {
-                return Results.BadRequest(new { error = "Workspace has delete protection enabled" });
+                return ApiError.BadRequest("Workspace has delete protection enabled");
             }
 
             await WorkspaceCascade.HardDeleteAsync(db, projectId, ct);
@@ -253,7 +253,7 @@ public static class AdminEndpoints
         {
             if (body.Value is null)
             {
-                return Results.BadRequest(new { error = "value is required" });
+                return ApiError.BadRequest("value is required");
             }
 
             var admin = ctx.GetAuthUser();

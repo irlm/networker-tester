@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Text;
-using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Auth;
@@ -46,23 +45,20 @@ public static partial class TesterWriteEndpoints
         if (http.Request.Query.TryGetValue("ssh_bootstrap", out var sshVals)
             && sshVals.Any(v => v is null or "" or "1" or "true"))
         {
-            return Results.Json(
-                new
-                {
-                    error = "ssh_bootstrap provisioning is not implemented in the C# control plane yet; "
-                            + "omit ssh_bootstrap to use the cloud-init path",
-                },
-                statusCode: StatusCodes.Status501NotImplemented);
+            return ApiError.Status(
+                StatusCodes.Status501NotImplemented,
+                "ssh_bootstrap provisioning is not implemented in the C# control plane yet; "
+                + "omit ssh_bootstrap to use the cloud-init path");
         }
 
         if (body is null)
         {
-            return Results.BadRequest(new { error = "Invalid request body" });
+            return ApiError.BadRequest("Invalid request body");
         }
 
         if (TesterCreateLogic.ValidateCreateBody(body.Name, body.Cloud, body.Region) is { } invalid)
         {
-            return Results.BadRequest(new { error = invalid });
+            return ApiError.BadRequest(invalid);
         }
 
         // Rate-limit: total testers in project + creates in the last hour
@@ -73,7 +69,7 @@ public static partial class TesterWriteEndpoints
             t => t.ProjectId == projectId && t.CreatedAt > hourAgo, ct);
         if (TesterCreateLogic.CheckRateLimit(total, lastHour) is { } limited)
         {
-            return Results.Json(new { error = limited }, statusCode: StatusCodes.Status429TooManyRequests);
+            return ApiError.Status(StatusCodes.Status429TooManyRequests, limited);
         }
 
         // Validate cloud_connection if provided: exists in project (404),
@@ -84,7 +80,7 @@ public static partial class TesterWriteEndpoints
                 .FirstOrDefaultAsync(c => c.ConnectionId == connId && c.ProjectId == projectId, ct);
             if (conn is null)
             {
-                return Results.NotFound(new { error = $"cloud_connection {connId} not found in this project" });
+                return ApiError.NotFound($"cloud_connection {connId} not found in this project");
             }
 
             if (conn.Status != "active")
@@ -94,7 +90,7 @@ public static partial class TesterWriteEndpoints
 
             if (TesterCreateLogic.ValidateConnectionConfig(conn.Provider, conn.Config) is { } confErr)
             {
-                return Results.BadRequest(new { error = $"unsupported cloud provider: {confErr}" });
+                return ApiError.BadRequest($"unsupported cloud provider: {confErr}");
             }
         }
 
@@ -106,7 +102,7 @@ public static partial class TesterWriteEndpoints
                 .FirstOrDefaultAsync(a => a.AccountId == accountId && a.ProjectId == projectId, ct);
             if (acct is null)
             {
-                return Results.NotFound(new { error = $"cloud_account {accountId} not found in this project" });
+                return ApiError.NotFound($"cloud_account {accountId} not found in this project");
             }
 
             if (acct.Status != "active")
@@ -116,11 +112,9 @@ public static partial class TesterWriteEndpoints
 
             if (acct.Provider != body.Cloud)
             {
-                return Results.BadRequest(new
-                {
-                    error = $"cloud_account {accountId} is a '{acct.Provider}' account but the "
-                            + $"tester cloud is '{body.Cloud}'",
-                });
+                return ApiError.BadRequest(
+                    $"cloud_account {accountId} is a '{acct.Provider}' account but the "
+                    + $"tester cloud is '{body.Cloud}'");
             }
         }
 
@@ -559,7 +553,7 @@ public static partial class TesterWriteEndpoints
                 throw new InvalidOperationException(err);
             }
 
-            var extra = FlattenJsonObject(conn.Config);
+            var extra = CredentialJson.ToMapLenient(conn.Config);
             extra.TryGetValue("subscription_id", out var sub);
             extra.TryGetValue("resource_group", out var rg);
             var region = extra.TryGetValue("region", out var r) && r.Length > 0 ? r : tester.Region;
@@ -595,7 +589,7 @@ public static partial class TesterWriteEndpoints
         if (acct is not null)
         {
             var plaintext = cipher.Decrypt(acct.CredentialsEnc, acct.CredentialsNonce);
-            var creds = FlattenJsonObject(Encoding.UTF8.GetString(plaintext));
+            var creds = CredentialJson.ToMapLenient(Encoding.UTF8.GetString(plaintext));
 
             switch (tester.Cloud)
             {
@@ -682,30 +676,4 @@ public static partial class TesterWriteEndpoints
             });
     }
 
-    /// <summary>Flatten a JSON object into a string→string map (string values
-    /// as-is, non-strings as raw JSON). Non-object / invalid JSON → empty.</summary>
-    private static Dictionary<string, string> FlattenJsonObject(string json)
-    {
-        var map = new Dictionary<string, string>(StringComparer.Ordinal);
-        try
-        {
-            using var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.ValueKind == JsonValueKind.Object)
-            {
-                foreach (var prop in doc.RootElement.EnumerateObject())
-                {
-                    map[prop.Name] = prop.Value.ValueKind == JsonValueKind.String
-                        ? prop.Value.GetString() ?? string.Empty
-                        : prop.Value.GetRawText();
-                }
-            }
-        }
-        catch (JsonException)
-        {
-            // Fall through with whatever parsed — callers treat missing keys
-            // as absent config, matching the Rust serde behaviour.
-        }
-
-        return map;
-    }
 }

@@ -69,7 +69,7 @@ public static class BenchmarkCatalogEndpoints
                 || string.IsNullOrWhiteSpace(body.Cloud)
                 || string.IsNullOrWhiteSpace(body.Region))
             {
-                return Results.BadRequest(new { error = "name, cloud, region and ip are required" });
+                return ApiError.BadRequest("name, cloud, region and ip are required");
             }
 
             var vm = new BenchmarkVmCatalog

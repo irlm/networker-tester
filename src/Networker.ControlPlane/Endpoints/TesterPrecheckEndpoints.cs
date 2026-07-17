@@ -1,6 +1,6 @@
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Auth;
+using Networker.ControlPlane.Security;
 using Networker.Data;
 using Networker.Security;
 
@@ -80,7 +80,7 @@ public static class TesterPrecheckEndpoints
             try
             {
                 var plain = cipher.Decrypt(account.CredentialsEnc, account.CredentialsNonce);
-                creds = ParseCreds(plain);
+                creds = CredentialJson.ToMap(plain);
             }
             catch (Exception)
             {
@@ -211,22 +211,6 @@ public static class TesterPrecheckEndpoints
                 resolution = "Run `ssh-keygen -t rsa -b 4096` on the dashboard host, or GCP will fall back to OS Login (slower)",
             });
         }
-    }
-
-    private static Dictionary<string, string> ParseCreds(byte[] plain)
-    {
-        var map = new Dictionary<string, string>();
-        using var doc = JsonDocument.Parse(plain);
-        if (doc.RootElement.ValueKind == JsonValueKind.Object)
-        {
-            foreach (var prop in doc.RootElement.EnumerateObject())
-            {
-                map[prop.Name] = prop.Value.ValueKind == JsonValueKind.String
-                    ? prop.Value.GetString() ?? string.Empty
-                    : prop.Value.GetRawText();
-            }
-        }
-        return map;
     }
 
     public sealed class PrecheckRequest

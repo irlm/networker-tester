@@ -92,7 +92,7 @@ public static class AgentCommandsEndpoints
 
             if (string.IsNullOrWhiteSpace(body.Verb))
             {
-                return Results.BadRequest(new { error = "verb is required" });
+                return ApiError.BadRequest("verb is required");
             }
 
             var agentInProject = await db.Agents
@@ -100,7 +100,7 @@ public static class AgentCommandsEndpoints
                 .AnyAsync(a => a.AgentId == agentId && a.ProjectId == projectId, ct);
             if (!agentInProject)
             {
-                return Results.NotFound(new { error = $"agent {agentId} not in this project" });
+                return ApiError.NotFound($"agent {agentId} not in this project");
             }
 
             var commandId = Guid.NewGuid();
@@ -176,7 +176,7 @@ public static class AgentCommandsEndpoints
         {
             var row = await FetchInProjectAsync(db, projectId, commandId, ct);
             return row is null
-                ? Results.NotFound(new { error = $"command {commandId} not found" })
+                ? ApiError.NotFound($"command {commandId} not found")
                 : Results.Ok(ShapeCommand(row));
         })
         .RequireAuthorization(AuthPolicies.ProjectMember);
@@ -190,7 +190,7 @@ public static class AgentCommandsEndpoints
             var initial = await FetchInProjectAsync(db, projectId, commandId, ctx.RequestAborted);
             if (initial is null)
             {
-                return Results.NotFound(new { error = $"command {commandId} not found" });
+                return ApiError.NotFound($"command {commandId} not found");
             }
 
             var response = ctx.Response;

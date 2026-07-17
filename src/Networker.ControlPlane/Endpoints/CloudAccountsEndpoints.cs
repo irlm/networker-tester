@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Auth;
+using Networker.ControlPlane.Security;
 using Networker.Data;
 using Networker.Data.Entities;
 using Networker.Security;
@@ -75,14 +76,12 @@ public static class CloudAccountsEndpoints
 
             if (string.IsNullOrWhiteSpace(req.Name))
             {
-                return Results.BadRequest(new { error = "name is required" });
+                return ApiError.BadRequest("name is required");
             }
             if (!ValidProviders.Contains(req.Provider))
             {
-                return Results.BadRequest(new
-                {
-                    error = $"Invalid provider '{req.Provider}'. Valid: {string.Join(", ", ValidProviders)}",
-                });
+                return ApiError.BadRequest(
+                    $"Invalid provider '{req.Provider}'. Valid: {string.Join(", ", ValidProviders)}");
             }
 
             // Personal → owner is the caller (Operator already satisfied by policy).
@@ -146,7 +145,7 @@ public static class CloudAccountsEndpoints
                 .FirstOrDefaultAsync(x => x.AccountId == id && x.ProjectId == projectId, ct);
 
             return a is null
-                ? Results.NotFound(new { error = "Account not found" })
+                ? ApiError.NotFound("Account not found")
                 : Results.Ok(new AccountSummaryDto(
                     a.AccountId, a.Name, a.Provider, a.RegionDefault,
                     a.OwnerId != null, a.Status, a.LastValidated, a.ValidationError));
@@ -173,7 +172,7 @@ public static class CloudAccountsEndpoints
                 .FirstOrDefaultAsync(x => x.AccountId == id && x.ProjectId == projectId, ct);
             if (account is null)
             {
-                return Results.NotFound(new { error = "Account not found" });
+                return ApiError.NotFound("Account not found");
             }
 
             if (!CanMutate(account, user, http))
@@ -183,7 +182,7 @@ public static class CloudAccountsEndpoints
 
             if (string.IsNullOrWhiteSpace(req.Name))
             {
-                return Results.BadRequest(new { error = "name is required" });
+                return ApiError.BadRequest("name is required");
             }
 
             account.Name = req.Name;
@@ -240,7 +239,7 @@ public static class CloudAccountsEndpoints
                 .FirstOrDefaultAsync(x => x.AccountId == id && x.ProjectId == projectId, ct);
             if (account is null)
             {
-                return Results.NotFound(new { error = "Account not found" });
+                return ApiError.NotFound("Account not found");
             }
 
             if (!CanMutate(account, user, http))
@@ -273,7 +272,7 @@ public static class CloudAccountsEndpoints
                 .FirstOrDefaultAsync(x => x.AccountId == id && x.ProjectId == projectId, ct);
             if (account is null)
             {
-                return Results.NotFound(new { error = "Account not found" });
+                return ApiError.NotFound("Account not found");
             }
 
             Dictionary<string, string> creds;
@@ -339,22 +338,8 @@ public static class CloudAccountsEndpoints
     /// stores a JSON object of string values; non-string values are coerced to
     /// their raw JSON text so nothing is silently dropped.
     /// </summary>
-    private static Dictionary<string, string> DecryptToMap(CredentialCipher cipher, CloudAccount account)
-    {
-        var plain = cipher.Decrypt(account.CredentialsEnc, account.CredentialsNonce);
-        using var doc = JsonDocument.Parse(plain);
-        var map = new Dictionary<string, string>();
-        if (doc.RootElement.ValueKind == JsonValueKind.Object)
-        {
-            foreach (var prop in doc.RootElement.EnumerateObject())
-            {
-                map[prop.Name] = prop.Value.ValueKind == JsonValueKind.String
-                    ? prop.Value.GetString() ?? string.Empty
-                    : prop.Value.GetRawText();
-            }
-        }
-        return map;
-    }
+    private static Dictionary<string, string> DecryptToMap(CredentialCipher cipher, CloudAccount account) =>
+        CredentialJson.ToMap(cipher.Decrypt(account.CredentialsEnc, account.CredentialsNonce));
 
     /// <summary>
     /// STUB provider validation. Verifies the credential map has the fields the

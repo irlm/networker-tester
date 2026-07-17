@@ -38,7 +38,7 @@ public static partial class TesterWriteEndpoints
         var tester = await LoadAsync(db, projectId, testerId, ct);
         if (tester is null)
         {
-            return Results.NotFound(new { error = "Tester not found" });
+            return ApiError.NotFound("Tester not found");
         }
 
         if (tester.PowerState != "stopped")
@@ -83,7 +83,7 @@ public static partial class TesterWriteEndpoints
         var tester = await LoadAsync(db, projectId, testerId, ct);
         if (tester is null)
         {
-            return Results.NotFound(new { error = "Tester not found" });
+            return ApiError.NotFound("Tester not found");
         }
 
         if (tester.Allocation != "idle")
@@ -138,17 +138,17 @@ public static partial class TesterWriteEndpoints
 
         if (body is null || !body.Confirm)
         {
-            return Results.BadRequest(new { error = "force-stop requires {\"confirm\": true, \"reason\": \"...\"}" });
+            return ApiError.BadRequest("force-stop requires {\"confirm\": true, \"reason\": \"...\"}");
         }
         if (string.IsNullOrWhiteSpace(body.Reason))
         {
-            return Results.BadRequest(new { error = "reason must not be empty" });
+            return ApiError.BadRequest("reason must not be empty");
         }
 
         var tester = await LoadAsync(db, projectId, testerId, ct);
         if (tester is null)
         {
-            return Results.NotFound(new { error = "Tester not found" });
+            return ApiError.NotFound("Tester not found");
         }
 
         // Refuse if a benchmark is actively running (cancel it first).
@@ -204,13 +204,13 @@ public static partial class TesterWriteEndpoints
 
         if (body is null || !body.Confirm)
         {
-            return Results.BadRequest(new { error = "upgrade requires {\"confirm\": true}" });
+            return ApiError.BadRequest("upgrade requires {\"confirm\": true}");
         }
 
         var tester = await LoadAsync(db, projectId, testerId, ct);
         if (tester is null)
         {
-            return Results.NotFound(new { error = "Tester not found" });
+            return ApiError.NotFound("Tester not found");
         }
 
         if (tester.Allocation != "idle")
@@ -277,7 +277,7 @@ public static partial class TesterWriteEndpoints
         var tester = await LoadAsync(db, projectId, testerId, ct);
         if (tester is null)
         {
-            return Results.NotFound(new { error = "Tester not found" });
+            return ApiError.NotFound("Tester not found");
         }
 
         if (tester.Allocation is "locked" or "upgrading")
@@ -332,7 +332,7 @@ public static partial class TesterWriteEndpoints
         var tester = await LoadAsync(db, projectId, testerId, ct);
         if (tester is null)
         {
-            return Results.NotFound(new { error = "Tester not found" });
+            return ApiError.NotFound("Tester not found");
         }
 
         var transient = tester.PowerState is "provisioning" or "starting" or "stopping" or "upgrading" or "deleting";

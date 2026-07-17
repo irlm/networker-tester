@@ -73,7 +73,7 @@ public static class VisibilityRulesEndpoints
             // serde: resource_type and resource_id are required fields → 400.
             if (string.IsNullOrEmpty(req.ResourceType) || req.ResourceId == Guid.Empty)
             {
-                return Results.BadRequest(new { error = "resource_type and resource_id are required" });
+                return ApiError.BadRequest("resource_type and resource_id are required");
             }
 
             var rule = new TestVisibilityRule

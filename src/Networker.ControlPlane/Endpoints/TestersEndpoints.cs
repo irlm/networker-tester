@@ -93,7 +93,7 @@ public static class TestersEndpoints
         // 404 on cross-project / missing — mirrors the Rust scoping so no
         // cross-project leakage even for platform admins.
         return tester is null
-            ? Results.NotFound(new { error = "Tester not found" })
+            ? ApiError.NotFound("Tester not found")
             : Results.Ok(tester);
     }
 
@@ -111,7 +111,7 @@ public static class TestersEndpoints
 
         if (tester is null)
         {
-            return Results.NotFound(new { error = "Tester not found" });
+            return ApiError.NotFound("Tester not found");
         }
 
         // Running + queued test runs for this tester, join to config for name.
@@ -174,7 +174,7 @@ public static class TestersEndpoints
 
         if (tester is null)
         {
-            return Results.NotFound(new { error = "Tester not found" });
+            return ApiError.NotFound("Tester not found");
         }
 
         var hourly = await HourlyUsdAsync(db, tester.Cloud, tester.VmSize, tester.Region);
@@ -263,7 +263,7 @@ public static class TestersEndpoints
         {
             if (string.IsNullOrEmpty(resource_type) || !IsValidResourceType(resource_type))
             {
-                return Results.BadRequest(new { error = "resource_id requires a valid resource_type" });
+                return ApiError.BadRequest("resource_id requires a valid resource_type");
             }
 
             var scoped = await db.VmLifecycles

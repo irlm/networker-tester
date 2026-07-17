@@ -90,7 +90,7 @@ public static partial class TesterWriteEndpoints
             ct);
 
     private static IResult Conflict(string message) =>
-        Results.Json(new { error = message }, statusCode: StatusCodes.Status409Conflict);
+        ApiError.Status(StatusCodes.Status409Conflict, message);
 
     // ── DTO (snake_case, subset matching the Rust ProjectTesterRow response) ──
 

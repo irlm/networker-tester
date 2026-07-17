@@ -50,21 +50,21 @@ public static class TestConfigWriteEndpoints
 
             if (string.IsNullOrWhiteSpace(req.Name))
             {
-                return Results.BadRequest(new { error = "name is required" });
+                return ApiError.BadRequest("name is required");
             }
             if (req.Endpoint.ValueKind != JsonValueKind.Object)
             {
-                return Results.BadRequest(new { error = "endpoint is required" });
+                return ApiError.BadRequest("endpoint is required");
             }
             if (req.Workload.ValueKind != JsonValueKind.Object)
             {
-                return Results.BadRequest(new { error = "workload is required" });
+                return ApiError.BadRequest("workload is required");
             }
 
             var endpointKind = DeriveEndpointKind(req.Endpoint);
             if (endpointKind is null)
             {
-                return Results.BadRequest(new { error = "endpoint.kind is required" });
+                return ApiError.BadRequest("endpoint.kind is required");
             }
 
             var now = DateTime.UtcNow;
@@ -94,7 +94,7 @@ public static class TestConfigWriteEndpoints
             catch (DbUpdateException ex) when (IsUniqueViolation(ex))
             {
                 // UNIQUE(project_id, name) → 409, matching Rust's 23505 mapping.
-                return Results.Conflict(new { error = "a test config with this name already exists" });
+                return ApiError.Conflict("a test config with this name already exists");
             }
 
             return Results.Ok(ToDto(cfg));
@@ -134,7 +134,7 @@ public static class TestConfigWriteEndpoints
                 var kind = DeriveEndpointKind(ep);
                 if (kind is null)
                 {
-                    return Results.BadRequest(new { error = "endpoint.kind is required" });
+                    return ApiError.BadRequest("endpoint.kind is required");
                 }
                 cfg.EndpointRef = ep.GetRawText();
                 cfg.EndpointKind = kind;
@@ -166,7 +166,7 @@ public static class TestConfigWriteEndpoints
             }
             catch (DbUpdateException ex) when (IsUniqueViolation(ex))
             {
-                return Results.Conflict(new { error = "a test config with this name already exists" });
+                return ApiError.Conflict("a test config with this name already exists");
             }
 
             return Results.Ok(ToDto(cfg));

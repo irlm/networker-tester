@@ -19,8 +19,6 @@ namespace Networker.Agent;
 /// </summary>
 public sealed class CommandHandler(ILogger<CommandHandler> logger)
 {
-    private static readonly long ProcessStartTicks = Stopwatch.GetTimestamp();
-
     /// <summary>Execute a command; returns the terminal <c>command_result</c>
     /// frame. Log lines (none for health today) stream via <paramref name="sink"/>.</summary>
     public CommandResultMessage Run(CommandMessage cmd, RawWebSocketClient.IFrameSink sink)
