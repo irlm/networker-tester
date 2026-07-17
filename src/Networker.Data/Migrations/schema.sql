@@ -64,7 +64,8 @@ CREATE TABLE public.agent (
     api_key character varying(255) NOT NULL,
     tags jsonb,
     project_id character(14) NOT NULL,
-    tester_id uuid
+    tester_id uuid,
+    api_key_hash character varying(64)
 );
 
 
@@ -1067,6 +1068,13 @@ ALTER TABLE ONLY public.workspace_invite
 
 ALTER TABLE ONLY public.workspace_warning
     ADD CONSTRAINT workspace_warning_pkey PRIMARY KEY (warning_id);
+
+
+--
+-- Name: agent_api_key_hash_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX agent_api_key_hash_key ON public.agent USING btree (api_key_hash);
 
 
 --

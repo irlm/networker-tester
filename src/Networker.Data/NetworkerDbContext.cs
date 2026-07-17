@@ -87,6 +87,8 @@ public partial class NetworkerDbContext : DbContext
 
             entity.HasIndex(e => e.ApiKey, "agent_api_key_key").IsUnique();
 
+            entity.HasIndex(e => e.ApiKeyHash, "agent_api_key_hash_key").IsUnique();
+
             entity.HasIndex(e => e.TesterId, "idx_agent_tester").HasFilter("(tester_id IS NOT NULL)");
 
             entity.HasIndex(e => e.ProjectId, "ix_agent_project");
@@ -99,6 +101,9 @@ public partial class NetworkerDbContext : DbContext
             entity.Property(e => e.ApiKey)
                 .HasMaxLength(255)
                 .HasColumnName("api_key");
+            entity.Property(e => e.ApiKeyHash)
+                .HasMaxLength(64)
+                .HasColumnName("api_key_hash");
             entity.Property(e => e.Arch)
                 .HasMaxLength(20)
                 .HasColumnName("arch");

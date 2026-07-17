@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using Networker.ControlPlane;
 using Networker.ControlPlane.Auth;
 using Networker.ControlPlane.Background;
 using Networker.ControlPlane.Dispatch;
@@ -12,6 +13,7 @@ using Networker.ControlPlane.Security;
 using Networker.ControlPlane.Sso;
 using Networker.Contracts;
 using Networker.Data;
+using Networker.Data.Migrations;
 
 // Phase 2 proof-of-concept control plane.
 //
@@ -99,6 +101,26 @@ builder.Services.AddAgentRawSocket();
 builder.Services.AddOpsInfrastructure();
 
 var app = builder.Build();
+
+// Schema migrations at startup (docs/schema-ownership.md follow-up): with the
+// Rust dashboard retired, this process boots first, so it owns applying the
+// V0NN chain. On an already-migrated database this is a no-op (bookkeeping
+// rows short-circuit); on failure the app refuses to start — the deploy's
+// readiness check then rolls back the build. NETWORKER_RUN_MIGRATIONS=0 opts
+// out (used by test hosts that materialize the schema themselves).
+if (builder.Configuration["NETWORKER_RUN_MIGRATIONS"] != "0")
+{
+    var migrationResult = await SchemaMigrator.MigrateAsync(connString);
+    app.Logger.LogInformation(
+        "Schema migrations: {Applied} applied, {Existing} already recorded (latest V{Latest:D3})",
+        migrationResult.Applied.Count, migrationResult.AlreadyApplied.Count, SchemaMigrator.LatestVersion);
+}
+
+// Global 500 contract — FIRST middleware so any unhandled exception below
+// (auth, endpoints, raw WS) becomes the uniform { "error": ... } envelope
+// with a server-side log, instead of Kestrel's undefined empty 500. Handled
+// 4xx envelopes are untouched (this only fires on unhandled exceptions).
+app.UseErrorEnvelope();
 
 // Order matters: authentication → DB-status middleware → authorization, all
 // after routing so {projectId} route values reach the project-scope handler.

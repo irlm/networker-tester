@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Networker.ControlPlane.Security;
 using Networker.Data;
 using Networker.Data.Entities;
 
@@ -105,13 +106,21 @@ public sealed class AgentMessageProcessor
     // ── Connection lifecycle ─────────────────────────────────────────────────
 
     /// <summary>
-    /// Validate an api-key against <c>agent.api_key</c> (the Rust
-    /// <c>get_by_api_key</c> lookup in <c>agent_ws_handler</c>). Returns the
-    /// agent's identity, or <c>null</c> when the key is missing/unknown — the
-    /// caller rejects the connection (raw: HTTP 401 before upgrade; SignalR:
-    /// <c>Context.Abort()</c>). Read-only: marking online is a separate step
+    /// Validate an api-key (the Rust <c>get_by_api_key</c> lookup in
+    /// <c>agent_ws_handler</c>). Returns the agent's identity, or <c>null</c>
+    /// when the key is missing/unknown — the caller rejects the connection
+    /// (raw: HTTP 401 before upgrade; SignalR: <c>Context.Abort()</c>).
+    /// Read-only: marking online is a separate step
     /// (<see cref="HandleConnectAsync"/>) because Rust performs it only after
     /// the upgrade completes.
+    ///
+    /// <para><b>Security (V040):</b> the lookup is keyed on
+    /// <c>agent.api_key_hash</c> (SHA-256 of the presented key), never the
+    /// plaintext column, so the database's non-constant-time string equality
+    /// runs over digests an attacker cannot incrementally control; the digest
+    /// is then re-verified in-process with
+    /// <see cref="AgentApiKeys.FixedTimeEqualsHex"/>. Rows without a hash
+    /// (pre-V040, impossible after the backfill) never match.</para>
     /// </summary>
     public async Task<AgentIdentity?> AuthenticateAsync(string? apiKey, CancellationToken ct = default)
     {
@@ -120,11 +129,21 @@ public sealed class AgentMessageProcessor
             return null;
         }
 
+        var presentedHash = AgentApiKeys.HashHex(apiKey);
+
         var agent = await _db.Agents
             .AsNoTracking()
-            .FirstOrDefaultAsync(a => a.ApiKey == apiKey, ct);
+            .Where(a => a.ApiKeyHash == presentedHash)
+            .Select(a => new { a.AgentId, a.Name, a.ApiKeyHash })
+            .FirstOrDefaultAsync(ct);
 
-        return agent is null ? null : new AgentIdentity(agent.AgentId, agent.Name);
+        if (agent is null
+            || !AgentApiKeys.FixedTimeEqualsHex(agent.ApiKeyHash, presentedHash))
+        {
+            return null;
+        }
+
+        return new AgentIdentity(agent.AgentId, agent.Name);
     }
 
     /// <summary>

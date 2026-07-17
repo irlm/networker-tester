@@ -9,8 +9,9 @@ namespace Networker.Tests;
 /// <summary>
 /// Proof that schema ownership has moved to Networker.Data: the ported
 /// migration chain (V002..V039, verbatim from the deleted Rust runner in
-/// crates/networker-dashboard/src/db/migrations.rs) builds a fresh database
-/// that the reverse-engineered EF model can query. Because the EF model was
+/// crates/networker-dashboard/src/db/migrations.rs, plus the post-decommission
+/// V040+) builds a fresh database that the reverse-engineered EF model can
+/// query. Because the EF model was
 /// scaffolded FROM the real production schema (which the Rust runner built),
 /// "every mapped entity queries cleanly" is the strongest available proxy for
 /// schema equivalence.
@@ -54,9 +55,9 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
     // ── Migration chain ─────────────────────────────────────────────────
 
     [Fact]
-    public void Fresh_database_applies_the_full_chain_v002_to_v039()
+    public void Fresh_database_applies_the_full_chain_v002_to_v040()
     {
-        Assert.Equal(Enumerable.Range(2, 38), _fx.FreshRun.Applied);
+        Assert.Equal(Enumerable.Range(2, 39), _fx.FreshRun.Applied);
         Assert.Empty(_fx.FreshRun.AlreadyApplied);
     }
 
@@ -69,7 +70,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
 
         Assert.True(second.WasUpToDate);
         Assert.Empty(second.Applied);
-        Assert.Equal(Enumerable.Range(2, 38), second.AlreadyApplied);
+        Assert.Equal(Enumerable.Range(2, 39), second.AlreadyApplied);
     }
 
     [Fact]
@@ -111,7 +112,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
             }
         }
 
-        Assert.Equal(Enumerable.Range(2, 38), recorded);
+        Assert.Equal(Enumerable.Range(2, 39), recorded);
     }
 
     // ── EF-model equivalence ────────────────────────────────────────────
@@ -249,12 +250,64 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
             Assert.NotEqual(Guid.Empty, run.Id); // gen_random_uuid() default fired
         }
     }
+
+    // ── V040: agent api_key hashed at rest ──────────────────────────────
+
+    [Fact]
+    public async Task V040_added_the_agent_hash_column_with_a_unique_index()
+    {
+        await using var conn = new NpgsqlConnection(_fx.ConnectionString);
+        await conn.OpenAsync();
+
+        await using var col = new NpgsqlCommand(
+            """
+            SELECT data_type, character_maximum_length
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'agent'
+              AND column_name = 'api_key_hash'
+            """, conn);
+        await using (var reader = await col.ExecuteReaderAsync())
+        {
+            Assert.True(await reader.ReadAsync(), "agent.api_key_hash column missing after V040");
+            Assert.Equal("character varying", reader.GetString(0));
+            Assert.Equal(64, reader.GetInt32(1));
+        }
+
+        await using var idx = new NpgsqlCommand(
+            """
+            SELECT indexdef FROM pg_indexes
+            WHERE schemaname = 'public' AND tablename = 'agent'
+              AND indexname = 'agent_api_key_hash_key'
+            """, conn);
+        var indexDef = (string?)await idx.ExecuteScalarAsync();
+        Assert.NotNull(indexDef);
+        Assert.Contains("UNIQUE", indexDef);
+    }
+
+    [Fact]
+    public async Task V040_sql_backfill_digest_matches_the_csharp_hasher()
+    {
+        // V040 backfills api_key_hash for existing agents in SQL; agent auth
+        // hashes the presented plaintext key in C#. The two digests MUST agree,
+        // or every pre-V040 fielded agent would be locked out at reconnect.
+        const string key = "itestAgentKey0123456789abcdefghijklmnopqrstu";
+
+        await using var conn = new NpgsqlConnection(_fx.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT encode(sha256(convert_to($1, 'UTF8')), 'hex')", conn);
+        cmd.Parameters.AddWithValue(key);
+        var sqlDigest = (string?)await cmd.ExecuteScalarAsync();
+
+        Assert.Equal(Networker.ControlPlane.Security.AgentApiKeys.HashHex(key), sqlDigest);
+    }
 }
 
 /// <summary>
 /// Frozen-history guard: the V002..V039 scripts are byte-for-byte copies of
 /// the Rust runner's SQL (generated from migrations.rs, then verified against
-/// a live Postgres 16). Once a migration has shipped it must never change —
+/// a live Postgres 16); V040+ are the post-decommission C#-era migrations.
+/// Once a migration has shipped it must never change —
 /// databases that already ran it would silently diverge from fresh installs.
 /// New schema work = a NEW V0NN file (and a new pin here), never an edit.
 /// Runs without Docker, so it guards even where Testcontainers can't run.
@@ -300,6 +353,7 @@ public sealed class MigrationScriptFreezeTests
         ["V037_comparison_groups.sql"] = "6c68eced9de3e0bb66be0b4e5c6b9554186dd06c0731dcf22349ee21b73609d1",
         ["V038_pending_endpoints.sql"] = "87353405225e0ca4870eaa9a38eb7abac0d28ce1b0664d6841d92fcea974c07c",
         ["V039_tester_cloud_account.sql"] = "cd88b9ab949cd844f100673754cea0507206ad9afee94e6cd45e95016cb45ece",
+        ["V040_agent_api_key_hash.sql"] = "6d5de2ba9985f56ef06d8ea93354c28b5b77551af491c4750b705744b69f4a5f",
     };
 
     [Fact]
@@ -319,7 +373,7 @@ public sealed class MigrationScriptFreezeTests
             Assert.Contains(version, scripted);
         }
 
-        Assert.Equal(37, scripted.Count);
+        Assert.Equal(38, scripted.Count);
     }
 
     [Fact]
