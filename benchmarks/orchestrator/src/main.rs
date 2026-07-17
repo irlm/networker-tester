@@ -1075,6 +1075,9 @@ fn collect_auto_rerun_targets(
     targets
 }
 
+// Parameter count reflects the benchmark cycle's real coordination surface;
+// bundling into a struct adds indirection without clarity (measurement-path code).
+#[allow(clippy::too_many_arguments)]
 async fn run_case_cycle(
     run: &mut types::BenchmarkRun,
     progress: &progress::ProgressReporter,

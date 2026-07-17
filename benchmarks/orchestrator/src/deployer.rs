@@ -21,9 +21,6 @@ fn validate_language_name(lang: &str) -> Result<()> {
 
 // ssh_exec, scp_to, scp_dir_to, validate_ip imported from crate::ssh
 
-/// The GitHub repo URL for cloning reference APIs.
-const REPO_URL: &str = "https://github.com/irlm/networker-tester.git";
-const REPO_BRANCH: &str = "main";
 /// GitHub raw URL for the installer script.
 const INSTALLER_URL: &str =
     "https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh";

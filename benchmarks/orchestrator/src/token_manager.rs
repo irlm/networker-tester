@@ -171,63 +171,6 @@ pub async fn cleanup_keyvault_vm(config_id: &str, testbed_id: &str) -> Result<()
     Ok(())
 }
 
-/// Revoke ALL tokens for a config run (emergency kill switch).
-/// Deletes all secrets matching bench-{config_id}-vm-*.
-pub async fn revoke_all_tokens(config_id: &str) -> Result<()> {
-    let vault_name = match keyvault_name() {
-        Some(name) => name,
-        None => return Ok(()),
-    };
-
-    let prefix = format!("bench-{}", &config_id[..config_id.len().min(12)]);
-
-    tracing::warn!(
-        "REVOKING ALL tokens for config {} from Key Vault {}",
-        config_id,
-        vault_name
-    );
-
-    // List all secrets matching the prefix
-    let output = tokio::process::Command::new("az")
-        .args([
-            "keyvault",
-            "secret",
-            "list",
-            "--vault-name",
-            &vault_name,
-            "--query",
-            &format!("[?starts_with(name, '{}')].name", prefix),
-            "--output",
-            "tsv",
-        ])
-        .output()
-        .await
-        .context("Failed to list Key Vault secrets")?;
-
-    if output.status.success() {
-        let names = String::from_utf8_lossy(&output.stdout);
-        for name in names.lines().filter(|l| !l.is_empty()) {
-            tracing::info!("Revoking: {}/{}", vault_name, name);
-            let _ = tokio::process::Command::new("az")
-                .args([
-                    "keyvault",
-                    "secret",
-                    "delete",
-                    "--vault-name",
-                    &vault_name,
-                    "--name",
-                    name,
-                    "--output",
-                    "none",
-                ])
-                .output()
-                .await;
-        }
-    }
-
-    Ok(())
-}
-
 /// Delete the token file from a VM.
 pub async fn cleanup_vm(ip: &str) {
     let _ = ssh::ssh_exec(ip, "sudo rm -f /opt/bench/.api-token").await;

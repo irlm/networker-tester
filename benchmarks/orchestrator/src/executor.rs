@@ -494,7 +494,7 @@ async fn stop_existing_server(vm: &VmInfo) {
     .await;
 }
 
-/// Deploy a reverse proxy on a VM. Uses install.sh --benchmark-proxy-swap.
+// Deploy a reverse proxy on a VM. Uses install.sh --benchmark-proxy-swap.
 // Token generation moved to crate::token_manager
 
 /// Validate a name is safe for shell interpolation (alphanumeric + dash/underscore/dot).
@@ -671,22 +671,6 @@ fn effective_http_versions_for_proxy(proxy: &str, modes: &[String]) -> Vec<Strin
             _ => None, // skip non-HTTP modes like download/upload
         })
         .collect()
-}
-
-fn effective_modes_for_proxy(proxy: &str, modes: &[String]) -> String {
-    if proxy_supports_http3(proxy) {
-        modes.join(",")
-    } else {
-        let filtered: Vec<&str> = modes
-            .iter()
-            .map(|s| s.as_str())
-            .filter(|m| *m != "http3")
-            .collect();
-        if filtered.len() < modes.len() {
-            tracing::info!("Skipping http3 for proxy {} (no QUIC support)", proxy);
-        }
-        filtered.join(",")
-    }
 }
 
 /// Outcome of a single testbed execution.
@@ -1952,6 +1936,9 @@ fn supports_http3(language: &str) -> bool {
 }
 
 /// Run the benchmark for a single language and collect JSON output.
+// Parameter count reflects the benchmark cycle's real coordination surface;
+// bundling into a struct adds indirection without clarity (measurement-path code).
+#[allow(clippy::too_many_arguments)]
 async fn run_language_benchmark(
     vm: &VmInfo,
     params: &runner::TestParams,
