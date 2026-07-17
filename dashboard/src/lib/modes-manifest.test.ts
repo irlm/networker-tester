@@ -59,10 +59,15 @@ describe('mode-family.ts ⇄ manifest', () => {
     }
   });
 
-  it('maps CLI aliases to the same family as their target', () => {
+  it('any CLI alias the map carries agrees with its target family', () => {
+    // CLI aliases (e.g. tls-resume) never appear as wire mode strings, so
+    // mode-family is not required to map them — but when it does (pageload1),
+    // the family must match the alias target.
     for (const [alias, target] of Object.entries(manifest.cli_aliases)) {
       if (alias.startsWith('$')) continue;
-      expect(familyOf(alias), `familyOf(${alias})`).toBe(familyOf(target));
+      if (alias in FAMILY_BY_MODE) {
+        expect(familyOf(alias), `familyOf(${alias})`).toBe(familyOf(target));
+      }
     }
   });
 
