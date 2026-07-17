@@ -116,7 +116,7 @@ public static class VersionEndpoints
     /// <c>project_tester.installer_version</c>, matching Rust's
     /// <c>env!("CARGO_PKG_VERSION")</c>.
     /// </summary>
-    public const string DashboardVersion = "0.28.29";
+    public const string DashboardVersion = "0.28.30";
 
     private const string TesterBinaryEnvVar = "AGENT_TESTERPATH";
 

@@ -45,6 +45,9 @@ public static class PlatformEndpoints
         // Replicates the static list from Protocol::all_modes() in
         // crates/networker-tester/src/metrics.rs and the group-detail text from
         // api/modes.rs, producing { "groups": [ { label, detail, modes: [...] } ] }.
+        // Extended (audit C5): "language_capabilities" carries the per-language
+        // protocol/workload matrix (BenchmarkLanguageCapabilities) so the
+        // Application Benchmark wizard can gate mode × language combos.
         app.MapGet("/api/modes", () => Results.Ok(BuildModes()))
             .RequireAuthorization();
 
@@ -148,6 +151,17 @@ public static class PlatformEndpoints
 
         Flush();
 
-        return new { groups };
+        var languageCapabilities = BenchmarkLanguageCapabilities.All
+            .Select(c => new
+            {
+                language = c.Language,
+                http1 = c.Http1,
+                http2 = c.Http2,
+                http3 = c.Http3,
+                apibench = c.Apibench,
+            })
+            .ToArray();
+
+        return new { groups, language_capabilities = languageCapabilities };
     }
 }
