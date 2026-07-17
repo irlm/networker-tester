@@ -132,6 +132,7 @@ Detailed documentation lives under [`docs/`](docs/):
 - [`docs/README.md`](docs/README.md): docs index
 - [`docs/architecture.md`](docs/architecture.md): component relationships and runtime flow
 - [`docs/installation.md`](docs/installation.md): installation, build, and component startup
+- [`docs/release-flow.md`](docs/release-flow.md): version bump, auto-tag, deploy-first release graph, rollback
 - [`docs/probes.md`](docs/probes.md): probe and metric reference
 - [`docs/testing.md`](docs/testing.md): protocol-comparison and benchmarking workflows
 - [`docs/deploy-config.md`](docs/deploy-config.md): `--deploy` JSON schema and execution model

@@ -1,5 +1,8 @@
 # Hybrid Migration Plan — Rust → C# / .NET 10
 
+> **Historical — migration completed 2026-07; see [`architecture.md`](../architecture.md).**
+> Kept for the decision rationale and scoring. Status lines below are frozen as written.
+
 **Status:** Phase 0 + Phase 1 scaffolded and proven; Phase 2 proof-of-concept working (the C# solution is `Networker.sln` at the repo root — projects under `src/`, tests under `tests/Networker.Tests/`).
 **Decision:** Keep the Rust probe engine; re-architect the control plane, agent, and endpoint in C#/.NET 10.
 **Score:** Hybrid **7.9/10** vs. stay-in-Rust 6.6 vs. full-C#-rewrite 6.3 (weighted for a solo, C#-fluent owner).
