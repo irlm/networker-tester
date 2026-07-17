@@ -87,7 +87,9 @@ builder.Services.AddSsoModule();
 // benchmark_config table; the M3 dispatcher/redispatcher own run assignment.
 builder.Services.AddNetworkerEmailSender();
 builder.Services.AddVmLifecycleRecorder();
-builder.Services.AddVersionRefresh("0.28.30");
+// Floor = the real assembly version (Directory.Build.props, single-sourced
+// with Cargo.toml) — never a hardcoded string.
+builder.Services.AddVersionRefresh(VersionEndpoints.DashboardVersion);
 // M6 cutover: raw-WebSocket bridges (the React frontend + fielded Rust agents
 // speak raw WS JSON, not SignalR) + per-tick pg-advisory leader election and
 // tick observability for the background loops. AddRawWebSockets must come
@@ -110,7 +112,7 @@ app.MapGet("/api/health", async (NetworkerDbContext db) =>
     return Results.Ok(new
     {
         status = dbOk ? "ok" : "degraded",
-        version = "hybrid-phase2-poc",
+        version = VersionEndpoints.DashboardVersion,
         db = dbOk ? "ok" : "error",
     });
 });

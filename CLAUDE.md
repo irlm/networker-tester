@@ -109,13 +109,24 @@ After implementing any fix, test the exact end-to-end workflow (e.g., curl|bash 
 - rustls with ring provider only — call `ring::default_provider().install_default()` before TLS.
 - HTTP/3 stub module must mirror the real module's public API. CI verifies `--no-default-features` builds.
 
-## Version Sync (3 locations)
+## Version Sync (5 locations)
 
 1. `Cargo.toml` workspace `version` field
 2. `CHANGELOG.md` — new `## [X.Y.Z]` section
-3. `INSTALLER_VERSION` in both `install.sh` AND `install.ps1`
+3. `install.sh` — `INSTALLER_VERSION`
+4. `install.ps1` — `InstallerVersion`
+5. `Directory.Build.props` `<Version>` (repo root — stamps every C# assembly)
 
-Every PR must bump all three.
+Every PR must bump all five files. CI (`version-check`) enforces that
+Directory.Build.props == Cargo.toml, CHANGELOG has the section, and the
+installers match.
+
+Everything else on the C# side is DERIVED from the assembly version at build
+time and must never be hand-bumped: the agent's heartbeat/self-reported
+version (`AgentVersion.Current`), the endpoint's `ServerInfo.Version` +
+`/health`, the control plane's `/api/health` + `/api/version`
+`dashboard_version` (`VersionEndpoints.DashboardVersion`), and the
+version-refresh floor. Do NOT add `<Version>` to individual .csproj files.
 
 ## Adding a New Protocol Variant
 

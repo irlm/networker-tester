@@ -25,6 +25,13 @@
     <ProjectReference Include="..\..\src\Networker.Agent\Networker.Agent.csproj" />
     <ProjectReference Include="..\..\src\Networker.ControlPlane\Networker.ControlPlane.csproj" />
     <ProjectReference Include="..\..\src\Networker.Data\Networker.Data.csproj" />
+    <ProjectReference Include="..\..\src\Networker.Endpoint\Networker.Endpoint.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Real tester output captured by scripts/regenerate-contract-golden.sh —
+         the contract golden for ContractRoundTripTests. -->
+    <Content Include="fixtures\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

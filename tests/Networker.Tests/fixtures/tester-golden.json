@@ -1,0 +1,143 @@
+{
+    "schema_version": "1.0",
+    "run_id": "52d66cbb-ea0d-4589-9128-0c9188d7a76b",
+    "started_at": "2026-07-17T15:36:15.208383Z",
+    "finished_at": "2026-07-17T15:36:15.219495Z",
+    "target_url": "https://localhost:18443/health",
+    "target_host": "localhost",
+    "modes": [
+        "http1"
+    ],
+    "total_runs": 1,
+    "concurrency": 1,
+    "timeout_ms": 30000,
+    "client_os": "macos",
+    "client_version": "0.28.31",
+    "server_info": {
+        "os": "macos",
+        "arch": "aarch64",
+        "cpu_cores": 10,
+        "total_memory_mb": 16384,
+        "os_version": "macOS 26.5.2",
+        "hostname": "Dune",
+        "server_version": "0.28.31",
+        "uptime_secs": 63
+    },
+    "client_info": {
+        "os": "macos",
+        "arch": "aarch64",
+        "cpu_cores": 10,
+        "total_memory_mb": 16384,
+        "os_version": "macOS 26.5.2",
+        "hostname": "Dune"
+    },
+    "baseline": {
+        "samples": 5,
+        "rtt_min_ms": 0.67275,
+        "rtt_avg_ms": 0.7248503999999999,
+        "rtt_max_ms": 0.81525,
+        "rtt_p50_ms": 0.505584,
+        "rtt_p95_ms": 0.8575668000000001,
+        "network_type": "Loopback"
+    },
+    "attempts": [
+        {
+            "attempt_id": "3b95da68-2645-4891-a9e8-85bbf5fab12c",
+            "run_id": "52d66cbb-ea0d-4589-9128-0c9188d7a76b",
+            "protocol": "http1",
+            "sequence_num": 0,
+            "started_at": "2026-07-17T15:36:15.209340Z",
+            "finished_at": "2026-07-17T15:36:15.219182Z",
+            "success": true,
+            "dns": {
+                "query_name": "localhost",
+                "resolved_ips": [
+                    "127.0.0.1"
+                ],
+                "duration_ms": 0.285125,
+                "started_at": "2026-07-17T15:36:15.212977Z",
+                "success": true,
+                "resolver": "system (10.10.10.1:53)"
+            },
+            "tcp": {
+                "local_addr": "127.0.0.1:54259",
+                "remote_addr": "127.0.0.1:18443",
+                "connect_duration_ms": 0.260083,
+                "attempt_count": 1,
+                "started_at": "2026-07-17T15:36:15.213467Z",
+                "success": true,
+                "mss_bytes": 16332,
+                "rtt_estimate_ms": null,
+                "retransmits": null,
+                "total_retrans": null,
+                "snd_cwnd": null,
+                "snd_ssthresh": null,
+                "rtt_variance_ms": null,
+                "rcv_space": null,
+                "segs_out": null,
+                "segs_in": null
+            },
+            "tls": {
+                "protocol_version": "TLSv1_3",
+                "cipher_suite": "TLS13_AES_256_GCM_SHA384",
+                "alpn_negotiated": "http/1.1",
+                "cert_subject": "CN=rcgen self signed cert",
+                "cert_issuer": "CN=rcgen self signed cert",
+                "cert_expiry": "4096-01-01T00:00:00Z",
+                "handshake_duration_ms": 2.8238339999999997,
+                "started_at": "2026-07-17T15:36:15.213938Z",
+                "success": true,
+                "tls_backend": "rustls"
+            },
+            "http": {
+                "negotiated_version": "HTTP/1.1",
+                "status_code": 200,
+                "headers_size_bytes": 222,
+                "body_size_bytes": 83,
+                "ttfb_ms": 0.761833,
+                "total_duration_ms": 1.6012089999999999,
+                "redirect_count": 0,
+                "started_at": "2026-07-17T15:36:15.217551Z",
+                "response_headers": [
+                    [
+                        "content-type",
+                        "application/json"
+                    ],
+                    [
+                        "x-networker-server-timestamp",
+                        "2026-07-17T15:36:15.218767+00:00"
+                    ],
+                    [
+                        "x-networker-server-version",
+                        "0.28.31"
+                    ],
+                    [
+                        "alt-svc",
+                        "h3=\":18443\"; ma=86400"
+                    ],
+                    [
+                        "content-length",
+                        "83"
+                    ],
+                    [
+                        "date",
+                        "Fri, 17 Jul 2026 15:36:15 GMT"
+                    ]
+                ],
+                "payload_bytes": 0,
+                "cpu_time_ms": 8.467,
+                "csw_voluntary": 0,
+                "csw_involuntary": 29,
+                "http_handshake_ms": 0.174792
+            },
+            "udp": null,
+            "error": null,
+            "retry_count": 0,
+            "server_timing": {
+                "server_timestamp": "2026-07-17T15:36:15.218767Z",
+                "clock_skew_ms": 0.16508350000000005,
+                "server_version": "0.28.31"
+            }
+        }
+    ]
+}

@@ -12,6 +12,7 @@ on:
       - "src/**"
       - "tests/Networker.*/**"
       - "Networker.sln"
+      - "Directory.Build.props"
       - ".github/workflows/dotnet.yml"
   pull_request:
     branches: ["main"]
@@ -19,6 +20,7 @@ on:
       - "src/**"
       - "tests/Networker.*/**"
       - "Networker.sln"
+      - "Directory.Build.props"
       - ".github/workflows/dotnet.yml"
 
 permissions:

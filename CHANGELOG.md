@@ -11,6 +11,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.31] — 2026-07-17
+
+### Changed
+- **Versions are now single-sourced (8 locations → 5).** New repo-root
+  `Directory.Build.props` stamps every C# assembly (src/* + tests/*) with the
+  workspace version; the agent's self-reported/heartbeat version, the endpoint's
+  `ServerInfo` + `/health` version, and the control plane's `/api/version`
+  `dashboard_version` + version-refresh floor all derive from the assembly
+  (`AssemblyInformationalVersion`, normalized to a dotted triple) instead of
+  hand-maintained constants. Fixes two already-drifted values:
+  `Networker.Agent.csproj` stuck at 0.28.26 (agents self-reported a stale,
+  4-part `0.28.26.0` to the dispatcher's version gate) and the C# endpoint's
+  `ServerInfo.Version` stuck at 0.28.28.
+- **`GET /api/health` now reports the real version** instead of the hardcoded
+  `"hybrid-phase2-poc"` placeholder.
+- **CI `version-check` now asserts `Directory.Build.props` == `Cargo.toml`**, so
+  the Rust and C# halves of the hybrid cannot drift; its failure message
+  documents the complete 5-file bump list (Cargo.toml, CHANGELOG.md,
+  install.sh, install.ps1, Directory.Build.props — everything else derived).
+- **Contract golden regenerated from the real tester.** The hand-typed
+  0.28.13 fixture in `ContractRoundTripTests` is replaced by a committed golden
+  captured from `networker-tester --json-stdout` probing a local
+  `networker-endpoint` (`scripts/regenerate-contract-golden.sh`), at the
+  current schema.
+
+---
+
 ## [0.28.30] — 2026-07-17
 
 ### Added

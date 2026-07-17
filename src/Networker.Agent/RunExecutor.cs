@@ -37,9 +37,6 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
 {
     private const long MaxStdoutBytes = 128L * 1024 * 1024;
 
-    private static readonly string AgentVersion =
-        typeof(RunExecutor).Assembly.GetName().Version?.ToString() ?? "0.0.0";
-
     /// <summary>Run one assigned execution to completion, streaming frames via
     /// <paramref name="sink"/>. Never throws — all failures become error +
     /// failed frames, matching the Rust executor which returns () on every
@@ -421,7 +418,7 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         var environment = El(JsonSerializer.Serialize(new Dictionary<string, string>
         {
             ["client_os"] = clientOs,
-            ["client_version"] = AgentVersion,
+            ["client_version"] = AgentVersion.Current,
         }));
 
         var methodology = config.Methodology.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null

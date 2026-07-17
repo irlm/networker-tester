@@ -286,8 +286,9 @@ public sealed class VersionRefreshService : BackgroundService
 /// <see cref="LatestVersionCache"/> singleton (seeded with the floor version) and
 /// the <see cref="VersionRefreshService"/> hosted service.
 ///
-/// <para><c>Program.cs</c> (the floor is the control plane's assembly version):
-/// <code>builder.Services.AddVersionRefresh("0.28.13");</code></para>
+/// <para><c>Program.cs</c> (the floor is the control plane's assembly version,
+/// derived from Directory.Build.props — never a hardcoded string):
+/// <code>builder.Services.AddVersionRefresh(VersionEndpoints.DashboardVersion);</code></para>
 /// </summary>
 public static class VersionRefreshExtensions
 {

@@ -96,7 +96,7 @@ jobs:
           # Rust release train, so forcing a bump on them is noise. Require the
           # bump iff a shipping artifact changed.
           SHIPPING=$(git diff --name-only origin/main...HEAD \
-            | grep -E '^(crates/|dashboard/|install\.sh$|install\.ps1$|Cargo\.(toml|lock)$)' || true)
+            | grep -E '^(crates/|dashboard/|install\.sh$|install\.ps1$|Cargo\.(toml|lock)$|Directory\.Build\.props$)' || true)
           if [ -z "${SHIPPING}" ]; then
             echo "✓ PR changes no shipping artifacts (crates/frontend/installers) — Rust version bump not required."
             exit 0
@@ -117,7 +117,7 @@ jobs:
             echo "Current version: ${BASE_VERSION}"
             echo "Bump to at least: $(echo ${BASE_VERSION} | awk -F. '{print $1"."$2"."$3+1}')"
             echo ""
-            echo "Also update: CHANGELOG.md, install.sh (INSTALLER_VERSION), install.ps1 (InstallerVersion)"
+            echo "Also update: CHANGELOG.md, install.sh (INSTALLER_VERSION), install.ps1 (InstallerVersion), Directory.Build.props (<Version>)"
             exit 1
           fi
 
@@ -140,9 +140,31 @@ jobs:
             exit 1
           fi
 
+          # Check Directory.Build.props (the single C# version source) matches —
+          # keeps the Rust and C# halves of the hybrid from drifting. Every C#
+          # runtime-reported version (agent heartbeat, endpoint ServerInfo,
+          # control-plane /api/health + /api/version) derives from this at
+          # build time, so this one line IS the C# version.
+          PROPS_VER=$(grep -o '<Version>[^<]*</Version>' Directory.Build.props | head -1 | sed 's/<[^>]*>//g')
+          if [ "${PROPS_VER}" != "${PR_VERSION}" ]; then
+            echo "::error::Directory.Build.props <Version> (${PROPS_VER}) doesn't match Cargo.toml (${PR_VERSION})."
+            echo ""
+            echo "The COMPLETE version-bump list is exactly 5 files:"
+            echo "  1. Cargo.toml            (workspace version)"
+            echo "  2. CHANGELOG.md          (new ## [X.Y.Z] section)"
+            echo "  3. install.sh            (INSTALLER_VERSION)"
+            echo "  4. install.ps1           (InstallerVersion)"
+            echo "  5. Directory.Build.props (<Version> — all C# assemblies)"
+            echo ""
+            echo "Everything else is derived: C# assemblies, /api/health, /api/version,"
+            echo "agent heartbeats, and endpoint ServerInfo all read the assembly version."
+            exit 1
+          fi
+
           echo "✓ Version bumped: ${BASE_VERSION} → ${PR_VERSION}"
           echo "✓ CHANGELOG entry found"
           echo "✓ Installer versions match"
+          echo "✓ Directory.Build.props (C# assemblies) matches"
 
   # ──────────────────────────────────────────────────────────────────────────
   # Fast checks: format + clippy (fails early, < 2 min)
