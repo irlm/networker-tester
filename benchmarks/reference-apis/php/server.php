@@ -1,6 +1,9 @@
 <?php
 /**
  * AletheBench PHP reference API — Swoole async HTTP server.
+ *
+ * Conforms to benchmarks/shared/API-SPEC.md (frozen contract v1, family C).
+ * Worker policy (§3): Swoole worker_num = BENCH_WORKERS (default = CPUs).
  */
 
 declare(strict_types=1);
@@ -11,155 +14,161 @@ $LOG_LEVEL = strtolower(getenv('LOG_LEVEL') ?: 'info');
 $LOG_LEVELS = ['error' => 0, 'warn' => 1, 'info' => 2, 'debug' => 3];
 $CURRENT_LEVEL = $LOG_LEVELS[$LOG_LEVEL] ?? 2;
 
-function bench_log(string $level, string $msg, array $fields = []): void
+function bench_log(string $level, string $msg): void
 {
     global $CURRENT_LEVEL, $LOG_LEVELS;
     if (($LOG_LEVELS[$level] ?? 0) <= $CURRENT_LEVEL) {
-        $format = getenv('LOG_FORMAT') ?: 'text';
-        if ($format === 'json') {
-            $entry = [
-                'ts'      => gmdate('Y-m-d\TH:i:s\Z'),
-                'service' => 'php',
-                'level'   => $level,
-                'message' => $msg,
-            ];
-            if (!empty($fields)) {
-                $entry['fields'] = $fields;
-            }
-            fwrite(STDERR, json_encode($entry) . "\n");
-        } else {
-            $ts = date('Y-m-d H:i:s');
-            fwrite(STDERR, "[$ts] " . strtoupper($level) . " $msg\n");
-        }
+        $ts = date('Y-m-d H:i:s');
+        fwrite(STDERR, "[$ts] " . strtoupper($level) . " $msg\n");
     }
 }
 
-$certDir = getenv('BENCH_CERT_DIR') ?: '/opt/bench';
+// ── Shared benchmark dataset (spec §2) — load failure is FATAL ────────────
 
-$server = new Swoole\HTTP\Server(
-    '0.0.0.0',
-    8443,
-    SWOOLE_PROCESS,
-    SWOOLE_SOCK_TCP | SWOOLE_SSL
+function bench_fatal(string $msg): void
+{
+    fwrite(STDERR, "FATAL: $msg\n");
+    exit(1);
+}
+
+function load_bench_data(): array
+{
+    $envPath = getenv('BENCH_DATA_PATH');
+    if ($envPath !== false && $envPath !== '') {
+        // An explicitly configured path must exist and parse (spec §2).
+        $raw = @file_get_contents($envPath);
+        if ($raw === false) {
+            bench_fatal("BENCH_DATA_PATH=$envPath could not be read");
+        }
+        $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            bench_fatal("BENCH_DATA_PATH=$envPath is not valid JSON: " . json_last_error_msg());
+        }
+        $source = $envPath;
+    } else {
+        $data = null;
+        $source = '';
+        foreach (['/opt/bench/bench-data.json', __DIR__ . '/../shared/bench-data.json'] as $p) {
+            if (!file_exists($p)) {
+                continue;
+            }
+            $raw = @file_get_contents($p);
+            $data = $raw === false ? null : json_decode($raw, true);
+            if (!is_array($data)) {
+                bench_fatal("bench-data.json exists at $p but could not be loaded: " . json_last_error_msg());
+            }
+            $source = $p;
+            break;
+        }
+        if ($data === null) {
+            bench_fatal('bench-data.json not found (set BENCH_DATA_PATH or deploy ' .
+                '/opt/bench/bench-data.json); reference implementations have no ' .
+                'PRNG fallback (spec §2)');
+        }
+    }
+
+    // Verify the §2 schema counts.
+    $checks = [
+        '_version == 2'                => ($data['_version'] ?? 0) === 2,
+        'users == 100'                 => count($data['users'] ?? []) === 100,
+        'search_corpus == 1000'        => count($data['search_corpus'] ?? []) === 1000,
+        'timeseries == 10000'          => count($data['timeseries'] ?? []) === 10000,
+        'transform_inputs == 10'       => count($data['transform_inputs'] ?? []) === 10,
+        'expected_checksums == 4 keys' => count($data['expected_checksums'] ?? []) === 4,
+    ];
+    foreach ($checks as $check => $ok) {
+        if (!$ok) {
+            bench_fatal("bench-data.json at $source: schema check failed ($check)");
+        }
+    }
+
+    bench_log('info', "Loaded bench-data.json from $source (_version 2, 100 users, 1000 corpus, 10000 timeseries)");
+    return $data;
+}
+
+$BENCH_DATA = load_bench_data();
+$USERS = $BENCH_DATA['users'];
+$CORPUS = $BENCH_DATA['search_corpus'];
+// Aggregate reads only the value field, in dataset order (spec §5.6).
+$TS_VALUES = array_map(static fn ($p) => (float) $p['value'], $BENCH_DATA['timeseries']);
+$CHECKSUMS = $BENCH_DATA['expected_checksums'];
+
+// /health body is a byte-constant precomputed at startup (spec §5.1).
+$HEALTH_BODY = json_encode(
+    ['status' => 'ok', 'runtime' => 'php', 'version' => PHP_VERSION],
+    JSON_UNESCAPED_SLASHES
 );
 
-$server->set([
-    'ssl_cert_file' => "$certDir/cert.pem",
-    'ssl_key_file'  => "$certDir/key.pem",
-    'worker_num'    => 4,
-]);
+const CHUNK_SIZE = 8192;               // spec §5.2: pinned chunk size
+const DOWNLOAD_CAP = 2147483648;       // spec §5.2: 2 GiB cap
+// Swoole's write() forces chunked transfer (no Content-Length header), so
+// bodies up to this threshold are sent via end() with an exact
+// Content-Length; larger bodies stream in 8 KiB chunks (chunked encoding).
+const DOWNLOAD_BUFFER_THRESHOLD = 8388608; // 8 MiB
 
-const CHUNK_SIZE = 8192;
-$chunk = str_repeat("\x42", CHUNK_SIZE);
-
-// ── Shared benchmark dataset ──────────────────────────────────────────────
-
-$BENCH_DATA = null;
-$benchPaths = [];
-if (($envPath = getenv('BENCH_DATA_PATH')) !== false) {
-    $benchPaths[] = $envPath;
-}
-$benchPaths[] = '/opt/bench/bench-data.json';
-$benchPaths[] = __DIR__ . '/../shared/bench-data.json';
-
-foreach ($benchPaths as $bp) {
-    if (file_exists($bp)) {
-        $raw = file_get_contents($bp);
-        if ($raw !== false) {
-            $parsed = json_decode($raw, true);
-            if (is_array($parsed)) {
-                $BENCH_DATA = $parsed;
-                $uCount = isset($parsed['users']) ? count($parsed['users']) : 0;
-                $sCount = isset($parsed['search_corpus']) ? count($parsed['search_corpus']) : 0;
-                $tCount = isset($parsed['timeseries']) ? count($parsed['timeseries']) : 0;
-                bench_log('info', "Loaded bench-data.json from $bp (version {$parsed['_version']}, $uCount users, $sCount corpus, $tCount timeseries)");
-                break;
-            } else {
-                bench_log('warn', "bench-data.json at $bp is invalid JSON");
-            }
-        }
-    }
-}
-if ($BENCH_DATA === null) {
-    bench_log('warn', "bench-data.json not found, falling back to per-language PRNG");
-}
-
-// ── Shared data for API endpoints ──────────────────────────────────────────
-
-const FIRST_NAMES = [
-    'Alice', 'Bob', 'Carol', 'Dave', 'Eve', 'Frank', 'Grace', 'Heidi',
-    'Ivan', 'Judy', 'Karl', 'Laura', 'Mallory', 'Nina', 'Oscar', 'Peggy',
-    'Quentin', 'Ruth', 'Steve', 'Trent', 'Ursula', 'Victor', 'Wendy',
-    'Xander', 'Yvonne', 'Zack',
-];
-
-const LAST_NAMES = [
-    'Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Miller',
-    'Davis', 'Rodriguez', 'Martinez', 'Hernandez', 'Lopez', 'Gonzalez',
-    'Wilson', 'Anderson', 'Thomas', 'Taylor', 'Moore', 'Jackson', 'Martin',
-];
-
-const DEPARTMENTS = [
-    'Engineering', 'Marketing', 'Sales', 'Finance', 'HR',
-    'Operations', 'Legal', 'Support', 'Design', 'Product',
-];
-
-const SEARCH_WORDS = [
-    'network', 'latency', 'throughput', 'bandwidth', 'packet',
-    'routing', 'firewall', 'proxy', 'endpoint', 'server',
-    'client', 'protocol', 'socket', 'buffer', 'stream',
-    'timeout', 'retry', 'cache', 'queue', 'load',
-];
+$USER_SORT_FIELDS = ['id', 'name', 'email', 'score', 'created_at'];
+$USER_STRING_FIELDS = ['name' => true, 'email' => true, 'created_at' => true];
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function api_headers(Swoole\HTTP\Response $response, float $duration_ms, ?float $authDurMs = null): void
+/** Spec §5.6: round half away from zero to 2 decimals (float64 semantics). */
+function r2(float $x): float
+{
+    return floor($x * 100 + 0.5) / 100;
+}
+
+function api_headers(Swoole\HTTP\Response $response, float $duration_ms): void
 {
     $response->header('Content-Type', 'application/json');
-    $timing = sprintf('app;dur=%.1f', $duration_ms);
-    if ($authDurMs !== null) {
-        $timing = sprintf('auth;dur=%.1f, ', $authDurMs) . $timing;
-    }
-    $response->header('Server-Timing', $timing);
+    $response->header('Server-Timing', sprintf('app;dur=%.1f', $duration_ms));
     $response->header('Cache-Control', 'no-store, no-cache, must-revalidate');
     $response->header('Timing-Allow-Origin', '*');
     $response->header('Access-Control-Allow-Origin', '*');
 }
 
-function api_json(Swoole\HTTP\Response $response, array $body, float $duration_ms, int $status = 200, ?float $authDurMs = null): void
+function api_json(Swoole\HTTP\Response $response, array $body, float $duration_ms, int $status = 200): void
 {
     $response->status($status);
-    api_headers($response, $duration_ms, $authDurMs);
+    api_headers($response, $duration_ms);
     $response->end(json_encode($body, JSON_UNESCAPED_SLASHES));
 }
 
-function generate_users(int $seed, int $count = 100): array
+function int_param(array $params, string $key, int $default): int
 {
-    mt_srand($seed);
-    $users = [];
-    for ($i = 0; $i < $count; $i++) {
-        $users[] = [
-            'id'         => $i + 1,
-            'name'       => FIRST_NAMES[mt_rand(0, count(FIRST_NAMES) - 1)] . ' '
-                          . LAST_NAMES[mt_rand(0, count(LAST_NAMES) - 1)],
-            'email'      => 'user' . ($i + 1) . '@example.com',
-            'age'        => mt_rand(22, 65),
-            'department' => DEPARTMENTS[mt_rand(0, count(DEPARTMENTS) - 1)],
-            'score'      => round(mt_rand(0, 10000) / 100, 2),
-        ];
+    $raw = $params[$key] ?? null;
+    if ($raw === null || !preg_match('/\A-?\d+\z/', (string) $raw)) {
+        return $default;
     }
-    return $users;
+    return (int) $raw;
 }
 
-function gauss_random(float $mean, float $stddev): float
-{
-    $u1 = mt_rand(1, PHP_INT_MAX) / PHP_INT_MAX;
-    $u2 = mt_rand(1, PHP_INT_MAX) / PHP_INT_MAX;
-    $z  = sqrt(-2.0 * log($u1)) * cos(2.0 * M_PI * $u2);
-    return $mean + $stddev * $z;
+// ── Server ─────────────────────────────────────────────────────────────────
+
+$certDir = getenv('BENCH_CERT_DIR') ?: '/opt/bench';
+$port = (int) (getenv('BENCH_PORT') ?: 8443);
+$workers = (int) (getenv('BENCH_WORKERS') ?: swoole_cpu_num());
+if ($workers < 1) {
+    $workers = swoole_cpu_num();
 }
 
-// ── Bearer token auth ─────────────────────────────────────────────────────
+$server = new Swoole\HTTP\Server(
+    '0.0.0.0',
+    $port,
+    SWOOLE_PROCESS,
+    SWOOLE_SOCK_TCP | SWOOLE_SSL
+);
+
+$server->set([
+    'ssl_cert_file'      => "$certDir/cert.pem",
+    'ssl_key_file'       => "$certDir/key.pem",
+    // Worker policy (spec §3): BENCH_WORKERS, default = logical CPU count.
+    'worker_num'         => $workers,
+    // Request handlers run in coroutines so /api/delayed can use a
+    // non-blocking coroutine sleep (spec §5.9, audit F7).
+    'enable_coroutine'   => true,
+    // Swoole buffers request bodies; allow benchmark-sized uploads.
+    'package_max_length' => 64 * 1024 * 1024,
+]);
 
 $BENCH_API_TOKEN = getenv('BENCH_API_TOKEN') ?: '';
 
@@ -168,106 +177,107 @@ $BENCH_API_TOKEN = getenv('BENCH_API_TOKEN') ?: '';
 $server->on('request', function (
     Swoole\HTTP\Request $request,
     Swoole\HTTP\Response $response
-) use ($chunk, $BENCH_DATA, $BENCH_API_TOKEN) {
+) use ($USERS, $CORPUS, $TS_VALUES, $CHECKSUMS, $HEALTH_BODY, $BENCH_API_TOKEN, $USER_SORT_FIELDS, $USER_STRING_FIELDS) {
     $path   = $request->server['request_uri'] ?? '/';
     $method = $request->server['request_method'] ?? 'GET';
+    // HEAD is served by the GET handler (Swoole suppresses the body); the
+    // validator's header checks use HEAD, mirroring axum auto-HEAD behaviour.
+    if ($method === 'HEAD') {
+        $method = 'GET';
+    }
     $params = $request->get ?? [];
 
-    // Bearer token authentication
-    $authDurMs = null;
-    if ($BENCH_API_TOKEN && $path !== '/health') {
-        $authT0 = hrtime(true);
+    // Bearer token authentication — every route except /health (spec §1).
+    if ($BENCH_API_TOKEN !== '' && $path !== '/health') {
         $auth = $request->header['authorization'] ?? '';
         if ($auth !== 'Bearer ' . $BENCH_API_TOKEN) {
-            $authDurMs = (hrtime(true) - $authT0) / 1e6;
             $response->status(401);
             $response->header('Content-Type', 'application/json');
-            $response->header('Server-Timing', sprintf('auth;dur=%.1f', $authDurMs));
             $response->end('{"error":"unauthorized"}');
             return;
         }
-        $authDurMs = (hrtime(true) - $authT0) / 1e6;
     }
 
-    // GET /health
+    // GET /health — constant-work byte-constant body (spec §5.1).
     if ($method === 'GET' && $path === '/health') {
         $response->header('Content-Type', 'application/json');
-        $response->end(json_encode([
-            'status'  => 'ok',
-            'runtime' => 'php',
-            'version' => PHP_VERSION,
-        ]));
+        $response->end($HEALTH_BODY);
         return;
     }
 
-    // GET /download/{size}
-    if ($method === 'GET' && preg_match('#^/download/(\d+)$#', $path, $matches)) {
-        $size = (int) $matches[1];
-        if ($size <= 0) {
+    // GET /download/{size} — 0x42 in 8 KiB chunks (spec §5.2).
+    if ($method === 'GET' && str_starts_with($path, '/download/')) {
+        $t0 = hrtime(true);
+        $sizeStr = substr($path, strlen('/download/'));
+        if (!preg_match('/\A\d+\z/', $sizeStr)) { // non-integer → 400
             $response->status(400);
             $response->header('Content-Type', 'application/json');
             $response->end('{"error":"invalid size"}');
             return;
         }
+        $size = min((int) $sizeStr, DOWNLOAD_CAP); // clamp above cap; 0 is valid
 
         $response->header('Content-Type', 'application/octet-stream');
-        $response->header('Content-Length', (string) $size);
+        $response->header('X-Download-Bytes', (string) $size);
+        $response->header('Server-Timing', sprintf('proc;dur=%.1f', (hrtime(true) - $t0) / 1e6));
 
+        if ($size <= DOWNLOAD_BUFFER_THRESHOLD) {
+            $response->header('Content-Length', (string) $size);
+            $response->end(str_repeat("\x42", $size));
+            return;
+        }
+        $chunk = str_repeat("\x42", CHUNK_SIZE);
         $remaining = $size;
         while ($remaining > 0) {
             $toSend = min($remaining, CHUNK_SIZE);
-            $response->write(substr($chunk, 0, $toSend));
+            $response->write($toSend === CHUNK_SIZE ? $chunk : substr($chunk, 0, $toSend));
             $remaining -= $toSend;
         }
         $response->end();
         return;
     }
 
-    // POST /upload
+    // POST /upload (spec §5.3).
     if ($method === 'POST' && $path === '/upload') {
+        $t0 = hrtime(true);
         $body = $request->rawContent();
-        $bytesReceived = $body !== false ? strlen($body) : 0;
+        $received = $body !== false ? strlen($body) : 0;
         $response->header('Content-Type', 'application/json');
-        $response->end(json_encode(['bytes_received' => $bytesReceived]));
+        $response->header('X-Networker-Received-Bytes', (string) $received);
+        $response->header('Server-Timing', sprintf('recv;dur=%.1f', (hrtime(true) - $t0) / 1e6));
+        $requestId = $request->header['x-networker-request-id'] ?? null;
+        if ($requestId !== null) {
+            $response->header('X-Networker-Request-Id', $requestId);
+        }
+        $response->end(json_encode(['received_bytes' => $received]));
         return;
     }
 
-    // ── JSON API endpoints ─────────────────────────────────────────────────
+    // ── JSON API endpoints (family C, spec §5.4-§5.10) ────────────────────
 
-    // GET /api/users?page=N&sort=field&order=asc|desc
+    // GET /api/users?page=N&sort=<field>&order=<asc|desc>
     if ($method === 'GET' && $path === '/api/users') {
         $t0 = hrtime(true);
-        $page       = (int) ($params['page'] ?? 1);
-        $sortField  = $params['sort'] ?? 'id';
-        $order      = $params['order'] ?? 'asc';
-
-        if ($BENCH_DATA !== null && isset($BENCH_DATA['users'])) {
-            $users = $BENCH_DATA['users'];
-        } else {
-            $users = generate_users($page);
+        $page      = max(1, int_param($params, 'page', 1));
+        $sortField = $params['sort'] ?? 'id';
+        if (!in_array($sortField, $USER_SORT_FIELDS, true)) {
+            $sortField = 'id';
         }
+        $desc = ($params['order'] ?? 'asc') === 'desc';
 
-        $validFields = ['id', 'name', 'email', 'age', 'department', 'score'];
-        if (in_array($sortField, $validFields, true)) {
-            usort($users, function ($a, $b) use ($sortField, $order) {
-                $cmp = $a[$sortField] <=> $b[$sortField];
-                return $order === 'desc' ? -$cmp : $cmp;
-            });
-        }
+        $window = array_slice($USERS, ($page - 1) * 100, 100);
+        $isString = isset($USER_STRING_FIELDS[$sortField]);
+        // usort is stable in PHP >= 8.0; desc reverses the comparator so
+        // ties stay in dataset order (family C semantics).
+        usort($window, function ($a, $b) use ($sortField, $desc, $isString) {
+            $cmp = $isString
+                ? strcmp((string) $a[$sortField], (string) $b[$sortField]) // bytewise
+                : ($a[$sortField] <=> $b[$sortField]);
+            return $desc ? -$cmp : $cmp;
+        });
 
-        $pageSize  = 20;
-        $start     = ($page - 1) * $pageSize;
-        $pageUsers = array_slice($users, $start, $pageSize);
-
-        $durationMs = (hrtime(true) - $t0) / 1e6;
-        api_json($response, [
-            'page'      => $page,
-            'page_size' => $pageSize,
-            'total'     => count($users),
-            'sort'      => $sortField,
-            'order'     => $order,
-            'users'     => $pageUsers,
-        ], $durationMs);
+        // Bare JSON array of the first 20 users of the sorted window.
+        api_json($response, array_slice($window, 0, 20), (hrtime(true) - $t0) / 1e6);
         return;
     }
 
@@ -275,255 +285,142 @@ $server->on('request', function (
     if ($method === 'POST' && $path === '/api/transform') {
         $t0  = hrtime(true);
         $raw = $request->rawContent();
-        $body = json_decode($raw ?: '', true);
+        $body = json_decode($raw !== false ? $raw : '', true);
 
-        if (!is_array($body)) {
-            $durationMs = (hrtime(true) - $t0) / 1e6;
-            api_json($response, ['error' => 'invalid JSON'], $durationMs, 400);
+        if (!is_array($body)) { // syntactically invalid JSON (or non-object) → 400
+            api_json($response, ['error' => 'invalid JSON'], (hrtime(true) - $t0) / 1e6, 400);
             return;
         }
 
-        $transformed = [];
-        foreach ($body as $key => $value) {
-            if (is_string($value)) {
-                $hashed = hash('sha256', $value);
-                $transformed[$key] = [
-                    'original_reversed' => strrev($value),
-                    'sha256'            => $hashed,
-                ];
-            } else {
-                $transformed[$key] = $value;
-            }
-        }
-
-        $durationMs = (hrtime(true) - $t0) / 1e6;
+        $fields = $body['fields'] ?? [];
+        $values = $body['values'] ?? [];
         api_json($response, [
-            'original_fields' => count($body),
-            'transformed'     => $transformed,
-        ], $durationMs);
+            'seed'            => $body['seed'] ?? 0,
+            'hashed_fields'   => array_map(static fn ($f) => hash('sha256', (string) $f), is_array($fields) ? $fields : []),
+            'reversed_values' => array_reverse(is_array($values) ? $values : []),
+        ], (hrtime(true) - $t0) / 1e6);
         return;
     }
 
-    // GET /api/aggregate?range=start,end
+    // GET /api/aggregate — `range` accepted and ignored (spec §5.6).
     if ($method === 'GET' && $path === '/api/aggregate') {
         $t0 = hrtime(true);
-        $rangeParam = $params['range'] ?? '0,1000';
-        $parts      = explode(',', $rangeParam);
-        $rangeStart = (int) ($parts[0] ?? 0);
-        $rangeEnd   = (int) ($parts[1] ?? 1000);
-
-        if ($BENCH_DATA !== null && isset($BENCH_DATA['timeseries'])) {
-            $ts = $BENCH_DATA['timeseries'];
-            $count = count($ts);
-            $values = array_map(fn($p) => $p['value'], $ts);
-            $categories = ['alpha', 'beta', 'gamma', 'delta', 'epsilon'];
-            $assignments = array_map(fn($p) => $p['category'], $ts);
-        } else {
-            mt_srand($rangeStart);
-            $count  = 10000;
-            $values = [];
-            for ($i = 0; $i < $count; $i++) {
-                $values[] = gauss_random(50, 15);
-            }
-
-            $categories = ['alpha', 'beta', 'gamma', 'delta', 'epsilon'];
-            mt_srand($rangeStart + 1);
-            $assignments = [];
-            for ($i = 0; $i < $count; $i++) {
-                $assignments[] = $categories[mt_rand(0, count($categories) - 1)];
-            }
+        $values = $TS_VALUES;
+        sort($values);
+        $n = count($values);
+        $total = 0.0;
+        foreach ($values as $v) { // sequential sum over SORTED values
+            $total += $v;
         }
-
-        $sortedVals = $values;
-        sort($sortedVals);
-        $mean   = array_sum($values) / $count;
-        $p50    = $sortedVals[(int) ($count / 2)];
-        $p95    = $sortedVals[(int) ($count * 0.95)];
-        $maxVal = $sortedVals[$count - 1];
-
-        $groups = [];
-        foreach ($categories as $cat) {
-            $catVals = [];
-            for ($i = 0; $i < $count; $i++) {
-                if ($assignments[$i] === $cat) {
-                    $catVals[] = $values[$i];
-                }
+        $chunk = intdiv($n, 5);
+        $categories = [];
+        for ($i = 0; $i < 5; $i++) {
+            $part = array_slice($values, $i * $chunk, $chunk);
+            $s = 0.0;
+            foreach ($part as $v) {
+                $s += $v;
             }
-            if (!empty($catVals)) {
-                sort($catVals);
-                $groups[$cat] = [
-                    'count' => count($catVals),
-                    'mean'  => round(array_sum($catVals) / count($catVals), 4),
-                    'p50'   => round($catVals[(int) (count($catVals) / 2)], 4),
-                    'max'   => round($catVals[count($catVals) - 1], 4),
-                ];
-            }
+            $categories[] = [
+                'category' => 'q' . ($i + 1),
+                'count'    => $chunk,
+                'mean'     => r2($s / $chunk),
+                'min'      => r2($part[0]),
+                'max'      => r2($part[$chunk - 1]),
+            ];
         }
-
-        $durationMs = (hrtime(true) - $t0) / 1e6;
         api_json($response, [
-            'range'        => ['start' => $rangeStart, 'end' => $rangeEnd],
-            'total_points' => $count,
-            'stats'        => [
-                'mean' => round($mean, 4),
-                'p50'  => round($p50, 4),
-                'p95'  => round($p95, 4),
-                'max'  => round($maxVal, 4),
-            ],
-            'groups' => $groups,
-        ], $durationMs);
+            'total_points' => $n,
+            'mean'         => r2($total / $n),
+            'p50'          => r2($values[(int) ($n * 0.50)]),
+            'p95'          => r2($values[(int) ($n * 0.95)]),
+            'max'          => r2($values[$n - 1]),
+            'categories'   => $categories,
+        ], (hrtime(true) - $t0) / 1e6);
         return;
     }
 
-    // GET /api/search?q=term&limit=N
+    // GET /api/search?q=<term>&limit=N
     if ($method === 'GET' && $path === '/api/search') {
         $t0    = hrtime(true);
-        $query = $params['q'] ?? 'test';
-        $limit = (int) ($params['limit'] ?? 10);
+        $query = (string) ($params['q'] ?? 'test');
+        $limit = min(int_param($params, 'limit', 20), 100);
 
-        if ($BENCH_DATA !== null && isset($BENCH_DATA['search_corpus'])) {
-            $corpus = [];
-            foreach ($BENCH_DATA['search_corpus'] as $i => $text) {
-                $corpus[] = ['id' => $i + 1, 'text' => $text];
-            }
-        } else {
-            mt_srand(42);
-            $corpus = [];
-            for ($i = 0; $i < 1000; $i++) {
-                $wordCount = mt_rand(3, 8);
-                $words     = [];
-                for ($j = 0; $j < $wordCount; $j++) {
-                    $words[] = SEARCH_WORDS[mt_rand(0, count(SEARCH_WORDS) - 1)];
+        // Case-sensitive regex; literal substring fallback on invalid pattern.
+        $pattern = '/' . str_replace('/', '\/', $query) . '/';
+        $regexOk = @preg_match($pattern, '') !== false;
+
+        $matches = [];
+        foreach ($CORPUS as $item) {
+            if ($regexOk) {
+                if (preg_match($pattern, $item, $m, PREG_OFFSET_CAPTURE)) {
+                    $matches[] = [$m[0][1], $item]; // byte offset of first match
                 }
-                $corpus[] = ['id' => $i + 1, 'text' => implode(' ', $words)];
+            } else {
+                $pos = strpos($item, $query);
+                if ($pos !== false) {
+                    $matches[] = [$pos, $item];
+                }
             }
         }
-
-        $pattern = '/' . preg_quote($query, '/') . '/i';
+        usort($matches, static function ($a, $b) {
+            $c = $a[0] <=> $b[0];               // position asc
+            return $c !== 0 ? $c : strcmp($a[1], $b[1]); // item asc bytewise
+        });
 
         $results = [];
-        foreach ($corpus as $item) {
-            if (preg_match($pattern, $item['text'], $m, PREG_OFFSET_CAPTURE)) {
-                $pos     = $m[0][1];
-                $score   = 1.0 / (1 + $pos);
-                $results[] = [
-                    'id'    => $item['id'],
-                    'text'  => $item['text'],
-                    'score' => round($score, 4),
-                ];
-            }
+        foreach (array_slice($matches, 0, max($limit, 0)) as $i => [$pos, $item]) {
+            $results[] = ['rank' => $i + 1, 'item' => $item, 'match_position' => $pos];
         }
-
-        usort($results, fn($a, $b) => $b['score'] <=> $a['score']);
-        $results = array_slice($results, 0, $limit);
-
-        $durationMs = (hrtime(true) - $t0) / 1e6;
         api_json($response, [
             'query'         => $query,
-            'total_matches' => count($results),
-            'limit'         => $limit,
+            'total_matches' => count($matches), // counted BEFORE truncation
+            'returned'      => count($results),
             'results'       => $results,
-        ], $durationMs);
+        ], (hrtime(true) - $t0) / 1e6);
         return;
     }
 
-    // POST /api/upload/process
+    // POST /api/upload/process (spec §5.8).
     if ($method === 'POST' && $path === '/api/upload/process') {
         $t0   = hrtime(true);
         $body = $request->rawContent();
         $body = $body !== false ? $body : '';
 
-        $crc        = crc32($body) & 0xFFFFFFFF;
-        $sha        = hash('sha256', $body);
-        $compressed = gzcompress($body);
-
-        $origSize = strlen($body);
-        $compSize = strlen($compressed);
-
-        $durationMs = (hrtime(true) - $t0) / 1e6;
         api_json($response, [
-            'original_size'     => $origSize,
-            'compressed_size'   => $compSize,
-            'compression_ratio' => round($compSize / max($origSize, 1), 4),
-            'crc32'             => sprintf('%08x', $crc),
-            'sha256'            => $sha,
-        ], $durationMs);
+            'original_size'   => strlen($body),
+            // zlib (RFC 1950) at level 6 — gzcompress emits a zlib stream.
+            'compressed_size' => strlen(gzcompress($body, 6)),
+            'crc32'           => sprintf('%08x', crc32($body) & 0xFFFFFFFF),
+            'sha256'          => hash('sha256', $body),
+        ], (hrtime(true) - $t0) / 1e6);
         return;
     }
 
-    // GET /api/delayed?ms=N&work=light
+    // GET /api/delayed?ms=N — coroutine sleep, ms clamped to [1,100] (spec §5.9).
     if ($method === 'GET' && $path === '/api/delayed') {
-        $t0   = hrtime(true);
-        $ms   = max(1, min(100, (int) ($params['ms'] ?? 100)));
-        $work = $params['work'] ?? 'none';
+        $t0 = hrtime(true);
+        $ms = max(1, min(100, int_param($params, 'ms', 10)));
+        // `work` is reserved: accepted and ignored.
 
-        usleep($ms * 1000);
+        // Coroutine sleep yields the worker instead of blocking it (audit F7).
+        \Swoole\Coroutine::sleep($ms / 1000.0);
 
-        if ($work === 'light') {
-            hash('sha256', str_repeat('benchmark', 100));
-        }
-
-        $actualMs   = (hrtime(true) - $t0) / 1e6;
+        $actualMs = (hrtime(true) - $t0) / 1e6;
         api_json($response, [
             'requested_ms' => $ms,
             'actual_ms'    => round($actualMs, 2),
-            'work'         => $work,
         ], $actualMs);
         return;
     }
 
-    // GET /api/validate?seed=42
+    // GET /api/validate?seed=N — echo dataset checksums (spec §5.10).
     if ($method === 'GET' && $path === '/api/validate') {
         $t0   = hrtime(true);
-        $seed = (int) ($params['seed'] ?? 42);
-
-        if ($BENCH_DATA !== null && isset($BENCH_DATA['expected_checksums'])) {
-            $checksums = $BENCH_DATA['expected_checksums'];
-            $usersHash = $checksums['users_page1'] ?? '';
-            $aggHash = $checksums['aggregate_summary'] ?? '';
-            $searchHash = $checksums['search_network_top10'] ?? '';
-        } else {
-            // Users checksum (page=1)
-            $users = generate_users(1);
-            // Sort each user's keys for deterministic JSON
-            $usersForHash = array_map(function ($u) {
-                ksort($u);
-                return $u;
-            }, $users);
-            $usersHash = hash('sha256', json_encode($usersForHash, JSON_UNESCAPED_SLASHES));
-
-            // Aggregate checksum (start=0)
-            mt_srand(0);
-            $values = [];
-            for ($i = 0; $i < 10000; $i++) {
-                $values[] = round(gauss_random(50, 15), 4);
-            }
-            sort($values);
-            $aggHash = hash('sha256', json_encode($values));
-
-            // Search checksum
-            mt_srand(42);
-            $corpus = [];
-            for ($i = 0; $i < 1000; $i++) {
-                $wordCount = mt_rand(3, 8);
-                $words     = [];
-                for ($j = 0; $j < $wordCount; $j++) {
-                    $words[] = SEARCH_WORDS[mt_rand(0, count(SEARCH_WORDS) - 1)];
-                }
-                $corpus[] = implode(' ', $words);
-            }
-            $searchHash = hash('sha256', json_encode($corpus));
-        }
-
-        $durationMs = (hrtime(true) - $t0) / 1e6;
+        $seed = int_param($params, 'seed', 42);
         api_json($response, [
             'seed'      => $seed,
-            'checksums' => [
-                'users_page1'      => substr($usersHash, 0, 16),
-                'aggregate_start0' => substr($aggHash, 0, 16),
-                'search_corpus'    => substr($searchHash, 0, 16),
-            ],
-        ], $durationMs);
+            'checksums' => $CHECKSUMS,
+        ], (hrtime(true) - $t0) / 1e6);
         return;
     }
 
@@ -533,5 +430,5 @@ $server->on('request', function (
     $response->end('{"error":"not found"}');
 });
 
-bench_log('info', "PHP Swoole server starting on https://0.0.0.0:8443");
+bench_log('info', "PHP Swoole server starting on https://0.0.0.0:$port ($workers workers)");
 $server->start();

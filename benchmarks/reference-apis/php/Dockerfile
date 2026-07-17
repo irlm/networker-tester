@@ -1,6 +1,12 @@
 FROM php:8.3-cli
 
-RUN pecl install swoole && docker-php-ext-enable swoole
+# swoole's pecl build probes for brotli (libbrotlienc) and aborts configure
+# when the dev package is missing (found by the wave-2 validation run).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libbrotli-dev libssl-dev pkg-config \
+    && pecl install swoole \
+    && docker-php-ext-enable swoole \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

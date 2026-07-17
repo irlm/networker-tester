@@ -2,6 +2,13 @@
 
 PHP async HTTP server powered by Swoole.
 
+Implements the frozen contract in `benchmarks/shared/API-SPEC.md` (family C):
+all `/health`, `/download/{size}`, `/upload`, and `/api/*` endpoints. The
+shared dataset (`bench-data.json`, spec §2) is **required** — startup fails
+if it cannot be loaded. Worker policy (spec §3): `BENCH_WORKERS` maps to
+Swoole `worker_num` (default = logical CPU count). `/api/delayed` uses a
+coroutine sleep, not `usleep`, so it never blocks a worker.
+
 ## Why Swoole?
 
 Swoole is the only production-ready async HTTP server for PHP. Traditional PHP

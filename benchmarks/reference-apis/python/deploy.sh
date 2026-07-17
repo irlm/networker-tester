@@ -52,11 +52,14 @@ if [[ -f "$CERT_DIR/cert.pem" && -f "$CERT_DIR/key.pem" ]]; then
     ssh "$TARGET" "sudo mv /tmp/cert.pem /tmp/key.pem $CERT_DIR/"
 fi
 
-# Start server
+# Start server. BENCH_WORKERS maps to uvicorn --workers (API-SPEC.md §3,
+# default = logical CPUs); --no-access-log so prod matches CI (audit F11).
 ssh "$TARGET" "cd $REMOTE_DIR && \
     sudo nohup venv/bin/uvicorn server:app \
         --host 0.0.0.0 \
         --port 8443 \
+        --workers \"\${BENCH_WORKERS:-\$(nproc)}\" \
+        --no-access-log \
         --ssl-keyfile $CERT_DIR/key.pem \
         --ssl-certfile $CERT_DIR/cert.pem \
         > /var/log/python-bench.log 2>&1 &"

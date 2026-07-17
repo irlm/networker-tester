@@ -14,6 +14,7 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
 find_package(Boost REQUIRED COMPONENTS system)
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
+find_package(ZLIB REQUIRED)
 
 add_executable(server server.cpp)
 target_link_libraries(server
@@ -22,5 +23,6 @@ target_link_libraries(server
         OpenSSL::SSL
         OpenSSL::Crypto
         Threads::Threads
+        ZLIB::ZLIB
 )
 target_include_directories(server PRIVATE ${Boost_INCLUDE_DIRS})
