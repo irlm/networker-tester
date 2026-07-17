@@ -1,0 +1,8 @@
+ALTER TABLE project_tester
+    ADD COLUMN IF NOT EXISTS requested_os       VARCHAR(50) DEFAULT 'ubuntu-24.04',
+    ADD COLUMN IF NOT EXISTS requested_variant  VARCHAR(20) DEFAULT 'server',
+    ADD COLUMN IF NOT EXISTS os_distro   VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS os_version  VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS os_variant  VARCHAR(20),
+    ADD COLUMN IF NOT EXISTS os_arch     VARCHAR(20),
+    ADD COLUMN IF NOT EXISTS os_kernel   VARCHAR(100);

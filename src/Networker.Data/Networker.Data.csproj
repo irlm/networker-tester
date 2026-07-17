@@ -7,6 +7,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Migration scripts ride inside the assembly so SchemaMigrator works
+         wherever Networker.Data is referenced (no loose-file deployment). -->
+    <EmbeddedResource Include="Migrations\V*.sql" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.0">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
