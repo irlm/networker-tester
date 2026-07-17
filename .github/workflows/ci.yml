@@ -109,7 +109,10 @@ jobs:
           # on each would defeat the automation. Their lockfile/manifest changes
           # ride into the NEXT bumped release (release builds are --locked
           # against the merged lockfile), so exempt them here.
-          if [ "${{ github.actor }}" = "dependabot[bot]" ]; then
+          # PR AUTHOR, not github.actor: the actor of a synchronize event is
+          # whoever pushed/refreshed the branch (e.g. a maintainer running
+          # update-branch), which broke the exemption on first use.
+          if [ "${{ github.event.pull_request.user.login }}" = "dependabot[bot]" ]; then
             echo "✓ Dependabot PR — dependency-only; changes ride the next release. Bump not required."
             exit 0
           fi
