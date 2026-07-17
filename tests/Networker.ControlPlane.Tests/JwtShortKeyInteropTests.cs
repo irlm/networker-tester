@@ -7,9 +7,13 @@ namespace Networker.ControlPlane.Tests;
 /// rejects <32-byte HS256 keys; the raw-HMAC SignatureValidator fixes it.
 public sealed class JwtShortKeyInteropTests
 {
-    // The exact prod secret (29 bytes) and a real Rust-minted token captured during cutover.
-    private const string ProdSecret = "securejwtsecret2026alethedash";
-    private const string RustToken = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIzODYyZGJkZS02YTM2LTRhMDctYThiZC0xODNjNzc4NTE0M2UiLCJlbWFpbCI6ImFkbWluQGFsZXRoZWRhc2guY29tIiwicm9sZSI6ImFkbWluIiwiaXNfcGxhdGZvcm1fYWRtaW4iOnRydWUsImV4cCI6MTc4NDE2NDk1OSwiaWF0IjoxNzg0MDc4NTU5fQ.Oh4k8cpGW5pEq_1smabDkwyUmWr9oMN3GYimURbXTrA";
+    // A SYNTHETIC 29-byte secret + a token minted from it with the same claim
+    // shape jsonwebtoken produces. NEVER commit real secrets/tokens: a real
+    // prod signing key was committed here once (public repo) and had to be
+    // rotated — the interop property under test only needs the short-key
+    // LENGTH, not the production value.
+    private const string ProdSecret = "synthetic29bytetestsecretxyz1";
+    private const string RustToken = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIzODYyZGJkZS02YTM2LTRhMDctYThiZC0xODNjNzc4NTE0M2UiLCJlbWFpbCI6ImFkbWluQGFsZXRoZWRhc2guY29tIiwicm9sZSI6ImFkbWluIiwiaXNfcGxhdGZvcm1fYWRtaW4iOnRydWUsImV4cCI6MTc4NDE2NDk1OSwiaWF0IjoxNzg0MDc4NTU5fQ.I5b4NbM0SDHp8APB1L-s7Eg8pISKjA7AX7R_AVbyOM4";
 
     [Fact]
     public void Rust_token_with_29_byte_secret_validates()
