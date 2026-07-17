@@ -1,4 +1,4 @@
-/// VM size tier normalization and region validation for multi-cloud provisioning.
+//! VM size tier normalization and region validation for multi-cloud provisioning.
 
 /// Resolve a human-friendly tier name (small/medium/large) to the cloud-specific
 /// VM size string.  If `tier` is not a recognized alias, it is passed through
@@ -24,6 +24,7 @@ pub fn resolve_vm_size<'a>(cloud: &str, tier: &'a str) -> &'a str {
 }
 
 /// Hardcoded list of common regions per cloud provider.
+#[cfg(test)] // test-only until wired into the runtime (clippy dead_code sweep)
 const AZURE_REGIONS: &[&str] = &[
     "eastus",
     "eastus2",
@@ -59,6 +60,7 @@ const AZURE_REGIONS: &[&str] = &[
     "centralindia",
 ];
 
+#[cfg(test)] // test-only until wired into the runtime (clippy dead_code sweep)
 const AWS_REGIONS: &[&str] = &[
     "us-east-1",
     "us-east-2",
@@ -86,6 +88,7 @@ const AWS_REGIONS: &[&str] = &[
     "il-central-1",
 ];
 
+#[cfg(test)] // test-only until wired into the runtime (clippy dead_code sweep)
 const GCP_REGIONS: &[&str] = &[
     "us-central1",
     "us-east1",
@@ -126,6 +129,7 @@ const GCP_REGIONS: &[&str] = &[
 ///
 /// For GCP, both region (e.g. `us-central1`) and zone (e.g. `us-central1-a`)
 /// formats are accepted — the zone suffix is stripped before matching.
+#[cfg(test)] // test-only until wired into the runtime (clippy dead_code sweep)
 pub fn validate_region(cloud: &str, region: &str) -> bool {
     match cloud {
         "azure" => AZURE_REGIONS.contains(&region),
@@ -141,6 +145,7 @@ pub fn validate_region(cloud: &str, region: &str) -> bool {
 
 /// Strip the trailing zone letter from a GCP zone string (e.g. `us-central1-a` -> `us-central1`).
 /// If the input doesn't look like a zone (no trailing `-<letter>`), it is returned unchanged.
+#[cfg(test)] // test-only until wired into the runtime (clippy dead_code sweep)
 fn strip_gcp_zone_suffix(zone: &str) -> &str {
     // GCP zones end in "-<single letter>", e.g. "us-central1-a"
     if zone.len() >= 3 {
@@ -155,6 +160,7 @@ fn strip_gcp_zone_suffix(zone: &str) -> &str {
 }
 
 /// Return the default region for a cloud provider.
+#[cfg(test)] // test-only until wired into the runtime (clippy dead_code sweep)
 pub fn default_region(cloud: &str) -> &'static str {
     match cloud {
         "azure" => "eastus",

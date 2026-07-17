@@ -221,7 +221,7 @@ async fn http_get(url: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-/// SSH helper for executing commands on the VM.
+// SSH helper for executing commands on the VM.
 // ssh_exec imported from crate::ssh (shared, hardened with timeout + keepalive)
 
 #[cfg(test)]
