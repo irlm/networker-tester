@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.34] — 2026-07-17
+
+### Changed
+- **networker-tester:** internal module reorganization, no behavior change.
+  `main.rs` (2,460 lines) and `output/html.rs` (6,826 lines) split into
+  focused modules; a deterministic HTML snapshot test proves the report
+  output is byte-identical.
+
+---
+
 ## [0.28.33] — 2026-07-17
 
 ### Changed
