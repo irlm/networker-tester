@@ -1,584 +1,881 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// C# reference API — Application Benchmark mode.
+// Contract: benchmarks/shared/API-SPEC.md (frozen v1, shape family C).
+//
+// SINGLE SOURCE OF TRUTH: benchmarks/reference-apis/csharp-template/Program.cs
+// The eight modern variant copies (csharp-net6 … csharp-net10-aot) are
+// byte-identical to this file, written by csharp-template/generate-variants.py.
+// Do NOT edit a variant copy — edit the template and regenerate
+// (`./generate-variants.py`; verify with `./generate-variants.py --check`).
+//
+// Per-variant differences are limited to (API-SPEC.md §8):
+//   - TFM / AssemblyName / PublishAot   → generated .csproj
+//   - HTTP/3                            → #if NET7_0_OR_GREATER (net6 has no
+//                                         stable Kestrel H3)
+//   - CreateSlimBuilder                 → #if NET8_0_OR_GREATER (the supported
+//                                         Native AOT builder; net6/7 lack it)
+//   - X509CertificateLoader             → #if NET9_0_OR_GREATER (pre-9 uses the
+//                                         X509Certificate2 ctor)
+// The runtime identity reported by /health is the AssemblyName set by the
+// generated .csproj (e.g. "csharp-net8-aot"), so this source stays identical.
+//
+// Language level: keep this file C# 10 compatible — the oldest toolchain in
+// the ladder (the net6 SDK image) compiles it. No collection expressions,
+// no raw string literals, no primary constructors.
+// ─────────────────────────────────────────────────────────────────────────────
+
 using System.Diagnostics;
+using System.Globalization;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 
-// Load shared benchmark data at startup
-static JsonDocument? BenchData = null;
-static void LoadBenchData(ILogger logger) {
-    string[] paths = {
-        Environment.GetEnvironmentVariable("BENCH_DATA_PATH") ?? "",
-        "/opt/bench/bench-data.json",
-        Path.Combine(AppContext.BaseDirectory, "..", "shared", "bench-data.json"),
-        "../shared/bench-data.json",
-    };
-    foreach (var p in paths) {
-        if (string.IsNullOrEmpty(p) || !File.Exists(p)) continue;
-        try {
-            var content = File.ReadAllText(p);
-            BenchData = JsonDocument.Parse(content);
-            logger.LogInformation("Loaded bench-data.json from {Path}", p);
+internal static class Program
+{
+    private static void Main(string[] args)
+    {
+        // §5.1: runtime identity == the reference directory name. The generated
+        // .csproj pins <AssemblyName> to the variant directory name.
+        var runtimeId = typeof(Program).Assembly.GetName().Name ?? "csharp";
+
+        // §2: dataset load failure is FATAL — no PRNG fallback.
+        var data = BenchData.LoadOrExit();
+
+        // §3: BENCH_WORKERS. For C# the knob is advisory (Kestrel + ThreadPool
+        // saturate all logical CPUs in-process); nproc and the effective value
+        // are logged so runs can record them next to results.
+        var nproc = Environment.ProcessorCount;
+        var workersEnv = Environment.GetEnvironmentVariable("BENCH_WORKERS");
+        var workers = int.TryParse(workersEnv, out var w) && w > 0 ? w : nproc;
+
+        var port = int.TryParse(Environment.GetEnvironmentVariable("BENCH_PORT"), out var p) ? p : 8443;
+        var certDir = Environment.GetEnvironmentVariable("BENCH_CERT_DIR") ?? "/opt/bench";
+        var certPath = Path.Combine(certDir, "cert.pem");
+        var keyPath = Path.Combine(certDir, "key.pem");
+        var hasTls = File.Exists(certPath) && File.Exists(keyPath);
+
+#if NET8_0_OR_GREATER
+        var builder = WebApplication.CreateSlimBuilder(args);
+        builder.WebHost.UseKestrelHttpsConfiguration();
+#else
+        var builder = WebApplication.CreateBuilder(args);
+#endif
+
+        builder.WebHost.ConfigureKestrel(options =>
+        {
+            if (hasTls)
+            {
+                using var pem = X509Certificate2.CreateFromPemFile(certPath, keyPath);
+                var pkcs12 = pem.Export(X509ContentType.Pkcs12);
+#if NET9_0_OR_GREATER
+                var cert = X509CertificateLoader.LoadPkcs12(pkcs12, null);
+#else
+                var cert = new X509Certificate2(pkcs12);
+#endif
+                options.ListenAnyIP(port, listen =>
+                {
+#if NET7_0_OR_GREATER
+                    // Kestrel adds the Alt-Svc h3 advertisement automatically.
+                    listen.Protocols = HttpProtocols.Http1AndHttp2AndHttp3;
+#else
+                    listen.Protocols = HttpProtocols.Http1AndHttp2;
+#endif
+                    listen.UseHttps(cert);
+                });
+            }
+            else
+            {
+                // Application-mode topology (audit F8): when the proxy
+                // terminates TLS and no certs are present, serve plain HTTP.
+                options.ListenAnyIP(port, listen =>
+                {
+                    listen.Protocols = HttpProtocols.Http1AndHttp2;
+                });
+            }
+        });
+
+        var app = builder.Build();
+
+        Handlers.Init(runtimeId, data);
+        Console.WriteLine(
+            $"{runtimeId} reference API listening on port {port} " +
+            $"(tls={hasTls.ToString().ToLowerInvariant()}, nproc={nproc}, " +
+            $"bench_workers={workers} [advisory: Kestrel + ThreadPool in-process scheduler], " +
+            $"dataset={data.SourcePath})");
+
+        // §1: bearer auth on every route except /health.
+        var token = Environment.GetEnvironmentVariable("BENCH_API_TOKEN");
+        if (!string.IsNullOrEmpty(token))
+        {
+            var expected = "Bearer " + token;
+            var rejection = Encoding.UTF8.GetBytes("{\"error\":\"unauthorized\"}");
+            app.Use(async (ctx, next) =>
+            {
+                if (ctx.Request.Path != "/health")
+                {
+                    var auth = ctx.Request.Headers.Authorization.FirstOrDefault() ?? "";
+                    if (auth != expected)
+                    {
+                        var resp = ctx.Response;
+                        resp.StatusCode = 401;
+                        resp.ContentType = "application/json";
+                        resp.ContentLength = rejection.Length;
+                        // §10.7: /api/* responses (including rejections) carry
+                        // the benchmark headers.
+                        Handlers.SetBenchHeaders(resp, 0.0);
+                        await resp.Body.WriteAsync(rejection);
+                        return;
+                    }
+                }
+                await next();
+            });
+        }
+
+        // GET routes also answer HEAD (the validator probes headers with
+        // `curl -I`; axum — the canonical baseline — does the same).
+        // NOTE: the template must stay C# 10 compatible — the net6/net7 SDK
+        // images compile with the C# 10 Roslyn (no collection expressions).
+        string[] getHead = { "GET", "HEAD" };
+        app.MapMethods("/health", getHead, Handlers.Health);
+        app.MapMethods("/download/{size}", getHead, Handlers.Download);
+        app.MapPost("/upload", Handlers.Upload);
+        app.MapMethods("/api/users", getHead, Handlers.ApiUsers);
+        app.MapPost("/api/transform", Handlers.ApiTransform);
+        app.MapMethods("/api/aggregate", getHead, Handlers.ApiAggregate);
+        app.MapMethods("/api/search", getHead, Handlers.ApiSearch);
+        app.MapPost("/api/upload/process", Handlers.ApiUploadProcess);
+        app.MapMethods("/api/delayed", getHead, Handlers.ApiDelayed);
+        app.MapMethods("/api/validate", getHead, Handlers.ApiValidate);
+
+        app.Run();
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Route handlers (API-SPEC.md §5)
+// ─────────────────────────────────────────────────────────────────────────────
+
+internal static class Handlers
+{
+    private const long DownloadCap = 2_147_483_648; // §5.2: 2 GiB
+    private const int DownloadChunk = 8192;         // §5.2: 8 KiB chunks
+    private const byte DownloadFill = 0x42;         // §5.2: 'B'
+
+    private static readonly byte[] FillChunk = CreateFillChunk();
+    private static byte[] HealthBytes = Array.Empty<byte>();
+    private static BenchData Data = null!;
+
+    private static byte[] CreateFillChunk()
+    {
+        var chunk = new byte[DownloadChunk];
+        Array.Fill(chunk, DownloadFill);
+        return chunk;
+    }
+
+    public static void Init(string runtimeId, BenchData data)
+    {
+        Data = data;
+        // §5.1: constant-work /health — the body is precomputed once; two
+        // requests must return byte-identical bodies.
+        HealthBytes = JsonSerializer.SerializeToUtf8Bytes(
+            new HealthResponse
+            {
+                Status = "ok",
+                Runtime = runtimeId,
+                Version = Environment.Version.ToString(),
+            },
+            BenchJson.Default.HealthResponse);
+    }
+
+    // §5.1 GET /health — infrastructure endpoint, never ranked, auth-exempt.
+    public static Task Health(HttpContext ctx)
+    {
+        var resp = ctx.Response;
+        resp.StatusCode = 200;
+        resp.ContentType = "application/json";
+        resp.ContentLength = HealthBytes.Length;
+        if (HttpMethods.IsHead(ctx.Request.Method))
+            return Task.CompletedTask;
+        return resp.Body.WriteAsync(HealthBytes, 0, HealthBytes.Length);
+    }
+
+    // §5.2 GET /download/{size} — exactly `size` bytes of 0x42 in 8 KiB chunks.
+    public static async Task Download(HttpContext ctx)
+    {
+        var sw = Stopwatch.StartNew();
+        var raw = ctx.Request.RouteValues["size"]?.ToString() ?? "";
+        // NumberStyles.None rejects signs — negative or non-integer → 400.
+        if (!long.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out var size))
+        {
+            await WriteError(ctx, 400, "invalid size");
             return;
-        } catch { }
-    }
-    logger.LogWarning("bench-data.json not found, using PRNG fallback");
-}
-
-var builder = WebApplication.CreateBuilder(args);
-
-// Configure Kestrel for HTTPS on port 8443 with HTTP/1.1, HTTP/2, and HTTP/3
-var certDir  = Environment.GetEnvironmentVariable("BENCH_CERT_DIR") ?? "/opt/bench";
-var certPath = $"{certDir}/cert.pem";
-var keyPath  = $"{certDir}/key.pem";
-var port     = int.Parse(Environment.GetEnvironmentVariable("BENCH_PORT") ?? "8443");
-
-builder.WebHost.ConfigureKestrel(options =>
-{
-    var cert = X509Certificate2.CreateFromPemFile(certPath, keyPath);
-
-    options.ListenAnyIP(port, listenOptions =>
-    {
-        listenOptions.UseHttps(cert);
-        listenOptions.Protocols = HttpProtocols.Http1AndHttp2AndHttp3;
-    });
-});
-
-var app = builder.Build();
-var logger = app.Logger;
-LoadBenchData(logger);
-logger.LogInformation("csharp-net10 reference API starting");
-
-// Advertise HTTP/3 via Alt-Svc header
-app.Use(async (context, next) =>
-{
-    context.Response.Headers["Alt-Svc"] = $"h3=\":{port}\"; ma=86400";
-    await next();
-});
-
-// Bearer token authentication
-var benchToken = Environment.GetEnvironmentVariable("BENCH_API_TOKEN") ?? "";
-if (!string.IsNullOrEmpty(benchToken))
-{
-    app.Use(async (context, next) =>
-    {
-        if (context.Request.Path != "/health")
-        {
-            var authSw = Stopwatch.StartNew();
-            var auth = context.Request.Headers["Authorization"].FirstOrDefault() ?? "";
-            if (auth != "Bearer " + benchToken)
-            {
-                authSw.Stop();
-                context.Response.StatusCode = 401;
-                context.Response.ContentType = "application/json";
-                context.Response.Headers["Server-Timing"] = $"auth;dur={authSw.Elapsed.TotalMilliseconds:F1}";
-                await context.Response.WriteAsync("{\"error\":\"unauthorized\"}");
-                return;
-            }
-            authSw.Stop();
-            context.Items["AuthDurMs"] = authSw.Elapsed.TotalMilliseconds;
         }
-        await next();
-    });
-}
+        if (size > DownloadCap) size = DownloadCap; // clamp above the 2 GiB cap
 
-// GET /health — runtime identity and version
-app.MapGet("/health", () => Results.Json(new
-{
-    status  = "ok",
-    runtime = "csharp-net10",
-    version = Environment.Version.ToString()
-}));
+        var resp = ctx.Response;
+        resp.StatusCode = 200;
+        resp.ContentType = "application/octet-stream";
+        resp.ContentLength = size;
+        resp.Headers["X-Download-Bytes"] = size.ToString(CultureInfo.InvariantCulture);
+        resp.Headers["Server-Timing"] = "proc;dur=" + Ms1(sw);
+        if (HttpMethods.IsHead(ctx.Request.Method))
+            return;
 
-// GET /download/{size} — stream `size` bytes of 0x42 in 8 KiB chunks
-app.MapGet("/download/{size}", async (long size, HttpContext ctx) =>
-{
-    if (size <= 0)
-    {
-        ctx.Response.StatusCode = 400;
-        return;
-    }
-
-    ctx.Response.ContentType   = "application/octet-stream";
-    ctx.Response.ContentLength = size;
-
-    const int chunkSize = 8192;
-    var buffer = new byte[chunkSize];
-    Array.Fill(buffer, (byte)0x42);
-
-    var remaining = size;
-    while (remaining > 0)
-    {
-        var toWrite = (int)Math.Min(remaining, chunkSize);
-        await ctx.Response.Body.WriteAsync(buffer.AsMemory(0, toWrite));
-        remaining -= toWrite;
-    }
-});
-
-// POST /upload — consume full request body, return byte count
-app.MapPost("/upload", async (HttpContext ctx) =>
-{
-    const int bufferSize = 8192;
-    var buffer = new byte[bufferSize];
-    long totalBytes = 0;
-
-    int bytesRead;
-    while ((bytesRead = await ctx.Request.Body.ReadAsync(buffer)) > 0)
-    {
-        totalBytes += bytesRead;
-    }
-
-    return Results.Json(new { bytes_received = totalBytes });
-});
-
-// ---------------------------------------------------------------------------
-// Application Benchmark JSON API endpoints
-// ---------------------------------------------------------------------------
-
-var firstNames = new[] {
-    "Alice", "Bob", "Carol", "Dave", "Eve", "Frank", "Grace", "Hank",
-    "Ivy", "Jack", "Kara", "Leo", "Mia", "Nick", "Olga", "Paul",
-    "Quinn", "Rita", "Sam", "Tina"
-};
-var lastNames = new[] {
-    "Smith", "Johnson", "Brown", "Taylor", "Anderson", "Thomas", "Jackson",
-    "White", "Harris", "Martin", "Garcia", "Clark", "Lewis", "Hall", "Young",
-    "King", "Wright", "Lopez", "Hill", "Scott"
-};
-var domains = new[] { "example.com", "test.org", "demo.net", "bench.io", "sample.dev" };
-var searchWords = new[] {
-    "network", "latency", "throughput", "bandwidth", "packet", "socket",
-    "connection", "timeout", "buffer", "stream", "protocol", "endpoint",
-    "request", "response", "header", "payload", "router", "gateway",
-    "firewall", "proxy"
-};
-var catNames = new[] { "alpha", "beta", "gamma", "delta", "epsilon" };
-
-// Helper: set API headers, return Stopwatch
-static Stopwatch SetAPIHeaders(HttpContext ctx)
-{
-    ctx.Response.ContentType = "application/json";
-    ctx.Response.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate";
-    ctx.Response.Headers["Timing-Allow-Origin"] = "*";
-    ctx.Response.Headers["Access-Control-Allow-Origin"] = "*";
-    return Stopwatch.StartNew();
-}
-
-// Helper: write Server-Timing header
-static void WriteServerTiming(HttpContext ctx, Stopwatch sw)
-{
-    sw.Stop();
-    var ms = sw.Elapsed.TotalMilliseconds;
-    var timing = $"app;dur={ms:F1}";
-    if (ctx.Items.TryGetValue("AuthDurMs", out var authObj) && authObj is double authMs)
-        timing = $"auth;dur={authMs:F1}, {timing}";
-    ctx.Response.Headers["Server-Timing"] = timing;
-}
-
-// Helper: JSON-escape a string
-static string JsonEsc(string s)
-{
-    return s.Replace("\\", "\\\\").Replace("\"", "\\\"");
-}
-
-// Generate 100 deterministic users
-static List<(int Id, string Name, string Email, int Age, int Score, bool Active, string CreatedAt)>
-    GenerateUsers(int seed, string[] firstN, string[] lastN, string[] doms)
-{
-    var rng = new Random(seed);
-    var users = new List<(int, string, string, int, int, bool, string)>(100);
-    for (int i = 0; i < 100; i++)
-    {
-        var first = firstN[rng.Next(firstN.Length)];
-        var last  = lastN[rng.Next(lastN.Length)];
-        var dom   = doms[rng.Next(doms.Length)];
-        users.Add((
-            i + 1,
-            $"{first} {last}",
-            $"{first.ToLower()}.{last.ToLower()}@{dom}",
-            20 + rng.Next(50),
-            rng.Next(1000),
-            rng.Next(2) == 1,
-            $"2025-{1 + rng.Next(12):D2}-{1 + rng.Next(28):D2}"
-        ));
-    }
-    return users;
-}
-
-// GET /api/users?page=N&sort=field&order=asc — paginated sorted user list
-app.MapGet("/api/users", (HttpContext ctx) =>
-{
-    var sw = SetAPIHeaders(ctx);
-
-    if (!int.TryParse(ctx.Request.Query["page"], out int page) || page < 1) page = 1;
-    var sortField = ctx.Request.Query["sort"].ToString();
-    var order     = ctx.Request.Query["order"].ToString();
-
-    // Try shared bench data first, fall back to PRNG
-    var users = new List<(int Id, string Name, string Email, int Age, int Score, bool Active, string CreatedAt)>();
-    if (BenchData != null)
-    {
-        try
+        var remaining = size;
+        while (remaining > 0)
         {
-            foreach (var u in BenchData.RootElement.GetProperty("users").EnumerateArray())
-            {
-                users.Add((
-                    u.GetProperty("id").GetInt32(),
-                    u.GetProperty("name").GetString()!,
-                    u.GetProperty("email").GetString()!,
-                    u.GetProperty("age").GetInt32(),
-                    u.GetProperty("score").GetInt32(),
-                    u.GetProperty("active").GetBoolean(),
-                    u.GetProperty("created_at").GetString()!
-                ));
-            }
+            var n = (int)Math.Min(remaining, DownloadChunk);
+            await resp.Body.WriteAsync(FillChunk.AsMemory(0, n));
+            remaining -= n;
         }
-        catch { users.Clear(); }
     }
-    if (users.Count == 0)
-        users = GenerateUsers(page, firstNames, lastNames, domains);
 
-    users.Sort((a, b) => sortField switch
+    // §5.3 POST /upload — drain the body without wholesale buffering.
+    public static async Task Upload(HttpContext ctx)
     {
-        "name"  => string.Compare(a.Name, b.Name, StringComparison.Ordinal),
-        "email" => string.Compare(a.Email, b.Email, StringComparison.Ordinal),
-        "age"   => a.Age.CompareTo(b.Age),
-        "score" => a.Score.CompareTo(b.Score),
-        _       => a.Id.CompareTo(b.Id)
-    });
-    if (order == "desc") users.Reverse();
+        var sw = Stopwatch.StartNew();
+        long received = 0;
+        var buf = new byte[DownloadChunk];
+        int read;
+        while ((read = await ctx.Request.Body.ReadAsync(buf)) > 0)
+            received += read;
 
-    int pageSize = 20;
-    int offset = Math.Min((page - 1) * pageSize, users.Count);
-    int end    = Math.Min(offset + pageSize, users.Count);
+        var resp = ctx.Response;
+        resp.Headers["Server-Timing"] = "recv;dur=" + Ms1(sw);
+        resp.Headers["X-Networker-Received-Bytes"] = received.ToString(CultureInfo.InvariantCulture);
+        if (ctx.Request.Headers.TryGetValue("X-Networker-Request-Id", out var rid))
+            resp.Headers["X-Networker-Request-Id"] = (string?)rid;
 
-    var sb = new StringBuilder("[");
-    for (int i = offset; i < end; i++)
-    {
-        if (i > offset) sb.Append(',');
-        var u = users[i];
-        sb.Append($"{{\"id\":{u.Id},\"name\":\"{JsonEsc(u.Name)}\",\"email\":\"{JsonEsc(u.Email)}\",\"age\":{u.Age},\"score\":{u.Score},\"active\":{(u.Active ? "true" : "false")},\"created_at\":\"{u.CreatedAt}\"}}");
+        var payload = JsonSerializer.SerializeToUtf8Bytes(
+            new UploadResponse { ReceivedBytes = received },
+            BenchJson.Default.UploadResponse);
+        resp.StatusCode = 200;
+        resp.ContentType = "application/json";
+        resp.ContentLength = payload.Length;
+        await resp.Body.WriteAsync(payload);
     }
-    sb.Append(']');
 
-    WriteServerTiming(ctx, sw);
-    return Results.Content(sb.ToString(), "application/json");
-});
-
-// POST /api/transform — hash string fields, reverse arrays
-app.MapPost("/api/transform", async (HttpContext ctx) =>
-{
-    var sw = SetAPIHeaders(ctx);
-
-    using var reader = new StreamReader(ctx.Request.Body);
-    var body = await reader.ReadToEndAsync();
-
-    // Minimal JSON parse: extract key-value pairs
-    // Use System.Text.Json for proper parsing
-    var doc = System.Text.Json.JsonDocument.Parse(body);
-    var sb = new StringBuilder("{");
-    bool first = true;
-
-    foreach (var prop in doc.RootElement.EnumerateObject())
+    // §5.4 GET /api/users?page=N&sort=<field>&order=<asc|desc>
+    public static Task ApiUsers(HttpContext ctx)
     {
-        if (!first) sb.Append(',');
-        first = false;
-        sb.Append($"\"{JsonEsc(prop.Name)}\":");
+        var sw = Stopwatch.StartNew();
+        var q = ctx.Request.Query;
 
-        if (prop.Value.ValueKind == System.Text.Json.JsonValueKind.String)
+        var page = QueryLong(ctx, "page") ?? 1;
+        if (page < 1) page = 1; // minimum clamp 1
+        var sort = q["sort"].FirstOrDefault() ?? "id";
+        var desc = (q["order"].FirstOrDefault() ?? "") == "desc";
+
+        // 100-user window; page beyond the dataset yields [] with 200.
+        // lastPage is compared first so (page-1)*100 can never overflow.
+        List<BenchUser> window;
+        var lastPage = (Data.Users.Count + 99) / 100;
+        if (page > lastPage)
         {
-            var hash = SHA256.HashData(Encoding.UTF8.GetBytes(prop.Value.GetString()!));
-            sb.Append($"\"{Convert.ToHexString(hash).ToLower()}\"");
-        }
-        else if (prop.Value.ValueKind == System.Text.Json.JsonValueKind.Array)
-        {
-            var items = new List<string>();
-            foreach (var el in prop.Value.EnumerateArray())
-                items.Add(el.GetRawText());
-            items.Reverse();
-            sb.Append('[');
-            sb.Append(string.Join(",", items));
-            sb.Append(']');
+            window = new List<BenchUser>();
         }
         else
         {
-            sb.Append(prop.Value.GetRawText());
+            var start = (int)((page - 1) * 100);
+            var count = Math.Min(100, Data.Users.Count - start);
+            window = Data.Users.GetRange(start, count);
         }
-    }
-    sb.Append('}');
 
-    WriteServerTiming(ctx, sw);
-    return Results.Content(sb.ToString(), "application/json");
-});
+        // OrderBy is a stable sort — dataset order breaks ties (§5.4); string
+        // fields compare ordinally (bytewise for this ASCII dataset), score as
+        // float64. `desc` reverses the ascending result.
+        var sorted = (sort switch
+        {
+            "name" => window.OrderBy(u => u.Name, StringComparer.Ordinal),
+            "email" => window.OrderBy(u => u.Email, StringComparer.Ordinal),
+            "score" => window.OrderBy(u => u.Score),
+            "created_at" => window.OrderBy(u => u.CreatedAt, StringComparer.Ordinal),
+            _ => window.OrderBy(u => u.Id),
+        }).ToList();
+        if (desc) sorted.Reverse();
 
-// GET /api/aggregate?range=start,end — statistics over generated data
-app.MapGet("/api/aggregate", (HttpContext ctx) =>
-{
-    var sw = SetAPIHeaders(ctx);
-
-    var rangeStr = ctx.Request.Query["range"].ToString();
-    var parts = rangeStr.Split(',');
-    if (parts.Length != 2 ||
-        !long.TryParse(parts[0], out long rangeStart) ||
-        !long.TryParse(parts[1], out long rangeEnd))
-    {
-        ctx.Response.StatusCode = 400;
-        WriteServerTiming(ctx, sw);
-        return Results.Content("{\"error\":\"range must be start,end\"}", "application/json");
+        var result = sorted.Take(20).ToList();
+        return WriteJson(ctx, sw, result, BenchJson.Default.ListBenchUser);
     }
 
-    // Try shared bench data timeseries, fall back to PRNG
-    var values = new List<double>();
-    if (BenchData != null)
+    // §5.5 POST /api/transform — SHA-256 the field strings, reverse values.
+    public static async Task ApiTransform(HttpContext ctx)
     {
+        var sw = Stopwatch.StartNew();
+
+        JsonDocument doc;
         try
         {
-            foreach (var v in BenchData.RootElement.GetProperty("timeseries").EnumerateArray())
-                values.Add(v.GetDouble());
+            doc = await JsonDocument.ParseAsync(ctx.Request.Body);
         }
-        catch { values.Clear(); }
-    }
-    if (values.Count == 0)
-    {
-        var rng = new Random((int)rangeStart);
-        for (int i = 0; i < 10000; i++)
-            values.Add(rng.NextDouble() * (rangeEnd - rangeStart) + rangeStart);
-    }
-
-    int n = values.Count;
-    double sum = 0;
-    var catCounts = new int[5];
-    var catSums   = new double[5];
-
-    for (int i = 0; i < n; i++)
-    {
-        sum += values[i];
-        int ci = i % 5;
-        catCounts[ci]++;
-        catSums[ci] += values[i];
-    }
-
-    values.Sort();
-
-    var sb = new StringBuilder();
-    sb.Append($"{{\"count\":{n},\"mean\":{sum / n},\"p50\":{values[n / 2]},\"p95\":{values[(int)(n * 0.95)]},\"max\":{values[n - 1]},\"categories\":{{");
-    for (int i = 0; i < 5; i++)
-    {
-        if (i > 0) sb.Append(',');
-        double mean = catCounts[i] > 0 ? catSums[i] / catCounts[i] : 0;
-        sb.Append($"\"{catNames[i]}\":{{\"count\":{catCounts[i]},\"sum\":{catSums[i]},\"mean\":{mean}}}");
-    }
-    sb.Append("}}");
-
-    WriteServerTiming(ctx, sw);
-    return Results.Content(sb.ToString(), "application/json");
-});
-
-// GET /api/search?q=term&limit=N — regex search over generated strings
-app.MapGet("/api/search", (HttpContext ctx) =>
-{
-    var sw = SetAPIHeaders(ctx);
-
-    var q = ctx.Request.Query["q"].ToString();
-    if (string.IsNullOrEmpty(q))
-    {
-        ctx.Response.StatusCode = 400;
-        WriteServerTiming(ctx, sw);
-        return Results.Content("{\"error\":\"q parameter required\"}", "application/json");
-    }
-    if (!int.TryParse(ctx.Request.Query["limit"], out int limit) || limit < 1 || limit > 100)
-        limit = 10;
-
-    var re = new Regex(Regex.Escape(q), RegexOptions.IgnoreCase);
-
-    // Build corpus from shared data or PRNG fallback
-    var corpus = new List<string>();
-    if (BenchData != null)
-    {
-        try
+        catch (JsonException)
         {
-            foreach (var item in BenchData.RootElement.GetProperty("search_corpus").EnumerateArray())
-                corpus.Add(item.GetString()!);
+            await WriteApiError(ctx, sw, 400, "invalid json");
+            return;
         }
-        catch { corpus.Clear(); }
-    }
-    if (corpus.Count == 0)
-    {
-        var rng = new Random(42);
-        for (int i = 0; i < 1000; i++)
+
+        using (doc)
         {
-            int wordCount = 3 + rng.Next(4);
-            var sb2 = new StringBuilder();
-            for (int j = 0; j < wordCount; j++)
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
             {
-                if (j > 0) sb2.Append(' ');
-                sb2.Append(searchWords[rng.Next(searchWords.Length)]);
+                await WriteApiError(ctx, sw, 400, "expected a JSON object");
+                return;
             }
-            corpus.Add(sb2.ToString());
+
+            long seed = 0; // §5.5 default
+            if (root.TryGetProperty("seed", out var seedEl) &&
+                seedEl.ValueKind == JsonValueKind.Number &&
+                seedEl.TryGetInt64(out var seedVal))
+            {
+                seed = seedVal;
+            }
+
+            var hashedFields = new List<string>();
+            if (root.TryGetProperty("fields", out var fields) && fields.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var el in fields.EnumerateArray())
+                {
+                    var s = el.ValueKind == JsonValueKind.String ? el.GetString()! : el.GetRawText();
+                    hashedFields.Add(HexLower(SHA256.HashData(Encoding.UTF8.GetBytes(s))));
+                }
+            }
+
+            var reversed = new List<JsonElement>();
+            if (root.TryGetProperty("values", out var values) && values.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var el in values.EnumerateArray())
+                    reversed.Add(el.Clone()); // pass through unmodified
+                reversed.Reverse();
+            }
+
+            var result = new TransformResponse
+            {
+                Seed = seed,
+                HashedFields = hashedFields,
+                ReversedValues = reversed,
+            };
+            await WriteJson(ctx, sw, result, BenchJson.Default.TransformResponse);
         }
     }
 
-    var results = new List<(int Index, string Text, double Score)>();
-    for (int i = 0; i < corpus.Count; i++)
+    // §5.6 GET /api/aggregate — full-series stats; `range` accepted + ignored.
+    public static Task ApiAggregate(HttpContext ctx)
     {
-        var text = corpus[i];
-        var match = re.Match(text);
-        if (match.Success)
+        var sw = Stopwatch.StartNew();
+
+        // Copy the cached dataset-order values, then run the normative
+        // float64 algorithm: sort → sequential sum over the SORTED values →
+        // truncated-index percentiles → quintile categories.
+        var values = (double[])Data.TimeseriesValues.Clone();
+        Array.Sort(values);
+        var n = values.Length;
+
+        double sum = 0.0;
+        for (var i = 0; i < n; i++)
+            sum += values[i];
+
+        var chunk = n / 5;
+        var categories = new List<AggregateCategory>(5);
+        for (var i = 0; i < 5; i++)
         {
-            double score = 1.0 / (1.0 + match.Index);
-            results.Add((i, text, score));
+            double chunkSum = 0.0;
+            for (var j = i * chunk; j < (i + 1) * chunk; j++)
+                chunkSum += values[j];
+            categories.Add(new AggregateCategory
+            {
+                Category = "q" + (i + 1),
+                Count = chunk,
+                Mean = R2(chunkSum / chunk),
+                Min = R2(values[i * chunk]),
+                Max = R2(values[(i + 1) * chunk - 1]),
+            });
         }
+
+        var result = new AggregateResponse
+        {
+            TotalPoints = n,
+            Mean = R2(sum / n),
+            P50 = R2(values[(int)(n * 0.50)]),
+            P95 = R2(values[(int)(n * 0.95)]),
+            Max = R2(values[n - 1]),
+            Categories = categories,
+        };
+        return WriteJson(ctx, sw, result, BenchJson.Default.AggregateResponse);
     }
 
-    results.Sort((a, b) => b.Score.CompareTo(a.Score));
-    if (results.Count > limit) results = results.GetRange(0, limit);
-
-    var sb = new StringBuilder("[");
-    for (int i = 0; i < results.Count; i++)
+    // §5.7 GET /api/search?q=<term>&limit=N — case-sensitive regex over the
+    // corpus, literal-substring fallback when the pattern does not compile.
+    public static Task ApiSearch(HttpContext ctx)
     {
-        if (i > 0) sb.Append(',');
-        var r = results[i];
-        sb.Append($"{{\"index\":{r.Index},\"text\":\"{JsonEsc(r.Text)}\",\"score\":{r.Score}}}");
+        var sw = Stopwatch.StartNew();
+        var query = ctx.Request.Query["q"].FirstOrDefault() ?? "test";
+        var limit = QueryLong(ctx, "limit") ?? 20;
+        if (limit > 100) limit = 100;
+        var take = (int)Math.Max(0, limit);
+
+        Regex? re = null;
+        try { re = new Regex(query); }
+        catch (ArgumentException) { /* literal fallback below */ }
+
+        var scored = new List<(int Pos, string Item)>();
+        foreach (var item in Data.SearchCorpus)
+        {
+            int pos;
+            if (re is not null)
+            {
+                var m = re.Match(item);
+                if (!m.Success) continue;
+                pos = m.Index;
+            }
+            else
+            {
+                pos = item.IndexOf(query, StringComparison.Ordinal);
+                if (pos < 0) continue;
+            }
+            scored.Add((pos, item));
+        }
+
+        scored.Sort((a, b) =>
+        {
+            var c = a.Pos.CompareTo(b.Pos);
+            return c != 0 ? c : string.CompareOrdinal(a.Item, b.Item);
+        });
+
+        var results = new List<SearchResult>(Math.Min(take, scored.Count));
+        for (var i = 0; i < scored.Count && i < take; i++)
+        {
+            results.Add(new SearchResult
+            {
+                Rank = i + 1,
+                Item = scored[i].Item,
+                MatchPosition = scored[i].Pos,
+            });
+        }
+
+        var result = new SearchResponse
+        {
+            Query = query,
+            TotalMatches = scored.Count, // before truncation
+            Returned = results.Count,
+            Results = results,
+        };
+        return WriteJson(ctx, sw, result, BenchJson.Default.SearchResponse);
     }
-    sb.Append(']');
 
-    WriteServerTiming(ctx, sw);
-    return Results.Content(sb.ToString(), "application/json");
-});
+    // §5.8 POST /api/upload/process — CRC-32 + SHA-256 + zlib level 6.
+    public static async Task ApiUploadProcess(HttpContext ctx)
+    {
+        var sw = Stopwatch.StartNew();
+        byte[] body;
+        using (var ms = new MemoryStream())
+        {
+            await ctx.Request.Body.CopyToAsync(ms);
+            body = ms.ToArray();
+        }
 
-// POST /api/upload/process — hash and compress uploaded body
-app.MapPost("/api/upload/process", async (HttpContext ctx) =>
+        var crc = Crc32.Hash(body);
+        var sha = HexLower(SHA256.HashData(body));
+
+        // ZLibStream = RFC 1950 (zlib header + adler); CompressionLevel.Optimal
+        // maps to zlib's default level 6 — the §5.8 canonical algorithm.
+        long compressedSize;
+        using (var outMs = new MemoryStream())
+        {
+            using (var zlib = new ZLibStream(outMs, CompressionLevel.Optimal, leaveOpen: true))
+                zlib.Write(body, 0, body.Length);
+            compressedSize = outMs.Length;
+        }
+
+        var result = new UploadProcessResponse
+        {
+            OriginalSize = body.Length,
+            CompressedSize = compressedSize,
+            Crc32 = crc.ToString("x8", CultureInfo.InvariantCulture),
+            Sha256 = sha,
+        };
+        await WriteJson(ctx, sw, result, BenchJson.Default.UploadProcessResponse);
+    }
+
+    // §5.9 GET /api/delayed?ms=N — async timer delay, clamped to [1, 100];
+    // `work` is reserved: accepted and ignored.
+    public static async Task ApiDelayed(HttpContext ctx)
+    {
+        var sw = Stopwatch.StartNew();
+        var ms = QueryLong(ctx, "ms") ?? 10;
+        ms = Math.Clamp(ms, 1, 100);
+        await Task.Delay((int)ms);
+
+        var result = new DelayedResponse
+        {
+            RequestedMs = ms,
+            ActualMs = R2(sw.Elapsed.TotalMilliseconds),
+        };
+        await WriteJson(ctx, sw, result, BenchJson.Default.DelayedResponse);
+    }
+
+    // §5.10 GET /api/validate?seed=N — echo the dataset's expected_checksums.
+    public static Task ApiValidate(HttpContext ctx)
+    {
+        var sw = Stopwatch.StartNew();
+        var seed = QueryLong(ctx, "seed") ?? 42;
+        var result = new ValidateResponse
+        {
+            Seed = seed,
+            Checksums = Data.ExpectedChecksums,
+        };
+        return WriteJson(ctx, sw, result, BenchJson.Default.ValidateResponse);
+    }
+
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    /// <summary>§5.6 rounding: half away from zero to 2 decimals
+    /// (bit-identical to the generator's `floor(x*100 + 0.5) / 100`).</summary>
+    private static double R2(double x) => Math.Floor(x * 100.0 + 0.5) / 100.0;
+
+    private static string Ms1(Stopwatch sw) =>
+        sw.Elapsed.TotalMilliseconds.ToString("0.0", CultureInfo.InvariantCulture);
+
+    private static string HexLower(byte[] bytes) =>
+        Convert.ToHexString(bytes).ToLowerInvariant();
+
+    private static long? QueryLong(HttpContext ctx, string key)
+    {
+        var v = ctx.Request.Query[key].FirstOrDefault();
+        return long.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out var l) ? l : null;
+    }
+
+    /// <summary>§1 benchmark headers, required on every /api/* response.</summary>
+    public static void SetBenchHeaders(HttpResponse resp, double durMs)
+    {
+        resp.Headers["Server-Timing"] =
+            "app;dur=" + durMs.ToString("0.0", CultureInfo.InvariantCulture);
+        resp.Headers["Cache-Control"] = "no-store, no-cache, must-revalidate";
+        resp.Headers["Timing-Allow-Origin"] = "*";
+        resp.Headers["Access-Control-Allow-Origin"] = "*";
+    }
+
+    private static Task WriteJson<T>(HttpContext ctx, Stopwatch sw, T value, JsonTypeInfo<T> typeInfo)
+    {
+        var payload = JsonSerializer.SerializeToUtf8Bytes(value, typeInfo);
+        var resp = ctx.Response;
+        resp.StatusCode = 200;
+        resp.ContentType = "application/json";
+        resp.ContentLength = payload.Length;
+        SetBenchHeaders(resp, sw.Elapsed.TotalMilliseconds);
+        if (HttpMethods.IsHead(ctx.Request.Method))
+            return Task.CompletedTask;
+        return resp.Body.WriteAsync(payload, 0, payload.Length);
+    }
+
+    private static Task WriteApiError(HttpContext ctx, Stopwatch sw, int status, string message)
+    {
+        var payload = JsonSerializer.SerializeToUtf8Bytes(
+            new ErrorResponse { Error = message }, BenchJson.Default.ErrorResponse);
+        var resp = ctx.Response;
+        resp.StatusCode = status;
+        resp.ContentType = "application/json";
+        resp.ContentLength = payload.Length;
+        SetBenchHeaders(resp, sw.Elapsed.TotalMilliseconds);
+        return resp.Body.WriteAsync(payload, 0, payload.Length);
+    }
+
+    private static Task WriteError(HttpContext ctx, int status, string message)
+    {
+        var payload = JsonSerializer.SerializeToUtf8Bytes(
+            new ErrorResponse { Error = message }, BenchJson.Default.ErrorResponse);
+        var resp = ctx.Response;
+        resp.StatusCode = status;
+        resp.ContentType = "application/json";
+        resp.ContentLength = payload.Length;
+        return resp.Body.WriteAsync(payload, 0, payload.Length);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared dataset (API-SPEC.md §2) — load is FATAL on failure, no PRNG fallback
+// ─────────────────────────────────────────────────────────────────────────────
+
+internal sealed class BenchData
 {
-    var sw = SetAPIHeaders(ctx);
+    public string SourcePath = "";
+    public List<BenchUser> Users = new();
+    public List<string> SearchCorpus = new();
+    public double[] TimeseriesValues = Array.Empty<double>();
+    public Dictionary<string, string> ExpectedChecksums = new();
 
-    using var ms = new MemoryStream();
-    await ctx.Request.Body.CopyToAsync(ms);
-    var body = ms.ToArray();
+    private static readonly string[] RequiredChecksumKeys =
+        { "users_page1", "aggregate_default", "search_network_top10", "transform_input0" };
 
-    // CRC32 (use System.IO.Hashing if available, otherwise manual)
-    uint crc = Crc32(body);
-    var sha = SHA256.HashData(body);
-
-    using var compMs = new MemoryStream();
-    using (var deflate = new DeflateStream(compMs, CompressionLevel.Optimal, leaveOpen: true))
+    public static BenchData LoadOrExit()
     {
-        deflate.Write(body, 0, body.Length);
-    }
-    int compressedSize = (int)compMs.Length;
+        var envPath = Environment.GetEnvironmentVariable("BENCH_DATA_PATH");
+        string path;
+        if (!string.IsNullOrEmpty(envPath))
+        {
+            // §2: when BENCH_DATA_PATH is set, that exact file must exist and
+            // parse — no fallback.
+            path = envPath;
+        }
+        else
+        {
+            string[] candidates =
+            {
+                "/opt/bench/bench-data.json",
+                Path.Combine(AppContext.BaseDirectory, "..", "shared", "bench-data.json"),
+                Path.Combine("..", "shared", "bench-data.json"),
+            };
+            var found = candidates.FirstOrDefault(File.Exists);
+            if (found is null)
+                Fatal("bench-data.json not found (BENCH_DATA_PATH unset; tried: " +
+                      string.Join(", ", candidates) + ")");
+            path = found!;
+        }
 
-    var result = $"{{\"original_size\":{body.Length},\"compressed_size\":{compressedSize},\"crc32\":\"{crc:x8}\",\"sha256\":\"{Convert.ToHexString(sha).ToLower()}\"}}";
-
-    WriteServerTiming(ctx, sw);
-    return Results.Content(result, "application/json");
-});
-
-// GET /api/delayed?ms=N&work=light — async delay with optional CPU work
-app.MapGet("/api/delayed", async (HttpContext ctx) =>
-{
-    var sw = SetAPIHeaders(ctx);
-
-    if (!int.TryParse(ctx.Request.Query["ms"], out int ms)) ms = 1;
-    if (ms < 1) ms = 1;
-    if (ms > 100) ms = 100;
-    var work = ctx.Request.Query["work"].ToString();
-
-    await Task.Delay(ms);
-
-    var sb = new StringBuilder();
-    sb.Append($"{{\"requested_ms\":{ms},\"actual_ms\":{sw.Elapsed.TotalMilliseconds:F1},\"work\":\"{JsonEsc(work)}\"");
-
-    if (work == "heavy")
-    {
-        double x = 0;
-        for (int i = 0; i < 100000; i++)
-            x += Math.Sqrt(i);
-        sb.Append($",\"compute\":{x}");
-    }
-
-    sb.Append('}');
-
-    WriteServerTiming(ctx, sw);
-    return Results.Content(sb.ToString(), "application/json");
-});
-
-// GET /api/validate?seed=42 — checksums for all endpoints
-app.MapGet("/api/validate", (HttpContext ctx) =>
-{
-    var sw = SetAPIHeaders(ctx);
-
-    // If shared data has pre-computed checksums, return them directly
-    if (BenchData != null)
-    {
+        BenchDatasetFile? file = null;
         try
         {
-            var checksums = BenchData.RootElement.GetProperty("expected_checksums");
-            WriteServerTiming(ctx, sw);
-            return Results.Content(checksums.GetRawText(), "application/json");
+            // byte[] overload: available on every TFM in the ladder (the sync
+            // Stream overload only exists on net7+).
+            file = JsonSerializer.Deserialize(File.ReadAllBytes(path), BenchJson.Default.BenchDatasetFile);
         }
-        catch { }
-    }
-
-    if (!long.TryParse(ctx.Request.Query["seed"], out long seed) || seed == 0) seed = 42;
-
-    // Users checksum
-    var users = GenerateUsers((int)seed, firstNames, lastNames, domains);
-    var usersJson = new StringBuilder("[");
-    for (int i = 0; i < users.Count; i++)
-    {
-        if (i > 0) usersJson.Append(',');
-        var u = users[i];
-        usersJson.Append($"{{\"id\":{u.Id},\"name\":\"{JsonEsc(u.Name)}\",\"email\":\"{JsonEsc(u.Email)}\",\"age\":{u.Age},\"score\":{u.Score},\"active\":{(u.Active ? "true" : "false")},\"created_at\":\"{u.CreatedAt}\"}}");
-    }
-    usersJson.Append(']');
-    var usersHash = SHA256.HashData(Encoding.UTF8.GetBytes(usersJson.ToString()));
-
-    // Aggregate checksum
-    var rng = new Random((int)seed);
-    double sum = 0;
-    for (int i = 0; i < 10000; i++)
-        sum += rng.NextDouble() * 100.0;
-    var aggHash = SHA256.HashData(Encoding.UTF8.GetBytes(sum.ToString("F6")));
-
-    // Search checksum (seed=42 corpus, q="network")
-    var rng2 = new Random(42);
-    var corpus = new StringBuilder();
-    for (int i = 0; i < 1000; i++)
-    {
-        int wordCount = 3 + rng2.Next(4);
-        for (int j = 0; j < wordCount; j++)
+        catch (Exception ex)
         {
-            if (j > 0) corpus.Append(' ');
-            corpus.Append(searchWords[rng2.Next(searchWords.Length)]);
+            Fatal($"failed to load {path}: {ex.Message}");
         }
-        corpus.Append('\n');
+        if (file is null)
+            Fatal($"failed to load {path}: null document");
+
+        // §2: verify the counts; exit non-zero on mismatch.
+        var f = file!;
+        if (f.Version != 2)
+            Fatal($"{path}: _version is {f.Version}, expected 2");
+        if (f.Users is not { Count: 100 })
+            Fatal($"{path}: users count is {f.Users?.Count ?? 0}, expected 100");
+        if (f.SearchCorpus is not { Count: 1000 })
+            Fatal($"{path}: search_corpus count is {f.SearchCorpus?.Count ?? 0}, expected 1000");
+        if (f.Timeseries is not { Count: 10000 })
+            Fatal($"{path}: timeseries count is {f.Timeseries?.Count ?? 0}, expected 10000");
+        if (f.TransformInputs is not { Count: 10 })
+            Fatal($"{path}: transform_inputs count is {f.TransformInputs?.Count ?? 0}, expected 10");
+        foreach (var key in RequiredChecksumKeys)
+        {
+            if (f.ExpectedChecksums is null || !f.ExpectedChecksums.ContainsKey(key))
+                Fatal($"{path}: expected_checksums missing key '{key}'");
+        }
+
+        return new BenchData
+        {
+            SourcePath = path,
+            Users = f.Users!,
+            SearchCorpus = f.SearchCorpus!,
+            TimeseriesValues = f.Timeseries!.Select(t => t.Value).ToArray(),
+            ExpectedChecksums = f.ExpectedChecksums!,
+        };
     }
-    var searchHash = SHA256.HashData(Encoding.UTF8.GetBytes(corpus.ToString()));
 
-    var result = $"{{\"seed\":\"{seed}\",\"users\":\"{Convert.ToHexString(usersHash, 0, 16).ToLower()}\",\"aggregate\":\"{Convert.ToHexString(aggHash, 0, 16).ToLower()}\",\"search\":\"{Convert.ToHexString(searchHash, 0, 16).ToLower()}\"}}";
-
-    WriteServerTiming(ctx, sw);
-    return Results.Content(result, "application/json");
-});
-
-app.Run();
-
-// CRC32 (IEEE polynomial) implementation
-static uint Crc32(byte[] data)
-{
-    uint[] table = new uint[256];
-    for (uint i = 0; i < 256; i++)
+    private static void Fatal(string message)
     {
-        uint crc = i;
-        for (int j = 0; j < 8; j++)
-            crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB88320u : crc >> 1;
-        table[i] = crc;
+        Console.Error.WriteLine("FATAL: " + message);
+        Environment.Exit(1);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DTOs + System.Text.Json source generation (idiomatic, AOT/trim-safe)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// <summary>
+/// Writes integral doubles as "N.0" so that canonical-JSON validators
+/// (Python <c>json.load</c> → <c>json.dumps</c>, API-SPEC.md §7) parse them as
+/// floats, not ints. The frozen dataset's aggregate response really contains
+/// an exact 39.0 (q2 mean) — System.Text.Json's shortest-round-trip "39"
+/// would canonicalize to int 39 and break the pinned checksum.
+/// </summary>
+internal sealed class PyFloatConverter : JsonConverter<double>
+{
+    public override double Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        => reader.GetDouble();
+
+    public override void Write(Utf8JsonWriter writer, double value, JsonSerializerOptions options)
+    {
+        if (double.IsFinite(value) && Math.Floor(value) == value && Math.Abs(value) < 1e15)
+            writer.WriteRawValue(((long)value).ToString(CultureInfo.InvariantCulture) + ".0",
+                skipInputValidation: true);
+        else
+            writer.WriteNumberValue(value);
+    }
+}
+
+internal sealed class BenchDatasetFile
+{
+    [JsonPropertyName("_version")] public int Version { get; set; }
+    [JsonPropertyName("users")] public List<BenchUser>? Users { get; set; }
+    [JsonPropertyName("search_corpus")] public List<string>? SearchCorpus { get; set; }
+    [JsonPropertyName("timeseries")] public List<TimeseriesPoint>? Timeseries { get; set; }
+    [JsonPropertyName("transform_inputs")] public List<JsonElement>? TransformInputs { get; set; }
+    [JsonPropertyName("expected_checksums")] public Dictionary<string, string>? ExpectedChecksums { get; set; }
+}
+
+// §2 user schema: id/name/email/score/created_at — no age/active/department.
+internal sealed class BenchUser
+{
+    [JsonPropertyName("id")] public long Id { get; set; }
+    [JsonPropertyName("name")] public string Name { get; set; } = "";
+    [JsonPropertyName("email")] public string Email { get; set; } = "";
+    [JsonPropertyName("score")]
+    [JsonConverter(typeof(PyFloatConverter))]
+    public double Score { get; set; }
+    [JsonPropertyName("created_at")] public string CreatedAt { get; set; } = "";
+}
+
+// §2 timeseries entries are objects, not bare floats.
+internal sealed class TimeseriesPoint
+{
+    [JsonPropertyName("ts")] public long Ts { get; set; }
+    [JsonPropertyName("value")] public double Value { get; set; }
+    [JsonPropertyName("category")] public string Category { get; set; } = "";
+}
+
+internal sealed class HealthResponse
+{
+    [JsonPropertyName("status")] public string Status { get; set; } = "";
+    [JsonPropertyName("runtime")] public string Runtime { get; set; } = "";
+    [JsonPropertyName("version")] public string Version { get; set; } = "";
+}
+
+internal sealed class UploadResponse
+{
+    [JsonPropertyName("received_bytes")] public long ReceivedBytes { get; set; }
+}
+
+internal sealed class TransformResponse
+{
+    [JsonPropertyName("seed")] public long Seed { get; set; }
+    [JsonPropertyName("hashed_fields")] public List<string> HashedFields { get; set; } = new();
+    [JsonPropertyName("reversed_values")] public List<JsonElement> ReversedValues { get; set; } = new();
+}
+
+internal sealed class AggregateResponse
+{
+    [JsonPropertyName("total_points")] public int TotalPoints { get; set; }
+    [JsonPropertyName("mean")]
+    [JsonConverter(typeof(PyFloatConverter))]
+    public double Mean { get; set; }
+    [JsonPropertyName("p50")]
+    [JsonConverter(typeof(PyFloatConverter))]
+    public double P50 { get; set; }
+    [JsonPropertyName("p95")]
+    [JsonConverter(typeof(PyFloatConverter))]
+    public double P95 { get; set; }
+    [JsonPropertyName("max")]
+    [JsonConverter(typeof(PyFloatConverter))]
+    public double Max { get; set; }
+    [JsonPropertyName("categories")] public List<AggregateCategory> Categories { get; set; } = new();
+}
+
+internal sealed class AggregateCategory
+{
+    [JsonPropertyName("category")] public string Category { get; set; } = "";
+    [JsonPropertyName("count")] public int Count { get; set; }
+    [JsonPropertyName("mean")]
+    [JsonConverter(typeof(PyFloatConverter))]
+    public double Mean { get; set; }
+    [JsonPropertyName("min")]
+    [JsonConverter(typeof(PyFloatConverter))]
+    public double Min { get; set; }
+    [JsonPropertyName("max")]
+    [JsonConverter(typeof(PyFloatConverter))]
+    public double Max { get; set; }
+}
+
+internal sealed class SearchResponse
+{
+    [JsonPropertyName("query")] public string Query { get; set; } = "";
+    [JsonPropertyName("total_matches")] public int TotalMatches { get; set; }
+    [JsonPropertyName("returned")] public int Returned { get; set; }
+    [JsonPropertyName("results")] public List<SearchResult> Results { get; set; } = new();
+}
+
+internal sealed class SearchResult
+{
+    [JsonPropertyName("rank")] public int Rank { get; set; }
+    [JsonPropertyName("item")] public string Item { get; set; } = "";
+    [JsonPropertyName("match_position")] public int MatchPosition { get; set; }
+}
+
+internal sealed class UploadProcessResponse
+{
+    [JsonPropertyName("original_size")] public int OriginalSize { get; set; }
+    [JsonPropertyName("compressed_size")] public long CompressedSize { get; set; }
+    [JsonPropertyName("crc32")] public string Crc32 { get; set; } = "";
+    [JsonPropertyName("sha256")] public string Sha256 { get; set; } = "";
+}
+
+internal sealed class DelayedResponse
+{
+    [JsonPropertyName("requested_ms")] public long RequestedMs { get; set; }
+    [JsonPropertyName("actual_ms")]
+    [JsonConverter(typeof(PyFloatConverter))]
+    public double ActualMs { get; set; }
+}
+
+internal sealed class ValidateResponse
+{
+    [JsonPropertyName("seed")] public long Seed { get; set; }
+    [JsonPropertyName("checksums")] public Dictionary<string, string> Checksums { get; set; } = new();
+}
+
+internal sealed class ErrorResponse
+{
+    [JsonPropertyName("error")] public string Error { get; set; } = "";
+}
+
+[JsonSourceGenerationOptions(WriteIndented = false)]
+[JsonSerializable(typeof(BenchDatasetFile))]
+[JsonSerializable(typeof(List<BenchUser>))]
+[JsonSerializable(typeof(HealthResponse))]
+[JsonSerializable(typeof(UploadResponse))]
+[JsonSerializable(typeof(TransformResponse))]
+[JsonSerializable(typeof(AggregateResponse))]
+[JsonSerializable(typeof(SearchResponse))]
+[JsonSerializable(typeof(UploadProcessResponse))]
+[JsonSerializable(typeof(DelayedResponse))]
+[JsonSerializable(typeof(ValidateResponse))]
+[JsonSerializable(typeof(ErrorResponse))]
+internal partial class BenchJson : JsonSerializerContext
+{
+}
+
+// IEEE CRC-32 with a hoisted table (computed once, audit P1#11).
+internal static class Crc32
+{
+    private static readonly uint[] Table = BuildTable();
+
+    private static uint[] BuildTable()
+    {
+        var table = new uint[256];
+        for (uint i = 0; i < 256; i++)
+        {
+            var crc = i;
+            for (var j = 0; j < 8; j++)
+                crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB88320u : crc >> 1;
+            table[i] = crc;
+        }
+        return table;
     }
 
-    uint result = 0xFFFFFFFF;
-    foreach (byte b in data)
-        result = table[(result ^ b) & 0xFF] ^ (result >> 8);
-    return result ^ 0xFFFFFFFF;
+    public static uint Hash(ReadOnlySpan<byte> data)
+    {
+        var crc = 0xFFFFFFFFu;
+        foreach (var b in data)
+            crc = Table[(crc ^ b) & 0xFF] ^ (crc >> 8);
+        return crc ^ 0xFFFFFFFFu;
+    }
 }
