@@ -45,7 +45,9 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# Without TLS (development)
+# Without TLS: if $BENCH_CERT_DIR/cert.pem + key.pem are absent, the Docker
+# CMD / deploy.sh fall back to plain HTTP on the same port (application mode
+# behind a TLS-terminating reverse proxy). Manually:
 uvicorn server:app --host 0.0.0.0 --port 8080
 
 # With TLS

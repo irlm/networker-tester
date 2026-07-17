@@ -54,14 +54,21 @@ fi
 
 # Start server. BENCH_WORKERS maps to uvicorn --workers (API-SPEC.md §3,
 # default = logical CPUs); --no-access-log so prod matches CI (audit F11).
+# Cert-absent on the target → plain HTTP on the same port (application mode
+# behind a TLS-terminating reverse proxy, audit F8).
 ssh "$TARGET" "cd $REMOTE_DIR && \
+    if [ -f $CERT_DIR/cert.pem ] && [ -f $CERT_DIR/key.pem ]; then \
+        SSL_OPTS='--ssl-keyfile $CERT_DIR/key.pem --ssl-certfile $CERT_DIR/cert.pem'; \
+    else \
+        echo 'no TLS certs in $CERT_DIR - starting plain HTTP on port 8443 (application mode)'; \
+        SSL_OPTS=''; \
+    fi && \
     sudo nohup venv/bin/uvicorn server:app \
         --host 0.0.0.0 \
         --port 8443 \
         --workers \"\${BENCH_WORKERS:-\$(nproc)}\" \
         --no-access-log \
-        --ssl-keyfile $CERT_DIR/key.pem \
-        --ssl-certfile $CERT_DIR/cert.pem \
+        \$SSL_OPTS \
         > /var/log/python-bench.log 2>&1 &"
 
 echo "==> Server started on $TARGET:8443"

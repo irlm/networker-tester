@@ -40,7 +40,9 @@ All endpoints served over TLS on port 8443.
 # Install Swoole
 pecl install swoole
 
-# Without TLS (edit server.php to remove SWOOLE_SSL flag)
+# Without TLS: if $BENCH_CERT_DIR/cert.pem + key.pem are absent the server
+# falls back to plain HTTP on the same port (application mode behind a
+# TLS-terminating reverse proxy)
 php server.php
 
 # With TLS

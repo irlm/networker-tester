@@ -529,8 +529,10 @@ export const api = {
   // Cloud status
   getCloudStatus: (projectId: string) => request<CloudStatus>(projectUrl(projectId, 'cloud/status')),
 
-  // Modes (NOT project-scoped)
-  getModes: () => request<{ groups: ModeGroup[] }>('/modes'),
+  // Modes (NOT project-scoped). language_capabilities is optional so the UI
+  // degrades gracefully against control planes that predate the matrix.
+  getModes: () =>
+    request<{ groups: ModeGroup[]; language_capabilities?: import('./types').LanguageCapability[] }>('/modes'),
 
   // Updates (NOT project-scoped)
   updateLocalTester: () =>

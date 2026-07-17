@@ -1,7 +1,7 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
-import type { Workload, Methodology, TestConfigCreate, ComparisonCell, ComparisonGroupCreate } from '../api/types';
+import type { Workload, Methodology, TestConfigCreate, ComparisonCell, ComparisonGroupCreate, LanguageCapability } from '../api/types';
 import { Breadcrumb } from '../components/common/Breadcrumb';
 import { WizardStepper } from '../components/wizard/WizardStepper';
 import { TestbedMatrix } from '../components/wizard/TestbedMatrix';
@@ -56,6 +56,28 @@ export function AppBenchmarkPage() {
   const runs = 10;
   const concurrency = 1;
   const timeoutMs = 5000;
+
+  // Language capability matrix (GET /api/modes → language_capabilities).
+  // undefined = not loaded / unsupported control plane → no gating.
+  const [capabilities, setCapabilities] = useState<LanguageCapability[] | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    api.getModes()
+      .then(res => { if (!cancelled) setCapabilities(res.language_capabilities); })
+      .catch(() => { /* degrade open — selector shows no capability tags */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  // apibench × language gating: languages without the /api/* suite (nginx)
+  // cannot appear in an apibench selection (audit C5).
+  useEffect(() => {
+    if (!capabilities || !selectedModes.has('apibench')) return;
+    const unsupported = new Set(capabilities.filter(c => !c.apibench).map(c => c.language));
+    setSelectedLangs(prev => {
+      const pruned = [...prev].filter(l => !unsupported.has(l));
+      return pruned.length === prev.size ? prev : new Set(pruned);
+    });
+  }, [capabilities, selectedModes]);
 
   // Step 3: Methodology (always on)
   const [methodology, setMethodology] = useState<Methodology>(DEFAULT_METHODOLOGY as Methodology);
@@ -316,6 +338,8 @@ export function AppBenchmarkPage() {
           selectedLangs={selectedLangs}
           onLangsChange={setSelectedLangs}
           testbeds={testbeds}
+          selectedModes={selectedModes}
+          capabilities={capabilities}
         />
       )}
 

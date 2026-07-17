@@ -15,7 +15,8 @@
 //   GET  /api/validate         → {"seed","checksums":<dataset expected_checksums>}
 //
 // Worker policy (spec §3): io_context pool threads = BENCH_WORKERS
-// (default = logical CPU count). Listens on BENCH_PORT (default 8443) TLS.
+// (default = logical CPU count). Listens on BENCH_PORT (default 8443) TLS;
+// certs absent → plain HTTP on the same port (application mode, audit F8).
 // Dataset load failure is FATAL (spec §2) — there is no PRNG fallback.
 
 #include <boost/asio.hpp>
@@ -41,6 +42,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #include <openssl/sha.h>
@@ -936,8 +938,15 @@ void handle_request(http::request<http::string_body>&& req, Send&& send) {
 
 // ── Session ─────────────────────────────────────────────────────────────────
 
-class session : public std::enable_shared_from_this<session> {
-    beast::ssl_stream<beast::tcp_stream> stream_;
+// Templated over the stream type (audit F8): TLS (`beast::ssl_stream`) in
+// direct mode, plain `beast::tcp_stream` in application mode behind a
+// TLS-terminating reverse proxy. The listener picks the variant at startup
+// from cert presence — the request handling above is byte-identical.
+template <class Stream>
+class session : public std::enable_shared_from_this<session<Stream>> {
+    static constexpr bool is_tls =
+        std::is_same_v<Stream, beast::ssl_stream<beast::tcp_stream>>;
+    Stream stream_;
     beast::flat_buffer buffer_;
     // Header-first parsing: /upload drains its body incrementally through
     // drain_buf_ (spec §5.3 — no wholesale buffering); everything else is
@@ -953,21 +962,30 @@ class session : public std::enable_shared_from_this<session> {
     std::string request_id_;
 
 public:
-    explicit session(tcp::socket&& socket, ssl::context& ctx)
+    // TLS session (only instantiated for the ssl_stream variant).
+    session(tcp::socket&& socket, ssl::context& ctx)
         : stream_(std::move(socket), ctx) {}
+
+    // Plain-HTTP session (application mode, audit F8).
+    explicit session(tcp::socket&& socket)
+        : stream_(std::move(socket)) {}
 
     void run() {
         net::dispatch(
             stream_.get_executor(),
-            beast::bind_front_handler(&session::on_run, shared_from_this()));
+            beast::bind_front_handler(&session::on_run, this->shared_from_this()));
     }
 
 private:
     void on_run() {
         beast::get_lowest_layer(stream_).expires_after(std::chrono::seconds(30));
-        stream_.async_handshake(
-            ssl::stream_base::server,
-            beast::bind_front_handler(&session::on_handshake, shared_from_this()));
+        if constexpr (is_tls) {
+            stream_.async_handshake(
+                ssl::stream_base::server,
+                beast::bind_front_handler(&session::on_handshake, this->shared_from_this()));
+        } else {
+            do_read();
+        }
     }
 
     void on_handshake(beast::error_code ec) {
@@ -982,7 +1000,7 @@ private:
         beast::get_lowest_layer(stream_).expires_after(std::chrono::seconds(30));
         http::async_read_header(
             stream_, buffer_, *hdr_parser_,
-            beast::bind_front_handler(&session::on_read_header, shared_from_this()));
+            beast::bind_front_handler(&session::on_read_header, this->shared_from_this()));
     }
 
     void on_read_header(beast::error_code ec, std::size_t /*bytes*/) {
@@ -1018,7 +1036,7 @@ private:
         hdr_parser_.reset();
         http::async_read(
             stream_, buffer_, *body_parser_,
-            beast::bind_front_handler(&session::on_read_full, shared_from_this()));
+            beast::bind_front_handler(&session::on_read_full, this->shared_from_this()));
     }
 
     void drain_upload() {
@@ -1030,7 +1048,7 @@ private:
         beast::get_lowest_layer(stream_).expires_after(std::chrono::seconds(30));
         http::async_read(
             stream_, buffer_, *hdr_parser_,
-            [self = shared_from_this()](beast::error_code ec, std::size_t) {
+            [self = this->shared_from_this()](beast::error_code ec, std::size_t) {
                 if (ec == http::error::need_buffer) ec = {};
                 if (ec) { bench_log(LOG_ERROR, "upload read: " + ec.message()); return; }
                 self->upload_received_ +=
@@ -1116,7 +1134,7 @@ private:
         auto timer = std::make_shared<net::steady_timer>(stream_.get_executor());
         timer->expires_after(std::chrono::milliseconds(ms));
         timer->async_wait(
-            [self = shared_from_this(), timer, ms, t0, keep, ver](beast::error_code ec) {
+            [self = this->shared_from_this(), timer, ms, t0, keep, ver](beast::error_code ec) {
                 if (ec) { bench_log(LOG_ERROR, "delayed timer: " + ec.message()); return; }
                 double actual = now_ms() - t0;
                 http::response<http::string_body> res{http::status::ok, ver};
@@ -1134,7 +1152,7 @@ private:
         auto sp = std::make_shared<std::decay_t<Response>>(std::forward<Response>(msg));
         http::async_write(
             stream_, *sp,
-            [self = shared_from_this(), sp](beast::error_code ec, std::size_t) {
+            [self = this->shared_from_this(), sp](beast::error_code ec, std::size_t) {
                 if (ec) { bench_log(LOG_ERROR, "write: " + ec.message()); return; }
                 if (sp->need_eof())
                     return self->do_close();
@@ -1151,7 +1169,7 @@ private:
 
         http::async_write_header(
             stream_, *sr,
-            [self = shared_from_this(), hdr, sr, total](beast::error_code ec, std::size_t) {
+            [self = this->shared_from_this(), hdr, sr, total](beast::error_code ec, std::size_t) {
                 if (ec) { bench_log(LOG_ERROR, "write_header: " + ec.message()); return; }
                 self->do_write_download_chunks(hdr, sr, total, 0);
             });
@@ -1171,7 +1189,7 @@ private:
 
             http::async_write(
                 stream_, *sr,
-                [self = shared_from_this(), hdr, sr](beast::error_code ec, std::size_t) {
+                [self = this->shared_from_this(), hdr, sr](beast::error_code ec, std::size_t) {
                     if (ec) { bench_log(LOG_ERROR, "write: " + ec.message()); return; }
                     self->do_read();
                 });
@@ -1195,8 +1213,15 @@ private:
 
         http::async_write(
             stream_, *sr,
-            [self = shared_from_this(), hdr, sr, total, written, to_write](
+            [self = this->shared_from_this(), hdr, sr, total, written, to_write](
                 beast::error_code ec, std::size_t) {
+                // Beast buffer_body: when a chunk is written with more=true,
+                // async_write completes with http::error::need_buffer as the
+                // EXPECTED "next chunk please" signal -- treating it as fatal
+                // dropped every download > one 8192-byte chunk after chunk 1
+                // (found by the P1#8 byte-exact 65536 check; /download/1024
+                // fit in one chunk, which is why it was always green).
+                if (ec == http::error::need_buffer) ec = {};
                 if (ec) { bench_log(LOG_ERROR, "write: " + ec.message()); return; }
                 auto new_written = written + to_write;
                 if (new_written >= total) {
@@ -1208,9 +1233,14 @@ private:
     }
 
     void do_close() {
-        beast::get_lowest_layer(stream_).expires_after(std::chrono::seconds(5));
-        stream_.async_shutdown(
-            [self = shared_from_this()](beast::error_code) {});
+        if constexpr (is_tls) {
+            beast::get_lowest_layer(stream_).expires_after(std::chrono::seconds(5));
+            stream_.async_shutdown(
+                [self = this->shared_from_this()](beast::error_code) {});
+        } else {
+            beast::error_code ec;
+            stream_.socket().shutdown(tcp::socket::shutdown_send, ec);
+        }
     }
 };
 
@@ -1218,11 +1248,11 @@ private:
 
 class listener : public std::enable_shared_from_this<listener> {
     net::io_context& ioc_;
-    ssl::context& ctx_;
+    ssl::context* ctx_; // nullptr → plain HTTP (application mode, audit F8)
     tcp::acceptor acceptor_;
 
 public:
-    listener(net::io_context& ioc, ssl::context& ctx, tcp::endpoint endpoint)
+    listener(net::io_context& ioc, ssl::context* ctx, tcp::endpoint endpoint)
         : ioc_(ioc), ctx_(ctx), acceptor_(net::make_strand(ioc)) {
         beast::error_code ec;
         acceptor_.open(endpoint.protocol(), ec);
@@ -1248,8 +1278,11 @@ private:
     void on_accept(beast::error_code ec, tcp::socket socket) {
         if (ec) {
             bench_log(LOG_ERROR, "accept: " + ec.message());
+        } else if (ctx_) {
+            std::make_shared<session<beast::ssl_stream<beast::tcp_stream>>>(
+                std::move(socket), *ctx_)->run();
         } else {
-            std::make_shared<session>(std::move(socket), ctx_)->run();
+            std::make_shared<session<beast::tcp_stream>>(std::move(socket))->run();
         }
         do_accept();
     }
@@ -1290,21 +1323,31 @@ int main() {
         return std::max<int>(1, static_cast<int>(std::thread::hardware_concurrency()));
     }();
 
-    // SSL context
+    // SSL context — loaded only when certs are present. Certs absent → plain
+    // HTTP on the same port (application mode behind a TLS-terminating
+    // reverse proxy, audit F8), mirroring the Go/Node/Java pattern.
+    bool const has_tls =
+        std::ifstream(cert_path).good() && std::ifstream(key_path).good();
     ssl::context ctx{ssl::context::tls_server};
-    ctx.set_options(
-        ssl::context::default_workarounds |
-        ssl::context::no_sslv2 |
-        ssl::context::no_sslv3 |
-        ssl::context::no_tlsv1 |
-        ssl::context::no_tlsv1_1);
-    ctx.use_certificate_chain_file(cert_path);
-    ctx.use_private_key_file(key_path, ssl::context::pem);
+    if (has_tls) {
+        ctx.set_options(
+            ssl::context::default_workarounds |
+            ssl::context::no_sslv2 |
+            ssl::context::no_sslv3 |
+            ssl::context::no_tlsv1 |
+            ssl::context::no_tlsv1_1);
+        ctx.use_certificate_chain_file(cert_path);
+        ctx.use_private_key_file(key_path, ssl::context::pem);
+    } else {
+        bench_log(LOG_INFO, "no TLS certs in " + cert_dir +
+                  " - serving plain HTTP on port " + std::to_string(port) +
+                  " (application mode)");
+    }
 
     net::io_context ioc{threads};
 
     std::make_shared<listener>(
-        ioc, ctx, tcp::endpoint{tcp::v4(), port})->run();
+        ioc, has_tls ? &ctx : nullptr, tcp::endpoint{tcp::v4(), port})->run();
 
     bench_log(LOG_INFO, "C++ Boost.Beast server listening on port " + std::to_string(port)
               + " (" + std::to_string(threads) + " threads, C++" + std::to_string(__cplusplus) + ")");
