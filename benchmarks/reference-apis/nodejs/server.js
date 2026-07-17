@@ -1,6 +1,6 @@
 "use strict";
 
-// AletheBench Node.js reference API.
+// Networker Bench Node.js reference API.
 // Conforms to the frozen contract in benchmarks/shared/API-SPEC.md (family C).
 // Scaling (§3): cluster module, BENCH_WORKERS worker processes (default = cores).
 

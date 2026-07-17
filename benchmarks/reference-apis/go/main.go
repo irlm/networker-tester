@@ -1,4 +1,4 @@
-// AletheBench Go reference API.
+// Networker Bench Go reference API.
 // net/http for HTTP/1.1 + HTTP/2, quic-go for HTTP/3 (QUIC/UDP).
 //
 // Conforms to the frozen contract in benchmarks/shared/API-SPEC.md (family C).
@@ -295,7 +295,7 @@ func main() {
 			Handler:   altSvcHandler,
 			TLSConfig: tlsCfg,
 		}
-		slog.Info("AletheBench Go reference API listening", "addr", addr, "tls", true, "quic", true)
+		slog.Info("Networker Bench Go reference API listening", "addr", addr, "tls", true, "quic", true)
 		if err := tcpSrv.ListenAndServeTLS(certPath, keyPath); err != nil {
 			slog.Error("Server failed to start", "error", err)
 			os.Exit(1)
@@ -303,7 +303,7 @@ func main() {
 	} else {
 		// Plain HTTP mode (application mode behind reverse proxy)
 		srv := &http.Server{Addr: addr, Handler: authHandler}
-		slog.Info("AletheBench Go reference API listening", "addr", addr, "tls", false, "mode", "application")
+		slog.Info("Networker Bench Go reference API listening", "addr", addr, "tls", false, "mode", "application")
 		if err := srv.ListenAndServe(); err != nil {
 			slog.Error("Server failed to start", "error", err)
 			os.Exit(1)

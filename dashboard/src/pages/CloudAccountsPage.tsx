@@ -29,7 +29,7 @@ const CLOUD_SETUP_GUIDES: Record<string, { steps: string[]; fieldHelp: Record<st
   azure: {
     steps: [
       '1. portal.azure.com \u2192 Microsoft Entra ID \u2192 App registrations \u2192 New registration',
-      '2. Name: "AletheDash VM Manager", Supported account types: "Single tenant"',
+      '2. Name: "Networker VM Manager", Supported account types: "Single tenant"',
       '3. Overview page: copy Application (client) ID and Directory (tenant) ID',
       '4. Certificates & secrets \u2192 New client secret \u2192 copy the Value immediately (shown once!)',
       '5. Subscriptions \u2192 your subscription \u2192 Access control (IAM) \u2192 Add role assignment',
@@ -65,13 +65,13 @@ const CLOUD_SETUP_GUIDES: Record<string, { steps: string[]; fieldHelp: Record<st
   gcp: {
     steps: [
       '1. Go to console.cloud.google.com \u2192 IAM & Admin \u2192 Service Accounts',
-      '2. Create Service Account \u2192 Name: "alethedash-vms"',
-      '3. Grant roles to alethedash-vms: Compute Admin (roles/compute.admin) AND Service Account User (roles/iam.serviceAccountUser)',
-      '4. Grant alethedash-vms the Service Account User role ON the Compute Engine default service account (PROJECT_NUMBER-compute@developer.gserviceaccount.com) \u2014 required so it can attach the default SA when creating VMs',
-      '5. Click the alethedash-vms service account \u2192 Keys tab \u2192 Add key \u2192 Create new key \u2192 JSON',
+      '2. Create Service Account \u2192 Name: "networker-vms"',
+      '3. Grant roles to networker-vms: Compute Admin (roles/compute.admin) AND Service Account User (roles/iam.serviceAccountUser)',
+      '4. Grant networker-vms the Service Account User role ON the Compute Engine default service account (PROJECT_NUMBER-compute@developer.gserviceaccount.com) \u2014 required so it can attach the default SA when creating VMs',
+      '5. Click the networker-vms service account \u2192 Keys tab \u2192 Add key \u2192 Create new key \u2192 JSON',
       '6. Download the JSON file and paste its entire contents below',
       '',
-      'Quick CLI for step 4: gcloud iam service-accounts add-iam-policy-binding PROJECT_NUMBER-compute@developer.gserviceaccount.com --member=serviceAccount:alethedash-vms@PROJECT_ID.iam.gserviceaccount.com --role=roles/iam.serviceAccountUser --project=PROJECT_ID',
+      'Quick CLI for step 4: gcloud iam service-accounts add-iam-policy-binding PROJECT_NUMBER-compute@developer.gserviceaccount.com --member=serviceAccount:networker-vms@PROJECT_ID.iam.gserviceaccount.com --role=roles/iam.serviceAccountUser --project=PROJECT_ID',
     ],
     fieldHelp: {
       json_key: 'The full JSON key file. Contains project_id, client_email, private_key, etc.',

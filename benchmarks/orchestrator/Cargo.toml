@@ -9,7 +9,9 @@
 name = "alethabench-orchestrator"
 version = "0.1.0"
 edition = "2021"
-description = "AletheBench — network API benchmark orchestrator"
+# Brand = Networker Bench; `alethabench` is the historical binary/package name
+# (kept — release assets, deploy scripts, and installs reference it).
+description = "Networker Bench (alethabench) — network API benchmark orchestrator"
 
 [[bin]]
 name = "alethabench"

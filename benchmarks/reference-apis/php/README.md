@@ -1,4 +1,4 @@
-# AletheBench — PHP Reference API
+# Networker Bench — PHP Reference API
 
 PHP async HTTP server powered by Swoole.
 
@@ -19,10 +19,10 @@ conflate the benchmark with the proxy layer rather than measuring PHP itself.
 Swoole runs PHP as a **long-lived, event-driven process** with built-in HTTP
 server, TLS, and coroutine support. This is the closest PHP gets to the
 single-process, async server model used by Go, Node.js, and Rust, making it
-the fairest comparison point for AletheBench.
+the fairest comparison point for Networker Bench.
 
 **Linux only**: Swoole requires Linux and does not support macOS or Windows.
-This is acceptable for AletheBench since all benchmark targets are Linux VMs.
+This is acceptable for Networker Bench since all benchmark targets are Linux VMs.
 
 ## Endpoints
 

@@ -59,7 +59,7 @@ export function ShareViewPage() {
       {/* Header */}
       <header className="border-b border-gray-800 px-6 py-4">
         <h1 className="text-lg font-bold text-gray-200">
-          AletheDash <span className="text-gray-600 font-normal">- Shared Report</span>
+          Networker <span className="text-gray-600 font-normal">- Shared Report</span>
         </h1>
         {shareData.label && (
           <p className="text-sm text-gray-400 mt-1">{shareData.label}</p>

@@ -1,4 +1,4 @@
-"""AletheBench Python reference API — starlette on uvicorn.
+"""Networker Bench Python reference API — starlette on uvicorn.
 
 Conforms to benchmarks/shared/API-SPEC.md (frozen contract v1, family C).
 

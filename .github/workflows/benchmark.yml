@@ -1,6 +1,6 @@
 name: Benchmarks
 
-# AletheBench CI/CD pipeline — runs reference API benchmarks on demand or weekly.
+# Networker Bench CI/CD pipeline — runs reference API benchmarks on demand or weekly.
 #
 # What gets measured: the apibench workload suite (benchmarks/configs/apibench.json)
 # — the spec-measured /api/* endpoints from benchmarks/shared/API-SPEC.md §4

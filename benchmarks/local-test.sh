@@ -1,5 +1,5 @@
 #!/bin/bash
-# AletheBench Local Test — run each available server and benchmark it
+# Networker Bench Local Test — run each available server and benchmark it
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -67,7 +67,7 @@ kill_server() {
 }
 
 echo "╔══════════════════════════════════════════════════════╗"
-echo "║  AletheBench Local Test Suite                       ║"
+echo "║  Networker Bench Local Test Suite                   ║"
 echo "║  $RUNS requests per language · HTTP/1.1 · localhost ║"
 echo "╚══════════════════════════════════════════════════════╝"
 

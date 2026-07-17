@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-/// Result of validating a deployed API against the AletheBench spec.
+/// Result of validating a deployed API against the Networker Bench spec.
 #[derive(Debug, Clone, Serialize)]
 pub struct ValidationResult {
     pub language: String,
@@ -64,7 +64,7 @@ fn insecure_http2_client() -> Result<reqwest::Client> {
         .context("building HTTP/2 reqwest client")
 }
 
-/// Validate a deployed API at the given IP against the AletheBench spec.
+/// Validate a deployed API at the given IP against the Networker Bench spec.
 ///
 /// Checks:
 /// 1. GET /health — JSON with "status":"ok", "runtime", "version"

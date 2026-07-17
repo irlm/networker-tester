@@ -1,4 +1,4 @@
-# Puma configuration for AletheBench Ruby reference API.
+# Puma configuration for Networker Bench Ruby reference API.
 #
 # Worker policy (API-SPEC.md §3): BENCH_WORKERS cluster workers
 # (default = logical CPU count), 5:5 threads per worker.

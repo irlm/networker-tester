@@ -1,6 +1,6 @@
 # C++ Boost.Beast Reference API
 
-AletheBench reference HTTP server implemented in C++ using Boost.Beast and Boost.Asio with OpenSSL.
+Networker Bench reference HTTP server implemented in C++ using Boost.Beast and Boost.Asio with OpenSSL.
 
 Implements the frozen contract in `benchmarks/shared/API-SPEC.md` (family C):
 all `/health`, `/download/{size}`, `/upload`, and `/api/*` endpoints. The

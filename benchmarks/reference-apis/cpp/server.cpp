@@ -1,4 +1,4 @@
-// server.cpp — C++ Boost.Beast + Boost.Asio SSL reference API for AletheBench.
+// server.cpp — C++ Boost.Beast + Boost.Asio SSL reference API for Networker Bench.
 //
 // Conforms to benchmarks/shared/API-SPEC.md (frozen contract v1, family C).
 //

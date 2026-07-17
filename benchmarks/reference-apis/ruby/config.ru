@@ -1,4 +1,4 @@
-# AletheBench Ruby reference API — direct Rack app on Puma.
+# Networker Bench Ruby reference API — direct Rack app on Puma.
 #
 # Conforms to benchmarks/shared/API-SPEC.md (frozen contract v1, family C).
 # Worker policy (§3): puma cluster workers = BENCH_WORKERS (see puma.rb),

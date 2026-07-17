@@ -1,6 +1,6 @@
-# AletheBench Java Reference API
+# Networker Bench Java Reference API
 
-HTTPS server for AletheBench using JDK 21 built-in APIs only.
+HTTPS server for Networker Bench using JDK 21 built-in APIs only.
 
 ## Why JDK Built-in HttpsServer
 

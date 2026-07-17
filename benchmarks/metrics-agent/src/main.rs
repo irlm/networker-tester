@@ -1,4 +1,4 @@
-//! Lightweight metrics collection agent for AletheBench.
+//! Lightweight metrics collection agent for Networker Bench.
 //!
 //! Runs an HTTP server on port 9100 exposing system and per-process metrics
 //! as JSON. Designed to run alongside the server under test with minimal

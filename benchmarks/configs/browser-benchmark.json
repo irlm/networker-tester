@@ -1,5 +1,5 @@
 {
-  "name": "AletheBench — Download Throughput (HTTP/1.1)",
+  "name": "Networker Bench — Download Throughput (HTTP/1.1)",
   "version": "0.1.0",
   "description": "Measures download throughput using networker-tester pageload1/http1 mode against each server's /download/1048576 endpoint (1 MB payload). Falls back to http1 when Chrome is not available on the benchmark host.",
   "target_pattern": "https://{ip}:8443/download/1048576",

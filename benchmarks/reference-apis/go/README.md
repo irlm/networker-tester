@@ -1,6 +1,6 @@
-# AletheBench — Go Reference API
+# Networker Bench — Go Reference API
 
-Go net/http implementation of the AletheBench reference API contract.
+Go net/http implementation of the Networker Bench reference API contract.
 
 ## Why net/http stdlib
 

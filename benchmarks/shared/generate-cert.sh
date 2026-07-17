@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generate a self-signed TLS certificate for AletheBench servers.
+# Generate a self-signed TLS certificate for Networker Bench servers.
 # Output: cert.pem + key.pem in the same directory as this script.
 set -euo pipefail
 

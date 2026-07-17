@@ -204,7 +204,7 @@ run_benchmark() {
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
-echo "=== AletheBench CI: $LANG ($RUNS runs) ==="
+echo "=== Networker Bench CI: $LANG ($RUNS runs) ==="
 
 echo "Starting $LANG server on port $PORT..."
 start_server

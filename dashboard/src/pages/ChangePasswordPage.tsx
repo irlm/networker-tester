@@ -53,7 +53,7 @@ export function ChangePasswordPage() {
         {/* Brand */}
         <div className="text-center mb-8">
           <h1 className="text-[#4ade80] text-2xl font-bold tracking-tight mb-1">
-            AletheDash
+            Networker
           </h1>
           <p className="text-gray-600 text-xs uppercase tracking-widest">
             network diagnostics

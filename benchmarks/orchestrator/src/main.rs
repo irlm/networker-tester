@@ -28,7 +28,7 @@ use tokio::sync::watch;
 #[derive(Parser)]
 #[command(
     name = "alethabench",
-    about = "AletheBench — cross-language network API benchmark orchestrator",
+    about = "Networker Bench (alethabench) — cross-language network API benchmark orchestrator",
     version
 )]
 struct Cli {
@@ -146,7 +146,7 @@ enum Command {
         output_dir: Option<PathBuf>,
     },
 
-    /// Validate a deployed API against the AletheBench spec.
+    /// Validate a deployed API against the Networker Bench spec.
     Validate {
         /// IP address of the server to validate.
         #[arg(long)]

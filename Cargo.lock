@@ -242,9 +242,9 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "aws-lc-rs"
-version = "1.17.1"
+version = "1.17.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4342d8937fc7e5dd9b1c60292261c0670c882a2cd1719cfc11b1af41731e32ad"
+checksum = "116fb6b3a2b6afe22b9ee35064c2ec3db155447019396bc02f2db35de4579dee"
 dependencies = [
  "aws-lc-sys",
  "zeroize",
@@ -252,9 +252,9 @@ dependencies = [
 
 [[package]]
 name = "aws-lc-sys"
-version = "0.42.0"
+version = "0.43.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d9ceb1da931507a12f4fccea479dccd00da1943e1b4ae72d8e502d707361444"
+checksum = "43103168cc76fe62678a375e722fc9cb3a0146159ac5828bc4f0dfd755c2224c"
 dependencies = [
  "cc",
  "cmake",
@@ -2146,7 +2146,7 @@ checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
 
 [[package]]
 name = "networker-agent"
-version = "0.28.32"
+version = "0.28.33"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2166,7 +2166,7 @@ dependencies = [
 
 [[package]]
 name = "networker-common"
-version = "0.28.32"
+version = "0.28.33"
 dependencies = [
  "chrono",
  "networker-tester",
@@ -2177,7 +2177,7 @@ dependencies = [
 
 [[package]]
 name = "networker-dashboard"
-version = "0.28.32"
+version = "0.28.33"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2221,7 +2221,7 @@ dependencies = [
 
 [[package]]
 name = "networker-endpoint"
-version = "0.28.32"
+version = "0.28.33"
 dependencies = [
  "anyhow",
  "axum",
@@ -2259,7 +2259,7 @@ dependencies = [
 
 [[package]]
 name = "networker-log"
-version = "0.28.32"
+version = "0.28.33"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2275,7 +2275,7 @@ dependencies = [
 
 [[package]]
 name = "networker-tester"
-version = "0.28.32"
+version = "0.28.33"
 dependencies = [
  "anyhow",
  "async-trait",
