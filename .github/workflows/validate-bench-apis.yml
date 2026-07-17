@@ -1,27 +1,130 @@
 name: Validate Benchmark APIs (all languages)
 
-# Runs weekly and on-demand. Builds Docker images for all reference APIs
-# and validates JSON endpoints + headers across every language.
+# Validates every reference API image against the frozen contract in
+# benchmarks/shared/API-SPEC.md.
+#
+# Design (post-audit, see docs/analysis/language-bench-audit.md V1/V5/V6/V7):
+# - One matrix leg per language: a broken Ruby image can no longer abort
+#   validation of the other seven (14/14 runs failed that way for 3 months).
+# - Required per leg: image builds, container boots, /health meets the
+#   orchestrator contract (status/runtime/version, constant body).
+# - Spec conformance (canonical shapes + §7 checksums, dataset mounted) is
+#   reported per language; it is SOFT for the not-yet-ported implementations
+#   and becomes required as wave-2 ports land. It is already REQUIRED for the
+#   canonical Rust baseline job.
+# - Runs on every PR touching benchmarks/** — not just the weekly cron.
 
 on:
   schedule:
     - cron: "0 6 * * 1" # Monday 6am UTC
-  workflow_dispatch: # Manual trigger
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "benchmarks/**"
+      - "crates/networker-endpoint/**"
+      - ".github/workflows/validate-bench-apis.yml"
 
 permissions:
   contents: read
 
 jobs:
-  validate-all:
-    name: Docker validation (all languages)
+  rust-baseline:
+    name: Canonical baseline (Rust, full conformance)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
-      - name: Run full validation via Docker Compose
-        working-directory: benchmarks/validate
+      # The canonical implementation must pass EVERYTHING, including the §7
+      # canonical-response checksums against the shared dataset
+      # (--rust-only implies --require-conformance).
+      - name: Validate networker-endpoint against API-SPEC.md
         run: |
-          chmod +x run-validation.sh
-          ./run-validation.sh
+          chmod +x benchmarks/validate/run-validation.sh
+          ./benchmarks/validate/run-validation.sh --rust-only
+
+  language:
+    name: ${{ matrix.lang }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        lang: [go, python, nodejs, java, ruby, php, cpp, csharp-net8]
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Build image
+        run: docker build -t bench-${{ matrix.lang }} benchmarks/reference-apis/${{ matrix.lang }}
+
+      - name: Boot container (certs + shared dataset mounted)
+        run: |
+          mkdir -p /tmp/bench
+          openssl req -x509 -newkey rsa:2048 \
+            -keyout /tmp/bench/key.pem -out /tmp/bench/cert.pem \
+            -days 1 -nodes -subj '/CN=bench'
+          cp benchmarks/reference-apis/shared/bench-data.json /tmp/bench/
+          docker run -d --name bench-srv -p 8443:8443 \
+            -e BENCH_CERT_DIR=/opt/bench \
+            -e BENCH_PORT=8443 \
+            -e BENCH_DATA_PATH=/opt/bench/bench-data.json \
+            -v /tmp/bench:/opt/bench:ro \
+            bench-${{ matrix.lang }}
+          for i in $(seq 1 30); do
+            if curl -skf --max-time 3 https://localhost:8443/health > /dev/null; then
+              echo "healthy after ~$((i * 2))s"; exit 0
+            fi
+            if [ -z "$(docker ps -q -f name=bench-srv)" ]; then
+              echo "::error::container exited during startup"; break
+            fi
+            sleep 2
+          done
+          echo "::error::${{ matrix.lang }} never became healthy"
+          docker logs bench-srv || true
+          exit 1
+
+      - name: Validate against API-SPEC.md
+        run: |
+          chmod +x benchmarks/validate/run-validation.sh
+          set +e
+          ./benchmarks/validate/run-validation.sh \
+            --url=https://localhost:8443 --name=${{ matrix.lang }}
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ]; then
+            echo "| ${{ matrix.lang }} | ✅ build | ✅ health | ✅ spec-conformant |" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$code" -eq 2 ]; then
+            echo "| ${{ matrix.lang }} | ✅ build | ✅ health | ⚠️ NOT spec-conformant (wave-2 port pending) |" >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::${{ matrix.lang }} boots but does not conform to API-SPEC.md yet (soft until its wave-2 port lands)"
+          else
+            echo "| ${{ matrix.lang }} | ✅ build | ❌ health/boot | — |" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Container logs (on failure)
+        if: failure()
+        run: docker logs bench-srv || true
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f bench-srv || true
+
+  verdict:
+    name: Verdict
+    runs-on: ubuntu-latest
+    needs: [rust-baseline, language]
+    if: always()
+    steps:
+      - name: Aggregate results
+        run: |
+          echo "rust-baseline: ${{ needs.rust-baseline.result }}"
+          echo "language matrix: ${{ needs.language.result }}"
+          if [ "${{ needs.rust-baseline.result }}" != "success" ]; then
+            echo "::error::canonical Rust baseline failed spec conformance"
+            exit 1
+          fi
+          if [ "${{ needs.language.result }}" != "success" ]; then
+            echo "::error::one or more language images failed to build/boot or violated the /health contract"
+            exit 1
+          fi
+          echo "All images build, boot, and meet the /health contract; see per-language summaries for spec conformance."

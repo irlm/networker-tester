@@ -26,9 +26,20 @@ public class EndpointTests : IClassFixture<WebApplicationFactory<Program>>
         var json = await resp.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal("ok", json.GetProperty("status").GetString());
         Assert.Equal("networker-endpoint", json.GetProperty("service").GetString());
+        // Orchestrator contract (API-SPEC.md §5.1): runtime + version required.
+        Assert.Equal("dotnet", json.GetProperty("runtime").GetString());
         Assert.False(string.IsNullOrEmpty(json.GetProperty("version").GetString()));
         Assert.True(resp.Headers.Contains("x-networker-server-timestamp"));
         Assert.True(resp.Headers.Contains("x-networker-server-version"));
+    }
+
+    [Fact]
+    public async Task Health_Body_Is_Constant()
+    {
+        var client = _factory.CreateClient();
+        var b1 = await client.GetStringAsync("/health");
+        var b2 = await client.GetStringAsync("/health");
+        Assert.Equal(b1, b2); // constant-work /health (API-SPEC.md §5.1)
     }
 
     [Fact]
@@ -41,9 +52,30 @@ public class EndpointTests : IClassFixture<WebApplicationFactory<Program>>
         Assert.Equal("application/octet-stream", resp.Content.Headers.ContentType?.MediaType);
         var body = await resp.Content.ReadAsByteArrayAsync();
         Assert.Equal(256, body.Length);
-        Assert.All(body, b => Assert.Equal(0, b));
+        Assert.All(body, b => Assert.Equal(0x42, b)); // fill byte per API-SPEC.md §5.2
         Assert.True(resp.Content.Headers.Contains("x-download-bytes")
                     || resp.Headers.Contains("x-download-bytes"));
+    }
+
+    [Fact]
+    public async Task Download_Path_Form_Returns_Exact_Fill_Bytes()
+    {
+        // Canonical orchestrator form: GET /download/{size} (API-SPEC.md §5.2).
+        var client = _factory.CreateClient();
+        var resp = await client.GetAsync("/download/1024");
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var body = await resp.Content.ReadAsByteArrayAsync();
+        Assert.Equal(1024, body.Length);
+        Assert.All(body, b => Assert.Equal(0x42, b));
+    }
+
+    [Fact]
+    public async Task Download_Path_Form_Rejects_Non_Integer()
+    {
+        var client = _factory.CreateClient();
+        var resp = await client.GetAsync("/download/abc");
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
     }
 
     [Fact]

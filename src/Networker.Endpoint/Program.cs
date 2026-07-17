@@ -98,6 +98,11 @@ app.UseMiddleware<BenchAuthMiddleware>();
 
 Endpoints.MapEndpoints(app);
 
+// Fatal-at-startup dataset policy (API-SPEC.md §2): a misconfigured
+// BENCH_DATA_PATH or corrupt dataset must kill the process, not silently
+// fall back to PRNG data.
+BenchData.EnsureLoaded();
+
 var log = app.Services.GetRequiredService<ILogger<Program>>();
 log.LogInformation("networker-endpoint v{Version}", ServerInfo.Version);
 log.LogInformation("HTTP  -> http://0.0.0.0:{Port}", httpPort);

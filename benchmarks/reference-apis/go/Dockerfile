@@ -1,6 +1,6 @@
 FROM golang:1.22-alpine AS builder
 WORKDIR /build
-COPY go.mod main.go ./
+COPY go.mod go.sum main.go ./
 RUN CGO_ENABLED=0 go build -o server .
 
 FROM scratch

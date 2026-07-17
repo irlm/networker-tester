@@ -361,11 +361,18 @@ fn detect_os_version() -> Option<String> {
 /// and upgrade to QUIC on subsequent navigations.  Pass `None` when H3 is not
 /// compiled in (the `http3` feature is disabled).
 pub fn build_router(state: AppState) -> Router {
+    // Eagerly resolve the shared benchmark dataset so a misconfigured
+    // BENCH_DATA_PATH (or a corrupt on-disk dataset) is fatal at startup
+    // instead of surfacing as silently different benchmark data at first
+    // request (API-SPEC.md §2).
+    load_bench_data();
+
     Router::new()
         .route("/", get(landing_page))
         .route("/health", get(health))
         .route("/echo", post(echo).get(echo_get))
         .route("/download", get(download))
+        .route("/download/{size}", get(download_path))
         .route("/upload", post(upload))
         .route("/delay", get(delay))
         .route("/headers", get(headers_echo))
@@ -733,14 +740,22 @@ async fn landing_page(State(state): State<AppState>) -> impl IntoResponse {
         .unwrap()
 }
 
-/// GET /health → 200 JSON { "status": "ok", "timestamp": "..." }
+/// GET /health → 200 JSON { "status": "ok", "runtime": "rust", ... }
+///
+/// Constant-work per API-SPEC.md §5.1: the body is a compile-time constant so
+/// every language's /health does identical (zero) per-request work. `runtime`
+/// and `version` are required by the orchestrator contract (validator.rs).
 async fn health() -> impl IntoResponse {
-    Json(serde_json::json!({
-        "status": "ok",
-        "timestamp": Utc::now().to_rfc3339(),
-        "service": "networker-endpoint",
-        "version": env!("CARGO_PKG_VERSION"),
-    }))
+    const HEALTH_BODY: &str = concat!(
+        "{\"status\":\"ok\",\"runtime\":\"rust\",\"service\":\"networker-endpoint\",\"version\":\"",
+        env!("CARGO_PKG_VERSION"),
+        "\"}"
+    );
+    Response::builder()
+        .status(200)
+        .header("content-type", "application/json")
+        .body(Body::from(HEALTH_BODY))
+        .unwrap()
 }
 
 /// GET /echo – returns empty body with request info
@@ -788,27 +803,44 @@ struct DownloadParams {
     bytes: Option<usize>,
 }
 
-/// GET /download?bytes=N – streams N zero bytes (max 2 GiB) in 64 KiB chunks.
+/// Canonical download payload per API-SPEC.md §5.2: fill byte 0x42 ('B')
+/// streamed in 8 KiB chunks, capped at 2 GiB. Fill byte and chunk size are
+/// part of the measured workload, so they are pinned across all languages.
+const DOWNLOAD_FILL: u8 = 0x42;
+const DOWNLOAD_CHUNK: usize = 8 * 1024; // 8 KiB
+const DOWNLOAD_CAP: usize = 2 * 1024 * 1024 * 1024; // 2 GiB
+
+/// GET /download?bytes=N — deprecated query-form alias kept for pre-0.28.28
+/// testers. Canonical form is `GET /download/{size}`.
+async fn download(Query(p): Query<DownloadParams>) -> impl IntoResponse {
+    download_response(p.bytes.unwrap_or(1024))
+}
+
+/// GET /download/{size} — canonical path form (orchestrator contract).
+async fn download_path(Path(size): Path<usize>) -> impl IntoResponse {
+    download_response(size)
+}
+
+/// Streams N fill bytes (max 2 GiB) in 8 KiB chunks.
 /// Adds `Server-Timing: proc;dur=X, csw-v;dur=N, csw-i;dur=N` indicating
 /// setup time and context switches.
-async fn download(Query(p): Query<DownloadParams>) -> impl IntoResponse {
-    let n = p.bytes.unwrap_or(1024).min(2 * 1024 * 1024 * 1024); // cap 2 GiB
+fn download_response(requested: usize) -> Response {
+    let n = requested.min(DOWNLOAD_CAP);
     let t0 = Instant::now();
     #[cfg(unix)]
     let (csw_v0, csw_i0) = csw_snapshot();
 
-    // Stream zero bytes in fixed-size chunks to avoid allocating the full
+    // Stream fill bytes in fixed-size chunks to avoid allocating the full
     // payload in memory at once (critical for multi-GiB downloads).
-    const CHUNK_SIZE: usize = 64 * 1024; // 64 KiB
-    let full_chunks = n / CHUNK_SIZE;
-    let remainder = n % CHUNK_SIZE;
-    let zero_chunk = Bytes::from(vec![0u8; CHUNK_SIZE]);
+    let full_chunks = n / DOWNLOAD_CHUNK;
+    let remainder = n % DOWNLOAD_CHUNK;
+    let fill_chunk = Bytes::from(vec![DOWNLOAD_FILL; DOWNLOAD_CHUNK]);
 
     let body = Body::from_stream(futures::stream::iter(
         (0..full_chunks)
-            .map(move |_| Ok::<_, std::io::Error>(zero_chunk.clone()))
+            .map(move |_| Ok::<_, std::io::Error>(fill_chunk.clone()))
             .chain(if remainder > 0 {
-                vec![Ok(Bytes::from(vec![0u8; remainder]))].into_iter()
+                vec![Ok(Bytes::from(vec![DOWNLOAD_FILL; remainder]))].into_iter()
             } else {
                 vec![].into_iter()
             }),
@@ -1084,27 +1116,63 @@ struct BenchData {
 
 static BENCH_DATA: OnceLock<Option<BenchData>> = OnceLock::new();
 
+fn parse_bench_data(path: &str) -> Result<BenchData, String> {
+    let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    serde_json::from_str::<BenchData>(&content).map_err(|e| e.to_string())
+}
+
+/// Load the shared benchmark dataset per API-SPEC.md §2.
+///
+/// Dataset-load failure is FATAL — a server that silently benchmarks
+/// different input data poisons cross-language comparisons (audit F2):
+/// - `BENCH_DATA_PATH` set but missing/unparsable → exit(1).
+/// - A fallback path exists on disk but fails to parse → exit(1).
+/// - No dataset found anywhere → PRNG fallback is tolerated only because
+///   networker-endpoint doubles as the production diagnostic server;
+///   benchmark deployments always ship the dataset.
 fn load_bench_data() -> Option<&'static BenchData> {
     BENCH_DATA
         .get_or_init(|| {
-            let paths = [
-                std::env::var("BENCH_DATA_PATH").unwrap_or_default(),
-                "/opt/bench/bench-data.json".to_string(),
-                "benchmarks/reference-apis/shared/bench-data.json".to_string(),
-            ];
-            for p in &paths {
-                if p.is_empty() {
+            if let Ok(p) = std::env::var("BENCH_DATA_PATH") {
+                if !p.is_empty() {
+                    match parse_bench_data(&p) {
+                        Ok(data) => {
+                            tracing::info!("Loaded bench-data.json from {p}");
+                            return Some(data);
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "FATAL: BENCH_DATA_PATH={p} could not be loaded: {e} \
+                                 (dataset load failure must not fall back to PRNG data)"
+                            );
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            }
+            for p in [
+                "/opt/bench/bench-data.json",
+                "benchmarks/reference-apis/shared/bench-data.json",
+            ] {
+                if !std::path::Path::new(p).exists() {
                     continue;
                 }
-                if let Ok(content) = std::fs::read_to_string(p) {
-                    if let Ok(data) = serde_json::from_str::<BenchData>(&content) {
+                match parse_bench_data(p) {
+                    Ok(data) => {
                         tracing::info!("Loaded bench-data.json from {p}");
                         return Some(data);
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "FATAL: bench-data.json exists at {p} but could not be loaded: {e}"
+                        );
+                        std::process::exit(1);
                     }
                 }
             }
             tracing::warn!(
-                "bench-data.json not found, JSON API endpoints will use fallback PRNG data"
+                "bench-data.json not found, JSON API endpoints will use fallback PRNG data \
+                 (benchmark runs must deploy the shared dataset)"
             );
             None
         })
@@ -1666,6 +1734,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn health_meets_orchestrator_contract_and_is_constant() {
+        // API-SPEC.md §5.1: status/runtime/version required, body byte-constant.
+        let mut bodies = Vec::new();
+        for _ in 0..2 {
+            let resp = app()
+                .oneshot(
+                    Request::builder()
+                        .uri("/health")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 200);
+            bodies.push(to_bytes(resp.into_body(), 4096).await.unwrap());
+        }
+        assert_eq!(bodies[0], bodies[1], "/health body must be constant-work");
+        let v: serde_json::Value = serde_json::from_slice(&bodies[0]).unwrap();
+        assert_eq!(v["status"], "ok");
+        assert_eq!(v["runtime"], "rust");
+        assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
+    }
+
+    #[tokio::test]
     async fn health_has_server_timestamp() {
         let resp = app()
             .oneshot(
@@ -1715,6 +1807,47 @@ mod tests {
         assert_eq!(resp.status(), 200);
         let body = to_bytes(resp.into_body(), 1024).await.unwrap();
         assert_eq!(body.len(), 256);
+    }
+
+    #[tokio::test]
+    async fn download_path_form_returns_exact_fill_bytes() {
+        // API-SPEC.md §5.2: canonical path form, 0x42 fill byte.
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/download/1024")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            resp.headers()
+                .get("content-length")
+                .and_then(|v| v.to_str().ok()),
+            Some("1024")
+        );
+        let body = to_bytes(resp.into_body(), 4096).await.unwrap();
+        assert_eq!(body.len(), 1024);
+        assert!(
+            body.iter().all(|&b| b == 0x42),
+            "download fill byte must be 0x42"
+        );
+    }
+
+    #[tokio::test]
+    async fn download_path_form_rejects_non_integer() {
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/download/abc")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
     }
 
     #[tokio::test]

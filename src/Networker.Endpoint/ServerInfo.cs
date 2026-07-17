@@ -12,7 +12,7 @@ public static class ServerInfo
     public const string Service = "networker-endpoint";
 
     /// <summary>Mirrors <c>CARGO_PKG_VERSION</c> (workspace version).</summary>
-    public const string Version = "0.28.14";
+    public const string Version = "0.28.28";
 }
 
 /// <summary>

@@ -11,6 +11,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.28] — 2026-07-16
+
+### Fixed — language-benchmark P0 wave 1 (audit: docs/analysis/language-bench-audit.md)
+- **Frozen API contract** (`benchmarks/shared/API-SPEC.md`): one canonical
+  shape family (family C — networker-endpoint + its C# port) for all 17
+  reference implementations, with exact schemas, param defaults/clamps, error
+  codes, 0x42/8 KiB download workload, zlib level-6 compression, the
+  `BENCH_WORKERS` worker policy, constant-work `/health`, and per-language
+  wave-2 porting notes. The suite previously compared three incompatible
+  contracts against each other.
+- **Shared dataset**: `generate-bench-data.py` now pins `expected_checksums`
+  to the canonical responses of four spec-defined requests (canonical-JSON
+  SHA-256), verified byte-for-byte against the live endpoint by the new
+  `canonical_checksums` integration test. Dataset load failures are now FATAL
+  at startup (Rust + C# endpoints) instead of silently benchmarking PRNG data.
+- **Canonical baseline passes its own orchestrator**: networker-endpoint (Rust
+  + C#) gained `GET /download/{size}` (query form kept as deprecated alias)
+  and `runtime` in `/health` (now constant-body per the spec); the Java
+  reference `/health` gained the required `version` field. Download fill is
+  now the spec-pinned 0x42 in 8 KiB chunks.
+- **Benchmark validation revived** after 14/14 failed runs since 2026-04-06:
+  per-language matrix isolation (one broken image no longer aborts the rest),
+  fixed the four unbuildable images (go: missing go.sum; python: uvicorn never
+  installed; java: jar omitted the API handler classes; ruby: no compiler for
+  puma's native extension), bench-data.json now mounted into every container,
+  PR path-trigger on `benchmarks/**`, and content validation (health contract,
+  byte-exact downloads, §7 canonical checksums) instead of liveness-only.
+
+---
+
 ## [0.28.27] — 2026-07-16
 
 ### Fixed

@@ -86,60 +86,95 @@ for i in range(10):
         "values": values,
     })
 
-# ── Expected checksums (computed from this exact dataset) ────────────────────
-# These are the SHA-256 hashes that /api/validate should return.
-# Every language should produce these exact values.
+# ── Expected checksums (canonical responses per benchmarks/shared/API-SPEC.md §7)
+# Each checksum is the SHA-256 of the CANONICAL JSON (sorted keys, no
+# whitespace, shortest-round-trip floats) of the canonical (family C) response
+# to one pinned request against this exact dataset. Validators fetch the
+# request, re-serialize the parsed body canonically, hash, and compare.
 
 def sha256_json(obj):
     """SHA-256 of canonical JSON (sorted keys, no whitespace)."""
     return hashlib.sha256(json.dumps(obj, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
-# Users sorted by name, first page of 20
-users_sorted = sorted(users, key=lambda u: u["name"])
-users_page1 = users_sorted[:20]
 
-# Aggregate stats
-values = [p["value"] for p in timeseries]
-values_sorted = sorted(values)
-n = len(values_sorted)
-agg_summary = {
-    "count": n,
-    "mean": round(sum(values) / n, 4),
-    "p50": values_sorted[n // 2],
-    "p95": values_sorted[int(n * 0.95)],
-    "max": values_sorted[-1],
+def r2(x):
+    """Spec §5.6 rounding: round half away from zero to 2 decimals."""
+    return math.floor(x * 100 + 0.5) / 100
+
+
+# 1. users_page1 — GET /api/users?page=1&sort=name&order=asc
+#    Page-1 window (all 100 users), stable-sorted by name, first 20.
+users_page1_response = sorted(users, key=lambda u: u["name"])[:20]
+
+# 2. aggregate_default — GET /api/aggregate (range ignored; full series).
+#    Mirrors the normative algorithm: sort ascending, sequential float64 sum
+#    over the SORTED values, truncated-index percentiles, quintile categories.
+agg_values = sorted(p["value"] for p in timeseries)
+agg_n = len(agg_values)
+agg_sum = 0.0
+for v in agg_values:
+    agg_sum += v
+chunk = agg_n // 5
+categories = []
+for i in range(5):
+    part = agg_values[i * chunk:(i + 1) * chunk]
+    part_sum = 0.0
+    for v in part:
+        part_sum += v
+    categories.append({
+        "category": f"q{i + 1}",
+        "count": chunk,
+        "mean": r2(part_sum / chunk),
+        "min": r2(part[0]),
+        "max": r2(part[-1]),
+    })
+aggregate_response = {
+    "total_points": agg_n,
+    "mean": r2(agg_sum / agg_n),
+    "p50": r2(agg_values[int(agg_n * 0.50)]),
+    "p95": r2(agg_values[int(agg_n * 0.95)]),
+    "max": r2(agg_values[-1]),
+    "categories": categories,
 }
 
-# Search for "network" (top 10)
+# 3. search_network_top10 — GET /api/search?q=network&limit=10
 import re
-search_results = []
 pattern = re.compile("network")
+scored = []
 for item in search_corpus:
     m = pattern.search(item)
     if m:
-        search_results.append({"item": item, "score": 1000 - m.start()})
-search_results.sort(key=lambda x: -x["score"])
-search_top10 = search_results[:10]
+        scored.append((m.start(), item))
+scored.sort(key=lambda t: (t[0], t[1]))
+search_response = {
+    "query": "network",
+    "total_matches": len(scored),
+    "returned": min(10, len(scored)),
+    "results": [
+        {"rank": i + 1, "item": item, "match_position": pos}
+        for i, (pos, item) in enumerate(scored[:10])
+    ],
+}
 
-# Transform first input
+# 4. transform_input0 — POST /api/transform with transform_inputs[0]
 t0 = transform_inputs[0]
-t0_hashed_fields = [hashlib.sha256(f.encode()).hexdigest() for f in t0["fields"]]
-t0_reversed_values = list(reversed(t0["values"]))
+transform_response = {
+    "seed": t0["seed"],
+    "hashed_fields": [hashlib.sha256(f.encode()).hexdigest() for f in t0["fields"]],
+    "reversed_values": list(reversed(t0["values"])),
+}
 
 expected_checksums = {
-    "users_page1": sha256_json(users_page1),
-    "aggregate_summary": sha256_json(agg_summary),
-    "search_network_top10": sha256_json(search_top10),
-    "transform_input0": sha256_json({
-        "hashed_fields": t0_hashed_fields,
-        "reversed_values": t0_reversed_values,
-    }),
+    "users_page1": sha256_json(users_page1_response),
+    "aggregate_default": sha256_json(aggregate_response),
+    "search_network_top10": sha256_json(search_response),
+    "transform_input0": sha256_json(transform_response),
 }
 
 # ── Assemble dataset ─────────────────────────────────────────────────────────
 dataset = {
-    "_version": 1,
-    "_description": "Shared benchmark dataset for Application mode JSON API endpoints. DO NOT EDIT — regenerate with generate-bench-data.py.",
+    "_version": 2,
+    "_description": "Shared benchmark dataset for Application mode JSON API endpoints. Contract: benchmarks/shared/API-SPEC.md. DO NOT EDIT — regenerate with generate-bench-data.py.",
     "users": users,
     "search_corpus": search_corpus,
     "timeseries": timeseries,
