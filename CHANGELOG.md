@@ -11,6 +11,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.35] — 2026-07-17
+
+### Added
+- **Shared modes manifest with cross-stack drift guards.** `shared/modes.json`
+  is now the canonical machine-readable list of probe modes, generated from
+  the engine truth (`Protocol` in `crates/networker-tester/src/metrics.rs`).
+  Drift-guard tests in all three stacks compare their local copy against it:
+  Rust (`modes_manifest_guard.rs`, bidirectional enum coverage via an
+  exhaustive match that breaks compile on new variants), dashboard
+  (`modes-manifest.test.ts` covering `mode-family.ts` +
+  `testbed-constants.ts`), and C# (`ModesManifestTests.cs` covering the
+  `/api/modes` catalog). Closes the 6-way unguarded copy that produced the
+  #377–379 bug class. `docs/deploy-config.md` now references the manifest.
+- **Frontend RBAC test suite.** Vitest coverage for the role-gating decision
+  layer: `useProject` role derivation (fails closed on unknown roles),
+  Sidebar admin/platform-admin nav sections, SettingsTabs per-role tabs,
+  TesterDetailDrawer start/stop/delete controls, and InfrastructurePage
+  deploy/runner wizard access — each asserted for viewer, operator, and
+  admin.
+
+### Fixed
+- **Dashboard:** `mode-family.ts` used mode ids that exist nowhere in the
+  product (`nativetls`, `downloadh1–h3`, `uploadh1–h3`) — the `native`,
+  `download1–3`, and `upload1–3` modes silently rendered with the gray
+  "other" chip instead of their family colors. Ids now match the manifest
+  (caught by the new drift guard).
+- **Dashboard RBAC:** TesterDetailDrawer showed mutating controls (Start /
+  Stop / Delete runner, Force to stopped, Reinstall, schedule editing,
+  probe triggers) to project viewers. All mutating drawer controls are now
+  operator+ only; viewers get a read-only drawer.
+
+---
+
 ## [0.28.34] — 2026-07-17
 
 ### Changed

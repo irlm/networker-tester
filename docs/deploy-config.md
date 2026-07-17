@@ -215,6 +215,14 @@ loss/jitter control yet.
 
 ### Valid test modes
 
+> The canonical, machine-readable mode list lives in
+> [`shared/modes.json`](../shared/modes.json) — generated from the engine's
+> `Protocol` enum (`crates/networker-tester/src/metrics.rs`) and enforced by
+> drift-guard tests in all three stacks (Rust: `modes_manifest_guard.rs`,
+> dashboard: `modes-manifest.test.ts`, C#: `ModesManifestTests.cs`). The
+> tables below are the deploy-config subset; `pageload1` is a CLI alias for
+> `pageload`, and `apibench` is runner-level (see note under Default modes).
+
 **Network probes:**
 `tcp`, `http1`, `http2`, `http3`, `udp`, `download`, `upload`,
 `webdownload`, `webupload`, `udpdownload`, `udpupload`

@@ -27,4 +27,11 @@
     <ProjectReference Include="..\..\src\Networker.ControlPlane\Networker.ControlPlane.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Canonical cross-stack modes manifest (repo root shared/modes.json),
+         linked (not copied) so ModesManifestTests always guards the real
+         file. See the manifest's $comment for the guard topology. -->
+    <Content Include="..\..\shared\modes.json" Link="shared\modes.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

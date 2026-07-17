@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TesterDetailDrawer } from './TesterDetailDrawer';
+import { useProjectStore } from '../stores/projectStore';
 import type { TesterRow } from '../api/testers';
 
 function baseRow(overrides: Partial<TesterRow> = {}): TesterRow {
@@ -47,6 +48,9 @@ function mockFetch(body: unknown) {
 describe('TesterDetailDrawer', () => {
   beforeEach(() => {
     localStorage.setItem('token', 'test');
+    // Drawer controls are operator+ gated; these tests exercise the full
+    // control surface. Viewer behavior is covered in TesterDetailDrawer.rbac.test.tsx.
+    useProjectStore.setState({ activeProjectRole: 'operator' });
     vi.stubGlobal(
       'fetch',
       vi.fn(() =>
@@ -74,6 +78,7 @@ describe('TesterDetailDrawer', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     localStorage.clear();
+    useProjectStore.setState({ activeProjectRole: null });
   });
 
   it('renders the standard sections for an idle tester', async () => {
