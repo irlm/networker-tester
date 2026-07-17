@@ -2962,6 +2962,125 @@ mod tests {
         assert_eq!(summary.quality_tier, "unreliable");
     }
 
+    // ── Golden tests for the measurement math (audit V9) ────────────────────
+    // These pin known-input → known-output values for the percentile/summary
+    // functions every published number flows through. Exactness matters: a
+    // silent change to interpolation or fence math changes rankings.
+
+    #[test]
+    fn test_golden_percentile_from_sorted_linear_interpolation() {
+        let sorted: Vec<f64> = (1..=10).map(|v| v as f64).collect();
+
+        // rank = p/100 * (n-1), linear interpolation between neighbours.
+        assert_eq!(percentile_from_sorted(&sorted, 0.0), 1.0);
+        assert_eq!(percentile_from_sorted(&sorted, 100.0), 10.0);
+        assert!((percentile_from_sorted(&sorted, 25.0) - 3.25).abs() < 1e-12);
+        assert!((percentile_from_sorted(&sorted, 50.0) - 5.5).abs() < 1e-12);
+        assert!((percentile_from_sorted(&sorted, 95.0) - 9.55).abs() < 1e-12);
+        assert!((percentile_from_sorted(&sorted, 99.0) - 9.91).abs() < 1e-12);
+
+        // Degenerate inputs.
+        assert_eq!(percentile_from_sorted(&[], 50.0), 0.0);
+        assert_eq!(percentile_from_sorted(&[42.0], 99.0), 42.0);
+    }
+
+    #[test]
+    fn test_golden_median_from_sorted() {
+        assert_eq!(median_from_sorted(&[]), 0.0);
+        assert_eq!(median_from_sorted(&[7.0]), 7.0);
+        assert_eq!(median_from_sorted(&[1.0, 3.0]), 2.0);
+        assert_eq!(median_from_sorted(&[1.0, 3.0, 5.0]), 3.0);
+        assert_eq!(median_from_sorted(&[1.0, 2.0, 3.0, 4.0]), 2.5);
+    }
+
+    #[test]
+    fn test_golden_summarise_metric_known_values() {
+        // sorted: [10, 11, 12, 13, 100] — one high outlier.
+        let summary = summarise_metric([10.0, 12.0, 11.0, 13.0, 100.0]);
+
+        assert_eq!(summary.sample_count, 5);
+        assert_eq!(summary.min, 10.0);
+        assert_eq!(summary.max, 100.0);
+        assert!((summary.mean - 29.2).abs() < 1e-9);
+        assert_eq!(summary.median, 12.0);
+        // Sample variance (n-1 denominator): 6270.8 / 4.
+        assert!((summary.variance - 1567.7).abs() < 1e-9);
+        assert!((summary.stddev - 1567.7_f64.sqrt()).abs() < 1e-9);
+        assert!((summary.cv - 1567.7_f64.sqrt() / 29.2).abs() < 1e-9);
+        // p25 = rank 1.0 → 11; p75 = rank 3.0 → 13; Tukey 1.5×IQR fences.
+        assert!((summary.iqr - 2.0).abs() < 1e-12);
+        assert!((summary.lower_fence - 8.0).abs() < 1e-12);
+        assert!((summary.upper_fence - 16.0).abs() < 1e-12);
+        assert_eq!(summary.low_outlier_count, 0);
+        assert_eq!(summary.high_outlier_count, 1);
+        assert_eq!(summary.outlier_count, 1);
+        // |x - median| = [2, 1, 0, 1, 88] → sorted median 1.
+        assert!((summary.mad - 1.0).abs() < 1e-12);
+        assert_eq!(summary.quality_tier, "unreliable");
+    }
+
+    #[test]
+    fn test_golden_summarise_metric_filters_non_finite() {
+        let summary = summarise_metric([1.0, f64::NAN, 3.0, f64::INFINITY]);
+        assert_eq!(summary.sample_count, 2);
+        assert_eq!(summary.min, 1.0);
+        assert_eq!(summary.max, 3.0);
+        assert!((summary.mean - 2.0).abs() < 1e-12);
+        assert_eq!(summary.median, 2.0);
+    }
+
+    #[test]
+    fn test_golden_bootstrap_median_interval() {
+        // Degenerate inputs have exact, spec'd outputs.
+        assert_eq!(bootstrap_median_interval(&[]), (0.0, 0.0, 0.0));
+        assert_eq!(bootstrap_median_interval(&[7.0]), (0.0, 7.0, 7.0));
+
+        // Constant samples: every resampled median is the constant, so the
+        // interval collapses exactly (se=0, lower=upper=value).
+        let (se, lower, upper) = bootstrap_median_interval(&[5.0, 5.0, 5.0, 5.0]);
+        assert_eq!(se, 0.0);
+        assert_eq!(lower, 5.0);
+        assert_eq!(upper, 5.0);
+
+        // The RNG is seeded from the input values — the same input must
+        // produce bit-identical intervals on every run and platform.
+        let values = [12.0, 15.0, 11.0, 14.0, 13.0, 16.0];
+        let first = bootstrap_median_interval(&values);
+        let second = bootstrap_median_interval(&values);
+        assert_eq!(first, second);
+        let (se, lower, upper) = first;
+        assert!(se > 0.0);
+        assert!(lower <= upper);
+        // The CI must bracket the sample median (13.5) and stay within range.
+        assert!(lower <= 13.5 && 13.5 <= upper);
+        assert!(lower >= 11.0 && upper <= 16.0);
+    }
+
+    #[test]
+    fn test_golden_quality_tier_boundaries() {
+        assert_eq!(quality_tier_for_cv(0.0), "excellent");
+        assert_eq!(quality_tier_for_cv(0.03), "excellent");
+        assert_eq!(quality_tier_for_cv(0.031), "good");
+        assert_eq!(quality_tier_for_cv(0.08), "good");
+        assert_eq!(quality_tier_for_cv(0.081), "fair");
+        assert_eq!(quality_tier_for_cv(0.15), "fair");
+        assert_eq!(quality_tier_for_cv(0.151), "unreliable");
+        assert_eq!(quality_tier_for_cv(f64::NAN), "unknown");
+        assert_eq!(quality_tier_for_cv(f64::INFINITY), "unknown");
+    }
+
+    #[test]
+    fn test_golden_cohens_d() {
+        // means 4 vs 3, both variances 4 → pooled variance 4 → d = 1/2.
+        let d = cohens_d(&[2.0, 4.0, 6.0], &[1.0, 3.0, 5.0]);
+        assert!((d - 0.5).abs() < 1e-12);
+
+        // Identical samples → zero effect.
+        assert_eq!(cohens_d(&[3.0, 3.0, 3.0], &[3.0, 3.0, 3.0]), 0.0);
+        // Fewer than 2 samples on either side → defined as 0.
+        assert_eq!(cohens_d(&[1.0], &[1.0, 2.0]), 0.0);
+    }
+
     #[test]
     fn test_summarise_cases_orders_by_warm_median_rps() {
         let run = sample_run();

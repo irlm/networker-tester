@@ -415,3 +415,57 @@ the audit, per language:
 8. With `BENCH_DATA_PATH=/nonexistent`, the process exits non-zero at startup.
 9. With `BENCH_API_TOKEN` set, `GET /api/users` without the header → 401;
    `/health` still 200.
+
+## 11. Docker image & resource policy (audit F14)
+
+### 11.1 Base-image pinning
+
+Every reference Dockerfile pins its base image to a **major.minor tag** of the
+language's official (or vendor-official) image — never `latest`, never a bare
+major tag. Digest pinning is deliberately not used: minor-line patch drift is
+acceptable for a validation/benchmark suite, but an unreviewed minor/major
+runtime jump is not. Bumping a base tag is a deliberate PR (it changes the
+measured runtime) and must note the bump in the PR body.
+
+Pinned today:
+
+| Language | Build stage | Final stage |
+|---|---|---|
+| go | `golang:1.24-alpine` | `scratch` (static binary; no shell — see §11.3) |
+| cpp | `ubuntu:24.04` | `ubuntu:24.04` |
+| nodejs | — | `node:22-slim` |
+| python | — | `python:3.12-slim` |
+| ruby | — | `ruby:3.3-slim` |
+| php | — | `php:8.3-cli` |
+| java | `eclipse-temurin:21-jdk` | `eclipse-temurin:21-jre` |
+| csharp-net6…net10(-aot) | `mcr.microsoft.com/dotnet/sdk:<TFM>` | `mcr.microsoft.com/dotnet/runtime-deps:<TFM>` (template-generated, §8) |
+| csharp-net48 | `mcr.microsoft.com/dotnet/framework/sdk:4.8` | `mcr.microsoft.com/dotnet/framework/runtime:4.8` (Windows containers only) |
+| nginx | — | `nginx:1.27-alpine` |
+
+The image *flavor* (alpine vs slim vs full debian vs scratch) intentionally
+follows each ecosystem's idiomatic production default and is part of the
+measured artifact (binary size, image size, cold start). It is documented
+here so a flavor change is recognized as a methodology change, not a cleanup.
+
+### 11.2 Resource limits for fair local comparisons
+
+CI validation (`validate-bench-apis.yml`) and the compose stack under
+`benchmarks/validate/` run containers **unlimited** — they check functional
+conformance, not performance, and limits would only slow the matrix down.
+
+For local *comparison* runs (numbers you intend to rank), give every language
+the **same explicit budget** so host contention and per-image defaults cannot
+skew results, e.g.:
+
+```bash
+docker run --cpus=2 --memory=1g --memory-swap=1g ... bench-<lang>
+```
+
+- Use the same `--cpus`/`--memory` for every implementation in the run, and
+  record the values alongside the results (the orchestrator's environment
+  fingerprint captures cores for VM runs; for containers, note it manually).
+- `BENCH_WORKERS` (§3) must be set consistently with the CPU budget — an
+  all-cores default inside a `--cpus=2` container measures scheduler
+  throttling, not the language.
+- Mixing limited and unlimited containers in one comparison invalidates the
+  run, same as mixing worker policies (§3).
