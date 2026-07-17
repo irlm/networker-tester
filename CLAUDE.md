@@ -154,6 +154,7 @@ Update all of these in a single PR:
 - Throughput/payload size mapping in `main.rs` (if applicable)
 - `docs/deploy-config.md` valid modes table
 - Integration test in `tests/integration.rs`
+- `shared/modes.json` manifest entry (the cross-stack drift guards fail otherwise)
 
 (All paths under `crates/networker-tester/src/`. Note: `apibench` is a
 runner-level mode, not a tester protocol — the agent expands it per
@@ -186,7 +187,7 @@ When writing documentation for CLI flags or environment variables (e.g., RUST_LO
   and the Gist sync run automatically on the main push — verify both landed.
 - Required CI checks (branch protection): `Test (ubuntu-latest)`,
   `Test (windows-latest)`, `Detect changed areas`, `Build & audit (C#)`,
-  `bats (installer unit tests)`, `shellcheck`.
+  `bats (installer unit tests)`, `shellcheck`, `cargo audit (RUSTSEC advisories)`.
 - Release = deploy-first graph: the tag triggers release.yml; build-linux +
   build-csharp gate the GitHub release and the prod deploy to alethedash.com
   (~8-9 min, auto-rollback on failed readiness); mac/windows binaries attach
