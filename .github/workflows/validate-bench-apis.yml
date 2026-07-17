@@ -12,6 +12,11 @@ name: Validate Benchmark APIs (all languages)
 #   REQUIRED for every language (hard since wave-2 convergence, 2026-07-17 —
 #   the first all-green matrix). A conformance failure is a real regression.
 # - Runs on every PR touching benchmarks/** — not just the weekly cron.
+# - PR/push runs validate csharp-net8 as the C# ladder representative (17
+#   docker builds per PR is enough); the weekly cron and workflow_dispatch
+#   expand the matrix to all 8 Linux-buildable C# variants (P1#15). The
+#   template drift-check (generate-variants.py --check) runs on EVERY run,
+#   so a PR can't silently diverge one variant from the template.
 
 on:
   schedule:
@@ -33,6 +38,19 @@ permissions:
   contents: read
 
 jobs:
+  # Cheap guard on EVERY run (PR + weekly): the nine C# variants are generated
+  # from csharp-template/ — hand-edits to a single variant defeat the "only
+  # the runtime differs" premise (API-SPEC.md §8, audit F13). This catches
+  # drift even on PR runs where only csharp-net8 gets docker-validated.
+  template-drift:
+    name: C# template drift check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - name: generate-variants.py --check
+        run: python3 benchmarks/reference-apis/csharp-template/generate-variants.py --check
+
   rust-baseline:
     name: Canonical baseline (Rust, full conformance)
     runs-on: ubuntu-latest
@@ -55,7 +73,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lang: [go, python, nodejs, java, ruby, php, cpp, csharp-net8]
+        # Fast matrix (PR + push): one leg per language, csharp-net8 stands in
+        # for the whole C# runtime ladder (all nine variants are generated
+        # from one template — the template-drift job proves it every run).
+        #
+        # Weekly cron + workflow_dispatch: the matrix expands to ALL 8
+        # Linux-buildable C# variants (net6/net7/net8/net8-aot/net9/net9-aot/
+        # net10/net10-aot), each as its own isolated leg (P1#15).
+        #
+        # ── csharp-net48 IS DELIBERATELY EXCLUDED ─────────────────────────
+        # .NET Framework 4.8 has no Linux runtime; its Dockerfile requires a
+        # Windows container host, which ubuntu-latest runners cannot provide.
+        # It is desk-checked only (generated from the same template + reviewed
+        # by hand; runtime confirmation tracked in audit C8). The verdict job
+        # prints this caveat into the weekly run summary so it can't be
+        # mistaken for a validated variant.
+        # ───────────────────────────────────────────────────────────────────
+        lang: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+          && '["go","python","nodejs","java","ruby","php","cpp","csharp-net6","csharp-net7","csharp-net8","csharp-net8-aot","csharp-net9","csharp-net9-aot","csharp-net10","csharp-net10-aot"]'
+          || '["go","python","nodejs","java","ruby","php","cpp","csharp-net8"]') }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
@@ -121,13 +157,22 @@ jobs:
   verdict:
     name: Verdict
     runs-on: ubuntu-latest
-    needs: [rust-baseline, language]
+    needs: [template-drift, rust-baseline, language]
     if: always()
     steps:
+      - name: csharp-net48 caveat (weekly full-ladder runs)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: |
+          echo "| csharp-net48 | ⚠️ desk-checked only | .NET Framework 4.8 is Windows-container-only — never built/validated on these Linux runners (audit C8) |" >> "$GITHUB_STEP_SUMMARY"
       - name: Aggregate results
         run: |
+          echo "template-drift: ${{ needs.template-drift.result }}"
           echo "rust-baseline: ${{ needs.rust-baseline.result }}"
           echo "language matrix: ${{ needs.language.result }}"
+          if [ "${{ needs.template-drift.result }}" != "success" ]; then
+            echo "::error::C# variants have drifted from csharp-template (run generate-variants.py and commit)"
+            exit 1
+          fi
           if [ "${{ needs.rust-baseline.result }}" != "success" ]; then
             echo "::error::canonical Rust baseline failed spec conformance"
             exit 1
@@ -136,4 +181,8 @@ jobs:
             echo "::error::one or more language images failed to build/boot or violated the /health contract"
             exit 1
           fi
-          echo "All 17 implementations build, boot, and FULLY conform to API-SPEC.md."
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Full ladder green: all 8 Linux-buildable C# variants + 7 other languages + Rust baseline conform to API-SPEC.md (csharp-net48 desk-checked only)."
+          else
+            echo "Fast matrix green: 8 languages (csharp-net8 as C# ladder representative) + Rust baseline conform to API-SPEC.md."
+          fi

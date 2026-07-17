@@ -7,11 +7,12 @@
 #
 #   HARD  — server unreachable or /health violates the orchestrator contract
 #           (status/runtime/version, constant body). Always fatal (exit 1).
-#   CONF  — spec-conformance failures: endpoint status/shape, canonical
-#           checksums (§7), download fill bytes, benchmark headers. Exit 2
-#           unless --require-conformance (then exit 1). Languages not yet
-#           ported to the canonical family C contract fail this tier until
-#           wave 2 lands — the CI workflow tracks them per language.
+#   CONF  — spec-conformance failures: endpoint status, per-endpoint JSON
+#           shape (exact keys + types on non-canonical requests, §5),
+#           canonical checksums (§7), byte-exact downloads at 1024 and 65536
+#           (length + sha256 of 0x42*N), benchmark headers. Exit 2 unless
+#           --require-conformance (then exit 1). Conformance is required for
+#           all languages since wave-2 convergence (2026-07-17).
 #
 # Usage:
 #   ./run-validation.sh                          # Docker Compose (all languages)
@@ -191,26 +192,37 @@ assert isinstance(d.get("version"), str) and d["version"], "missing version"
     return 0
 }
 
-# CONF tier: GET /download/1024 → exactly 1024 bytes, all 0x42 (§5.2).
+# CONF tier: GET /download/{size} → exactly {size} bytes, all 0x42 (§5.2).
+# Byte-exact: length AND sha256(body) == sha256(0x42 * size), so a wrong fill
+# byte, truncation, or padding on non-default sizes is caught.
 check_download_bytes() {
     local name="$1"
     local base="$2"
+    local size="${3:-1024}"
 
-    local tmp
+    local tmp curl_err
     tmp=$(mktemp)
-    if ! curl -sk --max-time 10 ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} -o "$tmp" "$base/download/1024" 2>/dev/null; then
-        conf_fail "$name /download/1024" "request failed"
+    # -sS: keep curl quiet but surface transfer errors (e.g. "transfer closed
+    # with N bytes remaining" — exactly the failure mode this check hunts).
+    if ! curl_err=$(curl -sSk --max-time 15 ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} -o "$tmp" "$base/download/$size" 2>&1); then
+        local got_bytes
+        got_bytes=$(wc -c < "$tmp" 2>/dev/null | tr -d ' ' || echo '?')
+        conf_fail "$name /download/$size" "request failed after $got_bytes/$size bytes: ${curl_err:-unknown curl error}"
         rm -f "$tmp"; return 1
     fi
-    if python3 -c "
-import sys
+    local detail
+    if detail=$(python3 -c "
+import hashlib
+size = $size
 b = open('$tmp','rb').read()
-assert len(b) == 1024, f'{len(b)} bytes'
-assert set(b) == {0x42}, 'fill byte != 0x42'
-" 2>/dev/null; then
-        pass "$name /download/1024" "1024 x 0x42"
+assert len(b) == size, f'{len(b)} bytes (want {size})'
+want = hashlib.sha256(b'\x42' * size).hexdigest()
+got = hashlib.sha256(b).hexdigest()
+assert got == want, f'sha256 {got[:16]}… != 0x42*{size} ({want[:16]}…)'
+" 2>&1); then
+        pass "$name /download/$size" "$size x 0x42 (sha256 exact)"
     else
-        conf_fail "$name /download/1024" "wrong size or fill byte (spec: 1024 bytes of 0x42)"
+        conf_fail "$name /download/$size" "$(echo "$detail" | grep -o 'AssertionError.*' || echo "wrong size or content (spec: $size bytes of 0x42)")"
     fi
     rm -f "$tmp"
 }
@@ -277,6 +289,155 @@ PYEOF
     fi
 }
 
+# CONF tier: per-endpoint JSON *shape* assertions (API-SPEC.md §5) on
+# NON-canonical requests. The §7 checksums already pin four exact requests;
+# this catches an implementation that returns extra or missing FIELDS (or
+# wrong types) on requests the checksums never see — e.g. family-B wrapper
+# objects, a stray compression_ratio, floats where ints belong. Deliberately
+# not full JSON Schema machinery: a small required key:type table per
+# endpoint, exact key sets (no extras allowed except where §5 permits).
+check_endpoint_shapes() {
+    local name="$1"
+    local base="$2"
+
+    local out line
+    out=$(python3 - "$base" "$TOKEN" <<'PYEOF' 2>&1
+import hashlib, json, ssl, sys, urllib.request
+
+base, token = sys.argv[1], sys.argv[2]
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+
+def fetch(path, body=None, raw=False):
+    headers = {}
+    if body is not None:
+        headers["Content-Type"] = "application/octet-stream" if raw else "application/json"
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    req = urllib.request.Request(base + path, data=body, headers=headers)
+    with urllib.request.urlopen(req, context=ctx, timeout=10) as r:
+        return json.loads(r.read())
+
+# type predicates — note bool is a subclass of int in Python, exclude it
+is_int = lambda v: type(v) is int
+is_num = lambda v: type(v) in (int, float)
+is_str = lambda v: isinstance(v, str)
+is_list = lambda v: isinstance(v, list)
+is_dict = lambda v: isinstance(v, dict)
+def is_hex(n):
+    return lambda v: isinstance(v, str) and len(v) == n and all(c in "0123456789abcdef" for c in v)
+
+class Bad(Exception):
+    pass
+
+def exact(obj, spec, where):
+    """obj must be a dict with EXACTLY spec's keys, each passing its type check."""
+    if not is_dict(obj):
+        raise Bad(f"{where}: expected object, got {type(obj).__name__}")
+    got, want = set(obj), set(spec)
+    if got != want:
+        parts = []
+        if got - want:
+            parts.append("extra keys: " + ",".join(sorted(got - want)))
+        if want - got:
+            parts.append("missing keys: " + ",".join(sorted(want - got)))
+        raise Bad(f"{where}: " + "; ".join(parts))
+    for k, chk in spec.items():
+        if not chk(obj[k]):
+            raise Bad(f"{where}.{k}: wrong type ({type(obj[k]).__name__})")
+
+USER = {"id": is_int, "name": is_str, "email": is_str, "score": is_num, "created_at": is_str}
+CATEGORY = {"category": is_str, "count": is_int, "mean": is_num, "min": is_num, "max": is_num}
+RESULT = {"rank": is_int, "item": is_str, "match_position": is_int}
+UPLOAD_BODY = b"shape-check-payload-0123456789"
+
+def users():
+    d = fetch("/api/users?page=1&sort=score&order=desc")
+    if not is_list(d):
+        raise Bad(f"top level: expected bare array (no wrapper), got {type(d).__name__}")
+    if not (0 < len(d) <= 20):
+        raise Bad(f"expected 1..20 users, got {len(d)}")
+    for i, u in enumerate(d):
+        exact(u, USER, f"[{i}]")
+
+def transform():
+    body = json.dumps({"seed": 7, "fields": ["shape-check"], "values": [9, 8, 7]}).encode()
+    d = fetch("/api/transform", body)
+    exact(d, {"seed": is_int, "hashed_fields": is_list, "reversed_values": is_list}, "top level")
+    for i, h in enumerate(d["hashed_fields"]):
+        if not is_hex(64)(h):
+            raise Bad(f"hashed_fields[{i}]: not 64-char lowercase hex")
+
+def aggregate():
+    d = fetch("/api/aggregate?range=1,100")  # range accepted + ignored (§5.6)
+    exact(d, {"total_points": is_int, "mean": is_num, "p50": is_num,
+              "p95": is_num, "max": is_num, "categories": is_list}, "top level")
+    if len(d["categories"]) != 5:
+        raise Bad(f"categories: expected 5 quintiles, got {len(d['categories'])}")
+    for i, c in enumerate(d["categories"]):
+        exact(c, CATEGORY, f"categories[{i}]")
+
+def search():
+    d = fetch("/api/search?q=test&limit=5")
+    exact(d, {"query": is_str, "total_matches": is_int,
+              "returned": is_int, "results": is_list}, "top level")
+    if len(d["results"]) > 5:
+        raise Bad(f"results: limit=5 not honored ({len(d['results'])} returned)")
+    for i, r in enumerate(d["results"]):
+        exact(r, RESULT, f"results[{i}]")
+
+def upload_process():
+    d = fetch("/api/upload/process", UPLOAD_BODY, raw=True)
+    exact(d, {"original_size": is_int, "compressed_size": is_int,
+              "crc32": is_hex(8), "sha256": is_hex(64)}, "top level")
+    if d["original_size"] != len(UPLOAD_BODY):
+        raise Bad(f"original_size {d['original_size']} != {len(UPLOAD_BODY)}")
+    if d["sha256"] != hashlib.sha256(UPLOAD_BODY).hexdigest():
+        raise Bad("sha256 does not match request body")
+
+def delayed():
+    d = fetch("/api/delayed?ms=5")
+    exact(d, {"requested_ms": is_int, "actual_ms": is_num}, "top level")
+
+def validate():
+    d = fetch("/api/validate?seed=7")
+    exact(d, {"seed": is_int, "checksums": is_dict}, "top level")
+    exact(d["checksums"], {k: is_hex(64) for k in
+          ("users_page1", "aggregate_default", "search_network_top10", "transform_input0")},
+          "checksums")
+
+for ep, fn in [("/api/users", users), ("/api/transform", transform),
+               ("/api/aggregate", aggregate), ("/api/search", search),
+               ("/api/upload/process", upload_process), ("/api/delayed", delayed),
+               ("/api/validate", validate)]:
+    try:
+        fn()
+        print(f"OK {ep}")
+    except Bad as e:
+        print(f"BAD {ep}: {e}")
+    except Exception as e:
+        print(f"BAD {ep}: request failed: {e}")
+PYEOF
+    ) || true
+
+    local saw=0
+    while IFS= read -r line; do
+        case "$line" in
+            "OK "*)
+                pass "$name shape ${line#OK }" "exact keys+types"
+                saw=1 ;;
+            "BAD "*)
+                local rest="${line#BAD }"
+                conf_fail "$name shape ${rest%%:*}" "${rest#*: }"
+                saw=1 ;;
+        esac
+    done <<< "$out"
+    if [[ "$saw" -eq 0 ]]; then
+        conf_fail "$name shape assertions" "checker produced no results: $(echo "$out" | head -1)"
+    fi
+}
+
 # ── Validate one server ──────────────────────────────────────────────────────
 
 validate_server() {
@@ -292,8 +453,11 @@ validate_server() {
     fi
     check_health_contract "$name" "$base" || return
 
-    # CONF tier: transport workload
-    check_download_bytes "$name" "$base"
+    # CONF tier: transport workload — default size plus one non-default size,
+    # both byte-exact (length + sha256 of 0x42*N), so size-dependent bugs
+    # (chunking, truncation, wrong fill on the non-1024 path) are caught.
+    check_download_bytes "$name" "$base" 1024
+    check_download_bytes "$name" "$base" 65536
 
     # CONF tier: the 7 JSON API endpoints
     check "$name /api/users" "$base/api/users?page=1&sort=name&order=asc" "GET" "" ""
@@ -309,6 +473,9 @@ validate_server() {
 
     # CONF tier: canonical response checksums (the real cross-language check)
     check_spec_checksums "$name" "$base"
+
+    # CONF tier: JSON shape assertions on non-canonical requests (§5)
+    check_endpoint_shapes "$name" "$base"
 
     # Auth rejection test (only when --token is provided)
     if [[ -n "$TOKEN" ]]; then
