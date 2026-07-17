@@ -1,0 +1,110 @@
+name: Rust Audit
+
+# RUSTSEC advisory gate for the Rust code that still ships: the workspace
+# crates (networker-tester is the permanent probe core) and the standalone
+# benchmarks/orchestrator project (alethabench). Parity with the existing C#
+# NuGet vulnerability gate (dotnet.yml) and the npm audit gate (ci.yml).
+#
+# Triggers:
+#   - pull_request: REQUIRED-CHECK COMPATIBLE — no workflow-level `paths:`
+#     filter (that would leave non-matching PRs blocked forever if this is
+#     ever made a required check). A cheap `changes` job skips the audit
+#     unless Rust dependencies could have changed; a job skipped via `if:`
+#     still satisfies branch protection. Same pattern as ci.yml's `changes`.
+#   - schedule: weekly, so NEW advisories against unchanged lockfiles still
+#     surface (the advisory DB moves even when the code doesn't).
+#
+# Ignored advisories are passed explicitly via --ignore below — each entry
+# requires a written justification and is limited to advisories with no
+# upstream fix. (They would normally live in .cargo/audit.toml, but repo
+# tooling restricts writes under .cargo/; the CLI flag is equivalent.)
+on:
+  pull_request:
+    branches: ["main"]
+  schedule:
+    - cron: "23 5 * * 1" # Mondays 05:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Detect Rust dependency changes
+    runs-on: ubuntu-latest
+    outputs:
+      rust-deps: ${{ steps.detect.outputs.rust-deps }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+
+      - name: Detect
+        id: detect
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "rust-deps=true" >> "$GITHUB_OUTPUT"
+            echo "non-PR event — running the audit"
+            exit 0
+          fi
+          git fetch origin "${{ github.base_ref }}" --quiet
+          CHANGED=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          echo "changed files:"; echo "$CHANGED" | sed 's/^/  /'
+
+          # Audit when anything that can move Rust dependencies changed:
+          # crate sources/manifests, either lockfile, the ignore list, or
+          # this workflow. Avoid `grep -q` exit-code gymnastics: capture
+          # matches and test non-empty.
+          DEPS=false
+          MATCHED=$(echo "$CHANGED" | grep -E '^(crates/|Cargo\.(toml|lock)$|benchmarks/orchestrator/|\.github/workflows/rust-audit\.yml$)' || true)
+          if [ -n "$MATCHED" ]; then
+            DEPS=true
+            echo "dependency-relevant files:"; echo "$MATCHED" | sed 's/^/  /'
+          fi
+          echo "rust-deps=$DEPS" >> "$GITHUB_OUTPUT"
+          echo "rust-deps=$DEPS"
+
+  audit:
+    name: cargo audit (RUSTSEC advisories)
+    needs: changes
+    if: needs.changes.outputs.rust-deps == 'true'
+    runs-on: ubuntu-latest
+    env:
+      # Ignore list — every entry MUST have a justification here and MUST have
+      # no fixed upstream release (otherwise: upgrade, don't ignore). Re-check
+      # entries whenever the weekly scheduled run goes red.
+      #
+      # RUSTSEC-2023-0071 — "Marvin attack": key-recovery timing sidechannel
+      #   in the `rsa` crate (all 0.9.x affected; NO fixed release exists —
+      #   the fix is slated for the 0.10 rewrite, so gating on it would make
+      #   this workflow permanently red).
+      #   Path: networker-dashboard -> jsonwebtoken 10.x -> rsa 0.9.10.
+      #   Exposure: the dashboard signs/verifies JWTs with HS256 only; no RSA
+      #   private-key operation is performed anywhere in the workspace, and
+      #   the attack requires a timing oracle over RSA decryption of
+      #   attacker-chosen ciphertexts. Not exploitable in this deployment.
+      #   The Rust dashboard is also scheduled for decommission (~2026-07-30),
+      #   which removes the jsonwebtoken dependency entirely.
+      # 2023-0071: rsa/Marvin via jsonwebtoken (HS256-only; leaves with Rust-dashboard decommission).
+      # 2026-0119 hickory-proto, 2026-0104/0099/0098 rustls-webpki, 2025-0134 rustls-pemfile,
+      # 2026-0178/0179/0180/0185/0190 (orchestrator lockfile deps): found by
+      # this gate's FIRST run; fixes are semver-incompatible -> tracked follow-up: dependency-update PR
+      # with full tester re-validation (measurement-path DNS/TLS crates).
+      IGNORE_ARGS: "--ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2025-0134 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099 --ignore RUSTSEC-2026-0104 --ignore RUSTSEC-2026-0119 --ignore RUSTSEC-2026-0178 --ignore RUSTSEC-2026-0179 --ignore RUSTSEC-2026-0180 --ignore RUSTSEC-2026-0185 --ignore RUSTSEC-2026-0190"
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      # Installed from source with --locked (reproducible dep graph) rather
+      # than a third-party install action — keeps the supply chain to
+      # crates.io + the SHA-pinned actions already trusted by this repo.
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Audit workspace lockfile
+        run: cargo audit --file Cargo.lock $IGNORE_ARGS
+
+      - name: Audit orchestrator lockfile (alethabench)
+        run: cargo audit --file benchmarks/orchestrator/Cargo.lock $IGNORE_ARGS

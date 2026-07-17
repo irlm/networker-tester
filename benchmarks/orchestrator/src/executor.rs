@@ -453,9 +453,12 @@ async fn start_existing_server(vm: &VmInfo, language: &str) -> Result<()> {
     };
 
     if language.starts_with("csharp-") {
+        // Single-quote the config-derived value so the remote shell treats it
+        // as inert data (quotes may appear mid-word in a path: /opt/bench/'x'/'x'
+        // resolves to the same path as /opt/bench/x/x).
         let cmd = format!(
             "chmod +x /opt/bench/{lang}/{lang} 2>/dev/null; BENCH_CERT_DIR=/opt/bench BENCH_PORT=8443 nohup /opt/bench/{lang}/{lang} > /dev/null 2>&1 &",
-            lang = language
+            lang = shell_quote(language)
         );
         ssh::ssh_exec(&vm.ip, &cmd).await?;
     } else {
@@ -497,6 +500,18 @@ async fn stop_existing_server(vm: &VmInfo) {
 // Deploy a reverse proxy on a VM. Uses install.sh --benchmark-proxy-swap.
 // Token generation moved to crate::token_manager
 
+/// Quote a string so it is transported as a single inert word through a POSIX
+/// shell. Wraps in single quotes and escapes embedded single quotes with the
+/// standard `'\''` dance. Within single quotes the shell performs NO expansion
+/// (no `$(...)`, backticks, `$VAR`, globbing, or word splitting), so any
+/// hostile value arrives at the target program byte-for-byte as data.
+///
+/// This is the primary injection defense for remote command construction;
+/// `validate_shell_safe` remains as defense-in-depth on top.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
 /// Validate a name is safe for shell interpolation (alphanumeric + dash/underscore/dot).
 fn validate_shell_safe(name: &str, label: &str) -> Result<()> {
     anyhow::ensure!(
@@ -515,9 +530,14 @@ async fn deploy_proxy(vm: &VmInfo, proxy: &str) -> Result<()> {
     // Deploy proxy with install.sh. The --benchmark-proxy-swap health check
     // may timeout because the upstream server isn't running yet — that's expected.
     // We run it in a subshell with || true, then verify nginx config separately.
+    //
+    // The install step runs in a plain subshell (...) rather than the previous
+    // `bash -c '...'` wrapper: the wrapper added a second quoting layer, which
+    // made the interpolated proxy value impossible to quote safely. With a
+    // single evaluation layer, shell_quote() transports it as inert data.
     let cmd = format!(
-        "bash -c 'export DEBIAN_FRONTEND=noninteractive; curl -fsSL https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh | sudo -E bash -s -- --benchmark-proxy-swap {} 2>&1; true' && sudo nginx -t 2>&1",
-        proxy
+        "export DEBIAN_FRONTEND=noninteractive; (curl -fsSL https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh | sudo -E bash -s -- --benchmark-proxy-swap {} 2>&1; true) && sudo nginx -t 2>&1",
+        shell_quote(proxy)
     );
     ssh::ssh_exec(&vm.ip, &cmd)
         .await
@@ -552,7 +572,9 @@ async fn deploy_app_language(vm: &VmInfo, language: &str, proxy: &str) -> Result
     // LOG_FORMAT=json enables structured JSON logging on the server process.
     let cmd = format!(
         "export DEBIAN_FRONTEND=noninteractive LOG_FORMAT=json LOG_SERVICE={} BENCH_API_TOKEN=$(cat /opt/bench/.api-token 2>/dev/null) && curl -fsSL https://raw.githubusercontent.com/irlm/networker-tester/main/install.sh | sudo -E bash -s -- --benchmark-server {} --benchmark-proxy {} 2>&1",
-        language, language, proxy
+        shell_quote(language),
+        shell_quote(language),
+        shell_quote(proxy)
     );
     ssh::ssh_exec(&vm.ip, &cmd).await.with_context(|| {
         format!(
@@ -586,7 +608,7 @@ async fn run_chrome_benchmark(
     let token_arg = if bench_token.is_empty() {
         String::new()
     } else {
-        format!(" --token {bench_token}")
+        format!(" --token {}", shell_quote(bench_token))
     };
     // Write output to a file to avoid SSH stdout buffer limits (64KB).
     // Then read the file back separately.
@@ -603,8 +625,8 @@ async fn run_chrome_benchmark(
          --timeout {}{} > {} 2>/dev/null",
         methodology.warmup_runs,
         methodology.min_measured,
-        http_version,
-        connection_mode,
+        shell_quote(http_version),
+        shell_quote(connection_mode),
         methodology.timeout_secs,
         token_arg,
         output_file,
@@ -2346,6 +2368,67 @@ async fn log_callback(callback: &CallbackClient, testbed_id: &str, lines: Vec<St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_shell_quote_plain_values_unchanged_semantics() {
+        // Values that validate_shell_safe accepts today must transport
+        // byte-identically (behavior-preserving change).
+        for v in ["nginx", "csharp-aot", "h2", "reuse", "a1B2.c-d_e"] {
+            assert_eq!(shell_quote(v), format!("'{v}'"));
+        }
+    }
+
+    #[test]
+    fn test_shell_quote_escapes_single_quotes() {
+        assert_eq!(shell_quote("a'b"), r"'a'\''b'");
+        assert_eq!(shell_quote("'"), r"''\'''");
+        assert_eq!(shell_quote(""), "''");
+    }
+
+    /// Prove a hostile config value is transported INERT through a real shell:
+    /// command substitution must not execute, and the value must arrive
+    /// byte-for-byte as data — exactly the layer ssh_exec hands the payload to
+    /// (sshd runs the remote command through the login shell).
+    #[test]
+    fn test_shell_quote_hostile_value_is_inert_through_shell() {
+        let canary = std::env::temp_dir().join(format!("pwn-canary-{}", std::process::id()));
+        let _ = std::fs::remove_file(&canary);
+
+        let hostile = format!("$(touch {}); `id`; $HOME; a'b\"c", canary.display());
+        let cmd = format!("printf %s {}", shell_quote(&hostile));
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&cmd)
+            .output()
+            .expect("failed to spawn sh");
+
+        assert!(out.status.success(), "shell rejected the quoted payload");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            hostile,
+            "hostile value must arrive byte-for-byte as data"
+        );
+        assert!(
+            !canary.exists(),
+            "command substitution executed — shell_quote failed to neutralize $()"
+        );
+        let _ = std::fs::remove_file(&canary);
+    }
+
+    /// The deploy_proxy command template must keep the quoted value at a single
+    /// shell evaluation layer (the old `bash -c '...'` wrapper nested it inside
+    /// an outer single-quoted string, where no quoting scheme is safe).
+    #[test]
+    fn test_shell_quote_survives_single_eval_layer_with_metachars() {
+        let hostile = "x; rm -rf /tmp/nonexistent-dir-pwn; echo owned";
+        let cmd = format!("printf %s {}", shell_quote(hostile));
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&cmd)
+            .output()
+            .expect("failed to spawn sh");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), hostile);
+    }
 
     #[test]
     fn test_resolve_tester_path_fallback() {
