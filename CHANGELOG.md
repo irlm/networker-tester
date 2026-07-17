@@ -11,6 +11,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.32] — 2026-07-17
+
+### Security
+- **RUSTSEC dependency updates — 6 of 11 ignored advisories cleared.**
+  - `hickory-resolver`/`hickory-proto` 0.24.4 → 0.26.1 clears
+    **RUSTSEC-2026-0119** (O(n²) DNS name-compression CPU-exhaustion DoS) in
+    the tester's measurement-critical system-DNS path. The DNS probe's
+    trust-audit semantics are preserved: OS resolver config read once per
+    process outside the timing window, resolver identity label (`system (...)`
+    nameserver list), loudly-labeled Google fallback, and ipv4/ipv6 filters.
+    Resolver construction errors now surface as DNS `ErrorRecord`s instead of
+    being impossible-by-API (hickory 0.26's builder is fallible).
+  - `benchmarks/orchestrator` lockfile: `tokio-postgres` 0.7.18
+    (**RUSTSEC-2026-0178**), `postgres-protocol` 0.6.12
+    (**RUSTSEC-2026-0179/-0180**), `quinn-proto` 0.11.15+
+    (**RUSTSEC-2026-0185**), `anyhow` 1.0.103 (**RUSTSEC-2026-0190**).
+  - `rust-audit.yml` ignore list shrunk 11 → 5. The remainder are genuinely
+    un-upgradeable: `rsa`/Marvin (RUSTSEC-2023-0071, no fixed release,
+    HS256-only usage, leaves with the Rust-dashboard decommission) and the
+    rustls-webpki 0.101 / rustls-pemfile 1.x copies pinned by the dormant
+    `tiberius` 0.12.3 MSSQL driver (RUSTSEC-2026-0098/-0099/-0104,
+    RUSTSEC-2025-0134) — the workspace's own rustls 0.23 stack already ships
+    the patched rustls-webpki 0.103.13, so all probe/measurement TLS paths
+    are fixed; each retained ignore carries a full justification in the
+    workflow.
+
+---
+
 ## [0.28.31] — 2026-07-17
 
 ### Changed

@@ -1,8 +1,9 @@
 use crate::metrics::{DnsResult, ErrorCategory, ErrorRecord, Protocol, RequestAttempt};
 use chrono::Utc;
 use hickory_resolver::{
-    config::{ResolverConfig, ResolverOpts},
-    TokioAsyncResolver,
+    config::{LookupIpStrategy, ResolverConfig, ResolverOpts, GOOGLE},
+    net::runtime::TokioRuntimeProvider,
+    TokioResolver,
 };
 use std::net::IpAddr;
 use std::sync::OnceLock;
@@ -20,31 +21,68 @@ use uuid::Uuid;
 ///
 /// Built once per process: reading the system config touches the filesystem and
 /// must never pollute a DNS timing window.
-fn shared_resolver() -> &'static (TokioAsyncResolver, String) {
-    static RESOLVER: OnceLock<(TokioAsyncResolver, String)> = OnceLock::new();
-    RESOLVER.get_or_init(|| match hickory_resolver::system_conf::read_system_conf() {
-        Ok((config, opts)) => {
-            let mut servers: Vec<String> = config
-                .name_servers()
-                .iter()
-                .map(|ns| ns.socket_addr.to_string())
-                .collect();
-            servers.dedup(); // UDP+TCP entries share a socket addr and are adjacent
-            let label = format!("system ({})", servers.join(", "));
-            (TokioAsyncResolver::tokio(config, opts), label)
-        }
-        Err(e) => {
-            warn!(
-                "Cannot read system resolver config ({e}); \
-                 falling back to Google Public DNS — DNS timings will NOT \
-                 reflect the path your applications use"
-            );
-            (
-                TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default()),
-                "google-fallback (8.8.8.8:53) — system config unavailable".to_string(),
-            )
-        }
-    })
+///
+/// hickory 0.26: construction goes through `ResolverBuilder`, whose `build()`
+/// is fallible. Without TLS features the only fallible branch (TLS provider
+/// setup) is compiled out, but we still surface a construction error as a DNS
+/// `ErrorRecord` rather than panicking inside a probe.
+fn shared_resolver() -> Result<&'static (TokioResolver, String), String> {
+    static RESOLVER: OnceLock<Result<(TokioResolver, String), String>> = OnceLock::new();
+    RESOLVER
+        .get_or_init(|| {
+            let (config, opts, label) = match hickory_resolver::system_conf::read_system_conf() {
+                Ok((config, opts)) => {
+                    let mut servers: Vec<String> = config
+                        .name_servers()
+                        .iter()
+                        .map(|ns| {
+                            // 0.26 splits a nameserver into ip + per-protocol
+                            // connections; keep the 0.24 "ip:port" label shape
+                            // (UDP and TCP share the port, so the first entry
+                            // is representative).
+                            match ns.connections.first() {
+                                Some(conn) => format!("{}:{}", ns.ip, conn.port),
+                                None => ns.ip.to_string(),
+                            }
+                        })
+                        .collect();
+                    servers.dedup(); // duplicate config entries are adjacent
+                    let label = format!("system ({})", servers.join(", "));
+                    (config, opts, label)
+                }
+                Err(e) => {
+                    warn!(
+                        "Cannot read system resolver config ({e}); \
+                         falling back to Google Public DNS — DNS timings will NOT \
+                         reflect the path your applications use"
+                    );
+                    (
+                        ResolverConfig::udp_and_tcp(&GOOGLE),
+                        ResolverOpts::default(),
+                        "google-fallback (8.8.8.8:53) — system config unavailable".to_string(),
+                    )
+                }
+            };
+            let mut opts = opts;
+            // hickory 0.26 changed the default lookup strategy to Ipv6AndIpv4
+            // (AAAA ordered before A). Pin the 0.24 behavior — A first, AAAA
+            // only if A fails — so resolved-IP ordering, and therefore which
+            // address downstream TCP/TLS/HTTP probes connect to, is unchanged.
+            // (No resolv.conf/system option maps to this, so overriding after
+            // read_system_conf() cannot clobber user configuration.)
+            opts.ip_strategy = LookupIpStrategy::Ipv4thenIpv6;
+            let mut builder =
+                TokioResolver::builder_with_config(config, TokioRuntimeProvider::default());
+            // Apply the options exactly as hickory's own `Resolver::builder()`
+            // does for the system-config path.
+            *builder.options_mut() = opts;
+            builder
+                .build()
+                .map(|resolver| (resolver, label))
+                .map_err(|e| format!("failed to construct DNS resolver: {e}"))
+        })
+        .as_ref()
+        .map_err(Clone::clone)
 }
 
 /// Resolve `hostname` and return the list of IPs plus a timing record.
@@ -56,7 +94,12 @@ pub async fn resolve(
 ) -> Result<(Vec<IpAddr>, DnsResult), ErrorRecord> {
     // Obtain the (cached) resolver before starting the timer: resolver
     // construction reads config files and is not part of DNS resolution time.
-    let (resolver, resolver_label) = shared_resolver();
+    let (resolver, resolver_label) = shared_resolver().map_err(|msg| ErrorRecord {
+        category: ErrorCategory::Dns,
+        message: msg,
+        detail: Some("resolver construction failed before any query was sent".to_string()),
+        occurred_at: Utc::now(),
+    })?;
 
     let started_at = Utc::now();
     let t0 = Instant::now();
