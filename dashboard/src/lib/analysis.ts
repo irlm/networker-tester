@@ -108,11 +108,6 @@ export function isThroughputProtocol(protocol: string): boolean {
   ].includes(protocol);
 }
 
-/** For throughput protocols, higher is better. For latency, lower is better. */
-export function isHigherBetter(protocol: string): boolean {
-  return isThroughputProtocol(protocol);
-}
-
 // ─── Payload bytes extraction (mirrors metrics.rs::attempt_payload_bytes) ────
 
 export function attemptPayloadBytes(a: LiveAttempt): number | null {

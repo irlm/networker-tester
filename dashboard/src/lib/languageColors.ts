@@ -56,11 +56,3 @@ export function languageColor(lang: string): string {
     Math.abs([...lang].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 0)) % FALLBACK_COLORS.length
   ];
 }
-
-/**
- * Get colors for an ordered list of languages.
- * Use this when you need index-based access (e.g., chart series).
- */
-export function languageColors(languages: string[]): string[] {
-  return languages.map(languageColor);
-}

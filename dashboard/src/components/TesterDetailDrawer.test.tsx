@@ -41,6 +41,7 @@ function mockFetch(body: unknown) {
     ok: true,
     status: 200,
     statusText: 'OK',
+    headers: new Headers(),
     text: () => Promise.resolve(JSON.stringify(body)),
   } as unknown as Response);
 }

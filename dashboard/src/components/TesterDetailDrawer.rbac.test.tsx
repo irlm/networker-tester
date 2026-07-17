@@ -64,6 +64,7 @@ describe('TesterDetailDrawer role gating (tester start/stop/delete)', () => {
           ok: true,
           status: 200,
           statusText: 'OK',
+          headers: new Headers(),
           text: () =>
             Promise.resolve(
               JSON.stringify({

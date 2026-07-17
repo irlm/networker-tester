@@ -3,6 +3,7 @@ import { api, type DashUser } from '../api/client';
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useToast } from '../hooks/useToast';
+import { timeAgo } from '../lib/format';
 
 const roleBadge: Record<string, string> = {
   admin: 'bg-green-500/20 text-green-400',
@@ -15,17 +16,6 @@ const providerBadge: Record<string, string> = {
   microsoft: 'bg-blue-500/20 text-blue-400',
   google: 'bg-red-500/20 text-red-400',
 };
-
-function timeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
 
 type Tab = 'pending' | 'all';
 

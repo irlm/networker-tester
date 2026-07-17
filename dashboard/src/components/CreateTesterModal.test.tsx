@@ -46,6 +46,7 @@ function mockFetchOnce(body: unknown, status = 200) {
     ok: status >= 200 && status < 300,
     status,
     statusText: 'OK',
+    headers: new Headers(),
     text: () => Promise.resolve(JSON.stringify(body)),
   } as unknown as Response);
 }

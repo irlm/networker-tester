@@ -6,9 +6,7 @@
  * layer; components read fields directly.
  */
 
-import { ApiError, handleUnauthorized } from './client';
-
-const API_BASE = '/api';
+import { request } from './client';
 
 export type ResourceType = 'tester' | 'endpoint' | 'benchmark';
 export type EventType =
@@ -54,25 +52,6 @@ export type VmHistoryFilters = {
   limit?: number;
   offset?: number;
 };
-
-async function request<T>(path: string): Promise<T> {
-  const token = localStorage.getItem('token');
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  };
-  const res = await fetch(`${API_BASE}${path}`, { headers });
-  if (res.status === 401) {
-    handleUnauthorized();
-    throw new ApiError(401, 'Unauthorized');
-  }
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new ApiError(res.status, `API error ${res.status}: ${body || res.statusText}`, body || null);
-  }
-  const text = await res.text();
-  return (text ? JSON.parse(text) : (undefined as unknown)) as T;
-}
 
 /**
  * Fetch a page of VM lifecycle events for a project.

@@ -4,7 +4,11 @@
  */
 export function timeAgo(iso: string): string {
   try {
-    const ms = Date.now() - new Date(iso).getTime();
+    const parsed = new Date(iso).getTime();
+    // new Date('garbage') yields NaN without throwing — honor the documented
+    // raw-string fallback instead of rendering "NaNd ago".
+    if (Number.isNaN(parsed)) return iso;
+    const ms = Date.now() - parsed;
     if (ms < 0) return 'just now';
     const secs = Math.floor(ms / 1000);
     if (secs < 60) return `${secs}s ago`;
@@ -17,6 +21,19 @@ export function timeAgo(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+/**
+ * Compact millisecond formatter for perf instrumentation tables
+ * ("-" for missing, "<1ms", otherwise one decimal place).
+ *
+ * Distinct from `lib/analysis.ts::formatMs`, which renders probe measurements
+ * with µs precision — keep that one for measurement data.
+ */
+export function formatMsCompact(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined) return '-';
+  if (ms < 1) return '<1ms';
+  return `${ms.toFixed(1)}ms`;
 }
 
 /**

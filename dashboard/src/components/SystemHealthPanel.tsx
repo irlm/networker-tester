@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { api } from "../api/client";
 
 interface HealthCheck {
   check_name: string;
@@ -41,12 +42,7 @@ export default function SystemHealthPanel() {
 
   const fetchHealth = useCallback(async () => {
     try {
-      const token = localStorage.getItem("token");
-      const res = await fetch("/api/system/health", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: HealthData = await res.json();
+      const data: HealthData = await api.getSystemHealth();
       setHealth(data);
       setError(null);
     } catch (e) {
