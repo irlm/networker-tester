@@ -168,7 +168,10 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
         // V010 created the Default project; V025 rewrote its id from the
         // well-known UUID to a valid 14-char base36 id (zone us, server a20);
         // V012 flipped delete_protection on.
-        var defaultProject = Assert.Single(await db.Projects.ToListAsync());
+        // Order-independent: the write round-trip test adds a project to the
+        // SHARED class-fixture DB, and xUnit's test order is arbitrary — so
+        // select the Default project by slug instead of Assert.Single on all.
+        var defaultProject = Assert.Single(await db.Projects.Where(p => p.Slug == "default").ToListAsync());
         Assert.Equal("default", defaultProject.Slug);
         Assert.True(defaultProject.DeleteProtection);
         Assert.Equal(14, defaultProject.ProjectId.Length);
