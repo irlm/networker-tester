@@ -1215,6 +1215,13 @@ private:
             stream_, *sr,
             [self = this->shared_from_this(), hdr, sr, total, written, to_write](
                 beast::error_code ec, std::size_t) {
+                // Beast buffer_body: when a chunk is written with more=true,
+                // async_write completes with http::error::need_buffer as the
+                // EXPECTED "next chunk please" signal -- treating it as fatal
+                // dropped every download > one 8192-byte chunk after chunk 1
+                // (found by the P1#8 byte-exact 65536 check; /download/1024
+                // fit in one chunk, which is why it was always green).
+                if (ec == http::error::need_buffer) ec = {};
                 if (ec) { bench_log(LOG_ERROR, "write: " + ec.message()); return; }
                 auto new_written = written + to_write;
                 if (new_written >= total) {
