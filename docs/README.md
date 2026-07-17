@@ -7,6 +7,7 @@ points here for the detailed material.
 ## Current Docs
 
 - [`architecture.md`](architecture.md): current hybrid architecture — Rust probe core + C# control plane/agent + React SPA
+- [`branding.md`](branding.md): the product brand is Networker; deployment/legacy name policy
 - [`installation.md`](installation.md): install from scripts, build from source (cargo + dotnet), and start each component
 - [`release-flow.md`](release-flow.md): version bump → auto-tag → deploy-first release graph → rollback
 - [`probes.md`](probes.md): probe modes, metrics, and CLI examples

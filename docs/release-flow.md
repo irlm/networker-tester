@@ -128,3 +128,10 @@ during the decommission soak window.
 - The nightly `Prod soak check` workflow (06:47 UTC) validates
   `/api/health`, `/api/health/background` (`all_healthy`), queue depth, and
   that the retired Rust services stay inactive.
+
+## Dependency updates (Dependabot)
+
+Dependabot PRs are exempt from the version-bump requirement (author-gated in
+ci.yml's version-check): they are dependency-only, and their lockfile/manifest
+changes ship with the **next** bumped release — release builds are `--locked`
+against the merged lockfile.
