@@ -5,6 +5,7 @@ import {
   type CostEstimate,
 } from '../api/testers';
 import { useTesterSubscription } from '../hooks/useTesterSubscription';
+import { useProjectStore } from '../stores/projectStore';
 import { StatusBadge } from './common/StatusBadge';
 
 interface TesterDetailDrawerProps {
@@ -72,6 +73,13 @@ export function TesterDetailDrawer({
   const [editingSchedule, setEditingSchedule] = useState(false);
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [scheduleHour, setScheduleHour] = useState(23);
+
+  // RBAC: mutating controls (start/stop/delete/reinstall/force-stop/probe)
+  // are operator+ only — viewers get a read-only drawer. Same derivation as
+  // useProject().isOperator, read from the store directly so the drawer does
+  // not depend on router params. Guarded by TesterDetailDrawer.rbac.test.tsx.
+  const projectRole = useProjectStore((s) => s.activeProjectRole);
+  const isOperator = projectRole === 'admin' || projectRole === 'operator';
 
   const testerIds = useMemo(
     () => (tester ? [tester.tester_id] : []),
@@ -215,6 +223,7 @@ export function TesterDetailDrawer({
                   </p>
                 )}
               </div>
+              {isOperator && (
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
@@ -255,6 +264,7 @@ export function TesterDetailDrawer({
                   Delete runner
                 </button>
               </div>
+              )}
             </section>
           )}
 
@@ -461,6 +471,7 @@ export function TesterDetailDrawer({
                 </div>
               </div>
             )}
+            {isOperator && (
             <div className="flex flex-wrap gap-2">
               {!editingSchedule && (
                 <button
@@ -505,6 +516,7 @@ export function TesterDetailDrawer({
                 Disable
               </button>
             </div>
+            )}
           </section>
 
           {/* ── Recovery ───────────────────────────────────────────────── */}
@@ -516,14 +528,16 @@ export function TesterDetailDrawer({
                 {tester.auto_probe_enabled ? 'enabled' : 'disabled'}
               </span>
             </div>
-            <button
-              type="button"
-              disabled={isBusy}
-              onClick={() => run(() => testersApi.probe(projectId, tester.tester_id))}
-              className="px-3 py-1 text-xs rounded border border-gray-700 text-gray-400 hover:border-cyan-500 hover:text-cyan-400 disabled:opacity-50"
-            >
-              Run probe now
-            </button>
+            {isOperator && (
+              <button
+                type="button"
+                disabled={isBusy}
+                onClick={() => run(() => testersApi.probe(projectId, tester.tester_id))}
+                className="px-3 py-1 text-xs rounded border border-gray-700 text-gray-400 hover:border-cyan-500 hover:text-cyan-400 disabled:opacity-50"
+              >
+                Run probe now
+              </button>
+            )}
           </section>
 
           {/* ── Queue ──────────────────────────────────────────────────── */}
@@ -560,7 +574,8 @@ export function TesterDetailDrawer({
             <p className="text-xs text-gray-500">Audit log coming soon.</p>
           </section>
 
-          {/* ── Danger zone ────────────────────────────────────────────── */}
+          {/* ── Danger zone (operator+ only — viewers get read-only) ──── */}
+          {isOperator && (
           <section className="border-t border-gray-800 pt-4">
             <h4 className="text-xs uppercase tracking-wide text-red-400 mb-2">
               Danger zone
@@ -609,6 +624,7 @@ export function TesterDetailDrawer({
               </p>
             )}
           </section>
+          )}
         </div>
       </div>
 

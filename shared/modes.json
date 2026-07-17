@@ -1,0 +1,60 @@
+{
+  "$comment": "Canonical cross-stack probe-mode manifest. The engine is the source of truth: crates/networker-tester/src/metrics.rs (Protocol enum + Protocol::all_modes()). This file is the machine-readable copy every other stack is guarded against. Drift guards: crates/networker-tester/src/modes_manifest_guard.rs (Rust, bidirectional enum coverage), dashboard/src/lib/modes-manifest.test.ts (TS: mode-family.ts + testbed-constants.ts), tests/Networker.ControlPlane.Tests/ModesManifestTests.cs (C#: /api/modes catalog). When adding a Protocol variant, update this file in the same PR — all three guards fail otherwise. See also docs/deploy-config.md (valid modes tables).",
+  "fields": {
+    "id": "canonical wire id — Protocol Display output / TestConfig mode string",
+    "level": "tester = a networker-tester Protocol variant; runner = expanded by the agent/orchestrator, never sent to the tester binary as a mode",
+    "catalog": "true = exposed in the GET /api/modes UI picker (Protocol::all_modes() + runner-level entries)",
+    "family": "dashboard chip family (mode-family.ts): net | http | thru | page | other",
+    "name/description/detail/group": "UI catalog text — present only when catalog is true; must match Protocol::all_modes() and PlatformEndpoints.AllModes byte-for-byte"
+  },
+  "modes": [
+    { "id": "tcp", "level": "tester", "catalog": true, "family": "net", "name": "TCP", "description": "Connect", "detail": "TCP 3-way handshake timing to measure raw connection latency", "group": "Network" },
+    { "id": "dns", "level": "tester", "catalog": true, "family": "net", "name": "DNS", "description": "Resolve", "detail": "DNS resolution timing for the target hostname", "group": "Network" },
+    { "id": "tls", "level": "tester", "catalog": true, "family": "net", "name": "TLS", "description": "Handshake", "detail": "TLS handshake via rustls — reports version, cipher, ALPN, cert chain", "group": "Network" },
+    { "id": "tlsresume", "level": "tester", "catalog": true, "family": "net", "name": "TLS Resume", "description": "Warm handshake", "detail": "Two fresh TLS handshakes with a real HTTP request; the second should resume", "group": "Network" },
+    { "id": "native", "level": "tester", "catalog": true, "family": "net", "name": "Native TLS", "description": "OS TLS stack", "detail": "Uses SChannel (Win), SecureTransport (macOS), or OpenSSL (Linux)", "group": "Network" },
+    { "id": "udp", "level": "tester", "catalog": true, "family": "net", "name": "UDP", "description": "Round-trip", "detail": "UDP echo probe — measures RTT, jitter, and packet loss", "group": "Network" },
+    { "id": "http1", "level": "tester", "catalog": true, "family": "http", "name": "HTTP/1.1", "description": "Single request", "detail": "Full HTTP/1.1 request: DNS + TCP + TLS + request/response", "group": "HTTP" },
+    { "id": "http2", "level": "tester", "catalog": true, "family": "http", "name": "HTTP/2", "description": "Multiplexed", "detail": "HTTP/2 over TLS with ALPN h2 negotiation", "group": "HTTP" },
+    { "id": "http3", "level": "tester", "catalog": true, "family": "http", "name": "HTTP/3", "description": "QUIC", "detail": "HTTP/3 over QUIC (UDP) — 0-RTT capable", "group": "HTTP" },
+    { "id": "curl", "level": "tester", "catalog": true, "family": "http", "name": "Curl", "description": "Via curl CLI", "detail": "Spawns curl binary, captures per-phase timing from --write-out", "group": "HTTP" },
+    { "id": "pageload", "level": "tester", "catalog": true, "family": "page", "name": "H1", "description": "6 parallel connections", "detail": "Fetches page manifest + assets using 6 parallel HTTP/1.1 connections (browser-like)", "group": "Page Load (Native)" },
+    { "id": "pageload2", "level": "tester", "catalog": true, "family": "page", "name": "H2", "description": "Multiplexed", "detail": "Same assets multiplexed over a single TLS/HTTP2 connection", "group": "Page Load (Native)" },
+    { "id": "pageload3", "level": "tester", "catalog": true, "family": "page", "name": "H3", "description": "QUIC", "detail": "Same assets multiplexed over a single QUIC connection", "group": "Page Load (Native)" },
+    { "id": "browser1", "level": "tester", "catalog": true, "family": "page", "name": "H1", "description": "Chrome HTTP/1.1", "detail": "Chrome headless with HTTP/2 disabled — forces HTTP/1.1", "group": "Page Load (Browser)" },
+    { "id": "browser2", "level": "tester", "catalog": true, "family": "page", "name": "H2", "description": "Chrome HTTP/2", "detail": "Chrome headless with QUIC disabled — forces HTTP/2", "group": "Page Load (Browser)" },
+    { "id": "browser3", "level": "tester", "catalog": true, "family": "page", "name": "H3", "description": "Chrome QUIC", "detail": "Chrome headless with QUIC forced via origin flag + SPKI cert pinning", "group": "Page Load (Browser)" },
+    { "id": "download", "level": "tester", "catalog": true, "family": "thru", "name": "Download", "description": "Server→client", "detail": "Large payload download via HTTP — measures sustained throughput", "group": "Throughput" },
+    { "id": "upload", "level": "tester", "catalog": true, "family": "thru", "name": "Upload", "description": "Client→server", "detail": "Large payload upload via HTTP POST — measures sustained throughput", "group": "Throughput" },
+    { "id": "download1", "level": "tester", "catalog": true, "family": "thru", "name": "Download H1", "description": "H1 download", "detail": "Throughput download forced over HTTP/1.1", "group": "Throughput" },
+    { "id": "download2", "level": "tester", "catalog": true, "family": "thru", "name": "Download H2", "description": "H2 download", "detail": "Throughput download over HTTP/2 multiplexed stream", "group": "Throughput" },
+    { "id": "download3", "level": "tester", "catalog": true, "family": "thru", "name": "Download H3", "description": "H3 download", "detail": "Throughput download over QUIC/HTTP3", "group": "Throughput" },
+    { "id": "upload1", "level": "tester", "catalog": true, "family": "thru", "name": "Upload H1", "description": "H1 upload", "detail": "Throughput upload forced over HTTP/1.1", "group": "Throughput" },
+    { "id": "upload2", "level": "tester", "catalog": true, "family": "thru", "name": "Upload H2", "description": "H2 upload", "detail": "Throughput upload over HTTP/2", "group": "Throughput" },
+    { "id": "upload3", "level": "tester", "catalog": true, "family": "thru", "name": "Upload H3", "description": "H3 upload", "detail": "Throughput upload over QUIC/HTTP3", "group": "Throughput" },
+    { "id": "webdownload", "level": "tester", "catalog": true, "family": "thru", "name": "Web Download", "description": "HTTP GET", "detail": "Download via /download endpoint route", "group": "Throughput" },
+    { "id": "webupload", "level": "tester", "catalog": true, "family": "thru", "name": "Web Upload", "description": "HTTP POST", "detail": "Upload via /upload endpoint route", "group": "Throughput" },
+    { "id": "udpdownload", "level": "tester", "catalog": true, "family": "thru", "name": "UDP Download", "description": "UDP bulk DL", "detail": "Bulk download via UDP throughput server (port 9998)", "group": "Throughput" },
+    { "id": "udpupload", "level": "tester", "catalog": true, "family": "thru", "name": "UDP Upload", "description": "UDP bulk UL", "detail": "Bulk upload via UDP throughput server (port 9998)", "group": "Throughput" },
+    { "id": "browser", "level": "tester", "catalog": false, "family": "page" },
+    { "id": "apibench", "level": "runner", "catalog": true, "family": "other", "name": "API Workloads", "description": "Server compute", "detail": "Measured /api/* JSON workload suite: api-users, api-transform, api-aggregate, api-search, api-compress (benchmarks/configs/apibench.json). nginx is skipped — it serves no /api/* endpoints.", "group": "API Workloads" }
+  ],
+  "groups": [
+    { "label": "Network", "detail": "Low-level connection probes. Measures DNS resolution, TCP handshake, TLS negotiation, and UDP round-trip independently — isolates each layer of the network stack." },
+    { "label": "HTTP", "detail": "Full HTTP request timing across protocol versions. Each probe does DNS + TCP + TLS + HTTP request/response and reports TTFB, total duration, and negotiated protocol." },
+    { "label": "Page Load (Native)", "detail": "Loads a page with multiple assets using the Rust HTTP stack (no browser). Compares H1 (6 parallel connections), H2 (multiplexed), and H3 (QUIC). Fastest, no rendering overhead." },
+    { "label": "Page Load (Browser)", "detail": "Same page load test but using real Chrome headless. Includes rendering, JavaScript, and browser networking. Measures what users actually experience — DOM loaded, full load, bytes transferred." },
+    { "label": "Throughput", "detail": "Sustained transfer speed tests with configurable payload sizes. Measures download and upload bandwidth across different HTTP versions and transport protocols." },
+    { "label": "API Workloads", "detail": "Per-request server computation benchmarks against the spec-measured /api/* endpoints (API-SPEC.md §4): dataset sorting, SHA-256 hashing, percentile aggregation, regex search, and zlib compression. Request shapes are frozen in benchmarks/configs/apibench.json so every language measures identical work." }
+  ],
+  "cli_aliases": {
+    "$comment": "CLI-only input aliases (cli.rs parsed_modes / Protocol::from_str) — never appear as wire ids in results or TestConfig.",
+    "pageload1": "pageload",
+    "tls-resume": "tlsresume"
+  },
+  "cli_shorthands": {
+    "$comment": "CLI aggregate inputs that expand to multiple tester modes (cli.rs parsed_modes).",
+    "pageload": ["pageload", "pageload2", "pageload3"],
+    "browser": ["browser1", "browser2", "browser3"]
+  }
+}
