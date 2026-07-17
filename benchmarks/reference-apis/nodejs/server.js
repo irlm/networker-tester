@@ -641,6 +641,12 @@ function onStream(stream, headers) {
 // HTTP/1.1 request dispatcher (fires for allowHTTP1 fallback connections)
 // ---------------------------------------------------------------------------
 function onRequest(req, res) {
+  // The http2 compat layer fires 'request' for h2 streams TOO -- onStream
+  // already owns those, and answering here as well threw
+  // ERR_HTTP2_HEADERS_SENT and killed the worker on the first h2 request
+  // (found by the wave-2 validation run). Only handle real HTTP/1.x
+  // (allowHTTP1 fallback) connections here.
+  if (req.httpVersion === "2.0") return;
   // HEAD is served like GET with the body suppressed (Node's http layer
   // drops response bodies for HEAD automatically).
   const isHead = req.method === "HEAD";
