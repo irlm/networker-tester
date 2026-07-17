@@ -25,7 +25,10 @@
     <ProjectReference Include="..\..\src\Networker.Agent\Networker.Agent.csproj" />
     <ProjectReference Include="..\..\src\Networker.ControlPlane\Networker.ControlPlane.csproj" />
     <ProjectReference Include="..\..\src\Networker.Data\Networker.Data.csproj" />
-    <ProjectReference Include="..\..\src\Networker.Endpoint\Networker.Endpoint.csproj" />
+    <!-- No Networker.Endpoint reference: its top-level Program would collide
+         with the ControlPlane's (CS0433) in WebApplicationFactory<Program>
+         tests. The endpoint's version single-sourcing is asserted in
+         tests/Networker.Endpoint.Tests/VersionSingleSourceTests.cs instead. -->
   </ItemGroup>
 
   <ItemGroup>

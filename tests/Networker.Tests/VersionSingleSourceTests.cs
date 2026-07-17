@@ -1,8 +1,8 @@
+using System.Reflection;
 using System.Text.RegularExpressions;
 using Networker.Agent;
 using Networker.ControlPlane.Dispatch;
 using Networker.ControlPlane.Endpoints;
-using Networker.Endpoint;
 using Xunit;
 
 namespace Networker.Tests;
@@ -20,12 +20,21 @@ public class VersionSingleSourceTests
     private static readonly Regex DottedTriple = new(@"^\d+\.\d+\.\d+$");
 
     [Fact]
-    public void Agent_controlplane_and_endpoint_report_the_same_version()
+    public void Agent_and_controlplane_report_the_same_version_as_this_assembly()
     {
-        // One Directory.Build.props stamps all three assemblies; any per-csproj
-        // override would break this immediately.
-        Assert.Equal(VersionEndpoints.DashboardVersion, AgentVersion.Current);
-        Assert.Equal(VersionEndpoints.DashboardVersion, ServerInfo.Version);
+        // One Directory.Build.props stamps every src/* and tests/* assembly, so
+        // the agent's self-report, the control plane's dashboard_version, and
+        // this test assembly's own stamped version must all be identical; any
+        // per-csproj <Version> override would break this immediately. (The
+        // endpoint's ServerInfo is asserted the same way in
+        // tests/Networker.Endpoint.Tests — referencing its exe here would
+        // collide two top-level Program classes.)
+        var thisAssembly = typeof(VersionSingleSourceTests).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()!
+            .InformationalVersion.Split('+')[0];
+
+        Assert.Equal(thisAssembly, AgentVersion.Current);
+        Assert.Equal(thisAssembly, VersionEndpoints.DashboardVersion);
     }
 
     [Fact]
@@ -37,7 +46,6 @@ public class VersionSingleSourceTests
         // sees the same format from both implementations.
         Assert.Matches(DottedTriple, AgentVersion.Current);
         Assert.Matches(DottedTriple, VersionEndpoints.DashboardVersion);
-        Assert.Matches(DottedTriple, ServerInfo.Version);
     }
 
     [Fact]
