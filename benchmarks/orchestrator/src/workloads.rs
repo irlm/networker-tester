@@ -311,7 +311,10 @@ mod tests {
         };
         let args = tester_args_for_workload("https://1.2.3.4:8443", &w, 50, 30, None);
         assert_eq!(args[0], "--target");
-        assert_eq!(args[1], "https://1.2.3.4:8443/api/search?q=network&limit=10");
+        assert_eq!(
+            args[1],
+            "https://1.2.3.4:8443/api/search?q=network&limit=10"
+        );
         assert!(args.contains(&"http1".to_string()));
         assert!(!args.contains(&"--request-body".to_string()));
         assert!(!args.contains(&"--bearer-token".to_string()));

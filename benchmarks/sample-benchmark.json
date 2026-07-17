@@ -1,70 +1,126 @@
 {
-  "name": "AletheBench Phase 1 — HTTP JSON API",
-  "version": "0.1.0",
-  "baseline_language": "rust",
-  "baseline_runtime": "axum",
-  "total_requests": 50000,
-  "concurrency_levels": [1, 10, 50, 100, 250],
-  "repeat": 3,
-  "warmup_requests": 1000,
-  "timeout_secs": 30,
-  "endpoint": "/api/health",
-  "method": "GET",
-  "body": null,
-  "languages": [
+  "_synthetic": "SYNTHETIC SAMPLE — hand-written documentation example of the orchestrator's output schema (BenchmarkRun in benchmarks/orchestrator/src/types.rs). The numbers are invented and MUST NOT be cited as measurements. Schema conformance is pinned by the sample_benchmark_json_matches_run_schema test in types.rs.",
+  "id": "00000000-0000-4000-8000-000000000000",
+  "started_at": "2026-01-01T00:00:00Z",
+  "finished_at": "2026-01-01T00:30:00Z",
+  "config_path": "SYNTHETIC (no real config; see benchmarks/configs/ for real inputs)",
+  "case_randomization_enabled": true,
+  "case_randomization_seed": 42,
+  "baseline": { "language": "rust", "runtime": "networker-endpoint" },
+  "results": [
     {
-      "name": "rust",
-      "runtime": "axum",
-      "path": "implementations/rust-axum",
-      "build_cmd": "cargo build --release",
-      "run_cmd": "./target/release/api-server",
-      "port": 3001,
-      "docker_image": null
+      "language": "rust",
+      "runtime": "networker-endpoint",
+      "concurrency": 50,
+      "repeat_index": 0,
+      "scenario": "warm",
+      "environment": {
+        "client_os": "linux",
+        "client_arch": "x86_64",
+        "client_cpu_cores": 4,
+        "client_region": "westeurope",
+        "server_os": "linux",
+        "server_arch": "x86_64",
+        "server_cpu_cores": 4,
+        "server_region": "westeurope",
+        "network_type": "vnet",
+        "baseline_rtt_p50_ms": 0.8,
+        "baseline_rtt_p95_ms": 1.4
+      },
+      "network": {
+        "rps": 24812.5,
+        "latency_mean_ms": 1.98,
+        "latency_p50_ms": 1.7,
+        "latency_p99_ms": 4.9,
+        "latency_p999_ms": 9.8,
+        "latency_max_ms": 21.3,
+        "bytes_transferred": 52428800,
+        "error_count": 0,
+        "total_requests": 500000,
+        "phase_model": "per-request",
+        "phases_present": ["dns", "connect", "tls", "ttfb", "transfer"]
+      },
+      "resources": {
+        "peak_rss_bytes": 26214400,
+        "avg_cpu_fraction": 0.61,
+        "peak_cpu_fraction": 0.83,
+        "peak_open_fds": 118
+      },
+      "startup": {
+        "time_to_first_response_ms": 18.0,
+        "time_to_ready_ms": 24.0
+      },
+      "binary": {
+        "size_bytes": 8912896,
+        "compressed_size_bytes": 3145728,
+        "docker_image_bytes": null
+      }
     },
     {
-      "name": "go",
-      "runtime": "gin",
-      "path": "implementations/go-gin",
-      "build_cmd": "go build -o api-server .",
-      "run_cmd": "./api-server",
-      "port": 3002,
-      "docker_image": null
+      "language": "rust",
+      "runtime": "networker-endpoint",
+      "concurrency": 50,
+      "repeat_index": 1,
+      "scenario": "warm",
+      "network": {
+        "rps": 24590.1,
+        "latency_mean_ms": 2.01,
+        "latency_p50_ms": 1.72,
+        "latency_p99_ms": 5.1,
+        "latency_p999_ms": 10.2,
+        "latency_max_ms": 24.8,
+        "bytes_transferred": 52428800,
+        "error_count": 0,
+        "total_requests": 500000
+      },
+      "resources": {
+        "peak_rss_bytes": 26738688,
+        "avg_cpu_fraction": 0.62,
+        "peak_cpu_fraction": 0.85,
+        "peak_open_fds": 121
+      },
+      "startup": {
+        "time_to_first_response_ms": 17.0,
+        "time_to_ready_ms": 23.0
+      },
+      "binary": {
+        "size_bytes": 8912896,
+        "compressed_size_bytes": 3145728,
+        "docker_image_bytes": null
+      }
     },
     {
-      "name": "python",
-      "runtime": "fastapi",
-      "path": "implementations/python-fastapi",
-      "build_cmd": "pip install -r requirements.txt",
-      "run_cmd": "uvicorn main:app --host 0.0.0.0 --port 3003",
-      "port": 3003,
-      "docker_image": null
-    },
-    {
-      "name": "typescript",
-      "runtime": "bun-hono",
-      "path": "implementations/ts-bun-hono",
-      "build_cmd": "bun install",
-      "run_cmd": "bun run src/index.ts",
-      "port": 3004,
-      "docker_image": null
-    },
-    {
-      "name": "java",
-      "runtime": "spring-boot",
-      "path": "implementations/java-spring",
-      "build_cmd": "./gradlew bootJar",
-      "run_cmd": "java -jar build/libs/api-server.jar",
-      "port": 3005,
-      "docker_image": null
-    },
-    {
-      "name": "csharp",
-      "runtime": "aspnet",
-      "path": "implementations/csharp-aspnet",
-      "build_cmd": "dotnet publish -c Release -o out",
-      "run_cmd": "./out/api-server",
-      "port": 3006,
-      "docker_image": null
+      "language": "go",
+      "runtime": "net/http",
+      "concurrency": 50,
+      "repeat_index": 0,
+      "scenario": "cold",
+      "network": {
+        "rps": 21504.7,
+        "latency_mean_ms": 2.29,
+        "latency_p50_ms": 2.0,
+        "latency_p99_ms": 6.3,
+        "latency_p999_ms": 12.7,
+        "latency_max_ms": 30.1,
+        "bytes_transferred": 52428800,
+        "error_count": 2,
+        "total_requests": 500000
+      },
+      "resources": {
+        "peak_rss_bytes": 41943040,
+        "avg_cpu_fraction": 0.68,
+        "peak_cpu_fraction": 0.9,
+        "peak_open_fds": 134
+      },
+      "startup": {
+        "time_to_first_response_ms": 9.0,
+        "time_to_ready_ms": 14.0
+      },
+      "binary": {
+        "size_bytes": 12582912,
+        "compressed_size_bytes": 5242880,
+        "docker_image_bytes": 15728640
+      }
     }
   ]
 }

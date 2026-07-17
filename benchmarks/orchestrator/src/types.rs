@@ -362,3 +362,34 @@ impl BenchmarkRun {
         self.finished_at = Some(Utc::now());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// benchmarks/sample-benchmark.json is a SYNTHETIC documentation sample of
+    /// the orchestrator's output schema (audit C6: the previous committed
+    /// sample referenced implementations that never existed in this repo).
+    /// This test pins it to the real `BenchmarkRun` shape so it can't rot
+    /// silently again.
+    #[test]
+    fn sample_benchmark_json_matches_run_schema() {
+        let raw = include_str!("../../sample-benchmark.json");
+        let run: BenchmarkRun = serde_json::from_str(raw)
+            .expect("sample-benchmark.json must deserialize as BenchmarkRun");
+        assert!(
+            !run.results.is_empty(),
+            "the sample must contain results (the old one shipped zero)"
+        );
+        assert!(
+            raw.contains("SYNTHETIC"),
+            "the sample must be clearly marked synthetic"
+        );
+        // Every result carries the full metrics shape (serde would have failed
+        // otherwise); sanity-check a couple of load-bearing fields.
+        for result in &run.results {
+            assert!(!result.language.is_empty());
+            assert!(result.network.total_requests > 0);
+        }
+    }
+}

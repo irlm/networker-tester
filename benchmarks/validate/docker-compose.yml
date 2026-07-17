@@ -3,13 +3,35 @@
 ##   cd benchmarks/validate
 ##   ./run-validation.sh
 ##
-## Each language gets a unique port (8501-8516) so all can run simultaneously.
+## (CI does NOT use this file — .github/workflows/validate-bench-apis.yml boots
+## one container per matrix leg with `docker run`. This compose file is the
+## local all-at-once path driven by run-validation.sh.)
+##
+## Host ports default to 8501-8508 but are overridable (audit V8: fixed ports
+## collide with anything else on the machine):
+##   BENCH_VALIDATE_PORT_GO=9501 BENCH_VALIDATE_PORT_PYTHON=9502 ./run-validation.sh
+## run-validation.sh reads the same variables, so overrides stay in sync.
+##
+## Healthchecks (audit V8): `docker compose up --wait` gates on them instead of
+## a blind sleep. Interpreter images probe /health over HTTPS (self-signed, so
+## verification is disabled); compiled images without an interpreter or curl
+## (java, cpp, csharp-net8) use a bash /dev/tcp connect probe; go's final stage
+## is FROM scratch — no shell exists, so it has no healthcheck and --wait
+## treats "running" as ready (run-validation.sh still polls /health from the
+## host before validating).
 ##
 ## Every service mounts the shared dataset (benchmarks/shared/API-SPEC.md §2) —
 ## previously only certs were mounted, so validation never exercised the
 ## dataset code paths that break in production (audit V6/F2).
 
 x-bench-data: &bench-data ../reference-apis/shared/bench-data.json:/opt/bench/bench-data.json:ro
+
+x-healthcheck-tcp: &healthcheck-tcp
+  test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8443 && exec 3>&-"]
+  interval: 5s
+  timeout: 3s
+  retries: 12
+  start_period: 10s
 
 services:
   certs:
@@ -23,7 +45,9 @@ services:
 
   go:
     build: ../reference-apis/go
-    ports: ["8501:8443"]
+    ports: ["${BENCH_VALIDATE_PORT_GO:-8501}:8443"]
+    # No healthcheck: final image is FROM scratch (no shell/curl). The host-side
+    # /health poll in run-validation.sh covers readiness.
     environment:
       BENCH_CERT_DIR: /opt/bench
       BENCH_DATA_PATH: /opt/bench/bench-data.json
@@ -36,7 +60,13 @@ services:
 
   python:
     build: ../reference-apis/python
-    ports: ["8502:8443"]
+    ports: ["${BENCH_VALIDATE_PORT_PYTHON:-8502}:8443"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", 'import ssl,urllib.request; ctx=ssl.create_default_context(); ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE; urllib.request.urlopen("https://127.0.0.1:8443/health", context=ctx, timeout=3)']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
     environment:
       BENCH_CERT_DIR: /opt/bench
       BENCH_DATA_PATH: /opt/bench/bench-data.json
@@ -49,7 +79,13 @@ services:
 
   nodejs:
     build: ../reference-apis/nodejs
-    ports: ["8503:8443"]
+    ports: ["${BENCH_VALIDATE_PORT_NODEJS:-8503}:8443"]
+    healthcheck:
+      test: ["CMD", "node", "-e", 'require("https").get({host:"127.0.0.1",port:8443,path:"/health",rejectUnauthorized:false},r=>process.exit(r.statusCode===200?0:1)).on("error",()=>process.exit(1))']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
     environment:
       BENCH_CERT_DIR: /opt/bench
       BENCH_PORT: "8443"
@@ -63,7 +99,8 @@ services:
 
   java:
     build: ../reference-apis/java
-    ports: ["8504:8443"]
+    ports: ["${BENCH_VALIDATE_PORT_JAVA:-8504}:8443"]
+    healthcheck: *healthcheck-tcp
     environment:
       BENCH_CERT_DIR: /opt/bench
       BENCH_DATA_PATH: /opt/bench/bench-data.json
@@ -76,7 +113,13 @@ services:
 
   ruby:
     build: ../reference-apis/ruby
-    ports: ["8505:8443"]
+    ports: ["${BENCH_VALIDATE_PORT_RUBY:-8505}:8443"]
+    healthcheck:
+      test: ["CMD", "ruby", "-e", 'require "net/http"; require "openssl"; h=Net::HTTP.new("127.0.0.1",8443); h.use_ssl=true; h.verify_mode=OpenSSL::SSL::VERIFY_NONE; exit(h.get("/health").code=="200" ? 0 : 1)']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
     environment:
       BENCH_CERT_DIR: /opt/bench
       BENCH_PORT: "8443"
@@ -90,7 +133,13 @@ services:
 
   php:
     build: ../reference-apis/php
-    ports: ["8506:8443"]
+    ports: ["${BENCH_VALIDATE_PORT_PHP:-8506}:8443"]
+    healthcheck:
+      test: ["CMD", "php", "-r", 'exit(@file_get_contents("https://127.0.0.1:8443/health", false, stream_context_create(["ssl"=>["verify_peer"=>false,"verify_peer_name"=>false]])) ? 0 : 1);']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
     environment:
       BENCH_CERT_DIR: /opt/bench
       BENCH_DATA_PATH: /opt/bench/bench-data.json
@@ -103,7 +152,8 @@ services:
 
   cpp:
     build: ../reference-apis/cpp
-    ports: ["8507:8443"]
+    ports: ["${BENCH_VALIDATE_PORT_CPP:-8507}:8443"]
+    healthcheck: *healthcheck-tcp
     environment:
       BENCH_CERT_DIR: /opt/bench
       BENCH_DATA_PATH: /opt/bench/bench-data.json
@@ -116,7 +166,8 @@ services:
 
   csharp-net8:
     build: ../reference-apis/csharp-net8
-    ports: ["8508:8443"]
+    ports: ["${BENCH_VALIDATE_PORT_CSHARP_NET8:-8508}:8443"]
+    healthcheck: *healthcheck-tcp
     environment:
       BENCH_CERT_DIR: /opt/bench
       BENCH_DATA_PATH: /opt/bench/bench-data.json

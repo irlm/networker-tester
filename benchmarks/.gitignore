@@ -1,0 +1,14 @@
+# Benchmark outputs are never committed (audit C6/C7): runs produce
+# results-*.json + per-language output/ report bundles locally.
+# The one committed exception is sample-benchmark.json — a clearly-marked
+# SYNTHETIC sample of the orchestrator's output schema, pinned by a test in
+# orchestrator/src/types.rs.
+results-*.json
+reference-apis/*/output/
+
+# Python
+__pycache__/
+*.pyc
+
+# Node
+node_modules/

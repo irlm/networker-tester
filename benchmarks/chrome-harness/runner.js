@@ -4,7 +4,7 @@
  * Launches headless Chrome, loads the test page, waits for results, outputs JSON.
  *
  * Usage:
- *   node runner.js --target https://endpoint:8443 --warmup 5 --measured 10 [--http-version h1|h2|h3]
+ *   node runner.js --target https://endpoint:8443 --warmup 10 --measured 30 [--http-version h1|h2|h3]
  *
  * Output: JSON results to stdout (all other output goes to stderr).
  */
@@ -55,8 +55,12 @@ try {
   process.exit(1);
 }
 
-const WARMUP = parseInt(args.warmup || '5', 10);
-const MEASURED = parseInt(args.measured || '10', 10);
+// Defaults raised from 5/10 (audit V9: publication-thin sample counts).
+// Orchestrator runs pass explicit values from MethodologyConfig
+// (warmup_runs=10, min_measured=50 by default); these defaults govern
+// standalone/manual invocations.
+const WARMUP = parseInt(args.warmup || '10', 10);
+const MEASURED = parseInt(args.measured || '30', 10);
 const CONCURRENCY = parseInt(args.concurrency || '10', 10);
 const HTTP_VERSION = args['http-version'] || 'h2'; // h1, h2, h3
 const CONNECTION_MODE = args['connection-mode'] || 'warm'; // cold, warm

@@ -534,15 +534,44 @@ elif [[ "$MODE" == "docker" ]]; then
     cd "$SCRIPT_DIR"
 
     echo "Starting containers..."
+    # --wait gates on the compose healthchecks (go has none: FROM scratch —
+    # the poll loop below covers it).
     docker compose up -d --build --wait 2>&1 | tail -5 || true
 
-    echo "Waiting for servers to start..."
-    sleep 10
-
     # Language → port mapping (parallel arrays: macOS ships bash 3.2, which
-    # has no associative arrays).
+    # has no associative arrays). Ports are overridable via the same
+    # BENCH_VALIDATE_PORT_* variables docker-compose.yml reads (audit V8:
+    # fixed 8501-8508 collided with anything else on the machine).
     LANG_NAMES=("Go" "Python" "Node.js" "Java" "Ruby" "PHP" "C++" "C# .NET 8")
-    LANG_PORTS=(8501 8502 8503 8504 8505 8506 8507 8508)
+    LANG_PORTS=(
+        "${BENCH_VALIDATE_PORT_GO:-8501}"
+        "${BENCH_VALIDATE_PORT_PYTHON:-8502}"
+        "${BENCH_VALIDATE_PORT_NODEJS:-8503}"
+        "${BENCH_VALIDATE_PORT_JAVA:-8504}"
+        "${BENCH_VALIDATE_PORT_RUBY:-8505}"
+        "${BENCH_VALIDATE_PORT_PHP:-8506}"
+        "${BENCH_VALIDATE_PORT_CPP:-8507}"
+        "${BENCH_VALIDATE_PORT_CSHARP_NET8:-8508}"
+    )
+
+    # Health-poll each server from the host (replaces the old blind
+    # `sleep 10` — audit V8). 60s budget per server, 2s interval.
+    echo "Waiting for servers to become healthy..."
+    i=0
+    while [[ $i -lt ${#LANG_NAMES[@]} ]]; do
+        tries=0
+        while [[ $tries -lt 30 ]]; do
+            if curl -skf --max-time 3 "https://localhost:${LANG_PORTS[$i]}/health" > /dev/null 2>&1; then
+                break
+            fi
+            tries=$((tries + 1))
+            sleep 2
+        done
+        if [[ $tries -ge 30 ]]; then
+            echo "  WARNING: ${LANG_NAMES[$i]} (port ${LANG_PORTS[$i]}) never answered /health — validation will record hard failures"
+        fi
+        i=$((i + 1))
+    done
 
     i=0
     while [[ $i -lt ${#LANG_NAMES[@]} ]]; do

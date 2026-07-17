@@ -7,8 +7,9 @@
 // Parameters from URL query string
 const params = new URLSearchParams(location.search);
 const TARGET = params.get('target') || 'https://localhost:8443';
-const WARMUP = parseInt(params.get('warmup') || '5', 10);
-const MEASURED = parseInt(params.get('measured') || '10', 10);
+// Defaults match runner.js (raised from 5/10 — audit V9).
+const WARMUP = parseInt(params.get('warmup') || '10', 10);
+const MEASURED = parseInt(params.get('measured') || '30', 10);
 const CONCURRENCY = parseInt(params.get('concurrency') || '10', 10);
 const AUTH_TOKEN = params.get('token') || '';
 
