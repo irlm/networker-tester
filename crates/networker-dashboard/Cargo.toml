@@ -42,7 +42,7 @@ reqwest      = { version = "0.13", default-features = false, features = ["rustls
 rustls       = { version = "0.23", default-features = false, features = ["ring"] }
 
 # Cron scheduling
-cron         = "0.16"
+cron         = "0.17"
 
 # Crypto (ACS HMAC-SHA256 auth + token hashing + credential encryption)
 sha2         = "0.11"
