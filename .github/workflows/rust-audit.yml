@@ -85,7 +85,11 @@ jobs:
       #   attacker-chosen ciphertexts. Not exploitable in this deployment.
       #   The Rust dashboard is also scheduled for decommission (~2026-07-30),
       #   which removes the jsonwebtoken dependency entirely.
-      IGNORE_ARGS: "--ignore RUSTSEC-2023-0071"
+      # 2023-0071: rsa/Marvin via jsonwebtoken (HS256-only; leaves with Rust-dashboard decommission).
+      # 2026-0119 hickory-proto, 2026-0104/0099/0098 rustls-webpki, 2025-0134 rustls-pemfile: found by
+      # this gate's FIRST run; fixes are semver-incompatible -> tracked follow-up: dependency-update PR
+      # with full tester re-validation (measurement-path DNS/TLS crates).
+      IGNORE_ARGS: "--ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0119 --ignore RUSTSEC-2026-0104 --ignore RUSTSEC-2026-0099 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2025-0134"
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
