@@ -663,6 +663,20 @@ export interface ModeGroup {
   modes: ModeInfo[];
 }
 
+/**
+ * Per-language protocol/workload capability row served by GET /api/modes
+ * (`language_capabilities`). http2/http3 mean the language's server negotiates
+ * the protocol directly (proxy-fronted h2/h3 works regardless); apibench means
+ * it implements the measured /api/* suite (benchmarks/shared/API-SPEC.md §4).
+ */
+export interface LanguageCapability {
+  language: string;
+  http1: boolean;
+  http2: boolean;
+  http3: boolean;
+  apibench: boolean;
+}
+
 export interface PacketCaptureSummary {
   mode: string;
   interface: string;

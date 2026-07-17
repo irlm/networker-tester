@@ -11,7 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.28.29] — 2026-07-17
+## [0.28.30] — 2026-07-17
+
+### Added
+- **Language-detection SSH probe ported to the C# control plane** (language-
+  bench audit P1#13 / C3). `POST /api/projects/{pid}/benchmark-catalog/{vmId}/detect`
+  now actually probes the VM instead of returning a 202 stub: it SSHes in
+  (BatchMode key auth, same probe commands as the retired Rust
+  `ssh_detect_languages`), tests `/opt/bench/*` for each language runtime plus
+  the `csharp-net*` ladder, persists `languages`/`status`/`last_health_check`,
+  and returns `{languages, status}` — Rust-parity shape.
+- **Per-language capability matrix** (audit P1#14 / C5). `GET /api/modes` now
+  carries `language_capabilities`: `{language, http1, http2, http3, apibench}`
+  for all 18 benchmark languages, source-verified against each reference
+  implementation (Java/C++/Python/Ruby/PHP/.NET 4.8 are direct-h1-only; nginx
+  has h2+h3 but no `/api/*` suite). The Application Benchmark wizard consumes
+  it: apibench selections disable and exclude non-apibench languages (nginx),
+  and direct-h1-only languages are tagged `h1 direct` when h2/h3 modes are
+  chosen (proxy-fronted runs measure the proxy, not the runtime).
 
 ### Added
 - **`apibench` — the `/api/*` compute workloads are now measured** (language-

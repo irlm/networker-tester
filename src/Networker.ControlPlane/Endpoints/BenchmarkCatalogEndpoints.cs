@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Auth;
+using Networker.ControlPlane.Provisioning;
 using Networker.Data;
 using Networker.Data.Entities;
 
@@ -18,14 +19,11 @@ namespace Networker.ControlPlane.Endpoints;
 /// <list type="bullet">
 ///   <item><b>DELETE requires ProjectAdmin</b> (per the M5 spec); the Rust
 ///   handler only required Operator. Registration stays Operator in both.</item>
-///   <item><b>Detect is a stub.</b> The Rust handler SSHes into the VM
-///   synchronously, probes /opt/bench/* for each language runtime, persists the
-///   detected list + online/offline status, and returns 200
-///   <c>{languages, status}</c>. The C# control plane does not yet shell out to
-///   ssh (same posture as the M4 provisioner CLI work: remote probing is a
-///   follow-up); the endpoint validates scope + ownership, logs a TODO, and
-///   returns 202 with the row's current status/languages so callers can poll
-///   the list endpoint. No columns are mutated.</item>
+///   <item><b>Detect</b> mirrors the Rust handler: SSH into the VM
+///   synchronously (<see cref="Provisioning.SshLanguageDetector"/>), probe
+///   /opt/bench/* for each language runtime, persist the detected list +
+///   online/offline status (update_status also stamps last_health_check, as
+///   the Rust SQL did), and return 200 <c>{languages, status}</c>.</item>
 /// </list>
 /// </summary>
 public static class BenchmarkCatalogEndpoints
@@ -131,40 +129,40 @@ public static class BenchmarkCatalogEndpoints
         .RequireAuthorization(AuthPolicies.ProjectAdmin);
 
         // POST /api/projects/{projectId}/benchmark-catalog/{vmId}/detect —
-        // language detection probe (project operator). STUB — see class doc.
+        // language detection probe (project operator). Port of the Rust
+        // detect_languages handler: SSH to the VM, probe /opt/bench/* installs,
+        // persist languages + status, return 200 { languages, status }.
         app.MapPost("/api/projects/{projectId}/benchmark-catalog/{vmId:guid}/detect", async (
             string projectId,
             Guid vmId,
             NetworkerDbContext db,
+            ISshLanguageDetector detector,
             ILoggerFactory loggerFactory,
             CancellationToken ct) =>
         {
             var vm = await db.BenchmarkVmCatalogs
-                .AsNoTracking()
                 .FirstOrDefaultAsync(v => v.VmId == vmId && v.ProjectId == projectId, ct);
             if (vm is null)
             {
                 return Results.NotFound();
             }
 
-            // TODO(phase2-m5): port the Rust ssh_detect_languages probe — SSH to
-            // vm.Ip as vm.SshUser, test /opt/bench/{rust-server,go-server,...}
-            // and csharp-net* dirs, then persist languages + online/offline
-            // status (benchmark_vm_catalog.languages / .status /
-            // .last_health_check). Until then this endpoint acknowledges the
-            // request without probing or mutating the row.
-            loggerFactory.CreateLogger("Networker.ControlPlane.BenchmarkCatalog").LogWarning(
-                "Language detection requested for VM {VmId} ({Ip}) but the SSH probe " +
-                "is not yet implemented in the C# control plane — returning 202 stub",
-                vmId, vm.Ip);
+            var languages = await detector.DetectAsync(vm.Ip, vm.SshUser, ct);
 
-            return Results.Accepted(value: new
-            {
-                vm_id = vm.VmId,
-                status = vm.Status,
-                languages = ParseJson(vm.Languages),
-                detail = "language detection probe not yet implemented in the C# control plane",
-            });
+            // Rust: update_languages sets the JSON list; update_status marks the
+            // VM online when anything was detected (SSH succeeded), offline
+            // otherwise, and stamps last_health_check = now().
+            var status = languages.Count == 0 ? "offline" : "online";
+            vm.Languages = JsonSerializer.Serialize(languages);
+            vm.Status = status;
+            vm.LastHealthCheck = DateTime.UtcNow;
+            await db.SaveChangesAsync(ct);
+
+            loggerFactory.CreateLogger("Networker.ControlPlane.BenchmarkCatalog").LogInformation(
+                "Language detection complete for VM {VmId} ({Ip}): {Count} language(s) [{Languages}]",
+                vmId, vm.Ip, languages.Count, string.Join(", ", languages));
+
+            return Results.Ok(new { languages, status });
         })
         .RequireAuthorization(AuthPolicies.ProjectOperator);
 

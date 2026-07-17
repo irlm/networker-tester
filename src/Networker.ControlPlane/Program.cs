@@ -73,6 +73,9 @@ builder.Services.AddComputeProvisioner();
 // via the deploy-runner shelling install.sh) and the cloud lifecycle loops
 // (auto-shutdown of idle testers, orphan-resource reaper).
 builder.Services.AddProvisioningOrchestrator();
+// Benchmark-catalog language detection: SSH probe of /opt/bench/* installs
+// (port of the Rust ssh_detect_languages — key-auth ssh shell-out).
+builder.Services.AddSingleton<ISshLanguageDetector, SshLanguageDetector>();
 builder.Services.AddNetworkerCloudLifecycleServices();
 // M5 admin/orgs/SSO: the workspace-inactivity lifecycle loop and the SSO
 // module (OIDC flows + provider admin, provider secrets encrypted via the cipher).
@@ -84,7 +87,7 @@ builder.Services.AddSsoModule();
 // benchmark_config table; the M3 dispatcher/redispatcher own run assignment.
 builder.Services.AddNetworkerEmailSender();
 builder.Services.AddVmLifecycleRecorder();
-builder.Services.AddVersionRefresh("0.28.29");
+builder.Services.AddVersionRefresh("0.28.30");
 // M6 cutover: raw-WebSocket bridges (the React frontend + fielded Rust agents
 // speak raw WS JSON, not SignalR) + per-tick pg-advisory leader election and
 // tick observability for the background loops. AddRawWebSockets must come
