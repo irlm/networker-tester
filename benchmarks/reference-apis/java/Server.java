@@ -44,7 +44,7 @@ import java.util.zip.CRC32;
 import java.util.zip.Deflater;
 
 /**
- * AletheBench Java reference API.
+ * Networker Bench Java reference API.
  *
  * Single-file HTTPS server using JDK built-in com.sun.net.httpserver.
  * No external dependencies. Conforms to the frozen contract in

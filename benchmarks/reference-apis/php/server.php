@@ -1,6 +1,6 @@
 <?php
 /**
- * AletheBench PHP reference API — Swoole async HTTP server.
+ * Networker Bench PHP reference API — Swoole async HTTP server.
  *
  * Conforms to benchmarks/shared/API-SPEC.md (frozen contract v1, family C).
  * Worker policy (§3): Swoole worker_num = BENCH_WORKERS (default = CPUs).

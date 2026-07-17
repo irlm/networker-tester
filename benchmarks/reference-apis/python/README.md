@@ -1,6 +1,6 @@
 # Python Reference API
 
-AletheBench Python reference API using uvicorn + starlette.
+Networker Bench Python reference API using uvicorn + starlette.
 
 Implements the frozen contract in `benchmarks/shared/API-SPEC.md` (family C):
 all `/health`, `/download/{size}`, `/upload`, and `/api/*` endpoints. The
@@ -14,7 +14,7 @@ the server does not advertise Alt-Svc.
 A pure-stdlib Python HTTP server (e.g. `http.server`) is single-threaded,
 blocking, and lacks async I/O -- it would be unrealistically slow and not
 representative of how Python is actually deployed in production. The goal of
-AletheBench is to compare runtimes under their **best realistic configuration**,
+Networker Bench is to compare runtimes under their **best realistic configuration**,
 not their worst.
 
 uvicorn + starlette is the fastest production-ready async Python stack:

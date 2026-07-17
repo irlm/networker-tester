@@ -1,10 +1,10 @@
-# AletheBench — Node.js Reference API
+# Networker Bench — Node.js Reference API
 
 HTTP/2 diagnostic server for cross-language network benchmarking.
 
 ## Why built-in `http2` (no Express, no dependencies)
 
-AletheBench compares runtime performance across languages. Each reference API
+Networker Bench compares runtime performance across languages. Each reference API
 must measure the **language runtime and standard library**, not a third-party
 framework. Using Node's built-in `http2` module ensures:
 

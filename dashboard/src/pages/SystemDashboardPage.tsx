@@ -468,7 +468,7 @@ const PROVIDER_FIELDS: Record<string, FieldDef[]> = {
 const PROVIDER_SETUP_GUIDES: Record<string, string[]> = {
   microsoft: [
     '1. Go to entra.microsoft.com \u2192 App registrations \u2192 New registration',
-    '2. Name: "AletheDash SSO", choose your tenant scope',
+    '2. Name: "Networker SSO", choose your tenant scope',
     '3. Redirect URI (Web): {public_url}/api/auth/sso/callback',
     '4. Copy Application (client) ID and Directory (tenant) ID from Overview',
     '5. Certificates & secrets \u2192 New client secret \u2192 copy the Value immediately',

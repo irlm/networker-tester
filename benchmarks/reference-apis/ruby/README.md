@@ -1,4 +1,4 @@
-# AletheBench — Ruby Reference API
+# Networker Bench — Ruby Reference API
 
 Ruby Rack application served by Puma.
 
@@ -21,7 +21,7 @@ Every Ruby web framework is built on Rack, so this represents the fastest path
 through the Ruby HTTP stack without dropping to raw sockets.
 
 The combination of Puma + direct Rack gives Ruby its best realistic performance
-ceiling, which is the goal of AletheBench: compare runtimes under their idiomatic,
+ceiling, which is the goal of Networker Bench: compare runtimes under their idiomatic,
 production-grade configurations.
 
 ## Endpoints

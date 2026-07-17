@@ -1,6 +1,12 @@
-# AletheDash Setup Guide
+# Networker Setup Guide
 
-Complete guide to deploy and configure AletheDash from scratch. Covers infrastructure, SSO, cloud federation, email, and ongoing operations.
+Complete guide to deploy and configure Networker (the dashboard/control plane) from scratch. Covers infrastructure, SSO, cloud federation, email, and ongoing operations.
+
+> **Naming:** the product brand is **Networker** (see
+> [`branding.md`](branding.md)). The `alethedash*` names below (domain,
+> resource group, VM, systemd service, DB, `/opt`/`/etc` paths) are the
+> current production deployment's identifiers — kept as-is because renaming
+> them is an ops migration, not a doc change.
 
 > **Current stack:** production runs the **C# control plane**
 > (`Networker.ControlPlane`, systemd service `alethedash-cs`, port `5030`
@@ -189,7 +195,7 @@ sudo chmod 600 /etc/alethedash-cs.env
 
 sudo tee /etc/systemd/system/alethedash-cs.service << 'EOF'
 [Unit]
-Description=AletheDash Control Plane (C#)
+Description=Networker Control Plane (C#)
 After=network.target postgresql.service
 
 [Service]
@@ -268,7 +274,7 @@ Microsoft SSO uses Azure AD (Entra ID). The deploy script does this automaticall
 ```bash
 # Create the app
 az ad app create \
-  --display-name "AletheDash" \
+  --display-name "Networker" \
   --web-redirect-uris "https://yourdomain.com/api/auth/sso/callback" \
   --sign-in-audience AzureADMyOrg
 
@@ -325,7 +331,7 @@ The login page should show "Continue with Microsoft." Click it to test.
 1. Go to https://console.cloud.google.com/auth/overview?project=YOUR_PROJECT
 2. Click **"Get Started"** or **"Configure consent screen"**
 3. Fill in:
-   - App name: **AletheDash**
+   - App name: **Networker**
    - Support email: your email
    - Audience: **External**
 4. Save
@@ -335,7 +341,7 @@ The login page should show "Continue with Microsoft." Click it to test.
 1. Go to **Clients** tab (or https://console.cloud.google.com/apis/credentials?project=YOUR_PROJECT)
 2. Click **"Create Credentials"** → **"OAuth client ID"**
 3. Application type: **Web application**
-4. Name: **AletheDash**
+4. Name: **Networker**
 5. Authorized redirect URI: `https://yourdomain.com/api/auth/sso/callback`
 6. Click **Create**
 7. Copy the **Client ID** and **Client Secret**
@@ -357,7 +363,7 @@ The login page should show both "Continue with Microsoft" and "Continue with Goo
 
 ## 6. Configure Email
 
-AletheDash uses Azure Communication Services for password reset and invite emails.
+Networker uses Azure Communication Services for password reset and invite emails.
 
 ### 6.1 Create ACS Resource
 

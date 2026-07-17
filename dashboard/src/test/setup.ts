@@ -36,5 +36,5 @@ afterEach(() => {
   cleanup();
   localStorage.clear();
   useProjectStore.getState().clear();
-  document.title = 'AletheDash';
+  document.title = 'Networker';
 });

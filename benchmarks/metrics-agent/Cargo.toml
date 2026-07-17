@@ -2,7 +2,7 @@
 name = "alethabench-metrics-agent"
 version = "0.1.0"
 edition = "2021"
-description = "AletheBench — lightweight server-side metrics collection agent"
+description = "Networker Bench (alethabench) — lightweight server-side metrics collection agent"
 
 [[bin]]
 name = "metrics-agent"

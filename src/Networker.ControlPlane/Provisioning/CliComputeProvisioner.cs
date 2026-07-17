@@ -846,7 +846,9 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
             new List<string>
             {
                 "ec2", "create-security-group", "--group-name", sgName,
-                "--description", "AletheDash tester (SSH + diagnostic ports)",
+                // Display-only description (brand = Networker). The SG *name* and
+                // tags stay "alethedash-tester" — live deployments match on them.
+                "--description", "Networker tester (SSH + diagnostic ports)",
                 "--query", "GroupId", "--region", region, "--output", "text",
             },
             env, ct, CommandTimeout).ConfigureAwait(false);

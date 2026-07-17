@@ -11,6 +11,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.33] — 2026-07-17
+
+### Changed
+- **Brand unified to "Networker" (P3, display-only).** The three-way product
+  identity split (Networker / AletheDash / AletheBench) is resolved:
+  - Dashboard UI: `<title>`, page titles (`usePageTitle`), login / forgot /
+    reset / change-password / invite / pending / SSO / shared-report headers,
+    and the cloud/SSO setup-guide strings now say **Networker**. npm package
+    renamed `dashboard` → `networker-dashboard`.
+  - Benchmark orchestrator: all display/doc strings are now
+    **"Networker Bench (alethabench)"** — CLI `about`, report title/H1/footer,
+    publication bundle heading, crate descriptions, reference-API READMEs and
+    source headers. The "AletheBench" prose spelling (drifted from the
+    `alethabench` identifier) is retired; the lowercase identifier is the only
+    surviving form.
+  - C# assemblies now stamp `<Product>Networker</Product>`
+    (Directory.Build.props); the AWS security-group *description* says
+    "Networker tester" (name/tags unchanged).
+  - New `docs/branding.md` records the rule: **Networker** is the brand;
+    `alethedash.com` (+ its `alethedash*` infra names) is the current
+    production deployment's identifier set; `alethabench` is the orchestrator
+    binary's historical name; env-var dialects (`DASHBOARD_*`, `BENCH_*`, …)
+    are known legacy and intentionally unrenamed.
+  - Deliberately unchanged: live infrastructure identifiers (domain, Azure
+    RG/VM, systemd service, DB, `/opt`/`/etc` paths, GH secrets, cloud
+    tags/SG/key names), env-var names, API/JSON contracts, release asset
+    names, `release.yml`/`soak-check.yml`, retired Rust crates, and
+    historical docs (CHANGELOG, dated plans/specs, audit snapshots).
+
+---
+
 ## [0.28.32] — 2026-07-17
 
 ### Security

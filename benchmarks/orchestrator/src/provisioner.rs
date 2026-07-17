@@ -316,7 +316,7 @@ async fn provision_aws(region: &str, _os: &str, vm_size: &str, name: &str) -> Re
             "--group-name",
             sg_name,
             "--description",
-            "AletheBench benchmark VMs",
+            "Networker Bench benchmark VMs",
             "--region",
             region,
             "--output",
