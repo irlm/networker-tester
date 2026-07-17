@@ -291,6 +291,17 @@ export const RUNTIME_TEMPLATES: RuntimeTemplate[] = [
     methodology: 'standard',
   },
   {
+    id: 'api-compute',
+    name: 'API Compute (apibench)',
+    description: 'Measured /api/* JSON workloads: users, transform, aggregate, search, compress. nginx excluded (no /api/* suite).',
+    defaultTestbedCount: 1,
+    defaultOs: 'linux',
+    defaultLanguages: ['rust', 'go', 'csharp-net8', 'java', 'nodejs', 'python'],
+    defaultProxies: ['nginx'],
+    defaultModes: ['http1', 'apibench'],
+    methodology: 'standard',
+  },
+  {
     id: 'validation-run',
     name: 'Validation Run',
     description: 'Golden run: Rust + Python, h2 + h3. Validates measurement correctness.',

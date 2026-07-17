@@ -174,6 +174,35 @@ public class RunExecutorMappingTests : IDisposable
     }
 
     [Fact]
+    public async Task Apibench_only_config_runs_one_tester_invocation_per_workload()
+    {
+        // modes=["apibench"] → no base invocation, one tester process per
+        // workload (5). The fake tester emits one successful attempt per
+        // invocation, so we expect 5 attempt frames and completed.
+        var testerJson = """{"schema_version":"1.0","attempts":[{"attempt_id":"a1","protocol":"http1","success":true}]}""";
+        var exec = MakeExecutor(WriteFakeTester(testerJson));
+        var sink = new CollectingSink();
+        var apibenchConfig = JsonDocument.Parse("""
+            { "id":"44444444-4444-4444-4444-444444444444",
+              "endpoint": { "kind":"network", "host":"example.com", "port":8443 },
+              "workload": { "modes":["apibench"], "runs":1, "concurrency":1, "timeout_ms":3000,
+                            "payload_sizes":[], "capture_mode":"headers-only", "insecure":true } }
+            """).RootElement.Clone();
+
+        await exec.ExecuteAsync(Guid.NewGuid(), apibenchConfig, sink, CancellationToken.None);
+
+        var attempts = sink.Messages.OfType<AttemptEventMessage>().Count();
+        Assert.Equal(ApibenchWorkloads.All.Count, attempts);
+
+        var progress = sink.Messages.OfType<RunProgressMessage>().Last();
+        Assert.Equal((uint)ApibenchWorkloads.All.Count, progress.Success);
+        Assert.Equal(0u, progress.Failure);
+
+        var finished = Assert.IsType<RunFinishedMessage>(sink.Messages[^1]);
+        Assert.Equal("completed", finished.Status);
+    }
+
+    [Fact]
     public async Task Missing_tester_binary_maps_to_error_and_failed()
     {
         var exec = MakeExecutor(Path.Combine(_scratch, "does-not-exist"));

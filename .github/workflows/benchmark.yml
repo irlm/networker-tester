@@ -1,6 +1,12 @@
 name: Benchmarks
 
 # AletheBench CI/CD pipeline — runs reference API benchmarks on demand or weekly.
+#
+# What gets measured: the apibench workload suite (benchmarks/configs/apibench.json)
+# — the spec-measured /api/* endpoints from benchmarks/shared/API-SPEC.md §4
+# (api-users, api-transform, api-aggregate, api-search, api-compress).
+# /health is constant-work by spec and is used only as a readiness gate, never
+# ranked (audit F4). One result JSON is written per language × workload.
 
 on:
   workflow_dispatch:
@@ -182,10 +188,10 @@ jobs:
       - name: Summarize results
         if: always()
         run: |
-          echo "## Benchmark Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Benchmark Results (apibench workloads)" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Language | Status | File |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|----------|--------|------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Language × Workload | Status | File |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---------------------|--------|------|" >> "$GITHUB_STEP_SUMMARY"
 
           for f in benchmarks/results/*.json; do
             [ -f "$f" ] || continue

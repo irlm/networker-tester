@@ -90,6 +90,10 @@ public static class PlatformEndpoints
         new("webupload", "Web Upload", "HTTP POST", "Upload via /upload endpoint route", "Throughput"),
         new("udpdownload", "UDP Download", "UDP bulk DL", "Bulk download via UDP throughput server (port 9998)", "Throughput"),
         new("udpupload", "UDP Upload", "UDP bulk UL", "Bulk upload via UDP throughput server (port 9998)", "Throughput"),
+        // API Workloads — orchestrator-level mode, NOT a tester Protocol
+        // variant: the orchestrator expands it into one tester run per
+        // workload in benchmarks/configs/apibench.json (API-SPEC.md §4).
+        new("apibench", "API Workloads", "Server compute", "Measured /api/* JSON workload suite: api-users, api-transform, api-aggregate, api-search, api-compress (benchmarks/configs/apibench.json). nginx is skipped — it serves no /api/* endpoints.", "API Workloads"),
     ];
 
     private static string GroupDetail(string label) => label switch
@@ -99,6 +103,7 @@ public static class PlatformEndpoints
         "Page Load (Native)" => "Loads a page with multiple assets using the Rust HTTP stack (no browser). Compares H1 (6 parallel connections), H2 (multiplexed), and H3 (QUIC). Fastest, no rendering overhead.",
         "Page Load (Browser)" => "Same page load test but using real Chrome headless. Includes rendering, JavaScript, and browser networking. Measures what users actually experience — DOM loaded, full load, bytes transferred.",
         "Throughput" => "Sustained transfer speed tests with configurable payload sizes. Measures download and upload bandwidth across different HTTP versions and transport protocols.",
+        "API Workloads" => "Per-request server computation benchmarks against the spec-measured /api/* endpoints (API-SPEC.md §4): dataset sorting, SHA-256 hashing, percentile aggregation, regex search, and zlib compression. Request shapes are frozen in benchmarks/configs/apibench.json so every language measures identical work.",
         _ => "",
     };
 

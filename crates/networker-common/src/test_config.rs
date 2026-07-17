@@ -185,6 +185,12 @@ pub enum Mode {
     Curl,
     Native,
     Tlsresume,
+    /// Runner-level mode: the measured /api/* workload suite
+    /// (benchmarks/configs/apibench.json, API-SPEC.md §4). Not a tester
+    /// protocol — runners expand it into one tester invocation per workload.
+    /// The legacy Rust agent parses it for wire compatibility but skips it
+    /// with a warning (the C# agent executes it).
+    Apibench,
 }
 
 impl Mode {
@@ -208,6 +214,7 @@ impl Mode {
             Mode::Curl => "curl",
             Mode::Native => "native",
             Mode::Tlsresume => "tlsresume",
+            Mode::Apibench => "apibench",
         }
     }
 }
