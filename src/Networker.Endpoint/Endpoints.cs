@@ -39,6 +39,7 @@ public static class Endpoints
         app.MapPost("/echo", EchoPost);
         app.MapGet("/echo", EchoGet);
         app.MapGet("/download", Download);
+        app.MapGet("/download/{size}", DownloadPath);
         app.MapPost("/upload", Upload);
         app.MapGet("/delay", Delay);
         app.MapGet("/headers", HeadersEcho);
@@ -115,17 +116,13 @@ public static class Endpoints
     // Core handlers
     // ─────────────────────────────────────────────────────────────────────────
 
-    private static IResult Health()
-    {
-        var obj = new JsonObject
-        {
-            ["status"] = "ok",
-            ["timestamp"] = Rfc3339Now(),
-            ["service"] = ServerInfo.Service,
-            ["version"] = ServerInfo.Version,
-        };
-        return JsonRaw(obj.ToJsonString(Compact));
-    }
+    // Constant-work /health per API-SPEC.md §5.1: the body is precomputed once
+    // so every language's /health does identical (zero) per-request work.
+    // `runtime` + `version` are required by the orchestrator contract.
+    private static readonly string HealthBody =
+        $"{{\"status\":\"ok\",\"runtime\":\"dotnet\",\"service\":\"{ServerInfo.Service}\",\"version\":\"{ServerInfo.Version}\"}}";
+
+    private static IResult Health() => JsonRaw(HealthBody);
 
     private static IResult EchoGet(HttpRequest req)
     {
@@ -164,10 +161,30 @@ public static class Endpoints
 
     private const long DownloadCap = 2L * 1024 * 1024 * 1024;
     private const int ChunkSize = 64 * 1024;
+    // Canonical download payload per API-SPEC.md §5.2: fill byte 0x42 ('B')
+    // streamed in 8 KiB chunks. Both are part of the measured workload and are
+    // pinned across all languages.
+    private const byte DownloadFill = 0x42;
+    private const int DownloadChunkSize = 8 * 1024;
 
-    private static async Task Download(HttpContext ctx)
+    /// <summary>GET /download?bytes=N — deprecated query-form alias.</summary>
+    private static Task Download(HttpContext ctx) =>
+        DownloadResponse(ctx, ParseQueryLong(ctx.Request, "bytes") ?? 1024);
+
+    /// <summary>GET /download/{size} — canonical path form (orchestrator contract).</summary>
+    private static Task DownloadPath(HttpContext ctx, string size)
     {
-        var n = Math.Min(ParseQueryLong(ctx.Request, "bytes") ?? 1024, DownloadCap);
+        if (!long.TryParse(size, out var n) || n < 0)
+        {
+            ctx.Response.StatusCode = 400;
+            return ctx.Response.WriteAsync("{\"error\":\"invalid size\"}");
+        }
+        return DownloadResponse(ctx, n);
+    }
+
+    private static async Task DownloadResponse(HttpContext ctx, long requested)
+    {
+        var n = Math.Min(requested, DownloadCap);
         var t0 = Stopwatch.GetTimestamp();
 
         var procMs = Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
@@ -179,12 +196,13 @@ public static class Endpoints
         ctx.Response.Headers["x-download-bytes"] = n.ToString();
         ctx.Response.Headers["server-timing"] = timing;
 
-        // Stream zero bytes in 64 KiB chunks without buffering the full payload.
-        var chunk = new byte[ChunkSize];
+        // Stream fill bytes in 8 KiB chunks without buffering the full payload.
+        var chunk = new byte[DownloadChunkSize];
+        Array.Fill(chunk, DownloadFill);
         long remaining = n;
         while (remaining > 0)
         {
-            var toWrite = (int)Math.Min(remaining, ChunkSize);
+            var toWrite = (int)Math.Min(remaining, DownloadChunkSize);
             await ctx.Response.Body.WriteAsync(chunk.AsMemory(0, toWrite));
             remaining -= toWrite;
         }

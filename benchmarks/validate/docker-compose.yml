@@ -4,6 +4,12 @@
 ##   ./run-validation.sh
 ##
 ## Each language gets a unique port (8501-8516) so all can run simultaneously.
+##
+## Every service mounts the shared dataset (benchmarks/shared/API-SPEC.md §2) —
+## previously only certs were mounted, so validation never exercised the
+## dataset code paths that break in production (audit V6/F2).
+
+x-bench-data: &bench-data ../reference-apis/shared/bench-data.json:/opt/bench/bench-data.json:ro
 
 services:
   certs:
@@ -20,8 +26,10 @@ services:
     ports: ["8501:8443"]
     environment:
       BENCH_CERT_DIR: /opt/bench
+      BENCH_DATA_PATH: /opt/bench/bench-data.json
     volumes:
       - certs:/opt/bench:ro
+      - *bench-data
     depends_on:
       certs:
         condition: service_completed_successfully
@@ -31,8 +39,10 @@ services:
     ports: ["8502:8443"]
     environment:
       BENCH_CERT_DIR: /opt/bench
+      BENCH_DATA_PATH: /opt/bench/bench-data.json
     volumes:
       - certs:/opt/bench:ro
+      - *bench-data
     depends_on:
       certs:
         condition: service_completed_successfully
@@ -43,8 +53,10 @@ services:
     environment:
       BENCH_CERT_DIR: /opt/bench
       BENCH_PORT: "8443"
+      BENCH_DATA_PATH: /opt/bench/bench-data.json
     volumes:
       - certs:/opt/bench:ro
+      - *bench-data
     depends_on:
       certs:
         condition: service_completed_successfully
@@ -54,8 +66,10 @@ services:
     ports: ["8504:8443"]
     environment:
       BENCH_CERT_DIR: /opt/bench
+      BENCH_DATA_PATH: /opt/bench/bench-data.json
     volumes:
       - certs:/opt/bench:ro
+      - *bench-data
     depends_on:
       certs:
         condition: service_completed_successfully
@@ -66,8 +80,10 @@ services:
     environment:
       BENCH_CERT_DIR: /opt/bench
       BENCH_PORT: "8443"
+      BENCH_DATA_PATH: /opt/bench/bench-data.json
     volumes:
       - certs:/opt/bench:ro
+      - *bench-data
     depends_on:
       certs:
         condition: service_completed_successfully
@@ -77,8 +93,10 @@ services:
     ports: ["8506:8443"]
     environment:
       BENCH_CERT_DIR: /opt/bench
+      BENCH_DATA_PATH: /opt/bench/bench-data.json
     volumes:
       - certs:/opt/bench:ro
+      - *bench-data
     depends_on:
       certs:
         condition: service_completed_successfully
@@ -88,8 +106,10 @@ services:
     ports: ["8507:8443"]
     environment:
       BENCH_CERT_DIR: /opt/bench
+      BENCH_DATA_PATH: /opt/bench/bench-data.json
     volumes:
       - certs:/opt/bench:ro
+      - *bench-data
     depends_on:
       certs:
         condition: service_completed_successfully
@@ -99,8 +119,10 @@ services:
     ports: ["8508:8443"]
     environment:
       BENCH_CERT_DIR: /opt/bench
+      BENCH_DATA_PATH: /opt/bench/bench-data.json
     volumes:
       - certs:/opt/bench:ro
+      - *bench-data
     depends_on:
       certs:
         condition: service_completed_successfully

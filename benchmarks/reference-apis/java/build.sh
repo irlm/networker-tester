@@ -10,7 +10,9 @@ echo "Compiling Server.java ..."
 javac Server.java
 
 echo "Packaging server.jar ..."
-jar cfe server.jar Server Server.class 'Server$HealthHandler.class' \
-    'Server$DownloadHandler.class' 'Server$UploadHandler.class'
+# Pack ALL compiled classes — javac emits one .class file per inner handler
+# class (APIUsersHandler, AggregateHandler, ...); listing only three of them
+# made the jar boot-fail with NoClassDefFoundError (audit V7).
+jar cfe server.jar Server *.class
 
 echo "Built: server.jar ($(du -h server.jar | cut -f1))"

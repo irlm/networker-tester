@@ -25,43 +25,70 @@ public sealed class BenchData
 
     public static BenchData? Instance => _cached.Value;
 
+    /// <summary>
+    /// Eagerly resolves the dataset at startup so a misconfigured
+    /// <c>BENCH_DATA_PATH</c> (or a corrupt on-disk dataset) is fatal
+    /// immediately instead of silently benchmarking different data
+    /// (API-SPEC.md §2, audit F2).
+    /// </summary>
+    public static void EnsureLoaded() => _ = Instance;
+
     private static BenchData? Load()
     {
-        var paths = new[]
+        // Explicitly configured path: any failure is fatal (API-SPEC.md §2).
+        var envPath = Environment.GetEnvironmentVariable("BENCH_DATA_PATH");
+        if (!string.IsNullOrEmpty(envPath))
         {
-            Environment.GetEnvironmentVariable("BENCH_DATA_PATH") ?? "",
-            "/opt/bench/bench-data.json",
-            "benchmarks/reference-apis/shared/bench-data.json",
-        };
-
-        foreach (var p in paths)
-        {
-            if (string.IsNullOrEmpty(p)) continue;
             try
             {
-                if (!File.Exists(p)) continue;
-                var content = File.ReadAllText(p);
-                var root = JsonNode.Parse(content)?.AsObject();
-                if (root is null) continue;
-
-                var data = new BenchData
-                {
-                    Users = ArrayNodes(root["users"]),
-                    SearchCorpus = StringArray(root["search_corpus"]),
-                    Timeseries = ArrayNodes(root["timeseries"]),
-                    ExpectedChecksums = root["expected_checksums"]?.AsObject() is { } cs
-                        ? (JsonObject)cs.DeepClone()
-                        : new JsonObject(),
-                };
-                return data;
+                return Parse(File.ReadAllText(envPath));
             }
-            catch
+            catch (Exception e)
             {
-                // try next path
+                Console.Error.WriteLine(
+                    $"FATAL: BENCH_DATA_PATH={envPath} could not be loaded: {e.Message} " +
+                    "(dataset load failure must not fall back to PRNG data)");
+                Environment.Exit(1);
+            }
+        }
+
+        // Fallback paths: a file that exists but fails to parse is fatal too.
+        foreach (var p in new[]
+                 {
+                     "/opt/bench/bench-data.json",
+                     "benchmarks/reference-apis/shared/bench-data.json",
+                 })
+        {
+            if (!File.Exists(p)) continue;
+            try
+            {
+                return Parse(File.ReadAllText(p));
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine(
+                    $"FATAL: bench-data.json exists at {p} but could not be loaded: {e.Message}");
+                Environment.Exit(1);
             }
         }
 
         return null;
+    }
+
+    private static BenchData Parse(string content)
+    {
+        var root = JsonNode.Parse(content)?.AsObject()
+            ?? throw new JsonException("root is not a JSON object");
+
+        return new BenchData
+        {
+            Users = ArrayNodes(root["users"]),
+            SearchCorpus = StringArray(root["search_corpus"]),
+            Timeseries = ArrayNodes(root["timeseries"]),
+            ExpectedChecksums = root["expected_checksums"]?.AsObject() is { } cs
+                ? (JsonObject)cs.DeepClone()
+                : new JsonObject(),
+        };
     }
 
     private static List<JsonNode?> ArrayNodes(JsonNode? node)

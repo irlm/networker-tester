@@ -415,8 +415,11 @@ public class Server {
     // ── Handlers ──────────────────────────────────────────────────────
 
     static class HealthHandler implements HttpHandler {
+        // Constant body per API-SPEC.md §5.1; "version" is required by the
+        // orchestrator contract (validator.rs checks status/runtime/version).
         private static final String BODY = String.format(
-                "{\"status\":\"ok\",\"language\":\"java\",\"runtime\":\"%s\"}",
+                "{\"status\":\"ok\",\"language\":\"java\",\"runtime\":\"%s\",\"version\":\"%s\"}",
+                System.getProperty("java.version"),
                 System.getProperty("java.version")
         );
 

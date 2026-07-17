@@ -1,6 +1,6 @@
 {
-  "_version": 1,
-  "_description": "Shared benchmark dataset for Application mode JSON API endpoints. DO NOT EDIT \u2014 regenerate with generate-bench-data.py.",
+  "_version": 2,
+  "_description": "Shared benchmark dataset for Application mode JSON API endpoints. Contract: benchmarks/shared/API-SPEC.md. DO NOT EDIT \u2014 regenerate with generate-bench-data.py.",
   "users": [
     {
       "id": 1,
@@ -51848,8 +51848,8 @@
   ],
   "expected_checksums": {
     "users_page1": "ff8d787ab8fd3b1645e07010f3b3b9c69d6d8f3624826a5498d17b9787b5a236",
-    "aggregate_summary": "8cba7aa8b1c7167ac541c75d88556ea813070c72556f41f4a7c96092fadf95d1",
-    "search_network_top10": "2f55b7ed416f1788edc2a942ef3c0f9f966871eb4fa7a56e8c5da5529040da3d",
-    "transform_input0": "9592dc373b97451aa217f8eb5fbb4f2b24fb7ffeb96b8eb218cbbcc755b652e7"
+    "aggregate_default": "9400a631a95e0f8f6f27b257bb4661c81724615c398215c74012e42e3886e736",
+    "search_network_top10": "68d64115f2cd53cad59c2c49acf8962fbb821f19d228920d23ffff29c450d1f7",
+    "transform_input0": "856f043bec21b836e129d334409d559a6ad0bf34304e4673fd6a306f8f3d51e5"
   }
 }

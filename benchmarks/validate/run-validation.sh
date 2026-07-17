@@ -2,13 +2,21 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # Application Benchmark JSON API Validation
 #
-# Tests all 7 JSON API endpoints against each reference API server.
-# Can run against Docker Compose servers or any single server URL.
+# Validates reference API servers against the frozen contract in
+# benchmarks/shared/API-SPEC.md. Two failure tiers:
+#
+#   HARD  — server unreachable or /health violates the orchestrator contract
+#           (status/runtime/version, constant body). Always fatal (exit 1).
+#   CONF  — spec-conformance failures: endpoint status/shape, canonical
+#           checksums (§7), download fill bytes, benchmark headers. Exit 2
+#           unless --require-conformance (then exit 1). Languages not yet
+#           ported to the canonical family C contract fail this tier until
+#           wave 2 lands — the CI workflow tracks them per language.
 #
 # Usage:
 #   ./run-validation.sh                          # Docker Compose (all languages)
-#   ./run-validation.sh --url https://localhost:8443   # Single server
-#   ./run-validation.sh --rust-only              # Just the Rust endpoint (no Docker)
+#   ./run-validation.sh --url=https://localhost:8443 --name=Go   # Single server
+#   ./run-validation.sh --rust-only              # Canonical Rust endpoint (no Docker)
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -19,25 +27,35 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 PASS=0
-FAIL=0
+FAIL=0        # hard failures
+CONF_FAIL=0   # spec-conformance failures
 SKIP=0
 ERRORS=""
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # ── Argument parsing ─────────────────────────────────────────────────────────
 MODE="docker"
 SINGLE_URL=""
-RUST_ONLY=0
+SINGLE_NAME="Server"
 SEED=42
 TOKEN=""
+DATA_PATH="$SCRIPT_DIR/../reference-apis/shared/bench-data.json"
+REQUIRE_CONF=0
 
 for arg in "$@"; do
     case "$arg" in
         --url=*) SINGLE_URL="${arg#*=}"; MODE="single" ;;
-        --url)   shift; SINGLE_URL="${1:-}"; MODE="single" ;;
-        --rust-only) RUST_ONLY=1; MODE="rust" ;;
+        --name=*) SINGLE_NAME="${arg#*=}" ;;
+        --rust-only) MODE="rust" ;;
         --seed=*) SEED="${arg#*=}" ;;
         --token=*) TOKEN="${arg#*=}" ;;
-        --help) echo "Usage: $0 [--url=URL | --rust-only] [--seed=N] [--token=TOKEN]"; exit 0 ;;
+        --data=*) DATA_PATH="${arg#*=}" ;;
+        --require-conformance) REQUIRE_CONF=1 ;;
+        --help)
+            echo "Usage: $0 [--url=URL [--name=NAME] | --rust-only] [--seed=N]" \
+                 "[--token=TOKEN] [--data=bench-data.json] [--require-conformance]"
+            exit 0 ;;
     esac
 done
 
@@ -49,6 +67,17 @@ fi
 
 # ── Test helpers ─────────────────────────────────────────────────────────────
 
+pass() { printf "  ${GREEN}PASS${NC} %-48s %s\n" "$1" "$2"; PASS=$((PASS + 1)); }
+hard_fail() {
+    printf "  ${RED}FAIL${NC} %-48s %s\n" "$1" "$2"
+    FAIL=$((FAIL + 1)); ERRORS+="  [hard] $1: $2\n"
+}
+conf_fail() {
+    printf "  ${YELLOW}CONF${NC} %-48s %s\n" "$1" "$2"
+    CONF_FAIL=$((CONF_FAIL + 1)); ERRORS+="  [conf] $1: $2\n"
+}
+
+# Conformance-tier endpoint check: HTTP < 400, valid JSON, optional field.
 check() {
     local label="$1"
     local url="$2"
@@ -56,16 +85,14 @@ check() {
     local body="${4:-}"
     local expect_field="${5:-}"
 
-    local curl_args=(-sk --max-time 10 -X "$method" ${AUTH_ARGS[@]+${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"}})
+    local curl_args=(-sk --max-time 10 -X "$method" ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"})
     if [[ -n "$body" ]]; then
         curl_args+=(-H "Content-Type: application/json" -d "$body")
     fi
 
     local response
     response=$(curl "${curl_args[@]}" -w "\n%{http_code}" "$url" 2>/dev/null) || {
-        printf "  ${RED}FAIL${NC} %-45s %s\n" "$label" "connection refused"
-        FAIL=$((FAIL + 1))
-        ERRORS+="  $label: connection refused\n"
+        conf_fail "$label" "connection refused"
         return 1
     }
 
@@ -75,35 +102,25 @@ check() {
     body_text=$(echo "$response" | sed '$d')
 
     if [[ "$http_code" -ge 400 ]]; then
-        printf "  ${RED}FAIL${NC} %-45s HTTP %s\n" "$label" "$http_code"
-        FAIL=$((FAIL + 1))
-        ERRORS+="  $label: HTTP $http_code\n"
+        conf_fail "$label" "HTTP $http_code"
         return 1
     fi
 
-    # Check response is valid JSON
     if ! echo "$body_text" | python3 -m json.tool > /dev/null 2>&1; then
-        printf "  ${RED}FAIL${NC} %-45s %s\n" "$label" "invalid JSON"
-        FAIL=$((FAIL + 1))
-        ERRORS+="  $label: invalid JSON response\n"
+        conf_fail "$label" "invalid JSON"
         return 1
     fi
 
-    # Check expected field if specified
     if [[ -n "$expect_field" ]]; then
         if ! echo "$body_text" | python3 -c "import sys,json; d=json.load(sys.stdin); assert '$expect_field' in (d if isinstance(d,dict) else {}), 'missing $expect_field'" 2>/dev/null; then
-            # For arrays, check first element
             if ! echo "$body_text" | python3 -c "import sys,json; d=json.load(sys.stdin); assert isinstance(d,list) and len(d)>0, 'empty'" 2>/dev/null; then
-                printf "  ${RED}FAIL${NC} %-45s %s\n" "$label" "missing field: $expect_field"
-                FAIL=$((FAIL + 1))
-                ERRORS+="  $label: missing expected field '$expect_field'\n"
+                conf_fail "$label" "missing field: $expect_field"
                 return 1
             fi
         fi
     fi
 
-    printf "  ${GREEN}PASS${NC} %-45s HTTP %s\n" "$label" "$http_code"
-    PASS=$((PASS + 1))
+    pass "$label" "HTTP $http_code"
     return 0
 }
 
@@ -114,18 +131,14 @@ check_header() {
 
     local headers
     headers=$(curl -sk --max-time 10 -I ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "$url" 2>/dev/null) || {
-        printf "  ${RED}FAIL${NC} %-45s %s\n" "$label" "connection refused"
-        FAIL=$((FAIL + 1))
+        conf_fail "$label" "connection refused"
         return 1
     }
 
     if echo "$headers" | grep -qi "$header"; then
-        printf "  ${GREEN}PASS${NC} %-45s %s\n" "$label" "present"
-        PASS=$((PASS + 1))
+        pass "$label" "present"
     else
-        printf "  ${RED}FAIL${NC} %-45s %s\n" "$label" "MISSING"
-        FAIL=$((FAIL + 1))
-        ERRORS+="  $label: header '$header' not found\n"
+        conf_fail "$label" "MISSING header '$header'"
     fi
 }
 
@@ -138,11 +151,129 @@ check_deterministic() {
     r2=$(curl -sk --max-time 10 ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} "$url" 2>/dev/null)
 
     if [[ "$r1" == "$r2" ]]; then
-        printf "  ${GREEN}PASS${NC} %-45s %s\n" "$label" "deterministic"
-        PASS=$((PASS + 1))
+        pass "$label" "deterministic"
     else
-        printf "  ${YELLOW}WARN${NC} %-45s %s\n" "$label" "non-deterministic"
+        conf_fail "$label" "non-deterministic"
+    fi
+}
+
+# HARD tier: /health must satisfy the orchestrator contract
+# (API-SPEC.md §5.1): 200, status=="ok", non-empty runtime + version,
+# byte-constant body across two requests.
+check_health_contract() {
+    local name="$1"
+    local base="$2"
+
+    local h1 h2
+    h1=$(curl -sk --max-time 10 "$base/health" 2>/dev/null) || {
+        hard_fail "$name /health" "connection refused"
+        return 1
+    }
+    h2=$(curl -sk --max-time 10 "$base/health" 2>/dev/null) || true
+
+    if ! echo "$h1" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+assert d.get("status") == "ok", "status != ok"
+assert isinstance(d.get("runtime"), str) and d["runtime"], "missing runtime"
+assert isinstance(d.get("version"), str) and d["version"], "missing version"
+' 2>/dev/null; then
+        hard_fail "$name /health contract" "needs status=ok + runtime + version — got: ${h1:0:120}"
+        return 1
+    fi
+    pass "$name /health contract" "status/runtime/version"
+
+    if [[ "$h1" == "$h2" ]]; then
+        pass "$name /health constant-work" "byte-constant"
+    else
+        conf_fail "$name /health constant-work" "body varies per request"
+    fi
+    return 0
+}
+
+# CONF tier: GET /download/1024 → exactly 1024 bytes, all 0x42 (§5.2).
+check_download_bytes() {
+    local name="$1"
+    local base="$2"
+
+    local tmp
+    tmp=$(mktemp)
+    if ! curl -sk --max-time 10 ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} -o "$tmp" "$base/download/1024" 2>/dev/null; then
+        conf_fail "$name /download/1024" "request failed"
+        rm -f "$tmp"; return 1
+    fi
+    if python3 -c "
+import sys
+b = open('$tmp','rb').read()
+assert len(b) == 1024, f'{len(b)} bytes'
+assert set(b) == {0x42}, 'fill byte != 0x42'
+" 2>/dev/null; then
+        pass "$name /download/1024" "1024 x 0x42"
+    else
+        conf_fail "$name /download/1024" "wrong size or fill byte (spec: 1024 bytes of 0x42)"
+    fi
+    rm -f "$tmp"
+}
+
+# CONF tier: the four canonical checksums from API-SPEC.md §7.
+check_spec_checksums() {
+    local name="$1"
+    local base="$2"
+
+    if [[ ! -f "$DATA_PATH" ]]; then
+        printf "  ${YELLOW}SKIP${NC} %-48s %s\n" "$name spec checksums" "no bench-data.json at $DATA_PATH"
         SKIP=$((SKIP + 1))
+        return 0
+    fi
+
+    local out
+    if out=$(python3 - "$base" "$DATA_PATH" "$TOKEN" <<'PYEOF' 2>&1
+import hashlib, json, ssl, sys, urllib.request
+
+base, data_path, token = sys.argv[1], sys.argv[2], sys.argv[3]
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+
+data = json.load(open(data_path))
+expected = data["expected_checksums"]
+
+def canon(obj):
+    return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode()
+
+def fetch(path, body=None):
+    headers = {"Content-Type": "application/json"} if body else {}
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    req = urllib.request.Request(base + path, data=body, headers=headers)
+    with urllib.request.urlopen(req, context=ctx, timeout=15) as r:
+        return json.loads(r.read())
+
+requests = {
+    "users_page1": ("/api/users?page=1&sort=name&order=asc", None),
+    "aggregate_default": ("/api/aggregate", None),
+    "search_network_top10": ("/api/search?q=network&limit=10", None),
+    "transform_input0": ("/api/transform", canon(data["transform_inputs"][0])),
+}
+
+bad = 0
+for key, (path, body) in requests.items():
+    try:
+        got = hashlib.sha256(canon(fetch(path, body))).hexdigest()
+    except Exception as e:
+        print(f"    {key}: request failed: {e}")
+        bad += 1
+        continue
+    if got != expected[key]:
+        print(f"    {key}: MISMATCH got {got[:16]}… want {expected[key][:16]}…")
+        bad += 1
+sys.exit(1 if bad else 0)
+PYEOF
+    ); then
+        pass "$name spec checksums" "4/4 canonical (§7)"
+    else
+        conf_fail "$name spec checksums" "response(s) diverge from API-SPEC.md"
+        [[ -n "$out" ]] && printf "%s\n" "$out"
     fi
 }
 
@@ -152,54 +283,45 @@ validate_server() {
     local name="$1"
     local base="$2"
 
-    printf "\n${CYAN}── $name ──${NC}\n"
+    printf "\n${CYAN}── %s ──${NC}\n" "$name"
 
-    # Health check first
+    # HARD tier: reachability + /health orchestrator contract.
     if ! curl -sk --max-time 5 "$base/health" > /dev/null 2>&1; then
-        printf "  ${RED}SKIP${NC} %-45s %s\n" "$name" "not reachable"
-        SKIP=$((SKIP + 7))
+        hard_fail "$name" "not reachable"
         return
     fi
+    check_health_contract "$name" "$base" || return
 
-    # 1. /api/users
+    # CONF tier: transport workload
+    check_download_bytes "$name" "$base"
+
+    # CONF tier: the 7 JSON API endpoints
     check "$name /api/users" "$base/api/users?page=1&sort=name&order=asc" "GET" "" ""
-
-    # 2. /api/transform
     check "$name /api/transform" "$base/api/transform" "POST" \
-        '{"seed":42,"fields":["hello","world"],"values":[1,2,3]}' ""
-
-    # 3. /api/aggregate
-    check "$name /api/aggregate" "$base/api/aggregate?range=1,100" "GET" "" "mean"
-
-    # 4. /api/search
-    check "$name /api/search" "$base/api/search?q=test&limit=10" "GET" "" ""
-
-    # 5. /api/upload/process
+        '{"seed":42,"fields":["hello","world"],"values":[1,2,3]}' "hashed_fields"
+    check "$name /api/aggregate" "$base/api/aggregate" "GET" "" "mean"
+    check "$name /api/search" "$base/api/search?q=test&limit=10" "GET" "" "results"
     check "$name /api/upload/process" "$base/api/upload/process" "POST" \
         "benchmark-test-payload-data-1234567890" "sha256"
-
-    # 6. /api/delayed
     check "$name /api/delayed" "$base/api/delayed?ms=10&work=light" "GET" "" "actual_ms"
-
-    # 7. /api/validate (deterministic)
-    check "$name /api/validate" "$base/api/validate?seed=$SEED" "GET" "" ""
+    check "$name /api/validate" "$base/api/validate?seed=$SEED" "GET" "" "checksums"
     check_deterministic "$name /api/validate determinism" "$base/api/validate?seed=$SEED"
+
+    # CONF tier: canonical response checksums (the real cross-language check)
+    check_spec_checksums "$name" "$base"
 
     # Auth rejection test (only when --token is provided)
     if [[ -n "$TOKEN" ]]; then
         local code
         code=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 5 "$base/api/users?page=1")
         if [[ "$code" == "401" ]]; then
-            printf "  ${GREEN}PASS${NC} %-45s %s\n" "$name auth rejection" "401"
-            PASS=$((PASS + 1))
+            pass "$name auth rejection" "401"
         else
-            printf "  ${RED}FAIL${NC} %-45s %s\n" "$name auth rejection" "expected 401, got $code"
-            FAIL=$((FAIL + 1))
-            ERRORS+="  $name auth rejection: expected 401, got $code\n"
+            conf_fail "$name auth rejection" "expected 401, got $code"
         fi
     fi
 
-    # Header checks
+    # CONF tier: benchmark headers (API-SPEC.md §1)
     check_header "$name Server-Timing" "$base/api/users?page=1" "Server-Timing"
     check_header "$name Cache-Control" "$base/api/users?page=1" "Cache-Control"
     check_header "$name Timing-Allow-Origin" "$base/api/users?page=1" "Timing-Allow-Origin"
@@ -210,61 +332,55 @@ validate_server() {
 
 echo "========================================"
 echo "  Application Benchmark API Validation"
+echo "  Contract: benchmarks/shared/API-SPEC.md"
 echo "========================================"
 
 if [[ "$MODE" == "rust" ]]; then
-    echo "Mode: Rust endpoint only (local)"
+    echo "Mode: Rust endpoint only (local, canonical baseline)"
     echo ""
 
-    # Build and start the Rust endpoint
-    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
     PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+    # The canonical baseline must be validated against the shared dataset.
+    export BENCH_DATA_PATH="$DATA_PATH"
+    REQUIRE_CONF=1
 
     echo "Building networker-endpoint..."
-    cargo build -p networker-endpoint --quiet 2>/dev/null
+    cargo build -p networker-endpoint --quiet
 
     echo "Starting endpoint on localhost:8443..."
     "$PROJECT_DIR/target/debug/networker-endpoint" --http-port 8480 --https-port 8443 &
     ENDPOINT_PID=$!
-    trap "kill $ENDPOINT_PID 2>/dev/null; wait $ENDPOINT_PID 2>/dev/null || true" EXIT
+    trap 'kill $ENDPOINT_PID 2>/dev/null; wait $ENDPOINT_PID 2>/dev/null || true' EXIT
 
     sleep 4
     validate_server "Rust" "https://localhost:8443"
 
 elif [[ "$MODE" == "single" ]]; then
-    echo "Mode: Single server at $SINGLE_URL"
+    echo "Mode: Single server '$SINGLE_NAME' at $SINGLE_URL"
     echo ""
-    validate_server "Server" "$SINGLE_URL"
+    validate_server "$SINGLE_NAME" "$SINGLE_URL"
 
 elif [[ "$MODE" == "docker" ]]; then
     echo "Mode: Docker Compose (all languages)"
     echo ""
 
-    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
     cd "$SCRIPT_DIR"
 
     echo "Starting containers..."
-    docker compose up -d --build --wait 2>&1 | tail -5
+    docker compose up -d --build --wait 2>&1 | tail -5 || true
 
-    # Wait for servers to be healthy
     echo "Waiting for servers to start..."
     sleep 10
 
-    # Language → port mapping
-    declare -A SERVERS=(
-        ["Go"]=8501
-        ["Python"]=8502
-        ["Node.js"]=8503
-        ["Java"]=8504
-        ["Ruby"]=8505
-        ["PHP"]=8506
-        ["C++"]=8507
-        ["C# .NET 8"]=8508
-    )
+    # Language → port mapping (parallel arrays: macOS ships bash 3.2, which
+    # has no associative arrays).
+    LANG_NAMES=("Go" "Python" "Node.js" "Java" "Ruby" "PHP" "C++" "C# .NET 8")
+    LANG_PORTS=(8501 8502 8503 8504 8505 8506 8507 8508)
 
-    for lang in "Go" "Python" "Node.js" "Java" "Ruby" "PHP" "C++" "C# .NET 8"; do
-        port="${SERVERS[$lang]}"
-        validate_server "$lang" "https://localhost:$port"
+    i=0
+    while [[ $i -lt ${#LANG_NAMES[@]} ]]; do
+        validate_server "${LANG_NAMES[$i]}" "https://localhost:${LANG_PORTS[$i]}"
+        i=$((i + 1))
     done
 
     echo ""
@@ -275,16 +391,23 @@ fi
 # ── Summary ──────────────────────────────────────────────────────────────────
 echo ""
 echo "========================================"
-printf "  Results: ${GREEN}%d passed${NC}  ${RED}%d failed${NC}  ${YELLOW}%d skipped${NC}\n" "$PASS" "$FAIL" "$SKIP"
+printf "  Results: ${GREEN}%d passed${NC}  ${RED}%d hard-failed${NC}  ${YELLOW}%d conformance-failed${NC}  %d skipped\n" \
+    "$PASS" "$FAIL" "$CONF_FAIL" "$SKIP"
 echo "========================================"
 
 if [[ -n "$ERRORS" ]]; then
     echo ""
     echo "Failures:"
-    printf "$ERRORS"
+    printf "%b" "$ERRORS"
 fi
 
 if [[ "$FAIL" -gt 0 ]]; then
     exit 1
+fi
+if [[ "$CONF_FAIL" -gt 0 ]]; then
+    if [[ "$REQUIRE_CONF" -eq 1 ]]; then
+        exit 1
+    fi
+    exit 2
 fi
 exit 0

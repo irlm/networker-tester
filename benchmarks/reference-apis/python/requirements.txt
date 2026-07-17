@@ -1,2 +1,7 @@
 hypercorn[h3]>=0.17,<1
 starlette>=0.46,<1
+# The Dockerfile, deploy.sh, and ci/run-language.sh all launch uvicorn, but it
+# was never installed here — the image could not boot (audit V7). The
+# uvicorn-vs-hypercorn identity decision is wave-2 work (audit F12); until
+# then both must be installed.
+uvicorn>=0.30,<1
