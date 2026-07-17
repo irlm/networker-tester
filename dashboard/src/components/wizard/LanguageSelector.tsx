@@ -49,6 +49,7 @@ export function LanguageSelector({ selectedLangs, onLangsChange, testbeds, selec
   }, [capabilityById, wantsDirectH2, wantsDirectH3]);
 
   const hasH1OnlyAnnotations = ALL_LANGUAGE_IDS.some(id => directH1Only(id));
+  const hasNoApiExclusions = ALL_LANGUAGE_IDS.some(id => lacksApibench(id));
 
   const toggleLang = useCallback((id: string) => {
     const next = new Set(selectedLangs);
@@ -145,7 +146,7 @@ export function LanguageSelector({ selectedLangs, onLangsChange, testbeds, selec
         {selectedLangs.has('nginx') && !wantsApibench && ' nginx is included as the static baseline.'}
       </p>
 
-      {wantsApibench && (
+      {hasNoApiExclusions && (
         <p className="text-xs text-gray-600 mt-1">
           apibench selected: languages tagged <span className="font-mono">no /api/*</span> serve no measured API suite and are excluded.
         </p>

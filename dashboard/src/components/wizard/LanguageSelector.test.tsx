@@ -31,7 +31,8 @@ describe('LanguageSelector capability gating', () => {
       />,
     );
 
-    expect(screen.getByText('no /api/*')).toBeInTheDocument();
+    // The tag on the nginx entry plus the mono span inside the exclusion note.
+    expect(screen.getAllByText('no /api/*')).toHaveLength(2);
     // nginx checkbox stays unselectable (it is baseline-disabled anyway) and
     // the apibench exclusion note is shown.
     expect(screen.getByText(/serve no measured API suite/)).toBeInTheDocument();
@@ -47,8 +48,9 @@ describe('LanguageSelector capability gating', () => {
       />,
     );
 
-    // java + python are h1-only in the trimmed matrix.
-    expect(screen.getAllByText('h1 direct')).toHaveLength(2);
+    // java + python tags (h1-only in the trimmed matrix) plus the mono span
+    // inside the footnote.
+    expect(screen.getAllByText('h1 direct')).toHaveLength(3);
     expect(screen.getByText(/h2\/h3 modes measure the proxy/)).toBeInTheDocument();
   });
 
