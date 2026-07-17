@@ -24,49 +24,55 @@ import java.security.PrivateKey;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateFactory;
 import java.security.spec.PKCS8EncodedKeySpec;
-import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Base64;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Random;
 import java.util.concurrent.Executors;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.ConsoleHandler;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 import java.util.zip.CRC32;
 import java.util.zip.Deflater;
 
 /**
  * AletheBench Java reference API.
  *
- * Single-file HTTPS server using JDK built-in com.sun.net.httpserver with
- * Virtual Threads (Java 21+). No external dependencies.
+ * Single-file HTTPS server using JDK built-in com.sun.net.httpserver.
+ * No external dependencies. Conforms to the frozen contract in
+ * benchmarks/shared/API-SPEC.md (family C).
+ *
+ * Worker policy (API-SPEC.md §3): the HttpServer executor is a fixed thread
+ * pool sized by BENCH_WORKERS (default = logical CPU count). /api/delayed is
+ * completed from a scheduler thread so the sleep never blocks a pool worker.
  *
  * Endpoints:
- *   GET  /health                -> {"status":"ok","language":"java","runtime":"..."}
- *   GET  /download/{size}       -> stream `size` bytes of zeros
- *   POST /upload                -> read body, return {"bytes_received": N}
- *   GET  /api/users             -> paginated sorted user list
- *   POST /api/transform         -> hash strings, reverse arrays
- *   GET  /api/aggregate         -> statistics over generated data points
- *   GET  /api/search            -> regex search over generated strings
- *   POST /api/upload/process    -> hash and compress uploaded body
- *   GET  /api/delayed           -> sleep with optional CPU work
- *   GET  /api/validate          -> checksums for all endpoints
+ *   GET  /health                -> byte-constant {"status","runtime","version"}
+ *   GET  /download/{size}       -> `size` bytes of 0x42 in 8 KiB chunks
+ *   POST /upload                -> drain body, {"received_bytes": N}
+ *   GET  /api/users             -> bare array, first 20 of sorted 100-user window
+ *   POST /api/transform         -> {seed, hashed_fields, reversed_values}
+ *   GET  /api/aggregate         -> quintile stats over the full timeseries
+ *   GET  /api/search            -> {query, total_matches, returned, results}
+ *   POST /api/upload/process    -> {original_size, compressed_size, crc32, sha256}
+ *   GET  /api/delayed           -> async timer delay, clamped [1, 100] ms
+ *   GET  /api/validate          -> {seed, checksums} from the shared dataset
  */
 public class Server {
 
     private static final int PORT = Integer.parseInt(System.getenv().getOrDefault("BENCH_PORT", "8443"));
     private static final String CERT_DIR = System.getenv().getOrDefault("BENCH_CERT_DIR", "/opt/bench");
     private static final String BENCH_TOKEN = System.getenv("BENCH_API_TOKEN");
+    private static final long MAX_DOWNLOAD = 2_147_483_648L; // §5.2: 2 GiB clamp
+    private static final int CHUNK_SIZE = 8192;              // §5.2: 8 KiB chunks
 
     private static final Logger logger = Logger.getLogger("bench-api");
 
@@ -111,248 +117,344 @@ public class Server {
         }
     }
 
-    // ── Shared benchmark dataset (loaded once at startup) ─────────────
+    // ── Minimal but CORRECT JSON parser + writer ──────────────────────
+    //
+    // The previous hand-written scanner broke on escaped quotes (audit F5).
+    // This is a complete recursive-descent JSON implementation: objects →
+    // LinkedHashMap, arrays → ArrayList, strings with full escape/\-uXXXX
+    // handling, numbers → Long when integral in the source text, Double
+    // otherwise (so 57.61 round-trips as 57.61 and 39.0 keeps its ".0",
+    // matching the §7 canonical-JSON float semantics).
 
-    /** Parsed user objects from bench-data.json. Null if file not found. */
-    private static List<Map<String, Object>> benchUsers = null;
-    /** Search corpus strings from bench-data.json. Null if file not found. */
-    private static List<String> benchSearchCorpus = null;
-    /** Timeseries data points from bench-data.json. Null if file not found. */
-    private static List<double[]> benchTimeseries = null; // [value] per entry
-    private static List<String> benchTimeseriesCategories = null;
-    /** Expected checksums from bench-data.json. Null if file not found. */
-    private static Map<String, String> benchChecksums = null;
-    /** Raw JSON content for pre-serialized responses. */
-    private static String benchRawContent = null;
+    static final class Json {
+        static Object parse(String s) {
+            P p = new P(s);
+            p.ws();
+            Object v = p.value();
+            p.ws();
+            if (p.pos != s.length()) throw new IllegalArgumentException("trailing data at " + p.pos);
+            return v;
+        }
 
+        private static final class P {
+            final String s;
+            int pos = 0;
+            P(String s) { this.s = s; }
+
+            void ws() {
+                while (pos < s.length()) {
+                    char c = s.charAt(pos);
+                    if (c == ' ' || c == '\t' || c == '\n' || c == '\r') pos++;
+                    else break;
+                }
+            }
+
+            char peek() {
+                if (pos >= s.length()) throw new IllegalArgumentException("unexpected end of input");
+                return s.charAt(pos);
+            }
+
+            void expect(char c) {
+                if (peek() != c) throw new IllegalArgumentException("expected '" + c + "' at " + pos);
+                pos++;
+            }
+
+            Object value() {
+                char c = peek();
+                switch (c) {
+                    case '{': return object();
+                    case '[': return array();
+                    case '"': return string();
+                    case 't': literal("true"); return Boolean.TRUE;
+                    case 'f': literal("false"); return Boolean.FALSE;
+                    case 'n': literal("null"); return null;
+                    default: return number();
+                }
+            }
+
+            void literal(String lit) {
+                if (!s.startsWith(lit, pos)) throw new IllegalArgumentException("invalid literal at " + pos);
+                pos += lit.length();
+            }
+
+            Map<String, Object> object() {
+                expect('{');
+                Map<String, Object> m = new LinkedHashMap<>();
+                ws();
+                if (peek() == '}') { pos++; return m; }
+                while (true) {
+                    ws();
+                    String key = string();
+                    ws();
+                    expect(':');
+                    ws();
+                    m.put(key, value());
+                    ws();
+                    char c = peek();
+                    if (c == ',') { pos++; continue; }
+                    if (c == '}') { pos++; return m; }
+                    throw new IllegalArgumentException("expected ',' or '}' at " + pos);
+                }
+            }
+
+            List<Object> array() {
+                expect('[');
+                List<Object> a = new ArrayList<>();
+                ws();
+                if (peek() == ']') { pos++; return a; }
+                while (true) {
+                    ws();
+                    a.add(value());
+                    ws();
+                    char c = peek();
+                    if (c == ',') { pos++; continue; }
+                    if (c == ']') { pos++; return a; }
+                    throw new IllegalArgumentException("expected ',' or ']' at " + pos);
+                }
+            }
+
+            String string() {
+                expect('"');
+                StringBuilder sb = new StringBuilder();
+                while (true) {
+                    if (pos >= s.length()) throw new IllegalArgumentException("unterminated string");
+                    char c = s.charAt(pos++);
+                    if (c == '"') return sb.toString();
+                    if (c == '\\') {
+                        if (pos >= s.length()) throw new IllegalArgumentException("unterminated escape");
+                        char e = s.charAt(pos++);
+                        switch (e) {
+                            case '"': sb.append('"'); break;
+                            case '\\': sb.append('\\'); break;
+                            case '/': sb.append('/'); break;
+                            case 'b': sb.append('\b'); break;
+                            case 'f': sb.append('\f'); break;
+                            case 'n': sb.append('\n'); break;
+                            case 'r': sb.append('\r'); break;
+                            case 't': sb.append('\t'); break;
+                            case 'u':
+                                if (pos + 4 > s.length()) throw new IllegalArgumentException("bad \\u escape");
+                                sb.append((char) Integer.parseInt(s.substring(pos, pos + 4), 16));
+                                pos += 4;
+                                break;
+                            default: throw new IllegalArgumentException("bad escape '\\" + e + "'");
+                        }
+                    } else {
+                        sb.append(c);
+                    }
+                }
+            }
+
+            Object number() {
+                int start = pos;
+                if (pos < s.length() && s.charAt(pos) == '-') pos++;
+                boolean isDouble = false;
+                while (pos < s.length()) {
+                    char c = s.charAt(pos);
+                    if (c >= '0' && c <= '9') { pos++; }
+                    else if (c == '.' || c == 'e' || c == 'E' || c == '+' || c == '-') { isDouble = isDouble || c == '.' || c == 'e' || c == 'E'; pos++; }
+                    else break;
+                }
+                String tok = s.substring(start, pos);
+                if (tok.isEmpty() || "-".equals(tok)) throw new IllegalArgumentException("invalid number at " + start);
+                try {
+                    return isDouble ? (Object) Double.parseDouble(tok) : (Object) Long.parseLong(tok);
+                } catch (NumberFormatException e) {
+                    try {
+                        return Double.parseDouble(tok);
+                    } catch (NumberFormatException e2) {
+                        throw new IllegalArgumentException("invalid number '" + tok + "'");
+                    }
+                }
+            }
+        }
+
+        static String write(Object o) {
+            StringBuilder sb = new StringBuilder(256);
+            writeTo(o, sb);
+            return sb.toString();
+        }
+
+        @SuppressWarnings("unchecked")
+        static void writeTo(Object o, StringBuilder sb) {
+            if (o == null) {
+                sb.append("null");
+            } else if (o instanceof String) {
+                writeString((String) o, sb);
+            } else if (o instanceof Double || o instanceof Float) {
+                double d = ((Number) o).doubleValue();
+                if (Double.isNaN(d) || Double.isInfinite(d)) throw new IllegalArgumentException("non-finite double");
+                sb.append(Double.toString(d)); // shortest round-trip; integral keeps ".0"
+            } else if (o instanceof Number) {
+                sb.append(o.toString());
+            } else if (o instanceof Boolean) {
+                sb.append(o.toString());
+            } else if (o instanceof Map) {
+                sb.append('{');
+                boolean first = true;
+                for (Map.Entry<String, Object> e : ((Map<String, Object>) o).entrySet()) {
+                    if (!first) sb.append(',');
+                    first = false;
+                    writeString(e.getKey(), sb);
+                    sb.append(':');
+                    writeTo(e.getValue(), sb);
+                }
+                sb.append('}');
+            } else if (o instanceof List) {
+                sb.append('[');
+                boolean first = true;
+                for (Object e : (List<Object>) o) {
+                    if (!first) sb.append(',');
+                    first = false;
+                    writeTo(e, sb);
+                }
+                sb.append(']');
+            } else {
+                throw new IllegalArgumentException("cannot serialize " + o.getClass());
+            }
+        }
+
+        static void writeString(String s, StringBuilder sb) {
+            sb.append('"');
+            for (int i = 0; i < s.length(); i++) {
+                char c = s.charAt(i);
+                switch (c) {
+                    case '"': sb.append("\\\""); break;
+                    case '\\': sb.append("\\\\"); break;
+                    case '\b': sb.append("\\b"); break;
+                    case '\f': sb.append("\\f"); break;
+                    case '\n': sb.append("\\n"); break;
+                    case '\r': sb.append("\\r"); break;
+                    case '\t': sb.append("\\t"); break;
+                    default:
+                        if (c < 0x20) {
+                            sb.append(String.format("\\u%04x", (int) c));
+                        } else {
+                            sb.append(c);
+                        }
+                }
+            }
+            sb.append('"');
+        }
+    }
+
+    // ── Shared benchmark dataset (API-SPEC.md §2) — load failure is FATAL ─
+
+    /** Parsed user objects from bench-data.json (LinkedHashMap each). */
+    private static List<Object> benchUsers;
+    /** Search corpus strings. */
+    private static List<String> benchSearchCorpus;
+    /** Timeseries `value` fields, in dataset order (audit F6: parsed once). */
+    private static double[] benchTsValues;
+    /** Expected checksums object, echoed by /api/validate. */
+    private static Map<String, Object> benchChecksums;
+
+    private static void fatal(String msg) {
+        System.err.println("FATAL: " + msg);
+        System.exit(1);
+    }
+
+    @SuppressWarnings("unchecked")
     private static void loadBenchData() {
-        List<String> paths = new ArrayList<>();
+        String chosen = null;
         String envPath = System.getenv("BENCH_DATA_PATH");
         if (envPath != null && !envPath.isEmpty()) {
-            paths.add(envPath);
-        }
-        paths.add("/opt/bench/bench-data.json");
-        paths.add(Path.of("../shared/bench-data.json").toAbsolutePath().normalize().toString());
-
-        for (String p : paths) {
-            try {
-                String content = Files.readString(Path.of(p), StandardCharsets.UTF_8);
-                benchRawContent = content;
-                parseBenchData(content);
-                logger.info(String.format("Loaded bench-data.json from %s (%d users, %d corpus, %d timeseries)",
-                        p,
-                        benchUsers != null ? benchUsers.size() : 0,
-                        benchSearchCorpus != null ? benchSearchCorpus.size() : 0,
-                        benchTimeseries != null ? benchTimeseries.size() : 0));
-                return;
-            } catch (IOException ignored) {
-                // try next path
-            } catch (Exception e) {
-                logger.warning(String.format("bench-data.json at %s is invalid: %s", p, e.getMessage()));
+            chosen = envPath; // must exist and parse — no fallback
+        } else {
+            String[] candidates = {
+                "/opt/bench/bench-data.json",
+                Path.of("../shared/bench-data.json").toAbsolutePath().normalize().toString(),
+            };
+            for (String c : candidates) {
+                if (Files.exists(Path.of(c))) { chosen = c; break; } // first existing wins
             }
-        }
-        logger.warning("bench-data.json not found, falling back to per-language PRNG");
-    }
-
-    /** Minimal JSON parser for bench-data.json — extracts users, search_corpus, timeseries, expected_checksums. */
-    private static void parseBenchData(String json) {
-        // Parse users array
-        benchUsers = new ArrayList<>();
-        int usersStart = json.indexOf("\"users\"");
-        if (usersStart >= 0) {
-            int arrStart = json.indexOf('[', usersStart);
-            int arrEnd = findMatchingBracket(json, arrStart);
-            if (arrStart >= 0 && arrEnd > arrStart) {
-                String usersArr = json.substring(arrStart + 1, arrEnd);
-                parseUserObjects(usersArr, benchUsers);
+            if (chosen == null) {
+                fatal("bench-data.json not found (tried BENCH_DATA_PATH, /opt/bench/bench-data.json, "
+                    + "../shared/bench-data.json); the shared dataset is required — there is no PRNG fallback");
             }
         }
 
-        // Parse search_corpus array (array of strings)
-        benchSearchCorpus = new ArrayList<>();
-        int searchStart = json.indexOf("\"search_corpus\"");
-        if (searchStart >= 0) {
-            int arrStart = json.indexOf('[', searchStart);
-            int arrEnd = findMatchingBracket(json, arrStart);
-            if (arrStart >= 0 && arrEnd > arrStart) {
-                String arr = json.substring(arrStart + 1, arrEnd);
-                parseStringArray(arr, benchSearchCorpus);
-            }
+        Map<String, Object> data;
+        try {
+            String content = Files.readString(Path.of(chosen), StandardCharsets.UTF_8);
+            data = (Map<String, Object>) Json.parse(content);
+        } catch (Exception e) {
+            fatal("bench-data.json at " + chosen + " could not be loaded: " + e.getMessage());
+            return; // unreachable
         }
 
-        // Parse timeseries array
-        benchTimeseries = new ArrayList<>();
-        benchTimeseriesCategories = new ArrayList<>();
-        int tsStart = json.indexOf("\"timeseries\"");
-        if (tsStart >= 0) {
-            int arrStart = json.indexOf('[', tsStart);
-            int arrEnd = findMatchingBracket(json, arrStart);
-            if (arrStart >= 0 && arrEnd > arrStart) {
-                String arr = json.substring(arrStart + 1, arrEnd);
-                parseTimeseriesObjects(arr, benchTimeseries, benchTimeseriesCategories);
-            }
+        Object version = data.get("_version");
+        if (!(version instanceof Long) || (Long) version != 2L) {
+            fatal("bench-data.json at " + chosen + ": _version=" + version + ", want 2");
         }
+        List<Object> users = (List<Object>) data.get("users");
+        List<Object> corpus = (List<Object>) data.get("search_corpus");
+        List<Object> timeseries = (List<Object>) data.get("timeseries");
+        List<Object> transformInputs = (List<Object>) data.get("transform_inputs");
+        Map<String, Object> checksums = (Map<String, Object>) data.get("expected_checksums");
+        if (users == null || users.size() != 100) fatal("bench-data.json: users count != 100");
+        if (corpus == null || corpus.size() != 1000) fatal("bench-data.json: search_corpus count != 1000");
+        if (timeseries == null || timeseries.size() != 10000) fatal("bench-data.json: timeseries count != 10000");
+        if (transformInputs == null || transformInputs.size() != 10) fatal("bench-data.json: transform_inputs count != 10");
+        if (checksums == null || checksums.size() != 4) fatal("bench-data.json: expected_checksums keys != 4");
 
-        // Parse expected_checksums object
-        benchChecksums = new HashMap<>();
-        int csStart = json.indexOf("\"expected_checksums\"");
-        if (csStart >= 0) {
-            int objStart = json.indexOf('{', csStart);
-            int objEnd = findMatchingCurly(json, objStart);
-            if (objStart >= 0 && objEnd > objStart) {
-                String obj = json.substring(objStart + 1, objEnd);
-                parseStringMap(obj, benchChecksums);
-            }
+        benchUsers = users;
+        benchSearchCorpus = new ArrayList<>(corpus.size());
+        for (Object o : corpus) benchSearchCorpus.add((String) o);
+        benchTsValues = new double[timeseries.size()];
+        for (int i = 0; i < timeseries.size(); i++) {
+            // §2: timeseries entries are OBJECTS {ts, value, category} —
+            // read the `value` field (audit F2).
+            Map<String, Object> point = (Map<String, Object>) timeseries.get(i);
+            benchTsValues[i] = ((Number) point.get("value")).doubleValue();
         }
+        benchChecksums = checksums;
+
+        logger.info(String.format("Loaded bench-data.json from %s (%d users, %d corpus, %d timeseries)",
+                chosen, benchUsers.size(), benchSearchCorpus.size(), benchTsValues.length));
     }
 
-    private static int findMatchingBracket(String s, int openPos) {
-        if (openPos < 0 || openPos >= s.length() || s.charAt(openPos) != '[') return -1;
-        int depth = 0;
-        boolean inStr = false;
-        for (int i = openPos; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c == '"' && (i == 0 || s.charAt(i - 1) != '\\')) inStr = !inStr;
-            if (!inStr) {
-                if (c == '[') depth++;
-                else if (c == ']') { depth--; if (depth == 0) return i; }
-            }
-        }
-        return -1;
+    // ── Constant-work /health body (§5.1) — precomputed once at startup ─
+
+    private static final byte[] HEALTH_BODY = String.format(
+            "{\"status\":\"ok\",\"runtime\":\"java\",\"version\":\"%s\"}",
+            System.getProperty("java.version")
+    ).getBytes(StandardCharsets.UTF_8);
+
+    /** Shared 8 KiB chunk of 0x42 for /download (§5.2). */
+    private static final byte[] FILL_CHUNK = new byte[CHUNK_SIZE];
+    static {
+        java.util.Arrays.fill(FILL_CHUNK, (byte) 0x42);
     }
 
-    private static int findMatchingCurly(String s, int openPos) {
-        if (openPos < 0 || openPos >= s.length() || s.charAt(openPos) != '{') return -1;
-        int depth = 0;
-        boolean inStr = false;
-        for (int i = openPos; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c == '"' && (i == 0 || s.charAt(i - 1) != '\\')) inStr = !inStr;
-            if (!inStr) {
-                if (c == '{') depth++;
-                else if (c == '}') { depth--; if (depth == 0) return i; }
-            }
-        }
-        return -1;
-    }
-
-    private static void parseUserObjects(String arr, List<Map<String, Object>> out) {
-        int pos = 0;
-        while (pos < arr.length()) {
-            int objStart = arr.indexOf('{', pos);
-            if (objStart < 0) break;
-            int objEnd = findMatchingCurly(arr, objStart);
-            if (objEnd < 0) break;
-            String objStr = arr.substring(objStart + 1, objEnd);
-
-            Map<String, Object> user = new LinkedHashMap<>();
-            // Extract fields: id (int), name (string), email (string), score (double), created_at (string)
-            user.put("id", extractJsonInt(objStr, "id"));
-            user.put("name", extractJsonString(objStr, "name"));
-            user.put("email", extractJsonString(objStr, "email"));
-            user.put("score", extractJsonDouble(objStr, "score"));
-            user.put("created_at", extractJsonString(objStr, "created_at"));
-            out.add(user);
-            pos = objEnd + 1;
-        }
-    }
-
-    private static void parseTimeseriesObjects(String arr, List<double[]> values, List<String> categories) {
-        int pos = 0;
-        while (pos < arr.length()) {
-            int objStart = arr.indexOf('{', pos);
-            if (objStart < 0) break;
-            int objEnd = findMatchingCurly(arr, objStart);
-            if (objEnd < 0) break;
-            String objStr = arr.substring(objStart + 1, objEnd);
-            values.add(new double[]{extractJsonDouble(objStr, "value")});
-            categories.add(extractJsonString(objStr, "category"));
-            pos = objEnd + 1;
-        }
-    }
-
-    private static void parseStringArray(String arr, List<String> out) {
-        int pos = 0;
-        while (pos < arr.length()) {
-            int qStart = arr.indexOf('"', pos);
-            if (qStart < 0) break;
-            int qEnd = qStart + 1;
-            while (qEnd < arr.length()) {
-                if (arr.charAt(qEnd) == '"' && arr.charAt(qEnd - 1) != '\\') break;
-                qEnd++;
-            }
-            out.add(arr.substring(qStart + 1, qEnd).replace("\\\"", "\"").replace("\\\\", "\\"));
-            pos = qEnd + 1;
-        }
-    }
-
-    private static void parseStringMap(String obj, Map<String, String> out) {
-        int pos = 0;
-        while (pos < obj.length()) {
-            int kStart = obj.indexOf('"', pos);
-            if (kStart < 0) break;
-            int kEnd = obj.indexOf('"', kStart + 1);
-            if (kEnd < 0) break;
-            String key = obj.substring(kStart + 1, kEnd);
-            int colon = obj.indexOf(':', kEnd);
-            if (colon < 0) break;
-            int vStart = obj.indexOf('"', colon);
-            if (vStart < 0) break;
-            int vEnd = obj.indexOf('"', vStart + 1);
-            if (vEnd < 0) break;
-            out.put(key, obj.substring(vStart + 1, vEnd));
-            pos = vEnd + 1;
-        }
-    }
-
-    private static String extractJsonString(String obj, String key) {
-        String search = "\"" + key + "\"";
-        int idx = obj.indexOf(search);
-        if (idx < 0) return "";
-        int colon = obj.indexOf(':', idx + search.length());
-        if (colon < 0) return "";
-        int qStart = obj.indexOf('"', colon);
-        if (qStart < 0) return "";
-        int qEnd = qStart + 1;
-        while (qEnd < obj.length()) {
-            if (obj.charAt(qEnd) == '"' && obj.charAt(qEnd - 1) != '\\') break;
-            qEnd++;
-        }
-        return obj.substring(qStart + 1, qEnd);
-    }
-
-    private static int extractJsonInt(String obj, String key) {
-        String search = "\"" + key + "\"";
-        int idx = obj.indexOf(search);
-        if (idx < 0) return 0;
-        int colon = obj.indexOf(':', idx + search.length());
-        if (colon < 0) return 0;
-        int start = colon + 1;
-        while (start < obj.length() && Character.isWhitespace(obj.charAt(start))) start++;
-        int end = start;
-        while (end < obj.length() && (Character.isDigit(obj.charAt(end)) || obj.charAt(end) == '-')) end++;
-        try { return Integer.parseInt(obj.substring(start, end)); } catch (NumberFormatException e) { return 0; }
-    }
-
-    private static double extractJsonDouble(String obj, String key) {
-        String search = "\"" + key + "\"";
-        int idx = obj.indexOf(search);
-        if (idx < 0) return 0.0;
-        int colon = obj.indexOf(':', idx + search.length());
-        if (colon < 0) return 0.0;
-        int start = colon + 1;
-        while (start < obj.length() && Character.isWhitespace(obj.charAt(start))) start++;
-        int end = start;
-        while (end < obj.length() && (Character.isDigit(obj.charAt(end)) || obj.charAt(end) == '.' || obj.charAt(end) == '-' || obj.charAt(end) == 'E' || obj.charAt(end) == 'e' || obj.charAt(end) == '+')) end++;
-        try { return Double.parseDouble(obj.substring(start, end)); } catch (NumberFormatException e) { return 0.0; }
-    }
+    /** Timer for /api/delayed — the sleep must not block a pool worker (§5.9). */
+    private static final ScheduledExecutorService SCHEDULER =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "delayed-timer");
+                t.setDaemon(true);
+                return t;
+            });
 
     public static void main(String[] args) throws Exception {
         loadBenchData();
 
+        // Worker policy (§3): BENCH_WORKERS maps to the HttpServer executor's
+        // fixed thread-pool size, default = logical CPU count.
+        int nproc = Runtime.getRuntime().availableProcessors();
+        int workers = nproc;
+        String w = System.getenv("BENCH_WORKERS");
+        if (w != null && !w.isEmpty()) {
+            try {
+                workers = Integer.parseInt(w);
+            } catch (NumberFormatException e) {
+                fatal("BENCH_WORKERS=" + w + " is not a positive integer");
+            }
+            if (workers < 1) fatal("BENCH_WORKERS=" + w + " is not a positive integer");
+        }
+
         // Check if TLS certs exist — if not, run plain HTTP (application mode)
-        boolean useTls = java.nio.file.Files.exists(Path.of(CERT_DIR, "cert.pem"))
-                      && java.nio.file.Files.exists(Path.of(CERT_DIR, "key.pem"));
+        boolean useTls = Files.exists(Path.of(CERT_DIR, "cert.pem"))
+                      && Files.exists(Path.of(CERT_DIR, "key.pem"));
 
         com.sun.net.httpserver.HttpServer server;
         if (useTls) {
@@ -384,13 +486,14 @@ public class Server {
         server.createContext("/api/delayed", new APIDelayedHandler());
         server.createContext("/api/validate", new APIValidateHandler());
 
-        server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
+        server.setExecutor(Executors.newFixedThreadPool(workers));
         server.start();
 
-        logger.info(String.format("Java %s server listening on :%d (Virtual Threads)", useTls ? "HTTPS" : "HTTP", PORT));
+        logger.info(String.format("Java %s server listening on :%d (nproc=%d bench_workers=%d, fixed thread pool)",
+                useTls ? "HTTPS" : "HTTP", PORT, nproc, workers));
     }
 
-    // ── Auth ─────────────────────────────────────────────────────────
+    // ── Auth (§1) ─────────────────────────────────────────────────────
 
     /**
      * Check bearer token auth. Returns true if authorized, false if 401 was sent.
@@ -402,9 +505,8 @@ public class Server {
         if ("/health".equals(path)) return true;
         String auth = exchange.getRequestHeaders().getFirst("Authorization");
         if (auth != null && auth.equals("Bearer " + BENCH_TOKEN)) return true;
-        exchange.getResponseHeaders().set("Content-Type", "application/json");
-        exchange.getResponseHeaders().set("Server-Timing", "auth;dur=0.0");
         byte[] body = "{\"error\":\"unauthorized\"}".getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set("Content-Type", "application/json");
         exchange.sendResponseHeaders(401, body.length);
         try (OutputStream out = exchange.getResponseBody()) {
             out.write(body);
@@ -412,113 +514,9 @@ public class Server {
         return false;
     }
 
-    // ── Handlers ──────────────────────────────────────────────────────
+    // ── Response helpers ──────────────────────────────────────────────
 
-    static class HealthHandler implements HttpHandler {
-        // Constant body per API-SPEC.md §5.1; "version" is required by the
-        // orchestrator contract (validator.rs checks status/runtime/version).
-        private static final String BODY = String.format(
-                "{\"status\":\"ok\",\"language\":\"java\",\"runtime\":\"%s\",\"version\":\"%s\"}",
-                System.getProperty("java.version"),
-                System.getProperty("java.version")
-        );
-
-        @Override
-        public void handle(HttpExchange ex) throws IOException {
-            if (!"GET".equals(ex.getRequestMethod())) {
-                sendText(ex, 405, "{\"error\":\"method not allowed\"}");
-                return;
-            }
-            sendText(ex, 200, BODY);
-        }
-    }
-
-    static class DownloadHandler implements HttpHandler {
-        private static final int CHUNK = 64 * 1024;
-        private static final byte[] ZEROS = new byte[CHUNK];
-
-        @Override
-        public void handle(HttpExchange ex) throws IOException {
-            if (!checkAuth(ex)) return;
-            if (!"GET".equals(ex.getRequestMethod())) {
-                sendText(ex, 405, "{\"error\":\"method not allowed\"}");
-                return;
-            }
-
-            String path = ex.getRequestURI().getPath();   // /download/1048576
-            String sizeStr = path.substring(path.lastIndexOf('/') + 1);
-            long size;
-            try {
-                size = Long.parseLong(sizeStr);
-            } catch (NumberFormatException e) {
-                sendText(ex, 400, "{\"error\":\"invalid size\"}");
-                return;
-            }
-            if (size < 0 || size > 1_073_741_824L) {
-                sendText(ex, 400, "{\"error\":\"size must be 0..1GiB\"}");
-                return;
-            }
-
-            ex.getResponseHeaders().set("Content-Type", "application/octet-stream");
-            ex.sendResponseHeaders(200, size);
-            try (OutputStream out = ex.getResponseBody()) {
-                long remaining = size;
-                while (remaining > 0) {
-                    int toWrite = (int) Math.min(remaining, CHUNK);
-                    out.write(ZEROS, 0, toWrite);
-                    remaining -= toWrite;
-                }
-            }
-        }
-    }
-
-    static class UploadHandler implements HttpHandler {
-        private static final int BUF_SIZE = 64 * 1024;
-
-        @Override
-        public void handle(HttpExchange ex) throws IOException {
-            if (!checkAuth(ex)) return;
-            if (!"POST".equals(ex.getRequestMethod())) {
-                sendText(ex, 405, "{\"error\":\"method not allowed\"}");
-                return;
-            }
-
-            long received = 0;
-            byte[] buf = new byte[BUF_SIZE];
-            try (InputStream in = ex.getRequestBody()) {
-                int n;
-                while ((n = in.read(buf)) != -1) {
-                    received += n;
-                }
-            }
-
-            String body = String.format("{\"bytes_received\":%d}", received);
-            sendText(ex, 200, body);
-        }
-    }
-
-    // ── JSON API Handlers ─────────────────────────────────────────────
-
-    private static final String[] FIRST_NAMES = {
-            "Alice", "Bob", "Carol", "Dave", "Eve", "Frank", "Grace", "Hank",
-            "Ivy", "Jack", "Kara", "Leo", "Mia", "Nick", "Olga", "Paul",
-            "Quinn", "Rita", "Sam", "Tina"
-    };
-    private static final String[] LAST_NAMES = {
-            "Smith", "Johnson", "Brown", "Taylor", "Anderson", "Thomas", "Jackson",
-            "White", "Harris", "Martin", "Garcia", "Clark", "Lewis", "Hall", "Young",
-            "King", "Wright", "Lopez", "Hill", "Scott"
-    };
-    private static final String[] DOMAINS = {"example.com", "test.org", "demo.net", "bench.io", "sample.dev"};
-    private static final String[] WORDS = {
-            "network", "latency", "throughput", "bandwidth", "packet", "socket",
-            "connection", "timeout", "buffer", "stream", "protocol", "endpoint",
-            "request", "response", "header", "payload", "router", "gateway",
-            "firewall", "proxy"
-    };
-    private static final String[] CAT_NAMES = {"alpha", "beta", "gamma", "delta", "epsilon"};
-
-    /** Set common benchmark headers; return start time in nanos. */
+    /** Set the §1 benchmark headers; return start time in nanos. */
     private static long setAPIHeaders(HttpExchange ex) {
         ex.getResponseHeaders().set("Content-Type", "application/json");
         ex.getResponseHeaders().set("Cache-Control", "no-store, no-cache, must-revalidate");
@@ -527,17 +525,47 @@ public class Server {
         return System.nanoTime();
     }
 
-    /** Write Server-Timing header from start nanos. */
-    private static void writeServerTiming(HttpExchange ex, long startNanos) {
-        double dur = (System.nanoTime() - startNanos) / 1_000_000.0;
-        ex.getResponseHeaders().set("Server-Timing", String.format("app;dur=%.1f", dur));
+    /** True when the request should be served like GET with the body
+     *  suppressed (the validator checks §1 headers with `curl -I`). */
+    private static boolean isHead(HttpExchange ex) {
+        return "HEAD".equals(ex.getRequestMethod());
     }
 
-    /** Send JSON response with Server-Timing. */
-    private static void sendAPI(HttpExchange ex, long startNanos, String json) throws IOException {
-        writeServerTiming(ex, startNanos);
+    /** True when the method is neither GET nor HEAD. */
+    private static boolean notGet(HttpExchange ex) {
+        String m = ex.getRequestMethod();
+        return !"GET".equals(m) && !"HEAD".equals(m);
+    }
+
+    /** Send a JSON response with Server-Timing (works for success AND errors,
+     *  so §10 item 7 — bench headers on all /api/* responses — holds).
+     *  HEAD requests get headers only. */
+    private static void sendAPI(HttpExchange ex, long startNanos, int status, String json) throws IOException {
+        double dur = (System.nanoTime() - startNanos) / 1_000_000.0;
+        ex.getResponseHeaders().set("Server-Timing", String.format("app;dur=%.1f", dur));
         byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
-        ex.sendResponseHeaders(200, bytes.length);
+        if (isHead(ex) || bytes.length == 0) {
+            ex.sendResponseHeaders(status, -1);
+            ex.close();
+            return;
+        }
+        ex.sendResponseHeaders(status, bytes.length);
+        try (OutputStream out = ex.getResponseBody()) {
+            out.write(bytes);
+        }
+    }
+
+    private static void sendAPIError(HttpExchange ex, long startNanos, int status, String message) throws IOException {
+        Map<String, Object> err = new LinkedHashMap<>();
+        err.put("error", message);
+        sendAPI(ex, startNanos, status, Json.write(err));
+    }
+
+    /** Plain JSON send for non-/api routes. */
+    private static void sendText(HttpExchange ex, int code, String body) throws IOException {
+        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        ex.getResponseHeaders().set("Content-Type", "application/json");
+        ex.sendResponseHeaders(code, bytes.length);
         try (OutputStream out = ex.getResponseBody()) {
             out.write(bytes);
         }
@@ -567,91 +595,138 @@ public class Server {
         return sb.toString();
     }
 
-    /** Generate 100 users from seed. */
-    private static List<Map<String, Object>> generateUsers(long seed) {
-        Random rng = new Random(seed);
-        List<Map<String, Object>> users = new ArrayList<>(100);
-        for (int i = 0; i < 100; i++) {
-            String first = FIRST_NAMES[rng.nextInt(FIRST_NAMES.length)];
-            String last = LAST_NAMES[rng.nextInt(LAST_NAMES.length)];
-            String domain = DOMAINS[rng.nextInt(DOMAINS.length)];
-
-            Map<String, Object> user = new LinkedHashMap<>();
-            user.put("id", i + 1);
-            user.put("name", first + " " + last);
-            user.put("email", first.toLowerCase() + "." + last.toLowerCase() + "@" + domain);
-            user.put("age", 20 + rng.nextInt(50));
-            user.put("score", rng.nextInt(1000));
-            user.put("active", rng.nextInt(2) == 1);
-            user.put("created_at", String.format("2025-%02d-%02d", 1 + rng.nextInt(12), 1 + rng.nextInt(28)));
-            users.add(user);
+    private static String sha256Hex(byte[] input) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            return hexEncode(md.digest(input));
+        } catch (Exception e) {
+            throw new RuntimeException(e); // SHA-256 is always available
         }
-        return users;
     }
 
-    /** Escape a string for JSON output. */
-    private static String jsonEscape(String s) {
-        return s.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
+    /** r2: §5.6 rounding — half away from zero to 2 decimals. */
+    private static double r2(double x) {
+        return Math.floor(x * 100.0 + 0.5) / 100.0;
     }
 
-    /** Serialize a user map to JSON object string. */
-    private static String userToJson(Map<String, Object> user) {
-        return String.format(
-                "{\"id\":%d,\"name\":\"%s\",\"email\":\"%s\",\"age\":%d,\"score\":%d,\"active\":%s,\"created_at\":\"%s\"}",
-                user.get("id"), jsonEscape((String) user.get("name")),
-                jsonEscape((String) user.get("email")), user.get("age"),
-                user.get("score"), user.get("active"), user.get("created_at")
-        );
+    // ── Handlers ──────────────────────────────────────────────────────
+
+    // GET /health — byte-constant body precomputed at startup (§5.1).
+    static class HealthHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange ex) throws IOException {
+            if (notGet(ex)) {
+                sendText(ex, 405, "{\"error\":\"method not allowed\"}");
+                return;
+            }
+            ex.getResponseHeaders().set("Content-Type", "application/json");
+            if (isHead(ex)) {
+                ex.sendResponseHeaders(200, -1);
+                ex.close();
+                return;
+            }
+            ex.sendResponseHeaders(200, HEALTH_BODY.length);
+            try (OutputStream out = ex.getResponseBody()) {
+                out.write(HEALTH_BODY);
+            }
+        }
     }
 
-    /** Serialize a list of user maps to JSON array. */
-    private static String usersToJson(List<Map<String, Object>> users) {
-        StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < users.size(); i++) {
-            if (i > 0) sb.append(",");
-            sb.append(userToJson(users.get(i)));
-        }
-        sb.append("]");
-        return sb.toString();
-    }
-
-    /** Serialize a bench-data user map to JSON (uses score as double, created_at as string). */
-    private static String benchUserToJson(Map<String, Object> user) {
-        StringBuilder sb = new StringBuilder("{");
-        sb.append("\"id\":").append(user.get("id"));
-        sb.append(",\"name\":\"").append(jsonEscape((String) user.get("name"))).append("\"");
-        sb.append(",\"email\":\"").append(jsonEscape((String) user.get("email"))).append("\"");
-        Object score = user.get("score");
-        if (score instanceof Double) {
-            sb.append(",\"score\":").append(score);
-        } else if (score instanceof Integer) {
-            sb.append(",\"score\":").append(score);
-        } else {
-            sb.append(",\"score\":").append(score);
-        }
-        if (user.containsKey("created_at")) {
-            sb.append(",\"created_at\":\"").append(jsonEscape((String) user.get("created_at"))).append("\"");
-        }
-        if (user.containsKey("age")) {
-            sb.append(",\"age\":").append(user.get("age"));
-        }
-        if (user.containsKey("active")) {
-            sb.append(",\"active\":").append(user.get("active"));
-        }
-        sb.append("}");
-        return sb.toString();
-    }
-
-    // GET /api/users?page=N&sort=field&order=asc — paginated sorted user list.
-    static class APIUsersHandler implements HttpHandler {
+    // GET /download/{size} — 0x42 fill, 8 KiB chunks, 2 GiB clamp (§5.2).
+    static class DownloadHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange ex) throws IOException {
             if (!checkAuth(ex)) return;
-            if (!"GET".equals(ex.getRequestMethod())) {
+            if (notGet(ex)) {
+                sendText(ex, 405, "{\"error\":\"method not allowed\"}");
+                return;
+            }
+            long start = System.nanoTime();
+
+            String path = ex.getRequestURI().getPath();   // /download/1048576
+            String sizeStr = path.substring(path.lastIndexOf('/') + 1);
+            long size;
+            try {
+                size = Long.parseLong(sizeStr);
+            } catch (NumberFormatException e) {
+                sendText(ex, 400, "{\"error\":\"invalid size\"}");
+                return;
+            }
+            if (size < 0) {
+                sendText(ex, 400, "{\"error\":\"invalid size\"}");
+                return;
+            }
+            if (size > MAX_DOWNLOAD) size = MAX_DOWNLOAD; // clamp, not reject
+
+            double procMs = (System.nanoTime() - start) / 1_000_000.0;
+            ex.getResponseHeaders().set("Content-Type", "application/octet-stream");
+            ex.getResponseHeaders().set("X-Download-Bytes", Long.toString(size));
+            ex.getResponseHeaders().set("Server-Timing", String.format("proc;dur=%.1f", procMs));
+            // sendResponseHeaders: length 0 means chunked; -1 means no body.
+            if (isHead(ex) || size == 0) {
+                ex.sendResponseHeaders(200, -1);
+                ex.close();
+                return;
+            }
+            ex.sendResponseHeaders(200, size);
+            try (OutputStream out = ex.getResponseBody()) {
+                long remaining = size;
+                while (remaining > 0) {
+                    int toWrite = (int) Math.min(remaining, CHUNK_SIZE);
+                    out.write(FILL_CHUNK, 0, toWrite);
+                    remaining -= toWrite;
+                }
+            }
+        }
+    }
+
+    // POST /upload — drain body without wholesale buffering (§5.3).
+    static class UploadHandler implements HttpHandler {
+        private static final int BUF_SIZE = 64 * 1024;
+
+        @Override
+        public void handle(HttpExchange ex) throws IOException {
+            if (!checkAuth(ex)) return;
+            if (!"POST".equals(ex.getRequestMethod())) {
+                sendText(ex, 405, "{\"error\":\"method not allowed\"}");
+                return;
+            }
+            long start = System.nanoTime();
+
+            long received = 0;
+            byte[] buf = new byte[BUF_SIZE];
+            try (InputStream in = ex.getRequestBody()) {
+                int n;
+                while ((n = in.read(buf)) != -1) {
+                    received += n;
+                }
+            }
+
+            double recvMs = (System.nanoTime() - start) / 1_000_000.0;
+            ex.getResponseHeaders().set("Content-Type", "application/json");
+            ex.getResponseHeaders().set("X-Networker-Received-Bytes", Long.toString(received));
+            ex.getResponseHeaders().set("Server-Timing", String.format("recv;dur=%.1f", recvMs));
+            String reqId = ex.getRequestHeaders().getFirst("X-Networker-Request-Id");
+            if (reqId != null) {
+                ex.getResponseHeaders().set("X-Networker-Request-Id", reqId);
+            }
+            byte[] body = String.format("{\"received_bytes\":%d}", received).getBytes(StandardCharsets.UTF_8);
+            ex.sendResponseHeaders(200, body.length);
+            try (OutputStream out = ex.getResponseBody()) {
+                out.write(body);
+            }
+        }
+    }
+
+    // ── JSON API Handlers (family C) ──────────────────────────────────
+
+    // GET /api/users?page=N&sort=<field>&order=<asc|desc> (§5.4).
+    static class APIUsersHandler implements HttpHandler {
+        @Override
+        @SuppressWarnings("unchecked")
+        public void handle(HttpExchange ex) throws IOException {
+            if (!checkAuth(ex)) return;
+            if (notGet(ex)) {
                 sendText(ex, 405, "{\"error\":\"method not allowed\"}");
                 return;
             }
@@ -662,59 +737,47 @@ public class Server {
             try { page = Integer.parseInt(params.getOrDefault("page", "1")); } catch (NumberFormatException ignored) {}
             if (page < 1) page = 1;
 
-            String sortField = params.getOrDefault("sort", "");
-            String order = params.getOrDefault("order", "");
+            String sortField = params.getOrDefault("sort", "id");
+            boolean desc = "desc".equals(params.getOrDefault("order", "asc"));
 
-            boolean useBench = benchUsers != null && !benchUsers.isEmpty();
-            List<Map<String, Object>> users = useBench ? new ArrayList<>(benchUsers) : generateUsers(page);
+            // 100-user window; the dataset has 100 users, so page ≥ 2 is [].
+            int winStart = (page - 1) * 100;
+            int winEnd = Math.min(winStart + 100, benchUsers.size());
+            List<Object> window = new ArrayList<>();
+            if (winStart < benchUsers.size()) {
+                window.addAll(benchUsers.subList(winStart, winEnd));
+            }
 
-            Comparator<Map<String, Object>> cmp;
+            Comparator<Object> cmp;
             switch (sortField) {
                 case "name":
-                    cmp = Comparator.comparing(u -> (String) u.get("name"));
-                    break;
                 case "email":
-                    cmp = Comparator.comparing(u -> (String) u.get("email"));
-                    break;
-                case "age":
-                    cmp = Comparator.comparingInt(u -> (Integer) u.get("age"));
+                case "created_at":
+                    final String sf = sortField;
+                    cmp = Comparator.comparing(u -> (String) ((Map<String, Object>) u).get(sf));
                     break;
                 case "score":
-                    cmp = Comparator.comparingInt(u -> (Integer) u.get("score"));
+                    cmp = Comparator.comparingDouble(
+                            u -> ((Number) ((Map<String, Object>) u).get("score")).doubleValue());
                     break;
-                default:
-                    cmp = Comparator.comparingInt(u -> (Integer) u.get("id"));
+                default: // "id" and any unrecognized value
+                    cmp = Comparator.comparingLong(
+                            u -> ((Number) ((Map<String, Object>) u).get("id")).longValue());
                     break;
             }
-            users.sort(cmp);
-            if ("desc".equals(order)) {
-                Collections.reverse(users);
-            }
+            // List.sort is stable (TimSort); desc reverses the comparator so
+            // ties keep dataset order.
+            window.sort(desc ? cmp.reversed() : cmp);
 
-            int pageSize = 20;
-            int offset = (page - 1) * pageSize;
-            if (offset > users.size()) offset = users.size();
-            int end = offset + pageSize;
-            if (end > users.size()) end = users.size();
-            List<Map<String, Object>> result = users.subList(offset, end);
-
-            if (useBench) {
-                StringBuilder sb = new StringBuilder("[");
-                for (int i = 0; i < result.size(); i++) {
-                    if (i > 0) sb.append(",");
-                    sb.append(benchUserToJson(result.get(i)));
-                }
-                sb.append("]");
-                sendAPI(ex, start, sb.toString());
-            } else {
-                sendAPI(ex, start, usersToJson(result));
-            }
+            List<Object> result = window.size() > 20 ? window.subList(0, 20) : window;
+            sendAPI(ex, start, 200, Json.write(result));
         }
     }
 
-    // POST /api/transform — hash string fields, reverse arrays.
+    // POST /api/transform — SHA-256 each field, reverse values (§5.5).
     static class APITransformHandler implements HttpHandler {
         @Override
+        @SuppressWarnings("unchecked")
         public void handle(HttpExchange ex) throws IOException {
             if (!checkAuth(ex)) return;
             if (!"POST".equals(ex.getRequestMethod())) {
@@ -723,283 +786,156 @@ public class Server {
             }
             long start = setAPIHeaders(ex);
 
-            String body;
+            String bodyStr;
             try (InputStream in = ex.getRequestBody()) {
-                body = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+                bodyStr = new String(in.readAllBytes(), StandardCharsets.UTF_8);
             }
 
-            // Minimal JSON parsing: top-level object with string or array values.
-            // Strip outer braces, split on top-level commas.
-            body = body.trim();
-            if (!body.startsWith("{") || !body.endsWith("}")) {
-                sendText(ex, 400, "{\"error\":\"invalid JSON\"}");
+            Map<String, Object> body;
+            try {
+                Object parsed = Json.parse(bodyStr);
+                if (!(parsed instanceof Map)) throw new IllegalArgumentException("not an object");
+                body = (Map<String, Object>) parsed;
+            } catch (Exception e) {
+                sendAPIError(ex, start, 400, "invalid JSON");
                 return;
             }
-            body = body.substring(1, body.length() - 1).trim();
 
-            StringBuilder result = new StringBuilder("{");
-            boolean first = true;
+            Object seed = body.get("seed");
+            if (!(seed instanceof Number)) seed = 0L;
+            List<Object> fields = body.get("fields") instanceof List ? (List<Object>) body.get("fields") : List.of();
+            List<Object> values = body.get("values") instanceof List ? (List<Object>) body.get("values") : List.of();
 
-            // Parse key-value pairs at top level
-            int pos = 0;
-            while (pos < body.length()) {
-                // Skip whitespace
-                while (pos < body.length() && Character.isWhitespace(body.charAt(pos))) pos++;
-                if (pos >= body.length()) break;
-
-                // Parse key (quoted string)
-                if (body.charAt(pos) != '"') break;
-                int keyStart = pos + 1;
-                int keyEnd = body.indexOf('"', keyStart);
-                String key = body.substring(keyStart, keyEnd);
-                pos = keyEnd + 1;
-
-                // Skip colon
-                while (pos < body.length() && body.charAt(pos) != ':') pos++;
-                pos++; // skip ':'
-                while (pos < body.length() && Character.isWhitespace(body.charAt(pos))) pos++;
-
-                if (!first) result.append(",");
-                first = false;
-
-                if (body.charAt(pos) == '"') {
-                    // String value — SHA-256 hash it
-                    int valStart = pos + 1;
-                    int valEnd = body.indexOf('"', valStart);
-                    String val = body.substring(valStart, valEnd);
-                    pos = valEnd + 1;
-
-                    try {
-                        MessageDigest md = MessageDigest.getInstance("SHA-256");
-                        byte[] hash = md.digest(val.getBytes(StandardCharsets.UTF_8));
-                        result.append("\"").append(jsonEscape(key)).append("\":\"").append(hexEncode(hash)).append("\"");
-                    } catch (Exception e) {
-                        result.append("\"").append(jsonEscape(key)).append("\":\"error\"");
-                    }
-                } else if (body.charAt(pos) == '[') {
-                    // Array value — reverse it
-                    int depth = 0;
-                    int arrStart = pos;
-                    for (int i = pos; i < body.length(); i++) {
-                        if (body.charAt(i) == '[') depth++;
-                        else if (body.charAt(i) == ']') {
-                            depth--;
-                            if (depth == 0) { pos = i + 1; break; }
-                        }
-                    }
-                    String arrStr = body.substring(arrStart + 1, pos - 1).trim();
-                    // Split array elements (handles strings and numbers)
-                    List<String> elements = new ArrayList<>();
-                    int elemStart = 0;
-                    int elemDepth = 0;
-                    boolean inStr = false;
-                    for (int i = 0; i < arrStr.length(); i++) {
-                        char c = arrStr.charAt(i);
-                        if (c == '"' && (i == 0 || arrStr.charAt(i - 1) != '\\')) inStr = !inStr;
-                        if (!inStr) {
-                            if (c == '[' || c == '{') elemDepth++;
-                            else if (c == ']' || c == '}') elemDepth--;
-                            else if (c == ',' && elemDepth == 0) {
-                                elements.add(arrStr.substring(elemStart, i).trim());
-                                elemStart = i + 1;
-                            }
-                        }
-                    }
-                    if (elemStart < arrStr.length()) {
-                        String last = arrStr.substring(elemStart).trim();
-                        if (!last.isEmpty()) elements.add(last);
-                    }
-                    Collections.reverse(elements);
-                    result.append("\"").append(jsonEscape(key)).append("\":[");
-                    for (int i = 0; i < elements.size(); i++) {
-                        if (i > 0) result.append(",");
-                        result.append(elements.get(i));
-                    }
-                    result.append("]");
-                } else {
-                    // Number or other — pass through
-                    int valStart = pos;
-                    while (pos < body.length() && body.charAt(pos) != ',' && body.charAt(pos) != '}') pos++;
-                    String val = body.substring(valStart, pos).trim();
-                    result.append("\"").append(jsonEscape(key)).append("\":").append(val);
-                }
-
-                // Skip comma
-                while (pos < body.length() && Character.isWhitespace(body.charAt(pos))) pos++;
-                if (pos < body.length() && body.charAt(pos) == ',') pos++;
+            List<Object> hashedFields = new ArrayList<>(fields.size());
+            for (Object f : fields) {
+                hashedFields.add(sha256Hex(String.valueOf(f).getBytes(StandardCharsets.UTF_8)));
             }
+            List<Object> reversedValues = new ArrayList<>(values);
+            java.util.Collections.reverse(reversedValues);
 
-            result.append("}");
-            sendAPI(ex, start, result.toString());
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("seed", seed);
+            result.put("hashed_fields", hashedFields);
+            result.put("reversed_values", reversedValues);
+            sendAPI(ex, start, 200, Json.write(result));
         }
     }
 
-    // GET /api/aggregate?range=start,end — statistics over generated data points.
+    // GET /api/aggregate[?range=start,end] — range accepted and IGNORED (§5.6).
     static class APIAggregateHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange ex) throws IOException {
             if (!checkAuth(ex)) return;
-            if (!"GET".equals(ex.getRequestMethod())) {
+            if (notGet(ex)) {
                 sendText(ex, 405, "{\"error\":\"method not allowed\"}");
                 return;
             }
             long start = setAPIHeaders(ex);
-            Map<String, String> params = parseQuery(ex.getRequestURI().getRawQuery());
 
-            String rangeStr = params.getOrDefault("range", "");
-            String[] parts = rangeStr.split(",", 2);
-            if (parts.length != 2) {
-                sendText(ex, 400, "{\"error\":\"range must be start,end\"}");
-                return;
-            }
-            long rangeStart, rangeEnd;
-            try {
-                rangeStart = Long.parseLong(parts[0].trim());
-                rangeEnd = Long.parseLong(parts[1].trim());
-            } catch (NumberFormatException e) {
-                sendText(ex, 400, "{\"error\":\"invalid range values\"}");
-                return;
-            }
-
-            int n;
-            double[] values;
+            double[] values = benchTsValues.clone();
+            java.util.Arrays.sort(values);
+            int n = values.length;
             double sum = 0.0;
-            int[] catCount = new int[5];
-            double[] catSum = new double[5];
+            for (double v : values) sum += v; // sequential sum of SORTED values
 
-            if (benchTimeseries != null && !benchTimeseries.isEmpty()) {
-                n = benchTimeseries.size();
-                values = new double[n];
-                for (int i = 0; i < n; i++) {
-                    double v = benchTimeseries.get(i)[0];
-                    values[i] = v;
-                    sum += v;
-                    String cat = benchTimeseriesCategories.get(i);
-                    int catIdx = 0;
-                    for (int c = 0; c < CAT_NAMES.length; c++) {
-                        if (CAT_NAMES[c].equals(cat)) { catIdx = c; break; }
-                    }
-                    catCount[catIdx]++;
-                    catSum[catIdx] += v;
-                }
-            } else {
-                Random rng = new Random(rangeStart);
-                n = 10000;
-                values = new double[n];
-
-                for (int i = 0; i < n; i++) {
-                    double v = rng.nextDouble() * (rangeEnd - rangeStart) + rangeStart;
-                    values[i] = v;
-                    sum += v;
-                    int catIdx = i % 5;
-                    catCount[catIdx]++;
-                    catSum[catIdx] += v;
-                }
+            int chunk = n / 5;
+            List<Object> categories = new ArrayList<>(5);
+            for (int i = 0; i < 5; i++) {
+                double partSum = 0.0;
+                for (int j = i * chunk; j < (i + 1) * chunk; j++) partSum += values[j];
+                Map<String, Object> cat = new LinkedHashMap<>();
+                cat.put("category", "q" + (i + 1));
+                cat.put("count", (long) chunk);
+                cat.put("mean", r2(partSum / chunk));
+                cat.put("min", r2(values[i * chunk]));
+                cat.put("max", r2(values[(i + 1) * chunk - 1]));
+                categories.add(cat);
             }
 
-            Arrays.sort(values);
-
-            StringBuilder json = new StringBuilder();
-            json.append("{\"count\":").append(n);
-            json.append(",\"mean\":").append(sum / n);
-            json.append(",\"p50\":").append(values[n / 2]);
-            json.append(",\"p95\":").append(values[(int) (n * 0.95)]);
-            json.append(",\"max\":").append(values[n - 1]);
-            json.append(",\"categories\":{");
-            for (int c = 0; c < 5; c++) {
-                if (c > 0) json.append(",");
-                double mean = catCount[c] > 0 ? catSum[c] / catCount[c] : 0.0;
-                json.append("\"").append(CAT_NAMES[c]).append("\":{");
-                json.append("\"count\":").append(catCount[c]);
-                json.append(",\"sum\":").append(catSum[c]);
-                json.append(",\"mean\":").append(mean);
-                json.append("}");
-            }
-            json.append("}}");
-
-            sendAPI(ex, start, json.toString());
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("total_points", (long) n);
+            result.put("mean", r2(sum / n));
+            result.put("p50", r2(values[(int) (n * 0.50)]));
+            result.put("p95", r2(values[(int) (n * 0.95)]));
+            result.put("max", r2(values[n - 1]));
+            result.put("categories", categories);
+            sendAPI(ex, start, 200, Json.write(result));
         }
     }
 
-    // GET /api/search?q=term&limit=N — regex search over generated strings.
+    // GET /api/search?q=<term>&limit=N — case-sensitive regex with literal
+    // fallback on compile failure (§5.7).
     static class APISearchHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange ex) throws IOException {
             if (!checkAuth(ex)) return;
-            if (!"GET".equals(ex.getRequestMethod())) {
+            if (notGet(ex)) {
                 sendText(ex, 405, "{\"error\":\"method not allowed\"}");
                 return;
             }
             long start = setAPIHeaders(ex);
             Map<String, String> params = parseQuery(ex.getRequestURI().getRawQuery());
 
-            String q = params.getOrDefault("q", "");
-            if (q.isEmpty()) {
-                sendText(ex, 400, "{\"error\":\"q parameter required\"}");
-                return;
+            String q = params.getOrDefault("q", "test");
+            if (q.isEmpty()) q = "test";
+            int limit = 20;
+            try { limit = Integer.parseInt(params.getOrDefault("limit", "20")); } catch (NumberFormatException ignored) {}
+            if (limit > 100) limit = 100;
+            if (limit < 0) limit = 0;
+
+            Pattern pattern = null;
+            try {
+                pattern = Pattern.compile(q); // raw, case-sensitive
+            } catch (PatternSyntaxException ignored) {
+                // literal-substring fallback
             }
-            int limit = 10;
-            try { limit = Integer.parseInt(params.getOrDefault("limit", "10")); } catch (NumberFormatException ignored) {}
-            if (limit < 1 || limit > 100) limit = 10;
 
-            Pattern pattern = Pattern.compile(Pattern.quote(q), Pattern.CASE_INSENSITIVE);
-
-            List<int[]> matches = new ArrayList<>(); // [index, matchPos]
-            List<String> matchTexts = new ArrayList<>();
-
-            if (benchSearchCorpus != null && !benchSearchCorpus.isEmpty()) {
-                for (int i = 0; i < benchSearchCorpus.size(); i++) {
-                    String text = benchSearchCorpus.get(i);
-                    Matcher m = pattern.matcher(text);
-                    if (m.find()) {
-                        matches.add(new int[]{i, m.start()});
-                        matchTexts.add(text);
-                    }
+            List<int[]> positions = new ArrayList<>();   // parallel to matchItems
+            List<String> matchItems = new ArrayList<>();
+            for (String item : benchSearchCorpus) {
+                int pos = -1;
+                if (pattern != null) {
+                    Matcher m = pattern.matcher(item);
+                    if (m.find()) pos = m.start();
+                } else {
+                    pos = item.indexOf(q);
                 }
-            } else {
-                Random rng = new Random(42);
-                for (int i = 0; i < 1000; i++) {
-                    int wordCount = 3 + rng.nextInt(4);
-                    StringBuilder sb = new StringBuilder();
-                    for (int j = 0; j < wordCount; j++) {
-                        if (j > 0) sb.append(" ");
-                        sb.append(WORDS[rng.nextInt(WORDS.length)]);
-                    }
-                    String text = sb.toString();
-
-                    Matcher m = pattern.matcher(text);
-                    if (m.find()) {
-                        matches.add(new int[]{i, m.start()});
-                        matchTexts.add(text);
-                    }
+                if (pos >= 0) {
+                    positions.add(new int[]{pos});
+                    matchItems.add(item);
                 }
             }
 
-            // Compute scores and sort
-            List<double[]> scored = new ArrayList<>(); // [origIdx, score]
-            for (int i = 0; i < matches.size(); i++) {
-                double score = 1.0 / (1.0 + matches.get(i)[1]);
-                scored.add(new double[]{i, score});
-            }
-            scored.sort((a, b) -> Double.compare(b[1], a[1]));
-            if (scored.size() > limit) scored = scored.subList(0, limit);
+            // Sort by (position asc, item asc bytewise).
+            Integer[] order = new Integer[matchItems.size()];
+            for (int i = 0; i < order.length; i++) order[i] = i;
+            java.util.Arrays.sort(order, (a, b) -> {
+                int c = Integer.compare(positions.get(a)[0], positions.get(b)[0]);
+                if (c != 0) return c;
+                return matchItems.get(a).compareTo(matchItems.get(b));
+            });
 
-            StringBuilder json = new StringBuilder("[");
-            for (int i = 0; i < scored.size(); i++) {
-                if (i > 0) json.append(",");
-                int idx = (int) scored.get(i)[0];
-                json.append("{\"index\":").append(matches.get(idx)[0]);
-                json.append(",\"text\":\"").append(jsonEscape(matchTexts.get(idx))).append("\"");
-                json.append(",\"score\":").append(scored.get(i)[1]);
-                json.append("}");
+            int total = matchItems.size();
+            int returned = Math.min(limit, total);
+            List<Object> results = new ArrayList<>(returned);
+            for (int i = 0; i < returned; i++) {
+                Map<String, Object> r = new LinkedHashMap<>();
+                r.put("rank", (long) (i + 1));
+                r.put("item", matchItems.get(order[i]));
+                r.put("match_position", (long) positions.get(order[i])[0]);
+                results.add(r);
             }
-            json.append("]");
 
-            sendAPI(ex, start, json.toString());
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("query", q);
+            result.put("total_matches", (long) total);
+            result.put("returned", (long) returned);
+            result.put("results", results);
+            sendAPI(ex, start, 200, Json.write(result));
         }
     }
 
-    // POST /api/upload/process — hash and compress uploaded body.
+    // POST /api/upload/process — CRC-32 + SHA-256 + zlib level 6 (§5.8).
     static class APIUploadProcessHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange ex) throws IOException {
@@ -1015,22 +951,15 @@ public class Server {
                 body = in.readAllBytes();
             }
 
-            // CRC32
+            // CRC-32 (IEEE), 8 lowercase hex chars, zero-padded.
             CRC32 crc = new CRC32();
             crc.update(body);
             String crcHex = String.format("%08x", crc.getValue());
 
-            // SHA-256
-            String shaHex;
-            try {
-                MessageDigest md = MessageDigest.getInstance("SHA-256");
-                shaHex = hexEncode(md.digest(body));
-            } catch (Exception e) {
-                shaHex = "error";
-            }
+            String shaHex = sha256Hex(body);
 
-            // Zlib compress (Deflater)
-            Deflater deflater = new Deflater();
+            // zlib (RFC 1950, with header/adler) at level 6 — NOT raw deflate.
+            Deflater deflater = new Deflater(6);
             deflater.setInput(body);
             deflater.finish();
             ByteArrayOutputStream compressed = new ByteArrayOutputStream();
@@ -1041,63 +970,57 @@ public class Server {
             }
             deflater.end();
 
-            String json = String.format(
-                    "{\"original_size\":%d,\"compressed_size\":%d,\"crc32\":\"%s\",\"sha256\":\"%s\"}",
-                    body.length, compressed.size(), crcHex, shaHex
-            );
-
-            sendAPI(ex, start, json);
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("original_size", (long) body.length);
+            result.put("compressed_size", (long) compressed.size());
+            result.put("crc32", crcHex);
+            result.put("sha256", shaHex);
+            sendAPI(ex, start, 200, Json.write(result));
         }
     }
 
-    // GET /api/delayed?ms=N&work=light — sleep with optional CPU work.
+    // GET /api/delayed?ms=N&work=<ignored> — async timer delay (§5.9).
+    // The response is completed from the scheduler thread so the sleep never
+    // blocks a fixed-pool worker.
     static class APIDelayedHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange ex) throws IOException {
             if (!checkAuth(ex)) return;
-            if (!"GET".equals(ex.getRequestMethod())) {
+            if (notGet(ex)) {
                 sendText(ex, 405, "{\"error\":\"method not allowed\"}");
                 return;
             }
             long start = setAPIHeaders(ex);
             Map<String, String> params = parseQuery(ex.getRequestURI().getRawQuery());
 
-            int ms = 1;
-            try { ms = Integer.parseInt(params.getOrDefault("ms", "1")); } catch (NumberFormatException ignored) {}
-            if (ms < 1) ms = 1;
-            if (ms > 100) ms = 100;
+            int msParam = 10;
+            try { msParam = Integer.parseInt(params.getOrDefault("ms", "10")); } catch (NumberFormatException ignored) {}
+            final int ms = Math.max(1, Math.min(100, msParam));
+            // `work` is reserved: accepted and ignored.
 
-            String work = params.getOrDefault("work", "light");
-
-            try { Thread.sleep(ms); } catch (InterruptedException ignored) {}
-
-            double actualMs = (System.nanoTime() - start) / 1_000_000.0;
-
-            StringBuilder json = new StringBuilder();
-            json.append("{\"requested_ms\":").append(ms);
-            json.append(",\"actual_ms\":").append(String.format("%.1f", actualMs));
-            json.append(",\"work\":\"").append(jsonEscape(work)).append("\"");
-
-            if ("heavy".equals(work)) {
-                double x = 0.0;
-                for (int i = 0; i < 100000; i++) {
-                    x += Math.sqrt(i);
+            SCHEDULER.schedule(() -> {
+                try {
+                    double actualMs = Math.round((System.nanoTime() - start) / 10_000.0) / 100.0;
+                    Map<String, Object> result = new LinkedHashMap<>();
+                    result.put("requested_ms", (long) ms);
+                    result.put("actual_ms", actualMs);
+                    sendAPI(ex, start, 200, Json.write(result));
+                } catch (IOException e) {
+                    logger.fine("delayed response failed: " + e.getMessage());
+                    ex.close();
                 }
-                json.append(",\"compute\":").append(x);
-            }
-
-            json.append("}");
-
-            sendAPI(ex, start, json.toString());
+            }, ms, TimeUnit.MILLISECONDS);
+            // handle() returns without closing the exchange; the scheduler
+            // completes it after the delay.
         }
     }
 
-    // GET /api/validate?seed=42 — checksums for all endpoints at given seed.
+    // GET /api/validate?seed=N — echo the dataset's expected_checksums (§5.10).
     static class APIValidateHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange ex) throws IOException {
             if (!checkAuth(ex)) return;
-            if (!"GET".equals(ex.getRequestMethod())) {
+            if (notGet(ex)) {
                 sendText(ex, 405, "{\"error\":\"method not allowed\"}");
                 return;
             }
@@ -1106,72 +1029,15 @@ public class Server {
 
             long seed = 42;
             try { seed = Long.parseLong(params.getOrDefault("seed", "42")); } catch (NumberFormatException ignored) {}
-            if (seed == 0) seed = 42;
 
-            try {
-                String usersHex, aggHex, searchHex;
-
-                if (benchChecksums != null && !benchChecksums.isEmpty()) {
-                    usersHex = benchChecksums.getOrDefault("users_page1", "").substring(0, Math.min(32, benchChecksums.getOrDefault("users_page1", "").length()));
-                    aggHex = benchChecksums.getOrDefault("aggregate_summary", "").substring(0, Math.min(32, benchChecksums.getOrDefault("aggregate_summary", "").length()));
-                    searchHex = benchChecksums.getOrDefault("search_network_top10", "").substring(0, Math.min(32, benchChecksums.getOrDefault("search_network_top10", "").length()));
-                } else {
-                    MessageDigest md = MessageDigest.getInstance("SHA-256");
-
-                    // Users checksum
-                    List<Map<String, Object>> users = generateUsers(seed);
-                    String usersJson = usersToJson(users);
-                    byte[] usersHash = md.digest(usersJson.getBytes(StandardCharsets.UTF_8));
-                    usersHex = hexEncode(Arrays.copyOf(usersHash, 16));
-
-                    // Aggregate checksum
-                    md.reset();
-                    Random rng = new Random(seed);
-                    double sum = 0.0;
-                    for (int i = 0; i < 10000; i++) {
-                        sum += rng.nextDouble() * 100.0;
-                    }
-                    byte[] aggHash = md.digest(String.format("%.6f", sum).getBytes(StandardCharsets.UTF_8));
-                    aggHex = hexEncode(Arrays.copyOf(aggHash, 16));
-
-                    // Search checksum (seed=42 corpus, q="network")
-                    md.reset();
-                    Random rng2 = new Random(42);
-                    StringBuilder corpus = new StringBuilder();
-                    for (int i = 0; i < 1000; i++) {
-                        int wordCount = 3 + rng2.nextInt(4);
-                        for (int j = 0; j < wordCount; j++) {
-                            if (j > 0) corpus.append(" ");
-                            corpus.append(WORDS[rng2.nextInt(WORDS.length)]);
-                        }
-                        corpus.append("\n");
-                    }
-                    byte[] searchHash = md.digest(corpus.toString().getBytes(StandardCharsets.UTF_8));
-                    searchHex = hexEncode(Arrays.copyOf(searchHash, 16));
-                }
-
-                String json = String.format(
-                        "{\"seed\":\"%d\",\"users\":\"%s\",\"aggregate\":\"%s\",\"search\":\"%s\"}",
-                        seed, usersHex, aggHex, searchHex
-                );
-
-                sendAPI(ex, start, json);
-            } catch (Exception e) {
-                sendText(ex, 500, "{\"error\":\"internal error\"}");
-            }
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("seed", seed);
+            result.put("checksums", benchChecksums);
+            sendAPI(ex, start, 200, Json.write(result));
         }
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────
-
-    private static void sendText(HttpExchange ex, int code, String body) throws IOException {
-        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
-        ex.getResponseHeaders().set("Content-Type", "application/json");
-        ex.sendResponseHeaders(code, bytes.length);
-        try (OutputStream out = ex.getResponseBody()) {
-            out.write(bytes);
-        }
-    }
+    // ── TLS helpers ───────────────────────────────────────────────────
 
     /**
      * Build an SSLContext from PEM-encoded certificate and PKCS#8 private key.

@@ -11,15 +11,16 @@ dependency weight and abstraction overhead without meaningful capability gains.
 This makes Go unique among the benchmark candidates: **the stdlib _is_ the
 idiomatic choice**.
 
-## Endpoints
+## Contract
 
-| Method | Path              | Description                               |
-|--------|-------------------|-------------------------------------------|
-| GET    | /health           | JSON health check with Go runtime version |
-| GET    | /download/{size}  | Stream `size` bytes (0x42, 8 KiB chunks)  |
-| POST   | /upload           | Consume body, return bytes received        |
+Implements the frozen contract in `benchmarks/shared/API-SPEC.md` (family C):
+`/health` (byte-constant), `/download/{size}` (0x42 fill, 8 KiB chunks, 2 GiB
+clamp), `/upload`, and the seven `/api/*` JSON endpoints, all served from the
+shared dataset `bench-data.json` (**load failure is fatal** — no PRNG
+fallback). Worker policy (§3): `BENCH_WORKERS` maps to `GOMAXPROCS`
+(default = logical CPU count).
 
-All endpoints served over TLS on port 8443.
+All endpoints served over TLS on port 8443 (plain HTTP when no certs found).
 
 ## Build
 
@@ -53,8 +54,15 @@ docker run -p 8443:8443 -v /opt/bench:/opt/bench alethabench-go
 
 ## Configuration
 
-| Variable    | Default | Description           |
-|-------------|---------|-----------------------|
-| LISTEN_ADDR | :8443   | Address to listen on  |
+| Variable         | Default      | Description                                 |
+|------------------|--------------|---------------------------------------------|
+| LISTEN_ADDR      | :8443        | Address to listen on                        |
+| BENCH_PORT       | 8443         | Port (when LISTEN_ADDR unset)               |
+| BENCH_CERT_DIR   | /opt/bench   | PEM cert/key directory (absent → plain HTTP)|
+| BENCH_WORKERS    | CPU count    | GOMAXPROCS (API-SPEC.md §3)                 |
+| BENCH_API_TOKEN  | unset        | Bearer token for all routes except /health  |
+| BENCH_DATA_PATH  | unset        | Explicit dataset path (failure → exit 1)    |
 
-TLS certificates are read from `/opt/bench/cert.pem` and `/opt/bench/key.pem`.
+TLS certificates are read from `$BENCH_CERT_DIR/cert.pem` + `key.pem`.
+`bench-data.json` is required at `$BENCH_DATA_PATH`, `/opt/bench/bench-data.json`,
+or `../shared/bench-data.json` — startup is fatal without it.

@@ -1,9 +1,12 @@
 // AletheBench Go reference API.
 // net/http for HTTP/1.1 + HTTP/2, quic-go for HTTP/3 (QUIC/UDP).
+//
+// Conforms to the frozen contract in benchmarks/shared/API-SPEC.md (family C).
 package main
 
 import (
-	"compress/flate"
+	"bytes"
+	"compress/zlib"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/json"
@@ -12,7 +15,6 @@ import (
 	"io"
 	"log/slog"
 	"math"
-	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -26,51 +28,136 @@ import (
 	"github.com/quic-go/quic-go/http3"
 )
 
-// BenchDataFile mirrors the shared bench-data.json schema.
-type BenchDataFile struct {
-	Version            int                `json:"_version"`
-	Users              []json.RawMessage  `json:"users"`
-	SearchCorpus       []json.RawMessage  `json:"search_corpus"`
-	Timeseries         []json.RawMessage  `json:"timeseries"`
-	TransformInputs    []json.RawMessage  `json:"transform_inputs"`
-	ExpectedChecksums  map[string]string  `json:"expected_checksums"`
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared benchmark dataset (API-SPEC.md §2) — load failure is FATAL
+// ─────────────────────────────────────────────────────────────────────────────
+
+// benchFloat serializes float64 the way the Python canonical-JSON validator
+// expects: integral values keep a trailing ".0" (json.Marshal would emit
+// `39` for float64(39.0), which Python parses as int and re-serializes as
+// "39" — breaking the §7 canonical checksums).
+type benchFloat float64
+
+func (f benchFloat) MarshalJSON() ([]byte, error) {
+	s := strconv.FormatFloat(float64(f), 'g', -1, 64)
+	if !strings.ContainsAny(s, ".eE") {
+		s += ".0"
+	}
+	return []byte(s), nil
 }
 
-// benchData holds the shared dataset (nil if file not found — PRNG fallback).
+// User mirrors the bench-data.json user schema (§2): no age/active/department.
+type User struct {
+	ID        int        `json:"id"`
+	Name      string     `json:"name"`
+	Email     string     `json:"email"`
+	Score     benchFloat `json:"score"`
+	CreatedAt string     `json:"created_at"`
+}
+
+// TimeseriesPoint mirrors the bench-data.json timeseries schema (§2):
+// objects {ts, value, category}, not bare floats.
+type TimeseriesPoint struct {
+	Ts       int     `json:"ts"`
+	Value    float64 `json:"value"`
+	Category string  `json:"category"`
+}
+
+// BenchDataFile mirrors the shared bench-data.json schema (_version 2).
+type BenchDataFile struct {
+	Version           int               `json:"_version"`
+	Users             []User            `json:"users"`
+	SearchCorpus      []string          `json:"search_corpus"`
+	Timeseries        []TimeseriesPoint `json:"timeseries"`
+	TransformInputs   []json.RawMessage `json:"transform_inputs"`
+	ExpectedChecksums map[string]string `json:"expected_checksums"`
+}
+
+// benchData holds the shared dataset. Always non-nil after loadBenchData
+// (the process exits otherwise — no PRNG fallback, audit F2/P0#2).
 var benchData *BenchDataFile
 
-// loadBenchData tries BENCH_DATA_PATH, /opt/bench/bench-data.json, ../shared/bench-data.json.
-func loadBenchData() {
-	paths := []string{}
-	if env := os.Getenv("BENCH_DATA_PATH"); env != "" {
-		paths = append(paths, env)
-	}
-	paths = append(paths, "/opt/bench/bench-data.json")
+// tsValues caches the timeseries values in dataset order so /api/aggregate
+// does not re-walk the object list per request (audit F6). The per-request
+// work (copy + sort + stats) is the measured workload.
+var tsValues []float64
 
-	// Relative to executable directory.
+func fatalf(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, "FATAL: "+format+"\n", args...)
+	os.Exit(1)
+}
+
+func parseBenchData(path string) (*BenchDataFile, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var bd BenchDataFile
+	if err := json.Unmarshal(data, &bd); err != nil {
+		return nil, err
+	}
+	return &bd, nil
+}
+
+// verifyBenchData enforces the §2 schema counts; any mismatch is fatal.
+func verifyBenchData(bd *BenchDataFile, path string) {
+	if bd.Version != 2 {
+		fatalf("bench-data.json at %s: _version=%d, want 2", path, bd.Version)
+	}
+	if len(bd.Users) != 100 {
+		fatalf("bench-data.json at %s: %d users, want 100", path, len(bd.Users))
+	}
+	if len(bd.SearchCorpus) != 1000 {
+		fatalf("bench-data.json at %s: %d search_corpus items, want 1000", path, len(bd.SearchCorpus))
+	}
+	if len(bd.Timeseries) != 10000 {
+		fatalf("bench-data.json at %s: %d timeseries points, want 10000", path, len(bd.Timeseries))
+	}
+	if len(bd.TransformInputs) != 10 {
+		fatalf("bench-data.json at %s: %d transform_inputs, want 10", path, len(bd.TransformInputs))
+	}
+	if len(bd.ExpectedChecksums) != 4 {
+		fatalf("bench-data.json at %s: %d expected_checksums keys, want 4", path, len(bd.ExpectedChecksums))
+	}
+}
+
+// loadBenchData resolves the dataset per API-SPEC.md §2 and exits non-zero on
+// any failure. Resolution order: $BENCH_DATA_PATH, /opt/bench/bench-data.json,
+// ../shared/bench-data.json relative to the source/executable directory.
+func loadBenchData() {
+	if env := os.Getenv("BENCH_DATA_PATH"); env != "" {
+		bd, err := parseBenchData(env)
+		if err != nil {
+			fatalf("BENCH_DATA_PATH=%s could not be loaded: %v (dataset load failure must not fall back)", env, err)
+		}
+		verifyBenchData(bd, env)
+		benchData = bd
+		slog.Info("Loaded bench-data.json", "path", env)
+		return
+	}
+
+	paths := []string{"/opt/bench/bench-data.json"}
 	if exe, err := os.Executable(); err == nil {
 		paths = append(paths, filepath.Join(filepath.Dir(exe), "..", "shared", "bench-data.json"))
 	}
 	paths = append(paths, "../shared/bench-data.json")
 
 	for _, p := range paths {
-		data, err := os.ReadFile(p)
+		if _, err := os.Stat(p); err != nil {
+			continue
+		}
+		// First existing path wins; if it fails to parse, that is fatal —
+		// silently trying the next path could load a different dataset.
+		bd, err := parseBenchData(p)
 		if err != nil {
-			continue
+			fatalf("bench-data.json exists at %s but could not be loaded: %v", p, err)
 		}
-		var bd BenchDataFile
-		if err := json.Unmarshal(data, &bd); err != nil {
-			slog.Warn("bench-data.json is invalid JSON", "path", p, "error", err)
-			continue
-		}
-		benchData = &bd
-		slog.Info("Loaded bench-data.json",
-			"path", p, "version", bd.Version,
-			"users", len(bd.Users), "corpus", len(bd.SearchCorpus),
-			"timeseries", len(bd.Timeseries))
+		verifyBenchData(bd, p)
+		benchData = bd
+		slog.Info("Loaded bench-data.json", "path", p)
 		return
 	}
-	slog.Warn("bench-data.json not found, falling back to per-language PRNG")
+	fatalf("bench-data.json not found (tried BENCH_DATA_PATH, /opt/bench/bench-data.json, ../shared/bench-data.json); the shared dataset is required — there is no PRNG fallback")
 }
 
 var benchToken = os.Getenv("BENCH_API_TOKEN")
@@ -78,9 +165,23 @@ var benchToken = os.Getenv("BENCH_API_TOKEN")
 const (
 	defaultAddr    = ":8443"
 	defaultCertDir = "/opt/bench"
-	bufSize        = 8192
-	fillByte       = 0x42
+	chunkSize      = 8192          // §5.2: 8 KiB download chunks
+	fillByte       = 0x42          // §5.2: fill byte 'B'
+	maxDownload    = 2_147_483_648 // §5.2: 2 GiB clamp
 )
+
+// healthBody is precomputed once at startup — /health is constant-work (§5.1).
+var healthBody = []byte(fmt.Sprintf(
+	`{"status":"ok","runtime":"go","version":"%s"}`, runtime.Version()))
+
+// downloadChunk is a shared 8 KiB buffer of 0x42.
+var downloadChunk = func() []byte {
+	b := make([]byte, chunkSize)
+	for i := range b {
+		b[i] = fillByte
+	}
+	return b
+}()
 
 func main() {
 	// Configure structured logging with LOG_LEVEL env var (debug, info, warn, error).
@@ -103,6 +204,23 @@ func main() {
 	}
 
 	loadBenchData()
+	tsValues = make([]float64, len(benchData.Timeseries))
+	for i, p := range benchData.Timeseries {
+		tsValues[i] = p.Value
+	}
+
+	// Worker policy (§3): BENCH_WORKERS maps to GOMAXPROCS, default = cores.
+	nproc := runtime.NumCPU()
+	workers := nproc
+	if w := os.Getenv("BENCH_WORKERS"); w != "" {
+		n, err := strconv.Atoi(w)
+		if err != nil || n < 1 {
+			fatalf("BENCH_WORKERS=%q is not a positive integer", w)
+		}
+		workers = n
+	}
+	runtime.GOMAXPROCS(workers)
+	slog.Info("Worker policy", "nproc", nproc, "bench_workers", workers, "mechanism", "GOMAXPROCS")
 
 	addr := os.Getenv("LISTEN_ADDR")
 	if addr == "" {
@@ -135,22 +253,18 @@ func main() {
 		MinVersion: tls.VersionTLS12,
 	}
 
-	// Auth middleware: validate BENCH_API_TOKEN on all routes except /health.
+	// Auth middleware (§1): if BENCH_API_TOKEN is set, every route except
+	// /health requires `Authorization: Bearer <token>`.
 	authHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authStart := time.Now()
 		if r.URL.Path != "/health" && benchToken != "" {
 			auth := r.Header.Get("Authorization")
 			if !strings.HasPrefix(auth, "Bearer ") || auth[7:] != benchToken {
-				dur := float64(time.Since(authStart).Microseconds()) / 1000.0
-				w.Header().Set("Server-Timing", fmt.Sprintf("auth;dur=%.1f", dur))
 				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(401)
+				w.WriteHeader(http.StatusUnauthorized)
 				w.Write([]byte(`{"error":"unauthorized"}`))
 				return
 			}
 		}
-		dur := float64(time.Since(authStart).Microseconds()) / 1000.0
-		w.Header().Set("X-Auth-Duration", fmt.Sprintf("%.1f", dur))
 		mux.ServeHTTP(w, r)
 	})
 
@@ -197,62 +311,11 @@ func main() {
 	}
 }
 
-// GET /health — JSON health check with runtime info.
-func handleHealth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"status":  "ok",
-		"runtime": "go",
-		"version": runtime.Version(),
-	})
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Response helpers
+// ─────────────────────────────────────────────────────────────────────────────
 
-// GET /download/{size} — stream `size` bytes of 0x42 in 8 KiB chunks.
-func handleDownload(w http.ResponseWriter, r *http.Request) {
-	sizeStr := r.PathValue("size")
-	size, err := strconv.ParseInt(sizeStr, 10, 64)
-	if err != nil || size < 0 {
-		http.Error(w, "invalid size", http.StatusBadRequest)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
-
-	buf := make([]byte, bufSize)
-	for i := range buf {
-		buf[i] = fillByte
-	}
-
-	remaining := size
-	for remaining > 0 {
-		chunk := int64(bufSize)
-		if chunk > remaining {
-			chunk = remaining
-		}
-		n, err := w.Write(buf[:chunk])
-		if err != nil {
-			return // client disconnected
-		}
-		remaining -= int64(n)
-	}
-}
-
-// POST /upload — consume request body, return bytes received.
-func handleUpload(w http.ResponseWriter, r *http.Request) {
-	n, err := io.Copy(io.Discard, r.Body)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("read error: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]int64{
-		"bytes_received": n,
-	})
-}
-
-// setAPIHeaders sets common benchmark headers and returns the start time.
+// setAPIHeaders sets the §1 benchmark headers and returns the start time.
 func setAPIHeaders(w http.ResponseWriter) time.Time {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
@@ -261,441 +324,400 @@ func setAPIHeaders(w http.ResponseWriter) time.Time {
 	return time.Now()
 }
 
-// writeServerTiming sets the Server-Timing header from elapsed duration.
-// If the auth middleware set X-Auth-Duration, append auth;dur=X.X.
+// writeServerTiming sets `Server-Timing: app;dur=<ms>` from the start time.
 func writeServerTiming(w http.ResponseWriter, start time.Time) {
 	dur := float64(time.Since(start).Microseconds()) / 1000.0
-	timing := fmt.Sprintf("app;dur=%.1f", dur)
-	if authDur := w.Header().Get("X-Auth-Duration"); authDur != "" {
-		timing += fmt.Sprintf(", auth;dur=%s", authDur)
-		w.Header().Del("X-Auth-Duration")
+	w.Header().Set("Server-Timing", fmt.Sprintf("app;dur=%.1f", dur))
+}
+
+// writeJSON encodes v after stamping Server-Timing.
+func writeJSON(w http.ResponseWriter, start time.Time, status int, v interface{}) {
+	writeServerTiming(w, start)
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}
+
+// jsonError writes an §1-style `{"error":...}` response (headers included).
+func jsonError(w http.ResponseWriter, start time.Time, status int, msg string) {
+	writeJSON(w, start, status, map[string]string{"error": msg})
+}
+
+// r2 rounds half away from zero to 2 decimals (§5.6).
+func r2(x float64) float64 {
+	return math.Floor(x*100.0+0.5) / 100.0
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Handlers
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GET /health — byte-constant body precomputed at startup (§5.1).
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", strconv.Itoa(len(healthBody)))
+	w.WriteHeader(http.StatusOK)
+	w.Write(healthBody)
+}
+
+// GET /download/{size} — stream `size` bytes of 0x42 in 8 KiB chunks (§5.2).
+func handleDownload(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	sizeStr := r.PathValue("size")
+	size, err := strconv.ParseInt(sizeStr, 10, 64)
+	if err != nil || size < 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error":"invalid size"}`))
+		return
 	}
-	w.Header().Set("Server-Timing", timing)
-}
+	if size > maxDownload {
+		size = maxDownload
+	}
 
-// User represents a generated user for /api/users.
-type User struct {
-	ID        int    `json:"id"`
-	Name      string `json:"name"`
-	Email     string `json:"email"`
-	Age       int    `json:"age"`
-	Score     int    `json:"score"`
-	Active    bool   `json:"active"`
-	CreatedAt string `json:"created_at"`
-}
+	proc := float64(time.Since(start).Microseconds()) / 1000.0
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	w.Header().Set("X-Download-Bytes", strconv.FormatInt(size, 10))
+	w.Header().Set("Server-Timing", fmt.Sprintf("proc;dur=%.1f", proc))
 
-var firstNames = []string{
-	"Alice", "Bob", "Carol", "Dave", "Eve", "Frank", "Grace", "Hank",
-	"Ivy", "Jack", "Kara", "Leo", "Mia", "Nick", "Olga", "Paul",
-	"Quinn", "Rita", "Sam", "Tina",
-}
-var lastNames = []string{
-	"Smith", "Johnson", "Brown", "Taylor", "Anderson", "Thomas", "Jackson",
-	"White", "Harris", "Martin", "Garcia", "Clark", "Lewis", "Hall", "Young",
-	"King", "Wright", "Lopez", "Hill", "Scott",
-}
-var domains = []string{"example.com", "test.org", "demo.net", "bench.io", "sample.dev"}
-
-func generateUsers(seed int64) []User {
-	rng := rand.New(rand.NewSource(seed))
-	users := make([]User, 100)
-	for i := range users {
-		first := firstNames[rng.Intn(len(firstNames))]
-		last := lastNames[rng.Intn(len(lastNames))]
-		domain := domains[rng.Intn(len(domains))]
-		users[i] = User{
-			ID:        i + 1,
-			Name:      first + " " + last,
-			Email:     strings.ToLower(first) + "." + strings.ToLower(last) + "@" + domain,
-			Age:       20 + rng.Intn(50),
-			Score:     rng.Intn(1000),
-			Active:    rng.Intn(2) == 1,
-			CreatedAt: fmt.Sprintf("2025-%02d-%02d", 1+rng.Intn(12), 1+rng.Intn(28)),
+	remaining := size
+	for remaining > 0 {
+		chunk := int64(chunkSize)
+		if chunk > remaining {
+			chunk = remaining
 		}
+		n, err := w.Write(downloadChunk[:chunk])
+		if err != nil {
+			return // client disconnected
+		}
+		remaining -= int64(n)
 	}
-	return users
 }
 
-// GET /api/users?page=N&sort=field&order=asc — paginated sorted user list.
+// POST /upload — drain the body without wholesale buffering (§5.3).
+func handleUpload(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	n, err := io.Copy(io.Discard, r.Body)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"error":"read error: %s"}`, strings.ReplaceAll(err.Error(), `"`, `'`))
+		return
+	}
+
+	recv := float64(time.Since(start).Microseconds()) / 1000.0
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Networker-Received-Bytes", strconv.FormatInt(n, 10))
+	w.Header().Set("Server-Timing", fmt.Sprintf("recv;dur=%.1f", recv))
+	if reqID := r.Header.Get("X-Networker-Request-Id"); reqID != "" {
+		w.Header().Set("X-Networker-Request-Id", reqID)
+	}
+	json.NewEncoder(w).Encode(map[string]int64{"received_bytes": n})
+}
+
+// GET /api/users?page=N&sort=<field>&order=<asc|desc> (§5.4).
 func handleAPIUsers(w http.ResponseWriter, r *http.Request) {
 	start := setAPIHeaders(w)
 
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 {
-		page = 1
+	page := 1
+	if p, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && p > 1 {
+		page = p
 	}
 	sortField := r.URL.Query().Get("sort")
-	order := r.URL.Query().Get("order")
+	descending := r.URL.Query().Get("order") == "desc"
 
-	var users []User
-	if benchData != nil && len(benchData.Users) > 0 {
-		users = make([]User, len(benchData.Users))
-		for i, raw := range benchData.Users {
-			json.Unmarshal(raw, &users[i])
+	// 100-user window of the dataset; page ≥ 2 is empty (dataset has 100 users).
+	winStart := (page - 1) * 100
+	winEnd := winStart + 100
+	if winEnd > len(benchData.Users) {
+		winEnd = len(benchData.Users)
+	}
+	users := make([]User, 0, 100)
+	if winStart < len(benchData.Users) {
+		users = append(users, benchData.Users[winStart:winEnd]...)
+	}
+
+	// Stable sort; string fields compare bytewise, score as float64;
+	// unrecognized sort fields fall back to id. `desc` reverses the
+	// comparator (ties keep dataset order — sort stays stable).
+	cmp := func(a, b *User) int {
+		switch sortField {
+		case "name":
+			return strings.Compare(a.Name, b.Name)
+		case "email":
+			return strings.Compare(a.Email, b.Email)
+		case "score":
+			if a.Score < b.Score {
+				return -1
+			} else if a.Score > b.Score {
+				return 1
+			}
+			return 0
+		case "created_at":
+			return strings.Compare(a.CreatedAt, b.CreatedAt)
+		default:
+			return a.ID - b.ID
 		}
-	} else {
-		users = generateUsers(int64(page))
 	}
-
-	switch sortField {
-	case "name":
-		sort.Slice(users, func(i, j int) bool { return users[i].Name < users[j].Name })
-	case "email":
-		sort.Slice(users, func(i, j int) bool { return users[i].Email < users[j].Email })
-	case "age":
-		sort.Slice(users, func(i, j int) bool { return users[i].Age < users[j].Age })
-	case "score":
-		sort.Slice(users, func(i, j int) bool { return users[i].Score < users[j].Score })
-	default:
-		sort.Slice(users, func(i, j int) bool { return users[i].ID < users[j].ID })
-	}
-	if order == "desc" {
-		for i, j := 0, len(users)-1; i < j; i, j = i+1, j-1 {
-			users[i], users[j] = users[j], users[i]
+	sort.SliceStable(users, func(i, j int) bool {
+		if descending {
+			return cmp(&users[j], &users[i]) < 0
 		}
-	}
+		return cmp(&users[i], &users[j]) < 0
+	})
 
-	pageSize := 20
-	offset := (page - 1) * pageSize
-	if offset > len(users) {
-		offset = len(users)
+	if len(users) > 20 {
+		users = users[:20]
 	}
-	end := offset + pageSize
-	if end > len(users) {
-		end = len(users)
-	}
-	result := users[offset:end]
-
-	writeServerTiming(w, start)
-	json.NewEncoder(w).Encode(result)
+	writeJSON(w, start, http.StatusOK, users)
 }
 
-// POST /api/transform — hash string fields, reverse values array.
+// transformRequest mirrors §5.5: all fields optional.
+type transformRequest struct {
+	Seed   *json.Number      `json:"seed"`
+	Fields []string          `json:"fields"`
+	Values []json.RawMessage `json:"values"`
+}
+
+// POST /api/transform — SHA-256 each field, reverse values (§5.5).
 func handleAPITransform(w http.ResponseWriter, r *http.Request) {
 	start := setAPIHeaders(w)
 
-	var body map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		jsonError(w, start, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	var req transformRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		jsonError(w, start, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
-	result := make(map[string]interface{})
-	for k, v := range body {
-		switch val := v.(type) {
-		case string:
-			h := sha256.Sum256([]byte(val))
-			result[k] = fmt.Sprintf("%x", h)
-		case []interface{}:
-			rev := make([]interface{}, len(val))
-			for i, item := range val {
-				rev[len(val)-1-i] = item
-			}
-			result[k] = rev
-		default:
-			result[k] = v
-		}
+	hashed := make([]string, 0, len(req.Fields))
+	for _, f := range req.Fields {
+		h := sha256.Sum256([]byte(f))
+		hashed = append(hashed, fmt.Sprintf("%x", h))
 	}
 
-	writeServerTiming(w, start)
-	json.NewEncoder(w).Encode(result)
+	reversed := make([]json.RawMessage, 0, len(req.Values))
+	for i := len(req.Values) - 1; i >= 0; i-- {
+		reversed = append(reversed, req.Values[i])
+	}
+
+	seed := json.Number("0")
+	if req.Seed != nil {
+		seed = *req.Seed
+	}
+
+	writeJSON(w, start, http.StatusOK, map[string]interface{}{
+		"seed":            seed,
+		"hashed_fields":   hashed,
+		"reversed_values": reversed,
+	})
 }
 
-// AggregateResult holds computed statistics for /api/aggregate.
-type AggregateResult struct {
-	Count      int                       `json:"count"`
-	Mean       float64                   `json:"mean"`
-	P50        float64                   `json:"p50"`
-	P95        float64                   `json:"p95"`
-	Max        float64                   `json:"max"`
-	Categories map[string]CategoryBucket `json:"categories"`
+type aggregateCategory struct {
+	Category string     `json:"category"`
+	Count    int        `json:"count"`
+	Mean     benchFloat `json:"mean"`
+	Min      benchFloat `json:"min"`
+	Max      benchFloat `json:"max"`
 }
 
-// CategoryBucket holds stats for one category grouping.
-type CategoryBucket struct {
-	Count int     `json:"count"`
-	Sum   float64 `json:"sum"`
-	Mean  float64 `json:"mean"`
+type aggregateResponse struct {
+	TotalPoints int                 `json:"total_points"`
+	Mean        benchFloat          `json:"mean"`
+	P50         benchFloat          `json:"p50"`
+	P95         benchFloat          `json:"p95"`
+	Max         benchFloat          `json:"max"`
+	Categories  []aggregateCategory `json:"categories"`
 }
 
-// GET /api/aggregate?range=start,end — statistics over generated data points.
+// GET /api/aggregate[?range=start,end] — range is accepted and ignored (§5.6).
 func handleAPIAggregate(w http.ResponseWriter, r *http.Request) {
 	start := setAPIHeaders(w)
 
-	rangeStr := r.URL.Query().Get("range")
-	parts := strings.SplitN(rangeStr, ",", 2)
-	if len(parts) != 2 {
-		http.Error(w, "range must be start,end", http.StatusBadRequest)
-		return
-	}
-	rangeStart, err1 := strconv.ParseInt(parts[0], 10, 64)
-	rangeEnd, err2 := strconv.ParseInt(parts[1], 10, 64)
-	if err1 != nil || err2 != nil {
-		http.Error(w, "invalid range values", http.StatusBadRequest)
-		return
-	}
-
-	// Load timeseries from shared data or generate via PRNG.
-	var values []float64
-	if benchData != nil && len(benchData.Timeseries) > 0 {
-		values = make([]float64, len(benchData.Timeseries))
-		for i, raw := range benchData.Timeseries {
-			json.Unmarshal(raw, &values[i])
-		}
-	} else {
-		rng := rand.New(rand.NewSource(rangeStart))
-		values = make([]float64, 10000)
-		for i := range values {
-			values[i] = rng.Float64()*float64(rangeEnd-rangeStart) + float64(rangeStart)
-		}
-	}
+	values := make([]float64, len(tsValues))
+	copy(values, tsValues)
+	sort.Float64s(values)
 
 	n := len(values)
 	sum := 0.0
-	catNames := []string{"alpha", "beta", "gamma", "delta", "epsilon"}
-	cats := make(map[string]*CategoryBucket)
-	for _, c := range catNames {
-		cats[c] = &CategoryBucket{}
+	for _, v := range values {
+		sum += v
 	}
 
-	for i := 0; i < n; i++ {
-		sum += values[i]
-		cat := catNames[i%len(catNames)]
-		cats[cat].Count++
-		cats[cat].Sum += values[i]
-	}
-
-	sort.Float64s(values)
-	for _, b := range cats {
-		if b.Count > 0 {
-			b.Mean = b.Sum / float64(b.Count)
+	chunk := n / 5
+	categories := make([]aggregateCategory, 0, 5)
+	for i := 0; i < 5; i++ {
+		part := values[i*chunk : (i+1)*chunk]
+		partSum := 0.0
+		for _, v := range part {
+			partSum += v
 		}
+		categories = append(categories, aggregateCategory{
+			Category: fmt.Sprintf("q%d", i+1),
+			Count:    chunk,
+			Mean:     benchFloat(r2(partSum / float64(chunk))),
+			Min:      benchFloat(r2(part[0])),
+			Max:      benchFloat(r2(part[len(part)-1])),
+		})
 	}
 
-	catResult := make(map[string]CategoryBucket)
-	for k, v := range cats {
-		catResult[k] = *v
-	}
-
-	result := AggregateResult{
-		Count:      n,
-		Mean:       sum / float64(n),
-		P50:        values[n/2],
-		P95:        values[int(float64(n)*0.95)],
-		Max:        values[n-1],
-		Categories: catResult,
-	}
-
-	writeServerTiming(w, start)
-	json.NewEncoder(w).Encode(result)
+	writeJSON(w, start, http.StatusOK, aggregateResponse{
+		TotalPoints: n,
+		Mean:        benchFloat(r2(sum / float64(n))),
+		P50:         benchFloat(r2(values[int(float64(n)*0.50)])),
+		P95:         benchFloat(r2(values[int(float64(n)*0.95)])),
+		Max:         benchFloat(r2(values[n-1])),
+		Categories:  categories,
+	})
 }
 
-// SearchResult holds one matched item for /api/search.
-type SearchResult struct {
-	Index int     `json:"index"`
-	Text  string  `json:"text"`
-	Score float64 `json:"score"`
+type searchResult struct {
+	Rank          int    `json:"rank"`
+	Item          string `json:"item"`
+	MatchPosition int    `json:"match_position"`
 }
 
-// GET /api/search?q=term&limit=N — regex search over generated strings.
+// GET /api/search?q=<term>&limit=N — case-sensitive regex with literal
+// fallback on compile failure (§5.7).
 func handleAPISearch(w http.ResponseWriter, r *http.Request) {
 	start := setAPIHeaders(w)
 
-	q := r.URL.Query().Get("q")
-	if q == "" {
-		http.Error(w, "q parameter required", http.StatusBadRequest)
-		return
+	q := "test"
+	if v := r.URL.Query().Get("q"); v != "" {
+		q = v
 	}
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit < 1 || limit > 100 {
-		limit = 10
-	}
-
-	re, err := regexp.Compile("(?i)" + regexp.QuoteMeta(q))
-	if err != nil {
-		http.Error(w, "invalid search term", http.StatusBadRequest)
-		return
-	}
-
-	// Build corpus from shared data or PRNG fallback.
-	type corpusItem struct {
-		Index int
-		Text  string
-	}
-	var corpus []corpusItem
-
-	if benchData != nil && len(benchData.SearchCorpus) > 0 {
-		for i, raw := range benchData.SearchCorpus {
-			var text string
-			json.Unmarshal(raw, &text)
-			corpus = append(corpus, corpusItem{Index: i, Text: text})
+	limit := 20
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
 		}
-	} else {
-		rng := rand.New(rand.NewSource(42))
-		words := []string{
-			"network", "latency", "throughput", "bandwidth", "packet", "socket",
-			"connection", "timeout", "buffer", "stream", "protocol", "endpoint",
-			"request", "response", "header", "payload", "router", "gateway",
-			"firewall", "proxy",
-		}
-		for i := 0; i < 1000; i++ {
-			parts := make([]string, 3+rng.Intn(4))
-			for j := range parts {
-				parts[j] = words[rng.Intn(len(words))]
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if limit < 0 {
+		limit = 0
+	}
+
+	re, reErr := regexp.Compile(q)
+
+	type match struct {
+		pos  int
+		item string
+	}
+	matches := make([]match, 0, 64)
+	for i := range benchData.SearchCorpus {
+		item := benchData.SearchCorpus[i]
+		pos := -1
+		if reErr == nil {
+			if loc := re.FindStringIndex(item); loc != nil {
+				pos = loc[0]
 			}
-			corpus = append(corpus, corpusItem{Index: i, Text: strings.Join(parts, " ")})
+		} else {
+			pos = strings.Index(item, q)
+		}
+		if pos >= 0 {
+			matches = append(matches, match{pos: pos, item: item})
 		}
 	}
 
-	var results []SearchResult
-	for _, item := range corpus {
-		loc := re.FindStringIndex(item.Text)
-		if loc != nil {
-			score := 1.0 / (1.0 + float64(loc[0]))
-			results = append(results, SearchResult{Index: item.Index, Text: item.Text, Score: score})
+	// Sort by (position asc, item asc bytewise).
+	sort.SliceStable(matches, func(i, j int) bool {
+		if matches[i].pos != matches[j].pos {
+			return matches[i].pos < matches[j].pos
 		}
+		return matches[i].item < matches[j].item
+	})
+
+	total := len(matches)
+	if len(matches) > limit {
+		matches = matches[:limit]
+	}
+	results := make([]searchResult, 0, len(matches))
+	for i, m := range matches {
+		results = append(results, searchResult{Rank: i + 1, Item: m.item, MatchPosition: m.pos})
 	}
 
-	sort.Slice(results, func(i, j int) bool { return results[i].Score > results[j].Score })
-	if len(results) > limit {
-		results = results[:limit]
-	}
-
-	writeServerTiming(w, start)
-	json.NewEncoder(w).Encode(results)
+	writeJSON(w, start, http.StatusOK, map[string]interface{}{
+		"query":         q,
+		"total_matches": total,
+		"returned":      len(results),
+		"results":       results,
+	})
 }
 
-// UploadProcessResult holds hash/compression results for /api/upload/process.
-type UploadProcessResult struct {
-	OriginalSize   int    `json:"original_size"`
-	CompressedSize int    `json:"compressed_size"`
-	CRC32          string `json:"crc32"`
-	SHA256         string `json:"sha256"`
-}
-
-// POST /api/upload/process — hash and compress uploaded body.
+// POST /api/upload/process — CRC-32 + SHA-256 + zlib level 6 (§5.8).
 func handleAPIUploadProcess(w http.ResponseWriter, r *http.Request) {
 	start := setAPIHeaders(w)
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("read error: %v", err), http.StatusInternalServerError)
+		jsonError(w, start, http.StatusInternalServerError, "read error")
 		return
 	}
 
 	crc := crc32.ChecksumIEEE(body)
 	sha := sha256.Sum256(body)
 
-	var compressed strings.Builder
-	fw, _ := flate.NewWriter(&compressed, flate.DefaultCompression)
-	fw.Write(body)
-	fw.Close()
+	// zlib (RFC 1950) at level 6 — NOT raw deflate (§5.8).
+	var compressed bytes.Buffer
+	zw, _ := zlib.NewWriterLevel(&compressed, 6)
+	zw.Write(body)
+	zw.Close()
 
-	result := UploadProcessResult{
-		OriginalSize:   len(body),
-		CompressedSize: len(compressed.String()),
-		CRC32:          fmt.Sprintf("%08x", crc),
-		SHA256:         fmt.Sprintf("%x", sha),
-	}
-
-	writeServerTiming(w, start)
-	json.NewEncoder(w).Encode(result)
+	writeJSON(w, start, http.StatusOK, map[string]interface{}{
+		"original_size":   len(body),
+		"compressed_size": compressed.Len(),
+		"crc32":           fmt.Sprintf("%08x", crc),
+		"sha256":          fmt.Sprintf("%x", sha),
+	})
 }
 
-// GET /api/delayed?ms=N&work=light — sleep with optional CPU work.
+// GET /api/delayed?ms=N&work=<ignored> — async timer delay (§5.9).
+// Goroutine sleep parks the goroutine, not an OS thread — Go's idiomatic
+// non-blocking delay.
 func handleAPIDelayed(w http.ResponseWriter, r *http.Request) {
 	start := setAPIHeaders(w)
 
-	ms, _ := strconv.Atoi(r.URL.Query().Get("ms"))
+	ms := 10
+	if v := r.URL.Query().Get("ms"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			ms = n
+		}
+	}
 	if ms < 1 {
 		ms = 1
 	}
 	if ms > 100 {
 		ms = 100
 	}
-	work := r.URL.Query().Get("work")
 
 	time.Sleep(time.Duration(ms) * time.Millisecond)
 
-	result := map[string]interface{}{
+	actual := float64(time.Since(start).Microseconds()) / 1000.0
+	writeJSON(w, start, http.StatusOK, map[string]interface{}{
 		"requested_ms": ms,
-		"actual_ms":    float64(time.Since(start).Microseconds()) / 1000.0,
-		"work":         work,
-	}
-
-	if work == "heavy" {
-		x := 0.0
-		for i := 0; i < 100000; i++ {
-			x += math.Sqrt(float64(i))
-		}
-		result["compute"] = x
-	}
-
-	writeServerTiming(w, start)
-	json.NewEncoder(w).Encode(result)
+		"actual_ms":    math.Round(actual*100) / 100,
+	})
 }
 
-// GET /api/validate?seed=42 — checksums for all endpoints at given seed.
+// GET /api/validate?seed=N — echo the dataset's expected_checksums (§5.10).
 func handleAPIValidate(w http.ResponseWriter, r *http.Request) {
 	start := setAPIHeaders(w)
 
-	seed, _ := strconv.ParseInt(r.URL.Query().Get("seed"), 10, 64)
-	if seed == 0 {
-		seed = 42
-	}
-
-	// If shared data is loaded, return pre-computed checksums.
-	if benchData != nil && len(benchData.ExpectedChecksums) > 0 {
-		result := make(map[string]string)
-		result["seed"] = fmt.Sprintf("%d", seed)
-		for k, v := range benchData.ExpectedChecksums {
-			result[k] = v
+	seed := 42
+	if v := r.URL.Query().Get("seed"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			seed = n
 		}
-		writeServerTiming(w, start)
-		json.NewEncoder(w).Encode(result)
-		return
 	}
 
-	// PRNG fallback.
-	// Users checksum
-	users := generateUsers(seed)
-	usersJSON, _ := json.Marshal(users)
-	usersHash := sha256.Sum256(usersJSON)
-
-	// Aggregate checksum
-	rng := rand.New(rand.NewSource(seed))
-	sum := 0.0
-	for i := 0; i < 10000; i++ {
-		sum += rng.Float64() * 100.0
-	}
-	aggHash := sha256.Sum256([]byte(fmt.Sprintf("%.6f", sum)))
-
-	// Search checksum (seed=42 corpus, q="network")
-	rng2 := rand.New(rand.NewSource(42))
-	words := []string{
-		"network", "latency", "throughput", "bandwidth", "packet", "socket",
-		"connection", "timeout", "buffer", "stream", "protocol", "endpoint",
-		"request", "response", "header", "payload", "router", "gateway",
-		"firewall", "proxy",
-	}
-	var corpus strings.Builder
-	for i := 0; i < 1000; i++ {
-		parts := make([]string, 3+rng2.Intn(4))
-		for j := range parts {
-			parts[j] = words[rng2.Intn(len(words))]
-		}
-		corpus.WriteString(strings.Join(parts, " "))
-		corpus.WriteByte('\n')
-	}
-	searchHash := sha256.Sum256([]byte(corpus.String()))
-
-	result := map[string]string{
-		"seed":      fmt.Sprintf("%d", seed),
-		"users":     fmt.Sprintf("%x", usersHash[:16]),
-		"aggregate": fmt.Sprintf("%x", aggHash[:16]),
-		"search":    fmt.Sprintf("%x", searchHash[:16]),
-	}
-
-	writeServerTiming(w, start)
-	json.NewEncoder(w).Encode(result)
+	writeJSON(w, start, http.StatusOK, map[string]interface{}{
+		"seed":      seed,
+		"checksums": benchData.ExpectedChecksums,
+	})
 }
