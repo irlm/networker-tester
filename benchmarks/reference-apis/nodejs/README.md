@@ -18,13 +18,31 @@ framework. Using Node's built-in `http2` module ensures:
 - **Reproducible builds** — the Docker image copies two files. No
   `node_modules`, no lockfile churn.
 
-## Endpoints
+## Contract
 
-| Method | Path              | Description                              |
-|--------|-------------------|------------------------------------------|
-| GET    | `/health`         | JSON health check with runtime info      |
-| GET    | `/download/:size` | Stream `size` bytes (backpressure-aware) |
-| POST   | `/upload`         | Accumulate body, return bytes received   |
+Implements the frozen contract in `benchmarks/shared/API-SPEC.md` (family C):
+`/health` (byte-constant), `/download/{size}` (0x42 fill, 8 KiB chunks),
+`/upload`, and the seven `/api/*` JSON endpoints, all served from the shared
+dataset `bench-data.json` (**load failure is fatal** — no PRNG fallback).
+
+## Worker policy (API-SPEC.md §3)
+
+Scaling uses the `cluster` module: the primary forks `BENCH_WORKERS` worker
+processes (default = logical CPU count) sharing the listen port.
+
+| Variable         | Default     | Description                                 |
+|------------------|-------------|---------------------------------------------|
+| `BENCH_PORT`     | `8443`      | Listen port                                 |
+| `BENCH_CERT_DIR` | `/opt/bench`| PEM cert/key directory (absent → plain HTTP)|
+| `BENCH_WORKERS`  | CPU count   | Cluster worker processes (§3)               |
+| `BENCH_API_TOKEN`| unset       | Bearer token for all routes except `/health`|
+| `BENCH_DATA_PATH`| unset       | Explicit dataset path (failure → exit 1)    |
+
+## Tests
+
+```bash
+node test.js   # pure-logic unit tests against the shared dataset
+```
 
 ## Running locally
 

@@ -1,9 +1,15 @@
 "use strict";
 
+// AletheBench Node.js reference API.
+// Conforms to the frozen contract in benchmarks/shared/API-SPEC.md (family C).
+// Scaling (§3): cluster module, BENCH_WORKERS worker processes (default = cores).
+
+const cluster = require("node:cluster");
 const http = require("node:http");
 const http2 = require("node:http2");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const url = require("node:url");
 const zlib = require("node:zlib");
@@ -14,11 +20,22 @@ const zlib = require("node:zlib");
 const CERT_DIR = process.env.BENCH_CERT_DIR || "/opt/bench";
 const PORT = parseInt(process.env.BENCH_PORT || process.env.PORT || "8443", 10);
 const BENCH_API_TOKEN = process.env.BENCH_API_TOKEN || "";
+const NPROC = os.availableParallelism ? os.availableParallelism() : os.cpus().length;
+const WORKERS = (function () {
+  const raw = process.env.BENCH_WORKERS;
+  if (raw === undefined || raw === "") return NPROC;
+  const n = parseInt(raw, 10);
+  if (!Number.isInteger(n) || n < 1) {
+    process.stderr.write(`FATAL: BENCH_WORKERS=${raw} is not a positive integer\n`);
+    process.exit(1);
+  }
+  return n;
+})();
+
+const MAX_DOWNLOAD = 2147483648; // §5.2: 2 GiB clamp
 
 // ---------------------------------------------------------------------------
 // Structured stderr logger (LOG_LEVEL, LOG_FORMAT env vars)
-// LOG_FORMAT=json  → structured JSON lines matching bench schema
-// LOG_FORMAT unset → human-readable text prefixed with timestamp + level
 // ---------------------------------------------------------------------------
 const LOG_LEVEL = (process.env.LOG_LEVEL || "info").toLowerCase();
 const LOG_FORMAT = (process.env.LOG_FORMAT || "text").toLowerCase();
@@ -46,42 +63,96 @@ const log = {
 };
 
 // ---------------------------------------------------------------------------
-// Shared benchmark dataset
+// Shared benchmark dataset (API-SPEC.md §2) — load failure is FATAL.
+// No PRNG fallback: silently benchmarking different input data poisons
+// cross-language comparisons (audit F2/P0#2).
 // ---------------------------------------------------------------------------
-let BENCH_DATA = null;
-
-function loadBenchData() {
-  const candidates = [];
-  if (process.env.BENCH_DATA_PATH) {
-    candidates.push(process.env.BENCH_DATA_PATH);
-  }
-  candidates.push("/opt/bench/bench-data.json");
-  candidates.push(path.join(__dirname, "..", "shared", "bench-data.json"));
-
-  for (let i = 0; i < candidates.length; i++) {
-    try {
-      const raw = fs.readFileSync(candidates[i], "utf8");
-      BENCH_DATA = JSON.parse(raw);
-      log.info("Loaded bench-data.json", {
-        path: candidates[i],
-        version: BENCH_DATA._version,
-        users: (BENCH_DATA.users || []).length,
-        corpus: (BENCH_DATA.search_corpus || []).length,
-        timeseries: (BENCH_DATA.timeseries || []).length,
-      });
-      return;
-    } catch (_e) {
-      // try next path
-    }
-  }
-  log.warn("bench-data.json not found, falling back to per-language PRNG", {});
+function fatal(msg) {
+  process.stderr.write("FATAL: " + msg + "\n");
+  process.exit(1);
 }
 
-loadBenchData();
+function loadBenchData() {
+  let chosen = null;
+  const envPath = process.env.BENCH_DATA_PATH;
+  if (envPath !== undefined && envPath !== "") {
+    chosen = envPath; // must exist and parse — no fallback
+  } else {
+    const candidates = [
+      "/opt/bench/bench-data.json",
+      path.join(__dirname, "..", "shared", "bench-data.json"),
+    ];
+    for (const c of candidates) {
+      if (fs.existsSync(c)) { chosen = c; break; } // first existing path wins
+    }
+    if (chosen === null) {
+      fatal("bench-data.json not found (tried BENCH_DATA_PATH, /opt/bench/bench-data.json, " +
+            "../shared/bench-data.json); the shared dataset is required — there is no PRNG fallback");
+    }
+  }
+
+  let data;
+  try {
+    data = JSON.parse(fs.readFileSync(chosen, "utf8"));
+  } catch (e) {
+    fatal(`bench-data.json at ${chosen} could not be loaded: ${e.message}`);
+  }
+
+  // §2 schema verification — exit non-zero on mismatch.
+  const checks = [
+    [data._version === 2, `_version=${data._version}, want 2`],
+    [Array.isArray(data.users) && data.users.length === 100, "users count != 100"],
+    [Array.isArray(data.search_corpus) && data.search_corpus.length === 1000, "search_corpus count != 1000"],
+    [Array.isArray(data.timeseries) && data.timeseries.length === 10000, "timeseries count != 10000"],
+    [Array.isArray(data.transform_inputs) && data.transform_inputs.length === 10, "transform_inputs count != 10"],
+    [data.expected_checksums && Object.keys(data.expected_checksums).length === 4, "expected_checksums keys != 4"],
+  ];
+  for (const [ok, msg] of checks) {
+    if (!ok) fatal(`bench-data.json at ${chosen}: ${msg}`);
+  }
+
+  log.info("Loaded bench-data.json", { path: chosen, version: data._version });
+  return data;
+}
+
+const BENCH_DATA = loadBenchData();
+// Timeseries values cached in dataset order (§5.6 reads the `value` field —
+// summing the raw objects was the NaN bug, audit F2). The per-request
+// copy + sort + stats is the measured workload.
+const TS_VALUES = BENCH_DATA.timeseries.map(function (p) { return p.value; });
 
 // Pre-allocate a single 8 KiB buffer filled with 0x42 ('B') for download
-// streaming. Reusing one buffer avoids per-request allocation pressure.
+// streaming (§5.2: fill byte and chunk size are part of the measured workload).
 const CHUNK = Buffer.alloc(8192, 0x42);
+
+// /health is constant-work (§5.1): the body is a byte-constant precomputed here.
+const HEALTH_BODY = JSON.stringify({
+  status: "ok",
+  runtime: "nodejs",
+  version: process.version,
+});
+
+// ---------------------------------------------------------------------------
+// Number formatting for canonical-JSON compatibility
+// ---------------------------------------------------------------------------
+// JSON.stringify(39.0) emits "39", which the Python-canonicalizing validator
+// parses as int — breaking the §7 checksums when a float field lands on an
+// integral value (aggregate q2.mean = 39.0 in the frozen dataset). jnum()
+// keeps a trailing ".0" for integral floats.
+function jnum(x) {
+  return Number.isInteger(x) ? x.toFixed(1) : String(x);
+}
+
+// r2: §5.6 rounding — half away from zero to 2 decimals.
+function r2(x) {
+  return Math.floor(x * 100 + 0.5) / 100;
+}
+
+// Bytewise-ordinal string compare (ASCII corpus/dataset; do NOT use
+// localeCompare — the spec requires ordinal comparison).
+function cmpStr(a, b) {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
 
 // ---------------------------------------------------------------------------
 // TLS credentials
@@ -97,86 +168,55 @@ const tlsOptions = USE_TLS ? {
 } : null;
 
 // ---------------------------------------------------------------------------
-// Shared response helpers (work with both HTTP/2 streams and HTTP/1.1 res)
+// Response adapters — normalize HTTP/1.1 res and HTTP/2 stream to one shape
 // ---------------------------------------------------------------------------
-
-function jsonResponse(res, status, obj) {
-  const body = JSON.stringify(obj);
-  res.writeHead(status, {
-    "content-type": "application/json",
-    "content-length": Buffer.byteLength(body),
-  });
+function sendH1(res, status, headers, body) {
+  res.writeHead(status, headers);
   res.end(body);
 }
 
-// ---------------------------------------------------------------------------
-// Auth check: returns true if request is authorized, false if 401 was sent.
-// ---------------------------------------------------------------------------
-function checkAuth(urlPath, headers, respond401) {
-  if (!BENCH_API_TOKEN) return true;
-  if (urlPath === "/health") return true;
-  var auth = headers["authorization"] || headers["Authorization"] || "";
-  if (auth === "Bearer " + BENCH_API_TOKEN) return true;
-  respond401();
-  return false;
-}
-
-// ---------------------------------------------------------------------------
-// Route: GET /health
-// ---------------------------------------------------------------------------
-function handleHealthH2(stream) {
-  const body = JSON.stringify({
-    status: "ok",
-    runtime: "nodejs",
-    version: process.version,
-  });
-  stream.respond({
-    ":status": 200,
-    "content-type": "application/json",
-    "content-length": Buffer.byteLength(body),
-  });
+function sendH2(stream, status, headers, body) {
+  const h = Object.assign({ ":status": status }, headers);
+  stream.respond(h);
   stream.end(body);
 }
 
 // ---------------------------------------------------------------------------
-// Route: GET /download/:size
+// Auth check (§1): all routes except /health require the bearer token when
+// BENCH_API_TOKEN is set. Returns true if authorized, false if 401 was sent.
 // ---------------------------------------------------------------------------
-function handleDownloadH2(stream, size) {
-  if (size <= 0 || !Number.isFinite(size)) {
-    const err = JSON.stringify({ error: "invalid size" });
-    stream.respond({ ":status": 400, "content-type": "application/json" });
-    stream.end(err);
-    return;
-  }
-
-  stream.respond({
-    ":status": 200,
-    "content-type": "application/octet-stream",
-    "content-length": size,
-  });
-
-  streamBytes(stream, size);
+function checkAuth(urlPath, headers, send) {
+  if (!BENCH_API_TOKEN) return true;
+  if (urlPath === "/health") return true;
+  var auth = headers["authorization"] || "";
+  if (auth === "Bearer " + BENCH_API_TOKEN) return true;
+  const body = '{"error":"unauthorized"}';
+  send(401, {
+    "content-type": "application/json",
+    "content-length": Buffer.byteLength(body),
+  }, body);
+  return false;
 }
 
 // ---------------------------------------------------------------------------
-// Route: POST /upload
+// API response helper: §1 benchmark headers + Server-Timing app;dur (1 dp).
+// `body` is a preserialized JSON string.
 // ---------------------------------------------------------------------------
-function handleUploadH2(stream) {
-  let total = 0;
+function apiSend(send, status, body, startHr) {
+  const elapsed = process.hrtime(startHr);
+  const durationMs = elapsed[0] * 1000 + elapsed[1] / 1e6;
+  send(status, {
+    "content-type": "application/json",
+    "content-length": Buffer.byteLength(body),
+    "server-timing": "app;dur=" + durationMs.toFixed(1),
+    "cache-control": "no-store, no-cache, must-revalidate",
+    "timing-allow-origin": "*",
+    "access-control-allow-origin": "*",
+  }, body);
+}
 
-  stream.on("data", (chunk) => {
-    total += chunk.length;
-  });
-
-  stream.on("end", () => {
-    const body = JSON.stringify({ bytes_received: total });
-    stream.respond({
-      ":status": 200,
-      "content-type": "application/json",
-      "content-length": Buffer.byteLength(body),
-    });
-    stream.end(body);
-  });
+function apiError(send, status, message, startHr) {
+  apiSend(send, status, JSON.stringify({ error: message }), startHr);
 }
 
 // ---------------------------------------------------------------------------
@@ -184,6 +224,10 @@ function handleUploadH2(stream) {
 // ---------------------------------------------------------------------------
 function streamBytes(writable, size) {
   let remaining = size;
+  if (remaining === 0) {
+    writable.end();
+    return;
+  }
 
   function write() {
     let ok = true;
@@ -207,437 +251,291 @@ function streamBytes(writable, size) {
 }
 
 // ---------------------------------------------------------------------------
-// Seeded PRNG (mulberry32) — deterministic output across runs
+// Route: GET /health — byte-constant body (§5.1). Auth-exempt. Status 200 only.
 // ---------------------------------------------------------------------------
-
-function mulberry32(seed) {
-  let s = seed | 0;
-  return function () {
-    s = (s + 0x6d2b79f5) | 0;
-    let t = Math.imul(s ^ (s >>> 15), 1 | s);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-// ---------------------------------------------------------------------------
-// JSON API response helpers
-// ---------------------------------------------------------------------------
-
-function apiJsonResponse(res, status, obj, startHr) {
-  const elapsed = process.hrtime(startHr);
-  const durationMs = elapsed[0] * 1000 + elapsed[1] / 1e6;
-  const body = JSON.stringify(obj);
-  res.writeHead(status, {
+function handleHealth(send) {
+  send(200, {
     "content-type": "application/json",
-    "content-length": Buffer.byteLength(body),
-    "server-timing": "app;dur=" + durationMs.toFixed(1),
-    "cache-control": "no-store, no-cache, must-revalidate",
-    "timing-allow-origin": "*",
-    "access-control-allow-origin": "*",
-  });
-  res.end(body);
+    "content-length": Buffer.byteLength(HEALTH_BODY),
+  }, HEALTH_BODY);
 }
 
-function apiJsonResponseH2(stream, status, obj, startHr) {
+// ---------------------------------------------------------------------------
+// Route: GET /download/{size} — exactly `size` bytes of 0x42 in 8 KiB chunks
+// (§5.2). Non-integer → 400; values above 2 GiB are clamped.
+// ---------------------------------------------------------------------------
+function handleDownload(urlPath, send, writable) {
+  const startHr = process.hrtime();
+  const m = /^\/download\/(\d+)$/.exec(urlPath);
+  if (!m) {
+    const err = '{"error":"invalid size"}';
+    send(400, {
+      "content-type": "application/json",
+      "content-length": Buffer.byteLength(err),
+    }, null); // headers only; body written below via writable
+    writable.end(err);
+    return;
+  }
+  let size = Number(m[1]);
+  if (size > MAX_DOWNLOAD) size = MAX_DOWNLOAD;
+
   const elapsed = process.hrtime(startHr);
-  const durationMs = elapsed[0] * 1000 + elapsed[1] / 1e6;
-  const body = JSON.stringify(obj);
-  stream.respond({
-    ":status": status,
-    "content-type": "application/json",
-    "content-length": Buffer.byteLength(body),
-    "server-timing": "app;dur=" + durationMs.toFixed(1),
-    "cache-control": "no-store, no-cache, must-revalidate",
-    "timing-allow-origin": "*",
-    "access-control-allow-origin": "*",
+  const procMs = elapsed[0] * 1000 + elapsed[1] / 1e6;
+  send(200, {
+    "content-type": "application/octet-stream",
+    "content-length": size,
+    "x-download-bytes": String(size),
+    "server-timing": "proc;dur=" + procMs.toFixed(1),
+  }, null);
+  streamBytes(writable, size);
+}
+
+// ---------------------------------------------------------------------------
+// Route: POST /upload — drain the body without buffering it (§5.3).
+// ---------------------------------------------------------------------------
+function handleUpload(readable, reqHeaders, send) {
+  const startHr = process.hrtime();
+  let total = 0;
+
+  readable.on("data", function (chunk) {
+    total += chunk.length;
   });
-  stream.end(body);
+
+  readable.on("end", function () {
+    const elapsed = process.hrtime(startHr);
+    const recvMs = elapsed[0] * 1000 + elapsed[1] / 1e6;
+    const body = JSON.stringify({ received_bytes: total });
+    const headers = {
+      "content-type": "application/json",
+      "content-length": Buffer.byteLength(body),
+      "x-networker-received-bytes": String(total),
+      "server-timing": "recv;dur=" + recvMs.toFixed(1),
+    };
+    const reqId = reqHeaders["x-networker-request-id"];
+    if (reqId) headers["x-networker-request-id"] = reqId;
+    send(200, headers, body);
+  });
 }
 
 // ---------------------------------------------------------------------------
-// Shared data for JSON API endpoints
+// GET /api/users?page=N&sort=<field>&order=<asc|desc> (§5.4)
 // ---------------------------------------------------------------------------
+const USER_SORT_FIELDS = ["id", "name", "email", "score", "created_at"];
 
-const FIRST_NAMES = [
-  "Alice", "Bob", "Carol", "Dave", "Eve", "Frank", "Grace", "Heidi",
-  "Ivan", "Judy", "Karl", "Laura", "Mallory", "Nina", "Oscar", "Peggy",
-  "Quentin", "Ruth", "Steve", "Trent", "Ursula", "Victor", "Wendy",
-  "Xander", "Yvonne", "Zack",
-];
-const LAST_NAMES = [
-  "Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller",
-  "Davis", "Rodriguez", "Martinez", "Hernandez", "Lopez", "Gonzalez",
-  "Wilson", "Anderson", "Thomas", "Taylor", "Moore", "Jackson", "Martin",
-];
-const DEPARTMENTS = [
-  "Engineering", "Marketing", "Sales", "Finance", "HR",
-  "Operations", "Legal", "Support", "Design", "Product",
-];
-
-function generateUsers(rng, count) {
-  const users = [];
-  for (let i = 0; i < count; i++) {
-    users.push({
-      id: i + 1,
-      name: FIRST_NAMES[Math.floor(rng() * FIRST_NAMES.length)] + " " +
-            LAST_NAMES[Math.floor(rng() * LAST_NAMES.length)],
-      email: "user" + (i + 1) + "@example.com",
-      age: 22 + Math.floor(rng() * 44),
-      department: DEPARTMENTS[Math.floor(rng() * DEPARTMENTS.length)],
-      score: Math.round(rng() * 10000) / 100,
-    });
-  }
-  return users;
-}
-
-const SEARCH_WORDS = [
-  "network", "latency", "throughput", "bandwidth", "packet",
-  "routing", "firewall", "proxy", "endpoint", "server",
-  "client", "protocol", "socket", "buffer", "stream",
-  "timeout", "retry", "cache", "queue", "load",
-];
-
-// Simple Box-Muller for Gaussian
-function gaussianRng(rng, mean, stddev) {
-  const u1 = rng();
-  const u2 = rng();
-  const z = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
-  return mean + stddev * z;
-}
-
-// CRC32 (IEEE) lookup table
-const CRC32_TABLE = (function () {
-  const table = new Uint32Array(256);
-  for (let i = 0; i < 256; i++) {
-    let c = i;
-    for (let j = 0; j < 8; j++) {
-      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    }
-    table[i] = c;
-  }
-  return table;
-})();
-
-function crc32(buf) {
-  let crc = 0xffffffff;
-  for (let i = 0; i < buf.length; i++) {
-    crc = CRC32_TABLE[(crc ^ buf[i]) & 0xff] ^ (crc >>> 8);
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-// ---------------------------------------------------------------------------
-// GET /api/users?page=N&sort=field&order=asc|desc
-// ---------------------------------------------------------------------------
-
-function handleApiUsers(parsedUrl, respond) {
+function handleApiUsers(parsedUrl, send) {
   const startHr = process.hrtime();
   const params = parsedUrl.query || {};
-  const page = Math.max(1, parseInt(params.page, 10) || 1);
-  const sortField = params.sort || "id";
-  const order = params.order || "asc";
+  let page = parseInt(params.page, 10);
+  if (!Number.isInteger(page) || page < 1) page = 1;
+  const sortField = USER_SORT_FIELDS.includes(params.sort) ? params.sort : "id";
+  const desc = params.order === "desc";
 
-  var users;
-  if (BENCH_DATA && BENCH_DATA.users && BENCH_DATA.users.length > 0) {
-    users = BENCH_DATA.users.slice(); // shallow copy for sorting
-  } else {
-    const rng = mulberry32(page);
-    users = generateUsers(rng, 100);
-  }
+  // 100-user window; the dataset has 100 users, so page ≥ 2 is [] (status 200).
+  const winStart = (page - 1) * 100;
+  const win = BENCH_DATA.users.slice(winStart, winStart + 100);
 
-  const validFields = ["id", "name", "email", "age", "department", "score"];
-  if (validFields.includes(sortField)) {
-    users.sort(function (a, b) {
-      const va = a[sortField];
-      const vb = b[sortField];
-      if (typeof va === "string") return va.localeCompare(vb);
-      return va - vb;
-    });
-  }
-  if (order === "desc") users.reverse();
+  // Stable sort (V8 Array#sort is stable); string fields compare bytewise,
+  // score as float64. `desc` reverses the comparator — ties keep dataset order.
+  const base = sortField === "score" || sortField === "id"
+    ? function (a, b) { return a[sortField] - b[sortField]; }
+    : function (a, b) { return cmpStr(a[sortField], b[sortField]); };
+  win.sort(desc ? function (a, b) { return base(b, a); } : base);
 
-  const pageSize = 20;
-  const startIdx = (page - 1) * pageSize;
-  const pageUsers = users.slice(startIdx, startIdx + pageSize);
-
-  respond(200, {
-    page: page,
-    page_size: pageSize,
-    total: users.length,
-    sort: sortField,
-    order: order,
-    users: pageUsers,
-  }, startHr);
+  apiSend(send, 200, JSON.stringify(win.slice(0, 20)), startHr);
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/transform — SHA-256 hash string fields, reverse arrays
+// POST /api/transform (§5.5) — SHA-256 each field, reverse values.
 // ---------------------------------------------------------------------------
-
-function handleApiTransform(bodyBuf, respond) {
+function handleApiTransform(bodyBuf, send) {
   const startHr = process.hrtime();
   var body;
   try {
     body = JSON.parse(bodyBuf.toString());
   } catch (_e) {
-    return respond(400, { error: "invalid JSON" }, startHr);
+    return apiError(send, 400, "invalid JSON", startHr);
+  }
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return apiError(send, 400, "invalid JSON", startHr);
   }
 
-  const transformed = {};
-  const keys = Object.keys(body);
-  for (let i = 0; i < keys.length; i++) {
-    const key = keys[i];
-    const value = body[key];
-    if (typeof value === "string") {
-      const hashed = crypto.createHash("sha256").update(value).digest("hex");
-      transformed[key] = { original_reversed: value.split("").reverse().join(""), sha256: hashed };
-    } else if (Array.isArray(value)) {
-      transformed[key] = value.slice().reverse();
-    } else {
-      transformed[key] = value;
-    }
-  }
+  const seed = body.seed !== undefined ? body.seed : 0;
+  const fields = Array.isArray(body.fields) ? body.fields : [];
+  const values = Array.isArray(body.values) ? body.values : [];
 
-  respond(200, {
-    original_fields: keys.length,
-    transformed: transformed,
-  }, startHr);
+  const hashedFields = fields.map(function (f) {
+    return crypto.createHash("sha256").update(String(f), "utf8").digest("hex");
+  });
+  const reversedValues = values.slice().reverse();
+
+  apiSend(send, 200, JSON.stringify({
+    seed: seed,
+    hashed_fields: hashedFields,
+    reversed_values: reversedValues,
+  }), startHr);
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/aggregate?range=start,end — stats over 10,000 generated points
+// GET /api/aggregate[?range=start,end] — range accepted and IGNORED (§5.6).
+// Hand-assembled body so integral floats keep their ".0" (see jnum()).
 // ---------------------------------------------------------------------------
+function computeAggregate() {
+  const values = TS_VALUES.slice().sort(function (a, b) { return a - b; });
+  const n = values.length;
+  let sum = 0.0;
+  for (let i = 0; i < n; i++) sum += values[i]; // sequential sum of SORTED values
 
-function handleApiAggregate(parsedUrl, respond) {
+  const chunk = Math.floor(n / 5);
+  const categories = [];
+  for (let i = 0; i < 5; i++) {
+    let partSum = 0.0;
+    for (let j = i * chunk; j < (i + 1) * chunk; j++) partSum += values[j];
+    categories.push({
+      category: "q" + (i + 1),
+      count: chunk,
+      mean: r2(partSum / chunk),
+      min: r2(values[i * chunk]),
+      max: r2(values[(i + 1) * chunk - 1]),
+    });
+  }
+
+  return {
+    total_points: n,
+    mean: r2(sum / n),
+    p50: r2(values[Math.floor(n * 0.50)]),
+    p95: r2(values[Math.floor(n * 0.95)]),
+    max: r2(values[n - 1]),
+    categories: categories,
+  };
+}
+
+function serializeAggregate(agg) {
+  const cats = agg.categories.map(function (c) {
+    return '{"category":"' + c.category + '","count":' + c.count +
+      ',"mean":' + jnum(c.mean) + ',"min":' + jnum(c.min) + ',"max":' + jnum(c.max) + "}";
+  });
+  return '{"total_points":' + agg.total_points +
+    ',"mean":' + jnum(agg.mean) +
+    ',"p50":' + jnum(agg.p50) +
+    ',"p95":' + jnum(agg.p95) +
+    ',"max":' + jnum(agg.max) +
+    ',"categories":[' + cats.join(",") + "]}";
+}
+
+function handleApiAggregate(parsedUrl, send) {
   const startHr = process.hrtime();
-  const rangeParam = (parsedUrl.query || {}).range || "0,1000";
-  const parts = rangeParam.split(",");
-  const rangeStart = parseInt(parts[0], 10) || 0;
-  const rangeEnd = parseInt(parts[1], 10) || 1000;
-
-  var values;
-  if (BENCH_DATA && BENCH_DATA.timeseries && BENCH_DATA.timeseries.length > 0) {
-    values = BENCH_DATA.timeseries.slice();
-  } else {
-    const rng = mulberry32(rangeStart);
-    values = [];
-    for (let i = 0; i < 10000; i++) {
-      values.push(gaussianRng(rng, 50, 15));
-    }
-  }
-
-  const count = values.length;
-  const categories = ["alpha", "beta", "gamma", "delta", "epsilon"];
-  const catRng = mulberry32(rangeStart + 1);
-  const assignments = [];
-
-  for (let i = 0; i < count; i++) {
-    assignments.push(categories[Math.floor(catRng() * categories.length)]);
-  }
-
-  const sorted = values.slice().sort(function (a, b) { return a - b; });
-  const mean = values.reduce(function (s, v) { return s + v; }, 0) / count;
-  const p50 = sorted[Math.floor(count / 2)];
-  const p95 = sorted[Math.floor(count * 0.95)];
-  const maxVal = sorted[count - 1];
-
-  const groups = {};
-  for (let ci = 0; ci < categories.length; ci++) {
-    const cat = categories[ci];
-    const catVals = [];
-    for (let i = 0; i < count; i++) {
-      if (assignments[i] === cat) catVals.push(values[i]);
-    }
-    if (catVals.length > 0) {
-      const catSorted = catVals.slice().sort(function (a, b) { return a - b; });
-      groups[cat] = {
-        count: catVals.length,
-        mean: Math.round((catVals.reduce(function (s, v) { return s + v; }, 0) / catVals.length) * 10000) / 10000,
-        p50: Math.round(catSorted[Math.floor(catSorted.length / 2)] * 10000) / 10000,
-        max: Math.round(catSorted[catSorted.length - 1] * 10000) / 10000,
-      };
-    }
-  }
-
-  respond(200, {
-    range: { start: rangeStart, end: rangeEnd },
-    total_points: count,
-    stats: {
-      mean: Math.round(mean * 10000) / 10000,
-      p50: Math.round(p50 * 10000) / 10000,
-      p95: Math.round(p95 * 10000) / 10000,
-      max: Math.round(maxVal * 10000) / 10000,
-    },
-    groups: groups,
-  }, startHr);
+  apiSend(send, 200, serializeAggregate(computeAggregate()), startHr);
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/search?q=term&limit=N — regex search over 1,000 generated strings
+// GET /api/search?q=<term>&limit=N (§5.7) — case-sensitive regex with
+// literal-substring fallback when the pattern fails to compile.
 // ---------------------------------------------------------------------------
+function computeSearch(query, limit) {
+  var re = null;
+  try {
+    re = new RegExp(query);
+  } catch (_e) {
+    re = null; // literal fallback
+  }
 
-function handleApiSearch(parsedUrl, respond) {
+  const matches = [];
+  for (let i = 0; i < BENCH_DATA.search_corpus.length; i++) {
+    const item = BENCH_DATA.search_corpus[i];
+    let pos = -1;
+    if (re !== null) {
+      const m = re.exec(item);
+      if (m) pos = m.index;
+    } else {
+      pos = item.indexOf(query);
+    }
+    if (pos >= 0) matches.push({ pos: pos, item: item });
+  }
+
+  matches.sort(function (a, b) { return (a.pos - b.pos) || cmpStr(a.item, b.item); });
+
+  const limited = matches.slice(0, limit);
+  return {
+    query: query,
+    total_matches: matches.length,
+    returned: limited.length,
+    results: limited.map(function (m, i) {
+      return { rank: i + 1, item: m.item, match_position: m.pos };
+    }),
+  };
+}
+
+function handleApiSearch(parsedUrl, send) {
   const startHr = process.hrtime();
   const params = parsedUrl.query || {};
-  const query = params.q || "test";
-  var limit = parseInt(params.limit, 10) || 10;
-  if (limit < 1 || limit > 100) limit = 10;
+  const query = params.q !== undefined && params.q !== "" ? params.q : "test";
+  var limit = parseInt(params.limit, 10);
+  if (!Number.isInteger(limit)) limit = 20;
+  if (limit > 100) limit = 100;
+  if (limit < 0) limit = 0;
 
-  var corpus;
-  if (BENCH_DATA && BENCH_DATA.search_corpus && BENCH_DATA.search_corpus.length > 0) {
-    corpus = [];
-    for (let i = 0; i < BENCH_DATA.search_corpus.length; i++) {
-      corpus.push({ id: i + 1, text: BENCH_DATA.search_corpus[i] });
-    }
-  } else {
-    const rng = mulberry32(42);
-    corpus = [];
-    for (let i = 0; i < 1000; i++) {
-      const wordCount = 3 + Math.floor(rng() * 6);
-      const words = [];
-      for (let j = 0; j < wordCount; j++) {
-        words.push(SEARCH_WORDS[Math.floor(rng() * SEARCH_WORDS.length)]);
-      }
-      corpus.push({ id: i + 1, text: words.join(" ") });
-    }
-  }
-
-  var escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  var pattern = new RegExp(escaped, "i");
-
-  const results = [];
-  for (let i = 0; i < corpus.length; i++) {
-    const match = pattern.exec(corpus[i].text);
-    if (match) {
-      const score = Math.round((1.0 / (1 + match.index)) * 10000) / 10000;
-      results.push({ id: corpus[i].id, text: corpus[i].text, score: score });
-    }
-  }
-
-  results.sort(function (a, b) { return b.score - a.score; });
-  const limited = results.slice(0, limit);
-
-  respond(200, {
-    query: query,
-    total_matches: results.length,
-    limit: limit,
-    results: limited,
-  }, startHr);
+  apiSend(send, 200, JSON.stringify(computeSearch(query, limit)), startHr);
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/upload/process — CRC32 + SHA-256 + zlib compress
+// POST /api/upload/process (§5.8) — CRC-32 (IEEE) + SHA-256 + zlib level 6.
 // ---------------------------------------------------------------------------
-
-function handleApiUploadProcess(bodyBuf, respond) {
+function handleApiUploadProcess(bodyBuf, send) {
   const startHr = process.hrtime();
 
-  const crcVal = crc32(bodyBuf);
+  const crcVal = zlib.crc32(bodyBuf) >>> 0;
   const sha = crypto.createHash("sha256").update(bodyBuf).digest("hex");
-  const compressed = zlib.deflateSync(bodyBuf);
+  // zlib (RFC 1950) at level 6 — NOT raw deflate, NOT gzip.
+  const compressed = zlib.deflateSync(bodyBuf, { level: 6 });
 
-  respond(200, {
+  apiSend(send, 200, JSON.stringify({
     original_size: bodyBuf.length,
     compressed_size: compressed.length,
-    compression_ratio: Math.round((compressed.length / Math.max(bodyBuf.length, 1)) * 10000) / 10000,
     crc32: ("00000000" + crcVal.toString(16)).slice(-8),
     sha256: sha,
-  }, startHr);
+  }), startHr);
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/delayed?ms=N&work=light — clamped setTimeout, return actual duration
+// GET /api/delayed?ms=N&work=<ignored> (§5.9) — setTimeout, clamp [1, 100].
 // ---------------------------------------------------------------------------
-
-function handleApiDelayed(parsedUrl, respond) {
+function handleApiDelayed(parsedUrl, send) {
   const startHr = process.hrtime();
   const params = parsedUrl.query || {};
-  var ms = parseInt(params.ms, 10) || 50;
+  var ms = parseInt(params.ms, 10);
+  if (!Number.isInteger(ms)) ms = 10;
   if (ms < 1) ms = 1;
   if (ms > 100) ms = 100;
-  const work = params.work || "none";
+  // `work` is reserved: accepted and ignored.
 
   setTimeout(function () {
-    if (work === "light") {
-      crypto.createHash("sha256").update("benchmark".repeat(100)).digest("hex");
-    }
-
     const elapsed = process.hrtime(startHr);
     const actualMs = Math.round((elapsed[0] * 1000 + elapsed[1] / 1e6) * 100) / 100;
-
-    respond(200, {
+    apiSend(send, 200, JSON.stringify({
       requested_ms: ms,
       actual_ms: actualMs,
-      work: work,
-    }, startHr);
+    }), startHr);
   }, ms);
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/validate?seed=42 — checksums for deterministic verification
+// GET /api/validate?seed=N (§5.10) — echo the dataset's expected_checksums.
 // ---------------------------------------------------------------------------
-
-function handleApiValidate(parsedUrl, respond) {
+function handleApiValidate(parsedUrl, send) {
   const startHr = process.hrtime();
   const params = parsedUrl.query || {};
-  const seed = parseInt(params.seed, 10) || 42;
+  var seed = parseInt(params.seed, 10);
+  if (!Number.isInteger(seed)) seed = 42;
 
-  // If shared data is loaded, return pre-computed checksums.
-  if (BENCH_DATA && BENCH_DATA.expected_checksums) {
-    const checksums = Object.assign({}, BENCH_DATA.expected_checksums);
-    respond(200, { seed: seed, checksums: checksums }, startHr);
-    return;
-  }
-
-  // PRNG fallback.
-  // Users checksum (page=1)
-  const usersRng = mulberry32(1);
-  const users = generateUsers(usersRng, 100);
-  const usersHash = crypto.createHash("sha256")
-    .update(JSON.stringify(users))
-    .digest("hex");
-
-  // Aggregate checksum (start=0)
-  const aggRng = mulberry32(0);
-  const aggValues = [];
-  for (let i = 0; i < 10000; i++) {
-    aggValues.push(gaussianRng(aggRng, 50, 15));
-  }
-  const aggSorted = aggValues.slice().sort(function (a, b) { return a - b; });
-  const aggHash = crypto.createHash("sha256")
-    .update(JSON.stringify(aggSorted.map(function (v) { return Math.round(v * 10000) / 10000; })))
-    .digest("hex");
-
-  // Search corpus checksum (seed=42)
-  const searchRng = mulberry32(42);
-  const corpus = [];
-  for (let i = 0; i < 1000; i++) {
-    const wordCount = 3 + Math.floor(searchRng() * 6);
-    const words = [];
-    for (let j = 0; j < wordCount; j++) {
-      words.push(SEARCH_WORDS[Math.floor(searchRng() * SEARCH_WORDS.length)]);
-    }
-    corpus.push(words.join(" "));
-  }
-  const searchHash = crypto.createHash("sha256")
-    .update(JSON.stringify(corpus))
-    .digest("hex");
-
-  respond(200, {
+  apiSend(send, 200, JSON.stringify({
     seed: seed,
-    checksums: {
-      users_page1: usersHash.slice(0, 16),
-      aggregate_start0: aggHash.slice(0, 16),
-      search_corpus: searchHash.slice(0, 16),
-    },
-  }, startHr);
+    checksums: BENCH_DATA.expected_checksums,
+  }), startHr);
 }
 
 // ---------------------------------------------------------------------------
 // Collect request body helper
 // ---------------------------------------------------------------------------
-
 function collectBody(readable, callback) {
   const chunks = [];
   readable.on("data", function (chunk) {
@@ -651,37 +549,33 @@ function collectBody(readable, callback) {
 // ---------------------------------------------------------------------------
 // API route dispatcher (shared by H1 and H2)
 // ---------------------------------------------------------------------------
-
-function dispatchApi(method, urlPath, parsedUrl, getBody, respond) {
-  // getBody(callback) — collects full request body then calls callback(Buffer)
+function dispatchApi(method, urlPath, parsedUrl, getBody, send) {
   if (method === "GET" && urlPath === "/api/users") {
-    handleApiUsers(parsedUrl, respond);
+    handleApiUsers(parsedUrl, send);
     return true;
   }
   if (method === "POST" && urlPath === "/api/transform") {
-    getBody(function (buf) { handleApiTransform(buf, respond); });
+    getBody(function (buf) { handleApiTransform(buf, send); });
     return true;
   }
   if (method === "GET" && urlPath === "/api/aggregate") {
-    handleApiAggregate(parsedUrl, respond);
+    handleApiAggregate(parsedUrl, send);
     return true;
   }
   if (method === "GET" && urlPath === "/api/search") {
-    handleApiSearch(parsedUrl, respond);
+    handleApiSearch(parsedUrl, send);
     return true;
   }
   if (method === "POST" && urlPath === "/api/upload/process") {
-    getBody(function (buf) {
-      handleApiUploadProcess(buf, respond);
-    });
+    getBody(function (buf) { handleApiUploadProcess(buf, send); });
     return true;
   }
   if (method === "GET" && urlPath === "/api/delayed") {
-    handleApiDelayed(parsedUrl, respond);
+    handleApiDelayed(parsedUrl, send);
     return true;
   }
   if (method === "GET" && urlPath === "/api/validate") {
-    handleApiValidate(parsedUrl, respond);
+    handleApiValidate(parsedUrl, send);
     return true;
   }
   return false;
@@ -691,124 +585,155 @@ function dispatchApi(method, urlPath, parsedUrl, getBody, respond) {
 // HTTP/2 stream dispatcher
 // ---------------------------------------------------------------------------
 function onStream(stream, headers) {
-  const method = headers[":method"];
+  const rawMethod = headers[":method"];
+  // HEAD is served like GET with the body suppressed (the validator checks
+  // the §1 benchmark headers with `curl -I`); Content-Length still reflects
+  // the would-be body, per HTTP semantics.
+  const isHead = rawMethod === "HEAD";
+  const method = isHead ? "GET" : rawMethod;
   const rawPath = headers[":path"];
   const urlPath = rawPath.split("?")[0];
   const parsedUrl = url.parse(rawPath, true);
+  const send = function (status, hdrs, body) {
+    if (isHead) {
+      stream.respond(Object.assign({ ":status": status }, hdrs));
+      stream.end();
+      return;
+    }
+    sendH2(stream, status, hdrs, body);
+  };
+  // For /download the body is streamed after headers:
+  const sendHeadersOnly = function (status, hdrs) {
+    stream.respond(Object.assign({ ":status": status }, hdrs));
+  };
 
-  // Auth check for H2 streams
-  if (!checkAuth(urlPath, headers, function () {
-    var body = '{"error":"unauthorized"}';
-    stream.respond({
-      ":status": 401,
-      "content-type": "application/json",
-      "content-length": Buffer.byteLength(body),
-      "server-timing": "auth;dur=0.0",
-    });
-    stream.end(body);
-  })) return;
+  if (!checkAuth(urlPath, headers, send)) return;
 
   if (method === "GET" && urlPath === "/health") {
-    return handleHealthH2(stream);
+    return handleHealth(send);
   }
 
-  if (method === "GET" && urlPath.startsWith("/download/")) {
-    const size = parseInt(urlPath.slice("/download/".length), 10);
-    return handleDownloadH2(stream, size);
+  if (!isHead && method === "GET" && urlPath.startsWith("/download/")) {
+    return handleDownload(urlPath, function (status, hdrs, _body) {
+      sendHeadersOnly(status, hdrs);
+    }, stream);
   }
 
   if (method === "POST" && urlPath === "/upload") {
-    return handleUploadH2(stream);
+    return handleUpload(stream, headers, send);
   }
 
-  // JSON API endpoints
   const handled = dispatchApi(
     method, urlPath, parsedUrl,
     function (cb) { collectBody(stream, cb); },
-    function (status, obj, startHr) { apiJsonResponseH2(stream, status, obj, startHr); }
+    send
   );
   if (handled) return;
 
   const body = JSON.stringify({ error: "not found" });
-  stream.respond({ ":status": 404, "content-type": "application/json" });
-  stream.end(body);
+  send(404, {
+    "content-type": "application/json",
+    "content-length": Buffer.byteLength(body),
+  }, body);
 }
 
 // ---------------------------------------------------------------------------
 // HTTP/1.1 request dispatcher (fires for allowHTTP1 fallback connections)
 // ---------------------------------------------------------------------------
 function onRequest(req, res) {
-  const method = req.method;
+  // HEAD is served like GET with the body suppressed (Node's http layer
+  // drops response bodies for HEAD automatically).
+  const isHead = req.method === "HEAD";
+  const method = isHead ? "GET" : req.method;
   const rawUrl = req.url;
   const urlPath = rawUrl.split("?")[0];
   const parsedUrl = url.parse(rawUrl, true);
+  const send = function (status, hdrs, body) { sendH1(res, status, hdrs, body); };
+  const sendHeadersOnly = function (status, hdrs) { res.writeHead(status, hdrs); };
 
-  // Auth check for H1 requests
-  if (!checkAuth(urlPath, req.headers, function () {
-    res.writeHead(401, {"content-type": "application/json", "server-timing": "auth;dur=0.0"});
-    res.end('{"error":"unauthorized"}');
-  })) return;
+  if (!checkAuth(urlPath, req.headers, send)) return;
 
   if (method === "GET" && urlPath === "/health") {
-    return jsonResponse(res, 200, {
-      status: "ok",
-      runtime: "nodejs",
-      version: process.version,
-    });
+    return handleHealth(send);
   }
 
   if (method === "GET" && urlPath.startsWith("/download/")) {
-    const size = parseInt(urlPath.slice("/download/".length), 10);
-    if (size <= 0 || !Number.isFinite(size)) {
-      return jsonResponse(res, 400, { error: "invalid size" });
-    }
-    res.writeHead(200, {
-      "content-type": "application/octet-stream",
-      "content-length": size,
-    });
-    return streamBytes(res, size);
+    return handleDownload(urlPath, function (status, hdrs, _body) {
+      sendHeadersOnly(status, hdrs);
+    }, res);
   }
 
   if (method === "POST" && urlPath === "/upload") {
-    let total = 0;
-    req.on("data", function (chunk) {
-      total += chunk.length;
-    });
-    req.on("end", function () {
-      jsonResponse(res, 200, { bytes_received: total });
-    });
-    return;
+    return handleUpload(req, req.headers, send);
   }
 
-  // JSON API endpoints
   const handled = dispatchApi(
     method, urlPath, parsedUrl,
     function (cb) { collectBody(req, cb); },
-    function (status, obj, startHr) { apiJsonResponse(res, status, obj, startHr); }
+    send
   );
   if (handled) return;
 
-  jsonResponse(res, 404, { error: "not found" });
+  const body = JSON.stringify({ error: "not found" });
+  send(404, {
+    "content-type": "application/json",
+    "content-length": Buffer.byteLength(body),
+  }, body);
 }
 
 // ---------------------------------------------------------------------------
-// Server — handles both HTTP/2 (stream event) and HTTP/1.1 (request event)
+// Server bootstrap — cluster primary forks BENCH_WORKERS workers (§3);
+// each worker handles both HTTP/2 (stream event) and HTTP/1.1 (request event).
 // ---------------------------------------------------------------------------
-let server;
-if (USE_TLS) {
-  server = http2.createSecureServer(tlsOptions);
-  server.on("stream", onStream);
-  server.on("request", onRequest);
-} else {
-  // Plain HTTP mode (application mode behind reverse proxy)
-  server = http.createServer(onRequest);
+function startServer() {
+  let server;
+  if (USE_TLS) {
+    server = http2.createSecureServer(tlsOptions);
+    server.on("stream", onStream);
+    server.on("request", onRequest);
+  } else {
+    // Plain HTTP mode (application mode behind reverse proxy)
+    server = http.createServer(onRequest);
+  }
+
+  server.on("error", (err) => {
+    log.error("Server error", { error: err.message });
+    process.exit(1);
+  });
+
+  server.listen(PORT, () => {
+    const proto = USE_TLS ? "https" : "http";
+    log.info("nodejs reference-api worker listening", {
+      addr: `${proto}://0.0.0.0:${PORT}`, tls: USE_TLS, pid: process.pid,
+    });
+  });
 }
 
-server.on("error", (err) => {
-  log.error("Server error", { error: err.message });
-});
+if (require.main === module) {
+  if (cluster.isPrimary) {
+    log.info("Worker policy", { nproc: NPROC, bench_workers: WORKERS, mechanism: "cluster" });
+    for (let i = 0; i < WORKERS; i++) {
+      cluster.fork();
+    }
+    cluster.on("exit", function (worker, code, signal) {
+      // Fail loud: a dying worker means the benchmark environment is broken.
+      log.error("Worker exited", { pid: worker.process.pid, code: code, signal: signal });
+      process.exit(code || 1);
+    });
+  } else {
+    startServer();
+  }
+}
 
-server.listen(PORT, () => {
-  const proto = USE_TLS ? "https" : "http";
-  log.info("nodejs reference-api listening", { addr: `${proto}://0.0.0.0:${PORT}`, tls: USE_TLS });
-});
+// Pure logic exported for unit tests (test.js).
+module.exports = {
+  jnum: jnum,
+  r2: r2,
+  cmpStr: cmpStr,
+  computeAggregate: computeAggregate,
+  serializeAggregate: serializeAggregate,
+  computeSearch: computeSearch,
+  HEALTH_BODY: HEALTH_BODY,
+  CHUNK: CHUNK,
+  BENCH_DATA: BENCH_DATA,
+};
