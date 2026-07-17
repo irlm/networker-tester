@@ -27,7 +27,7 @@ networker-tester = { path = "../networker-tester", default-features = false, fea
 
 # Web framework
 axum        = { version = "0.8", features = ["macros", "ws", "multipart"] }
-tower-http  = { version = "0.6", features = ["trace", "cors", "fs"] }
+tower-http  = { version = "0.7", features = ["trace", "cors", "fs"] }
 
 # Database
 tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-uuid-1", "with-serde_json-1"] }
