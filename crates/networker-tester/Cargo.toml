@@ -29,7 +29,10 @@ rustls-pemfile       = "2"
 webpki-roots         = "1"
 
 # --- DNS ---
-hickory-resolver = { version = "0.24", features = ["tokio-runtime"] }
+# 0.26.1+ clears RUSTSEC-2026-0119 (hickory-proto O(n²) name compression DoS).
+# "tokio" + "system-config" are 0.26's spelling of 0.24's "tokio-runtime" (+
+# default system-config): the DNS probe reads the OS resolver configuration.
+hickory-resolver = { version = "0.26.1", default-features = false, features = ["tokio", "system-config"] }
 
 # --- HTTP/3 (optional feature) ---
 quinn    = { version = "0.11",    optional = true }

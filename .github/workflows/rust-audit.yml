@@ -70,9 +70,17 @@ jobs:
     if: needs.changes.outputs.rust-deps == 'true'
     runs-on: ubuntu-latest
     env:
-      # Ignore list — every entry MUST have a justification here and MUST have
-      # no fixed upstream release (otherwise: upgrade, don't ignore). Re-check
-      # entries whenever the weekly scheduled run goes red.
+      # Ignore list — every entry MUST have a justification here and MUST be
+      # unfixable by a dependency upgrade (otherwise: upgrade, don't ignore).
+      # Re-check entries whenever the weekly scheduled run goes red.
+      #
+      # History: the gate's first run found 11 advisories. Six were fixed by
+      # upgrading (hickory-resolver/-proto 0.24 -> 0.26.1 clearing
+      # RUSTSEC-2026-0119 in the measurement-critical DNS probe path, plus
+      # the five orchestrator-lockfile advisories RUSTSEC-2026-0178/0179/
+      # 0180/0185/0190 via anyhow, tokio-postgres, postgres-protocol and
+      # quinn-proto updates). The five below remain because no upgrade path
+      # exists.
       #
       # RUSTSEC-2023-0071 — "Marvin attack": key-recovery timing sidechannel
       #   in the `rsa` crate (all 0.9.x affected; NO fixed release exists —
@@ -85,12 +93,29 @@ jobs:
       #   attacker-chosen ciphertexts. Not exploitable in this deployment.
       #   The Rust dashboard is also scheduled for decommission (~2026-07-30),
       #   which removes the jsonwebtoken dependency entirely.
-      # 2023-0071: rsa/Marvin via jsonwebtoken (HS256-only; leaves with Rust-dashboard decommission).
-      # 2026-0119 hickory-proto, 2026-0104/0099/0098 rustls-webpki, 2025-0134 rustls-pemfile,
-      # 2026-0178/0179/0180/0185/0190 (orchestrator lockfile deps): found by
-      # this gate's FIRST run; fixes are semver-incompatible -> tracked follow-up: dependency-update PR
-      # with full tester re-validation (measurement-path DNS/TLS crates).
-      IGNORE_ARGS: "--ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2025-0134 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099 --ignore RUSTSEC-2026-0104 --ignore RUSTSEC-2026-0119 --ignore RUSTSEC-2026-0178 --ignore RUSTSEC-2026-0179 --ignore RUSTSEC-2026-0180 --ignore RUSTSEC-2026-0185 --ignore RUSTSEC-2026-0190"
+      #
+      # RUSTSEC-2026-0098 / -0099 / -0104 — rustls-webpki name-constraint
+      #   bypasses (0098/0099) and CRL-parsing panic (0104). Patched releases
+      #   exist (0.103.12/0.103.13) and the workspace's modern rustls 0.23
+      #   stack ALREADY uses the patched 0.103.13 — every probe/TLS
+      #   measurement path is fixed. The vulnerable 0.101.7 copy survives
+      #   only through tiberius 0.12.3 (MSSQL persistence, opt-in `db-mssql`
+      #   feature) -> tokio-rustls 0.24 -> rustls 0.21, and tiberius has no
+      #   release — not even git master (checked 2026-07-17) — that supports
+      #   rustls 0.23, so no version bump can reach the fix. Exposure: TLS to
+      #   the user's own configured SQL Server (requires a malicious or
+      #   misissued cert on that connection), not the measurement paths. Exit
+      #   options if tiberius stays dormant: switch its TLS feature off
+      #   rustls, or drop the tiberius backend (the C# control plane owns
+      #   persistence long-term).
+      #
+      # RUSTSEC-2025-0134 — rustls-pemfile is unmaintained (informational; by
+      #   definition no fixed release exists). tiberius 0.12.3 hard-pins
+      #   rustls-pemfile ^1 (same dead-end as above); the tester/endpoint use
+      #   the maintained 2.x line directly for PEM loading. Migrating direct
+      #   usage to rustls-pki-types' PemObject would still leave the tiberius
+      #   1.x copy flagged, so this clears only with the tiberius exit above.
+      IGNORE_ARGS: "--ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2025-0134 --ignore RUSTSEC-2026-0098 --ignore RUSTSEC-2026-0099 --ignore RUSTSEC-2026-0104"
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 

@@ -23,7 +23,7 @@
     (own solution, own lifecycle) are untouched.
   -->
   <PropertyGroup Condition="$(MSBuildProjectDirectory.StartsWith('$(MSBuildThisFileDirectory)src')) Or $(MSBuildProjectDirectory.StartsWith('$(MSBuildThisFileDirectory)tests'))">
-    <Version>0.28.31</Version>
+    <Version>0.28.32</Version>
     <AssemblyVersion>$(Version).0</AssemblyVersion>
     <FileVersion>$(Version).0</FileVersion>
     <InformationalVersion>$(Version)</InformationalVersion>
