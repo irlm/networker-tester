@@ -47,7 +47,9 @@ bash build.sh
 ## Running
 
 ```bash
-# TLS certificates must exist at the default paths (or override via env vars)
+# TLS certificates are read from $BENCH_CERT_DIR/cert.pem + key.pem; if
+# absent, the server falls back to plain HTTP on the same port (application
+# mode behind a TLS-terminating reverse proxy)
 BENCH_CERT_DIR=/opt/bench \
 BENCH_PORT=8443 \
 ./build/server

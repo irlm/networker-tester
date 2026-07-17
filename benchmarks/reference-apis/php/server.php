@@ -156,16 +156,19 @@ if ($workers < 1) {
     $workers = swoole_cpu_num();
 }
 
+// Listener type is chosen at startup from cert presence (audit F8): certs
+// absent → plain HTTP on the same port (application mode behind a
+// TLS-terminating reverse proxy), mirroring the Go/Node/Java pattern.
+$hasTls = is_file("$certDir/cert.pem") && is_file("$certDir/key.pem");
+
 $server = new Swoole\HTTP\Server(
     '0.0.0.0',
     $port,
     SWOOLE_PROCESS,
-    SWOOLE_SOCK_TCP | SWOOLE_SSL
+    $hasTls ? (SWOOLE_SOCK_TCP | SWOOLE_SSL) : SWOOLE_SOCK_TCP
 );
 
-$server->set([
-    'ssl_cert_file'      => "$certDir/cert.pem",
-    'ssl_key_file'       => "$certDir/key.pem",
+$settings = [
     // Worker policy (spec §3): BENCH_WORKERS, default = logical CPU count.
     'worker_num'         => $workers,
     // Request handlers run in coroutines so /api/delayed can use a
@@ -173,7 +176,14 @@ $server->set([
     'enable_coroutine'   => true,
     // Swoole buffers request bodies; allow benchmark-sized uploads.
     'package_max_length' => 64 * 1024 * 1024,
-]);
+];
+if ($hasTls) {
+    $settings['ssl_cert_file'] = "$certDir/cert.pem";
+    $settings['ssl_key_file']  = "$certDir/key.pem";
+} else {
+    bench_log('info', "no TLS certs in $certDir - serving plain HTTP on port $port (application mode)");
+}
+$server->set($settings);
 
 $BENCH_API_TOKEN = getenv('BENCH_API_TOKEN') ?: '';
 
@@ -435,5 +445,5 @@ $server->on('request', function (
     $response->end('{"error":"not found"}');
 });
 
-bench_log('info', "PHP Swoole server starting on https://0.0.0.0:$port ($workers workers)");
+bench_log('info', 'PHP Swoole server starting on ' . ($hasTls ? 'https' : 'http') . "://0.0.0.0:$port ($workers workers)");
 $server->start();

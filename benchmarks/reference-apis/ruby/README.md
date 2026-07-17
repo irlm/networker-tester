@@ -39,8 +39,10 @@ All endpoints served over TLS on port 8443.
 ```bash
 bundle install
 
-# Without TLS (development) — override bind in environment
-BENCH_CERT_DIR=. puma -b tcp://0.0.0.0:8080 config.ru
+# Without TLS: if $BENCH_CERT_DIR/cert.pem + key.pem are absent, puma.rb
+# falls back to a plain-HTTP (tcp://) bind on the same port (application
+# mode behind a TLS-terminating reverse proxy)
+BENCH_CERT_DIR=/nonexistent puma -C puma.rb config.ru
 
 # With TLS
 puma -C puma.rb config.ru

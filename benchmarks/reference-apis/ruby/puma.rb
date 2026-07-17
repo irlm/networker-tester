@@ -8,7 +8,17 @@ require 'etc'
 cert_dir = ENV.fetch('BENCH_CERT_DIR', '/opt/bench')
 port = ENV.fetch('BENCH_PORT', '8443')
 
-bind "ssl://0.0.0.0:#{port}?cert=#{cert_dir}/cert.pem&key=#{cert_dir}/key.pem&verify_mode=none"
+# Listener type is chosen at startup from cert presence (audit F8): certs
+# absent → plain HTTP on the same port (application mode behind a
+# TLS-terminating reverse proxy), mirroring the Go/Node/Java pattern.
+cert = "#{cert_dir}/cert.pem"
+key = "#{cert_dir}/key.pem"
+if File.file?(cert) && File.file?(key)
+  bind "ssl://0.0.0.0:#{port}?cert=#{cert}&key=#{key}&verify_mode=none"
+else
+  warn "no TLS certs in #{cert_dir} - serving plain HTTP on port #{port} (application mode)"
+  bind "tcp://0.0.0.0:#{port}"
+end
 
 workers Integer(ENV.fetch('BENCH_WORKERS') { Etc.nprocessors })
 threads 5, 5
