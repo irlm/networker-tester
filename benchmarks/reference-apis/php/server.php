@@ -130,7 +130,12 @@ function api_json(Swoole\HTTP\Response $response, array $body, float $duration_m
 {
     $response->status($status);
     api_headers($response, $duration_ms);
-    $response->end(json_encode($body, JSON_UNESCAPED_SLASHES));
+    // JSON_PRESERVE_ZERO_FRACTION: the frozen dataset's aggregate contains an
+    // exact 39.0 -- without the flag PHP emits `39`, the Python §7
+    // canonicalizer reads int != float, and the pinned checksum diverges (the
+    // same int-vs-float hazard the C#/Go/Java ports hit; caught by the first
+    // HARD-tier validation run).
+    $response->end(json_encode($body, JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION));
 }
 
 function int_param(array $params, string $key, int $default): int
