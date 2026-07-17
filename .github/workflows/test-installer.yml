@@ -1,6 +1,16 @@
 name: Installer Tests
 
 # Run on every push/PR that touches the installer or its tests.
+#
+# REQUIRED-CHECK COMPATIBLE: the pull_request trigger deliberately has NO
+# `paths:` filter. A workflow-level path filter means non-matching PRs never
+# create the check run at all, so a branch-protection required check would
+# block those PRs forever ("Expected — waiting for status"). Instead, the
+# workflow always starts on PRs and a cheap `changes` job decides whether the
+# real jobs run; a job skipped via `if:` still reports a (passing) check run,
+# which satisfies branch protection. Same pattern as ci.yml's `changes` job.
+# The push trigger keeps its path filter — push events aren't gated by
+# required checks, so skipping the whole workflow there is free.
 on:
   push:
     branches: ["main", "develop"]
@@ -11,19 +21,50 @@ on:
       - ".github/workflows/test-installer.yml"
   pull_request:
     branches: ["main"]
-    paths:
-      - "install.sh"
-      - "install.ps1"
-      - "tests/**"
-      - ".github/workflows/test-installer.yml"
 
 permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Detect installer changes
+    runs-on: ubuntu-latest
+    outputs:
+      installer: ${{ steps.detect.outputs.installer }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+
+      - name: Detect
+        id: detect
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "installer=true" >> "$GITHUB_OUTPUT"
+            echo "non-PR event — running installer tests"
+            exit 0
+          fi
+          git fetch origin "${{ github.base_ref }}" --quiet
+          CHANGED=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          echo "changed files:"; echo "$CHANGED" | sed 's/^/  /'
+
+          # Mirror the old workflow-level paths filter (tests/** includes the
+          # bats suite + stubs). Avoid `grep -q` exit-code gymnastics: capture
+          # matches and test non-empty.
+          INSTALLER=false
+          MATCHED=$(echo "$CHANGED" | grep -E '^(install\.sh$|install\.ps1$|tests/|\.github/workflows/test-installer\.yml$)' || true)
+          if [ -n "$MATCHED" ]; then
+            INSTALLER=true
+            echo "installer-relevant files:"; echo "$MATCHED" | sed 's/^/  /'
+          fi
+          echo "installer=$INSTALLER" >> "$GITHUB_OUTPUT"
+          echo "installer=$INSTALLER"
+
   # ── shellcheck: static analysis for install.sh ─────────────────────────────
   shellcheck:
     name: shellcheck
+    needs: changes
+    if: needs.changes.outputs.installer == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -44,6 +85,8 @@ jobs:
   # ── bats: unit tests for install.sh ────────────────────────────────────────
   bats:
     name: bats (installer unit tests)
+    needs: changes
+    if: needs.changes.outputs.installer == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -61,6 +104,8 @@ jobs:
   # ── shellcheck on Windows installer (PowerShell syntax is checked by PSScriptAnalyzer) ──
   psscriptanalyzer:
     name: PSScriptAnalyzer (install.ps1)
+    needs: changes
+    if: needs.changes.outputs.installer == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5

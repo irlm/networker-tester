@@ -1,10 +1,17 @@
 name: .NET
 
 # Builds and audits the C# solution (Networker.sln) that is replacing the Rust
-# control plane / agent / endpoint. Path-filtered: only runs when the C# code
-# (or this workflow) changes, so it never touches the Rust/npm pipeline. The
-# C# test project lives under tests/Networker.Tests/, so that path is gated
-# specifically (the rest of tests/ is the Rust/bats suite).
+# control plane / agent / endpoint.
+#
+# REQUIRED-CHECK COMPATIBLE: the pull_request trigger deliberately has NO
+# `paths:` filter. A workflow-level path filter means non-matching PRs never
+# create the check run at all, so a branch-protection required check would
+# block those PRs forever ("Expected — waiting for status"). Instead, the
+# workflow always starts on PRs and a cheap `changes` job decides whether the
+# real job runs; a job skipped via `if:` still reports a (passing) check run,
+# which satisfies branch protection. Same pattern as ci.yml's `changes` job.
+# The push trigger keeps its path filter — push events aren't gated by
+# required checks, so skipping the whole workflow there is free.
 on:
   push:
     branches: ["main", "develop"]
@@ -16,19 +23,48 @@ on:
       - ".github/workflows/dotnet.yml"
   pull_request:
     branches: ["main"]
-    paths:
-      - "src/**"
-      - "tests/Networker.*/**"
-      - "Networker.sln"
-      - "Directory.Build.props"
-      - ".github/workflows/dotnet.yml"
 
 permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Detect C# changes
+    runs-on: ubuntu-latest
+    outputs:
+      csharp: ${{ steps.detect.outputs.csharp }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+
+      - name: Detect
+        id: detect
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "csharp=true" >> "$GITHUB_OUTPUT"
+            echo "non-PR event — running the C# build"
+            exit 0
+          fi
+          git fetch origin "${{ github.base_ref }}" --quiet
+          CHANGED=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          echo "changed files:"; echo "$CHANGED" | sed 's/^/  /'
+
+          # Mirror the old workflow-level paths filter. Avoid `grep -q` exit
+          # code gymnastics: capture matches and test non-empty.
+          CSHARP=false
+          MATCHED=$(echo "$CHANGED" | grep -E '^(src/|tests/Networker\.|Networker\.sln$|Directory\.Build\.props$|\.github/workflows/dotnet\.yml$)' || true)
+          if [ -n "$MATCHED" ]; then
+            CSHARP=true
+            echo "C#-relevant files:"; echo "$MATCHED" | sed 's/^/  /'
+          fi
+          echo "csharp=$CSHARP" >> "$GITHUB_OUTPUT"
+          echo "csharp=$CSHARP"
+
   build:
     name: Build & audit (C#)
+    needs: changes
+    if: needs.changes.outputs.csharp == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
