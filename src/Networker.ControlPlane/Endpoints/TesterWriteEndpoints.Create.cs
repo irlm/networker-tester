@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Auth;
 using Networker.ControlPlane.Provisioning;
+using Networker.ControlPlane.Security;
 using Networker.Data;
 using Networker.Data.Entities;
 using Networker.Security;
@@ -292,17 +293,21 @@ public static partial class TesterWriteEndpoints
         var vmNamePreview = TesterCreateLogic.GenerateVmName(region);
 
         // Step 1: mint the agent api_key before VM create so it can be baked
-        // into the bootstrap (Rust provision_agent_for_tester).
+        // into the bootstrap (Rust provision_agent_for_tester). Both columns
+        // are written: api_key_hash is what auth looks up (V040); the
+        // plaintext column stays only until the fleet is verified on
+        // hash-only lookups.
         var agentApiKey = TesterCreateLogic.GenerateAgentApiKey();
         await using (var cmd = conn.CreateCommand())
         {
             cmd.CommandText = """
-                INSERT INTO agent (agent_id, name, api_key, region, provider, project_id, tester_id)
-                VALUES (@agent_id, @name, @api_key, @region, @provider, @project_id, @tester_id)
+                INSERT INTO agent (agent_id, name, api_key, api_key_hash, region, provider, project_id, tester_id)
+                VALUES (@agent_id, @name, @api_key, @api_key_hash, @region, @provider, @project_id, @tester_id)
                 """;
             cmd.Parameters.AddWithValue("agent_id", Guid.NewGuid());
             cmd.Parameters.AddWithValue("name", vmNamePreview);
             cmd.Parameters.AddWithValue("api_key", agentApiKey);
+            cmd.Parameters.AddWithValue("api_key_hash", AgentApiKeys.HashHex(agentApiKey));
             cmd.Parameters.AddWithValue("region", region);
             cmd.Parameters.AddWithValue("provider", tester.Cloud);
             cmd.Parameters.AddWithValue("project_id", tester.ProjectId);

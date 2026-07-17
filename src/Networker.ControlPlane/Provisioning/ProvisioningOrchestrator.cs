@@ -176,7 +176,7 @@ public sealed class ProvisioningOrchestrator : BackgroundService
     /// <returns><c>true</c> when this call kicked off the deployment.</returns>
     private async Task<bool> KickOneAsync(NetworkerDbContext db, TestRun run, TestConfig cfg, CancellationToken ct)
     {
-        var pending = ParsePending(cfg.EndpointRef);
+        var pending = ParsePending(cfg.EndpointRef, _logger);
         if (pending is null)
         {
             _logger.LogWarning(
@@ -352,7 +352,7 @@ public sealed class ProvisioningOrchestrator : BackgroundService
             return;
         }
 
-        var pending = ParsePending(cfg.EndpointRef);
+        var pending = ParsePending(cfg.EndpointRef, _logger);
         if (pending is null)
         {
             // Already rewritten by an earlier tick (shared config, or a prior
@@ -490,8 +490,11 @@ public sealed class ProvisioningOrchestrator : BackgroundService
     /// <summary>Parse a JSONB <c>endpoint_ref</c> text column into a
     /// <see cref="PendingEndpoint"/>, or null if it isn't a Pending endpoint.
     /// The tagged-union shape is <c>{"kind":"pending", cloud_account_id, region,
-    /// vm_size, os, proxy_stack, topology, language?}</c>.</summary>
-    internal static PendingEndpoint? ParsePending(string endpointRef)
+    /// vm_size, os, proxy_stack, topology, language?}</c>. A malformed ref
+    /// (undecodable JSON / missing <c>cloud_account_id</c>) also yields null,
+    /// but is WARN-logged when a logger is supplied — callers otherwise can't
+    /// distinguish "not a pending endpoint" from "corrupt pending endpoint".</summary>
+    internal static PendingEndpoint? ParsePending(string endpointRef, ILogger? logger = null)
     {
         try
         {
@@ -515,8 +518,15 @@ public sealed class ProvisioningOrchestrator : BackgroundService
 
             return new PendingEndpoint(cloudAccountId, region, vmSize, os, proxyStack, language);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            // Behavior preserved (null → caller skips the run), but no longer a
+            // silent swallow: a pending-kind ref that fails to parse means a
+            // stuck run, so leave a trace of WHY.
+            logger?.LogWarning(
+                ex,
+                "endpoint_ref failed to parse as a Pending endpoint ({Length} chars) — treating as non-pending",
+                endpointRef.Length);
             return null;
         }
     }
