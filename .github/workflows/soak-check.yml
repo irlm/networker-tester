@@ -21,6 +21,8 @@ on:
 
 permissions:
   contents: read
+  actions: read   # streak step reads this workflow's own run history
+  issues: write   # failure alerting creates/comments the pinned issue
 
 jobs:
   soak:
@@ -106,3 +108,87 @@ jobs:
       - name: Verdict
         run: |
           echo '✅ Soak day PASS — count consecutive greens in this workflow'\''s run history; 14 = decommission-ready (runbook §7).' >> "$GITHUB_STEP_SUMMARY"
+
+      # ── Streak counter ──────────────────────────────────────────────────
+      # Accounting note: this workflow's run history was reset ~2026-07-17 by
+      # the required-check refactor, so the streak counts from the most recent
+      # red OR the start of the visible history, whichever comes first —
+      # exactly what walking newest→oldest until a failure gives us.
+      # Cancelled/skipped runs are neither green nor red and are ignored.
+      - name: Consecutive-green streak
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          CONCLUSIONS=$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/soak-check.yml/runs?status=completed&per_page=100" \
+            --jq "[.workflow_runs[] | select(.id != ${GITHUB_RUN_ID}) | .conclusion] | join(\" \")")
+          STREAK=0
+          for C in $CONCLUSIONS; do
+            if [ "$C" = "success" ]; then
+              STREAK=$((STREAK+1))
+            elif [ "$C" = "cancelled" ] || [ "$C" = "skipped" ]; then
+              continue
+            else
+              break
+            fi
+          done
+          echo "Consecutive green soak runs BEFORE this one: ${STREAK} (target 14, runbook §7)" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # ── Failure alerting ────────────────────────────────────────────────
+      # A red Actions run only notifies watchers; a pinned issue is visible to
+      # everyone. Create-or-comment keyed on the exact title; steps that
+      # already completed report their conclusion mid-run, so we can name the
+      # failing step(s) — fall back to the run log if the API answers early.
+      - name: Alert — open/update pinned issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TITLE='Soak check failing'
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          FAILED=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
+            --jq '[.jobs[].steps[]? | select(.conclusion=="failure") | .name] | join(", ")' || true)
+          [ -n "$FAILED" ] || FAILED='(see run log)'
+          {
+            echo "Nightly prod soak check failed."
+            echo ""
+            echo "- Run: ${RUN_URL}"
+            echo "- Failing step(s): ${FAILED}"
+            echo ""
+            echo "Checklist + rollback: docs/phase2-cutover-runbook.md §4/§7."
+          } > /tmp/soak-issue-body.md
+          NUM=$(gh issue list --state open --json number,title \
+            --jq "first(.[] | select(.title==\"${TITLE}\")).number // empty")
+          if [ -z "$NUM" ]; then
+            URL=$(gh issue create --title "$TITLE" --body-file /tmp/soak-issue-body.md)
+            NUM="${URL##*/}"
+            echo "Opened issue #${NUM}"
+            gh issue pin "$NUM" || echo "::warning::could not pin issue #${NUM} (pin needs push-level rights; issue still open)"
+          else
+            gh issue comment "$NUM" --body-file /tmp/soak-issue-body.md
+            echo "Commented on existing issue #${NUM}"
+          fi
+
+      # On the first green after a red streak: comment resolution, unpin, close
+      # (closing keeps subsequent greens from re-commenting — the title search
+      # only matches OPEN issues).
+      - name: Resolve alert issue on green
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TITLE='Soak check failing'
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          NUM=$(gh issue list --state open --json number,title \
+            --jq "first(.[] | select(.title==\"${TITLE}\")).number // empty")
+          if [ -z "$NUM" ]; then
+            echo "No open soak-failure issue — nothing to resolve."
+            exit 0
+          fi
+          gh issue unpin "$NUM" || echo "::warning::could not unpin issue #${NUM}"
+          gh issue close "$NUM" --comment "Resolved — soak check is green again: ${RUN_URL}. Streak restarts from this run."
+          echo "Closed issue #${NUM}"

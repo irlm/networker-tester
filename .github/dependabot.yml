@@ -1,0 +1,49 @@
+# Dependabot — weekly bumps for all four ecosystems in the hybrid repo.
+# Minor/patch updates are grouped into one PR per ecosystem to keep noise
+# down; majors still arrive as individual PRs (they need real review).
+#
+# Note: every Dependabot PR that touches a shipping artifact (Cargo.lock,
+# dashboard/package-lock.json) will trip the version-check CI gate — that's
+# intentional; batch-merge them with a version bump like any other change.
+version: 2
+
+updates:
+  # GitHub Actions (workflow files under .github/workflows/)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # C# solution — per-project PackageReference under src/ (no central
+  # Directory.Packages.props; Dependabot discovers the .csproj files).
+  - package-ecosystem: "nuget"
+    directory: "/src"
+    schedule:
+      interval: "weekly"
+    groups:
+      nuget-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # React frontend
+  - package-ecosystem: "npm"
+    directory: "/dashboard"
+    schedule:
+      interval: "weekly"
+    groups:
+      npm-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # Rust: the workspace lockfile at the root plus the workspace-excluded
+  # orchestrator (alethabench), which has its own Cargo.lock.
+  - package-ecosystem: "cargo"
+    directories:
+      - "/"
+      - "/benchmarks/orchestrator"
+    schedule:
+      interval: "weekly"
+    groups:
+      cargo-minor-patch:
+        update-types: ["minor", "patch"]
