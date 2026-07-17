@@ -9,15 +9,20 @@ name: Validate Benchmark APIs (all languages)
 # - Required per leg: image builds, container boots, /health meets the
 #   orchestrator contract (status/runtime/version, constant body).
 # - Spec conformance (canonical shapes + §7 checksums, dataset mounted) is
-#   reported per language; it is SOFT for the not-yet-ported implementations
-#   and becomes required as wave-2 ports land. It is already REQUIRED for the
-#   canonical Rust baseline job.
+#   REQUIRED for every language (hard since wave-2 convergence, 2026-07-17 —
+#   the first all-green matrix). A conformance failure is a real regression.
 # - Runs on every PR touching benchmarks/** — not just the weekly cron.
 
 on:
   schedule:
     - cron: "0 6 * * 1" # Monday 6am UTC
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "benchmarks/**"
+      - "crates/networker-endpoint/**"
+      - ".github/workflows/validate-bench-apis.yml"
   pull_request:
     paths:
       - "benchmarks/**"
@@ -94,8 +99,12 @@ jobs:
           if [ "$code" -eq 0 ]; then
             echo "| ${{ matrix.lang }} | ✅ build | ✅ health | ✅ spec-conformant |" >> "$GITHUB_STEP_SUMMARY"
           elif [ "$code" -eq 2 ]; then
-            echo "| ${{ matrix.lang }} | ✅ build | ✅ health | ⚠️ NOT spec-conformant (wave-2 port pending) |" >> "$GITHUB_STEP_SUMMARY"
-            echo "::warning::${{ matrix.lang }} boots but does not conform to API-SPEC.md yet (soft until its wave-2 port lands)"
+            # HARD since wave 2 converged (2026-07-17): every implementation is
+            # ported, so a conformance regression is a real break, not a
+            # pending port.
+            echo "| ${{ matrix.lang }} | ✅ build | ✅ health | ❌ NOT spec-conformant |" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::${{ matrix.lang }} violates API-SPEC.md (conformance is required post-wave-2)"
+            exit 1
           else
             echo "| ${{ matrix.lang }} | ✅ build | ❌ health/boot | — |" >> "$GITHUB_STEP_SUMMARY"
             exit 1
@@ -127,4 +136,4 @@ jobs:
             echo "::error::one or more language images failed to build/boot or violated the /health contract"
             exit 1
           fi
-          echo "All images build, boot, and meet the /health contract; see per-language summaries for spec conformance."
+          echo "All 17 implementations build, boot, and FULLY conform to API-SPEC.md."
