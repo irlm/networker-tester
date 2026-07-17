@@ -1006,11 +1006,19 @@ async fn execute_testbed(
         )
         .await;
 
-        // Run benchmark for each mode.
+        // Run benchmark for each mode. "apibench" is an orchestrator-level
+        // mode (the measured /api/* workload suite) — it must be stripped
+        // before building the tester's --modes list, because the tester has
+        // no such protocol and would silently run nothing (audit C1).
+        let apibench_requested = methodology
+            .modes
+            .iter()
+            .any(|m| m == crate::workloads::APIBENCH_MODE);
         let modes_str = methodology
             .modes
             .iter()
             .map(|s| s.as_str())
+            .filter(|m| *m != crate::workloads::APIBENCH_MODE)
             .collect::<Vec<_>>()
             .join(",");
 
@@ -1020,76 +1028,100 @@ async fn execute_testbed(
             timeout_secs: methodology.timeout_secs as u64,
         };
 
-        log_callback(
-            callback,
-            &testbed.testbed_id,
-            vec![format!(
-                "Running benchmark: modes={}, warmup={}, measured={}, timeout={}s",
-                modes_str,
-                methodology.warmup_runs,
-                methodology.min_measured,
-                methodology.timeout_secs,
-            )],
-        )
-        .await;
+        let mut lang_ok = true;
 
-        match run_language_benchmark(
-            &vm,
-            &test_params,
-            language,
-            &modes_str,
-            config.callback_url.as_deref(),
-            config.callback_token.as_deref(),
-            &config.config_id,
-            &testbed.testbed_id,
-        )
-        .await
-        {
-            Ok(artifact_json) => {
-                tracing::info!(
-                    "Benchmark complete for {} on testbed {}",
-                    language,
-                    testbed.testbed_id
-                );
-                log_callback(
-                    callback,
-                    &testbed.testbed_id,
-                    vec![format!("{} benchmark complete", language)],
-                )
-                .await;
+        if !modes_str.is_empty() {
+            log_callback(
+                callback,
+                &testbed.testbed_id,
+                vec![format!(
+                    "Running benchmark: modes={}, warmup={}, measured={}, timeout={}s",
+                    modes_str,
+                    methodology.warmup_runs,
+                    methodology.min_measured,
+                    methodology.timeout_secs,
+                )],
+            )
+            .await;
 
-                // Report result via callback.
-                if let Err(e) = callback
-                    .result(&testbed.testbed_id, language, artifact_json)
-                    .await
-                {
-                    tracing::error!("Failed to report result for {}: {e:#}", language);
+            match run_language_benchmark(
+                &vm,
+                &test_params,
+                language,
+                &modes_str,
+                config.callback_url.as_deref(),
+                config.callback_token.as_deref(),
+                &config.config_id,
+                &testbed.testbed_id,
+            )
+            .await
+            {
+                Ok(artifact_json) => {
+                    tracing::info!(
+                        "Benchmark complete for {} on testbed {}",
+                        language,
+                        testbed.testbed_id
+                    );
                     log_callback(
                         callback,
                         &testbed.testbed_id,
-                        vec![format!("Result callback failed for {}: {e:#}", language)],
+                        vec![format!("{} benchmark complete", language)],
                     )
                     .await;
-                    languages_failed += 1;
-                } else {
-                    languages_completed += 1;
+
+                    // Report result via callback.
+                    if let Err(e) = callback
+                        .result(&testbed.testbed_id, language, artifact_json)
+                        .await
+                    {
+                        tracing::error!("Failed to report result for {}: {e:#}", language);
+                        log_callback(
+                            callback,
+                            &testbed.testbed_id,
+                            vec![format!("Result callback failed for {}: {e:#}", language)],
+                        )
+                        .await;
+                        lang_ok = false;
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Benchmark failed for {} on testbed {}: {:#}",
+                        language,
+                        testbed.testbed_id,
+                        e
+                    );
+                    log_callback(
+                        callback,
+                        &testbed.testbed_id,
+                        vec![format!("Benchmark failed for {}: {e:#}", language)],
+                    )
+                    .await;
+                    lang_ok = false;
                 }
             }
-            Err(e) => {
-                tracing::error!(
-                    "Benchmark failed for {} on testbed {}: {:#}",
-                    language,
-                    testbed.testbed_id,
-                    e
-                );
-                log_callback(
-                    callback,
-                    &testbed.testbed_id,
-                    vec![format!("Benchmark failed for {}: {e:#}", language)],
-                )
-                .await;
-                languages_failed += 1;
-            }
+        }
+
+        if apibench_requested
+            && !run_apibench_suite(
+                &vm,
+                &test_params,
+                language,
+                None,
+                None,
+                callback,
+                &testbed.testbed_id,
+                bench_dir,
+            )
+            .await
+        {
+            lang_ok = false;
+        }
+
+        if lang_ok {
+            languages_completed += 1;
+        } else {
+            languages_failed += 1;
         }
 
         // Stop the server before the next language.
@@ -1143,7 +1175,7 @@ async fn execute_testbed_application(
     config: &DashboardBenchmarkConfig,
     callback: &Arc<CallbackClient>,
     cancel_rx: &watch::Receiver<bool>,
-    _bench_dir: &Path,
+    bench_dir: &Path,
     vm: &VmInfo,
     provisioned: bool,
 ) -> Result<TestbedOutcome> {
@@ -1304,6 +1336,7 @@ async fn execute_testbed_application(
         provisioned,
         &db,
         &config_uuid,
+        bench_dir,
     ))
     .catch_unwind()
     .await;
@@ -1381,6 +1414,7 @@ async fn run_application_matrix(
     provisioned: bool,
     db: &PgClient,
     config_uuid: &Uuid,
+    bench_dir: &Path,
 ) -> Result<TestbedOutcome> {
     let methodology = &config.methodology;
 
@@ -1669,6 +1703,35 @@ async fn run_application_matrix(
                         .await;
                         lang_ok = false;
                     }
+                }
+            }
+
+            // apibench: drive the measured /api/* workload suite through the
+            // proxy with the per-testbed bearer token (audit C1 — these
+            // endpoints were never measured before).
+            if methodology
+                .modes
+                .iter()
+                .any(|m| m == crate::workloads::APIBENCH_MODE)
+            {
+                let api_params = runner::TestParams {
+                    warmup_requests: methodology.warmup_runs as u64,
+                    benchmark_requests: methodology.min_measured as u64,
+                    timeout_secs: methodology.timeout_secs as u64,
+                };
+                if !run_apibench_suite(
+                    vm,
+                    &api_params,
+                    language,
+                    Some(proxy),
+                    Some(&bench_token),
+                    callback,
+                    &testbed.testbed_id,
+                    bench_dir,
+                )
+                .await
+                {
+                    lang_ok = false;
                 }
             }
 
@@ -1988,6 +2051,178 @@ async fn run_language_benchmark(
     let artifact: serde_json::Value =
         serde_json::from_str(&stdout).context("parsing tester JSON output")?;
 
+    Ok(artifact)
+}
+
+/// Run the full apibench workload suite (the measured /api/* endpoints,
+/// API-SPEC.md §4) for one language and report one result artifact per
+/// workload via the callback.
+///
+/// `proxy`/`bearer_token` are set in application mode (the token is the
+/// per-testbed BENCH_API_TOKEN; the reference servers enforce it on every
+/// route except /health). Returns true when every workload ran and reported
+/// successfully; nginx is skipped (it never implements /api/*, spec §9) and
+/// does not count as a failure.
+#[allow(clippy::too_many_arguments)]
+async fn run_apibench_suite(
+    vm: &VmInfo,
+    params: &runner::TestParams,
+    language: &str,
+    proxy: Option<&str>,
+    bearer_token: Option<&str>,
+    callback: &Arc<CallbackClient>,
+    testbed_id: &str,
+    bench_dir: &Path,
+) -> bool {
+    if !crate::workloads::language_supports_apibench(language) {
+        tracing::info!("Skipping apibench for {} (no /api/* suite)", language);
+        log_callback(
+            callback,
+            testbed_id,
+            vec![format!(
+                "Skipping apibench for {} (serves no /api/* endpoints)",
+                language
+            )],
+        )
+        .await;
+        return true;
+    }
+
+    let workload_set = match crate::workloads::ApiWorkloadSet::load_or_embedded(bench_dir) {
+        Ok(set) => set,
+        Err(e) => {
+            tracing::error!("Failed to load apibench workload set: {e:#}");
+            log_callback(
+                callback,
+                testbed_id,
+                vec![format!("apibench workload set failed to load: {e:#}")],
+            )
+            .await;
+            return false;
+        }
+    };
+
+    let mut all_ok = true;
+    for workload in &workload_set.workloads {
+        log_callback(
+            callback,
+            testbed_id,
+            vec![format!(
+                "Running apibench workload {} ({} {}) for {}{}",
+                workload.name,
+                workload.method,
+                workload.path,
+                language,
+                proxy.map(|p| format!(" behind {p}")).unwrap_or_default(),
+            )],
+        )
+        .await;
+
+        match run_apibench_workload(vm, params, workload, bearer_token).await {
+            Ok(tester_json) => {
+                let mut artifact = serde_json::json!({
+                    "mode": "apibench",
+                    "workload": workload.name,
+                    "endpoint": workload.path,
+                    "method": workload.method,
+                    "tester": tester_json,
+                });
+                if let Some(p) = proxy {
+                    artifact["proxy"] = serde_json::Value::String(p.to_string());
+                }
+                if let Err(e) = callback.result(testbed_id, language, artifact).await {
+                    tracing::error!(
+                        "Failed to report apibench result {} for {}: {e:#}",
+                        workload.name,
+                        language
+                    );
+                    log_callback(
+                        callback,
+                        testbed_id,
+                        vec![format!(
+                            "apibench result callback failed for {}/{}: {e:#}",
+                            language, workload.name
+                        )],
+                    )
+                    .await;
+                    all_ok = false;
+                }
+            }
+            Err(e) => {
+                tracing::error!(
+                    "apibench workload {} failed for {}: {:#}",
+                    workload.name,
+                    language,
+                    e
+                );
+                log_callback(
+                    callback,
+                    testbed_id,
+                    vec![format!(
+                        "apibench workload {} failed for {}: {e:#}",
+                        workload.name, language
+                    )],
+                )
+                .await;
+                all_ok = false;
+            }
+        }
+    }
+    all_ok
+}
+
+/// Execute a single apibench workload via `networker-tester` and return the
+/// parsed tester JSON output. Uses the same measurement pipeline as
+/// `run_language_benchmark` (`--benchmark-mode` + `--json-stdout`); only the
+/// request shape differs (path/query, optional POST body, bearer token).
+async fn run_apibench_workload(
+    vm: &VmInfo,
+    params: &runner::TestParams,
+    workload: &crate::workloads::ApiWorkload,
+    bearer_token: Option<&str>,
+) -> Result<serde_json::Value> {
+    let base_url = format!("https://{}:8443", vm.ip);
+    let args = crate::workloads::tester_args_for_workload(
+        &base_url,
+        workload,
+        params.benchmark_requests,
+        params.timeout_secs,
+        bearer_token,
+    );
+    let tester_bin = resolve_tester_path();
+
+    tracing::info!(
+        "Running apibench tester: workload={}, target={}{}, runs={}, timeout={}s",
+        workload.name,
+        base_url,
+        workload.path,
+        params.benchmark_requests,
+        params.timeout_secs,
+    );
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(params.timeout_secs * params.benchmark_requests + 120),
+        tokio::process::Command::new(&tester_bin)
+            .args(&args)
+            .output(),
+    )
+    .await
+    .with_context(|| format!("apibench workload {} timed out", workload.name))?
+    .context("failed to execute networker-tester")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "networker-tester failed for apibench workload {} (exit={}): {}",
+            workload.name,
+            output.status,
+            stderr.trim()
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let artifact: serde_json::Value = serde_json::from_str(&stdout)
+        .with_context(|| format!("parsing tester JSON output for workload {}", workload.name))?;
     Ok(artifact)
 }
 

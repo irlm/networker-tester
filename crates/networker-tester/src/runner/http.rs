@@ -63,6 +63,16 @@ pub struct RunConfig {
     pub proxy: Option<String>,
     /// When true, bypass all proxy settings (--no-proxy flag).
     pub no_proxy: bool,
+    /// Explicit request body for http1/http2 probes (apibench workloads).
+    /// Loaded once at startup; `Bytes` clones are refcounted, so no
+    /// per-request allocation happens in the timed region. When set the
+    /// request method is POST and `payload_size` must be 0.
+    pub request_body: Option<Bytes>,
+    /// Content-Type header sent with `request_body` (default application/json).
+    pub request_content_type: Option<String>,
+    /// Bearer token added as `Authorization: Bearer <token>` on every request
+    /// (reference endpoints enforce BENCH_API_TOKEN on all routes but /health).
+    pub bearer_token: Option<String>,
 }
 
 impl Default for RunConfig {
@@ -78,6 +88,9 @@ impl Default for RunConfig {
             ca_bundle: None,
             proxy: None,
             no_proxy: false,
+            request_body: None,
+            request_content_type: None,
+            bearer_token: None,
         }
     }
 }
@@ -774,13 +787,26 @@ fn build_request(
     _version_hint: &str,
     attempt_id: Uuid,
 ) -> anyhow::Result<Request<BoxBody<Bytes, Infallible>>> {
-    let body: BoxBody<Bytes, Infallible> = if cfg.payload_size > 0 {
+    // Explicit request body (apibench workloads) takes precedence over the
+    // synthetic upload payload. CLI validation guarantees the two are never
+    // combined (`--request-body*` conflicts with `--payload-size`).
+    let explicit_body_len = cfg.request_body.as_ref().map(|b| b.len());
+
+    let body: BoxBody<Bytes, Infallible> = if let Some(b) = &cfg.request_body {
+        // Zero-copy: `Bytes::clone` bumps a refcount; the payload was loaded
+        // once at startup so nothing is allocated per request here.
+        BoxBody::new(http_body_util::Full::new(b.clone()))
+    } else if cfg.payload_size > 0 {
         make_upload_body(cfg.payload_size)
     } else {
         BoxBody::new(Empty::<Bytes>::new())
     };
 
-    let method = if cfg.payload_size > 0 { "POST" } else { "GET" };
+    let method = if explicit_body_len.is_some() || cfg.payload_size > 0 {
+        "POST"
+    } else {
+        "GET"
+    };
 
     let mut builder = Request::builder()
         .method(method)
@@ -790,8 +816,22 @@ fn build_request(
         .header("accept", "*/*")
         .header("x-networker-request-id", attempt_id.to_string());
 
-    // Upload metadata — lets the server verify it received the full body.
-    if cfg.payload_size > 0 {
+    if let Some(token) = &cfg.bearer_token {
+        builder = builder.header("authorization", format!("Bearer {token}"));
+    }
+
+    if let Some(len) = explicit_body_len {
+        builder = builder
+            // Fixed-length framing: no chunked transfer encoding on HTTP/1.1.
+            .header("content-length", len.to_string())
+            .header(
+                "content-type",
+                cfg.request_content_type
+                    .as_deref()
+                    .unwrap_or("application/json"),
+            );
+    } else if cfg.payload_size > 0 {
+        // Upload metadata — lets the server verify it received the full body.
         builder = builder
             // Fixed-length framing: no chunked transfer encoding on HTTP/1.1.
             .header("content-length", cfg.payload_size.to_string())
@@ -1763,6 +1803,87 @@ mod tests {
             .get("x-networker-upload-bytes")
             .expect("x-networker-upload-bytes");
         assert_eq!(ub, "1024");
+    }
+
+    #[test]
+    fn build_request_explicit_body_posts_exact_bytes() {
+        let body = r#"{"seed":1,"fields":["throughput"],"values":[9216,8962]}"#;
+        let cfg = RunConfig {
+            request_body: Some(Bytes::from_static(body.as_bytes())),
+            ..Default::default()
+        };
+        let req = build_request(
+            "example.com",
+            "/api/transform",
+            &cfg,
+            "HTTP/1.1",
+            Uuid::new_v4(),
+        )
+        .expect("build_request should succeed");
+        assert_eq!(req.method(), hyper::Method::POST);
+        // Fixed-length framing with the exact byte count.
+        assert_eq!(
+            req.headers().get("content-length").expect("content-length"),
+            body.len().to_string().as_str()
+        );
+        // Default content type is application/json.
+        assert_eq!(
+            req.headers().get("content-type").expect("content-type"),
+            "application/json"
+        );
+        // The synthetic-upload marker must NOT leak onto explicit bodies.
+        assert!(req.headers().get("x-networker-upload-bytes").is_none());
+    }
+
+    #[test]
+    fn build_request_explicit_body_custom_content_type() {
+        let cfg = RunConfig {
+            request_body: Some(Bytes::from_static(b"raw-bytes")),
+            request_content_type: Some("application/octet-stream".into()),
+            ..Default::default()
+        };
+        let req = build_request(
+            "example.com",
+            "/api/upload/process",
+            &cfg,
+            "HTTP/1.1",
+            Uuid::new_v4(),
+        )
+        .expect("build_request should succeed");
+        assert_eq!(
+            req.headers().get("content-type").unwrap(),
+            "application/octet-stream"
+        );
+        assert_eq!(req.headers().get("content-length").unwrap(), "9");
+    }
+
+    #[test]
+    fn build_request_bearer_token_sets_authorization() {
+        let cfg = RunConfig {
+            bearer_token: Some("s3cret".into()),
+            ..Default::default()
+        };
+        let req = build_request(
+            "example.com",
+            "/api/users",
+            &cfg,
+            "HTTP/1.1",
+            Uuid::new_v4(),
+        )
+        .expect("build_request should succeed");
+        assert_eq!(req.method(), hyper::Method::GET);
+        assert_eq!(
+            req.headers().get("authorization").expect("authorization"),
+            "Bearer s3cret"
+        );
+    }
+
+    #[test]
+    fn build_request_no_bearer_token_no_authorization_header() {
+        let cfg = RunConfig::default();
+        let req = build_request("example.com", "/health", &cfg, "HTTP/1.1", Uuid::new_v4())
+            .expect("build_request should succeed");
+        assert!(req.headers().get("authorization").is_none());
     }
 
     #[test]

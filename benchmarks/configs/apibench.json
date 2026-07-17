@@ -1,0 +1,40 @@
+{
+  "_version": 1,
+  "_description": "Measured /api/* apibench workload set. Contract: benchmarks/shared/API-SPEC.md §4 (measured endpoints) and §7 (canonical requests). Bodies are committed literals — deterministic by construction, no runtime randomness. api-transform's body is transform_inputs[0] from the frozen shared dataset (the §7 transform_input0 canonical request); the api-compress body was generated once with a fixed seed (42) in the shared-corpus word style. nginx never implements /api/* (§9) — runners must skip it for apibench.",
+  "workloads": [
+    {
+      "name": "api-users",
+      "method": "GET",
+      "path": "/api/users?page=1&sort=name&order=asc",
+      "description": "Dataset window + stable sort + top-20 serialization (§5.4; §7 users_page1 request)."
+    },
+    {
+      "name": "api-transform",
+      "method": "POST",
+      "path": "/api/transform",
+      "content_type": "application/json",
+      "body": "{\"seed\":1,\"fields\":[\"throughput\",\"performance\",\"latency\",\"protocol\"],\"values\":[9216,8962]}",
+      "description": "JSON parse + SHA-256 per field + value reversal (§5.5; §7 transform_input0 request)."
+    },
+    {
+      "name": "api-aggregate",
+      "method": "GET",
+      "path": "/api/aggregate",
+      "description": "10k-point sort + percentiles + quintile stats (§5.6; §7 aggregate_default request)."
+    },
+    {
+      "name": "api-search",
+      "method": "GET",
+      "path": "/api/search?q=network&limit=10",
+      "description": "Regex scan over the 1000-item corpus + rank sort (§5.7; §7 search_network_top10 request)."
+    },
+    {
+      "name": "api-compress",
+      "method": "POST",
+      "path": "/api/upload/process",
+      "content_type": "application/octet-stream",
+      "body": "throughput-network-4506 socket-socket-2286 throughput-upload-1424 download-kernel-0520 network-latency-3582 socket-session-9863 network-upload-3257 upload-kernel-3611 payload-download-4557 network-packet-6924 gateway-stream-2547 buffer-gateway-1674 latency-router-1584 proxy-proxy-9891 stream-cache-7527 upload-throughput-6201 latency-upload-4803 benchmark-proxy-9459 buffer-latency-0750 socket-handshake-1307 socket-throughput-6227 stream-payload-5977 packet-proxy-5820 buffer-stream-1169 benchmark-packet-8751 socket-packet-7573 router-stream-9125 socket-gateway-0916 socket-cache-5168 router-stream-1084 buffer-download-5155 buffer-cipher-6482 payload-protocol-4339 protocol-socket-9197 upload-stream-9577 kernel-download-6543 proxy-socket-2266 session-cipher-1489 cache-throughput-2504 packet-kernel-9771 latency-router-6252 benchmark-payload-8669 stream-upload-0188 throughput-upload-4371 gateway-throughput-4808 kernel-packet-7433 network-stream-8201 packet-session-1743 handshake-session-9977 buffer-protocol-6126 packet-upload-8689 network-benchmark-5310 cipher-network-1832 proxy-handshake-3923 cache-socket-9295 latency-latency-7962 latency-upload-2060 protocol-cipher-9007 packet-stream-8645 benchmark-kernel-3470 upload-buffer-5107 router-proxy-7177 session-payload-1982 socket-socket-1049 gateway-network-9638 upload-socket-9641 socket-network-1163 cache-socket-1104 cache-gateway-1160 session-socket-4562 cipher-buffer-8834 protocol-download-9440 cipher-socket-7749 kernel-buffer-1545 throughput-kernel-5804 kernel-kernel-7651 cache-throughput-0993 router-gateway-1790 socket-buffer-3116 upload-payload-2296 kernel-packet-4563 payload-socket-1235 payload-upload-1604 cache-upload-0241 latency-socket-2724 kernel-cipher-7886 buffer-router-0960 packet-router-0035 router-stream-7454 handshake-kernel-9105 cipher-protocol-3111 handshake-buffer-0958 download-upload-0998 gateway-cache-0821 download-cipher-8238 session-packet-0931",
+      "description": "CRC-32 + SHA-256 + zlib level-6 over a 1940-byte deterministic body (§5.8)."
+    }
+  ]
+}

@@ -79,6 +79,29 @@ pub struct Cli {
     #[arg(long, value_delimiter = ',')]
     pub payload_sizes: Option<Vec<String>>,
 
+    // ── Request shape (apibench workloads) ────────────────────────────────────
+    /// Explicit request body for http1/http2 probes. When set, requests are
+    /// POSTs carrying exactly these bytes (loaded once at startup — no
+    /// per-request allocation in the timed region). Used by apibench
+    /// workloads such as POST /api/transform.
+    #[arg(long, conflicts_with_all = ["payload_size", "request_body_file"])]
+    pub request_body: Option<String>,
+
+    /// Like --request-body but reads the body bytes from a file.
+    #[arg(long, conflicts_with = "payload_size")]
+    pub request_body_file: Option<String>,
+
+    /// Content-Type header sent with --request-body / --request-body-file
+    /// (default: application/json).
+    #[arg(long)]
+    pub request_content_type: Option<String>,
+
+    /// Bearer token sent as `Authorization: Bearer <token>` on http1/http2
+    /// probe requests (benchmark endpoints enforce BENCH_API_TOKEN on all
+    /// routes except /health).
+    #[arg(long)]
+    pub bearer_token: Option<String>,
+
     // ── UDP ───────────────────────────────────────────────────────────────────
     /// UDP echo server port on the target host
     #[arg(long)]
@@ -490,6 +513,10 @@ pub struct ConfigFile {
     pub timeout: Option<u64>,
     pub payload_size: Option<usize>,
     pub payload_sizes: Option<Vec<String>>,
+    pub request_body: Option<String>,
+    pub request_body_file: Option<String>,
+    pub request_content_type: Option<String>,
+    pub bearer_token: Option<String>,
     pub udp_port: Option<u16>,
     pub udp_throughput_port: Option<u16>,
     pub udp_probes: Option<u32>,
@@ -572,6 +599,10 @@ pub struct ResolvedConfig {
     pub timeout: u64,
     pub payload_size: usize,
     pub payload_sizes: Vec<String>,
+    pub request_body: Option<String>,
+    pub request_body_file: Option<String>,
+    pub request_content_type: Option<String>,
+    pub bearer_token: Option<String>,
     pub udp_port: u16,
     pub udp_throughput_port: u16,
     pub udp_probes: u32,
@@ -787,6 +818,10 @@ impl Cli {
             timeout: pick!(timeout, 30),
             payload_size: pick!(payload_size, 0),
             payload_sizes: pick!(payload_sizes, vec![]),
+            request_body: self.request_body.or(f.request_body),
+            request_body_file: self.request_body_file.or(f.request_body_file),
+            request_content_type: self.request_content_type.or(f.request_content_type),
+            bearer_token: self.bearer_token.or(f.bearer_token),
             udp_port: pick!(udp_port, 9999),
             udp_throughput_port: pick!(udp_throughput_port, 9998),
             udp_probes: pick!(udp_probes, 10),
@@ -1121,6 +1156,36 @@ impl ResolvedConfig {
         }
         if self.ipv4_only && self.ipv6_only {
             anyhow::bail!("--ipv4-only and --ipv6-only are mutually exclusive");
+        }
+        if self.request_body.is_some() && self.request_body_file.is_some() {
+            anyhow::bail!("--request-body and --request-body-file are mutually exclusive");
+        }
+        if self.request_body.is_some() || self.request_body_file.is_some() {
+            if self.payload_size > 0 {
+                anyhow::bail!("--request-body/--request-body-file conflict with --payload-size");
+            }
+            // Explicit bodies are only wired into the http1/http2 request
+            // builder. Refusing other modes here prevents a workload from
+            // silently being measured as a bodyless GET (e.g. over http3).
+            let unsupported: Vec<&str> = self
+                .modes
+                .iter()
+                .map(|m| m.as_str())
+                .filter(|m| !matches!(m.to_lowercase().as_str(), "http1" | "http2"))
+                .collect();
+            if !unsupported.is_empty() {
+                anyhow::bail!(
+                    "--request-body/--request-body-file only support --modes http1,http2 \
+                     (got unsupported mode(s): {})",
+                    unsupported.join(", ")
+                );
+            }
+        }
+        if self.request_content_type.is_some()
+            && self.request_body.is_none()
+            && self.request_body_file.is_none()
+        {
+            anyhow::bail!("--request-content-type requires --request-body or --request-body-file");
         }
         Ok(())
     }
@@ -2334,5 +2399,86 @@ mod tests {
             cfg.http_stacks.is_empty(),
             "--http-stacks should default to empty"
         );
+    }
+
+    // ── Request shape (apibench) flags ─────────────────────────────────────
+
+    #[test]
+    fn request_body_flags_resolve() {
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--modes",
+            "http1",
+            "--request-body",
+            r#"{"seed":1}"#,
+            "--request-content-type",
+            "application/json",
+            "--bearer-token",
+            "tok123",
+        ])
+        .resolve(None);
+        assert_eq!(cfg.request_body.as_deref(), Some(r#"{"seed":1}"#));
+        assert_eq!(
+            cfg.request_content_type.as_deref(),
+            Some("application/json")
+        );
+        assert_eq!(cfg.bearer_token.as_deref(), Some("tok123"));
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn request_body_conflicts_with_payload_size() {
+        // clap-level conflict: both flags on the command line must fail to parse.
+        let parsed = Cli::try_parse_from([
+            "networker-tester",
+            "--request-body",
+            "x",
+            "--payload-size",
+            "128",
+        ]);
+        assert!(parsed.is_err(), "--request-body + --payload-size must fail");
+    }
+
+    #[test]
+    fn request_body_rejects_non_http_modes() {
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--modes",
+            "http1,http3",
+            "--request-body",
+            "x",
+        ])
+        .resolve(None);
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("http3"),
+            "error should name the bad mode: {err}"
+        );
+    }
+
+    #[test]
+    fn request_content_type_requires_body() {
+        let cfg = Cli::parse_from([
+            "networker-tester",
+            "--modes",
+            "http1",
+            "--request-content-type",
+            "text/plain",
+        ])
+        .resolve(None);
+        let err = cfg.validate().unwrap_err().to_string();
+        assert!(err.contains("--request-content-type"));
+    }
+
+    #[test]
+    fn request_body_and_file_mutually_exclusive() {
+        let parsed = Cli::try_parse_from([
+            "networker-tester",
+            "--request-body",
+            "x",
+            "--request-body-file",
+            "/tmp/body.json",
+        ]);
+        assert!(parsed.is_err());
     }
 }

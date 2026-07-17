@@ -779,6 +779,16 @@ async fn run_for_target(
         "Starting run"
     );
 
+    // Explicit request body (apibench workloads): loaded exactly once here so
+    // the per-request path only clones a refcounted `Bytes` handle.
+    let request_body: Option<bytes::Bytes> = match (&cfg.request_body, &cfg.request_body_file) {
+        (Some(inline), _) => Some(bytes::Bytes::from(inline.clone().into_bytes())),
+        (None, Some(path)) => Some(bytes::Bytes::from(
+            std::fs::read(path).with_context(|| format!("reading --request-body-file {path}"))?,
+        )),
+        (None, None) => None,
+    };
+
     let probe_cfg = RunConfig {
         timeout_ms: cfg.timeout * 1000,
         dns_enabled: cfg.dns_enabled,
@@ -790,6 +800,9 @@ async fn run_for_target(
         ca_bundle: cfg.ca_bundle.clone(),
         proxy: cfg.proxy.clone(),
         no_proxy: cfg.no_proxy,
+        request_body,
+        request_content_type: cfg.request_content_type.clone(),
+        bearer_token: cfg.bearer_token.clone(),
     };
 
     let throughput_cfg = ThroughputConfig {
@@ -1913,6 +1926,10 @@ mod tests {
             timeout: 1000,
             payload_size: 0,
             payload_sizes: vec![],
+            request_body: None,
+            request_body_file: None,
+            request_content_type: None,
+            bearer_token: None,
             udp_port: 9999,
             udp_throughput_port: 9998,
             udp_probes: 20,

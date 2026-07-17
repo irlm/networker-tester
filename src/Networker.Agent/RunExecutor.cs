@@ -84,7 +84,43 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             return;
         }
 
-        var args = BuildArgs(config, target);
+        // Build the invocation plan. "apibench" is a runner-level mode, not a
+        // tester protocol (the tester would silently drop it from --modes):
+        // the base invocation carries the remaining protocol modes, then one
+        // tester invocation per apibench workload drives the measured /api/*
+        // suite (audit C1).
+        var apibenchRequested = config.Modes.Any(ApibenchWorkloads.IsApibenchMode);
+        var invocations = new List<(string? Workload, List<string> Args)>();
+        if (config.Modes.Any(m => !ApibenchWorkloads.IsApibenchMode(m)))
+            invocations.Add((null, BuildArgs(config, target)));
+        if (apibenchRequested)
+        {
+            IReadOnlyList<ApibenchWorkloads.Workload> workloads;
+            try
+            {
+                workloads = ApibenchWorkloads.All;
+            }
+            catch (Exception ex)
+            {
+                var msg = $"apibench workload set failed to load: {ex.Message}";
+                logger.LogError("{CorrelationId}: {Message}", correlationId, msg);
+                sink.TrySend(new ErrorMessage(runId, msg));
+                SendFinished(sink, runId, "failed", artifact: null);
+                return;
+            }
+
+            foreach (var w in workloads)
+                invocations.Add((w.Name, ApibenchWorkloads.BuildArgs(config, target, w)));
+        }
+
+        if (invocations.Count == 0)
+        {
+            const string msg = "No executable modes in workload";
+            logger.LogError("{CorrelationId}: {Message}", correlationId, msg);
+            sink.TrySend(new ErrorMessage(runId, msg));
+            SendFinished(sink, runId, "failed", artifact: null);
+            return;
+        }
 
         // Locate tester binary ────────────────────────────────────────────────────
         var binPath = await TesterBinaryLocator.LocateAsync(options.TesterPath, cancellationToken)
@@ -98,8 +134,67 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             return;
         }
 
+        var successCount = 0u;
+        var failureCount = 0u;
+
+        foreach (var (workload, args) in invocations)
+        {
+            var outcome = await RunTesterOnceAsync(
+                    binPath, args, workload, runId, correlationId, sink,
+                    successCount, failureCount, cancellationToken)
+                .ConfigureAwait(false);
+
+            successCount = outcome.SuccessCount;
+            failureCount = outcome.FailureCount;
+
+            if (outcome.Status == InvocationStatus.Cancelled)
+            {
+                SendFinished(sink, runId, "cancelled", artifact: null);
+                return;
+            }
+            if (outcome.Status == InvocationStatus.Failed)
+            {
+                SendFinished(sink, runId, "failed", artifact: null);
+                return;
+            }
+        }
+
+        sink.TrySend(new RunProgressMessage(runId, successCount, failureCount));
+
+        var artifact = config.IsBenchmark
+            ? BuildArtifact(config, successCount, failureCount)
+            : null;
+
+        SendFinished(sink, runId, "completed", artifact);
+    }
+
+    private enum InvocationStatus { Completed, Failed, Cancelled }
+
+    private readonly record struct InvocationOutcome(
+        InvocationStatus Status, uint SuccessCount, uint FailureCount);
+
+    /// <summary>
+    /// Spawn one tester process and stream its output — the single-invocation
+    /// body of the original executor, extracted verbatim so a run can consist
+    /// of several invocations (base modes + one per apibench workload).
+    /// Success/failure counts accumulate across invocations via the
+    /// <paramref name="successCount"/>/<paramref name="failureCount"/> seeds.
+    /// </summary>
+    private async Task<InvocationOutcome> RunTesterOnceAsync(
+        string binPath,
+        List<string> args,
+        string? workload,
+        Guid runId,
+        string correlationId,
+        RawWebSocketClient.IFrameSink sink,
+        uint successCount,
+        uint failureCount,
+        CancellationToken cancellationToken)
+    {
+        var label = workload is null ? "tester" : $"tester/{workload}";
         logger.LogInformation(
-            "{CorrelationId}: Spawning tester {Bin} {Args}", correlationId, binPath, string.Join(" ", args));
+            "{CorrelationId}: Spawning {Label} {Bin} {Args}",
+            correlationId, label, binPath, string.Join(" ", args));
 
         var psi = new ProcessStartInfo
         {
@@ -123,14 +218,10 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             var msg = $"Failed to spawn tester: {ex.Message}";
             logger.LogError("{CorrelationId}: {Message}", correlationId, msg);
             sink.TrySend(new ErrorMessage(runId, msg));
-            SendFinished(sink, runId, "failed", artifact: null);
-            return;
+            return new(InvocationStatus.Failed, successCount, failureCount);
         }
 
         process.StandardInput.Close(); // stdin = null
-
-        var successCount = 0u;
-        var failureCount = 0u;
 
         // Stream stderr as [tester] error frames (best-effort).
         var stderrTask = Task.Run(async () =>
@@ -140,7 +231,7 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
                 string? line;
                 while ((line = await process.StandardError.ReadLineAsync(cancellationToken).ConfigureAwait(false)) is not null)
                 {
-                    sink.TrySend(new ErrorMessage(runId, $"[tester] {line}"));
+                    sink.TrySend(new ErrorMessage(runId, $"[{label}] {line}"));
                 }
             }
             catch (OperationCanceledException) { /* cancelled */ }
@@ -180,8 +271,7 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         if (cancelled)
         {
             await WaitAndDrainAsync(process, stderrTask).ConfigureAwait(false);
-            SendFinished(sink, runId, "cancelled", artifact: null);
-            return;
+            return new(InvocationStatus.Cancelled, successCount, failureCount);
         }
 
         if (overflow)
@@ -190,8 +280,7 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             logger.LogError("{CorrelationId}: {Message}", correlationId, msg);
             sink.TrySend(new ErrorMessage(runId, msg));
             await WaitAndDrainAsync(process, stderrTask).ConfigureAwait(false);
-            SendFinished(sink, runId, "failed", artifact: null);
-            return;
+            return new(InvocationStatus.Failed, successCount, failureCount);
         }
 
         // stdout hit EOF → await exit + stderr drain.
@@ -206,8 +295,7 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             logger.LogWarning("{CorrelationId}: Run cancelled during wait — killing tester", correlationId);
             KillTree(process);
             await WaitAndDrainAsync(process, stderrTask).ConfigureAwait(false);
-            SendFinished(sink, runId, "cancelled", artifact: null);
-            return;
+            return new(InvocationStatus.Cancelled, successCount, failureCount);
         }
 
         try { await stderrTask.ConfigureAwait(false); } catch { /* best-effort */ }
@@ -224,11 +312,10 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         catch (JsonException parseErr)
         {
             var snippet = stdoutText.Length > 512 ? stdoutText[..512] : stdoutText;
-            var msg = $"Tester exited with code {exitCode} and unparseable JSON: {parseErr.Message} (stdout starts: {snippet})";
+            var msg = $"Tester ({label}) exited with code {exitCode} and unparseable JSON: {parseErr.Message} (stdout starts: {snippet})";
             logger.LogError("{CorrelationId}: {Message}", correlationId, msg);
             sink.TrySend(new ErrorMessage(runId, msg));
-            SendFinished(sink, runId, "failed", artifact: null);
-            return;
+            return new(InvocationStatus.Failed, successCount, failureCount);
         }
 
         using (parsed)
@@ -258,17 +345,9 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
                         sink.TrySend(new RunProgressMessage(runId, successCount, failureCount));
                 }
             }
-
-            sink.TrySend(new RunProgressMessage(runId, successCount, failureCount));
-
-            var artifact = config.IsBenchmark
-                ? BuildArtifact(config, successCount, failureCount)
-                : null;
-
-            // completed regardless of non-zero exit as long as JSON parsed
-            // (Rust: `(Ok(_), Ok(run)) => Completed`).
-            SendFinished(sink, runId, "completed", artifact);
         }
+
+        return new(InvocationStatus.Completed, successCount, failureCount);
     }
 
     // ── endpoint_to_target (Rust parity) ─────────────────────────────────────────
@@ -291,7 +370,11 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
     // ── build_args (Rust parity) ─────────────────────────────────────────────────
     internal static List<string> BuildArgs(TestConfigView config, string target)
     {
-        var modesCsv = string.Join(",", config.Modes);
+        // "apibench" is a runner-level mode — never a tester --modes value
+        // (the tester would silently drop it). Its workloads run as separate
+        // invocations built by ApibenchWorkloads.BuildArgs.
+        var modesCsv = string.Join(
+            ",", config.Modes.Where(m => !ApibenchWorkloads.IsApibenchMode(m)));
         // timeout_ms.div_ceil(1000).max(1) — round up to whole seconds, floor 1.
         var timeoutSecs = Math.Max(1u, (config.TimeoutMs + 999) / 1000);
 

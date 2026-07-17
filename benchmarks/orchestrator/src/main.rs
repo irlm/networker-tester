@@ -16,6 +16,7 @@ mod token_manager;
 mod types;
 mod validator;
 mod vm_tiers;
+mod workloads;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};

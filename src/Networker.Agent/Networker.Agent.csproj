@@ -23,6 +23,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Single source of truth for the apibench workload set: the committed
+         benchmarks/configs/apibench.json is embedded so the agent drives the
+         exact same /api/* request shapes as the orchestrator and weekly CI. -->
+    <EmbeddedResource Include="../../benchmarks/configs/apibench.json" LogicalName="Networker.Agent.apibench.json" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="Networker.Agent.Tests" />
   </ItemGroup>
 

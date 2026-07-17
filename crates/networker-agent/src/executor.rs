@@ -56,10 +56,22 @@ fn endpoint_to_target(endpoint: &EndpointRef) -> Option<String> {
 
 /// Build CLI args for `networker-tester` from a `TestConfig`.
 fn build_args(config: &TestConfig, target: &str) -> Vec<String> {
+    // `apibench` is a runner-level mode (one tester invocation per /api/*
+    // workload). The legacy Rust agent does not execute it — the C# agent
+    // does — so strip it from --modes (the tester would silently drop an
+    // unknown mode) and warn loudly instead of pretending to measure it.
+    if config.workload.modes.contains(&Mode::Apibench) {
+        tracing::warn!(
+            config_id = %config.id,
+            "apibench mode requested but the legacy Rust agent does not execute \
+             /api/* workloads — upgrade this runner to the C# agent"
+        );
+    }
     let modes_csv = config
         .workload
         .modes
         .iter()
+        .filter(|m| !matches!(m, Mode::Apibench))
         .map(Mode::as_str)
         .collect::<Vec<_>>()
         .join(",");

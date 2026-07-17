@@ -169,6 +169,83 @@ public class ConfigAndArgsTests
         Assert.Equal("1024,4096", args[i + 1]);
     }
 
+    // ── apibench (the measured /api/* workload suite) ─────────────────────
+
+    private const string NetworkApibench = """
+        {
+          "id": "22222222-2222-2222-2222-222222222222",
+          "endpoint": { "kind": "network", "host": "example.com", "port": 8443 },
+          "workload": {
+            "modes": ["http1", "apibench"],
+            "runs": 10, "concurrency": 1, "timeout_ms": 5000,
+            "payload_sizes": [], "capture_mode": "headers-only", "insecure": true
+          }
+        }
+        """;
+
+    [Fact]
+    public void BuildArgs_strips_apibench_from_tester_modes()
+    {
+        var view = TestConfigView.From(Config(NetworkApibench));
+        var args = RunExecutor.BuildArgs(view, "https://example.com:8443/health");
+        var modesIdx = args.IndexOf("--modes");
+        Assert.Equal("http1", args[modesIdx + 1]);
+    }
+
+    [Fact]
+    public void Apibench_embedded_workload_set_loads_five_spec_workloads()
+    {
+        var names = ApibenchWorkloads.All.Select(w => w.Name).ToArray();
+        Assert.Equal(
+            new[] { "api-users", "api-transform", "api-aggregate", "api-search", "api-compress" },
+            names);
+        // Every path targets a spec-measured /api/* endpoint (API-SPEC.md §4).
+        Assert.All(ApibenchWorkloads.All, w => Assert.StartsWith("/api/", w.Path));
+        // POST workloads carry deterministic committed bodies.
+        Assert.All(
+            ApibenchWorkloads.All.Where(w => w.Method == "POST"),
+            w => Assert.False(string.IsNullOrEmpty(w.Body)));
+    }
+
+    [Fact]
+    public void Apibench_workload_target_rewrites_path_preserving_authority()
+    {
+        var search = ApibenchWorkloads.All.Single(w => w.Name == "api-search");
+        var target = ApibenchWorkloads.WorkloadTarget("https://example.com:8443/health", search);
+        Assert.Equal("https://example.com:8443/api/search?q=network&limit=10", target);
+    }
+
+    [Fact]
+    public void Apibench_post_workload_args_carry_body_and_content_type()
+    {
+        var view = TestConfigView.From(Config(NetworkApibench));
+        var transform = ApibenchWorkloads.All.Single(w => w.Name == "api-transform");
+        var args = ApibenchWorkloads.BuildArgs(view, "https://example.com:8443/health", transform);
+
+        Assert.Equal("--target", args[0]);
+        Assert.Equal("https://example.com:8443/api/transform", args[1]);
+        var modesIdx = args.IndexOf("--modes");
+        Assert.Equal("http1", args[modesIdx + 1]);
+        Assert.Contains("--insecure", args);
+
+        var bodyIdx = args.IndexOf("--request-body");
+        Assert.True(bodyIdx >= 0, "--request-body missing");
+        // The body is the frozen dataset's transform_inputs[0] (§7 transform_input0).
+        Assert.Contains("\"seed\":1", args[bodyIdx + 1]);
+        var ctIdx = args.IndexOf("--request-content-type");
+        Assert.Equal("application/json", args[ctIdx + 1]);
+    }
+
+    [Fact]
+    public void Apibench_get_workload_args_have_no_body_flags()
+    {
+        var view = TestConfigView.From(Config(NetworkApibench));
+        var users = ApibenchWorkloads.All.Single(w => w.Name == "api-users");
+        var args = ApibenchWorkloads.BuildArgs(view, "https://example.com:8443/health", users);
+        Assert.DoesNotContain("--request-body", args);
+        Assert.DoesNotContain("--request-content-type", args);
+    }
+
     [Fact]
     public void BuildArgs_no_payload_flag_when_not_needed_and_empty()
     {

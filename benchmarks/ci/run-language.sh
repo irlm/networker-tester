@@ -123,20 +123,83 @@ start_server() {
     esac
 }
 
+# Measure the apibench workload suite (benchmarks/configs/apibench.json) —
+# the spec-measured /api/* endpoints (API-SPEC.md §4). /health is
+# constant-work by spec and MUST NOT be ranked (audit F4), so it is only used
+# as the readiness gate above, never measured here.
+#
+# nginx is the transport-only baseline and serves no /api/* endpoints
+# (API-SPEC.md §9): it falls back to a /health liveness measurement whose
+# result file is suffixed "-health-smoke" so downstream ranking can exclude it.
 run_benchmark() {
     mkdir -p "$RESULTS_DIR"
-    local outfile="$RESULTS_DIR/${LANG}.json"
+    local config="$REPO_ROOT/benchmarks/configs/apibench.json"
 
-    "$TESTER" \
-        --target "https://localhost:$PORT/health" \
-        --modes http1 \
-        --runs "$RUNS" \
-        --timeout 5 \
-        --insecure \
-        --json-stdout \
-        > "$outfile" 2>/dev/null
+    if [ "$LANG" = "nginx" ]; then
+        echo "NOTE: nginx serves no /api/* endpoints — health smoke only (not ranked)" >&2
+        local outfile="$RESULTS_DIR/${LANG}-health-smoke.json"
+        "$TESTER" \
+            --target "https://localhost:$PORT/health" \
+            --modes http1 \
+            --runs "$RUNS" \
+            --timeout 5 \
+            --insecure \
+            --json-stdout \
+            > "$outfile" 2>/dev/null
+        echo "$outfile"
+        return 0
+    fi
 
-    echo "$outfile"
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "ERROR: jq is required to read $config" >&2
+        return 1
+    fi
+    if [ ! -f "$config" ]; then
+        echo "ERROR: apibench workload config not found: $config" >&2
+        return 1
+    fi
+
+    local count i name method path body ctype outfile body_file
+    count=$(jq '.workloads | length' "$config")
+    i=0
+    while [ "$i" -lt "$count" ]; do
+        name=$(jq -r ".workloads[$i].name" "$config")
+        method=$(jq -r ".workloads[$i].method" "$config")
+        path=$(jq -r ".workloads[$i].path" "$config")
+        outfile="$RESULTS_DIR/${LANG}-${name}.json"
+
+        echo "Workload $name: $method $path" >&2
+        if [ "$method" = "POST" ]; then
+            body=$(jq -r ".workloads[$i].body" "$config")
+            ctype=$(jq -r ".workloads[$i].content_type // \"application/json\"" "$config")
+            body_file=$(mktemp)
+            # printf (not jq > file) so the body bytes are exact — no
+            # trailing newline that would change content-length/checksums.
+            printf '%s' "$body" > "$body_file"
+            "$TESTER" \
+                --target "https://localhost:$PORT$path" \
+                --modes http1 \
+                --runs "$RUNS" \
+                --timeout 10 \
+                --insecure \
+                --json-stdout \
+                --request-body-file "$body_file" \
+                --request-content-type "$ctype" \
+                > "$outfile" 2>/dev/null
+            rm -f "$body_file"
+        else
+            "$TESTER" \
+                --target "https://localhost:$PORT$path" \
+                --modes http1 \
+                --runs "$RUNS" \
+                --timeout 10 \
+                --insecure \
+                --json-stdout \
+                > "$outfile" 2>/dev/null
+        fi
+        echo "$outfile"
+        i=$((i + 1))
+    done
 }
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -156,8 +219,9 @@ fi
 curl -sk "https://localhost:$PORT/health" 2>/dev/null || true
 echo ""
 
-echo "Running benchmark..."
-RESULT_FILE=$(run_benchmark)
-echo "Results written to $RESULT_FILE"
+echo "Running apibench workloads..."
+RESULT_FILES=$(run_benchmark)
+echo "Results written:"
+echo "$RESULT_FILES"
 
 echo "=== Done: $LANG ==="

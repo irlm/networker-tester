@@ -130,6 +130,13 @@ All fields are optional. If `tests` is omitted entirely, defaults are used.
 **Default modes** (when `modes` is not specified): `tcp`, `http1`, `http2`, `http3`,
 `udp`, `download`, `upload`, `pageload`, `pageload2`, `pageload3`.
 
+`apibench` is additionally accepted as a runner-level mode (not a tester
+protocol): the agent expands it into one tester run per measured `/api/*`
+workload defined in `benchmarks/configs/apibench.json` (API-SPEC.md §4),
+driving the frozen request shapes via `--request-body`/`--request-body-file`
+over http1/http2. Targets that serve no `/api/*` endpoints (e.g. nginx) are
+skipped.
+
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `run_tests` | boolean | `true` | Set `false` for deploy-only (no test execution) |

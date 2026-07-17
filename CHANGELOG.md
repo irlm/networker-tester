@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.29] — 2026-07-17
+
+### Added
+- **`apibench` — the `/api/*` compute workloads are now measured** (language-
+  bench audit P0#7). New runner-level mode: the agent expands `apibench` into
+  one tester run per workload in `benchmarks/configs/apibench.json`
+  (api-users, api-transform, api-aggregate, api-search, api-compress —
+  API-SPEC.md §4 frozen request shapes), driven via the tester's new
+  `--request-body`/`--request-body-file`/`--request-content-type` flags
+  (http1/http2, body built outside the timed region). Exposed in the
+  benchmark catalog as "API Workloads"; weekly language CI now measures
+  api-aggregate instead of the constant-work `/health`.
+
+---
+
 ## [0.28.28] — 2026-07-16
 
 ### Fixed — language-benchmark P0 wave 1 (audit: docs/analysis/language-bench-audit.md)
