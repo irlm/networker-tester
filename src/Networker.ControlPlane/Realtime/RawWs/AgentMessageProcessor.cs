@@ -450,6 +450,11 @@ public sealed class AgentMessageProcessor
     /// <c>status='failed'</c> and publish <see cref="JobUpdate"/>(failed). Rust:
     /// <c>test_runs::set_error</c> + <c>JobUpdate</c>. A run-less error is logged
     /// only (matching Rust's <c>(Some(rid), …)</c> guard).
+    ///
+    /// <para>The message is ANSI-scrubbed before persistence: the agent relays
+    /// tester stderr verbatim, which carries SGR color codes (audit F8) —
+    /// stored <c>error_message</c> must be clean for every consumer, not just
+    /// the frontend's display-side strip.</para>
     /// </summary>
     private async Task OnError(Guid agentId, ErrorMessage err, CancellationToken ct)
     {
@@ -459,11 +464,12 @@ public sealed class AgentMessageProcessor
             return;
         }
 
+        var cleanMessage = AnsiText.Strip(err.Message);
         await _db.TestRuns
             .Where(r => r.Id == runId)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(r => r.Status, "failed")
-                .SetProperty(r => r.ErrorMessage, err.Message)
+                .SetProperty(r => r.ErrorMessage, cleanMessage)
                 .SetProperty(r => r.FinishedAt, DateTime.UtcNow), ct);
 
         _bus.Publish(new JobUpdate(runId, "failed", agentId, null, DateTimeOffset.UtcNow));
@@ -492,16 +498,19 @@ public sealed class AgentMessageProcessor
     /// CommandResult → mark the <c>agent_command</c> row terminal: set
     /// <c>status</c>, <c>result</c>, <c>error_message</c>, <c>finished_at</c>.
     /// Mirrors the Rust <c>mark_finished</c> half of <c>handle_command_result</c>.
+    /// The error text is ANSI-scrubbed on ingest, same as
+    /// <see cref="OnError"/> (agent-relayed process output carries SGR codes).
     /// </summary>
     private async Task OnCommandResult(CommandResultMessage cr, CancellationToken ct)
     {
         var resultJson = cr.Result?.GetRawText();
+        var cleanError = AnsiText.Strip(cr.Error);
         await _db.AgentCommands
             .Where(c => c.CommandId == cr.CommandId)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(c => c.Status, cr.Status)
                 .SetProperty(c => c.Result, resultJson)
-                .SetProperty(c => c.ErrorMessage, cr.Error)
+                .SetProperty(c => c.ErrorMessage, cleanError)
                 .SetProperty(c => c.FinishedAt, DateTime.UtcNow), ct);
     }
 }
