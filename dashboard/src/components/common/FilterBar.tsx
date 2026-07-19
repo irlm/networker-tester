@@ -23,20 +23,6 @@ export function FilterChip({ label, value, onClear }: FilterChipProps) {
   );
 }
 
-interface ScopeChipProps {
-  label: string;
-}
-
-/** Non-dismissible chip showing viewer scoping */
-export function ScopeChip({ label }: ScopeChipProps) {
-  return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-purple-500/10 border border-purple-500/20 text-xs text-purple-400">
-      <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />
-      {label}
-    </span>
-  );
-}
-
 interface FilterBarProps {
   children: ReactNode;
   /** Active filter chips to display below the filter controls */

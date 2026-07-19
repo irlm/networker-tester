@@ -5,15 +5,10 @@ import { FilterBar, FilterChip } from '../components/common/FilterBar';
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { stableSet } from '../lib/stableUpdate';
+import { formatMsCompact as formatMs } from '../lib/format';
 
 type Tab = 'logs' | 'stats';
 type Kind = 'all' | 'api' | 'render';
-
-function formatMs(ms: number | null | undefined): string {
-  if (ms === null || ms === undefined) return '-';
-  if (ms < 1) return '<1ms';
-  return `${ms.toFixed(1)}ms`;
-}
 
 function speedColor(ms: number | null | undefined): string {
   if (ms === null || ms === undefined) return 'text-gray-500';

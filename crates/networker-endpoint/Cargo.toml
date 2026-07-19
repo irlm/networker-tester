@@ -29,7 +29,6 @@ tower-http      = { version = "0.7", features = ["trace", "timeout", "cors"] }
 # --- TLS ---
 rustls         = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 rustls-pemfile = "2"
-tokio-rustls   = "0.26"
 
 # --- cert generation (self-signed for dev) ---
 rcgen = "0.14"
@@ -48,7 +47,6 @@ serde_json.workspace  = true
 clap.workspace        = true
 anyhow.workspace      = true
 tracing.workspace     = true
-tracing-subscriber.workspace = true
 
 # --- structured logging ---
 networker-log = { path = "../networker-log" }

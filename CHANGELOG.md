@@ -11,6 +11,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.36] — 2026-07-17
+
+### Removed
+- **Dead frontend code (~1,250 lines).** Verified-unreferenced files deleted:
+  `CreateScheduleDialog.tsx` (588), `common/Combobox.tsx` (285), the shared
+  `PhaseBar.tsx` + its test (DiagnosticsPage uses its own, different,
+  timings-based bar), `hooks/useDebounce.ts`, and `lib/benchmarkPresets.ts`.
+  Dead exports removed: `ScopeChip` (FilterBar), `isHigherBetter`
+  (lib/analysis), `languageColors` (plural, lib/languageColors), and
+  `formatBenchmarkCount`/`formatBenchmarkInterval`/`formatBenchmarkRatio`/
+  `formatBenchmarkCaseLabel` (lib/benchmark).
+- **Unused Rust dependencies.** `tracing-subscriber` dropped from
+  `networker-tester` and `networker-endpoint` (the `networker-log` builder
+  owns subscriber setup); `tokio-rustls` dropped from `networker-endpoint`
+  (TLS termination goes through `axum-server`/`quinn`).
+
+### Changed
+- **Frontend helper consolidation.** Seven identical copy-pasted `timeAgo`
+  helpers (Users, Schedules, Settings, SystemDashboard, Diagnostics,
+  BenchmarkCatalog, BenchmarkRegressions pages) now use the canonical
+  `lib/format.ts::timeAgo` — timestamps younger than 60 s now render as
+  "42s ago" instead of "just now" on those pages, matching Runs/Infra/
+  EndpointRuns. The duplicated compact ms formatter in ApiLogPanel and
+  PerfLogPage moved to `lib/format.ts::formatMsCompact`. `lib/format.ts`
+  gained a unit test suite.
+- **All REST traffic now goes through the shared api client.**
+  `api/testers.ts` and `api/vmHistory.ts` dropped their private `fetch`
+  wrappers and use the (now exported) `request()` from `api/client.ts`, and
+  `SystemHealthPanel` uses a new `api.getSystemHealth()` — tester, VM-history
+  and health calls now appear in the api-log panel and perf-log flush, get
+  the 403 `pending_approval` redirect, and wrap network failures in
+  `ApiError` like every other call. Streaming SSE readers and the perf-log
+  flush itself remain direct `fetch` by design (documented on `request()`).
+
+### Fixed
+- **`timeAgo` on unparseable timestamps.** `new Date('garbage')` yields NaN
+  without throwing, so the documented raw-string fallback never fired and
+  the UI would render "NaNd ago". Now guarded explicitly.
+
+---
+
 ## [0.28.35] — 2026-07-17
 
 ### Added

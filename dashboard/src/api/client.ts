@@ -58,7 +58,16 @@ export function handleUnauthorized(): void {
 // session and hard-reloading the login page mid-interaction.
 const AUTH_401_EXEMPT = new Set(['/auth/login', '/auth/sso/exchange']);
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
+/**
+ * Shared low-level REST helper: auth header, 401/403 session handling,
+ * ApiError wrapping, empty-body tolerance, and perf-log instrumentation.
+ *
+ * All REST modules (client.ts, testers.ts, vmHistory.ts) must go through
+ * this — a raw `fetch` bypasses the api-log panel and the perf-log flush.
+ * The only sanctioned exceptions are streaming SSE readers (useSSE,
+ * useDeployEvents) and the perf-log flush itself (usePerfLogFlush).
+ */
+export async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const token = localStorage.getItem('token');
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -760,6 +769,18 @@ export const api = {
   // ── System Admin (platform admin only, NOT project-scoped) ──────────
   getSystemMetrics: () =>
     request<{ system: SystemMetrics; database: DbMetrics }>('/admin/metrics').then(r => ({ system: r.system, db: r.database })),
+
+  getSystemHealth: () =>
+    request<{
+      live: { core_db: boolean; logs_db: boolean };
+      checks: {
+        check_name: string;
+        status: string;
+        value: string | null;
+        message: string | null;
+        checked_at: string;
+      }[];
+    }>('/system/health'),
 
   getWorkspaceUsage: () =>
     request<WorkspaceUsage[]>('/admin/workspaces'),

@@ -9,9 +9,7 @@
  * types to avoid a transform layer — components can read fields directly.
  */
 
-import { ApiError, handleUnauthorized } from './client';
-
-const API_BASE = '/api';
+import { request } from './client';
 
 export type PowerState =
   | 'provisioning'
@@ -113,31 +111,6 @@ export type ForceStopBody = {
 export type RefreshLatestVersionResponse = {
   latest_version: string;
 };
-
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const token = localStorage.getItem('token');
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  };
-
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: { ...headers, ...(options?.headers as Record<string, string>) },
-  });
-
-  if (res.status === 401) {
-    handleUnauthorized();
-    throw new ApiError(401, 'Unauthorized');
-  }
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new ApiError(res.status, `API error ${res.status}: ${body || res.statusText}`, body || null);
-  }
-  // 204 responses still come back as empty JSON — guard against empty body.
-  const text = await res.text();
-  return (text ? JSON.parse(text) : (undefined as unknown)) as T;
-}
 
 function base(projectId: string, suffix = ''): string {
   return `/projects/${projectId}/testers${suffix}`;

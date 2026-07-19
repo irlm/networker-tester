@@ -1,14 +1,9 @@
 import { useState, useMemo, memo } from 'react';
 import { useApiLogStore, type ApiLogEntry } from '../stores/apiLogStore';
 import { useShallow } from 'zustand/react/shallow';
+import { formatMsCompact as formatMs } from '../lib/format';
 
 type Tab = 'api' | 'render';
-
-function formatMs(ms: number | null): string {
-  if (ms === null) return '-';
-  if (ms < 1) return '<1ms';
-  return `${ms.toFixed(1)}ms`;
-}
 
 function timingBar(entry: ApiLogEntry) {
   if (entry.serverMs === null) return null;
