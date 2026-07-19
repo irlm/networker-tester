@@ -280,6 +280,13 @@ jobs:
           dotnet publish src/Networker.ControlPlane/Networker.ControlPlane.csproj \
             -c Release -r linux-x64 --self-contained true \
             -o publish/controlplane
+          # DeployRunner shells out to install.sh --deploy for testbed
+          # provisioning (FindInstallSh walks the assembly dir). The Rust-era
+          # service ran from a repo checkout so the script was ambient; the C#
+          # deployable must CARRY it — without this, target creation soft-fails
+          # on prod with "install.sh not found" (found live 2026-07-19).
+          cp install.sh publish/controlplane/install.sh
+          chmod 755 publish/controlplane/install.sh
           mkdir -p dist
           tar czf dist/networker-controlplane-linux-x64.tar.gz -C publish/controlplane .
 
@@ -408,6 +415,12 @@ jobs:
               # so an env-file recreation can't silently regress it.
               sudo grep -q '^DASHBOARD_PUBLIC_URL=' /etc/alethedash-cs.env 2>/dev/null \
                 || echo 'DASHBOARD_PUBLIC_URL=https://alethedash.com' | sudo tee -a /etc/alethedash-cs.env >/dev/null
+              # INSTALL_SH_PATH: DeployRunner's testbed provisioning shell-out.
+              # The tarball ships install.sh alongside the binary (build-csharp);
+              # the explicit path pins resolution independent of cwd/BaseDirectory
+              # quirks. Same regression-guard rationale as DASHBOARD_PUBLIC_URL.
+              sudo grep -q '^INSTALL_SH_PATH=' /etc/alethedash-cs.env 2>/dev/null \
+                || echo 'INSTALL_SH_PATH=/opt/alethedash-cs/install.sh' | sudo tee -a /etc/alethedash-cs.env >/dev/null
               echo '>> Deploying C# control plane...'
               sudo systemctl stop alethedash-cs
               sudo rm -rf /opt/alethedash-cs.prevbuild
