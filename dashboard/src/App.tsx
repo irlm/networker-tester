@@ -64,6 +64,7 @@ const NetworkTestPage = lazyPage(() => import('./pages/NetworkTestPage'), 'Netwo
 const TlsProfilesPage = lazyPage(() => import('./pages/TlsProfilesPage'), 'TlsProfilesPage');
 const TlsProfileDetailPage = lazyPage(() => import('./pages/TlsProfileDetailPage'), 'TlsProfileDetailPage');
 const FullStackPage = lazyPage(() => import('./pages/FullStackPage'), 'FullStackPage');
+const AlertsPage = lazyPage(() => import('./pages/AlertsPage'), 'AlertsPage');
 const AppBenchmarkPage = lazyPage(() => import('./pages/AppBenchmarkPage'), 'AppBenchmarkPage');
 
 const statusColors: Record<ConnectionStatus, string> = {
@@ -258,6 +259,7 @@ function AuthenticatedApp() {
             <Route path="/projects/:projectId/tls-profiles" element={<TlsProfilesPage />} />
             <Route path="/projects/:projectId/tls-profiles/:runId" element={<TlsProfileDetailPage />} />
             <Route path="/projects/:projectId/schedules" element={<SchedulesPage />} />
+            <Route path="/projects/:projectId/alerts" element={<AlertsPage />} />
             <Route path="/projects/:projectId/settings" element={<SettingsPage />} />
             <Route path="/projects/:projectId/members" element={<ProjectMembersPage />} />
             <Route path="/projects/:projectId/cloud-accounts" element={<CloudAccountsPage />} />

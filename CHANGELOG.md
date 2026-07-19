@@ -11,6 +11,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.38] — 2026-07-19
+
+### Added
+- **Alerting frontend (wave 2).** New **Alerts** page (sidebar entry +
+  `/projects/:id/alerts`) on top of the wave-1 backend (#476), with three
+  tabs:
+  - **Rules** — rule builder for threshold watches: metric
+    (`p95_ms`/`mean_ms`/`error_rate`/`success_rate`), strict `gt`/`lt`
+    comparator, threshold, N-consecutive-runs window (1..50), scope
+    (project-wide or a single test config), target channel, enable/disable
+    toggle. Client-side validation mirrors the backend contract (finite
+    threshold, ratio bounds for rates, window range); a config-scoped rule
+    can't be widened back to project-wide via PATCH, so the editor locks
+    that option with an explainer.
+  - **Channels** — webhook (URL + optional write-only HMAC secret; the
+    stored secret round-trips as a mask and is never displayed, with a
+    `signed` badge on masked channels) and email (recipient list) channels,
+    per-channel **Test-fire** with inline delivery-status feedback, and 409
+    handling when deleting a channel that rules still reference.
+  - **History** — newest-first paginated event table (50/page) with rule
+    context (condition, scope), firing/resolved state badges, observed
+    value, message, and per-event delivery status; filterable by rule.
+- RBAC: all mutating controls (create/edit/delete/toggle/test-fire) are
+  gated behind `isOperator`; viewers get the full read-only data with
+  status badges instead of toggles. Covered by a dedicated
+  `AlertsPage.rbac.test.tsx` suite plus rule-builder validation and
+  history-rendering tests.
+
+---
+
 ## [0.28.37] — 2026-07-18
 
 UI design-audit fix wave (`docs/analysis/ui-design-audit.md`, scored 57/100).

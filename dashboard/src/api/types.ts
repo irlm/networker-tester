@@ -1335,3 +1335,80 @@ export interface PerfLogStats {
   slow_api_count: number;
   janky_render_count: number;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Alerting (REST v2, wave 1 backend — docs/alerting.md)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type AlertMetric = 'p95_ms' | 'mean_ms' | 'error_rate' | 'success_rate';
+export type AlertComparator = 'gt' | 'lt';
+export type AlertChannelKind = 'webhook' | 'email';
+
+/** Channel config union. Webhook secrets are write-only: reads return the
+ *  mask `********`; PATCHing the mask back keeps the stored secret. */
+export interface AlertChannelConfig {
+  url?: string;
+  secret?: string;
+  to?: string[];
+}
+
+export interface AlertChannel {
+  channel_id: string;
+  project_id: string;
+  kind: AlertChannelKind;
+  name: string;
+  config: AlertChannelConfig;
+  enabled: boolean;
+  created_at: string;
+}
+
+export interface AlertChannelCreate {
+  kind: AlertChannelKind;
+  name: string;
+  config: AlertChannelConfig;
+  enabled?: boolean;
+}
+
+export interface AlertRule {
+  rule_id: string;
+  project_id: string;
+  /** null → applies to every config in the project. */
+  test_config_id: string | null;
+  metric: AlertMetric;
+  comparator: AlertComparator;
+  threshold: number;
+  /** N consecutive breaching runs required to fire (1..50). */
+  window_runs: number;
+  enabled: boolean;
+  channel_id: string;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface AlertRuleCreate {
+  metric: AlertMetric;
+  comparator: AlertComparator;
+  threshold: number;
+  window_runs?: number;
+  channel_id: string;
+  test_config_id?: string;
+  enabled?: boolean;
+}
+
+/** One firing/resolved transition, joined with its rule's threshold context. */
+export interface AlertEvent {
+  event_id: string;
+  rule_id: string;
+  run_id: string;
+  fired_at: string;
+  state: 'firing' | 'resolved';
+  value: number | null;
+  message: string | null;
+  /** 'delivered' | 'failed: ...' | 'skipped: ...' | 'pending'. */
+  delivery_status: string | null;
+  metric: AlertMetric;
+  comparator: AlertComparator;
+  threshold: number;
+  test_config_id: string | null;
+  channel_id: string;
+}
