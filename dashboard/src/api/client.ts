@@ -11,8 +11,8 @@ const API_BASE = '/api';
 /**
  * Typed API error. `status` is the HTTP status code (0 for network-level
  * failures where no response was received). `body` is the raw response body,
- * when one was read. `message` keeps the legacy `API error: ...` / raw-body
- * format so existing callers that string-match keep working.
+ * when one was read. `message` is human-readable copy safe to render
+ * directly in banners/toasts — never a raw response body.
  */
 export class ApiError extends Error {
   readonly status: number;
@@ -24,6 +24,64 @@ export class ApiError extends Error {
     this.status = status;
     this.body = body;
   }
+}
+
+// ── Human-readable error copy ──────────────────────────────────────────────
+//
+// SREs watch closest when things break — that's exactly when raw
+// `ApiError: API error: 404 Not Found`, nginx 502 HTML dumps, and
+// `{"error":"internal server error"}` used to leak into the UI (design
+// audit F3/F16). Map status codes to plain copy and never surface a raw
+// body verbatim.
+
+const STATUS_COPY: Record<number, string> = {
+  400: 'The server rejected this request.',
+  401: 'Session expired — sign in again.',
+  403: "You don't have permission to do that.",
+  404: 'Not found — it may have been deleted.',
+  409: 'Conflict — this already exists.',
+  422: 'The server rejected the request payload.',
+  429: 'Rate limited — wait a moment and try again.',
+  500: 'Server error — try again shortly.',
+  502: 'Server unavailable — it may be restarting. Try again shortly.',
+  503: 'Server unavailable — it may be restarting. Try again shortly.',
+  504: 'The server timed out — try again shortly.',
+};
+
+/** Build a renderable message from an HTTP failure without leaking raw bodies. */
+export function friendlyHttpError(status: number, statusText: string, body: string | null): string {
+  const trimmed = (body ?? '').trim();
+  let detail = '';
+  // HTML (e.g. a raw nginx 502 page) is never useful copy — drop it.
+  if (trimmed && !trimmed.startsWith('<')) {
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        const parsed: unknown = JSON.parse(trimmed);
+        if (parsed && typeof parsed === 'object') {
+          const o = parsed as Record<string, unknown>;
+          const m = o.error ?? o.message ?? o.detail;
+          if (typeof m === 'string') detail = m;
+        }
+      } catch { /* not JSON — ignore */ }
+    } else {
+      detail = trimmed;
+    }
+  }
+  if (detail.length > 160) detail = `${detail.slice(0, 157)}...`;
+  const base = STATUS_COPY[status] ?? `Request failed (${status}${statusText ? ` ${statusText}` : ''}).`;
+  // 5xx bodies are stack noise ("internal server error") — status copy only.
+  return detail && status < 500 && detail.toLowerCase() !== 'internal server error'
+    ? `${base} (${detail})`
+    : base;
+}
+
+/**
+ * Render-safe message for any caught error. Use instead of `String(e)`,
+ * which leaks the class name ("ApiError: ...") into user-facing banners.
+ */
+export function errorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  return String(e);
 }
 
 /**
@@ -120,14 +178,14 @@ export async function request<T>(path: string, options?: RequestInit): Promise<T
         }
         throw new ApiError(403, 'pending_approval', body);
       }
-      throw new ApiError(403, `API error: ${res.status} ${body}`, body);
+      throw new ApiError(403, friendlyHttpError(403, res.statusText, body), body);
     }
 
     if (!res.ok) {
       const body = await res.text();
       throw new ApiError(
         res.status,
-        body || `API error: ${res.status} ${res.statusText}`,
+        friendlyHttpError(res.status, res.statusText, body),
         body || null
       );
     }

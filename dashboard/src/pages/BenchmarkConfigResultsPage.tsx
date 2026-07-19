@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { api } from '../api/client';
+import { api, errorMessage } from '../api/client';
 import type {
   BenchmarkConfigResults,
   BenchmarkTestbedRow,
@@ -232,7 +232,7 @@ export function BenchmarkConfigResultsPage() {
         }
       })
       .catch((e) => {
-        setError(String(e));
+        setError(errorMessage(e));
         setLoading(false);
       });
   }, [projectId, configId, activeTestbed]);

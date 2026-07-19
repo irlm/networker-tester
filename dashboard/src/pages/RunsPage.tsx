@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { api } from '../api/client';
+import { api, errorMessage } from '../api/client';
 import type { TestRun, RunStatus, EndpointKind, TestConfig, TestConfigListItem } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { FilterBar, FilterChip } from '../components/common/FilterBar';
@@ -139,7 +139,7 @@ export function RunsPage() {
         setLoading(false);
       })
       .catch((e) => {
-        setError(String(e));
+        setError(errorMessage(e));
         setLoading(false);
       });
   }, [statusFilter, endpointKindFilter, artifactFilter, comparisonGroupId, projectId, markRender]);

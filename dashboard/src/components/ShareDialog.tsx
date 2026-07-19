@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api } from '../api/client';
+import { api, errorMessage } from '../api/client';
 
 interface ShareDialogProps {
   projectId: string;
@@ -30,7 +30,7 @@ export function ShareDialog({ projectId, resourceType, resourceId, onClose, onCr
       setResult(data);
       onCreated?.();
     } catch (e) {
-      setError(String(e));
+      setError(errorMessage(e));
     } finally {
       setCreating(false);
     }

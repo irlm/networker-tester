@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { api } from '../api/client';
+import { api, errorMessage } from '../api/client';
 import type { Agent, Deployment, TestRun } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { useLiveStore } from '../stores/liveStore';
@@ -48,7 +48,7 @@ export function DashboardPage() {
       api.listTestRuns(projectId, { limit: 10 }).then(setRecentRuns),
       api.getDeployments(projectId, { limit: 10 }).then(setDeployments),
     ]).then(() => { setError(null); setLoading(false); })
-     .catch(e => { setError(String(e)); setLoading(false); });
+     .catch(e => { setError(errorMessage(e)); setLoading(false); });
   }, [projectId]);
 
   usePolling(loadData, 15000);

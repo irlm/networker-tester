@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { api } from '../api/client';
+import { api, errorMessage } from '../api/client';
 import type { ComparisonReport, BenchmarkCaseComparison } from '../api/types';
 import { Breadcrumb } from '../components/common/Breadcrumb';
 import { usePageTitle } from '../hooks/usePageTitle';
@@ -22,7 +22,7 @@ export function RunComparePage() {
     if (runIds.length < 2) return;
     api.compareTestRuns(runIds)
       .then(r => { setReport(r); setError(null); setLoading(false); })
-      .catch(e => { setError(String(e)); setLoading(false); });
+      .catch(e => { setError(errorMessage(e)); setLoading(false); });
   }, [runIds]);
 
   usePolling(loadComparison, 0, runIds.length >= 2);

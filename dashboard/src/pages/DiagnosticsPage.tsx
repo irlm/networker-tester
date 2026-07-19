@@ -9,6 +9,7 @@ import { usePolling } from '../hooks/usePolling';
 import { useProject } from '../hooks/useProject';
 import { useToast } from '../hooks/useToast';
 import { timeAgo } from '../lib/format';
+import { stripAnsi } from '../lib/ansi';
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -417,7 +418,7 @@ function UrlCard({
                   .filter(r => r.error_message)
                   .map(r => (
                     <div key={`err-${r.id}`} className="text-[11px] text-red-400/70 pl-2 mt-1">
-                      {r.error_message}
+                      {stripAnsi(r.error_message!)}
                     </div>
                   ))}
               </div>

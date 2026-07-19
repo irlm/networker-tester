@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
-import { api } from '../api/client';
+import { api, errorMessage } from '../api/client';
 import type { LiveAttempt } from '../api/types';
 import {
   computeProtocolStats,
@@ -32,7 +32,7 @@ export function ShareViewPage() {
     if (!token) return;
     api.resolveShareLink(token)
       .then(data => { setShareData(data); setLoading(false); })
-      .catch(e => { setError(String(e)); setLoading(false); });
+      .catch(e => { setError(errorMessage(e)); setLoading(false); });
   }, [token]);
 
   if (loading) {

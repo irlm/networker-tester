@@ -1,7 +1,8 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useParams, Link } from 'react-router-dom';
-import { api, type Job } from '../api/client';
+import { api, errorMessage, type Job } from '../api/client';
+import { stripAnsi } from '../lib/ansi';
 import type { LiveAttempt, PacketCaptureSummary } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { Breadcrumb } from '../components/common/Breadcrumb';
@@ -268,7 +269,7 @@ export function JobDetailPage() {
           if (TERMINAL_STATUSES.has(j.status)) setFinalFetchDone(true);
         })
         .catch((e) => {
-          setError(String(e));
+          setError(errorMessage(e));
           setLoading(false);
         });
     },
@@ -523,7 +524,7 @@ export function JobDetailPage() {
             )}
           </p>
           {job.error_message && (
-            <p className="text-red-400 text-sm mt-2">Error: {job.error_message}</p>
+            <p className="text-red-400 text-sm mt-2">Error: {stripAnsi(job.error_message)}</p>
           )}
         </div>
       )}
@@ -1106,7 +1107,7 @@ export function JobDetailPage() {
           {job.error_message && (
             <>
               <div className="text-gray-500">Error</div>
-              <div className="text-red-400">{job.error_message}</div>
+              <div className="text-red-400">{stripAnsi(job.error_message)}</div>
             </>
           )}
         </div>

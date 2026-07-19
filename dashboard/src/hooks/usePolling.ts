@@ -1,7 +1,11 @@
 import { useEffect, useEffectEvent } from 'react';
 import { setRequestSource } from '../lib/requestSource';
 
-export function usePolling(fn: () => void, intervalMs: number, enabled = true) {
+/**
+ * @param resetKey Optional value that restarts the poll loop (and fires an
+ *                 immediate tick) when it changes — used by retry buttons.
+ */
+export function usePolling(fn: () => void, intervalMs: number, enabled = true, resetKey: unknown = null) {
   const onTick = useEffectEvent(fn);
 
   useEffect(() => {
@@ -18,5 +22,5 @@ export function usePolling(fn: () => void, intervalMs: number, enabled = true) {
     run();
     const id = setInterval(run, intervalMs);
     return () => { cancelled = true; clearInterval(id); };
-  }, [intervalMs, enabled]);
+  }, [intervalMs, enabled, resetKey]);
 }
