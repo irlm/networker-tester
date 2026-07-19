@@ -1,6 +1,7 @@
-import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, LogsResponse, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo, PerfLogInput, PerfLogRow, PerfLogStats, ImportResult, SendInviteResult, TestConfig, TestConfigListItem, TestConfigCreate, TestRun, TestSchedule, ComparisonReport, ComparisonGroup, ComparisonGroupCreate } from './types';
+import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, LogsResponse, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo, PerfLogInput, PerfLogRow, PerfLogStats, ImportResult, SendInviteResult, TestConfig, TestConfigListItem, TestConfigCreate, TestRun, TestSchedule, ComparisonReport, ComparisonGroup, ComparisonGroupCreate, AlertChannel, AlertChannelCreate, AlertRule, AlertRuleCreate, AlertEvent } from './types';
 
-export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, LogsResponse, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo, ImportResult, SendInviteResult, TestConfig, TestConfigListItem, TestConfigCreate, TestRun, TestSchedule, ComparisonReport, ComparisonGroup, ComparisonGroupCreate };
+export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, LogsResponse, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo, ImportResult, SendInviteResult, TestConfig, TestConfigListItem, TestConfigCreate, TestRun, TestSchedule, ComparisonReport, ComparisonGroup, ComparisonGroupCreate, AlertChannel, AlertChannelCreate, AlertRule, AlertRuleCreate, AlertEvent };
+export type { AlertMetric, AlertComparator, AlertChannelKind, AlertChannelConfig } from './types';
 export type { LiveAttempt, EndpointRef, EndpointKind, Workload, Methodology, RunStatus, CaptureMode, OutlierPolicy, QualityGates, PublicationGates, ComparisonCell } from './types';
 
 import { useApiLogStore } from '../stores/apiLogStore';
@@ -1118,4 +1119,55 @@ export const api = {
 
   launchComparisonGroup: (groupId: string) =>
     request<ComparisonGroup>(`/v2/comparison-groups/${groupId}/launch`, { method: 'POST' }),
+
+  // ── Alerting (docs/alerting.md; operator writes, member reads) ──────
+  createAlertChannel: (projectId: string, body: AlertChannelCreate) =>
+    request<AlertChannel>(`/v2/projects/${projectId}/alert-channels`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  listAlertChannels: (projectId: string) =>
+    request<AlertChannel[]>(`/v2/projects/${projectId}/alert-channels`),
+
+  updateAlertChannel: (channelId: string, patch: Partial<AlertChannelCreate>) =>
+    request<AlertChannel>(`/v2/alert-channels/${channelId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+
+  // 409 while rules still reference the channel.
+  deleteAlertChannel: (channelId: string) =>
+    request<void>(`/v2/alert-channels/${channelId}`, { method: 'DELETE' }),
+
+  testAlertChannel: (channelId: string) =>
+    request<{ delivery_status: string }>(`/v2/alert-channels/${channelId}/test`, { method: 'POST' }),
+
+  createAlertRule: (projectId: string, body: AlertRuleCreate) =>
+    request<AlertRule>(`/v2/projects/${projectId}/alert-rules`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  listAlertRules: (projectId: string) =>
+    request<AlertRule[]>(`/v2/projects/${projectId}/alert-rules`),
+
+  updateAlertRule: (ruleId: string, patch: Partial<AlertRuleCreate>) =>
+    request<AlertRule>(`/v2/alert-rules/${ruleId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+
+  deleteAlertRule: (ruleId: string) =>
+    request<void>(`/v2/alert-rules/${ruleId}`, { method: 'DELETE' }),
+
+  // Newest first; limit ≤ 200.
+  listAlertEvents: (projectId: string, params?: { rule_id?: string; limit?: number; offset?: number }) => {
+    const search = new URLSearchParams();
+    if (params?.rule_id) search.set('rule_id', params.rule_id);
+    if (params?.limit) search.set('limit', String(params.limit));
+    if (params?.offset) search.set('offset', String(params.offset));
+    const qs = search.toString();
+    return request<AlertEvent[]>(`/v2/projects/${projectId}/alert-events${qs ? `?${qs}` : ''}`);
+  },
 };

@@ -62,6 +62,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
   const tailItems: NavItem[] = pid ? [
     { path: `/projects/${pid}/runs`, label: 'Runs', icon: '\u25B6' },
     { path: `/projects/${pid}/schedules`, label: 'Schedules', icon: '\u21BB' },
+    { path: `/projects/${pid}/alerts`, label: 'Alerts', icon: '\u26A0' },
   ] : [];
 
   const adminItems: NavItem[] = [];
