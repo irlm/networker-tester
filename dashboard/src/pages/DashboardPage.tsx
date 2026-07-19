@@ -44,7 +44,7 @@ export function DashboardPage() {
     if (!projectId) return;
     Promise.all([
       api.getDashboardSummary(projectId).then(setSummary),
-      api.getAgents(projectId).then(r => setAgents(r.agents)),
+      api.getAgents(projectId).then(r => setAgents(Array.isArray(r) ? r : [])),
       api.listTestRuns(projectId, { limit: 10 }).then(setRecentRuns),
       api.getDeployments(projectId, { limit: 10 }).then(setDeployments),
     ]).then(() => { setError(null); setLoading(false); })

@@ -384,8 +384,13 @@ export const api = {
       jobs_pending: number;
     }>(projectUrl(projectId, 'dashboard/summary')),
 
+  // The C# control plane returns a bare array here; the legacy shape wrapped
+  // it in `{ agents }`. Accept both so contract drift can never blank the
+  // dashboard again (same defensive pattern as getTestRunAttempts below).
   getAgents: (projectId: string) =>
-    request<{ agents: Agent[] }>(projectUrl(projectId, 'agents')),
+    request<{ agents: Agent[] } | Agent[]>(projectUrl(projectId, 'agents')).then((r) =>
+      Array.isArray(r) ? r : (r?.agents ?? [])
+    ),
 
   createAgent: (projectId: string, params: {
     name: string;

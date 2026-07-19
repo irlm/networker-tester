@@ -7,6 +7,7 @@ import { api } from './api/client';
 import { useWebSocket, type ConnectionStatus } from './hooks/useWebSocket';
 import { useHotkey } from './hooks/useHotkey';
 import { Sidebar } from './components/layout/Sidebar';
+import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ToastContainer } from './components/common/Toast';
 import { ApiLogPanel } from './components/ApiLogPanel';
 import { usePerfLogFlush } from './hooks/usePerfLogFlush';
@@ -183,7 +184,9 @@ function AuthenticatedApp() {
   return (
     <div className="flex min-h-screen bg-[var(--bg-base)]">
       <Sidebar connectionDot={<ConnectionDot status={status} />} />
-      <main className="flex-1 overflow-auto pt-12 md:pt-0">
+      {/* pb-16 when the perf pill is visible so its fixed bottom-right pill
+          never sits on top of page CTAs / form footers (audit F11/F15). */}
+      <main className={`flex-1 overflow-auto pt-12 md:pt-0 ${isPlatformAdmin ? 'pb-16' : ''}`}>
         <ConnectionBanner status={status} />
         <ToastContainer />
         {isPlatformAdmin && <ApiLogPanel />}
@@ -192,6 +195,7 @@ function AuthenticatedApp() {
           <LazyCommandPalette />
         </Suspense>
         <Suspense fallback={<RouteFallback />}>
+          <ErrorBoundary resetKey={location.pathname}>
           <Routes>
             {/* Project list */}
             <Route path="/projects" element={<ProjectsPage />} />
@@ -279,6 +283,7 @@ function AuthenticatedApp() {
             {/* Catch-all: redirect unknown routes to project list */}
             <Route path="*" element={<Navigate to="/projects" replace />} />
           </Routes>
+          </ErrorBoundary>
         </Suspense>
       </main>
     </div>
@@ -290,22 +295,24 @@ function App() {
 
   return (
     <BrowserRouter>
-      <Suspense fallback={<RouteFallback />}>
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/sso-complete" element={<SSOCompletePage />} />
-          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-          <Route path="/reset-password" element={<ResetPasswordPage />} />
-          <Route path="/share/:token" element={<ShareViewPage />} />
-          <Route path="/invite/:token" element={<AcceptInvitePage />} />
-          <Route
-            path="/*"
-            element={
-              isAuthenticated ? <AuthenticatedApp /> : <Navigate to="/login" />
-            }
-          />
-        </Routes>
-      </Suspense>
+      <ErrorBoundary>
+        <Suspense fallback={<RouteFallback />}>
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/sso-complete" element={<SSOCompletePage />} />
+            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
+            <Route path="/share/:token" element={<ShareViewPage />} />
+            <Route path="/invite/:token" element={<AcceptInvitePage />} />
+            <Route
+              path="/*"
+              element={
+                isAuthenticated ? <AuthenticatedApp /> : <Navigate to="/login" />
+              }
+            />
+          </Routes>
+        </Suspense>
+      </ErrorBoundary>
     </BrowserRouter>
   );
 }

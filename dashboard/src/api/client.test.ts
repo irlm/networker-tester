@@ -84,6 +84,25 @@ describe('request()', () => {
   });
 });
 
+describe('getAgents response-shape normalization (P0 — black-screen regression)', () => {
+  const agent = { agent_id: 'a1', name: 'runner-1', status: 'online' };
+
+  it('accepts the legacy wrapped shape { agents: [...] }', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ agents: [agent] }));
+    await expect(api.getAgents('p1')).resolves.toEqual([agent]);
+  });
+
+  it('accepts the C# control-plane bare-array shape', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse([agent]));
+    await expect(api.getAgents('p1')).resolves.toEqual([agent]);
+  });
+
+  it('returns [] for empty/odd payloads instead of undefined', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({}));
+    await expect(api.getAgents('p1')).resolves.toEqual([]);
+  });
+});
+
 describe('checkEmail (dead endpoint stub)', () => {
   it('resolves locally without a network round-trip', async () => {
     await expect(api.checkEmail('user@example.com')).resolves.toEqual({ provider: null });

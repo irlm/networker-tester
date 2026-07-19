@@ -25,7 +25,7 @@ export function CreateTlsProfileDialog({ projectId, onClose, onCreated }: Create
 
   useEffect(() => {
     firstInputRef.current?.focus();
-    api.getAgents(projectId).then(r => setTesters(r.agents)).catch(() => {});
+    api.getAgents(projectId).then(setTesters).catch(() => {});
   }, [projectId]);
 
   // Escape closes — matches every other slide-over dialog.
