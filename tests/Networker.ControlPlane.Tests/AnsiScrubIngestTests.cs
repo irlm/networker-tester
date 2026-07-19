@@ -22,7 +22,7 @@ namespace Networker.ControlPlane.Tests;
 public sealed class AnsiScrubIngestTests
 {
     private const string ProjectId = "proj-ansi-test";
-    private const string Esc = "";
+    private const string Esc = "\u001B";
 
     /// <summary>The tester log line the audit captured, as the agent relays it.</summary>
     private static readonly string AnsiLaden =
@@ -61,7 +61,7 @@ public sealed class AnsiScrubIngestTests
         var run = await db.TestRuns.AsNoTracking().FirstAsync(r => r.Id == runId);
         Assert.Equal("failed", run.Status);
         Assert.Equal(CleanExpected, run.ErrorMessage);
-        Assert.DoesNotContain(Esc, run.ErrorMessage);
+        Assert.DoesNotContain(Esc, run.ErrorMessage, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -94,7 +94,7 @@ public sealed class AnsiScrubIngestTests
         var cmd = await db.AgentCommands.AsNoTracking().FirstAsync(c => c.CommandId == commandId);
         Assert.Equal("error", cmd.Status);
         Assert.Equal(CleanExpected, cmd.ErrorMessage);
-        Assert.DoesNotContain(Esc, cmd.ErrorMessage);
+        Assert.DoesNotContain(Esc, cmd.ErrorMessage, StringComparison.Ordinal);
     }
 
     // ── Test host wiring (same Sqlite pattern as RunDispatcherTesterFkTests:
