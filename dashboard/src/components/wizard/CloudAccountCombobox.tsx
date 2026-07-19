@@ -127,8 +127,9 @@ export function CloudAccountCombobox({
   }, [open, filtered, activeIdx, onSelect]);
 
   // ── Display text when collapsed ────────────────────────────────────────
+  // Omit the region segment entirely when unknown — no trailing "/ —" junk.
   const placeholder = selected
-    ? `${selected.name} · ${selected.provider.toUpperCase()} / ${selected.region_default ?? '—'}`
+    ? `${selected.name} · ${selected.provider.toUpperCase()}${selected.region_default ? ` / ${selected.region_default}` : ''}`
     : 'Search accounts… (try "azure" or "prod")';
 
   return (
@@ -146,14 +147,18 @@ export function CloudAccountCombobox({
           onFocus={() => setOpen(true)}
           onChange={e => { setQuery(e.target.value); setActiveIdx(0); setOpen(true); }}
           onKeyDown={onKeyDown}
+          // No warning-amber on an untouched field (audit §8) — the wizard's
+          // Next-button hint carries the "select an account" message instead.
           className={`w-full bg-[var(--bg-base)] border ${
-            open ? 'border-cyan-500/60' : selectedAccountId ? 'border-gray-700' : 'border-yellow-500/40'
+            open ? 'border-cyan-500/60' : 'border-gray-700'
           } px-3 py-1.5 text-xs font-mono text-gray-200 focus:outline-none placeholder:text-gray-500 ${
             selected && !open ? 'pl-7' : ''
           }`}
+          role="combobox"
           aria-autocomplete="list"
           aria-expanded={open}
           aria-controls="cloud-account-listbox"
+          aria-activedescendant={open && filtered.length > 0 ? `cloud-account-opt-${activeIdx}` : undefined}
         />
         <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-gray-500 pointer-events-none">
           {open ? '⌄' : '/'}
@@ -176,9 +181,11 @@ export function CloudAccountCombobox({
               return (
                 <div
                   key={acct.account_id}
+                  id={`cloud-account-opt-${idx}`}
                   data-idx={idx}
                   role="option"
                   aria-selected={isActive}
+                  aria-disabled={isDisabled || undefined}
                   onMouseEnter={() => setActiveIdx(idx)}
                   onMouseDown={e => {
                     e.preventDefault();

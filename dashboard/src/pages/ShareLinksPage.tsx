@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { api } from '../api/client';
+import { api, errorMessage } from '../api/client';
 import type { ShareLink } from '../api/types';
 import { useProject } from '../hooks/useProject';
 import { usePageTitle } from '../hooks/usePageTitle';
@@ -30,7 +30,7 @@ export function ShareLinksPage() {
     if (!projectId) return;
     api.getShareLinks(projectId)
       .then(data => { setLinks(data); setError(null); setLoading(false); })
-      .catch(e => { setError(String(e)); setLoading(false); });
+      .catch(e => { setError(errorMessage(e)); setLoading(false); });
   }, [projectId]);
 
   usePolling(fetchLinks, 15000, !!projectId);
@@ -42,7 +42,7 @@ export function ShareLinksPage() {
       await api.revokeShareLink(projectId, linkId);
       fetchLinks();
     } catch (e) {
-      setError(String(e));
+      setError(errorMessage(e));
     } finally {
       setActionInProgress(null);
     }
@@ -55,7 +55,7 @@ export function ShareLinksPage() {
       await api.extendShareLink(projectId, linkId, 30);
       fetchLinks();
     } catch (e) {
-      setError(String(e));
+      setError(errorMessage(e));
     } finally {
       setActionInProgress(null);
     }
@@ -68,7 +68,7 @@ export function ShareLinksPage() {
       await api.deleteShareLink(projectId, linkId);
       fetchLinks();
     } catch (e) {
-      setError(String(e));
+      setError(errorMessage(e));
     } finally {
       setActionInProgress(null);
     }

@@ -1,10 +1,13 @@
 import { useState, useMemo } from 'react';
-import { useParams } from 'react-router-dom';
-import { api } from '../api/client';
+import { Link, useParams } from 'react-router-dom';
+import { api, errorMessage } from '../api/client';
+import { stripAnsi } from '../lib/ansi';
 import type { TestRun, LiveAttempt, BenchmarkArtifact } from '../api/types';
 import { useProject } from '../hooks/useProject';
 import { Breadcrumb } from '../components/common/Breadcrumb';
 import { StatusBadge } from '../components/common/StatusBadge';
+import { RunResult } from '../components/common/RunResult';
+import { runDisplayStatus } from '../lib/runStatus';
 import { ShareDialog } from '../components/ShareDialog';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { usePolling } from '../hooks/usePolling';
@@ -41,8 +44,13 @@ export function RunDetailPage() {
   const [artifact, setArtifact] = useState<BenchmarkArtifact | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Attempts failing must never dead-end the page when the run itself loaded
+  // (audit F3: /attempts 404'd while the run returned 200) — track separately
+  // and degrade that section instead.
+  const [attemptsError, setAttemptsError] = useState<string | null>(null);
   const [expandedProtocols, setExpandedProtocols] = useState<Set<string>>(new Set());
   const [showShareDialog, setShowShareDialog] = useState(false);
+  const [retryTick, setRetryTick] = useState(0);
 
   const shortId = runId?.slice(0, 8) ?? '';
   usePageTitle(runId ? `Run ${shortId}` : 'Run');
@@ -54,23 +62,25 @@ export function RunDetailPage() {
         .getTestRunAttempts(runId)
         .then((data) => {
           setAttempts(data as unknown as LiveAttempt[]);
-          setError(null);
+          setAttemptsError(null);
           setLoading(false);
         })
-        .catch((e) => { setError(String(e)); setLoading(false); });
+        .catch((e) => { setAttemptsError(errorMessage(e)); setLoading(false); });
       api
         .getTestRun(runId)
         .then((data) => {
           setRun(data);
+          setError(null);
           // Fetch artifact if present and not already loaded
           if (data.artifact_id && !artifact) {
             api.getTestRunArtifact(runId).then(setArtifact).catch(() => {});
           }
         })
-        .catch(() => {});
+        .catch((e) => { setError(errorMessage(e)); setLoading(false); });
     },
     15000,
-    !!runId
+    !!runId,
+    retryTick
   );
 
   // ── Analysis (shared with HTML report logic) ──
@@ -121,7 +131,7 @@ export function RunDetailPage() {
     });
   };
 
-  if (loading && attempts.length === 0) {
+  if (loading && attempts.length === 0 && !run) {
     return (
       <div className="p-4 md:p-6">
         <Breadcrumb items={[{ label: 'Runs', to: `/projects/${projectId}/runs` }, { label: `Run ${shortId}` }]} />
@@ -130,13 +140,29 @@ export function RunDetailPage() {
     );
   }
 
-  if (error && attempts.length === 0) {
+  // Page-fatal only when the run itself failed to load. An attempts-only
+  // failure renders the run with a degraded probe-details section below.
+  if (error && !run) {
     return (
       <div className="p-4 md:p-6">
         <Breadcrumb items={[{ label: 'Runs', to: `/projects/${projectId}/runs` }, { label: `Run ${shortId}` }]} />
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
-          <h3 className="text-red-400 font-bold mb-2">Failed to load run</h3>
-          <p className="text-red-300 text-sm font-mono">{error}</p>
+          <h3 className="text-red-400 font-bold mb-2">Failed to load run {shortId}</h3>
+          <p className="text-red-300 text-sm mb-3">{error}</p>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setRetryTick(t => t + 1)}
+              className="px-3 py-1.5 text-xs bg-cyan-600 hover:bg-cyan-500 text-white rounded transition-colors"
+            >
+              Retry
+            </button>
+            <Link
+              to={`/projects/${projectId}/runs`}
+              className="px-3 py-1.5 text-xs border border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600 rounded transition-colors"
+            >
+              Back to runs
+            </Link>
+          </div>
         </div>
       </div>
     );
@@ -154,9 +180,9 @@ export function RunDetailPage() {
         <div>
           <div className="flex items-center gap-3 mb-1">
             <h2 className="text-xl font-bold text-gray-100">Run {shortId}</h2>
-            {run && <StatusBadge status={run.status} />}
+            {run && <StatusBadge status={runDisplayStatus(run)} />}
             {run?.artifact_id && (
-              <span className="text-[10px] text-purple-400 bg-purple-500/10 px-1.5 py-0.5 rounded">benchmark</span>
+              <span className="text-[10px] text-gray-300 bg-gray-500/10 px-1.5 py-0.5 rounded">benchmark</span>
             )}
           </div>
           <p className="text-sm text-gray-500">
@@ -365,6 +391,18 @@ export function RunDetailPage() {
 
       {/* ── Attempts by Protocol (collapsible) ── */}
       <h3 className="text-xs text-gray-500 tracking-wider mb-3 font-medium">probe details</h3>
+      {attemptsError && attempts.length === 0 && (
+        <div className="border border-gray-800 rounded p-6 text-center mb-2">
+          <p className="text-gray-400 text-sm mb-1">Attempt data unavailable</p>
+          <p className="text-gray-600 text-xs mb-3">{attemptsError}</p>
+          <button
+            onClick={() => setRetryTick(t => t + 1)}
+            className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      )}
       {Object.entries(groupByProtocol(attempts)).map(([protocol, group]) => {
         const isExpanded = expandedProtocols.has(protocol);
         const protoSuccess = group.filter((a) => a.success).length;
@@ -421,11 +459,10 @@ export function RunDetailPage() {
               <span className="text-gray-300">
                 {run.success_count + run.failure_count} attempts completed
               </span>
-              <span className="text-green-400">{run.success_count} ok</span>
-              {run.failure_count > 0 && <span className="text-red-400">{run.failure_count} fail</span>}
+              <RunResult ok={run.success_count} fail={run.failure_count} className="text-xs" />
             </div>
             {run.error_message && (
-              <p className="text-red-400 text-xs mt-2 font-mono">{run.error_message}</p>
+              <p className="text-red-400 text-xs mt-2 font-mono">{stripAnsi(run.error_message)}</p>
             )}
           </div>
         </div>

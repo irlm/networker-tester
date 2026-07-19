@@ -37,6 +37,21 @@ export function formatMsCompact(ms: number | null | undefined): string {
 }
 
 /**
+ * Short display label for an endpoint host. FQDNs shorten to their first
+ * label; IP addresses are returned whole — `host.split('.')[0]` used to
+ * title endpoint rows "136" / "34" (audit F17).
+ */
+export function hostLabel(host: string): string {
+  const trimmed = host.trim();
+  // IPv4 (all-numeric labels) or IPv6 (contains ':') — show the full address.
+  if (trimmed.includes(':') || /^\d{1,3}(\.\d{1,3}){3}$/.test(trimmed)) return trimmed;
+  const first = trimmed.split('.')[0];
+  // Defensive: a leading numeric label (e.g. truncated IP) is meaningless alone.
+  if (/^\d+$/.test(first)) return trimmed;
+  return first || trimmed;
+}
+
+/**
  * Format a duration between two timestamps as a human-readable string.
  * Handles both string (ISO) and Date inputs.
  * Returns "\u2014" if start is null/undefined.

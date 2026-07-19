@@ -46,7 +46,12 @@ export default function SystemHealthPanel() {
       setHealth(data);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load health data");
+      // Never surface raw JSON/HTML bodies here (audit F16) — the client
+      // humanizes ApiError messages; anything else gets a generic line.
+      const msg = e instanceof Error ? e.message : "";
+      setError(msg && !msg.trim().startsWith("{") && !msg.trim().startsWith("<")
+        ? msg
+        : "Health data unavailable — try again shortly.");
     } finally {
       setLoading(false);
     }
@@ -71,7 +76,13 @@ export default function SystemHealthPanel() {
     return (
       <div className="border border-red-800/50 rounded p-4">
         <h3 className="text-sm font-medium text-gray-400 mb-3">System Health</h3>
-        <p className="text-xs text-red-400">{error}</p>
+        <p className="text-xs text-red-400 mb-2">{error}</p>
+        <button
+          onClick={() => { setLoading(true); fetchHealth(); }}
+          className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
+        >
+          Retry
+        </button>
       </div>
     );
   }

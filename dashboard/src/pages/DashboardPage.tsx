@@ -1,8 +1,11 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { api } from '../api/client';
+import { api, errorMessage } from '../api/client';
 import type { Agent, Deployment, TestRun } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
+import { RunResult } from '../components/common/RunResult';
+import { runDisplayStatus } from '../lib/runStatus';
+import { hostLabel } from '../lib/format';
 import { useLiveStore } from '../stores/liveStore';
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
@@ -44,11 +47,11 @@ export function DashboardPage() {
     if (!projectId) return;
     Promise.all([
       api.getDashboardSummary(projectId).then(setSummary),
-      api.getAgents(projectId).then(r => setAgents(r.agents)),
+      api.getAgents(projectId).then(r => setAgents(Array.isArray(r) ? r : [])),
       api.listTestRuns(projectId, { limit: 10 }).then(setRecentRuns),
       api.getDeployments(projectId, { limit: 10 }).then(setDeployments),
     ]).then(() => { setError(null); setLoading(false); })
-     .catch(e => { setError(String(e)); setLoading(false); });
+     .catch(e => { setError(errorMessage(e)); setLoading(false); });
   }, [projectId]);
 
   usePolling(loadData, 15000);
@@ -129,7 +132,7 @@ export function DashboardPage() {
             <div className="text-xs text-gray-500" title="Agents that execute network tests from remote locations">runners online</div>
           </div>
           <div>
-            <div className={`text-xl font-semibold tabular-nums ${activeCount > 0 ? 'text-blue-400' : 'text-gray-600'}`}>
+            <div className={`text-xl font-semibold tabular-nums ${activeCount > 0 ? 'text-cyan-400' : 'text-gray-600'}`}>
               {activeCount}
             </div>
             <div className="text-xs text-gray-600">running</div>
@@ -298,7 +301,7 @@ function InfraSection({ agents, endpoints, projectId }: {
           {endpoints.length > 0 && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               {endpoints.map(ep => {
-                const host = ep.host.split('.')[0];
+                const host = hostLabel(ep.host);
                 return (
                   <div
                     key={ep.host}
@@ -397,8 +400,7 @@ function RecentRunsSection({ runs, projectId }: { runs: TestRun[]; projectId: st
               <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
                 <th className="px-3 py-2 text-left font-medium">ID</th>
                 <th className="px-3 py-2 text-left font-medium">Status</th>
-                <th className="px-3 py-2 text-left font-medium">Success</th>
-                <th className="px-3 py-2 text-left font-medium">Failed</th>
+                <th className="px-3 py-2 text-left font-medium">Result</th>
                 <th className="px-3 py-2 text-left font-medium">Duration</th>
               </tr>
             </thead>
@@ -410,12 +412,9 @@ function RecentRunsSection({ runs, projectId }: { runs: TestRun[]; projectId: st
                       {run.id.slice(0, 8)}
                     </Link>
                   </td>
-                  <td className="px-3 py-2"><StatusBadge status={run.status} /></td>
-                  <td className={`px-3 py-2 tabular-nums text-xs ${run.success_count > 0 ? 'text-green-400' : 'text-gray-600'}`}>
-                    {run.success_count}
-                  </td>
-                  <td className={`px-3 py-2 tabular-nums text-xs ${run.failure_count > 0 ? 'text-red-400 font-semibold' : 'text-gray-600'}`}>
-                    {run.failure_count}
+                  <td className="px-3 py-2"><StatusBadge status={runDisplayStatus(run)} /></td>
+                  <td className="px-3 py-2 text-xs">
+                    <RunResult ok={run.success_count} fail={run.failure_count} />
                   </td>
                   <td className="px-3 py-2 text-gray-500 text-xs font-mono">
                     {run.started_at && run.finished_at

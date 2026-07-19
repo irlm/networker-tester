@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
+import { stripAnsi } from '../lib/ansi';
 import type { Deployment } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { formatDuration } from '../lib/format';
@@ -294,7 +295,7 @@ export function DeployDetailPage() {
       {/* Error message */}
       {deployment?.error_message && (
         <div className="bg-red-500/10 border border-red-500/30 rounded p-3 mb-4">
-          <p className="text-red-400 text-sm">{deployment.error_message}</p>
+          <p className="text-red-400 text-sm">{stripAnsi(deployment.error_message)}</p>
         </div>
       )}
 

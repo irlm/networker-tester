@@ -11,6 +11,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.37] — 2026-07-18
+
+UI design-audit fix wave (`docs/analysis/ui-design-audit.md`, scored 57/100).
+
+### Fixed
+- **P0 — dashboard black screen after login.** `GET /projects/:id/agents`
+  now returns a bare array (C# control-plane contract drift) but the client
+  typed it as `{ agents }`, crashing `DashboardPage` with `undefined.filter`
+  and unmounting the whole app. The client accepts both shapes, and a new
+  top-level React error boundary (terminal-styled fallback + Reload, resets
+  on navigation) guarantees no page can ever black-screen again.
+- **Run detail dead end.** An `/attempts` 404 no longer kills the page when
+  the run itself loaded — the probe-details section degrades to "Attempt
+  data unavailable" with a Retry; the fatal banner gains Retry + Back to runs.
+- **Raw errors in the UI.** API errors map to human copy (no more
+  `ApiError: API error: 404 Not Found`); raw nginx 502 HTML and
+  `{"error":"internal server error"}` bodies are never rendered; ANSI escape
+  codes in stored `error_message` are stripped at display (`lib/ansi.ts`).
+- **Full Stack Review contradicted Methodology.** Wizards seeded methodology
+  state from defaults (5 warmup / 30 measured / 2%) while highlighting the
+  Standard preset (10 / 50 / 5%). Methodology now seeds from the selected
+  preset (`methodologyForPreset`, tested).
+- **Perf-log widget blocked CTAs.** The floating pill/panel dropped below
+  page content (z-30) and the app shell pads the scroll area so wizard
+  Next/Launch and Settings Update are always clickable.
+- **Pass/fail chaos.** One shared `RunResult` (`7/9 · 2 fail`) replaces the
+  four competing formats; zero failures are never painted red; one verdict
+  rule (`runDisplayStatus`): completed-with-failures reads amber "partial"
+  identically on Runs, Run detail, Dashboard, and URL Probe.
+- **Infrastructure honesty.** "5 RUNNERS ACTIVE" (with 1 usable) became
+  "5 Runners · 1 ready" with a colored breakdown; runner rows show one merged
+  state instead of VM-power + agent-state double-speak; `v—` → `v?`.
+- Settings endpoint labels no longer mangle IPs into "136" (`hostLabel`).
+
+### Changed
+- **Brand/color discipline.** New `--brand-purple` / `--accent-cyan` tokens;
+  the wordmark and sidebar name wear brand purple (was hardcoded green);
+  login carets/focus are cyan; status ramp unified (running/deploying →
+  cyan, cancelled/provisioning → grey, new partial → amber); mode chips use
+  one selection accent; kind badges neutral; chart panels use bg/border
+  tokens instead of slate hexes; font stack ordered for cross-platform parity.
+- Copy: lowercase secondary actions / Title Case primary CTAs sweep; nav
+  "URL" → "URL Probe"; "use the hero below" jargon removed; opaque mode ids
+  get display labels (`pageload2` → "pageload h2"); Schedules empty state
+  links to the wizard that actually creates schedules; zero counts render
+  grey; disabled wizard Next explains why.
+
+---
+
 ## [0.28.36] — 2026-07-17
 
 ### Removed

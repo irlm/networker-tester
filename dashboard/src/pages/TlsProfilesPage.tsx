@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, type TlsProfileSummary } from '../api/client';
+import { api, errorMessage, type TlsProfileSummary } from '../api/client';
 import { CreateTlsProfileDialog } from '../components/CreateTlsProfileDialog';
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
@@ -28,7 +28,7 @@ export function TlsProfilesPage() {
         setLoading(false);
       })
       .catch((e) => {
-        setError(String(e));
+        setError(errorMessage(e));
         setLoading(false);
       });
   }, [projectId]);

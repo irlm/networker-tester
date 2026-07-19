@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { api, type TlsProfileDetail } from '../api/client';
+import { api, errorMessage, type TlsProfileDetail } from '../api/client';
 import { Breadcrumb } from '../components/common/Breadcrumb';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { usePolling } from '../hooks/usePolling';
@@ -28,7 +28,7 @@ export function TlsProfileDetailPage() {
           setLoading(false);
         })
         .catch((e) => {
-          setError(String(e));
+          setError(errorMessage(e));
           setLoading(false);
         });
     },

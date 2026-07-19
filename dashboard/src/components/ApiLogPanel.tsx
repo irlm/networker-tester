@@ -89,7 +89,10 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
     return (
       <button
         onClick={() => setOpen(true)}
-        className="fixed bottom-4 right-4 z-50 bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-gray-400 hover:text-cyan-400 hover:border-cyan-500/30 transition-colors flex items-center gap-2"
+        // z-30 (below dialogs/sidebar overlays at z-40/50) + the pb-16 the app
+        // shell adds under <main> keep this pill from ever covering page CTAs
+        // (audit F11/F15: it blocked wizard Next/Launch and Settings Update).
+        className="fixed bottom-4 right-4 z-30 bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-gray-400 hover:text-cyan-400 hover:border-cyan-500/30 transition-colors flex items-center gap-2"
         title="Performance Log"
       >
         <span className="font-mono">{entries.filter(e => e.source === 'user').length}</span>
@@ -125,7 +128,7 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
   }
 
   return (
-    <div className="fixed bottom-0 right-0 z-50 w-full md:w-[640px] lg:w-[760px] max-h-[60vh] bg-[#0d0e14] border-t border-l border-gray-700 rounded-tl-lg flex flex-col">
+    <div className="fixed bottom-0 right-0 z-30 w-full md:w-[640px] lg:w-[760px] max-h-[60vh] bg-[var(--bg-surface)] border-t border-l border-gray-700 rounded-tl-lg flex flex-col">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-gray-800 flex-shrink-0">
         <div className="flex items-center gap-2">
@@ -227,7 +230,7 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
           ) : (
             <table className="w-full">
               <thead>
-                <tr className="text-gray-600 text-left border-b border-gray-800/50 sticky top-0 bg-[#0d0e14]">
+                <tr className="text-gray-600 text-left border-b border-gray-800/50 sticky top-0 bg-[var(--bg-surface)]">
                   <th className="px-2 py-1 font-normal">Time</th>
                   <th className="px-2 py-1 font-normal w-12">Method</th>
                   <th className="px-2 py-1 font-normal">Path</th>
@@ -267,7 +270,7 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
           ) : (
             <table className="w-full">
               <thead>
-                <tr className="text-gray-600 text-left border-b border-gray-800/50 sticky top-0 bg-[#0d0e14]">
+                <tr className="text-gray-600 text-left border-b border-gray-800/50 sticky top-0 bg-[var(--bg-surface)]">
                   <th className="px-2 py-1 font-normal">Time</th>
                   <th className="px-2 py-1 font-normal">Component</th>
                   <th className="px-2 py-1 font-normal">Trigger</th>

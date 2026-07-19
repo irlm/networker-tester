@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { api, ApiError, clearSession } from './client';
+import { api, ApiError, clearSession, errorMessage, friendlyHttpError } from './client';
 import { useApiLogStore } from '../stores/apiLogStore';
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -81,6 +81,59 @@ describe('request()', () => {
     const err = await api.getProjects().catch((e: unknown) => e);
     expect(err).toBeInstanceOf(DOMException);
     expect((err as DOMException).name).toBe('AbortError');
+  });
+});
+
+describe('friendlyHttpError — human copy, never raw bodies (audit F3/F16)', () => {
+  it('maps 404 to human copy without class-name or "API error:" prefixes', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('Not Found', { status: 404, statusText: 'Not Found' }));
+    const err = await api.getTestRun('r1').catch((e: unknown) => e) as ApiError;
+    expect(err.message).not.toContain('API error');
+    expect(err.message).not.toContain('ApiError');
+    expect(err.message).toContain('Not found');
+    // errorMessage() must not re-introduce the class name like String(e) did.
+    expect(errorMessage(err)).toBe(err.message);
+  });
+
+  it('never surfaces raw nginx 502 HTML in the message', async () => {
+    const nginx = '<html>\n<head><title>502 Bad Gateway</title></head>\n<body><center><h1>502 Bad Gateway</h1></center></body>\n</html>\n<!-- a padding to disable MSIE and Chrome friendly error page -->';
+    fetchMock.mockResolvedValueOnce(new Response(nginx, { status: 502, statusText: 'Bad Gateway' }));
+    const err = await api.getTestRun('r1').catch((e: unknown) => e) as ApiError;
+    expect(err.message).not.toContain('<');
+    expect(err.message).toContain('Server unavailable');
+    // Raw body stays available for debugging on .body.
+    expect(err.body).toContain('502 Bad Gateway');
+  });
+
+  it('hides raw JSON internal-server-error bodies (5xx)', () => {
+    expect(friendlyHttpError(500, 'Internal Server Error', '{"error":"internal server error"}'))
+      .toBe('Server error — try again shortly.');
+  });
+
+  it('keeps useful 4xx server detail, capped', () => {
+    expect(friendlyHttpError(409, 'Conflict', '{"error":"config name already exists"}'))
+      .toContain('config name already exists');
+    const long = 'x'.repeat(500);
+    expect(friendlyHttpError(400, 'Bad Request', long).length).toBeLessThan(220);
+  });
+});
+
+describe('getAgents response-shape normalization (P0 — black-screen regression)', () => {
+  const agent = { agent_id: 'a1', name: 'runner-1', status: 'online' };
+
+  it('accepts the legacy wrapped shape { agents: [...] }', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ agents: [agent] }));
+    await expect(api.getAgents('p1')).resolves.toEqual([agent]);
+  });
+
+  it('accepts the C# control-plane bare-array shape', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse([agent]));
+    await expect(api.getAgents('p1')).resolves.toEqual([agent]);
+  });
+
+  it('returns [] for empty/odd payloads instead of undefined', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({}));
+    await expect(api.getAgents('p1')).resolves.toEqual([]);
   });
 });
 

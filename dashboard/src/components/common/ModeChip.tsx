@@ -7,7 +7,7 @@
 // Color mapping + familyOf live in ./mode-family.ts so this file stays
 // component-only (required for react-refresh HMR).
 
-import { familyOf, CHIP_CLASSES } from './mode-family';
+import { familyOf, CHIP_CLASSES, modeLabel } from './mode-family';
 
 export interface ModeChipProps {
   mode: string;
@@ -22,7 +22,7 @@ export function ModeChip({ mode, label }: ModeChipProps) {
       className={`inline-flex items-center px-1.5 py-0.5 text-[9px] font-mono leading-tight border rounded-sm ${cls}`}
       title={mode}
     >
-      {label ?? mode}
+      {label ?? modeLabel(mode)}
     </span>
   );
 }

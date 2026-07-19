@@ -4,16 +4,19 @@ import { api } from '../api/client';
 import { testersApi, type TesterRow } from '../api/testers';
 import type { EndpointRef, TestConfig, TestConfigCreate, TestConfigListItem, TestRun, Workload } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
+import { RunResult } from '../components/common/RunResult';
+import { runDisplayStatus } from '../lib/runStatus';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { usePolling } from '../hooks/usePolling';
 import { useProject } from '../hooks/useProject';
 import { useToast } from '../hooks/useToast';
 import { timeAgo } from '../lib/format';
+import { stripAnsi } from '../lib/ansi';
 
 // ── Types ───────────────────────────────────────────────────────────────
 
 type DiagPreset = 'quick' | 'standard' | 'full';
-type FilterMode = 'all' | 'healthy' | 'failed' | 'pending' | 'stale';
+type FilterMode = 'all' | 'healthy' | 'partial' | 'failed' | 'pending' | 'stale';
 type SortMode = 'last-checked' | 'name' | 'slowest' | 'most-runs';
 
 interface UrlGroup {
@@ -21,7 +24,7 @@ interface UrlGroup {
   runs: TestRun[];
   configIds: Set<string>;
   lastRun: TestRun;
-  lastStatus: 'healthy' | 'failed' | 'stale' | 'pending';
+  lastStatus: 'healthy' | 'partial' | 'failed' | 'stale' | 'pending';
   totalDurationMs: number | null;
 }
 
@@ -234,7 +237,7 @@ function UrlCard({
   const borderClass =
     lastStatus === 'failed'
       ? 'border-l-2 border-l-red-500'
-      : lastStatus === 'stale'
+      : lastStatus === 'partial' || lastStatus === 'stale'
         ? 'border-l-2 border-l-amber-500'
         : lastStatus === 'pending'
           ? 'border-l-2 border-l-cyan-500'
@@ -244,7 +247,7 @@ function UrlCard({
   const urlColor =
     lastStatus === 'failed'
       ? 'text-red-400'
-      : lastStatus === 'stale'
+      : lastStatus === 'partial' || lastStatus === 'stale'
         ? 'text-amber-400'
         : lastStatus === 'pending'
           ? 'text-gray-300'
@@ -254,7 +257,7 @@ function UrlCard({
   const dotColor =
     lastStatus === 'failed'
       ? 'bg-red-500'
-      : lastStatus === 'stale'
+      : lastStatus === 'partial' || lastStatus === 'stale'
         ? 'bg-amber-500'
         : lastStatus === 'pending'
           ? 'bg-cyan-500 animate-pulse'
@@ -293,7 +296,7 @@ function UrlCard({
   return (
     <div
       className={`border border-gray-800 rounded mb-1.5 transition-colors ${borderClass} ${
-        expanded ? 'bg-[#0d1218]' : ''
+        expanded ? 'bg-[var(--bg-surface)]' : ''
       }`}
     >
       {/* Collapsed header */}
@@ -320,8 +323,8 @@ function UrlCard({
           {/* Inline phase timings - show total duration if no phase breakdown */}
           {totalDuration != null && (
             <div className="hidden xl:flex items-center gap-3 text-xs tabular-nums whitespace-nowrap">
-              <span className="text-gray-200 font-medium">
-                <span className="text-gray-500 mr-1 font-normal">total</span>
+              <span className="text-gray-200 font-medium" title="Wall-clock duration of the last full run">
+                <span className="text-gray-500 mr-1 font-normal">run</span>
                 {fmtMs(totalDuration)}
               </span>
             </div>
@@ -369,39 +372,36 @@ function UrlCard({
                   <tbody>
                     {group.runs.map(run => {
                       const dur = getDurationMs(run);
-                      const isFail = run.status === 'failed' || run.failure_count > 0;
+                      const verdict = runDisplayStatus(run);
                       return (
                         <tr
                           key={run.id}
                           className={`border-b border-white/[0.02] last:border-b-0 ${
-                            isFail ? 'text-red-400/80' : ''
+                            verdict === 'failed' ? 'text-red-400/80' : ''
                           }`}
                         >
                           <td className="py-1.5 px-2 text-gray-400 whitespace-nowrap">
                             {fmtTime(run.created_at)}
                           </td>
                           <td className="py-1.5 px-2">
-                            {run.status === 'completed' && run.failure_count === 0 ? (
+                            {verdict === 'completed' ? (
                               <span className="text-emerald-400">{'\u2713'}</span>
-                            ) : run.status === 'failed' || run.failure_count > 0 ? (
+                            ) : verdict === 'partial' ? (
+                              <span className="text-amber-400">{'\u2713'}</span>
+                            ) : verdict === 'failed' ? (
                               <span className="text-red-400">{'\u2717'}</span>
-                            ) : run.status === 'running' || run.status === 'queued' ? (
-                              <span className="text-blue-400 motion-safe:animate-pulse">{'\u25CF'}</span>
+                            ) : verdict === 'running' || verdict === 'queued' ? (
+                              <span className="text-cyan-400 motion-safe:animate-pulse">{'\u25CF'}</span>
                             ) : (
                               <span className="text-gray-600">-</span>
                             )}
                           </td>
                           <td className="py-1.5 px-2">
-                            <StatusBadge status={run.status} />
+                            <StatusBadge status={verdict} />
                           </td>
-                          <td className="py-1.5 px-2 text-right font-mono">
+                          <td className="py-1.5 px-2 text-right">
                             {run.status === 'completed' && (
-                              <span className="flex items-center justify-end gap-2">
-                                <span className="text-emerald-400">{run.success_count} ok</span>
-                                {run.failure_count > 0 && (
-                                  <span className="text-red-400">{run.failure_count} fail</span>
-                                )}
-                              </span>
+                              <RunResult ok={run.success_count} fail={run.failure_count} />
                             )}
                           </td>
                           <td className="py-1.5 px-2 text-right text-gray-200 font-medium">
@@ -417,7 +417,7 @@ function UrlCard({
                   .filter(r => r.error_message)
                   .map(r => (
                     <div key={`err-${r.id}`} className="text-[11px] text-red-400/70 pl-2 mt-1">
-                      {r.error_message}
+                      {stripAnsi(r.error_message!)}
                     </div>
                   ))}
               </div>
@@ -609,8 +609,17 @@ export function DiagnosticsPage() {
       // matching the summary strip's label.
       const timeSinceLastRun = Date.now() - new Date(lastRun.created_at).getTime();
       let lastStatus: UrlGroup['lastStatus'];
-      if (lastRun.status === 'failed' || lastRun.status === 'cancelled' || lastRun.failure_count > 0) {
+      // Verdict rule shared with the Runs pages (runDisplayStatus, audit F9):
+      // completed-with-some-failures reads "partial", not "failed" — the same
+      // run must never be green on /runs and red here.
+      if (
+        lastRun.status === 'failed' ||
+        lastRun.status === 'cancelled' ||
+        (lastRun.failure_count > 0 && lastRun.success_count === 0)
+      ) {
         lastStatus = 'failed';
+      } else if (lastRun.status === 'completed' && lastRun.failure_count > 0) {
+        lastStatus = 'partial';
       } else if (lastRun.status === 'queued' || lastRun.status === 'provisioning' || lastRun.status === 'running') {
         lastStatus = 'pending';
       } else if (timeSinceLastRun > STALE_THRESHOLD_MS) {
@@ -640,10 +649,11 @@ export function DiagnosticsPage() {
   const summary = useMemo(() => {
     const total = urlGroups.length;
     const healthy = urlGroups.filter(g => g.lastStatus === 'healthy').length;
+    const partial = urlGroups.filter(g => g.lastStatus === 'partial').length;
     const failed = urlGroups.filter(g => g.lastStatus === 'failed').length;
     const stale = urlGroups.filter(g => g.lastStatus === 'stale').length;
     const pending = urlGroups.filter(g => g.lastStatus === 'pending').length;
-    return { total, healthy, failed, stale, pending };
+    return { total, healthy, partial, failed, stale, pending };
   }, [urlGroups]);
 
   // ── Filter + Sort + Paginate ──────────────────────────────────────
@@ -652,10 +662,7 @@ export function DiagnosticsPage() {
     let result = urlGroups;
 
     // Filter
-    if (filter === 'healthy') result = result.filter(g => g.lastStatus === 'healthy');
-    if (filter === 'failed') result = result.filter(g => g.lastStatus === 'failed');
-    if (filter === 'pending') result = result.filter(g => g.lastStatus === 'pending');
-    if (filter === 'stale') result = result.filter(g => g.lastStatus === 'stale');
+    if (filter !== 'all') result = result.filter(g => g.lastStatus === filter);
 
     // Sort
     result = [...result].sort((a, b) => {
@@ -810,7 +817,7 @@ export function DiagnosticsPage() {
               onChange={e => setUrl(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && url.trim()) handleRun(); }}
               placeholder="Enter URL to test..."
-              className="flex-1 bg-[var(--bg-input,#0e1319)] border border-gray-800 rounded px-3 py-2 text-[13px] font-mono text-cyan-400 focus:outline-none focus:border-cyan-500/50 placeholder:text-gray-600 transition-colors"
+              className="flex-1 bg-[var(--bg-raised)] border border-gray-800 rounded px-3 py-2 text-[13px] font-mono text-cyan-400 focus:outline-none focus:border-cyan-500/50 placeholder:text-gray-600 transition-colors"
               aria-label="URL or hostname to test"
             />
           </div>
@@ -819,7 +826,7 @@ export function DiagnosticsPage() {
             id="diag-preset"
             value={preset}
             onChange={e => setPreset(e.target.value as DiagPreset)}
-            className="bg-[var(--bg-input,#0e1319)] border border-gray-800 rounded px-3 py-2 text-xs font-mono text-gray-400 focus:outline-none appearance-none pr-7 cursor-pointer"
+            className="bg-[var(--bg-raised)] border border-gray-800 rounded px-3 py-2 text-xs font-mono text-gray-400 focus:outline-none appearance-none pr-7 cursor-pointer"
             style={{
               backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23475569' stroke-width='1.5'/%3E%3C/svg%3E")`,
               backgroundRepeat: 'no-repeat',
@@ -837,7 +844,7 @@ export function DiagnosticsPage() {
             id="diag-runner"
             value={selectedTesterId ?? ''}
             onChange={e => setSelectedTesterId(e.target.value || null)}
-            className="bg-[var(--bg-input,#0e1319)] border border-gray-800 rounded px-3 py-2 text-xs font-mono text-gray-400 focus:outline-none appearance-none pr-7 cursor-pointer max-w-[14rem]"
+            className="bg-[var(--bg-raised)] border border-gray-800 rounded px-3 py-2 text-xs font-mono text-gray-400 focus:outline-none appearance-none pr-7 cursor-pointer max-w-[14rem]"
             style={{
               backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23475569' stroke-width='1.5'/%3E%3C/svg%3E")`,
               backgroundRepeat: 'no-repeat',
@@ -896,16 +903,25 @@ export function DiagnosticsPage() {
       {/* Summary strip */}
       {!loading && urlGroups.length > 0 && (
         <div className="flex items-center gap-4 mb-4 text-xs">
+          {/* Color carries signal — zero counts stay grey (audit: colored zeros). */}
           <span className="text-gray-500">
             <strong className="text-gray-400 font-medium">{summary.total}</strong> {summary.total === 1 ? 'URL' : 'URLs'}
           </span>
           <span className="text-gray-700">&middot;</span>
           <span className="text-gray-500">
-            <strong className="text-emerald-400 font-medium">{summary.healthy}</strong> healthy
+            <strong className={`font-medium ${summary.healthy > 0 ? 'text-emerald-400' : 'text-gray-600'}`}>{summary.healthy}</strong> healthy
           </span>
+          {summary.partial > 0 && (
+            <>
+              <span className="text-gray-700">&middot;</span>
+              <span className="text-gray-500">
+                <strong className="text-amber-400 font-medium">{summary.partial}</strong> partial
+              </span>
+            </>
+          )}
           <span className="text-gray-700">&middot;</span>
           <span className="text-gray-500">
-            <strong className="text-red-400 font-medium">{summary.failed}</strong> failed
+            <strong className={`font-medium ${summary.failed > 0 ? 'text-red-400' : 'text-gray-600'}`}>{summary.failed}</strong> failed
           </span>
           {summary.pending > 0 && (
             <>
@@ -917,7 +933,7 @@ export function DiagnosticsPage() {
           )}
           <span className="text-gray-700">&middot;</span>
           <span className="text-gray-500">
-            <strong className="text-amber-400 font-medium">{summary.stale}</strong> stale (no check in 24h)
+            <strong className={`font-medium ${summary.stale > 0 ? 'text-amber-400' : 'text-gray-600'}`}>{summary.stale}</strong> stale (no check in 24h)
           </span>
         </div>
       )}
@@ -930,7 +946,7 @@ export function DiagnosticsPage() {
         <div className="flex items-center gap-3">
           {/* Filter toggle */}
           <div className="flex border border-gray-800 rounded overflow-hidden">
-            {(['all', 'healthy', 'pending', 'failed', 'stale'] as FilterMode[]).map(f => (
+            {(['all', 'healthy', 'partial', 'pending', 'failed', 'stale'] as FilterMode[]).map(f => (
               <button
                 key={f}
                 onClick={() => setFilter(f)}

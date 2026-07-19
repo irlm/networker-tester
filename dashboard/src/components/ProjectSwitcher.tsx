@@ -93,7 +93,7 @@ export function ProjectSwitcher({ collapsed, connectionDot }: ProjectSwitcherPro
       <div ref={ref} className="relative flex justify-center">
         <button
           onClick={() => setOpen(!open)}
-          className="text-green-400 text-lg font-bold"
+          className="text-[var(--brand-purple)] text-lg font-bold"
           title={displayName}
           aria-haspopup="listbox"
           aria-expanded={open}
@@ -111,7 +111,8 @@ export function ProjectSwitcher({ collapsed, connectionDot }: ProjectSwitcherPro
         onClick={() => setOpen(!open)}
         className="w-full text-left flex items-center gap-2"
       >
-        <h1 className="text-green-400 text-lg font-bold tracking-tight truncate">
+        {/* Brand purple — the sidebar name is the in-app wordmark slot (F1) */}
+        <h1 className="text-[var(--brand-purple)] text-lg font-bold tracking-tight truncate">
           {displayName}
         </h1>
         {connectionDot}

@@ -1,17 +1,22 @@
+// One status ramp per the north star: green=success, red=failure,
+// yellow=needs attention, cyan=in flight, grey=inert. Purple stays reserved
+// for the logo; the previous blue/purple/orange one-offs (running=blue,
+// provisioning=purple, cancelled=orange) were audit finding F12.
 const statusColors: Record<string, string> = {
   online: 'bg-green-500/20 text-green-400 border-green-500/30',
   offline: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
   busy: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
   pending: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
-  provisioning: 'bg-purple-500/20 text-purple-300 border-purple-500/30',
+  provisioning: 'bg-gray-500/20 text-gray-300 border-gray-500/30',
   queued: 'bg-gray-500/20 text-gray-300 border-gray-500/30',
-  deploying: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+  deploying: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30',
   waiting: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
-  assigned: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
-  running: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+  assigned: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30',
+  running: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30',
   completed: 'bg-green-500/20 text-green-400 border-green-500/30',
+  partial: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
   failed: 'bg-red-500/20 text-red-400 border-red-500/30',
-  cancelled: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
+  cancelled: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
 };
 
 interface StatusBadgeProps {
