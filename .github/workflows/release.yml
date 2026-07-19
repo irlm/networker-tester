@@ -8,15 +8,14 @@ name: Release
 # The workflow — DEPLOY-FIRST GRAPH (the deploy never waits for Windows/mac):
 #   1. build-linux (+ sccache) builds the deploy-critical artifacts: tester/
 #      endpoint/agent (musl), alethabench, and the frontend. build-csharp
-#      publishes the control plane. These two gate everything (~6 min).
-#   2. release publishes the GitHub release with the linux + C# assets.
-#   3. deploy ships to the Azure VM immediately (~8-9 min after the tag,
-#      instead of ~20 waiting on windows-msvc — chromiumoxide in the tester is
-#      the immovable floor of that build).
-#   4. build-native (macOS x64/ARM64, Windows x64) runs in parallel and
-#      attaches its archives to the published release when done. Brief window
-#      where releases/latest lacks win/mac assets; installers fall back to
-#      cargo install if hit mid-window.
+#      publishes the control plane. build-native (macOS x64/ARM64, Windows
+#      x64) runs in parallel from t=0.
+#   2. release waits for ALL builds and publishes ONE complete GitHub release.
+#      GitHub releases are immutable once published (asset uploads after
+#      publish fail with HTTP 422), so the old attach-async pattern is gone;
+#      windows-msvc (~11 min, chromiumoxide floor) sets the release latency.
+#   3. deploy ships to the Azure VM as soon as the release exists
+#      (~12-14 min after the tag), pulling assets from the public release URL.
 #
 # NOTE (post-cutover): the Rust dashboard/agent are NO LONGER built, shipped, or
 # deployed — the C# control plane replaced them (docs/phase2-cutover-runbook.md).
@@ -45,10 +44,6 @@ env:
 
 jobs:
   # ── Deploy-critical build: linux (what prod + the bootstrap consume) ───────
-  # The deploy chain gates ONLY on this + build-csharp. Windows/mac binaries are
-  # download artifacts — they attach to the release asynchronously (see
-  # build-native) instead of holding the deploy hostage for ~11 min of
-  # windows-msvc compile (chromiumoxide in the tester is the immovable floor).
   build-linux:
     name: Build x86_64-unknown-linux-musl
     runs-on: ubuntu-latest
@@ -128,10 +123,14 @@ jobs:
           name: dist-x86_64-unknown-linux-musl
           path: dist/
 
-  # ── Async native builds: mac x2 + windows (do NOT gate the deploy) ─────────
+  # ── Native builds: mac x2 + windows (start at t=0, gate the release) ───────
+  # GitHub releases are immutable once published (assets can no longer be
+  # attached afterwards — HTTP 422), so the old async-attach pattern is dead.
+  # These now run in parallel from the tag push and the release is created
+  # once, complete, when every platform is packaged. windows-msvc (~11 min,
+  # chromiumoxide floor) is the release/deploy latency floor.
   build-native:
     name: Build ${{ matrix.target }}
-    needs: release   # attach to the already-published release when done
     runs-on: ${{ matrix.os }}
     env:
       CARGO_INCREMENTAL: "0"
@@ -250,15 +249,14 @@ jobs:
               -DestinationPath "dist\alethabench-$target.zip" `
               -Force
 
-      # Attach this target's archives to the ALREADY-PUBLISHED release. The
-      # deploy went out minutes ago on the linux+C# assets; win/mac downloads
-      # become available here (brief window where releases/latest lacks them —
-      # installers fall back to cargo install if hit mid-window).
-      - name: Upload assets to release
-        shell: bash
-        run: gh release upload "${RELEASE_TAG}" dist/* --clobber
-        env:
-          GH_TOKEN: ${{ github.token }}
+      # Hand the archives to the release job as artifacts — the release is
+      # created once with every platform's assets (immutable releases forbid
+      # attaching anything after publish).
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: dist-${{ matrix.target }}
+          path: dist/
 
   # ── Publish the C# control plane (self-contained linux-x64) ──────────────
   # This is the deployable that serves alethedash.com since the cutover. Built
@@ -313,7 +311,7 @@ jobs:
   # ── Create GitHub release and attach all archives ────────────────────────
   release:
     name: Create GitHub Release
-    needs: [build-linux, build-csharp]
+    needs: [build-linux, build-csharp, build-native]
     runs-on: ubuntu-latest
 
     steps:
