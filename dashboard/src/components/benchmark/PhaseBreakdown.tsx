@@ -95,7 +95,7 @@ function ModeBar({ data, maxTotal, barWidthPx, onTooltip }: ModeBarProps) {
     return (
       <div
         className="relative h-[10px] rounded-sm"
-        style={{ width: `${scaledTotal}px`, backgroundColor: '#444' }}
+        style={{ width: `${scaledTotal}px`, backgroundColor: '#4b5563' /* gray-600 */ }}
         onMouseLeave={handleLeave}
         onMouseMove={(e) =>
           handleSegmentEnter(e, 'Total', data.total_ms)
@@ -141,14 +141,14 @@ interface DeltaInfo {
 
 function DeltaBadge({ delta }: { delta: DeltaInfo }) {
   if (delta.value === null) {
-    return <span style={{ color: '#555' }}>—</span>;
+    return <span style={{ color: '#6b7280' /* gray-500 */ }}>—</span>;
   }
   const v = delta.value;
   let color = '#22c55e'; // green — faster
   if (v > 20) color = '#ef4444';
   else if (v > 0) color = '#f59e0b';
 
-  const displayColor = delta.isDimmed ? '#555' : color;
+  const displayColor = delta.isDimmed ? '#6b7280' /* gray-500 */ : color;
   const prefix = v > 0 ? '+' : '';
   const text = `${prefix}${Math.round(v)}%`;
 
@@ -237,7 +237,7 @@ export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps
 
   if (modes.length === 0) {
     return (
-      <div className="bg-[#0a0f1a] border border-[#1e293b] rounded p-3 text-gray-500 text-xs font-mono">
+      <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded p-3 text-gray-500 text-xs font-mono">
         No phase data available
       </div>
     );
@@ -271,7 +271,7 @@ export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps
   const BAR_WIDTH = 320;
 
   return (
-    <div className="bg-[#0a0f1a] border border-[#1e293b] rounded p-3 space-y-3 relative">
+    <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded p-3 space-y-3 relative">
       {/* ── Stacked bars ── */}
       <div className="space-y-[6px]">
         {displayModes.map((modeData) => (
@@ -315,7 +315,7 @@ export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps
       <div className="overflow-x-auto">
         <table className="w-full text-xs font-mono border-collapse">
           <thead>
-            <tr className="text-gray-500 border-b border-[#1e293b]">
+            <tr className="text-gray-500 border-b border-[var(--border-default)]">
               <th className="text-left py-1 pr-2 font-normal">Mode</th>
               <th className="text-right py-1 px-1 font-normal">DNS</th>
               <th className="text-right py-1 px-1 font-normal">TCP</th>
@@ -334,7 +334,7 @@ export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps
               return (
                 <Fragment key={modeData.mode}>
                   {/* Primary row */}
-                  <tr className="border-b border-[#1e293b] hover:bg-[#0f172a]">
+                  <tr className="border-b border-[var(--border-default)] hover:bg-[var(--bg-raised)]">
                     <td className="py-1 pr-2 text-gray-300">{modeData.mode}</td>
                     <td className="text-right py-1 px-1 text-gray-400">
                       {fmtMsShort(modeData.dns_ms)}
@@ -358,7 +358,7 @@ export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps
 
                   {/* Comparison row */}
                   {other && (
-                    <tr className="border-b border-[#1e293b] hover:bg-[#0f172a]">
+                    <tr className="border-b border-[var(--border-default)] hover:bg-[var(--bg-raised)]">
                       <td className="py-1 pr-2" style={{ color: comparison!.otherColor }}>
                         {comparison!.otherLanguage}
                       </td>
@@ -385,7 +385,7 @@ export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps
 
                   {/* Delta row */}
                   {deltas && (
-                    <tr className="border-b border-[#1e293b] bg-[#080d14]">
+                    <tr className="border-b border-[var(--border-default)] bg-[var(--bg-base)]">
                       <td className="py-0.5 pr-2 text-gray-600 text-[10px]">Δ</td>
                       <td className="text-right py-0.5 px-1">
                         <DeltaBadge delta={deltas['dns_ms']} />
@@ -417,7 +417,7 @@ export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps
       {/* ── Hover Tooltip ── */}
       {tooltip && (
         <div
-          className="fixed z-50 pointer-events-none bg-[#0f172a] border border-[#334155] rounded px-2 py-1 text-xs font-mono text-gray-200"
+          className="fixed z-50 pointer-events-none bg-[var(--bg-raised)] border border-gray-700 rounded px-2 py-1 text-xs font-mono text-gray-200"
           style={{ left: tooltip.x + 12, top: tooltip.y - 28 }}
         >
           {tooltip.label}: {fmtMs(tooltip.value)} ({tooltip.pct.toFixed(0)}% of total)

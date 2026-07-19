@@ -147,7 +147,7 @@ export function SettingsPage() {
           onClick={loadData}
           className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
         >
-          Refresh
+          refresh
         </button>
       </div>
 
@@ -179,10 +179,13 @@ export function SettingsPage() {
                   <span className="text-xs text-gray-600 ml-2">Control plane API + UI</span>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className={`text-xs font-mono ${
-                    versionInfo?.dashboard_version === latestRelease ? 'text-green-400' :
-                    versionInfo?.dashboard_version ? 'text-yellow-400' : 'text-gray-400'
-                  }`}>
+                  <span
+                    className={`text-xs font-mono ${
+                      versionInfo?.dashboard_version === latestRelease ? 'text-green-400' :
+                      versionInfo?.dashboard_version ? 'text-yellow-400' : 'text-gray-400'
+                    }`}
+                    title={dashOutdated ? `Update available (latest: v${latestRelease})` : undefined}
+                  >
                     v{versionInfo?.dashboard_version}
                   </span>
                   {dashOutdated && (
@@ -205,7 +208,7 @@ export function SettingsPage() {
                           : 'border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/10'
                       } disabled:opacity-50`}
                     >
-                      {dashboardUpdating ? 'Updating...' : `Update to v${latestRelease}`}
+                      {dashboardUpdating ? 'updating…' : `update to v${latestRelease}`}
                     </button>
                   )}
                 </div>
@@ -233,10 +236,13 @@ export function SettingsPage() {
                   )}
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className={`text-xs font-mono ${
-                    !ep.reachable ? 'text-gray-600' :
-                    outdated ? 'text-yellow-400' : 'text-green-400'
-                  }`}>
+                  <span
+                    className={`text-xs font-mono ${
+                      !ep.reachable ? 'text-gray-600' :
+                      outdated ? 'text-yellow-400' : 'text-green-400'
+                    }`}
+                    title={outdated ? `Update available (latest: v${latestRelease})` : undefined}
+                  >
                     {ep.reachable ? `v${ep.version}` : 'offline'}
                   </span>
                   {ep.reachable && dep && outdated && (
@@ -245,11 +251,11 @@ export function SettingsPage() {
                       disabled={isUpdating}
                       className={`text-xs px-3 py-1 rounded border transition-colors ${
                         isUpdating
-                          ? 'border-blue-500/30 text-blue-400 motion-safe:animate-pulse'
+                          ? 'border-cyan-500/30 text-cyan-400 motion-safe:animate-pulse'
                           : 'border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/10'
                       } disabled:opacity-50`}
                     >
-                      {isUpdating ? 'Updating...' : 'Update'}
+                      {isUpdating ? 'updating…' : 'update'}
                     </button>
                   )}
                 </div>
@@ -273,10 +279,10 @@ export function SettingsPage() {
 
       {/* Live Update Log */}
       {activeUpdateId && liveLines.length > 0 && (
-        <div className="border border-blue-500/20 rounded-lg mb-6 overflow-hidden">
+        <div className="border border-cyan-500/20 rounded-lg mb-6 overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
-            <h3 className="text-sm text-blue-400 font-medium flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-blue-400 motion-safe:animate-pulse" />
+            <h3 className="text-sm text-cyan-400 font-medium flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-cyan-400 motion-safe:animate-pulse" />
               Update Progress
             </h3>
             {!Object.values(updating).some(v => v) && (
@@ -325,11 +331,11 @@ export function SettingsPage() {
                     disabled={isUpdating}
                     className={`text-xs px-3 py-1 rounded border transition-colors ${
                       isUpdating
-                        ? 'border-blue-500/30 text-blue-400 motion-safe:animate-pulse'
+                        ? 'border-cyan-500/30 text-cyan-400 motion-safe:animate-pulse'
                         : 'border-gray-700 text-gray-400 hover:border-cyan-500 hover:text-cyan-400'
                     } disabled:opacity-50`}
                   >
-                    {isUpdating ? 'Updating...' : 'Update'}
+                    {isUpdating ? 'updating…' : 'update'}
                   </button>
                 </div>
               );
@@ -358,7 +364,7 @@ export function SettingsPage() {
             disabled={inventoryLoading}
             className="text-xs px-3 py-1 rounded border border-gray-700 text-gray-400 hover:border-cyan-500 hover:text-cyan-400 transition-colors disabled:opacity-50"
           >
-            {inventoryLoading ? 'Scanning...' : 'Scan All Providers'}
+            {inventoryLoading ? 'scanning…' : 'scan all providers'}
           </button>
         </div>
 
@@ -372,7 +378,7 @@ export function SettingsPage() {
 
         {inventory.length === 0 && !inventoryLoading ? (
           <p className="text-gray-600 text-sm">
-            Click "Scan All Providers" to discover VMs across Azure, AWS, and GCP.
+            Click "scan all providers" to discover VMs across Azure, AWS, and GCP.
           </p>
         ) : inventoryLoading ? (
           <p className="text-gray-500 text-sm motion-safe:animate-pulse">Scanning cloud providers...</p>
@@ -462,7 +468,7 @@ export function SettingsPage() {
               }}
               className="text-xs px-3 py-1 rounded border border-gray-700 text-gray-400 hover:border-cyan-500 hover:text-cyan-400 transition-colors"
             >
-              + Add Account
+              + add account
             </button>
           </div>
 
@@ -734,7 +740,7 @@ export function SettingsPage() {
                           disabled={isValidating}
                           className="text-xs text-gray-400 hover:text-cyan-400 transition-colors disabled:opacity-50"
                         >
-                          {isValidating ? 'Validating...' : 'Validate'}
+                          {isValidating ? 'validating…' : 'validate'}
                         </button>
                         <button
                           onClick={async () => {
@@ -749,7 +755,7 @@ export function SettingsPage() {
                           }}
                           className="text-xs text-gray-500 hover:text-red-400 transition-colors"
                         >
-                          Remove
+                          remove
                         </button>
                       </div>
                     </div>

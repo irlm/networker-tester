@@ -85,6 +85,18 @@ export function FullStackPage() {
     return true;
   }, [step, testbeds, selectedModes.size, configName]);
 
+  // Say WHY Next is disabled — a silently grey button was audit §8.
+  const nextHint = useMemo(() => {
+    if (canNext || step >= 3) return null;
+    if (step === 0) {
+      if (testbeds.length === 0) return 'add a testbed to continue';
+      if (testbeds.some(tb => tb.cloudAccountId === '')) return 'select a cloud account to continue';
+      if (testbeds.some(tb => tb.proxies.length === 0)) return 'select at least one proxy per testbed';
+    }
+    if (step === 1) return 'select at least one mode';
+    return null;
+  }, [canNext, step, testbeds]);
+
   const goNext = () => {
     if (!canNext || step >= 3) return;
     if (step === 0) {
@@ -303,7 +315,7 @@ export function FullStackPage() {
                   <span className="text-gray-200">{testbed.cloud}</span>
                   <span className="text-gray-500">/</span>
                   <span className="text-gray-300">{testbed.region}</span>
-                  <span className={`text-[10px] px-1 ${testbed.os === 'windows' ? 'text-blue-400' : 'text-green-400'}`}>
+                  <span className="text-[10px] px-1 text-gray-300">
                     {testbed.os === 'windows' ? 'win' : 'linux'}
                   </span>
                   <span className="text-gray-600">{testbed.vmSize}</span>
@@ -332,7 +344,7 @@ export function FullStackPage() {
           </div>
 
           {isMatrixRun && (
-            <div className="text-xs font-mono text-purple-400 mb-4">
+            <div className="text-xs font-mono text-cyan-400 mb-4">
               Comparison group: {totalCells} cell{totalCells !== 1 ? 's' : ''} across {testbeds.length} testbed{testbeds.length !== 1 ? 's' : ''}
             </div>
           )}
@@ -403,13 +415,18 @@ export function FullStackPage() {
           Back
         </button>
         {step < 3 && (
-          <button
-            onClick={goNext}
-            disabled={!canNext}
-            className="px-5 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-800 disabled:text-gray-600 text-white text-xs font-medium transition-colors"
-          >
-            Next
-          </button>
+          <div className="flex items-center gap-3">
+            {nextHint && (
+              <span className="text-[11px] text-gray-500 font-mono">{nextHint}</span>
+            )}
+            <button
+              onClick={goNext}
+              disabled={!canNext}
+              className="px-5 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-800 disabled:text-gray-600 text-white text-xs font-medium transition-colors"
+            >
+              Next
+            </button>
+          </div>
         )}
       </div>
     </div>

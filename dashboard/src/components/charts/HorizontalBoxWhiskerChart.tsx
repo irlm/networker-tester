@@ -163,7 +163,7 @@ export function HorizontalBoxWhiskerChart({
                 y1={PAD_TOP}
                 x2={x}
                 y2={PAD_TOP + rows.length * ROW_H}
-                stroke="#1e293b"
+                stroke="#1a1b25" /* --border-default — SVG attrs can't take var() */
                 strokeWidth={1}
               />
               <text
@@ -246,14 +246,14 @@ export function HorizontalBoxWhiskerChart({
                 y1={cy}
                 x2={p95x}
                 y2={cy}
-                stroke="#444"
+                stroke="#4b5563"
                 strokeWidth={2}
               />
 
               {/* p5 end cap */}
-              <line x1={p5x} y1={cy - 4} x2={p5x} y2={cy + 4} stroke="#444" strokeWidth={1} />
+              <line x1={p5x} y1={cy - 4} x2={p5x} y2={cy + 4} stroke="#4b5563" strokeWidth={1} />
               {/* p95 end cap */}
-              <line x1={p95x} y1={cy - 4} x2={p95x} y2={cy + 4} stroke="#444" strokeWidth={1} />
+              <line x1={p95x} y1={cy - 4} x2={p95x} y2={cy + 4} stroke="#4b5563" strokeWidth={1} />
 
               {/* IQR box: p25 to p75 */}
               <rect

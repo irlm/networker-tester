@@ -49,7 +49,8 @@ export function Sidebar({ connectionDot }: SidebarProps) {
   ] : [];
 
   const probeItems: NavItem[] = pid ? [
-    { path: `/projects/${pid}/probe`, label: 'URL', icon: '\u2713' },
+    // Label matches the page title exactly ("URL Probe") \u2014 audit \u00a76.
+    { path: `/projects/${pid}/probe`, label: 'URL Probe', icon: '\u2713' },
   ] : [];
 
   const benchmarkItems: NavItem[] = pid ? [
@@ -65,7 +66,8 @@ export function Sidebar({ connectionDot }: SidebarProps) {
 
   const adminItems: NavItem[] = [];
   if (isPlatformAdmin) {
-    adminItems.push({ path: '/admin/system', label: 'System', icon: '\u2318' });
+    // \u25a6 instead of \u2318 \u2014 the command glyph is macOS-specific (audit \u00a712).
+    adminItems.push({ path: '/admin/system', label: 'System', icon: '\u25a6' });
     adminItems.push({ path: '/bench-tokens', label: 'Tokens', icon: '\u26BF' });
     adminItems.push({ path: '/admin/perf-log', label: 'Perf Log', icon: '\u23F1' });
   }
@@ -253,14 +255,17 @@ export function Sidebar({ connectionDot }: SidebarProps) {
                 >
                   {email?.[0]?.toUpperCase() ?? '?'}
                 </div>
-                {/* Name + role */}
+                {/* Name + role — skip the role line when it would just repeat
+                    the username ("admin / admin" read like a bug, audit §12) */}
                 <div className="flex-1 min-w-0">
                   <div className="text-xs text-gray-300 truncate" title={email ?? ''}>
                     {email?.split('@')[0] ?? ''}
                   </div>
-                  <div className="text-[10px] text-gray-600">
-                    {isPlatformAdmin ? 'admin' : role ?? 'viewer'}
-                  </div>
+                  {(email?.split('@')[0] ?? '') !== (isPlatformAdmin ? 'admin' : role ?? 'viewer') && (
+                    <div className="text-[10px] text-gray-600">
+                      {isPlatformAdmin ? 'admin' : role ?? 'viewer'}
+                    </div>
+                  )}
                 </div>
                 {/* Actions */}
                 <button

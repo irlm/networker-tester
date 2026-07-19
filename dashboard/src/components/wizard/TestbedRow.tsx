@@ -133,9 +133,9 @@ export function TestbedRow({
               onClick={() => onUpdate(testbed.key, { os })}
               className={`px-2.5 py-1 text-xs font-mono border transition-colors ${
                 testbed.os === os
-                  ? os === 'linux'
-                    ? 'bg-green-500/10 border-green-500/40 text-green-300 z-10'
-                    : 'bg-blue-500/10 border-blue-500/40 text-blue-300 z-10'
+                  // One selection color per form — the green/blue split next to
+                  // cyan proxy chips was audit finding §8.
+                  ? 'bg-cyan-900/40 border-cyan-700 text-cyan-300 z-10'
                   : 'border-gray-700 text-gray-500 hover:text-gray-300'
               } ${os === 'linux' ? '' : '-ml-px'}`}
             >

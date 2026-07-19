@@ -98,7 +98,7 @@ export function TestbedMatrix({
           onClick={() => addTestbed()}
           className="px-3 py-1.5 border border-gray-700 text-xs text-gray-200 hover:border-cyan-500 transition-colors"
         >
-          + Add Testbed
+          + add testbed
         </button>
       </div>
 

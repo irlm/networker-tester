@@ -334,18 +334,26 @@ export function InfrastructurePage() {
           ════════════════════════════════════════════════════════════════ */}
       <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-4 items-center p-4 md:p-5 border border-gray-800 bg-[var(--bg-raised)] mb-5">
         <div className="flex flex-wrap gap-6 md:gap-8">
+          {/* "N runners" with an honest ready-count sub-line — the old
+              "5 RUNNERS ACTIVE" (with 1 idle · 3 stopped · 1 error below it)
+              was a trust-breaking label for an SRE audience (audit F6).
+              KPI numbers stay neutral; purple is logo-only (F12). */}
           <div>
-            <div className="text-2xl font-bold font-mono leading-none text-purple-300">{runnerActiveCt}</div>
-            <div className="text-[10px] uppercase tracking-wider text-gray-500 mt-1.5">Runners active</div>
-            <div className="text-[10px] text-green-400 font-mono mt-0.5">
-              {runnerIdleCt} idle · {runnerBusyCt} busy · {runnerStoppedCt} stopped
+            <div className="text-2xl font-bold font-mono leading-none text-gray-100">{runnerActiveCt}</div>
+            <div className="text-[10px] uppercase tracking-wider text-gray-500 mt-1.5">Runners · {runnerIdleCt} ready</div>
+            <div className="text-[10px] font-mono mt-0.5 text-gray-500">
+              <span className={runnerIdleCt > 0 ? 'text-green-400' : 'text-gray-600'}>{runnerIdleCt} idle</span>
+              {' · '}
+              <span className={runnerBusyCt > 0 ? 'text-yellow-400' : 'text-gray-600'}>{runnerBusyCt} busy</span>
+              {' · '}
+              <span className="text-gray-500">{runnerStoppedCt} stopped</span>
               {runnerErrorCt > 0 && (
                 <span className="text-red-400"> · {runnerErrorCt} error</span>
               )}
             </div>
           </div>
           <div>
-            <div className="text-2xl font-bold font-mono leading-none text-cyan-300">{targetsCt}</div>
+            <div className="text-2xl font-bold font-mono leading-none text-gray-100">{targetsCt}</div>
             <div className="text-[10px] uppercase tracking-wider text-gray-500 mt-1.5">Targets</div>
             {activeDeps.length > 0 && (
               <div className="text-[10px] text-amber-400 font-mono mt-0.5">
@@ -354,7 +362,7 @@ export function InfrastructurePage() {
             )}
           </div>
           <div>
-            <div className="text-2xl font-bold font-mono leading-none text-gray-200">{cloudAccountsCt ?? '—'}</div>
+            <div className="text-2xl font-bold font-mono leading-none text-gray-100">{cloudAccountsCt ?? '—'}</div>
             <div className="text-[10px] uppercase tracking-wider text-gray-500 mt-1.5">Cloud accounts</div>
           </div>
         </div>
@@ -401,7 +409,7 @@ export function InfrastructurePage() {
               onClick={handleRefreshVersion}
               className="px-3 py-1 text-xs rounded border border-gray-700 text-gray-400 hover:border-cyan-500 hover:text-cyan-400 disabled:opacity-50"
             >
-              {refreshingVersion ? 'Refreshing\u2026' : 'Refresh latest version'}
+              {refreshingVersion ? 'refreshing\u2026' : 'refresh latest version'}
             </button>
           ) : null
         }
@@ -612,7 +620,7 @@ export function InfrastructurePage() {
             <Link
               key={d.deployment_id}
               to={`/projects/${projectId}/deploy/${d.deployment_id}`}
-              className="block border border-blue-500/20 bg-blue-500/5 rounded p-3"
+              className="block border border-cyan-500/20 bg-cyan-500/5 rounded p-3"
             >
               <div className="flex items-center justify-between mb-1">
                 <span className="text-cyan-400 text-sm">{d.name}</span>

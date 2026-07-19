@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { stableSet } from '../lib/stableUpdate';
 import { timeAgo } from '../lib/format';
@@ -207,6 +207,8 @@ export function SchedulesPage() {
         </div>
       </div>
 
+      {/* No filter chrome before there is anything to filter (audit §10). */}
+      {(schedules.length > 0 || schedFilterCount > 0) && (
       <FilterBar
         activeCount={schedFilterCount}
         onClearAll={clearAllFilters}
@@ -240,12 +242,21 @@ export function SchedulesPage() {
           ))}
         </select>
       </FilterBar>
+      )}
 
       {/* Mobile card layout */}
       <div className="md:hidden space-y-2 mt-4">
         {filteredSchedules.length === 0 ? (
           <div className="border border-gray-800 rounded p-8 text-center">
             <p className="text-gray-500 text-sm">{schedFilterCount > 0 ? 'No schedules match filters' : 'No scheduled tests yet'}</p>
+            {schedFilterCount === 0 && (
+              <Link
+                to={`/projects/${projectId}/benchmarks/full-stack/new`}
+                className="inline-block mt-3 px-4 py-1.5 text-xs bg-cyan-600 hover:bg-cyan-500 text-white rounded transition-colors"
+              >
+                New Full Stack Benchmark
+              </Link>
+            )}
           </div>
         ) : (
           computedSchedules.map((s) => (
@@ -372,9 +383,19 @@ export function SchedulesPage() {
         {filteredSchedules.length === 0 && (
           <div className="py-10 text-center">
             <p className="text-gray-500 text-sm">{schedFilterCount > 0 ? 'No schedules match the current filters' : 'No scheduled tests yet'}</p>
-            <p className="text-gray-700 text-xs mt-1">
-              Schedules are created as part of the New Run wizard.
-            </p>
+            {schedFilterCount === 0 && (
+              <>
+                <p className="text-gray-600 text-xs mt-1">
+                  Create one from the Full Stack benchmark wizard ("Add schedule" on the Review step).
+                </p>
+                <Link
+                  to={`/projects/${projectId}/benchmarks/full-stack/new`}
+                  className="inline-block mt-3 px-4 py-1.5 text-xs bg-cyan-600 hover:bg-cyan-500 text-white rounded transition-colors"
+                >
+                  New Full Stack Benchmark
+                </Link>
+              </>
+            )}
           </div>
         )}
       </div>

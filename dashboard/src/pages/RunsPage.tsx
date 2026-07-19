@@ -431,7 +431,9 @@ export function RunsPage() {
                     <span className="ml-2 text-[10px] text-gray-300 bg-gray-500/10 px-1.5 py-0.5 rounded">benchmark</span>
                   )}
                 </td>
-                <td className="px-4 py-3 text-gray-300 text-xs truncate max-w-48">
+                {/* Name gets the width — it's the most scannable column; Modes
+                    truncates with a tooltip instead of wrapping to 3 lines. */}
+                <td className="px-4 py-3 text-gray-300 text-xs truncate max-w-72" title={run.config_name || undefined}>
                   {run.config_name || run.test_config_id.slice(0, 8)}
                 </td>
                 <td className="px-4 py-3 hidden lg:table-cell">
@@ -443,7 +445,10 @@ export function RunsPage() {
                 <td className="px-4 py-3 text-xs">
                   <RunResult ok={run.success_count} fail={run.failure_count} />
                 </td>
-                <td className="px-4 py-3 text-gray-500 text-xs hidden lg:table-cell">
+                <td
+                  className="px-4 py-3 text-gray-500 text-xs hidden lg:table-cell truncate max-w-40"
+                  title={run.modes?.join(', ') || undefined}
+                >
                   {run.modes?.join(', ') || '-'}
                 </td>
                 <td className="px-4 py-3 text-gray-500 text-xs" title={run._createdIso}>

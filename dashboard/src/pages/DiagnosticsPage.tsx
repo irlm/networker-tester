@@ -296,7 +296,7 @@ function UrlCard({
   return (
     <div
       className={`border border-gray-800 rounded mb-1.5 transition-colors ${borderClass} ${
-        expanded ? 'bg-[#0d1218]' : ''
+        expanded ? 'bg-[var(--bg-surface)]' : ''
       }`}
     >
       {/* Collapsed header */}
@@ -817,7 +817,7 @@ export function DiagnosticsPage() {
               onChange={e => setUrl(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && url.trim()) handleRun(); }}
               placeholder="Enter URL to test..."
-              className="flex-1 bg-[var(--bg-input,#0e1319)] border border-gray-800 rounded px-3 py-2 text-[13px] font-mono text-cyan-400 focus:outline-none focus:border-cyan-500/50 placeholder:text-gray-600 transition-colors"
+              className="flex-1 bg-[var(--bg-raised)] border border-gray-800 rounded px-3 py-2 text-[13px] font-mono text-cyan-400 focus:outline-none focus:border-cyan-500/50 placeholder:text-gray-600 transition-colors"
               aria-label="URL or hostname to test"
             />
           </div>
@@ -826,7 +826,7 @@ export function DiagnosticsPage() {
             id="diag-preset"
             value={preset}
             onChange={e => setPreset(e.target.value as DiagPreset)}
-            className="bg-[var(--bg-input,#0e1319)] border border-gray-800 rounded px-3 py-2 text-xs font-mono text-gray-400 focus:outline-none appearance-none pr-7 cursor-pointer"
+            className="bg-[var(--bg-raised)] border border-gray-800 rounded px-3 py-2 text-xs font-mono text-gray-400 focus:outline-none appearance-none pr-7 cursor-pointer"
             style={{
               backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23475569' stroke-width='1.5'/%3E%3C/svg%3E")`,
               backgroundRepeat: 'no-repeat',
@@ -844,7 +844,7 @@ export function DiagnosticsPage() {
             id="diag-runner"
             value={selectedTesterId ?? ''}
             onChange={e => setSelectedTesterId(e.target.value || null)}
-            className="bg-[var(--bg-input,#0e1319)] border border-gray-800 rounded px-3 py-2 text-xs font-mono text-gray-400 focus:outline-none appearance-none pr-7 cursor-pointer max-w-[14rem]"
+            className="bg-[var(--bg-raised)] border border-gray-800 rounded px-3 py-2 text-xs font-mono text-gray-400 focus:outline-none appearance-none pr-7 cursor-pointer max-w-[14rem]"
             style={{
               backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23475569' stroke-width='1.5'/%3E%3C/svg%3E")`,
               backgroundRepeat: 'no-repeat',
