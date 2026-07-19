@@ -16,6 +16,7 @@ points here for the detailed material.
 - [`deploy-config.md`](deploy-config.md): full `--deploy` schema and execution flow (the `dashboard` object is legacy)
 - [`setup-guide.md`](setup-guide.md): production deployment guide (infrastructure, SSO, cloud federation, email) — some manual-setup sections still show the legacy Rust service and are marked as such
 - [`cloud-auth.md`](cloud-auth.md): zero-credential Azure-to-AWS/GCP federation for the control plane
+- [`alerting.md`](alerting.md): threshold alert rules + notification channels (webhook/email) — concepts, API, webhook payload + signature contract
 - [`schema-ownership.md`](schema-ownership.md): the control-plane PostgreSQL schema is owned by `src/Networker.Data` (migrations, migrator, compatibility guarantees)
 - [`dotnet-migration.md`](dotnet-migration.md): the Rust↔C# seam — versioned JSON contract, differential-testing architecture
 - [`phase2-cutover-runbook.md`](phase2-cutover-runbook.md): production ops runbook — leader election, health endpoints, soak checklist (§4), rollback (§5), decommission criteria (§7). Cutover is complete; §4/§5/§7 remain operative until the Rust crates are decommissioned

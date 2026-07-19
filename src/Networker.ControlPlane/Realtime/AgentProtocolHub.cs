@@ -58,9 +58,10 @@ public sealed class AgentProtocolHub : Hub
         EventBus bus,
         AgentConnectionRegistry registry,
         ILogger<AgentProtocolHub> logger,
-        ILogger<AgentMessageProcessor> processorLogger)
+        ILogger<AgentMessageProcessor> processorLogger,
+        Alerting.AlertEvaluator? alerts = null)
     {
-        _processor = new AgentMessageProcessor(db, bus, processorLogger);
+        _processor = new AgentMessageProcessor(db, bus, processorLogger, alerts);
         _registry = registry;
         _logger = logger;
     }

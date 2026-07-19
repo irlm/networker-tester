@@ -55,9 +55,9 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
     // ── Migration chain ─────────────────────────────────────────────────
 
     [Fact]
-    public void Fresh_database_applies_the_full_chain_v002_to_v040()
+    public void Fresh_database_applies_the_full_chain_v002_to_v041()
     {
-        Assert.Equal(Enumerable.Range(2, 39), _fx.FreshRun.Applied);
+        Assert.Equal(Enumerable.Range(2, 40), _fx.FreshRun.Applied);
         Assert.Empty(_fx.FreshRun.AlreadyApplied);
     }
 
@@ -70,7 +70,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
 
         Assert.True(second.WasUpToDate);
         Assert.Empty(second.Applied);
-        Assert.Equal(Enumerable.Range(2, 39), second.AlreadyApplied);
+        Assert.Equal(Enumerable.Range(2, 40), second.AlreadyApplied);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
             }
         }
 
-        Assert.Equal(Enumerable.Range(2, 39), recorded);
+        Assert.Equal(Enumerable.Range(2, 40), recorded);
     }
 
     // ── EF-model equivalence ────────────────────────────────────────────
@@ -155,6 +155,9 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
         await db.BenchmarkArtifacts.ToListAsync(); queried++;
         await db.TestSchedules.ToListAsync(); queried++;
         await db.ComparisonGroups.ToListAsync(); queried++;
+        await db.AlertChannels.ToListAsync(); queried++;
+        await db.AlertRules.ToListAsync(); queried++;
+        await db.AlertEvents.ToListAsync(); queried++;
 
         // If someone adds a DbSet without extending this list, fail loudly so
         // the new entity is covered by the equivalence proof too.
@@ -301,6 +304,50 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
 
         Assert.Equal(Networker.ControlPlane.Security.AgentApiKeys.HashHex(key), sqlDigest);
     }
+
+    // ── V041: alerting tables ───────────────────────────────────────────
+
+    [Fact]
+    public async Task V041_created_the_alerting_tables_with_constraints()
+    {
+        await using var conn = new NpgsqlConnection(_fx.ConnectionString);
+        await conn.OpenAsync();
+
+        // All three tables exist.
+        await using (var tables = new NpgsqlCommand(
+            """
+            SELECT table_name FROM information_schema.tables
+            WHERE table_schema = 'public'
+              AND table_name IN ('alert_channel', 'alert_rule', 'alert_event')
+            ORDER BY table_name
+            """, conn))
+        await using (var reader = await tables.ExecuteReaderAsync())
+        {
+            var found = new List<string>();
+            while (await reader.ReadAsync())
+            {
+                found.Add(reader.GetString(0));
+            }
+            Assert.Equal(new[] { "alert_channel", "alert_event", "alert_rule" }, found);
+        }
+
+        // The metric/comparator/window vocabularies are CHECK-enforced on
+        // alert_rule (metric, comparator, window_runs — three CHECKs).
+        await using var checks = new NpgsqlCommand(
+            """
+            SELECT count(*) FROM pg_constraint
+            WHERE conrelid = 'public.alert_rule'::regclass AND contype = 'c'
+            """, conn);
+        Assert.True((long)(await checks.ExecuteScalarAsync())! >= 3);
+
+        // alert_rule.channel_id must NOT cascade (409-on-delete contract).
+        await using var fk = new NpgsqlCommand(
+            """
+            SELECT confdeltype::text FROM pg_constraint
+            WHERE conname = 'alert_rule_channel_id_fkey'
+            """, conn);
+        Assert.Equal("a", (string?)await fk.ExecuteScalarAsync()); // 'a' = NO ACTION
+    }
 }
 
 /// <summary>
@@ -354,6 +401,7 @@ public sealed class MigrationScriptFreezeTests
         ["V038_pending_endpoints.sql"] = "87353405225e0ca4870eaa9a38eb7abac0d28ce1b0664d6841d92fcea974c07c",
         ["V039_tester_cloud_account.sql"] = "cd88b9ab949cd844f100673754cea0507206ad9afee94e6cd45e95016cb45ece",
         ["V040_agent_api_key_hash.sql"] = "6d5de2ba9985f56ef06d8ea93354c28b5b77551af491c4750b705744b69f4a5f",
+        ["V041_alerting.sql"] = "add33d316b5e705668c0a89fc8c64ab28a51291c3bee31bcbda77a327972d36d",
     };
 
     [Fact]
@@ -373,7 +421,7 @@ public sealed class MigrationScriptFreezeTests
             Assert.Contains(version, scripted);
         }
 
-        Assert.Equal(38, scripted.Count);
+        Assert.Equal(39, scripted.Count);
     }
 
     [Fact]

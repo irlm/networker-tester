@@ -73,6 +73,12 @@ public partial class NetworkerDbContext : DbContext
 
     public virtual DbSet<ComparisonGroup> ComparisonGroups { get; set; }
 
+    public virtual DbSet<AlertChannel> AlertChannels { get; set; }
+
+    public virtual DbSet<AlertRule> AlertRules { get; set; }
+
+    public virtual DbSet<AlertEvent> AlertEvents { get; set; }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder
@@ -1409,6 +1415,127 @@ public partial class NetworkerDbContext : DbContext
                 .HasForeignKey(d => d.ComparisonGroupId)
                 .OnDelete(DeleteBehavior.SetNull)
                 .HasConstraintName("test_run_comparison_group_id_fkey");
+        });
+
+        modelBuilder.Entity<AlertChannel>(entity =>
+        {
+            entity.HasKey(e => e.ChannelId).HasName("alert_channel_pkey");
+
+            entity.ToTable("alert_channel");
+
+            entity.HasIndex(e => e.ProjectId, "ix_alert_channel_project");
+
+            entity.Property(e => e.ChannelId)
+                .HasDefaultValueSql("gen_random_uuid()")
+                .HasColumnName("channel_id");
+            entity.Property(e => e.Config)
+                .HasColumnType("jsonb")
+                .HasDefaultValueSql("'{}'::jsonb")
+                .HasColumnName("config");
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("now()")
+                .HasColumnName("created_at");
+            entity.Property(e => e.Enabled)
+                .HasDefaultValue(true)
+                .HasColumnName("enabled");
+            entity.Property(e => e.Kind).HasColumnName("kind");
+            entity.Property(e => e.Name).HasColumnName("name");
+            entity.Property(e => e.ProjectId)
+                .HasMaxLength(14)
+                .IsFixedLength()
+                .HasColumnName("project_id");
+
+            entity.HasOne(d => d.Project).WithMany()
+                .HasForeignKey(d => d.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("alert_channel_project_id_fkey");
+        });
+
+        modelBuilder.Entity<AlertRule>(entity =>
+        {
+            entity.HasKey(e => e.RuleId).HasName("alert_rule_pkey");
+
+            entity.ToTable("alert_rule");
+
+            entity.HasIndex(e => e.ProjectId, "ix_alert_rule_project");
+
+            entity.HasIndex(e => e.TestConfigId, "ix_alert_rule_config")
+                .HasFilter("(test_config_id IS NOT NULL)");
+
+            entity.Property(e => e.RuleId)
+                .HasDefaultValueSql("gen_random_uuid()")
+                .HasColumnName("rule_id");
+            entity.Property(e => e.ChannelId).HasColumnName("channel_id");
+            entity.Property(e => e.Comparator).HasColumnName("comparator");
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("now()")
+                .HasColumnName("created_at");
+            entity.Property(e => e.CreatedBy).HasColumnName("created_by");
+            entity.Property(e => e.Enabled)
+                .HasDefaultValue(true)
+                .HasColumnName("enabled");
+            entity.Property(e => e.Metric).HasColumnName("metric");
+            entity.Property(e => e.ProjectId)
+                .HasMaxLength(14)
+                .IsFixedLength()
+                .HasColumnName("project_id");
+            entity.Property(e => e.TestConfigId).HasColumnName("test_config_id");
+            entity.Property(e => e.Threshold).HasColumnName("threshold");
+            entity.Property(e => e.WindowRuns)
+                .HasDefaultValue(1)
+                .HasColumnName("window_runs");
+
+            entity.HasOne(d => d.Project).WithMany()
+                .HasForeignKey(d => d.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("alert_rule_project_id_fkey");
+
+            entity.HasOne(d => d.TestConfig).WithMany()
+                .HasForeignKey(d => d.TestConfigId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("alert_rule_test_config_id_fkey");
+
+            // Deliberately NOT cascading: the API pre-checks and 409s a channel
+            // delete while rules still reference it.
+            entity.HasOne(d => d.Channel).WithMany(p => p.AlertRules)
+                .HasForeignKey(d => d.ChannelId)
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("alert_rule_channel_id_fkey");
+        });
+
+        modelBuilder.Entity<AlertEvent>(entity =>
+        {
+            entity.HasKey(e => e.EventId).HasName("alert_event_pkey");
+
+            entity.ToTable("alert_event");
+
+            entity.HasIndex(e => new { e.RuleId, e.FiredAt }, "ix_alert_event_rule")
+                .IsDescending(false, true);
+
+            entity.HasIndex(e => e.RunId, "ix_alert_event_run");
+
+            entity.Property(e => e.EventId)
+                .HasDefaultValueSql("gen_random_uuid()")
+                .HasColumnName("event_id");
+            entity.Property(e => e.DeliveryStatus).HasColumnName("delivery_status");
+            entity.Property(e => e.FiredAt)
+                .HasDefaultValueSql("now()")
+                .HasColumnName("fired_at");
+            entity.Property(e => e.Message).HasColumnName("message");
+            entity.Property(e => e.RuleId).HasColumnName("rule_id");
+            entity.Property(e => e.RunId).HasColumnName("run_id");
+            entity.Property(e => e.State).HasColumnName("state");
+            entity.Property(e => e.Value).HasColumnName("value");
+
+            entity.HasOne(d => d.Rule).WithMany(p => p.AlertEvents)
+                .HasForeignKey(d => d.RuleId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("alert_event_rule_id_fkey");
+
+            entity.HasOne(d => d.Run).WithMany()
+                .HasForeignKey(d => d.RunId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("alert_event_run_id_fkey");
         });
 
         modelBuilder.HasSequence("chunk_constraint_name", "_timescaledb_catalog");
