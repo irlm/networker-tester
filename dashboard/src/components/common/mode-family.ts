@@ -33,12 +33,33 @@ export function familyOf(mode: string): ModeFamily {
   return FAMILY_BY_MODE[mode.toLowerCase()] ?? 'other';
 }
 
-// WCAG-AA chip colors on dark base. Background opacity ~.14, text uses
-// Tailwind 300-level shade so every family has visible weight.
+// One accent for selected/active mode chips (north-star color discipline —
+// audit F12: four category hues collided with the green/red/yellow status
+// ramp and put green+cyan chips side by side in one configured form).
+// Family grouping still carries the taxonomy; color stays a selection signal.
 export const CHIP_CLASSES: Record<ModeFamily, string> = {
-  net:   'bg-green-400/[.14]  text-green-300  border-green-400/50',
-  http:  'bg-cyan-400/[.14]   text-cyan-300   border-cyan-400/50',
-  thru:  'bg-violet-400/[.16] text-violet-300 border-violet-400/55',
-  page:  'bg-amber-400/[.14]  text-amber-300  border-amber-400/50',
-  other: 'bg-gray-700/30      text-gray-400   border-gray-700',
+  net:   'bg-cyan-400/[.14] text-cyan-300 border-cyan-400/50',
+  http:  'bg-cyan-400/[.14] text-cyan-300 border-cyan-400/50',
+  thru:  'bg-cyan-400/[.14] text-cyan-300 border-cyan-400/50',
+  page:  'bg-cyan-400/[.14] text-cyan-300 border-cyan-400/50',
+  other: 'bg-gray-700/30    text-gray-400 border-gray-700',
 };
+
+// Display labels for opaque mode ids (audit P2: `pageload2` chips vs the Full
+// Stack wizard's "Page Load H2" checkboxes — one vocabulary, wizard's wins).
+// Ids sent to the backend are unchanged; this is display-only.
+export const MODE_LABELS: Record<string, string> = {
+  tlsresume: 'tls resume',
+  native: 'native tls',
+  pageload: 'pageload native',
+  pageload1: 'pageload native',
+  pageload2: 'pageload h2',
+  pageload3: 'pageload h3',
+  browser1: 'browser h1',
+  browser2: 'browser h2',
+  browser3: 'browser h3',
+};
+
+export function modeLabel(mode: string): string {
+  return MODE_LABELS[mode.toLowerCase()] ?? mode;
+}

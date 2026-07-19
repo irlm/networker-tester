@@ -7,7 +7,8 @@ import { Breadcrumb } from '../components/common/Breadcrumb';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
 import { useToast } from '../hooks/useToast';
-import { familyOf } from '../components/common/mode-family';
+import { familyOf, modeLabel } from '../components/common/mode-family';
+import { RunResult } from '../components/common/RunResult';
 
 // ── Mode families (source of truth is ModeChip.tsx) ────────────────────
 
@@ -22,34 +23,38 @@ interface ModeFamilyDef {
 // Mode ids must match the backend Mode enum in
 // crates/networker-common/src/test_config.rs (lowercase serde) — anything
 // else is rejected with a 422 when the config is created.
+// One selection accent across all families (audit F12 — the four category
+// hues collided with the status ramp; grouping carries the taxonomy now).
+const CHIP_ACTIVE_CLASS = 'bg-cyan-400/[.14] text-cyan-300 border-cyan-400/50';
+
 const MODE_FAMILIES: ModeFamilyDef[] = [
   {
     id: 'net',
     label: 'NETWORK',
     modes: ['tcp', 'dns', 'tls', 'tlsresume', 'native', 'udp'],
-    activeClass: 'bg-green-400/[.14] text-green-300 border-green-400/50',
-    labelClass: 'text-green-300',
+    activeClass: CHIP_ACTIVE_CLASS,
+    labelClass: 'text-gray-500',
   },
   {
     id: 'http',
     label: 'HTTP',
     modes: ['http1', 'http2', 'http3', 'curl'],
-    activeClass: 'bg-cyan-400/[.14] text-cyan-300 border-cyan-400/50',
-    labelClass: 'text-cyan-300',
+    activeClass: CHIP_ACTIVE_CLASS,
+    labelClass: 'text-gray-500',
   },
   {
     id: 'thru',
     label: 'THROUGHPUT',
     modes: ['download', 'upload'],
-    activeClass: 'bg-violet-400/[.16] text-violet-300 border-violet-400/55',
-    labelClass: 'text-violet-300',
+    activeClass: CHIP_ACTIVE_CLASS,
+    labelClass: 'text-gray-500',
   },
   {
     id: 'page',
     label: 'PAGE-LOAD',
     modes: ['pageload', 'pageload2', 'pageload3'],
-    activeClass: 'bg-amber-400/[.14] text-amber-300 border-amber-400/50',
-    labelClass: 'text-amber-300',
+    activeClass: CHIP_ACTIVE_CLASS,
+    labelClass: 'text-gray-500',
   },
 ];
 
@@ -361,7 +366,7 @@ export function NetworkTestPage() {
       <div className="mb-4">
         <h2 className="text-lg md:text-xl font-bold text-gray-100">New Network Test</h2>
         <p className="text-xs text-gray-500 mt-1">
-          Run network primitives against a deployed target. Most runs repeat — use the hero below for the fastest path.
+          Run network primitives against a deployed target. Most runs repeat — rerun a recent run below, or build a new one.
         </p>
       </div>
 
@@ -383,7 +388,7 @@ export function NetworkTestPage() {
                   key={m}
                   className={`inline-flex items-center px-1.5 py-0.5 text-[10px] font-mono leading-tight border rounded-sm ${classForMode(m, true)}`}
                 >
-                  {m}
+                  {modeLabel(m)}
                 </span>
               ))}
               {lastRun.modes.length > 8 && (
@@ -391,7 +396,7 @@ export function NetworkTestPage() {
               )}
               <span className="ml-2">· {relTime(lastRun.finished_at ?? lastRun.started_at ?? lastRun.created_at)}</span>
               {lastRun.status === 'completed' && (
-                <span className="ml-2 text-green-400">· {lastRun.success_count}/{lastRun.success_count + lastRun.failure_count} ✓</span>
+                <span className="ml-2">· <RunResult ok={lastRun.success_count} fail={lastRun.failure_count} /></span>
               )}
               <span className="ml-2">
                 · <button onClick={() => navigate(`/projects/${projectId}/runs/${lastRun.id}`)} className="text-cyan-400 hover:underline">view last run</button>
@@ -448,7 +453,6 @@ export function NetworkTestPage() {
           <div className="border-t border-gray-800/50">
             {filteredRecent.slice(0, 5).map((run, i) => {
               const modes = run.modes ?? [];
-              const ok = run.status === 'completed' && run.failure_count === 0;
               return (
                 <div
                   key={run.id}
@@ -468,16 +472,12 @@ export function NetworkTestPage() {
                         key={m}
                         className={`inline-flex items-center px-1.5 py-0.5 text-[9px] font-mono leading-tight border rounded-sm ${classForMode(m, true)}`}
                       >
-                        {m}
+                        {modeLabel(m)}
                       </span>
                     ))}
                     {modes.length > 6 && <span className="text-[9px] text-gray-600">+{modes.length - 6}</span>}
                   </div>
-                  <span className={`text-[11px] font-mono ${ok ? 'text-green-400' : 'text-red-400'}`}>
-                    {ok
-                      ? `${run.success_count}/${run.success_count} ✓`
-                      : `${run.success_count}/${run.success_count + run.failure_count} · ${run.failure_count} fail`}
-                  </span>
+                  <RunResult ok={run.success_count} fail={run.failure_count} className="text-[11px]" />
                   <div className="text-right text-[11px]">
                     <button onClick={() => rerunConfig(run.test_config_id)} disabled={submitting} className="text-cyan-400 hover:underline disabled:opacity-50" title={`rerun (key ${i + 1})`}>↻ rerun</button>
                     <button onClick={() => tweakFromRun(run)} className="text-gray-500 hover:text-cyan-300 ml-2" title="load into form">✎</button>
@@ -538,9 +538,9 @@ export function NetworkTestPage() {
           {/* Payload sizes — only shown when any throughput mode is active, since
               other modes ignore payload. Keeps the form compact by default. */}
           {[...selectedModes].some(m => THROUGHPUT_MODES.has(m)) && (
-            <div className="mb-2 px-2 py-1.5 border border-violet-400/30 bg-violet-500/5 rounded-sm">
+            <div className="mb-2 px-2 py-1.5 border border-cyan-400/30 bg-cyan-500/5 rounded-sm">
               <div className="flex items-center justify-between mb-1">
-                <span className="text-[10px] uppercase tracking-wider font-mono text-violet-300">
+                <span className="text-[10px] uppercase tracking-wider font-mono text-gray-400">
                   PAYLOAD SIZES <span className="text-gray-500 normal-case tracking-normal">· download/upload run once per selected size</span>
                 </span>
                 <span className="text-[10px] font-mono text-gray-500">
@@ -560,7 +560,7 @@ export function NetworkTestPage() {
                       })}
                       className={`px-2 py-0.5 text-[11px] font-mono border transition-colors rounded-sm ${
                         active
-                          ? 'bg-violet-400/[.16] text-violet-200 border-violet-400/55'
+                          ? CHIP_ACTIVE_CLASS
                           : 'border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600'
                       }`}
                     >
@@ -595,7 +595,7 @@ export function NetworkTestPage() {
                         onClick={() => toggleMode(m)}
                         className={`px-2 py-0.5 text-[11px] font-mono border transition-colors rounded-sm ${classForMode(m, active)}`}
                       >
-                        {m}
+                        {modeLabel(m)}
                       </button>
                     );
                   })}
@@ -655,9 +655,9 @@ export function NetworkTestPage() {
                       <div>
                         <div className="font-mono text-gray-200">{dep.name}</div>
                         <div className="text-[10px] text-gray-500">
-                          {dep.config?.endpoints?.[0]?.provider ?? '?'}
+                          {dep.config?.endpoints?.[0]?.provider ?? 'cloud unknown'}
                           {' · '}
-                          {dep.config?.endpoints?.[0]?.region ?? '?'}
+                          {dep.config?.endpoints?.[0]?.region ?? 'region unknown'}
                           {dep.config?.endpoints?.[0]?.http_stacks && dep.config.endpoints[0].http_stacks.length > 0 && ` · ${dep.config.endpoints[0].http_stacks.join(', ')}`}
                         </div>
                       </div>
@@ -768,8 +768,9 @@ export function NetworkTestPage() {
         </div>
       </div>
 
-      {/* Shortcuts hint — fixed bottom-right */}
-      <div className="fixed bottom-4 right-6 text-[10px] text-gray-600 font-mono pointer-events-none select-none">
+      {/* Shortcuts hint — static footer so it can't collide with the fixed
+          perf pill in the same corner (audit F11). */}
+      <div className="mt-4 text-right text-[10px] text-gray-600 font-mono select-none">
         <span className="px-1 bg-gray-900 border border-gray-800 rounded">R</span> rerun last ·{' '}
         <span className="px-1 bg-gray-900 border border-gray-800 rounded">1</span>-<span className="px-1 bg-gray-900 border border-gray-800 rounded">5</span> recent ·{' '}
         <span className="px-1 bg-gray-900 border border-gray-800 rounded">/</span> search ·{' '}

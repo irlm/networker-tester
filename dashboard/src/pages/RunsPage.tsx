@@ -3,6 +3,8 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { api, errorMessage } from '../api/client';
 import type { TestRun, RunStatus, EndpointKind, TestConfig, TestConfigListItem } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
+import { RunResult } from '../components/common/RunResult';
+import { runDisplayStatus } from '../lib/runStatus';
 import { FilterBar, FilterChip } from '../components/common/FilterBar';
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
@@ -16,10 +18,12 @@ const ARTIFACT_OPTIONS = ['all', 'yes', 'no'] as const;
 
 const PAGE_SIZE = 20;
 
+// Kind is a category, not a status — one neutral treatment so green/purple
+// stay reserved for success/logo (audit F12: category hues fought the ramp).
 const KIND_BADGE_CLASSES: Record<string, string> = {
   network: 'text-cyan-400 bg-cyan-500/10',
-  proxy: 'text-purple-400 bg-purple-500/10',
-  runtime: 'text-green-400 bg-green-500/10',
+  proxy: 'text-gray-300 bg-gray-500/10',
+  runtime: 'text-gray-300 bg-gray-500/10',
 };
 
 function KindBadge({ kind }: { kind: string | null | undefined }) {
@@ -289,11 +293,11 @@ export function RunsPage() {
               className={`px-3 py-2 text-xs font-medium border-b-2 transition-colors ${
                 active
                   ? 'border-cyan-500 text-gray-100'
-                  : 'border-transparent text-gray-500 hover:text-gray-300'
+                  : `border-transparent hover:text-gray-300 ${count === 0 ? 'text-gray-700' : 'text-gray-500'}`
               }`}
             >
               {tab.label}
-              <span className={`ml-1.5 tabular-nums ${active ? 'text-cyan-400' : 'text-gray-600'}`}>
+              <span className={`ml-1.5 tabular-nums ${active ? 'text-cyan-400' : count === 0 ? 'text-gray-700' : 'text-gray-600'}`}>
                 {count}
               </span>
             </button>
@@ -381,16 +385,15 @@ export function RunsPage() {
           >
             <div className="flex items-center justify-between mb-1">
               <span className="text-cyan-400 font-mono text-xs">{run.id.slice(0, 8)}</span>
-              <StatusBadge status={run.status} />
+              <StatusBadge status={runDisplayStatus(run)} />
             </div>
             <p className="text-gray-300 text-xs truncate mb-1">
               {run.config_name || run.test_config_id.slice(0, 8)}
             </p>
             <div className="flex items-center gap-3 text-xs text-gray-500">
               {run.endpoint_kind && <KindBadge kind={run.endpoint_kind} />}
-              {run.artifact_id && <span className="text-purple-400">benchmark</span>}
-              <span className="text-green-400">{run.success_count} ok</span>
-              {run.failure_count > 0 && <span className="text-red-400">{run.failure_count} fail</span>}
+              {run.artifact_id && <span className="text-gray-400">benchmark</span>}
+              <RunResult ok={run.success_count} fail={run.failure_count} />
               <span title={run._createdIso}>{run._createdAgo}</span>
             </div>
           </Link>
@@ -425,7 +428,7 @@ export function RunsPage() {
                     {run.id.slice(0, 8)}
                   </Link>
                   {run.artifact_id && (
-                    <span className="ml-2 text-[10px] text-purple-400 bg-purple-500/10 px-1.5 py-0.5 rounded">benchmark</span>
+                    <span className="ml-2 text-[10px] text-gray-300 bg-gray-500/10 px-1.5 py-0.5 rounded">benchmark</span>
                   )}
                 </td>
                 <td className="px-4 py-3 text-gray-300 text-xs truncate max-w-48">
@@ -435,14 +438,10 @@ export function RunsPage() {
                   <KindBadge kind={run.endpoint_kind} />
                 </td>
                 <td className="px-4 py-3">
-                  <StatusBadge status={run.status} />
+                  <StatusBadge status={runDisplayStatus(run)} />
                 </td>
-                <td className="px-4 py-3">
-                  <span className="text-green-400">{run.success_count}</span>
-                  {' / '}
-                  <span className={run.failure_count > 0 ? 'text-red-400' : 'text-gray-600'}>
-                    {run.failure_count}
-                  </span>
+                <td className="px-4 py-3 text-xs">
+                  <RunResult ok={run.success_count} fail={run.failure_count} />
                 </td>
                 <td className="px-4 py-3 text-gray-500 text-xs hidden lg:table-cell">
                   {run.modes?.join(', ') || '-'}

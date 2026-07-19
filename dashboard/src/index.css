@@ -7,13 +7,22 @@
   --bg-sidebar: #0f1015;  /* sidebar background */
   --bg-raised: #12131a;   /* form inputs in panels, subtle elevation */
   --border-default: #1a1b25; /* table borders, section dividers */
+
+  /* Brand (see .impeccable.md): purple is the logo/wordmark ONLY; cyan is
+     the single interactive accent. Status ramp: green=success, red=failure,
+     amber=attention/partial, cyan=in-flight, grey=inert. Never re-purpose
+     purple for statuses/KPIs (audit F12). */
+  --brand-purple: #863bff;
+  --accent-cyan: #47bfff;
 }
 
 body {
   margin: 0;
   background: var(--bg-base);
   color: #e5e7eb;
-  font-family: ui-monospace, 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+  /* Named faces first so macOS and Windows resolve the same family instead of
+     ui-monospace diverging to SF Mono vs Cascadia (audit typography note). */
+  font-family: 'Cascadia Code', 'JetBrains Mono', ui-monospace, Consolas, monospace;
   scrollbar-color: #2a2b35 transparent;
   scrollbar-width: thin;
 }
@@ -40,6 +49,7 @@ body {
   border: 1px solid var(--border-default);
   border-radius: 6px;
   overflow: hidden;
+  overflow-x: auto; /* narrow viewports scroll the table, not the page */
 }
 
 .table-container table {

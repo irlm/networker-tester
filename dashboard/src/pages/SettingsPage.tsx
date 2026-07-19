@@ -7,7 +7,7 @@ import { useLiveStore } from '../stores/liveStore';
 import { useProject } from '../hooks/useProject';
 import { SettingsTabs } from '../components/common/SettingsTabs';
 import SystemHealthPanel from '../components/SystemHealthPanel';
-import { timeAgo } from '../lib/format';
+import { hostLabel, timeAgo } from '../lib/format';
 
 interface VersionInfo {
   dashboard_version: string;
@@ -227,8 +227,10 @@ export function SettingsPage() {
             return (
               <div key={host} className="flex items-center justify-between py-2.5 border-t border-gray-800/30">
                 <div>
-                  <span className="text-sm text-gray-200">{host.split('.')[0]}</span>
-                  <span className="text-xs text-gray-600 ml-2 truncate" title={host}>{host}</span>
+                  <span className="text-sm text-gray-200">{hostLabel(host)}</span>
+                  {hostLabel(host) !== host && (
+                    <span className="text-xs text-gray-600 ml-2 truncate" title={host}>{host}</span>
+                  )}
                 </div>
                 <div className="flex items-center gap-3">
                   <span className={`text-xs font-mono ${

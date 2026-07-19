@@ -242,6 +242,23 @@ export const DEFAULT_METHODOLOGY = {
   publication_gates: { max_failure_pct: 5.0, require_all_phases: true },
 };
 
+/**
+ * Methodology state seeded from a preset. Wizards that default the preset
+ * selector to e.g. 'standard' MUST seed their methodology state from this —
+ * seeding from DEFAULT_METHODOLOGY (5/30/2%) while highlighting Standard
+ * (10/50/5%) made the Review step contradict the Methodology step (audit F14).
+ */
+export function methodologyForPreset(presetId: string): typeof DEFAULT_METHODOLOGY {
+  const p = METHODOLOGY_PRESETS.find(m => m.id === presetId);
+  if (!p) return { ...DEFAULT_METHODOLOGY };
+  return {
+    ...DEFAULT_METHODOLOGY,
+    warmup_runs: p.warmup,
+    measured_runs: p.measured,
+    target_error_pct: p.targetError ?? 0,
+  };
+}
+
 // ── Runtime templates ──────────────────────────────────────────────────
 
 export interface RuntimeTemplate {

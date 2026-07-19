@@ -6,6 +6,8 @@ import type { TestRun, LiveAttempt, BenchmarkArtifact } from '../api/types';
 import { useProject } from '../hooks/useProject';
 import { Breadcrumb } from '../components/common/Breadcrumb';
 import { StatusBadge } from '../components/common/StatusBadge';
+import { RunResult } from '../components/common/RunResult';
+import { runDisplayStatus } from '../lib/runStatus';
 import { ShareDialog } from '../components/ShareDialog';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { usePolling } from '../hooks/usePolling';
@@ -178,9 +180,9 @@ export function RunDetailPage() {
         <div>
           <div className="flex items-center gap-3 mb-1">
             <h2 className="text-xl font-bold text-gray-100">Run {shortId}</h2>
-            {run && <StatusBadge status={run.status} />}
+            {run && <StatusBadge status={runDisplayStatus(run)} />}
             {run?.artifact_id && (
-              <span className="text-[10px] text-purple-400 bg-purple-500/10 px-1.5 py-0.5 rounded">benchmark</span>
+              <span className="text-[10px] text-gray-300 bg-gray-500/10 px-1.5 py-0.5 rounded">benchmark</span>
             )}
           </div>
           <p className="text-sm text-gray-500">
@@ -457,8 +459,7 @@ export function RunDetailPage() {
               <span className="text-gray-300">
                 {run.success_count + run.failure_count} attempts completed
               </span>
-              <span className="text-green-400">{run.success_count} ok</span>
-              {run.failure_count > 0 && <span className="text-red-400">{run.failure_count} fail</span>}
+              <RunResult ok={run.success_count} fail={run.failure_count} className="text-xs" />
             </div>
             {run.error_message && (
               <p className="text-red-400 text-xs mt-2 font-mono">{stripAnsi(run.error_message)}</p>

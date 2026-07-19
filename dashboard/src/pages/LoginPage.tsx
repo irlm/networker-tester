@@ -154,9 +154,9 @@ export function LoginPage() {
     )}
     <div className="min-h-screen bg-[var(--bg-base)] flex flex-col items-center pt-[15vh] p-4">
       <div className="w-full max-w-xs">
-        {/* Brand */}
+        {/* Brand — wordmark wears the brand purple; green is status-only (F1) */}
         <div className="text-center mb-8">
-          <h1 className="text-[#4ade80] text-2xl font-bold tracking-tight mb-1">
+          <h1 className="text-[var(--brand-purple)] text-2xl font-bold tracking-tight mb-1">
             Networker
           </h1>
           <p className="text-gray-600 text-xs uppercase tracking-widest">
@@ -202,8 +202,8 @@ export function LoginPage() {
               <label htmlFor="login-email" className="block text-xs text-gray-600 mb-1.5 uppercase tracking-wider">
                 Email
               </label>
-              <div className="flex items-center border-b border-gray-700 focus-within:border-green-500/50 transition-colors">
-                <span className="text-green-600/60 text-sm mr-2 select-none">&gt;</span>
+              <div className="flex items-center border-b border-gray-700 focus-within:border-cyan-500/50 transition-colors">
+                <span className="text-cyan-600/60 text-sm mr-2 select-none">&gt;</span>
                 <input
                   id="login-email"
                   type="email"

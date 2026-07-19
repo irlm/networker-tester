@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { timeAgo, formatDuration, formatMsCompact } from './format';
+import { timeAgo, formatDuration, formatMsCompact, hostLabel } from './format';
 
 const NOW = new Date('2026-07-17T12:00:00Z');
 
@@ -78,5 +78,23 @@ describe('formatMsCompact', () => {
   it('renders one decimal place otherwise', () => {
     expect(formatMsCompact(12.34)).toBe('12.3ms');
     expect(formatMsCompact(250)).toBe('250.0ms');
+  });
+});
+
+describe('hostLabel (audit F17 — never mangle IPs into "136")', () => {
+  it('shortens FQDNs to the first label', () => {
+    expect(hostLabel('endpoint-1.eastus.cloudapp.azure.com')).toBe('endpoint-1');
+  });
+
+  it('returns IPv4 addresses whole', () => {
+    expect(hostLabel('136.34.12.9')).toBe('136.34.12.9');
+  });
+
+  it('returns IPv6 addresses whole', () => {
+    expect(hostLabel('2001:db8::1')).toBe('2001:db8::1');
+  });
+
+  it('keeps bare hostnames as-is', () => {
+    expect(hostLabel('proxybox')).toBe('proxybox');
   });
 });

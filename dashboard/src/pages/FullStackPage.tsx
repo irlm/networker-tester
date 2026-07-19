@@ -12,7 +12,7 @@ import { useProject } from '../hooks/useProject';
 import { useToast } from '../hooks/useToast';
 import type { TestbedState } from '../components/wizard/testbed-constants';
 import {
-  DEFAULT_METHODOLOGY,
+  methodologyForPreset,
   PROXY_LABELS,
   TESTER_OS_OPTIONS,
   resolveVmSize,
@@ -50,8 +50,9 @@ export function FullStackPage() {
   const [connectionReuse, setConnectionReuse] = useState(true);
   const [captureMode, setCaptureMode] = useState<'none' | 'tester' | 'endpoint' | 'both'>('none');
 
-  // Step 2: Methodology (always on)
-  const [methodology, setMethodology] = useState<Methodology>(DEFAULT_METHODOLOGY as Methodology);
+  // Step 2: Methodology (always on). Seeded from the 'standard' preset so the
+  // Review step always shows exactly what the highlighted preset says (F14).
+  const [methodology, setMethodology] = useState<Methodology>(methodologyForPreset('standard') as Methodology);
   const [methodPreset, setMethodPreset] = useState<string>('standard');
 
   // Step 3: Review

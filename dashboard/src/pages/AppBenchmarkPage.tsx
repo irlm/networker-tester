@@ -12,7 +12,7 @@ import { useProject } from '../hooks/useProject';
 import { useToast } from '../hooks/useToast';
 import type { TestbedState } from '../components/wizard/testbed-constants';
 import {
-  DEFAULT_METHODOLOGY,
+  methodologyForPreset,
   RUNTIME_TEMPLATES,
   PROXY_LABELS,
   TESTER_OS_OPTIONS,
@@ -79,8 +79,9 @@ export function AppBenchmarkPage() {
     });
   }, [capabilities, selectedModes]);
 
-  // Step 3: Methodology (always on)
-  const [methodology, setMethodology] = useState<Methodology>(DEFAULT_METHODOLOGY as Methodology);
+  // Step 3: Methodology (always on). Seeded from the 'standard' preset so the
+  // Review step always matches the highlighted preset (audit F14).
+  const [methodology, setMethodology] = useState<Methodology>(methodologyForPreset('standard') as Methodology);
   const [methodPreset, setMethodPreset] = useState<string>('standard');
 
   // Step 4: Review
