@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane;
+using Networker.ControlPlane.Alerting;
 using Networker.ControlPlane.Auth;
 using Networker.ControlPlane.Background;
 using Networker.ControlPlane.Dispatch;
@@ -89,6 +90,10 @@ builder.Services.AddSsoModule();
 // benchmark_config table; the M3 dispatcher/redispatcher own run assignment.
 builder.Services.AddNetworkerEmailSender();
 builder.Services.AddVmLifecycleRecorder();
+// Alerting (wave 1): threshold rules + notification channels. The evaluator
+// hooks run_finished in AgentMessageProcessor (both transports) and delivers
+// via webhook (HMAC-signed) or the email sender registered above.
+builder.Services.AddNetworkerAlerting();
 // Floor = the real assembly version (Directory.Build.props, single-sourced
 // with Cargo.toml) — never a hardcoded string.
 builder.Services.AddVersionRefresh(VersionEndpoints.DashboardVersion);
@@ -219,6 +224,8 @@ app.MapUpdateEndpoints();
 app.MapBenchTokensEndpoints();
 app.MapUrlTestsEndpoints();
 app.MapTlsProfilesEndpoints();
+// Alerting (wave 1): channels + rules CRUD, event history, channel test-fire.
+app.MapAlertsEndpoints();
 app.MapInventoryEndpoints();
 app.MapTesterPrecheckEndpoints();
 // GET /api/version — the frontend's "Latest version" toast + tester-upgrade

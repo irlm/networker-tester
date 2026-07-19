@@ -39,6 +39,8 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<Program>, IAsync
     public static readonly Guid SeededUserId = Guid.Parse("11111111-1111-4111-8111-111111111111");
     public const string SeededUserEmail = "itest@networker.local";
     public static readonly Guid SeededConfigId = Guid.Parse("22222222-2222-4222-8222-222222222222");
+    public static readonly Guid SeededViewerUserId = Guid.Parse("33333333-3333-4333-8333-333333333333");
+    public const string SeededViewerEmail = "itest-viewer@networker.local";
 
     /// A fresh DbContext against the same container — for tests to assert what
     /// a write endpoint persisted.
@@ -133,6 +135,28 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<Program>, IAsync
             Status = "active",
             JoinedAt = now,
         });
+        // A read-only member so operator-vs-viewer authz can be exercised
+        // end-to-end (viewer reads succeed, viewer writes are 403).
+        ctx.DashUsers.Add(new DashUser
+        {
+            UserId = SeededViewerUserId,
+            Email = SeededViewerEmail,
+            Role = "viewer",
+            Status = "active",
+            AuthProvider = "local",
+            IsPlatformAdmin = false,
+            MustChangePassword = false,
+            SsoOnly = false,
+            CreatedAt = now,
+        });
+        ctx.ProjectMembers.Add(new ProjectMember
+        {
+            ProjectId = SeededProjectId,
+            UserId = SeededViewerUserId,
+            Role = "viewer",
+            Status = "active",
+            JoinedAt = now,
+        });
         // A test config so the M3 launch/dispatch write path can be exercised.
         ctx.TestConfigs.Add(new TestConfig
         {
@@ -167,6 +191,17 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<Program>, IAsync
         var client = CreateClient();
         var tokens = Services.GetRequiredService<JwtTokenService>();
         var jwt = tokens.CreateToken(SeededUserId, SeededUserEmail, "operator", isPlatformAdmin: false);
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", jwt);
+        return client;
+    }
+
+    /// A client authenticated as the seeded VIEWER member — for asserting that
+    /// project-operator writes are denied to read-only members.
+    public HttpClient CreateViewerClient()
+    {
+        var client = CreateClient();
+        var tokens = Services.GetRequiredService<JwtTokenService>();
+        var jwt = tokens.CreateToken(SeededViewerUserId, SeededViewerEmail, "viewer", isPlatformAdmin: false);
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", jwt);
         return client;
     }

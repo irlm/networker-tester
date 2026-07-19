@@ -9,7 +9,7 @@ the Rust control-plane crates when the decommission soak completes.
 
 | Piece | Location |
 |---|---|
-| Ordered migration scripts (V002…V039) | `src/Networker.Data/Migrations/V0NN_*.sql` (embedded resources) |
+| Ordered migration scripts (V002…V041) | `src/Networker.Data/Migrations/V0NN_*.sql` (embedded resources) |
 | V025 (UUID → base36 project ids) | `src/Networker.Data/Migrations/V025ProjectIdMigration.cs` (code, like the Rust original) |
 | ProjectId base36 + Damm implementation | `src/Networker.Data/Migrations/ProjectId36.cs` |
 | Runner | `src/Networker.Data/Migrations/SchemaMigrator.cs` |
@@ -93,12 +93,12 @@ replay).
 
 ## How to add a migration (post-decommission workflow)
 
-1. Create `src/Networker.Data/Migrations/V040_short_name.sql` (next free
+1. Create `src/Networker.Data/Migrations/V042_short_name.sql` (next free
    number, zero-padded, one underscore after the version). Make it
    idempotent where cheap (`IF NOT EXISTS` guards) — the runner's
    transaction makes idempotence optional, but it keeps manual recovery
    easy.
-2. Bump `SchemaMigrator.LatestVersion` to `40`.
+2. Bump `SchemaMigrator.LatestVersion` to `42`.
 3. Pin the script's SHA-256 in `MigrationScriptFreezeTests.FrozenSha256`.
 4. Update the EF model (`NetworkerDbContext` + entity) to match, if the
    change touches mapped tables. The equivalence test fails if they drift.

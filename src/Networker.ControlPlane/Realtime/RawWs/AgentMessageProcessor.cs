@@ -49,15 +49,22 @@ public sealed class AgentMessageProcessor
     private readonly NetworkerDbContext _db;
     private readonly EventBus _bus;
     private readonly ILogger<AgentMessageProcessor> _logger;
+    private readonly Alerting.AlertEvaluator? _alerts;
 
+    /// <param name="alerts">Optional so hosts/tests that don't wire the
+    /// alerting module (<c>AddNetworkerAlerting</c>) keep working; when
+    /// present, terminal runs are evaluated against the project's alert
+    /// rules (best-effort — see <see cref="OnRunFinished"/>).</param>
     public AgentMessageProcessor(
         NetworkerDbContext db,
         EventBus bus,
-        ILogger<AgentMessageProcessor> logger)
+        ILogger<AgentMessageProcessor> logger,
+        Alerting.AlertEvaluator? alerts = null)
     {
         _db = db;
         _bus = bus;
         _logger = logger;
+        _alerts = alerts;
     }
 
     // ── Frame codec (shared parse seam — also what the unit tests exercise) ──
@@ -428,6 +435,14 @@ public sealed class AgentMessageProcessor
             rf.RunId, rf.RunId,
             counts?.SuccessCount ?? 0,
             counts?.FailureCount ?? 0));
+
+        // Alerting hook: evaluate the project's rules against this now-terminal
+        // run. EvaluateRunAsync catches its own exceptions (log-and-continue)
+        // — alerting is best-effort and must never fail run processing.
+        if (_alerts is not null)
+        {
+            await _alerts.EvaluateRunAsync(rf.RunId, ct);
+        }
     }
 
     /// <summary>
