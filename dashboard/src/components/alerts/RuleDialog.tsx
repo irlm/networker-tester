@@ -107,7 +107,9 @@ export function RuleDialog({ projectId, channels, configs, existing, onClose, on
         aria-labelledby="alert-rule-dialog-title"
         className="relative w-full md:w-[520px] md:max-w-[90vw] bg-[var(--bg-base)] md:border-l border-gray-800 h-full overflow-y-auto slide-over-panel"
       >
-        <form onSubmit={handleSubmit} className="p-4 md:p-6">
+        {/* noValidate: alert-form.ts owns validation so errors render in the
+            styled banner instead of native constraint tooltips. */}
+        <form onSubmit={handleSubmit} noValidate className="p-4 md:p-6">
           <div className="flex items-center justify-between mb-6">
             <h3 id="alert-rule-dialog-title" className="text-lg font-bold text-gray-100">
               {existing ? 'Edit Alert Rule' : 'New Alert Rule'}
