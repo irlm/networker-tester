@@ -7,9 +7,9 @@ auto-tag) and `.github/workflows/release.yml` (build + release + deploy).
 ## The whole flow in one line
 
 PR (bump 5 version locations) → merge → `auto-tag` pushes `vX.Y.Z` and
-dispatches Release → deploy-first release graph builds, publishes, and deploys
-to alethedash.com in ~8–9 minutes → macOS/Windows binaries attach to the
-release asynchronously.
+dispatches Release → all five platform builds run in parallel → one complete
+GitHub release publishes → deploy to alethedash.com (~12–14 minutes after
+the tag, auto-rollback on failed readiness).
 
 ## 1. Version bump (5 locations, CI-enforced)
 
@@ -46,35 +46,38 @@ pushes it, then explicitly dispatches `release.yml` with that tag (tags pushed
 by the Actions token don't trigger workflows on their own). If the tag already
 exists — e.g. a docs-only merge with no bump — nothing happens.
 
-## 4. The deploy-first release graph (release.yml)
+## 4. The release graph (release.yml)
 
-The deploy never waits for the slow Windows/macOS native builds:
+All five builds start in parallel at the tag push; the release is created
+once, complete (GitHub releases are immutable after publish — asset uploads
+then fail with HTTP 422, which killed the old attach-async pattern):
 
 ```
 build-linux (musl: tester, endpoint, alethabench + frontend)  ┐
-                                                              ├─→ release ─→ deploy ─→ verify
-build-csharp (control plane + C# agent, ubuntu runner)        ┘        ↑
-                                                                       │
-build-native (mac x64/ARM64, win x64) ── attaches assets async ────────┘
+build-csharp (control plane + C# agent, ubuntu runner)        ├─→ release ─→ deploy ─→ verify
+build-native (mac x64/ARM64, win x64 — the ~11 min floor)     ┘
 ```
 
-1. **build-linux** + **build-csharp** run in parallel and gate everything
-   (~6 min).
-2. **release** publishes the GitHub release with the linux + C# assets, using
-   the `## [X.Y.Z]` CHANGELOG section as notes.
-3. **deploy** ships to the Azure VM immediately (~8–9 min after the tag):
-   `az vm run-command` on `alethedash-vm` stops `alethedash-cs`, moves the old
-   build to `/opt/alethedash-cs.prevbuild`, extracts the new control plane,
-   asserts `DASHBOARD_PUBLIC_URL` into `/etc/alethedash-cs.env`, swaps the
-   Rust endpoint/tester/orchestrator binaries and the static frontend, restarts,
-   and polls `/api/health/ready` (30 s budget — **auto-rolls-back to
-   `.prevbuild` on failure**). It then verifies the public path through nginx
-   (`https://alethedash.com/api/health` must be 200, login must 401 bad creds)
-   and refreshes the installer Gist.
-4. **build-native** compiles the tester/endpoint/orchestrator for macOS
-   (x64 + ARM64) and Windows and uploads the archives to the already-published
-   release. There is a brief window where `releases/latest` lacks win/mac
-   assets; the installers fall back to `cargo install` if hit mid-window.
+1. **build-linux** + **build-csharp** (~6 min) and **build-native**
+   (~11 min — windows-msvc/chromiumoxide is the floor) run in parallel and
+   hand their archives to the release job as artifacts.
+2. **release** waits for all of them and publishes ONE complete GitHub
+   release with every platform's assets, using the `## [X.Y.Z]` CHANGELOG
+   section as notes. No missing-asset window; `releases/latest` is always
+   complete.
+3. **deploy** ships to the Azure VM as soon as the release exists
+   (~12–14 min after the tag): `az vm run-command` on `alethedash-vm` stops
+   `alethedash-cs`, moves the old build to `/opt/alethedash-cs.prevbuild`,
+   extracts the new control plane, asserts `DASHBOARD_PUBLIC_URL` into
+   `/etc/alethedash-cs.env`, swaps the Rust endpoint/tester/orchestrator
+   binaries and the static frontend, restarts, and polls `/api/health/ready`
+   (30 s budget — **auto-rolls-back to `.prevbuild` on failure**). It then
+   verifies the public path through nginx (`https://alethedash.com/api/health`
+   must be 200, login must 401 bad creds) and refreshes the installer Gist.
+
+Releases v0.28.35–v0.28.38 predate this fix and permanently lack mac/windows
+assets (immutable — cannot be repaired); installers fall back to the newest
+release that carries the requested asset.
 
 ## 5. Asset inventory
 
