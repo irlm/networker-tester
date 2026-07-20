@@ -44,6 +44,7 @@ const STATUS_COPY: Record<number, string> = {
   422: 'The server rejected the request payload.',
   429: 'Rate limited — wait a moment and try again.',
   500: 'Server error — try again shortly.',
+  501: 'Not supported by this server.',
   502: 'Server unavailable — it may be restarting. Try again shortly.',
   503: 'Server unavailable — it may be restarting. Try again shortly.',
   504: 'The server timed out — try again shortly.',
@@ -71,7 +72,9 @@ export function friendlyHttpError(status: number, statusText: string, body: stri
   if (detail.length > 160) detail = `${detail.slice(0, 157)}...`;
   const base = STATUS_COPY[status] ?? `Request failed (${status}${statusText ? ` ${statusText}` : ''}).`;
   // 5xx bodies are stack noise ("internal server error") — status copy only.
-  return detail && status < 500 && detail.toLowerCase() !== 'internal server error'
+  // Exception: 501 is a deliberate, honest "not implemented" whose body
+  // explains what is missing and what to do instead — surface it.
+  return detail && (status < 500 || status === 501) && detail.toLowerCase() !== 'internal server error'
     ? `${base} (${detail})`
     : base;
 }

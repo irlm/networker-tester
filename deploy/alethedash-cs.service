@@ -1,0 +1,44 @@
+# alethedash-cs.service — the C# control plane unit for alethedash.com.
+#
+# This codifies the unit that was hand-applied at the Phase-2 cutover
+# (fidelity audit F13: nothing in the repo pinned User=, WorkingDirectory=,
+# or PATH, so every deploy depended on unasserted manual VM state). It ships
+# inside the control-plane tarball (release.yml build-csharp) and the deploy
+# installs it idempotently: copy + `systemctl daemon-reload` ONLY when the
+# on-disk unit differs (release.yml deploy job).
+#
+# Deliberate choices:
+# - User=azureuser         — the VM's login user (Azure admin user; matches the
+#                            Rust-era `User=$(whoami)` install). The provisioner
+#                            reads ~/.ssh/id_rsa.pub and writes ~/.ssh/*.pem, so
+#                            the unit MUST run as a real login user with a home
+#                            (audit F3/F4). systemd sets $HOME from User=.
+# - PATH includes /usr/local/bin (aws v2, networker-tester) AND /snap/bin
+#                            (snap-installed gcloud) — systemd's default PATH
+#                            has neither /snap/bin nor a gcloud (audit F12).
+# - EnvironmentFile        — /etc/alethedash-cs.env holds the secrets
+#                            (DASHBOARD_JWT_SECRET, DASHBOARD_CREDENTIAL_KEY,
+#                            DB URL, DASHBOARD_PUBLIC_URL, INSTALL_SH_PATH).
+#                            EnvironmentFile= values override the Environment=
+#                            defaults below, so the env file stays authoritative.
+# - Restart=on-failure     — crash recovery; deploys stop/start explicitly.
+
+[Unit]
+Description=Networker C# control plane (alethedash.com)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=azureuser
+WorkingDirectory=/opt/alethedash-cs
+ExecStart=/opt/alethedash-cs/Networker.ControlPlane
+EnvironmentFile=/etc/alethedash-cs.env
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=ASPNETCORE_URLS=http://0.0.0.0:5030
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

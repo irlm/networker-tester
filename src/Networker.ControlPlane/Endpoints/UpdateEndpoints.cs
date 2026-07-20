@@ -13,64 +13,45 @@ namespace Networker.ControlPlane.Endpoints;
 ///   <item><b>POST /api/update/dashboard</b> — trigger dashboard self-update.</item>
 /// </list>
 ///
-/// <para>Both return <c>{ status: "updating", update_id: &lt;uuid&gt; }</c> and
-/// kick off the update in the background.</para>
-///
-/// <para><b>Stub divergence (TODO(phase3)):</b> the actual binary self-update is
-/// host-specific — the Rust handlers download a GitHub release, extract a tarball,
-/// overwrite the running binary, fix perms, and <c>exec()</c>-restart the process,
-/// streaming progress over the event bus. None of that is appropriate to run from
-/// the C# ControlPlane in this phase (no in-process tester subprocess, no
-/// exec-restart, CI has no release assets). The ENDPOINTS + response shape are
-/// ported faithfully; the update action itself is a logged no-op. The
-/// <c>update_id</c> is still a fresh UUID so the wire contract holds.</para>
+/// <para><b>HONEST 501 (fidelity audit F24):</b> the Rust handlers downloaded a
+/// GitHub release, extracted the tarball, overwrote the running binary, and
+/// <c>exec()</c>-restarted the process. On the tarball deployment model
+/// self-update is the release pipeline's job (release.yml deploys, health-checks,
+/// and rolls back atomically) — an in-process self-update would fight it. The
+/// previous C# behaviour returned <c>200 {"status":"updating"}</c> and did
+/// nothing, so operators watched an "update" that never happened. Both routes
+/// now return <c>501 { "error": ... }</c> until/unless a tarball-aware
+/// self-update is deliberately built.</para>
 /// </summary>
 public static class UpdateEndpoints
 {
+    private const string NotImplementedMessage =
+        "self-update is not implemented in the C# control plane yet — nothing was updated; "
+        + "tracked in the fidelity audit (F24). Updates ship via the release pipeline: "
+        + "tagging a release deploys, health-checks, and auto-rolls-back (docs/release-flow.md).";
+
     public static IEndpointRouteBuilder MapUpdateEndpoints(this IEndpointRouteBuilder app)
     {
         // POST /api/update/tester — trigger local tester update (admin).
         app.MapPost("/api/update/tester", (
             HttpContext ctx,
             ILoggerFactory loggerFactory) =>
-        {
-            var updateId = Guid.NewGuid();
-            var log = loggerFactory.CreateLogger("Networker.Update");
-
-            // TODO(phase3): perform the real host-side tester binary update +
-            // subprocess restart. Stubbed — see class remarks.
-            log.LogInformation(
-                "update/tester requested (update_id={UpdateId}) — self-update is a phase-3 stub; no binary was changed",
-                updateId);
-
-            return Results.Ok(new
-            {
-                status = "updating",
-                update_id = updateId.ToString(),
-            });
-        }).RequireAuthorization(AuthPolicies.GlobalAdmin);
+            Refuse(loggerFactory, "update/tester")).RequireAuthorization(AuthPolicies.GlobalAdmin);
 
         // POST /api/update/dashboard — trigger dashboard self-update (admin).
         app.MapPost("/api/update/dashboard", (
             HttpContext ctx,
             ILoggerFactory loggerFactory) =>
-        {
-            var updateId = Guid.NewGuid();
-            var log = loggerFactory.CreateLogger("Networker.Update");
-
-            // TODO(phase3): perform the real host-side dashboard binary + frontend
-            // + agent update and exec-restart. Stubbed — see class remarks.
-            log.LogInformation(
-                "update/dashboard requested (update_id={UpdateId}) — self-update is a phase-3 stub; no binary was changed",
-                updateId);
-
-            return Results.Ok(new
-            {
-                status = "updating",
-                update_id = updateId.ToString(),
-            });
-        }).RequireAuthorization(AuthPolicies.GlobalAdmin);
+            Refuse(loggerFactory, "update/dashboard")).RequireAuthorization(AuthPolicies.GlobalAdmin);
 
         return app;
+    }
+
+    private static IResult Refuse(ILoggerFactory loggerFactory, string route)
+    {
+        loggerFactory.CreateLogger("Networker.Update").LogWarning(
+            "{Route} requested — refused with 501: self-update is the release pipeline's job on the tarball model",
+            route);
+        return ApiError.Status(StatusCodes.Status501NotImplemented, NotImplementedMessage);
     }
 }

@@ -116,6 +116,16 @@ describe('friendlyHttpError — human copy, never raw bodies (audit F3/F16)', ()
     const long = 'x'.repeat(500);
     expect(friendlyHttpError(400, 'Bad Request', long).length).toBeLessThan(220);
   });
+
+  it('surfaces the honest 501 detail (fidelity audit F23/F24)', () => {
+    // 501 is a deliberate "not implemented" whose body says what is missing
+    // and what to do instead — unlike other 5xx it must NOT be swallowed.
+    const msg = friendlyHttpError(
+      501, 'Not Implemented',
+      '{"error":"self-update is not implemented in the C# control plane yet"}');
+    expect(msg).toContain('Not supported by this server.');
+    expect(msg).toContain('not implemented in the C# control plane');
+  });
 });
 
 describe('getAgents response-shape normalization (P0 — black-screen regression)', () => {

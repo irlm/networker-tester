@@ -127,10 +127,8 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         BuildAzure(LifecycleOp op, string resourceId, ProviderCredentials? creds)
     {
         // `az` resolution honours the AZ_CMD override the Rust az_bin() uses so
-        // the same dev shim works across both stacks.
-        var file = Environment.GetEnvironmentVariable("AZ_CMD") is { Length: > 0 } azOverride
-            ? azOverride
-            : "az";
+        // the same dev shim works across both stacks (see CloudCli).
+        var file = CloudCli.AzBin();
 
         var sub = creds?.SubscriptionId ?? string.Empty;
         var rg = creds?.ResourceGroup ?? string.Empty;
@@ -197,7 +195,7 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
             if (extra.TryGetValue("secret_access_key", out var sk)) env["AWS_SECRET_ACCESS_KEY"] = sk;
             if (extra.TryGetValue("session_token", out var st)) env["AWS_SESSION_TOKEN"] = st;
         }
-        return (file: "aws", args, env: env.Count > 0 ? env : null);
+        return (file: CloudCli.AwsBin(), args, env: env.Count > 0 ? env : null);
     }
 
     // ── GCP argv (gcloud compute instances) ──────────────────────────────────
@@ -225,7 +223,7 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
             args.Add("--format");
             args.Add("json");
         }
-        return (file: "gcloud", args, env: null);
+        return (file: CloudCli.GcloudBin(), args, env: null);
     }
 
     /// <summary>
@@ -285,7 +283,7 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
     private async Task<VmCreateResult> CreateAzureVmAsync(
         VmCreateRequest request, ProviderCredentials? creds, CancellationToken ct)
     {
-        var azBin = Environment.GetEnvironmentVariable("AZ_CMD") is { Length: > 0 } o ? o : "az";
+        var azBin = CloudCli.AzBin();
         var sub = creds?.SubscriptionId ?? string.Empty;
         var rg = creds?.ResourceGroup ?? string.Empty;
 
@@ -590,7 +588,7 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         // 1. Resolve the AMI from the "aws:<os-variant>" marker.
         var (owner, nameFilter) = AwsAmiFilter(request.Image);
         var amiRes = await RunAsync(
-            "aws",
+            CloudCli.AwsBin(),
             new List<string>
             {
                 "ec2", "describe-images",
@@ -639,7 +637,7 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         try
         {
             var args = BuildAwsRunInstancesArgs(request, amiId, keyName.Value!, sg.Value!, userDataPath);
-            runRes = await RunAsync("aws", args, env, ct, CreateTimeout).ConfigureAwait(false);
+            runRes = await RunAsync(CloudCli.AwsBin(), args, env, ct, CreateTimeout).ConfigureAwait(false);
         }
         finally
         {
@@ -679,7 +677,7 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         for (var i = 0; i < 30; i++)
         {
             var ipRes = await RunAsync(
-                "aws",
+                CloudCli.AwsBin(),
                 new List<string>
                 {
                     "ec2", "describe-instances",
@@ -753,7 +751,7 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         const string keyName = "alethedash-tester";
 
         var check = await RunAsync(
-            "aws",
+            CloudCli.AwsBin(),
             new List<string>
             {
                 "ec2", "describe-key-pairs", "--key-names", keyName,
@@ -765,13 +763,14 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
             return (keyName, null);
         }
 
-        // Import the local public key if present.
-        var home = Environment.GetEnvironmentVariable("HOME") ?? string.Empty;
+        // Import the local public key if present. Home resolution survives a
+        // systemd unit without $HOME (audit F3) — never a relative path.
+        var home = CloudCli.HomeDirectory();
         var pubKeyPath = Path.Combine(home, ".ssh", "id_rsa.pub");
         if (File.Exists(pubKeyPath))
         {
             var import = await RunAsync(
-                "aws",
+                CloudCli.AwsBin(),
                 new List<string>
                 {
                     "ec2", "import-key-pair", "--key-name", keyName,
@@ -789,7 +788,7 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         }
 
         var create = await RunAsync(
-            "aws",
+            CloudCli.AwsBin(),
             new List<string>
             {
                 "ec2", "create-key-pair", "--key-name", keyName,
@@ -824,7 +823,7 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         const string sgName = "alethedash-tester";
 
         var check = await RunAsync(
-            "aws",
+            CloudCli.AwsBin(),
             new List<string>
             {
                 "ec2", "describe-security-groups", "--group-names", sgName,
@@ -842,7 +841,7 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         }
 
         var create = await RunAsync(
-            "aws",
+            CloudCli.AwsBin(),
             new List<string>
             {
                 "ec2", "create-security-group", "--group-name", sgName,
@@ -868,7 +867,7 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
                  })
         {
             _ = await RunAsync(
-                "aws",
+                CloudCli.AwsBin(),
                 new List<string>
                 {
                     "ec2", "authorize-security-group-ingress",
@@ -928,8 +927,9 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         var zone = $"{request.Region}-a";
 
         // ssh-keys metadata from the dashboard host's local key, when present.
+        // Home resolution survives a systemd unit without $HOME (audit F3).
         string? sshMetadataPath = null;
-        var home = Environment.GetEnvironmentVariable("HOME") ?? string.Empty;
+        var home = CloudCli.HomeDirectory();
         var pubKeyPath = Path.Combine(home, ".ssh", "id_rsa.pub");
         if (File.Exists(pubKeyPath))
         {
@@ -953,7 +953,7 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         try
         {
             var args = BuildGcpCreateArgs(request, zone, sshMetadataPath, startupScriptPath);
-            res = await RunAsync("gcloud", args, env, ct, CreateTimeout).ConfigureAwait(false);
+            res = await RunAsync(CloudCli.GcloudBin(), args, env, ct, CreateTimeout).ConfigureAwait(false);
         }
         finally
         {
@@ -1133,10 +1133,13 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         }
         catch (Exception ex)
         {
-            // The common CI path: the cloud CLI isn't installed. Soft failure —
-            // the caller logs it and still returns 202 with the DB transition done.
-            logger.LogWarning(ex, "Failed to launch provisioner CLI '{File}'", file);
-            return ProvisionResult.SpawnError($"failed to launch '{file}': {ex.Message}");
+            // The common CI path: the cloud CLI isn't installed. Still a soft
+            // failure (the caller logs it and returns 202 with the DB transition
+            // done), but the message now names the binary and its override env
+            // var so the soft-fail is diagnosable, not silent (audit F12).
+            var message = CloudCli.LaunchFailureMessage(file, ex.Message);
+            logger.LogWarning(ex, "Failed to launch provisioner CLI '{File}': {Hint}", file, message);
+            return ProvisionResult.SpawnError(message);
         }
 
         // Drain both streams concurrently, await AFTER exit (avoids the
