@@ -1,0 +1,32 @@
+{
+  "name": "@laghound/endpoint",
+  "version": "0.1.0",
+  "description": "Embed a LagHound diagnostic endpoint (contract v1) into your Node app - Express/Connect middleware, Fastify plugin, or bare node:http handler. Zero runtime dependencies.",
+  "keywords": ["laghound", "server-timing", "diagnostics", "latency", "throughput", "observability"],
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/esm/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.esm.json && tsc -p tsconfig.cjs.json && node scripts/fixup-cjs.mjs",
+    "test": "node --test \"test/*.test.ts\"",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.0"
+  }
+}
