@@ -1,0 +1,3 @@
+# Build artifacts for the standalone laghound crate and its sample app.
+/target/
+/example/target/
