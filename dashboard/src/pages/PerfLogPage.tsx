@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useRef } from 'react';
-import { api } from '../api/client';
+import { api, errorMessage } from '../api/client';
 import type { PerfLogRow, PerfLogStats } from '../api/types';
 import { FilterBar, FilterChip } from '../components/common/FilterBar';
 import { usePolling } from '../hooks/usePolling';
@@ -42,6 +42,7 @@ export function PerfLogPage() {
   const [logs, setLogs] = useState<PerfLogRow[]>([]);
   const [stats, setStats] = useState<PerfLogStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [kindFilter, setKindFilter] = useState<Kind>('all');
   const [pathFilter, setPathFilter] = useState('');
   const [page, setPage] = useState(0);
@@ -56,8 +57,13 @@ export function PerfLogPage() {
     if (pathFilter.trim()) params.path = pathFilter.trim();
     api.getPerfLogs(params).then(data => {
       stableSet(setLogs, data, logsFingerprint);
+      setLoadError(null);
       setLoading(false);
-    }).catch(() => setLoading(false));
+    }).catch((e: unknown) => {
+      // An API failure is NOT an empty log — keep them distinguishable.
+      setLoadError(errorMessage(e));
+      setLoading(false);
+    });
   }, [kindFilter, pathFilter]);
 
   const loadStats = useCallback(() => {
@@ -102,6 +108,19 @@ export function PerfLogPage() {
       <div className="p-4 md:p-6">
         <h2 className="text-lg md:text-xl font-bold text-gray-100 mb-6">Performance Log</h2>
         <div className="text-gray-500 motion-safe:animate-pulse">Loading performance data...</div>
+      </div>
+    );
+  }
+
+  if (loadError && logs.length === 0) {
+    return (
+      <div className="p-4 md:p-6">
+        <h2 className="text-lg md:text-xl font-bold text-gray-100 mb-6">Performance Log</h2>
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
+          <h3 className="text-red-400 font-bold mb-2">Failed to load performance logs</h3>
+          <p className="text-red-300 text-sm font-mono">{loadError}</p>
+          <p className="text-gray-500 text-xs mt-2">Retrying automatically every 15 seconds.</p>
+        </div>
       </div>
     );
   }

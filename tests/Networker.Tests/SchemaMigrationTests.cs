@@ -55,9 +55,9 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
     // ── Migration chain ─────────────────────────────────────────────────
 
     [Fact]
-    public void Fresh_database_applies_the_full_chain_v002_to_v041()
+    public void Fresh_database_applies_the_full_chain_v002_to_v042()
     {
-        Assert.Equal(Enumerable.Range(2, 40), _fx.FreshRun.Applied);
+        Assert.Equal(Enumerable.Range(2, 41), _fx.FreshRun.Applied);
         Assert.Empty(_fx.FreshRun.AlreadyApplied);
     }
 
@@ -70,7 +70,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
 
         Assert.True(second.WasUpToDate);
         Assert.Empty(second.Applied);
-        Assert.Equal(Enumerable.Range(2, 40), second.AlreadyApplied);
+        Assert.Equal(Enumerable.Range(2, 41), second.AlreadyApplied);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
             }
         }
 
-        Assert.Equal(Enumerable.Range(2, 40), recorded);
+        Assert.Equal(Enumerable.Range(2, 41), recorded);
     }
 
     // ── EF-model equivalence ────────────────────────────────────────────
@@ -348,6 +348,73 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
             """, conn);
         Assert.Equal("a", (string?)await fk.ExecuteScalarAsync()); // 'a' = NO ACTION
     }
+
+    // ── V042: perf_log re-asserted on the main database ─────────────────
+
+    [Fact]
+    public async Task V042_recreates_perf_log_when_v023_was_bookkept_but_never_ran_here()
+    {
+        // The prod incident: the Rust dashboard created perf_log in its
+        // separate LOGS database while recording V023 in the MAIN database's
+        // _migrations — so the table is absent even though the bookkeeping
+        // says otherwise. Simulate exactly that (perf_log gone, V023 still
+        // recorded, V042 pending) and prove the migrator heals it.
+        await using (var conn = new NpgsqlConnection(_fx.ConnectionString))
+        {
+            await conn.OpenAsync();
+            await using (var drop = new NpgsqlCommand("DROP TABLE IF EXISTS perf_log CASCADE", conn))
+            {
+                await drop.ExecuteNonQueryAsync();
+            }
+            await using (var forget = new NpgsqlCommand("DELETE FROM _migrations WHERE version = 42", conn))
+            {
+                await forget.ExecuteNonQueryAsync();
+            }
+        }
+
+        var run = await SchemaMigrator.MigrateAsync(_fx.ConnectionString);
+        Assert.Equal(new[] { 42 }, run.Applied);
+
+        await using (var verify = new NpgsqlConnection(_fx.ConnectionString))
+        {
+            await verify.OpenAsync();
+
+            await using (var table = new NpgsqlCommand(
+                """
+                SELECT count(*) FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = 'perf_log'
+                """, verify))
+            {
+                Assert.Equal(1L, (long)(await table.ExecuteScalarAsync())!);
+            }
+
+            // All four V023 indexes exist (incl. the partial kind='api' one).
+            await using var idx = new NpgsqlCommand(
+                """
+                SELECT indexname FROM pg_indexes
+                WHERE schemaname = 'public' AND tablename = 'perf_log'
+                  AND indexname LIKE 'ix_perf_log%'
+                ORDER BY indexname
+                """, verify);
+            var names = new List<string>();
+            await using (var reader = await idx.ExecuteReaderAsync())
+            {
+                while (await reader.ReadAsync())
+                {
+                    names.Add(reader.GetString(0));
+                }
+            }
+            Assert.Equal(
+                new[] { "ix_perf_log_kind", "ix_perf_log_logged_at", "ix_perf_log_path", "ix_perf_log_user" },
+                names);
+        }
+
+        // And on a database where V023 DID build the table (this fixture's
+        // fresh run), V042 must have been a pure no-op — rerun proves the
+        // whole chain is settled again.
+        var settled = await SchemaMigrator.MigrateAsync(_fx.ConnectionString);
+        Assert.True(settled.WasUpToDate);
+    }
 }
 
 /// <summary>
@@ -402,6 +469,7 @@ public sealed class MigrationScriptFreezeTests
         ["V039_tester_cloud_account.sql"] = "cd88b9ab949cd844f100673754cea0507206ad9afee94e6cd45e95016cb45ece",
         ["V040_agent_api_key_hash.sql"] = "6d5de2ba9985f56ef06d8ea93354c28b5b77551af491c4750b705744b69f4a5f",
         ["V041_alerting.sql"] = "add33d316b5e705668c0a89fc8c64ab28a51291c3bee31bcbda77a327972d36d",
+        ["V042_perf_log_main_db.sql"] = "dd222a9fcb6c38d0451148df6c05761439af5980bdf4849c0376330d773e4114",
     };
 
     [Fact]
@@ -421,7 +489,7 @@ public sealed class MigrationScriptFreezeTests
             Assert.Contains(version, scripted);
         }
 
-        Assert.Equal(39, scripted.Count);
+        Assert.Equal(40, scripted.Count);
     }
 
     [Fact]
