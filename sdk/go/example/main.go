@@ -18,7 +18,7 @@ import (
 	"os"
 	"time"
 
-	laghound "github.com/irlm/networker-tester/sdk/go/laghound"
+	"github.com/irlm/networker-tester/sdk/go/laghound"
 )
 
 func main() {
