@@ -227,6 +227,7 @@ public sealed class PerfPerCostAggregationTests : IClassFixture<ControlPlaneFixt
         Id = id,
         TestConfigId = ControlPlaneFixture.SeededConfigId,
         ProjectId = ControlPlaneFixture.SeededProjectId,
+        TesterId = testerId,
         Status = status,
         StartedAt = now,
         FinishedAt = status == "completed" ? now.AddMinutes(1) : null,

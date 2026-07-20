@@ -91,7 +91,7 @@ const report: PerfPerCostReport = {
   missing_cost_skus: [{ provider: 'gcp', vm_size: 'weird-size', region: 'us-east1' }],
 };
 
-const getPerfPerCostReport = vi.fn(() => Promise.resolve(report));
+const getPerfPerCostReport = vi.fn((_projectId?: string) => Promise.resolve(report));
 
 vi.mock('../api/client', () => ({
   api: {
