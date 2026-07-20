@@ -571,8 +571,7 @@ public sealed class OrphanReaperService : BackgroundService
 
     // ── Azure CLI list/delete (az) — best-effort; missing CLI ⇒ empty/no-op ────
 
-    private static string AzBin() =>
-        Environment.GetEnvironmentVariable("AZ_CMD") is { Length: > 0 } o ? o : "az";
+    private static string AzBin() => Provisioning.CloudCli.AzBin();
 
     /// <summary>
     /// Run <c>az &lt;subcommand&gt; list --subscription --resource-group --query

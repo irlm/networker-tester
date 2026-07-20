@@ -199,8 +199,11 @@ public static class TesterPrecheckEndpoints
             return;
         }
 
-        // Local SSH public key presence — pure host check, reproduced.
-        var home = Environment.GetEnvironmentVariable("HOME") ?? string.Empty;
+        // Local SSH public key presence — pure host check, reproduced. Home
+        // resolution survives a systemd unit without $HOME (audit F3): the old
+        // `?? ""` degraded to a relative `.ssh/id_rsa.pub` under cwd `/` and
+        // emitted a false gcp_no_local_ssh_key warning.
+        var home = Provisioning.CloudCli.HomeDirectory();
         var pubKeyPath = Path.Combine(home, ".ssh", "id_rsa.pub");
         if (!File.Exists(pubKeyPath))
         {

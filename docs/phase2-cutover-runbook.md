@@ -45,6 +45,7 @@ the SAME schema during the transition window.
 | `ASPNETCORE_ENVIRONMENT` | Yes (`Production`) | Anything other than `Development` enforces the fail-closed secrets. |
 | `ASPNETCORE_URLS` | Yes | The "separate port" for side-by-side deploy, e.g. `http://0.0.0.0:5030` (Rust stays on `:3000`). |
 | `DASHBOARD_PUBLIC_URL` | **Yes for provisioning** | The publicly reachable base URL (e.g. `https://alethedash.com`). The tester-provisioning bootstrap derives the agent WebSocket URL from it; unset, new tester agents are pointed at `ws://localhost:3000` and never come online (the control plane logs a warning). The prod deploy asserts it into `/etc/alethedash-cs.env` idempotently. |
+| `AZ_CMD`, `AWS_CMD`, `GCLOUD_CMD` | No | Absolute-path overrides for the cloud CLIs the provisioner shells out to. Unset, the bare names resolve via the service's `PATH` — the codified unit (`deploy/alethedash-cs.service`) extends `PATH` with `/usr/local/bin` and `/snap/bin` (snap-installed `gcloud`). A CLI that fails to launch reports which binary was missing and which of these vars overrides it. |
 
 Agent side (C# `Networker.Agent`): `AGENT_DASHBOARDURL` (base URL; the agent
 connects to `{url}/ws/agent`), `AGENT_TESTERPATH`, `AGENT_NAME` — note the
