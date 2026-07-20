@@ -1,0 +1,99 @@
+# LagHound multi-language deploy harness.
+#
+# Runs all five language SDK sample services on ONE target so a LagHound fleet
+# can probe each and prove "LagHound works in every language" — a cross-language
+# integration test AND the sales demo.
+#
+#   docker compose up --build          # build + start all five
+#   ./probe-all.sh                     # assert the contract across all langs
+#
+# Port map (host -> container app route GET / and GET /work, plus /laghound/*):
+#   csharp  8081   js  8082   python  8083   rust  8084   go  8085
+#
+# Every service shares LAGHOUND_TOKEN (default demo-token-laghound via .env).
+# Build context is the repo root (..) so each Dockerfile can COPY sdk/<lang>.
+
+x-token: &token
+  LAGHOUND_TOKEN: ${LAGHOUND_TOKEN:-demo-token-laghound}
+
+services:
+  laghound-csharp:
+    build:
+      context: ..
+      dockerfile: examples/csharp.Dockerfile
+    environment:
+      <<: *token
+    ports:
+      - "8081:8081"
+    restart: unless-stopped
+    healthcheck:
+      # Hit this service's OWN app route (not /laghound — that's token-gated).
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  laghound-js:
+    build:
+      context: ..
+      dockerfile: examples/js.Dockerfile
+    environment:
+      <<: *token
+    ports:
+      - "8082:8082"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8082/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  laghound-python:
+    build:
+      context: ..
+      dockerfile: examples/python.Dockerfile
+    environment:
+      <<: *token
+    ports:
+      - "8083:8083"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8083/').status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  laghound-rust:
+    build:
+      context: ..
+      dockerfile: examples/rust.Dockerfile
+    environment:
+      <<: *token
+    ports:
+      - "8084:8084"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8084/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  laghound-go:
+    build:
+      context: ..
+      dockerfile: examples/go.Dockerfile
+    environment:
+      <<: *token
+    ports:
+      - "8085:8085"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8085/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
