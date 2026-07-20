@@ -962,6 +962,12 @@ export const api = {
     return request<import('./types').GroupedLeaderboard>(`/leaderboard/grouped${params}`);
   },
 
+  // ── Perf-per-cost report ───────────────────────────────────────────
+  getPerfPerCostReport: (projectId: string) =>
+    request<import('./types').PerfPerCostReport>(
+      projectUrl(projectId, 'reports/perf-per-cost')
+    ),
+
   // ── Benchmark Regressions ──────────────────────────────────────────
   listBenchmarkRegressions: (projectId: string, limit?: number) =>
     request<import('./types').BenchmarkRegressionWithConfig[]>(

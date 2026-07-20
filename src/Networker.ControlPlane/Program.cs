@@ -217,6 +217,9 @@ app.MapOpsEndpoints();
 // each module (public leaderboard; admin update/system-health/perf-log; project-
 // scoped url-tests/tls-profiles/inventory/precheck; flat logs/bench-tokens).
 app.MapLeaderboardEndpoints();
+// Provider performance-per-cost report (project-scoped, member-read) — probe
+// aggregates joined to the static shared/cloud-costs.json price table.
+app.MapPerfPerCostEndpoints();
 app.MapSystemHealthEndpoints();
 app.MapLogsEndpoints();
 app.MapPerfLogEndpoints();

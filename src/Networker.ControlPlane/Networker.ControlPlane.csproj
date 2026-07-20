@@ -13,6 +13,15 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Static curated cloud price table for the perf-per-cost report
+         (Reports/CloudCostTable.cs). Embedded so deploys can't lose it;
+         the repo-root shared/ copy stays the editable source of truth. -->
+    <EmbeddedResource Include="..\..\shared\cloud-costs.json"
+                      Link="shared\cloud-costs.json"
+                      LogicalName="Networker.ControlPlane.shared.cloud-costs.json" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Azure.Communication.Email" Version="1.0.1" />
     <PackageReference Include="Cronos" Version="0.13.0" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.0" />

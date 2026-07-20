@@ -61,6 +61,8 @@ export function Sidebar({ connectionDot }: SidebarProps) {
 
   const tailItems: NavItem[] = pid ? [
     { path: `/projects/${pid}/runs`, label: 'Runs', icon: '\u25B6' },
+    // Provider performance-per-cost report \u2014 "Value" in the runs/reports tail.
+    { path: `/projects/${pid}/reports/value`, label: 'Value', icon: '$' },
     { path: `/projects/${pid}/schedules`, label: 'Schedules', icon: '\u21BB' },
     { path: `/projects/${pid}/alerts`, label: 'Alerts', icon: '\u26A0' },
   ] : [];

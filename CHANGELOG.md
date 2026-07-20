@@ -11,8 +11,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.28.41] — 2026-07-20
+## [0.28.42] — 2026-07-20
 
+### Added
+- **Provider performance-per-cost report ("Value").** New project report
+  answering "which cloud provider gives the best performance per dollar":
+  - `GET /api/projects/{id}/reports/perf-per-cost` (member-read) aggregates
+    the probe results of completed runs per (provider, vm_size, region)
+    tester group × mode family — median/p95 latency
+    (`HttpResult.TotalDurationMs`, wall-time fallback — same definition as
+    the alerting `RunMetricProvider`) and median throughput — and joins a
+    **static curated price table** to compute two documented value scores:
+    `latency_cost_index = p95_ms × hourly_usd` (lower better) and
+    `mbps_per_dollar_hour = median_mbps ÷ hourly_usd` (higher better). The
+    formulas ship verbatim in the response; no pricing API is ever called at
+    runtime.
+  - `shared/cloud-costs.json` — hand-curated on-demand Linux list prices for
+    the 18 provisioning-wizard VM sizes (Azure eastus / AWS us-east-1 / GCP
+    us-east1), each row carrying `source_url` + `as_of` (verified 2026-07-17
+    ⁠–⁠ 2026-07-20 against the Azure Retail Prices API, the awsstatic
+    on-demand feed, and the GCP billing catalog). Embedded into the control
+    plane and validated at load (`CloudCostTable`) + in CI
+    (`CloudCostTableTests`).
+  - Honesty rules: tester groups whose SKU has no price row are shown with
+    cost `—`, a note, and a `missing_cost_skus` entry (plus a server warning
+    log) — never silently dropped; off-region prices are flagged
+    ("priced from eastus").
+  - Dashboard **Value** page (`/projects/{id}/reports/value`, sidebar tail):
+    per-family comparison table sorted best-value-first, value bar chart,
+    missing-cost banner, `as_of` + disclaimer footer, and an empty state
+    until at least two providers have completed-run data.
+  - Docs: `docs/reports-perf-per-cost.md` (formulas, data sources,
+    cost-table maintenance). Tests: formula/validation/contract units,
+    Testcontainers end-to-end (authz matrix + hand-computed aggregates), and
+    ValueReportPage vitest suite.
+
+---
+
+## [0.28.41] — 2026-07-20
 ### Changed
 - **Domain cutover to laghound.com (phases 2–3).** `https://laghound.com` now
   serves production; `https://laghound.sh` serves the installer to `curl` and
