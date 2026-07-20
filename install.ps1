@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 # ──────────────────────────────────────────────────────────────────────────────
-# Networker Tester – Windows interactive installer (rustup-style)
+# LagHound – Windows interactive installer (rustup-style)
 #
 # Installs networker-tester and/or networker-endpoint either:
 #   locally  – on this machine (release binary download or source compile)
@@ -59,7 +59,7 @@ $ErrorActionPreference = "Stop"
 $RepoHttps     = "https://github.com/irlm/networker-tester"
 $RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"
-$InstallerVersion = "v0.28.40"  # fallback when gh is unavailable
+$InstallerVersion = "v0.28.41"  # fallback when gh is unavailable
 
 # ── Print helpers ──────────────────────────────────────────────────────────────
 function Write-Ok   ($msg) { Write-Host "  v " -NoNewline -ForegroundColor Green;   Write-Host $msg }
@@ -72,9 +72,9 @@ function Write-Banner {
     Write-Host ""
     Write-Host ("=" * 58) -ForegroundColor Cyan
     if ($script:NetworkerVersion) {
-        Write-Host ("      Networker Tester  " + $script:NetworkerVersion) -ForegroundColor Cyan
+        Write-Host ("      LagHound  " + $script:NetworkerVersion) -ForegroundColor Cyan
     } else {
-        Write-Host ("      Networker Tester Installer") -ForegroundColor Cyan
+        Write-Host ("      LagHound Installer") -ForegroundColor Cyan
     }
     Write-Host ("=" * 58) -ForegroundColor Cyan
     Write-Host ""

@@ -1,6 +1,7 @@
 # Phase 2 — M6 Cutover Runbook (Rust dashboard → C# control plane)
 
-> **Status (2026-07): the cutover is complete** — prod (alethedash.com) is
+> **Status (2026-07): the cutover is complete** — prod (laghound.com, with
+> alethedash.com as the compatibility bridge — see `branding.md`) is
 > served by the C# control plane. This file stays at this path because the
 > nightly soak check and the decommission standing order reference its section
 > numbers. Sections 1–3 and 6 are historical; **§4 (soak checklist), §5
@@ -44,7 +45,7 @@ the SAME schema during the transition window.
 | `DASHBOARD_BACKGROUND_SERVICES` | No (default **on**) | `0`/`false` makes a replica **API-only** (no scheduler/watchdog/reaper/… loops registered). With M6 leader election this is no longer required for safety with multiple replicas, but keep it as the explicit ops switch: during cutover run the C# loops **disabled** until step 3.4 flips ownership. |
 | `ASPNETCORE_ENVIRONMENT` | Yes (`Production`) | Anything other than `Development` enforces the fail-closed secrets. |
 | `ASPNETCORE_URLS` | Yes | The "separate port" for side-by-side deploy, e.g. `http://0.0.0.0:5030` (Rust stays on `:3000`). |
-| `DASHBOARD_PUBLIC_URL` | **Yes for provisioning** | The publicly reachable base URL (e.g. `https://alethedash.com`). The tester-provisioning bootstrap derives the agent WebSocket URL from it; unset, new tester agents are pointed at `ws://localhost:3000` and never come online (the control plane logs a warning). The prod deploy asserts it into `/etc/alethedash-cs.env` idempotently. |
+| `DASHBOARD_PUBLIC_URL` | **Yes for provisioning** | The publicly reachable base URL (`https://laghound.com` in prod). The tester-provisioning bootstrap derives the agent WebSocket URL from it; unset, new tester agents are pointed at `ws://localhost:3000` and never come online (the control plane logs a warning). The prod deploy asserts it into `/etc/alethedash-cs.env` idempotently, replacing a stale value (e.g. the pre-cutover `https://alethedash.com`) if present. |
 | `AZ_CMD`, `AWS_CMD`, `GCLOUD_CMD` | No | Absolute-path overrides for the cloud CLIs the provisioner shells out to. Unset, the bare names resolve via the service's `PATH` — the codified unit (`deploy/alethedash-cs.service`) extends `PATH` with `/usr/local/bin` and `/snap/bin` (snap-installed `gcloud`). A CLI that fails to launch reports which binary was missing and which of these vars overrides it. |
 
 Agent side (C# `Networker.Agent`): `AGENT_DASHBOARDURL` (base URL; the agent

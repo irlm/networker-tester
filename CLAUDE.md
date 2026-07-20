@@ -17,7 +17,8 @@ See `docs/architecture.md` for the full picture.
 | `networker-common` | **retired** | Legacy dashboard↔agent message types |
 
 C# solution (`Networker.sln`, .NET 10): `src/Networker.ControlPlane` (ASP.NET
-Minimal APIs + raw-WS hubs — **serves prod alethedash.com**, port 5030 behind
+Minimal APIs + raw-WS hubs — **serves prod laghound.com** (alethedash.com is
+the compatibility bridge, see `docs/branding.md`), port 5030 behind
 nginx), `src/Networker.Agent` (what tester VMs bootstrap; release assets
 `networker-agent-cs-*`), plus `Contracts` (the versioned JSON seam), `Data`
 (EF Core — **owns the schema migrations**, see `docs/schema-ownership.md`),
@@ -189,7 +190,7 @@ When writing documentation for CLI flags or environment variables (e.g., RUST_LO
   `Test (windows-latest)`, `Detect changed areas`, `Build & audit (C#)`,
   `bats (installer unit tests)`, `shellcheck`, `cargo audit (RUSTSEC advisories)`.
 - Release = deploy-first graph: the tag triggers release.yml; build-linux +
-  build-csharp gate the GitHub release and the prod deploy to alethedash.com
+  build-csharp gate the GitHub release and the prod deploy to laghound.com
   (~8-9 min, auto-rollback on failed readiness); mac/windows binaries attach
   asynchronously. Full flow + rollback: `docs/release-flow.md`.
 

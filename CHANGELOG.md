@@ -11,6 +11,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.41] — 2026-07-20
+
+### Changed
+- **Domain cutover to laghound.com (phases 2–3).** `https://laghound.com` now
+  serves production; `https://laghound.sh` serves the installer to `curl` and
+  301s browsers; `leghound.com` 301s to `laghound.com`. Pipeline changes:
+  - `release.yml` deploy now asserts
+    `DASHBOARD_PUBLIC_URL=https://laghound.com` into `/etc/alethedash-cs.env`
+    and **replaces a stale value** (previously it only appended if missing,
+    which would have left `https://alethedash.com` in place forever); new
+    tester bootstraps get the canonical domain.
+  - Deploy-verify checks BOTH `https://laghound.com/api/health` and
+    `https://alethedash.com/api/health` (the bridge must stay alive); the
+    login round-trip probes laghound.com.
+  - Nightly soak check probes `laghound.com` for public health and adds a
+    dedicated **bridge check** that alerts if `alethedash.com` stops
+    answering 200 before its decommission window closes.
+  - `benchmark.yml` result upload points at `laghound.com`.
+- **Domain bridge policy (recorded in `docs/branding.md`):**
+  `alethedash.com` stays fully functional (API + WS + UI) for at least one
+  full fleet re-provision cycle — fielded agents hold provision-time
+  alethedash.com WebSocket URLs — then may be demoted to a browser-only 301;
+  the registration is kept for at least 1 year. On-VM `alethedash-*`
+  infrastructure names are unchanged.
+- **Docs + installer sweep:** README install one-liner is now
+  `curl -fsSL https://laghound.sh | bash` (Gist mirror still works);
+  README/architecture/release-flow/runbook §1.1 reference laghound.com;
+  installer banners say **LagHound** (binary names, repo download URLs, and
+  env vars unchanged). Historical references in CHANGELOG/archives/legacy
+  scripts are untouched.
+
+---
+
 ## [0.28.40] — 2026-07-20
 
 ### Changed

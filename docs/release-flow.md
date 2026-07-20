@@ -8,7 +8,7 @@ auto-tag) and `.github/workflows/release.yml` (build + release + deploy).
 
 PR (bump 5 version locations) → merge → `auto-tag` pushes `vX.Y.Z` and
 dispatches Release → all five platform builds run in parallel → one complete
-GitHub release publishes → deploy to alethedash.com (~12–14 minutes after
+GitHub release publishes → deploy to laghound.com (~12–14 minutes after
 the tag, auto-rollback on failed readiness).
 
 ## 1. Version bump (5 locations, CI-enforced)
@@ -68,12 +68,16 @@ build-native (mac x64/ARM64, win x64 — the ~11 min floor)     ┘
 3. **deploy** ships to the Azure VM as soon as the release exists
    (~12–14 min after the tag): `az vm run-command` on `alethedash-vm` stops
    `alethedash-cs`, moves the old build to `/opt/alethedash-cs.prevbuild`,
-   extracts the new control plane, asserts `DASHBOARD_PUBLIC_URL` into
-   `/etc/alethedash-cs.env`, swaps the Rust endpoint/tester/orchestrator
-   binaries and the static frontend, restarts, and polls `/api/health/ready`
-   (30 s budget — **auto-rolls-back to `.prevbuild` on failure**). It then
-   verifies the public path through nginx (`https://alethedash.com/api/health`
-   must be 200, login must 401 bad creds) and refreshes the installer Gist.
+   extracts the new control plane, asserts
+   `DASHBOARD_PUBLIC_URL=https://laghound.com` into `/etc/alethedash-cs.env`
+   (replacing a stale value if present), swaps the Rust
+   endpoint/tester/orchestrator binaries and the static frontend, restarts,
+   and polls `/api/health/ready` (30 s budget — **auto-rolls-back to
+   `.prevbuild` on failure**). It then verifies the public path through nginx
+   — BOTH `https://laghound.com/api/health` and the `https://alethedash.com`
+   bridge must be 200 (fielded agents hold provision-time alethedash.com WS
+   URLs; see `branding.md` domain bridge policy), login must 401 bad creds —
+   and refreshes the installer Gist.
 
 Releases v0.28.35–v0.28.38 predate this fix and permanently lack mac/windows
 assets (immutable — cannot be repaired); installers fall back to the newest
@@ -87,7 +91,7 @@ release that carries the requested asset.
 | `networker-endpoint-<target>.tar.gz` / `.zip` | build-linux / build-native | Rust diagnostic server |
 | `alethabench-<target>.tar.gz` / `.zip` | build-linux / build-native | Benchmark orchestrator |
 | `dashboard-frontend.tar.gz` | build-linux | Built React SPA (served static by nginx) |
-| `networker-controlplane-linux-x64.tar.gz` | build-csharp | Self-contained C# control plane — the alethedash.com deployable |
+| `networker-controlplane-linux-x64.tar.gz` | build-csharp | Self-contained C# control plane — the laghound.com deployable |
 | `networker-agent-cs-linux-x64.tar.gz` | build-csharp | Self-contained single-file C# agent (binary named `networker-agent`) — what tester VMs bootstrap since v0.28.26 |
 | `networker-agent-cs-win-x64.zip` | build-csharp | Windows C# agent |
 

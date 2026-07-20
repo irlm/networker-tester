@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────────────
-# Networker Tester – unified installer (rustup-style)
+# LagHound – unified installer (rustup-style)
 #
 # Installs networker-tester and/or networker-endpoint either:
 #   locally  – on this machine (release binary download or source compile)
@@ -213,9 +213,9 @@ print_banner() {
     echo ""
     echo "${BOLD}══════════════════════════════════════════════════════════${RESET}"
     if [[ -n "$NETWORKER_VERSION" ]]; then
-        printf "${BOLD}      Networker Tester  %-34s${RESET}\n" "$NETWORKER_VERSION"
+        printf "${BOLD}      LagHound  %-42s${RESET}\n" "$NETWORKER_VERSION"
     else
-        printf "${BOLD}      Networker Tester Installer                          ${RESET}\n"
+        printf "${BOLD}      LagHound Installer                                  ${RESET}\n"
     fi
     echo "${BOLD}══════════════════════════════════════════════════════════${RESET}"
     echo ""
@@ -324,7 +324,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.40"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.41"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
