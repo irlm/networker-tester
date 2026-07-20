@@ -23,9 +23,9 @@
     (own solution, own lifecycle) are untouched.
   -->
   <PropertyGroup Condition="$(MSBuildProjectDirectory.StartsWith('$(MSBuildThisFileDirectory)src')) Or $(MSBuildProjectDirectory.StartsWith('$(MSBuildThisFileDirectory)tests'))">
-    <Version>0.28.39</Version>
+    <Version>0.28.40</Version>
     <!-- Display-only brand metadata (see docs/branding.md). -->
-    <Product>Networker</Product>
+    <Product>LagHound</Product>
     <AssemblyVersion>$(Version).0</AssemblyVersion>
     <FileVersion>$(Version).0</FileVersion>
     <InformationalVersion>$(Version)</InformationalVersion>

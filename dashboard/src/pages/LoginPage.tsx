@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import type { SsoProviderInfo, PendingProject } from '../api/client';
+import { PRODUCT_NAME } from '../lib/brand';
 import { useAuthStore } from '../stores/authStore';
 import { useProjectStore } from '../stores/projectStore';
 import { PendingProjectsModal } from '../components/PendingProjectsModal';
@@ -157,7 +158,7 @@ export function LoginPage() {
         {/* Brand — wordmark wears the brand purple; green is status-only (F1) */}
         <div className="text-center mb-8">
           <h1 className="text-[var(--brand-purple)] text-2xl font-bold tracking-tight mb-1">
-            Networker
+            {PRODUCT_NAME}
           </h1>
           <p className="text-gray-600 text-xs uppercase tracking-widest">
             network diagnostics

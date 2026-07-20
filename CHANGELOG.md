@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.40] — 2026-07-20
+
+### Changed
+- **Brand: Networker → LagHound (phase 1 — product surfaces only).** The
+  product name is now **LagHound** (domains `laghound.com`/`laghound.sh`
+  purchased; domain cutover is a separate later phase — `alethedash.com` is
+  untouched). Renamed surfaces: dashboard `<title>`/page titles
+  (`usePageTitle`), auth-page wordmarks (login / forgot / reset / change
+  password / accept invite / SSO complete / pending), shared-report header,
+  docs-search man-page header, SSO + cloud-account setup-guide display names,
+  the alert email subject tag (`[networker]` → `[laghound]`), and the C#
+  assembly `<Product>` metadata. The frontend product name is now
+  single-sourced from `dashboard/src/lib/brand.ts` (`PRODUCT_NAME`), pinned by
+  a test. Decision + policy recorded in `docs/branding.md`. NOT renamed
+  (infra/contract, per branding policy): crate/binary/release-asset names, C#
+  namespaces (`Networker.*`), env var names, the `X-Networker-Signature`
+  header, systemd/Azure/DB identifiers, repo URLs, and `shared/modes.json`
+  ids.
+
+---
+
 ## [0.28.39] — 2026-07-20
 
 ### Fixed

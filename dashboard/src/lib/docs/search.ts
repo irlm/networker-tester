@@ -82,7 +82,7 @@ const META_MAN_ENTRY: DocEntry = {
   title: 'man(1) — Documentation Viewer',
   aliases: ['man', 'manual', 'help', 'rtfm'],
   brief: 'You are reading the manual for the manual.',
-  detail: `NETWORKER-DOCS(1)       Networker Manual       NETWORKER-DOCS(1)
+  detail: `LAGHOUND-DOCS(1)        LagHound Manual        LAGHOUND-DOCS(1)
 
 NAME
     docs — interactive documentation for networker-tester
