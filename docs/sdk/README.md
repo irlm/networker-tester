@@ -82,6 +82,8 @@ let router = router.merge(laghound::router(laghound::Config::new(token)));
 mux.Handle("/laghound/", laghound.Handler(laghound.Config{Token: os.Getenv("LAGHOUND_TOKEN")}))
 ```
 
+Shipped: [`sdk/go/`](../../sdk/go/) — `net/http` + chi quickstart, conformance suite, and a runnable sample.
+
 Every SDK also exposes `mark(name, duration)` so your handlers can add custom
 `Server-Timing` marks (`mark-db`, `mark-cache`, …) that show up in reports as
 a server-side breakdown.
