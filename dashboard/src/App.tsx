@@ -58,6 +58,7 @@ const LeaderboardPage = lazyPage(() => import('./pages/LeaderboardPage'), 'Leade
 const BenchmarkCatalogPage = lazyPage(() => import('./pages/BenchmarkCatalogPage'), 'BenchmarkCatalogPage');
 const BenchmarkConfigResultsPage = lazyPage(() => import('./pages/BenchmarkConfigResultsPage'), 'BenchmarkConfigResultsPage');
 const BenchmarkRegressionsPage = lazyPage(() => import('./pages/BenchmarkRegressionsPage'), 'BenchmarkRegressionsPage');
+const ValueReportPage = lazyPage(() => import('./pages/ValueReportPage'), 'ValueReportPage');
 const BenchTokensPage = lazyPage(() => import('./pages/BenchTokensPage'), 'BenchTokensPage');
 const BenchTokenHistoryPage = lazyPage(() => import('./pages/BenchTokenHistoryPage'), 'BenchTokenHistoryPage');
 const NetworkTestPage = lazyPage(() => import('./pages/NetworkTestPage'), 'NetworkTestPage');
@@ -268,6 +269,8 @@ function AuthenticatedApp() {
             <Route path="/projects/:projectId/benchmark-catalog" element={<BenchmarkCatalogPage />} />
             <Route path="/projects/:projectId/benchmark-configs/:configId/results" element={<BenchmarkConfigResultsPage />} />
             <Route path="/projects/:projectId/benchmark-regressions" element={<BenchmarkRegressionsPage />} />
+            {/* Provider performance-per-cost comparison (member-read). */}
+            <Route path="/projects/:projectId/reports/value" element={<ValueReportPage />} />
 
             {/* Platform routes */}
             <Route path="/leaderboard" element={<LeaderboardPage />} />

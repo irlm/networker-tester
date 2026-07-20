@@ -1412,3 +1412,48 @@ export interface AlertEvent {
   test_config_id: string | null;
   channel_id: string;
 }
+
+// ── Perf-per-cost report (GET /projects/{id}/reports/perf-per-cost) ────────
+
+/** Per-family aggregate for one (provider, vm_size, region) tester group. */
+export interface PerfPerCostFamily {
+  /** Mode family from shared/modes.json: 'net' | 'http' | 'page' | 'thru'. */
+  family: string;
+  run_count: number;
+  sample_count: number;
+  /** What `median` measures: 'latency_ms' or 'throughput_mbps'. */
+  metric_label: 'latency_ms' | 'throughput_mbps';
+  median: number | null;
+  /** Latency families only; null for throughput. */
+  p95_ms: number | null;
+  /** 'latency_cost_index' (lower better) | 'mbps_per_dollar_hour' (higher better). */
+  value_metric: 'latency_cost_index' | 'mbps_per_dollar_hour';
+  /** Null when the SKU has no price row or there's no perf data — never faked. */
+  value_score: number | null;
+}
+
+export interface PerfPerCostGroup {
+  provider: string;
+  vm_size: string;
+  region: string;
+  /** Null when the SKU is missing from shared/cloud-costs.json (show '—'). */
+  hourly_usd: number | null;
+  /** Region the price row covers (may differ from `region` — see cost_note). */
+  cost_region: string | null;
+  cost_source_url: string | null;
+  cost_as_of: string | null;
+  /** Honesty note: missing price row / priced from another region. */
+  cost_note: string | null;
+  families: PerfPerCostFamily[];
+}
+
+export interface PerfPerCostReport {
+  generated_at: string;
+  cost_table: { as_of: string; disclaimer: string; source: string };
+  /** Human-readable formula text — render verbatim, don't re-derive. */
+  formulas: { latency_cost_index: string; mbps_per_dollar_hour: string };
+  completed_runs: number;
+  providers_with_data: number;
+  groups: PerfPerCostGroup[];
+  missing_cost_skus: { provider: string; vm_size: string; region: string }[];
+}
