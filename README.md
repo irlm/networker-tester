@@ -1,11 +1,14 @@
-# Networker Tester
+# LagHound
 
-`networker-tester` is a cross-platform network diagnostics suite for measuring TCP, HTTP/1.1,
+**LagHound** is a cross-platform network diagnostics suite for measuring TCP, HTTP/1.1,
 HTTP/2, HTTP/3, UDP, page-load, throughput, TLS, and URL-diagnostic behavior.
+The CLI probe engine ships as `networker-tester`.
 
-> **Brand:** the product is **Networker** — one name across the tester, the
-> dashboard/control plane, and the benchmark suite ("Networker Bench", binary
-> `alethabench`). `alethedash.com` is the current production deployment's
+> **Brand:** the product is **LagHound** (renamed from Networker, 2026-07) —
+> one name across the tester, the dashboard/control plane, and the benchmark
+> suite (binary `alethabench`). Infrastructure identifiers keep their
+> historical names: the repo and crates stay `networker-*`, C# projects stay
+> `Networker.*`, and `alethedash.com` is the current production deployment's
 > domain, not a product name. See [`docs/branding.md`](docs/branding.md).
 
 The repository is a hybrid Rust + C# system:

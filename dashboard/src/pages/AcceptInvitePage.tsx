@@ -4,6 +4,7 @@ import { api } from '../api/client';
 import { useAuthStore } from '../stores/authStore';
 import { useProjectStore } from '../stores/projectStore';
 import type { ResolvedInvite } from '../api/types';
+import { PRODUCT_NAME } from '../lib/brand';
 
 type PageState = 'loading' | 'resolved' | 'error' | 'success';
 
@@ -91,7 +92,7 @@ export function AcceptInvitePage() {
         {/* Brand */}
         <div className="text-center mb-8">
           <h1 className="text-[#4ade80] text-2xl font-bold tracking-tight mb-1">
-            Networker
+            {PRODUCT_NAME}
           </h1>
           <p className="text-gray-600 text-xs uppercase tracking-widest">
             network diagnostics

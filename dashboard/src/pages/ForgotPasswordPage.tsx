@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
+import { PRODUCT_NAME } from '../lib/brand';
 
 export function ForgotPasswordPage() {
   const [email, setEmail] = useState('');
@@ -24,7 +25,7 @@ export function ForgotPasswordPage() {
       <div className="w-full max-w-xs">
         <div className="text-center mb-8">
           <h1 className="text-[#4ade80] text-2xl font-bold tracking-tight mb-1">
-            Networker
+            {PRODUCT_NAME}
           </h1>
           <p className="text-gray-600 text-xs uppercase tracking-widest">
             network diagnostics

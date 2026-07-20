@@ -167,7 +167,9 @@ public sealed class AlertNotifier(
             return "failed: invalid channel config";
         }
 
-        var subject = $"[networker] {notification.state}: {notification.metric} " +
+        // Brand tag only — LagHound rename (docs/branding.md); wire headers
+        // (X-Networker-Signature) and env vars are NOT brand and stay put.
+        var subject = $"[laghound] {notification.state}: {notification.metric} " +
                       $"{notification.comparator} {notification.threshold.ToString("0.###", CultureInfo.InvariantCulture)}";
         var body =
             $"{notification.message}\n\n" +

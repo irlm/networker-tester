@@ -29,7 +29,7 @@ const CLOUD_SETUP_GUIDES: Record<string, { steps: string[]; fieldHelp: Record<st
   azure: {
     steps: [
       '1. portal.azure.com \u2192 Microsoft Entra ID \u2192 App registrations \u2192 New registration',
-      '2. Name: "Networker VM Manager", Supported account types: "Single tenant"',
+      '2. Name: "LagHound VM Manager", Supported account types: "Single tenant"',
       '3. Overview page: copy Application (client) ID and Directory (tenant) ID',
       '4. Certificates & secrets \u2192 New client secret \u2192 copy the Value immediately (shown once!)',
       '5. Subscriptions \u2192 your subscription \u2192 Access control (IAM) \u2192 Add role assignment',

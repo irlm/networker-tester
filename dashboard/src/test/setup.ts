@@ -2,6 +2,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
 import { afterEach } from 'vitest';
 import { useProjectStore } from '../stores/projectStore';
+import { PRODUCT_NAME } from '../lib/brand';
 
 function createStorageMock() {
   let store = new Map<string, string>();
@@ -36,5 +37,5 @@ afterEach(() => {
   cleanup();
   localStorage.clear();
   useProjectStore.getState().clear();
-  document.title = 'Networker';
+  document.title = PRODUCT_NAME;
 });
