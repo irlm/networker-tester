@@ -59,6 +59,8 @@ const { laghound } = require("@laghound/node");
 app.use(laghound({ token: process.env.LAGHOUND_TOKEN })); // prefix: "/laghound"
 ```
 
+> Node SDK (`@laghound/endpoint`) — Express/Fastify/`http` adapters, conformance suite + sample: [`sdk/js/`](../../sdk/js/README.md).
+
 ### Python (ASGI — FastAPI/Starlette/Django)
 
 ```python

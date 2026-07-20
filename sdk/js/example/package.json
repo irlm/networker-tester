@@ -1,0 +1,10 @@
+{
+  "name": "laghound-node-sample",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Tiny bare-http service embedding @laghound/endpoint at /laghound. Zero dependencies.",
+  "scripts": {
+    "start": "node server.mjs"
+  }
+}
