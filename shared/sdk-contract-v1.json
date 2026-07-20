@@ -1,0 +1,169 @@
+{
+  "$comment": "Machine-readable LagHound SDK endpoint contract v1. The authoritative prose spec is docs/sdk/contract-v1.md — this file is the copy every language SDK (C#, JS, Python, Rust, Go) and the tester's sdkprobe mode pin their conformance tests to, exactly like shared/modes.json. Frozen once the first SDK ships; breaking changes require contract v2 (new file, new envelope value).",
+  "contract": "v1",
+  "prefix_default": "/laghound",
+  "auth": {
+    "header": "X-LagHound-Token",
+    "alt_header": "Authorization",
+    "alt_scheme": "Bearer",
+    "precedence": "X-LagHound-Token wins when both present",
+    "compare": "constant-time",
+    "token_min_bytes": 16,
+    "rotation_max_tokens": 2,
+    "on_failure": { "status": 404, "body": "bare", "laghound_headers": false },
+    "env_token": "LAGHOUND_TOKEN",
+    "check_order": ["kill_switch", "rate_limits", "auth", "route"]
+  },
+  "kill_switch": {
+    "env": "LAGHOUND_DISABLED",
+    "value": "1",
+    "behavior": { "status": 404, "body": "bare" },
+    "max_cache_s": 1
+  },
+  "caps": {
+    "download_default_bytes": 4194304,
+    "upload_default_bytes": 4194304,
+    "absolute_max_bytes": 33554432,
+    "echo_request_body_max_bytes": 65536,
+    "over_cap_download": "clamp+report",
+    "over_cap_upload": "413",
+    "clamp_report_header": "X-LagHound-Bytes"
+  },
+  "limits": {
+    "rate_per_ip": { "rps": 10, "burst": 20 },
+    "rate_global": { "rps": 50, "burst": 100 },
+    "max_concurrent": 8,
+    "max_concurrent_transfers": 2,
+    "per_ip_table_max_entries": 10000,
+    "byte_budget": { "enabled_by_default": false, "example": { "bytes": 268435456, "window_s": 600 } },
+    "on_exceeded_authenticated": { "status": 429, "headers": ["Retry-After"], "envelope": true },
+    "on_exceeded_unauthenticated": { "status": 404, "body": "bare" }
+  },
+  "server_timing": {
+    "header": "Server-Timing",
+    "max_metrics": 8,
+    "max_header_bytes": 512,
+    "name_pattern": "[a-z0-9-]{1,32}",
+    "dur_unit": "ms",
+    "dur_max_decimals": 3,
+    "metrics": [
+      { "name": "app", "required": "every-response", "meaning": "server processing: request fully received -> response headers ready" },
+      { "name": "recv", "required": "upload-only", "meaning": "upload body drain wall time" },
+      { "name": "total", "required": "recommended", "meaning": "compat alias parsed by deployed testers (runner/http.rs); = app, or recv+app on upload" },
+      { "name": "mark-<name>", "required": "optional", "pattern": "mark-[a-z0-9]{1,24}", "meaning": "host-app custom marks via SDK API" }
+    ],
+    "timing_allow_origin": "*"
+  },
+  "common_response_headers": {
+    "success": ["Server-Timing", "Cache-Control: no-store, no-cache, must-revalidate"],
+    "bare_404": []
+  },
+  "routes": [
+    {
+      "id": "health",
+      "method": "GET",
+      "path": "/health",
+      "params": {},
+      "response": {
+        "status": 200,
+        "content_type": "application/json",
+        "fields": ["contract", "status", "sdk.lang", "sdk.version", "app?", "uptime_s", "routes"],
+        "constraints": ["O(1) per request", "body precomputed at init except uptime_s"]
+      },
+      "always_enabled": true
+    },
+    {
+      "id": "echo",
+      "method": "GET",
+      "path": "/echo",
+      "params": {},
+      "response": {
+        "status": 200,
+        "content_type": "application/json",
+        "body_fixed": { "contract": "v1", "ok": true },
+        "constraints": ["byte-constant per process", "< 1024 bytes", "zero reflection of request input"]
+      }
+    },
+    {
+      "id": "download",
+      "method": "GET",
+      "path": "/download",
+      "params": {
+        "bytes": { "type": "u64", "default": 4194304, "invalid": { "status": 400, "code": "invalid_param" }, "effective": "min(bytes, download_cap_bytes, absolute_max_bytes)" }
+      },
+      "response": {
+        "status": 200,
+        "content_type": "application/octet-stream",
+        "headers": ["Content-Length", "X-LagHound-Bytes"],
+        "fill_byte": 66,
+        "constraints": ["streamed, chunk <= 65536 bytes", "single shared per-process buffer", "no per-request allocation proportional to N"]
+      }
+    },
+    {
+      "id": "upload",
+      "method": "POST",
+      "path": "/upload",
+      "params": {},
+      "request": {
+        "cap": "min(upload_cap_bytes, absolute_max_bytes)",
+        "content_length_over_cap": { "status": 413, "read_body": false },
+        "chunked_over_cap": { "status": 413, "drain_max": "cap", "close_connection": true }
+      },
+      "response": {
+        "status": 200,
+        "content_type": "application/json",
+        "fields": ["contract", "received_bytes"],
+        "headers": ["X-LagHound-Bytes"],
+        "server_timing": ["recv", "app"],
+        "constraints": ["drain-and-count, never buffer", "peak memory O(chunk)"]
+      }
+    },
+    {
+      "id": "info",
+      "method": "GET",
+      "path": "/info",
+      "params": {},
+      "response": {
+        "status": 200,
+        "content_type": "application/json",
+        "fields": ["contract", "sdk.lang", "sdk.version", "app?", "prefix", "uptime_s", "token_set", "caps", "limits", "routes"],
+        "constraints": ["never emits the token or any derivative (hash, prefix, length)", "no host-app config, hostnames, IPs, or env dumps"]
+      }
+    }
+  ],
+  "error_envelope": {
+    "shape": { "contract": "v1", "error": { "code": "<code>", "message": "<fixed string>", "retry_after_ms": "<optional u64>" } },
+    "codes": [
+      { "code": "invalid_param", "status": 400 },
+      { "code": "method_not_allowed", "status": 405 },
+      { "code": "payload_too_large", "status": 413 },
+      { "code": "rate_limited", "status": 429, "headers": ["Retry-After"] },
+      { "code": "internal", "status": 500 }
+    ],
+    "bare_statuses": [404],
+    "messages_are_fixed_strings": true,
+    "forward_compat": "consumers ignore unknown members; contract != v1 means stop and do not guess"
+  },
+  "sdk_langs": ["csharp", "js", "python", "rust", "go"],
+  "logging": {
+    "forbidden": ["request bodies", "tokens", "full header sets"],
+    "permitted_fields": ["method", "route", "status", "duration_ms", "byte_count"]
+  },
+  "tester_compat": {
+    "$comment": "How existing shared/modes.json modes map onto a LagHound-embedded app. sdkprobe is NOT in modes.json yet — the control-plane wave adds it (drift guards enforce single-PR updates).",
+    "unchanged_no_route": ["dns", "tcp", "tls", "tlsresume", "native"],
+    "unchanged_with_bearer": {
+      "http1": "/echo", "http2": "/echo", "http3": "/echo", "curl": "/echo",
+      "download": "/download?bytes=N", "download1": "/download?bytes=N", "download2": "/download?bytes=N", "download3": "/download?bytes=N", "webdownload": "/download?bytes=N",
+      "upload": "/upload", "upload1": "/upload", "upload2": "/upload", "upload3": "/upload", "webupload": "/upload"
+    },
+    "not_applicable": ["udp", "udpdownload", "udpupload", "pageload", "pageload2", "pageload3", "browser1", "browser2", "browser3", "browser", "apibench"],
+    "new_mode_pending": {
+      "id": "sdkprobe",
+      "level": "tester",
+      "family": "http",
+      "consumes": ["app", "mark-*", "/health capability map"],
+      "split": ["dns_ms", "tcp_ms", "tls_ms", "network_transfer_ms = ttfb_ms - app", "server_processing_ms = app"]
+    }
+  }
+}
