@@ -41,6 +41,8 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<Program>, IAsync
     public static readonly Guid SeededConfigId = Guid.Parse("22222222-2222-4222-8222-222222222222");
     public static readonly Guid SeededViewerUserId = Guid.Parse("33333333-3333-4333-8333-333333333333");
     public const string SeededViewerEmail = "itest-viewer@networker.local";
+    public static readonly Guid SeededAdminUserId = Guid.Parse("44444444-4444-4444-8444-444444444444");
+    public const string SeededAdminEmail = "itest-admin@networker.local";
 
     /// A fresh DbContext against the same container — for tests to assert what
     /// a write endpoint persisted.
@@ -157,6 +159,29 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<Program>, IAsync
             Status = "active",
             JoinedAt = now,
         });
+        // A global-admin + project-admin member so Admin-gated routes
+        // (GlobalAdmin: /api/update/*; ProjectAdmin: tester upgrade) can be
+        // exercised past the 403 — needed for the honest-501 contract tests.
+        ctx.DashUsers.Add(new DashUser
+        {
+            UserId = SeededAdminUserId,
+            Email = SeededAdminEmail,
+            Role = "admin",
+            Status = "active",
+            AuthProvider = "local",
+            IsPlatformAdmin = false,
+            MustChangePassword = false,
+            SsoOnly = false,
+            CreatedAt = now,
+        });
+        ctx.ProjectMembers.Add(new ProjectMember
+        {
+            ProjectId = SeededProjectId,
+            UserId = SeededAdminUserId,
+            Role = "admin",
+            Status = "active",
+            JoinedAt = now,
+        });
         // A test config so the M3 launch/dispatch write path can be exercised.
         ctx.TestConfigs.Add(new TestConfig
         {
@@ -202,6 +227,17 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<Program>, IAsync
         var client = CreateClient();
         var tokens = Services.GetRequiredService<JwtTokenService>();
         var jwt = tokens.CreateToken(SeededViewerUserId, SeededViewerEmail, "viewer", isPlatformAdmin: false);
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", jwt);
+        return client;
+    }
+
+    /// A client authenticated as the seeded global/project ADMIN — for routes
+    /// behind GlobalAdmin (/api/update/*) or ProjectAdmin (tester upgrade).
+    public HttpClient CreateAdminClient()
+    {
+        var client = CreateClient();
+        var tokens = Services.GetRequiredService<JwtTokenService>();
+        var jwt = tokens.CreateToken(SeededAdminUserId, SeededAdminEmail, "admin", isPlatformAdmin: false);
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", jwt);
         return client;
     }
@@ -358,6 +394,77 @@ public sealed class ControlPlaneIntegrationTests : IClassFixture<ControlPlaneFix
             .FirstOrDefaultAsync(d => d.ProjectId == ControlPlaneFixture.SeededProjectId
                                       && d.Name == "itest-deploy");
         Assert.NotNull(dep);
+    }
+
+    // ── Honest 501s (fidelity audit F23/F24) ───────────────────────────────
+    // These endpoints used to claim success for work they didn't do (upgrade
+    // wrote "Upgrade completed (state re-probed)" after a mere probe; update
+    // returned 200 {"status":"updating"} and did nothing). They must refuse
+    // loudly until a real implementation lands.
+
+    [Theory]
+    [InlineData("/api/update/tester")]
+    [InlineData("/api/update/dashboard")]
+    public async Task Update_endpoints_refuse_honestly_with_501(string route)
+    {
+        var client = _fixture.CreateAdminClient();
+
+        var resp = await client.PostAsync(route, content: null);
+
+        Assert.Equal(HttpStatusCode.NotImplemented, resp.StatusCode);
+        var body = await resp.Content.ReadAsStringAsync();
+        Assert.Contains("not implemented", body);
+        Assert.Contains("fidelity audit", body);
+        Assert.DoesNotContain("updating", body); // the old fake-success shape
+    }
+
+    [Fact]
+    public async Task Tester_upgrade_refuses_honestly_with_501_and_mutates_nothing()
+    {
+        var client = _fixture.CreateAdminClient();
+
+        Guid testerId;
+        await using (var ctx = _fixture.NewDbContext())
+        {
+            var tester = await ctx.ProjectTesters
+                .FirstAsync(t => t.Name == ControlPlaneFixture.SeededTesterName);
+            testerId = tester.TesterId;
+        }
+
+        var resp = await client.PostAsJsonAsync(
+            $"/api/projects/{ControlPlaneFixture.SeededProjectId}/testers/{testerId}/upgrade",
+            new { confirm = true });
+
+        Assert.Equal(HttpStatusCode.NotImplemented, resp.StatusCode);
+        var body = await resp.Content.ReadAsStringAsync();
+        Assert.Contains("not implemented", body);
+
+        // No state transition, no fake status message — the row is untouched.
+        await using (var verify = _fixture.NewDbContext())
+        {
+            var tester = await verify.ProjectTesters.FirstAsync(t => t.TesterId == testerId);
+            Assert.Equal("on-demand", tester.Allocation);
+            Assert.Null(tester.StatusMessage);
+        }
+    }
+
+    [Fact]
+    public async Task Tester_upgrade_still_validates_the_confirm_contract()
+    {
+        var client = _fixture.CreateAdminClient();
+
+        Guid testerId;
+        await using (var ctx = _fixture.NewDbContext())
+        {
+            testerId = (await ctx.ProjectTesters
+                .FirstAsync(t => t.Name == ControlPlaneFixture.SeededTesterName)).TesterId;
+        }
+
+        var resp = await client.PostAsJsonAsync(
+            $"/api/projects/{ControlPlaneFixture.SeededProjectId}/testers/{testerId}/upgrade",
+            new { confirm = false });
+
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
     }
 
     [Fact]

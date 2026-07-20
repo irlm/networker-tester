@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { api } from '../api/client';
+import { api, errorMessage } from '../api/client';
 import type { Deployment, CloudConnection } from '../api/types';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useToast } from '../hooks/useToast';
@@ -196,8 +196,11 @@ export function SettingsPage() {
                           const result = await api.updateDashboard();
                           setActiveUpdateId(result.update_id);
                           addToast('success', 'Dashboard update started — will restart automatically');
-                        } catch {
-                          addToast('error', 'Failed to start dashboard update');
+                        } catch (e) {
+                          // Surface the server's message (e.g. the honest 501:
+                          // updates ship via the release pipeline) — not a
+                          // generic failure line.
+                          addToast('error', errorMessage(e));
                           setDashboardUpdating(false);
                         }
                       }}

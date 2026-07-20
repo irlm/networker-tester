@@ -184,11 +184,16 @@ public static partial class TesterWriteEndpoints
 
     // ── upgrade ────────────────────────────────────────────────────────────────
 
-    /// <summary>POST /upgrade (Admin) — re-run the installer on a running,
-    /// idle tester. Requires <c>{confirm:true}</c>. Marks
-    /// <c>allocation=upgrading</c>, returns 202; the actual re-install is the
-    /// deploy-runner's job (M4 slice 2) — here we do the state transition and a
-    /// state probe so the row reflects reality.</summary>
+    /// <summary>POST /upgrade (Admin) — HONEST 501 (fidelity audit F23).
+    /// The Rust dashboard re-installed the tester binaries over SSH
+    /// (<c>services/tester_install.rs::install_tester</c>); that path has not
+    /// been ported. The previous C# behaviour marked the row
+    /// <c>upgrading</c>, ran a cloud state probe, and wrote "Upgrade
+    /// completed (state re-probed)" — a silent lie that left testers on old
+    /// versions while the UI reported success. Until the SSH re-install (or
+    /// an agent self-update command) is wired, this refuses loudly and
+    /// mutates nothing. Request validation (400/404) is kept so the route's
+    /// contract stays testable.</summary>
     private static async Task<IResult> UpgradeTester(
         string projectId,
         Guid testerId,
@@ -213,46 +218,15 @@ public static partial class TesterWriteEndpoints
             return ApiError.NotFound("Tester not found");
         }
 
-        if (tester.Allocation != "idle")
-        {
-            return Conflict($"cannot upgrade tester with allocation={tester.Allocation}; must be idle");
-        }
-        if (tester.PowerState != "running")
-        {
-            return Conflict($"cannot upgrade tester in power_state={tester.PowerState}; expected 'running'");
-        }
+        logger.LogWarning(
+            "tester {TesterId} upgrade requested by {Actor} — refused with 501: SSH re-install not ported",
+            testerId, user?.Email);
 
-        var inFlight = await InFlightRunCountAsync(db, testerId, ct);
-        if (inFlight > 0)
-        {
-            return Conflict($"cannot upgrade tester with {inFlight} benchmark(s) in flight");
-        }
-
-        tester.Allocation = "upgrading";
-        tester.StatusMessage = "Upgrade requested";
-        tester.UpdatedAt = DateTime.UtcNow;
-        await db.SaveChangesAsync(ct);
-
-        logger.LogInformation("tester {TesterId} upgrade requested by {Actor}", testerId, user?.Email);
-
-        // Background: confirm the VM is reachable via a state probe, then release
-        // the allocation. Re-installer wiring lands in M4 slice 2 (deploy-runner).
-        FireAndForget(scopeFactory, loggerFactory, testerId, "upgrade", async (p, cred, t, l, token) =>
-        {
-            var res = await p.ShowAsync(t, cred, token);
-            using var scope = scopeFactory.CreateScope();
-            var sdb = scope.ServiceProvider.GetRequiredService<NetworkerDbContext>();
-            var row = await sdb.ProjectTesters.FirstOrDefaultAsync(x => x.TesterId == testerId, token);
-            if (row is null) return;
-            row.Allocation = "idle";
-            row.StatusMessage = res.Success
-                ? "Upgrade completed (state re-probed)"
-                : $"Upgrade probe failed: {res.Error ?? res.StdErr}";
-            row.UpdatedAt = DateTime.UtcNow;
-            await sdb.SaveChangesAsync(token);
-        });
-
-        return Results.Accepted($"/api/projects/{projectId}/testers/{testerId}", ToDto(tester));
+        return ApiError.Status(
+            StatusCodes.Status501NotImplemented,
+            "tester upgrade (SSH re-install) is not implemented in the C# control plane yet — "
+            + "no binaries were changed; tracked in the fidelity audit (F23). "
+            + "Workaround: delete and re-deploy the runner to get current binaries.");
     }
 
     // ── probe ──────────────────────────────────────────────────────────────────
