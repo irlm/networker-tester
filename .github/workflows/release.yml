@@ -287,6 +287,10 @@ jobs:
           # on prod with "install.sh not found" (found live 2026-07-19).
           cp install.sh publish/controlplane/install.sh
           chmod 755 publish/controlplane/install.sh
+          # The codified systemd unit (audit F13) rides the same tarball; the
+          # deploy job installs it idempotently (copy + daemon-reload only
+          # when it differs from the unit on the VM).
+          cp deploy/alethedash-cs.service publish/controlplane/alethedash-cs.service
           mkdir -p dist
           tar czf dist/networker-controlplane-linux-x64.tar.gz -C publish/controlplane .
 
@@ -408,6 +412,21 @@ jobs:
               curl -fsSL \"\${RELEASE_BASE}/dashboard-frontend.tar.gz\" -o /tmp/dashboard-frontend.tar.gz
 
               # ── C# control plane (the /api + /ws backend) ───────────────
+              # Secrets guard (audit F2): fail LOUDLY while the old build is
+              # still serving. DASHBOARD_CREDENTIAL_KEY decrypts every stored
+              # cloud-account secret; a regenerated key permanently orphans
+              # them all (this class of loss already happened once) — so this
+              # deploy NEVER auto-generates it, it only refuses to proceed.
+              for REQ in DASHBOARD_CREDENTIAL_KEY DASHBOARD_JWT_SECRET; do
+                if ! sudo grep -q \"^\${REQ}=.\" /etc/alethedash-cs.env 2>/dev/null; then
+                  echo \">> DEPLOY_FAILED: /etc/alethedash-cs.env is missing \${REQ}\"
+                  echo '>>   Refusing to deploy: the app fail-closes without it, and auto-generating'
+                  echo '>>   DASHBOARD_CREDENTIAL_KEY would permanently orphan every encrypted cloud'
+                  echo '>>   credential. Restore the env file (runbook docs/phase2-cutover-runbook.md'
+                  echo '>>   §1.1) and re-run the deploy. The running build was NOT touched.'
+                  exit 1
+                fi
+              done
               # Idempotent env guard: DASHBOARD_PUBLIC_URL must be set or the
               # provisioning bootstrap points new tester agents at
               # ws://localhost:3000 and they never come online (found live,
@@ -430,6 +449,17 @@ jobs:
               sudo find /opt/alethedash-cs -name '._*' -delete 2>/dev/null || true
               sudo chmod +x /opt/alethedash-cs/Networker.ControlPlane
               rm -f /tmp/controlplane.tar.gz
+
+              # ── systemd unit (codified: deploy/alethedash-cs.service) ───
+              # Audit F13: the unit used to exist only as hand-applied VM
+              # state. The repo copy rides the tarball; install + reload ONLY
+              # when it actually changed, so steady-state deploys stay no-op.
+              if ! sudo cmp -s /opt/alethedash-cs/alethedash-cs.service /etc/systemd/system/alethedash-cs.service; then
+                echo '>> Unit changed — installing alethedash-cs.service + daemon-reload'
+                sudo install -m 644 /opt/alethedash-cs/alethedash-cs.service /etc/systemd/system/alethedash-cs.service
+                sudo systemctl daemon-reload
+                sudo systemctl enable alethedash-cs 2>/dev/null || true
+              fi
 
               # ── Rust endpoint (still Rust on prod) ──────────────────────
               echo '>> Deploying endpoint + tester + orchestrator...'
