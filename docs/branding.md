@@ -6,11 +6,37 @@ The product brand is **LagHound** (capital L, capital H).
 
 The product brand renamed from **Networker** to **LagHound**. Rationale:
 catchier and ownable — "Networker" is generic and unclaimable as a name;
-the `laghound.com` / `laghound.sh` domains are purchased. The domain cutover
-is a **separate later phase** — all `alethedash.com` references stay until it
-is ordered. The hound logo is a later design task; the text wordmark (existing
-brand purple/cyan tokens, unchanged) is the mark for now. The single source of
-truth in the frontend is `dashboard/src/lib/brand.ts` (`PRODUCT_NAME`).
+the `laghound.com` / `laghound.sh` domains are purchased. The hound logo is a
+later design task; the text wordmark (existing brand purple/cyan tokens,
+unchanged) is the mark for now. The single source of truth in the frontend is
+`dashboard/src/lib/brand.ts` (`PRODUCT_NAME`).
+
+## Domain cutover status (2026-07-20)
+
+- **Phase 1 (product surfaces): complete** — user-visible brand strings say
+  LagHound (#483).
+- **Phase 2 (serving infra): complete** — `https://laghound.com` is LIVE and
+  serves production (nginx server block + TLS cert done). `https://laghound.sh`
+  serves the installer script to `curl` clients and 301s browsers to the
+  dashboard. `leghound.com` (typo domain) 301s to `laghound.com`.
+- **Phase 3 (pipeline + docs): complete** — release deploy asserts
+  `DASHBOARD_PUBLIC_URL=https://laghound.com` (replacing stale values), the
+  deploy-verify and nightly soak check both probe `laghound.com` AND the
+  `alethedash.com` bridge, and docs/installer one-liners point at the new
+  domains.
+
+### Domain bridge policy — `alethedash.com`
+
+Fielded tester agents hold **provision-time** WebSocket URLs pointing at
+`alethedash.com`, so the old domain is a live compatibility surface:
+
+1. `alethedash.com` stays **fully functional** (API + WS + UI, not a redirect)
+   for at least one full fleet re-provision cycle after the cutover. The
+   nightly soak check alerts if the bridge stops answering 200.
+2. After the fleet no longer holds `alethedash.com` URLs, it may be demoted to
+   a browser-only 301 to `laghound.com`.
+3. The registration is kept for **at least 1 year** to prevent takeover of a
+   domain that fielded binaries and docs have referenced.
 
 Policy restated: **only user-visible product-brand strings rename.**
 Infrastructure identifiers — crate/binary names, release asset names, C#
@@ -35,13 +61,15 @@ wire/ops compatibility surfaces and do NOT change.
 These are live identifiers, not brand. Renaming them is an ops migration that
 has not been ordered — they stay until one is.
 
-- **`alethedash.com`** — the current production deployment's domain, and the
-  naming stem for its infrastructure: Azure resource group `ALETHEDASH-RG`,
-  VM `alethedash-vm`, systemd service `alethedash-cs`, database `alethedash`,
+- **`alethedash-*` infrastructure names** — the naming stem for the production
+  deployment's infrastructure: Azure resource group `ALETHEDASH-RG`, VM
+  `alethedash-vm`, systemd service `alethedash-cs`, database `alethedash`,
   `/etc/alethedash-cs.env`, `/opt/alethedash*` paths, the AWS security-group/
   key-pair/tag name `alethedash-tester`, backup storage, and related GitHub
-  secrets. Docs and workflows that reference these are describing the
-  deployment, not the brand.
+  secrets. These stay even though the public domain is now `laghound.com` —
+  docs and workflows that reference them are describing the deployment, not
+  the brand. The `alethedash.com` **domain** itself is now the compatibility
+  bridge (policy above).
 - **`alethabench`** — the orchestrator's historical binary/package name
   (`benchmarks/orchestrator`, package `alethabench-orchestrator`), plus its
   cloud identifiers (`alethabench-rg`, `alethabench-sg`, `alethabench-key`,

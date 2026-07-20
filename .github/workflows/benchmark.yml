@@ -223,7 +223,7 @@ jobs:
             exit 0
           fi
 
-          API_URL="https://alethedash.com/api/benchmarks"
+          API_URL="https://laghound.com/api/benchmarks"
 
           for f in benchmarks/results/*.json; do
             [ -f "$f" ] || continue

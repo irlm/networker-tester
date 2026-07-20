@@ -6,10 +6,12 @@ The CLI probe engine ships as `networker-tester`.
 
 > **Brand:** the product is **LagHound** (renamed from Networker, 2026-07) —
 > one name across the tester, the dashboard/control plane, and the benchmark
-> suite (binary `alethabench`). Infrastructure identifiers keep their
-> historical names: the repo and crates stay `networker-*`, C# projects stay
-> `Networker.*`, and `alethedash.com` is the current production deployment's
-> domain, not a product name. See [`docs/branding.md`](docs/branding.md).
+> suite (binary `alethabench`). Production is served at
+> [`https://laghound.com`](https://laghound.com); `alethedash.com` remains a
+> fully functional bridge for fielded agents until decommissioned.
+> Infrastructure identifiers keep their historical names: the repo and crates
+> stay `networker-*`, C# projects stay `Networker.*`, and on-VM names stay
+> `alethedash-*`. See [`docs/branding.md`](docs/branding.md).
 
 The repository is a hybrid Rust + C# system:
 - `networker-tester` (Rust): the CLI probe engine — runs probes and writes JSON, HTML, Excel, and DB output. This is the permanent measurement core.
@@ -63,9 +65,14 @@ More detail is in [`docs/architecture.md`](docs/architecture.md).
 ### macOS and Linux
 
 ```bash
-curl -fsSL https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh | bash -s -- tester
-curl -fsSL https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh | bash -s -- endpoint
+curl -fsSL https://laghound.sh | bash -s -- tester
+curl -fsSL https://laghound.sh | bash -s -- endpoint
 ```
+
+(`laghound.sh` serves the installer script to `curl` and redirects browsers
+to the dashboard. The Gist mirror at
+`https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh`
+keeps working.)
 
 ### Windows PowerShell
 

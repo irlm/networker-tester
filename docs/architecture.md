@@ -6,8 +6,9 @@ the direct probe path (Rust) and the managed control-plane path (C#).
 - **Rust** owns measurement: `networker-tester` (the probe engine) and
   `networker-endpoint` (the diagnostic target). These are the permanent core.
 - **C#/.NET 10** owns the application layer: `Networker.ControlPlane` serves
-  production (alethedash.com) and `Networker.Agent` is the worker that tester
-  VMs bootstrap.
+  production (laghound.com; alethedash.com stays as the compatibility bridge
+  for fielded agents — see [`branding.md`](branding.md)) and
+  `Networker.Agent` is the worker that tester VMs bootstrap.
 - The legacy Rust control plane (`networker-dashboard`, `networker-agent`,
   `networker-common`) is **retired** — replaced by the C# solution, off the
   release train, and pending decommission (see
@@ -25,7 +26,7 @@ flowchart LR
         T --> O
     end
 
-    subgraph ControlPlane["Managed path (production: alethedash.com)"]
+    subgraph ControlPlane["Managed path (production: laghound.com)"]
         B["Browser"]
         N["nginx"]
         SPA["React SPA (static files on disk)"]
