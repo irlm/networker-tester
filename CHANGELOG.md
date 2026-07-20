@@ -11,6 +11,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.39] — 2026-07-20
+
+### Fixed
+- **`GET /api/perf-log` 500 (42P01) on prod — `perf_log` missing from the main
+  DB.** The Rust dashboard created `perf_log` in its separate LOGS database
+  while recording V023 as applied in the main DB's `_migrations` bookkeeping,
+  so the C# `SchemaMigrator` skipped V023 and the single-DB control plane
+  queried a table that doesn't exist. New **V042** migration re-asserts the
+  exact V023 `perf_log` DDL idempotently (`CREATE TABLE IF NOT EXISTS` +
+  indexes) on the main database; `SchemaMigrator.LatestVersion` → 42.
+- **Perf Log page showed the "No performance logs recorded yet" empty state
+  when the API failed.** The page now distinguishes a load error (red error
+  panel with the server message) from a genuinely empty log.
+- **Systemd unit codified (audit F13).** `deploy/alethedash-cs.service` is now
+  in the repo (pinned `User=`, `WorkingDirectory=/opt/alethedash-cs`,
+  `EnvironmentFile=/etc/alethedash-cs.env`, PATH including
+  `/usr/local/bin:/snap/bin`, `Restart=on-failure`), ships inside the
+  control-plane tarball, and the deploy installs it idempotently
+  (copy + `daemon-reload` only when changed) before restart.
+- **Credential-key deploy guard (audit F2).** The prod deploy now fails loudly
+  — before stopping the old build — if `/etc/alethedash-cs.env` lacks
+  `DASHBOARD_CREDENTIAL_KEY` or `DASHBOARD_JWT_SECRET`. The key is never
+  auto-generated (a regenerated key = permanent loss of every encrypted cloud
+  credential).
+- **HOME/PATH under systemd (audit F3/F12).** Provisioning paths that read
+  `$HOME` (AWS key-pair import, GCP ssh-keys metadata, GCP precheck) now fall
+  back to the passwd-backed user profile (and `/root`) instead of silently
+  probing a relative `.ssh/id_rsa.pub` under `/`. Added `AWS_CMD` and
+  `GCLOUD_CMD` overrides (parity with `AZ_CMD`); a missing cloud CLI now
+  reports which binary failed to launch and which env var overrides its path.
+- **Honest upgrade endpoints (audit F23/F24).** `POST
+  /api/projects/{p}/testers/{id}/upgrade` and `POST /api/update/{tester,
+  dashboard}` no longer report success for work they don't do — they return
+  `501 { "error": ... }` ("not implemented in the C# control plane yet;
+  tracked in the fidelity audit"). The UI surfaces the message instead of a
+  fake success toast.
+
+---
+
 ## [0.28.38] — 2026-07-19
 
 ### Added
