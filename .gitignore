@@ -34,11 +34,13 @@ benchmarks/reference-apis/**/obj/
 # ...except the C# solution, which lives at repo root by design
 !/Networker.sln
 
-# C# / .NET build output (src/ = projects, tests/ = test projects)
+# C# / .NET build output (src/ = projects, tests/ = test projects, sdk/ = language SDKs)
 src/**/bin/
 src/**/obj/
 tests/**/bin/
 tests/**/obj/
+sdk/**/bin/
+sdk/**/obj/
 *.user
 .vs/
 .idea/
