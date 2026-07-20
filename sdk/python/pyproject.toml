@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "laghound"
+version = "0.1.0"
+description = "LagHound endpoint SDK for Python (ASGI + WSGI) — embed a production-safe diagnostic endpoint that reports the network-vs-server split via Server-Timing (contract v1)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+keywords = ["laghound", "server-timing", "diagnostics", "latency", "asgi", "wsgi", "observability"]
+authors = [{ name = "LagHound" }]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Intended Audience :: System Administrators",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Internet :: WWW/HTTP",
+  "Topic :: System :: Networking :: Monitoring",
+]
+# Contract requirement: zero runtime dependencies — stdlib only.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/irlm/networker-tester"
+Documentation = "https://github.com/irlm/networker-tester/tree/main/sdk/python"
+Specification = "https://github.com/irlm/networker-tester/blob/main/docs/sdk/contract-v1.md"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/laghound"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/laghound", "tests", "README.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
