@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>LagHound.Example</RootNamespace>
+    <AssemblyName>LagHound.Example</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <!-- Deliberately NOT in Networker.sln: kept out of the CI build matrix;
+         this is a deployment/demo target. Lives under sdk/, outside the
+         Directory.Build.props src/*|tests/* version scope. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LagHound.Endpoint\LagHound.Endpoint.csproj" />
+  </ItemGroup>
+
+</Project>

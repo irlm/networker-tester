@@ -51,6 +51,8 @@ app.MapLagHound(new LagHoundOptions { Token = builder.Configuration["LAGHOUND_TO
 // optional: opts.Prefix = "/laghound"; opts.DownloadCapBytes = 4 * 1024 * 1024;
 ```
 
+Implementation: [`sdk/csharp/`](../../sdk/csharp/README.md) (`LagHound.Endpoint`).
+
 ### JS (Node — Express/Fastify/etc.)
 
 ```js

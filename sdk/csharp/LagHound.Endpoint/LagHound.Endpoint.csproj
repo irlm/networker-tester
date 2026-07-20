@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- net8.0 = broadest supported LTS host; net10.0 = repo default. -->
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>LagHound.Endpoint</RootNamespace>
+    <AssemblyName>LagHound.Endpoint</AssemblyName>
+    <PackageId>LagHound.Endpoint</PackageId>
+    <!-- SDK versions independently of the repo's five-file version sync;
+         Directory.Build.props scopes itself to src/* and tests/* so nothing
+         is stamped here. This is the version /health and /info report. -->
+    <Version>0.1.0</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <Description>Embed a LagHound diagnostic endpoint (contract v1) into an ASP.NET Core app. Five token-gated routes (/health /echo /download /upload /info) with Server-Timing app/total on every response, hard byte caps, rate/concurrency limits, a kill switch, and 404-invisibility. Zero dependencies beyond the shared framework.</Description>
+    <Authors>LagHound</Authors>
+    <IsPackable>true</IsPackable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The ONLY reference: the shared ASP.NET Core framework. No packages. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="LagHound.Endpoint.Tests" />
+  </ItemGroup>
+
+</Project>

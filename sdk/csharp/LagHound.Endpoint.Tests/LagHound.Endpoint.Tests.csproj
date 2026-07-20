@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Match the SDK under test; single-target net10.0 to align with the repo
+         CI ('Build & audit (C#)') host and Networker.sln's net10 projects. -->
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <!-- This project lives under sdk/, outside Directory.Build.props' src/*|tests/*
+         scope, so it is NOT stamped by the repo's five-file version. It carries
+         no <Version> and does not participate in version-check. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LagHound.Endpoint\LagHound.Endpoint.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Pin the conformance suite to the machine-readable contract, exactly
+         like shared/modes.json. Copied next to the test assembly at build. -->
+    <None Include="..\..\..\shared\sdk-contract-v1.json" Link="sdk-contract-v1.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>
