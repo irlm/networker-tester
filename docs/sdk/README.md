@@ -75,6 +75,8 @@ let router = router.merge(laghound::router(laghound::Config::new(token)));
 // Config::new(token).prefix("/laghound").download_cap(4 * 1024 * 1024)
 ```
 
+Shipped SDK + runnable sample: [`sdk/rust/`](../../sdk/rust/README.md).
+
 ### Go (net/http)
 
 ```go

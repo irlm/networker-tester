@@ -1,0 +1,46 @@
+# Standalone workspace marker: the Rust SDK is intentionally NOT a member of the
+# root `../../Cargo.toml` workspace (which pins a synced release version across
+# five files). Keeping it standalone means the SDK versions independently and
+# the root Cargo.toml / Cargo.lock stay untouched. The empty `[workspace]` table
+# below stops cargo's upward manifest walk so the crate builds identically from
+# the main checkout and from any git worktree — same trick as
+# `benchmarks/orchestrator`. The nested `example/` crate is excluded here so it
+# is not pulled into this crate's own workspace either.
+[workspace]
+exclude = ["example"]
+
+[package]
+name = "laghound"
+version = "1.0.0"
+edition = "2021"
+license = "MIT"
+description = "LagHound diagnostic endpoint SDK — a tower Layer/Service (with optional axum router sugar) implementing endpoint contract v1: the Server-Timing network-vs-server split, production-safe byte/rate/concurrency caps, and 404-invisible auth."
+repository = "https://github.com/laghound/laghound"
+readme = "README.md"
+keywords = ["observability", "server-timing", "diagnostics", "tower", "axum"]
+categories = ["web-programming", "network-programming"]
+
+[features]
+default = []
+# Adds `laghound::router(config)` -> an `axum::Router` you can `.merge()`/`.nest()`.
+axum = ["dep:axum"]
+
+[dependencies]
+tower = { version = "0.5", features = ["util"] }
+http = "1"
+http-body = "1"
+http-body-util = "0.1"
+bytes = "1"
+subtle = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+pin-project-lite = "0.2"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+axum = { version = "0.8", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
+tower = { version = "0.5", features = ["util"] }
+serde_json = "1"
+axum = "0.8"

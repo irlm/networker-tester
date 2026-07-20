@@ -1,0 +1,24 @@
+# Standalone workspace: the sample app is intentionally NOT a member of the
+# `laghound` crate's workspace (which `exclude = ["example"]`s it) nor of the
+# repo root workspace. The empty `[workspace]` table stops cargo's upward
+# manifest walk so it builds from any checkout/worktree without touching the
+# root Cargo.toml / Cargo.lock.
+[workspace]
+
+[package]
+name = "laghound-sample"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "Minimal axum app nesting laghound::router — the Rust SDK sample."
+
+[[bin]]
+name = "laghound-sample"
+path = "src/main.rs"
+
+[dependencies]
+# The SDK, from the parent directory, with the axum router sugar enabled.
+laghound = { path = "..", features = ["axum"] }
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net"] }
