@@ -8,6 +8,7 @@ using Networker.ControlPlane.Realtime;
 using Networker.ControlPlane.Realtime.RawWs;
 using Networker.Data;
 using Networker.Data.Entities;
+using Networker.Security;
 
 namespace Networker.ControlPlane.Tests;
 
@@ -158,7 +159,9 @@ public sealed class RunDispatcherTesterFkTests
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 baseline_run_id TEXT,
-                max_duration_secs INTEGER NOT NULL DEFAULT 0
+                max_duration_secs INTEGER NOT NULL DEFAULT 0,
+                token_enc BLOB,
+                token_nonce BLOB
             );
             """);
         Exec(conn, """
@@ -271,6 +274,12 @@ public sealed class RunDispatcherTesterFkTests
         Role: "admin",
         IsPlatformAdmin: true);
 
+    /// <summary>A fixed-key cipher for the dispatcher — these tests use no
+    /// sdkprobe tokens, so the key value is irrelevant; it just satisfies the
+    /// constructor.</summary>
+    private static CredentialCipher TestCipher() =>
+        new(new byte[CredentialCipher.KeySize]);
+
     private static string RunStartedFrame(Guid runId, DateTimeOffset startedAt)
         => System.Text.Json.JsonSerializer.Serialize(
             (AgentMessage)new RunStartedMessage(runId, startedAt));
@@ -296,7 +305,8 @@ public sealed class RunDispatcherTesterFkTests
         var dispatcher = new RunDispatcher(
             db, registry,
             sp.GetRequiredService<EventBus>(),
-            sp.GetRequiredService<ILogger<RunDispatcher>>());
+            sp.GetRequiredService<ILogger<RunDispatcher>>(),
+            TestCipher());
 
         // Launch pinned to the project_tester (a project_tester id, NOT an agent id).
         var runId = await dispatcher.LaunchAsync(configId, null, testerId, Caller(), default);
@@ -329,7 +339,8 @@ public sealed class RunDispatcherTesterFkTests
         var dispatcher = new RunDispatcher(
             db, registry,
             sp.GetRequiredService<EventBus>(),
-            sp.GetRequiredService<ILogger<RunDispatcher>>());
+            sp.GetRequiredService<ILogger<RunDispatcher>>(),
+            TestCipher());
 
         // Launch with no pinned tester → falls back to the only online agent.
         var runId = await dispatcher.LaunchAsync(configId, null, null, Caller(), default);

@@ -191,7 +191,7 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         var label = workload is null ? "tester" : $"tester/{workload}";
         logger.LogInformation(
             "{CorrelationId}: Spawning {Label} {Bin} {Args}",
-            correlationId, label, binPath, string.Join(" ", args));
+            correlationId, label, binPath, string.Join(" ", RedactSecretArgs(args)));
 
         var psi = new ProcessStartInfo
         {
@@ -388,6 +388,24 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         if (config.Insecure)
             args.Add("--insecure");
 
+        // sdkprobe mode: pass the decrypted LagHound token + optional route. The
+        // token reaches here only via the control-plane wire workload (it is
+        // never stored plaintext); the spawn log line REDACTS it (see the
+        // masked-args log below).
+        if (config.Modes.Any(m => string.Equals(m, "sdkprobe", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (!string.IsNullOrEmpty(config.LagHoundToken))
+            {
+                args.Add("--laghound-token");
+                args.Add(config.LagHoundToken);
+            }
+            if (!string.IsNullOrEmpty(config.LagHoundRoute))
+            {
+                args.Add("--laghound-route");
+                args.Add(config.LagHoundRoute);
+            }
+        }
+
         // Download/Upload hard-require --payload-sizes; fall back to [65536] when
         // a throughput mode is selected but no sizes were supplied.
         var needsPayload = config.Modes.Any(m => m is "download" or "upload");
@@ -402,6 +420,36 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         }
 
         return args;
+    }
+
+    /// <summary>
+    /// The tester flags whose VALUE is a secret and must never appear in a log
+    /// line. The value immediately following one of these flags is replaced with
+    /// a mask before the spawn command is logged.
+    /// </summary>
+    private static readonly HashSet<string> SecretArgFlags =
+        new(StringComparer.OrdinalIgnoreCase) { "--laghound-token", "--bearer-token" };
+
+    private const string SecretArgMask = "***REDACTED***";
+
+    /// <summary>
+    /// Copy of <paramref name="args"/> with the value after any secret flag
+    /// masked, so the spawn log can be safe to emit verbatim. Order-preserving;
+    /// only the token VALUES are hidden, not the flag names.
+    /// </summary>
+    internal static IReadOnlyList<string> RedactSecretArgs(IReadOnlyList<string> args)
+    {
+        var redacted = new List<string>(args.Count);
+        for (var i = 0; i < args.Count; i++)
+        {
+            redacted.Add(args[i]);
+            if (SecretArgFlags.Contains(args[i]) && i + 1 < args.Count)
+            {
+                redacted.Add(SecretArgMask);
+                i++; // skip the real value
+            }
+        }
+        return redacted;
     }
 
     // ── Placeholder BenchmarkArtifact (Rust parity) ──────────────────────────────

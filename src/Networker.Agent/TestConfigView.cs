@@ -24,6 +24,16 @@ public sealed class TestConfigView
     public required bool IsBenchmark { get; init; }
     public JsonElement Methodology { get; init; }
 
+    /// <summary>LagHound shared secret for the <c>sdkprobe</c> mode — decrypted
+    /// by the control plane and spliced into the wire workload as
+    /// <c>laghound_token</c>. Maps to the tester's <c>--laghound-token</c>.
+    /// Null when this is not an sdkprobe run.</summary>
+    public string? LagHoundToken { get; init; }
+
+    /// <summary>Optional LagHound route override (workload
+    /// <c>laghound_route</c> → tester <c>--laghound-route</c>).</summary>
+    public string? LagHoundRoute { get; init; }
+
     public sealed record EndpointNetwork(string Host, ushort? Port);
 
     /// <summary>Parse the assign_run <c>config</c> element into a view. Throws
@@ -81,8 +91,15 @@ public sealed class TestConfigView
             Insecure = workload.TryGetProperty("insecure", out var insEl) && insEl.ValueKind == JsonValueKind.True,
             IsBenchmark = methodologyPresent,
             Methodology = methodologyPresent ? methEl.Clone() : default,
+            LagHoundToken = GetString(workload, "laghound_token"),
+            LagHoundRoute = GetString(workload, "laghound_route"),
         };
     }
+
+    private static string? GetString(JsonElement obj, string name) =>
+        obj.TryGetProperty(name, out var el) && el.ValueKind == JsonValueKind.String
+            ? el.GetString()
+            : null;
 
     private static uint GetUInt(JsonElement obj, string name, uint fallback) =>
         obj.TryGetProperty(name, out var el) && el.ValueKind == JsonValueKind.Number

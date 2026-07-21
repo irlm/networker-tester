@@ -2,8 +2,10 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Auth;
+using Networker.ControlPlane.Endpoints;
 using Networker.ControlPlane.Realtime;
 using Networker.Data;
+using Networker.Security;
 
 namespace Networker.ControlPlane.Dispatch;
 
@@ -45,17 +47,20 @@ public sealed class RunDispatcher : IRunDispatcher
     private readonly AgentConnectionRegistry _agents;
     private readonly EventBus _bus;
     private readonly ILogger<RunDispatcher> _logger;
+    private readonly CredentialCipher _cipher;
 
     public RunDispatcher(
         NetworkerDbContext db,
         AgentConnectionRegistry agents,
         EventBus bus,
-        ILogger<RunDispatcher> logger)
+        ILogger<RunDispatcher> logger,
+        CredentialCipher cipher)
     {
         _db = db;
         _agents = agents;
         _bus = bus;
         _logger = logger;
+        _cipher = cipher;
     }
 
     /// <inheritdoc />
@@ -547,6 +552,16 @@ public sealed class RunDispatcher : IRunDispatcher
             }
         }
 
+        // sdkprobe: decrypt the stored LagHound token and splice it into the
+        // wire clone's workload as `laghound_token` (the agent maps it to the
+        // tester's --laghound-token). The stored config row is NEVER mutated,
+        // and the token is NEVER logged (SendAsync logs only the message type;
+        // this method logs nothing). Mirrors the WithInsecure copy-on-write.
+        if (IsSdkProbeWorkload(workloadJson) && cfg.TokenEnc is { Length: > 0 } && cfg.TokenNonce is { Length: > 0 })
+        {
+            workloadJson = WithLagHoundToken(workloadJson, cfg.TokenEnc, cfg.TokenNonce);
+        }
+
         var runDto = new
         {
             id = run.Id,
@@ -607,6 +622,81 @@ public sealed class RunDispatcher : IRunDispatcher
             // fall through — ship the workload unmodified
         }
         return RawJson(workloadText);
+    }
+
+    /// <summary>
+    /// True when the (already-resolved) wire workload runs the <c>sdkprobe</c>
+    /// mode — i.e. its <c>modes</c> array contains "sdkprobe". Operates on the
+    /// boxed <see cref="JsonElement"/> the serializer will actually ship.
+    /// </summary>
+    private static bool IsSdkProbeWorkload(object workloadJson)
+    {
+        if (workloadJson is not JsonElement el || el.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+        if (!el.TryGetProperty("modes", out var modes) || modes.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+        foreach (var m in modes.EnumerateArray())
+        {
+            if (m.ValueKind == JsonValueKind.String
+                && string.Equals(m.GetString(), SdkEndpointsEndpoints.SdkProbeMode, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Decrypt the SDK token and return a COPY of the workload with
+    /// <c>laghound_token</c> spliced in (wire clone only; the stored row keeps
+    /// the ciphertext). If decryption fails, the original workload is shipped
+    /// unchanged — the tester then classifies the SDK routes as a config error
+    /// (404), which is the correct visible failure. The plaintext token is
+    /// never logged.
+    /// </summary>
+    private object WithLagHoundToken(object workloadJson, byte[] tokenEnc, byte[] tokenNonce)
+    {
+        string token;
+        try
+        {
+            token = System.Text.Encoding.UTF8.GetString(_cipher.Decrypt(tokenEnc, tokenNonce));
+        }
+        catch (Exception ex)
+        {
+            // Do NOT include the token or ciphertext in the log. A lost/rotated
+            // key is operational, not a crash.
+            _logger.LogWarning(
+                "sdkprobe dispatch: failed to decrypt LagHound token ({Reason}); "
+                + "shipping the run without a token (SDK routes will answer 404)",
+                ex.GetType().Name);
+            return workloadJson;
+        }
+
+        if (string.IsNullOrEmpty(token))
+        {
+            return workloadJson;
+        }
+
+        try
+        {
+            var node = workloadJson is JsonElement el
+                ? JsonNode.Parse(el.GetRawText())
+                : null;
+            if (node is JsonObject obj)
+            {
+                obj["laghound_token"] = token;
+                return JsonSerializer.SerializeToElement(obj);
+            }
+        }
+        catch (JsonException)
+        {
+            // fall through — ship the workload unmodified
+        }
+        return workloadJson;
     }
 
     // Parse a JSONB-as-text column into a JsonElement so it serializes as raw
