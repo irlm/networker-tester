@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.47] — 2026-07-21
+
+### Fixed
+- **Agent auth uses the real client IP behind nginx.** The raw-WS agent auth
+  path read the socket peer (always `127.0.0.1` behind the proxy), which made
+  `api_key_last_used_ip` useless and collapsed the per-IP brute-force limiter
+  into a single global bucket. It now resolves the client from nginx's
+  `X-Real-IP` (then the left-most `X-Forwarded-For` hop), falling back to the
+  socket peer only for direct connections.
+
+---
+
 ## [0.28.46] — 2026-07-21
 
 ### Security

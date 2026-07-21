@@ -71,7 +71,7 @@ public static class AgentSocketEndpoint
         var apiKey = context.Request.Query[ApiKeyQueryKey].ToString();
         var scopeFactory = context.RequestServices.GetRequiredService<IServiceScopeFactory>();
         var limiter = context.RequestServices.GetRequiredService<AgentAuthLimiter>();
-        var remoteIp = context.Connection.RemoteIpAddress?.ToString();
+        var remoteIp = ResolveClientIp(context);
 
         // Per-IP brute-force short-circuit (V044): a source IP that has flooded
         // failed keys gets 429 for the cooldown window before any DB work.
@@ -181,4 +181,34 @@ public static class AgentSocketEndpoint
     /// </summary>
     private static AgentMessageProcessor GetProcessor(IServiceScope scope)
         => ActivatorUtilities.GetServiceOrCreateInstance<AgentMessageProcessor>(scope.ServiceProvider);
+
+    /// <summary>
+    /// The real client IP. In prod the control plane sits behind nginx, so the
+    /// socket peer is always the proxy (127.0.0.1) — using it would make
+    /// <c>api_key_last_used_ip</c> useless and collapse the per-IP brute-force
+    /// limiter into a single global bucket. Prefer nginx's <c>X-Real-IP</c>
+    /// (a single value it overwrites, so a client can't spoof it), then the
+    /// left-most hop of <c>X-Forwarded-For</c>, and only fall back to the
+    /// socket peer when neither header is present (direct/local connection).
+    /// </summary>
+    internal static string? ResolveClientIp(HttpContext context)
+    {
+        var realIp = context.Request.Headers["X-Real-IP"].ToString();
+        if (!string.IsNullOrWhiteSpace(realIp))
+        {
+            return realIp.Trim();
+        }
+
+        var xff = context.Request.Headers["X-Forwarded-For"].ToString();
+        if (!string.IsNullOrWhiteSpace(xff))
+        {
+            var first = xff.Split(',', 2)[0].Trim();
+            if (first.Length > 0)
+            {
+                return first;
+            }
+        }
+
+        return context.Connection.RemoteIpAddress?.ToString();
+    }
 }
