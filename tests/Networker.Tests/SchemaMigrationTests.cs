@@ -55,9 +55,9 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
     // ── Migration chain ─────────────────────────────────────────────────
 
     [Fact]
-    public void Fresh_database_applies_the_full_chain_v002_to_v043()
+    public void Fresh_database_applies_the_full_chain_v002_to_v044()
     {
-        Assert.Equal(Enumerable.Range(2, 42), _fx.FreshRun.Applied);
+        Assert.Equal(Enumerable.Range(2, 43), _fx.FreshRun.Applied);
         Assert.Empty(_fx.FreshRun.AlreadyApplied);
     }
 
@@ -70,7 +70,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
 
         Assert.True(second.WasUpToDate);
         Assert.Empty(second.Applied);
-        Assert.Equal(Enumerable.Range(2, 42), second.AlreadyApplied);
+        Assert.Equal(Enumerable.Range(2, 43), second.AlreadyApplied);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
             }
         }
 
-        Assert.Equal(Enumerable.Range(2, 42), recorded);
+        Assert.Equal(Enumerable.Range(2, 43), recorded);
     }
 
     // ── EF-model equivalence ────────────────────────────────────────────
@@ -451,6 +451,41 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
             },
             found);
     }
+
+    [Fact]
+    public async Task V044_added_the_agent_api_key_lifecycle_columns()
+    {
+        await using var conn = new NpgsqlConnection(_fx.ConnectionString);
+        await conn.OpenAsync();
+
+        await using var cols = new NpgsqlCommand(
+            """
+            SELECT column_name, data_type, is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'agent'
+              AND column_name IN ('api_key_expires_at', 'api_key_last_used_at', 'api_key_last_used_ip')
+            ORDER BY column_name
+            """, conn);
+        var found = new List<(string Name, string Type, string Nullable)>();
+        await using (var reader = await cols.ExecuteReaderAsync())
+        {
+            while (await reader.ReadAsync())
+            {
+                found.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2)));
+            }
+        }
+
+        // All three exist and are nullable: expiry/last-used are TIMESTAMPTZ,
+        // the IP is a VARCHAR. NULL = no expiry / never-seen (back-compat).
+        Assert.Equal(
+            new[]
+            {
+                ("api_key_expires_at", "timestamp with time zone", "YES"),
+                ("api_key_last_used_at", "timestamp with time zone", "YES"),
+                ("api_key_last_used_ip", "character varying", "YES"),
+            },
+            found);
+    }
 }
 
 /// <summary>
@@ -507,6 +542,7 @@ public sealed class MigrationScriptFreezeTests
         ["V041_alerting.sql"] = "add33d316b5e705668c0a89fc8c64ab28a51291c3bee31bcbda77a327972d36d",
         ["V042_perf_log_main_db.sql"] = "dd222a9fcb6c38d0451148df6c05761439af5980bdf4849c0376330d773e4114",
         ["V043_sdk_endpoint_token.sql"] = "4ab8a521c29976867e78ba5fca479420353abca143571b0493506382e8524a1e",
+        ["V044_agent_api_key_lifecycle.sql"] = "02ed690dac68e6aca9790d6dbdcd0d2ac38bf1d7412ec7d00a9b430a9b3ede81",
     };
 
     [Fact]
@@ -526,7 +562,7 @@ public sealed class MigrationScriptFreezeTests
             Assert.Contains(version, scripted);
         }
 
-        Assert.Equal(41, scripted.Count);
+        Assert.Equal(42, scripted.Count);
     }
 
     [Fact]

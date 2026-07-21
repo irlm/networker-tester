@@ -7,6 +7,7 @@ import {
 import { useTesterSubscription } from '../hooks/useTesterSubscription';
 import { useProjectStore } from '../stores/projectStore';
 import { StatusBadge } from './common/StatusBadge';
+import { RotateKeyDialog } from './RotateKeyDialog';
 
 interface TesterDetailDrawerProps {
   projectId: string;
@@ -69,6 +70,7 @@ export function TesterDetailDrawer({
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmForceStop, setConfirmForceStop] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [rotatingKey, setRotatingKey] = useState(false);
   const [latestVersion, setLatestVersion] = useState<string | null>(null);
   const [editingSchedule, setEditingSchedule] = useState(false);
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
@@ -150,6 +152,13 @@ export function TesterDetailDrawer({
 
   const isError = tester.power_state === 'error';
   const isBusy = actionState === 'busy';
+  // Agent api-key expiry status (V044): a non-null expiry in the past is expired.
+  const keyExpiry = {
+    expired: Boolean(
+      tester.api_key_expires_at &&
+        new Date(tester.api_key_expires_at).getTime() <= Date.now(),
+    ),
+  };
   const isRunningOrQueued =
     tester.allocation !== 'idle' ||
     Boolean(queueState?.running) ||
@@ -540,6 +549,43 @@ export function TesterDetailDrawer({
             )}
           </section>
 
+          {/* ── Agent key ──────────────────────────────────────────────── */}
+          <section>
+            <h4 className="text-xs uppercase tracking-wide text-gray-500 mb-2">
+              Agent key
+            </h4>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-xs text-gray-500">Last seen:</span>
+              <span className="text-xs text-gray-300 font-mono">
+                {tester.api_key_last_used_at
+                  ? formatDate(tester.api_key_last_used_at)
+                  : 'never'}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-xs text-gray-500">Key expiry:</span>
+              {keyExpiry.expired ? (
+                <StatusBadge status="failed" label="expired" />
+              ) : tester.api_key_expires_at ? (
+                <StatusBadge
+                  status="waiting"
+                  label={`expires ${formatDate(tester.api_key_expires_at)}`}
+                />
+              ) : (
+                <span className="text-xs text-gray-300 font-mono">no expiry</span>
+              )}
+            </div>
+            {isOperator && (
+              <button
+                type="button"
+                onClick={() => setRotatingKey(true)}
+                className="px-3 py-1 text-xs rounded border border-gray-700 text-gray-400 hover:border-cyan-500 hover:text-cyan-400"
+              >
+                Rotate key
+              </button>
+            )}
+          </section>
+
           {/* ── Queue ──────────────────────────────────────────────────── */}
           <section>
             <h4 className="text-xs uppercase tracking-wide text-gray-500 mb-2">Queue</h4>
@@ -667,6 +713,16 @@ export function TesterDetailDrawer({
             });
           }}
           onCancel={() => setConfirmDelete(false)}
+        />
+      )}
+
+      {rotatingKey && (
+        <RotateKeyDialog
+          projectId={projectId}
+          testerId={tester.tester_id}
+          testerName={tester.name}
+          onClose={() => setRotatingKey(false)}
+          onRotated={() => onChanged()}
         />
       )}
     </div>

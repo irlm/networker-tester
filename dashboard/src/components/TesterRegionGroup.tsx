@@ -2,6 +2,14 @@ import { useState } from 'react';
 import type { TesterRow } from '../api/testers';
 import type { TesterQueueState } from '../hooks/useTesterSubscription';
 import { StatusBadge } from './common/StatusBadge';
+import { timeAgo } from '../lib/format';
+
+/** True when the agent's api-key expiry is non-null and already past. */
+function keyExpired(t: TesterRow): boolean {
+  return Boolean(
+    t.api_key_expires_at && new Date(t.api_key_expires_at).getTime() <= Date.now(),
+  );
+}
 
 interface TesterRegionGroupProps {
   cloud: string;
@@ -103,13 +111,26 @@ export function TesterRegionGroup({
                           <StatusBadge status={s.badge} label={s.label} />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <div className="text-gray-200 font-mono truncate">{t.name}</div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-gray-200 font-mono truncate">{t.name}</span>
+                            {keyExpired(t) && (
+                              <StatusBadge status="failed" label="key expired" />
+                            )}
+                          </div>
                           <div className="text-gray-500 truncate">
                             {t.vm_size} · v{t.installer_version ?? '?'}
                           </div>
                         </div>
-                        <div className="w-24 text-right font-mono text-gray-500">
-                          {detail ?? ''}
+                        <div className="w-32 text-right font-mono text-gray-500">
+                          <div>{detail ?? ''}</div>
+                          <div
+                            className="text-gray-600"
+                            title="last time the runner's agent key authenticated"
+                          >
+                            {t.api_key_last_used_at
+                              ? `seen ${timeAgo(t.api_key_last_used_at)}`
+                              : 'never seen'}
+                          </div>
                         </div>
                       </>
                     );

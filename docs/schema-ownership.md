@@ -9,7 +9,7 @@ the Rust control-plane crates when the decommission soak completes.
 
 | Piece | Location |
 |---|---|
-| Ordered migration scripts (V002…V043) | `src/Networker.Data/Migrations/V0NN_*.sql` (embedded resources) |
+| Ordered migration scripts (V002…V044) | `src/Networker.Data/Migrations/V0NN_*.sql` (embedded resources) |
 | V025 (UUID → base36 project ids) | `src/Networker.Data/Migrations/V025ProjectIdMigration.cs` (code, like the Rust original) |
 | ProjectId base36 + Damm implementation | `src/Networker.Data/Migrations/ProjectId36.cs` |
 | Runner | `src/Networker.Data/Migrations/SchemaMigrator.cs` |
@@ -146,6 +146,13 @@ bookkeeping.
   configs. Encrypted with `Networker.Security.CredentialCipher` (the same
   AES-256-GCM scheme as `cloud_account.credentials_enc`); never returned to a
   client. Only populated for `sdkprobe` endpoints; NULL everywhere else.
+- **V044** adds `agent.api_key_expires_at` / `api_key_last_used_at` (both
+  `TIMESTAMPTZ`) and `api_key_last_used_ip` (`VARCHAR(64)`), all nullable — the
+  agent api-key hardening wave. `api_key_expires_at` non-null + in the past →
+  agent auth rejects the key (NULL = no expiry, back-compat for the whole
+  fleet); `api_key_last_used_at` / `_ip` are the write-throttled "last seen"
+  audit stamps. The rotate endpoint replaces `api_key` + `api_key_hash` and
+  resets the expiry.
 - `bootstrap/reset-pre-prod.sql` and the tester's V001 schema are separate,
   unaffected artifacts.
 

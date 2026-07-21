@@ -11,6 +11,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.46] — 2026-07-21
+
+### Security
+- **Agent api_key hardening — rotation, expiry, last-used tracking, and
+  brute-force mitigation.** The 48-char CSPRNG agent api_key (hashed at rest
+  since V040) previously had no way to be rotated, no expiry, no usage audit,
+  and no protection against a flood of guess attempts. This wave adds all four,
+  all project-scoped:
+  - **Rotate.** `POST /api/projects/{projectId}/testers/{testerId}/rotate-key`
+    (ProjectOperator, scoped to the tester's agent where
+    `agent.project_id == projectId`) mints a fresh key, replaces both
+    `api_key` + `api_key_hash` so the old key is instantly dead, clears any
+    expiry, drops the agent's live WS connection so it must reconnect with the
+    new key, and returns the new plaintext **once** in the response
+    (`{ "api_key": "...", "api_key_expires_at": null }`) — never shown again,
+    like an invite token. Cross-project / unknown tester → 404; viewer → 403.
+  - **Expiry.** New nullable `agent.api_key_expires_at`; both agent auth paths
+    (raw-WS `AgentSocketEndpoint` + SignalR `AgentProtocolHub`, via the shared
+    `AgentMessageProcessor.AuthenticateAsync`) reject an expired key
+    (401, pre-upgrade) after the hash match. NULL = no expiry (back-compat for
+    the whole fielded fleet; rotation defaults to no-expiry).
+  - **Last-used.** New `agent.api_key_last_used_at` / `api_key_last_used_ip`
+    stamped on successful auth, throttled to at most one write per ~5 min per
+    agent so heartbeat/reconnect churn never causes a hot write.
+  - **Brute-force.** A per-IP failed-auth counter (sliding window, reuses the
+    `SlidingWindowRateLimiter` pattern) short-circuits repeated bad keys from
+    one IP with a 429 + cooldown and a logged warning.
+  - Schema: migration **V044** adds the three nullable columns to `agent`
+    (idempotent `IF NOT EXISTS`); EF entity + `schema.sql` +
+    `docs/schema-ownership.md` + migration freeze/chain guards updated.
+
+---
+
 ## [0.28.45] — 2026-07-21
 
 ### Security

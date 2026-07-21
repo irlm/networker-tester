@@ -113,13 +113,22 @@ public sealed class AgentMessageProcessor
     // ── Connection lifecycle ─────────────────────────────────────────────────
 
     /// <summary>
+    /// Throttle window for the <see cref="StampApiKeyUsedAsync"/> write: a
+    /// successful auth only refreshes <c>api_key_last_used_at</c> when the last
+    /// stamp is older than this, so heartbeat/reconnect churn never causes a hot
+    /// write on every connection.
+    /// </summary>
+    public static readonly TimeSpan LastUsedThrottle = TimeSpan.FromMinutes(5);
+
+    /// <summary>
     /// Validate an api-key (the Rust <c>get_by_api_key</c> lookup in
     /// <c>agent_ws_handler</c>). Returns the agent's identity, or <c>null</c>
-    /// when the key is missing/unknown — the caller rejects the connection
-    /// (raw: HTTP 401 before upgrade; SignalR: <c>Context.Abort()</c>).
+    /// when the key is missing/unknown/EXPIRED — the caller rejects the
+    /// connection (raw: HTTP 401 before upgrade; SignalR: <c>Context.Abort()</c>).
     /// Read-only: marking online is a separate step
     /// (<see cref="HandleConnectAsync"/>) because Rust performs it only after
-    /// the upgrade completes.
+    /// the upgrade completes; the last-used stamp is
+    /// <see cref="StampApiKeyUsedAsync"/>, also called post-accept.
     ///
     /// <para><b>Security (V040):</b> the lookup is keyed on
     /// <c>agent.api_key_hash</c> (SHA-256 of the presented key), never the
@@ -128,6 +137,11 @@ public sealed class AgentMessageProcessor
     /// is then re-verified in-process with
     /// <see cref="AgentApiKeys.FixedTimeEqualsHex"/>. Rows without a hash
     /// (pre-V040, impossible after the backfill) never match.</para>
+    ///
+    /// <para><b>Expiry (V044):</b> after the hash match, a non-null
+    /// <c>api_key_expires_at</c> in the past rejects the key (returns null).
+    /// NULL = no expiry — every fielded agent authenticates unchanged; rotation
+    /// defaults to no-expiry so a rotated key never breaks the fleet.</para>
     /// </summary>
     public async Task<AgentIdentity?> AuthenticateAsync(string? apiKey, CancellationToken ct = default)
     {
@@ -141,7 +155,7 @@ public sealed class AgentMessageProcessor
         var agent = await _db.Agents
             .AsNoTracking()
             .Where(a => a.ApiKeyHash == presentedHash)
-            .Select(a => new { a.AgentId, a.Name, a.ApiKeyHash })
+            .Select(a => new { a.AgentId, a.Name, a.ApiKeyHash, a.ApiKeyExpiresAt })
             .FirstOrDefaultAsync(ct);
 
         if (agent is null
@@ -150,7 +164,44 @@ public sealed class AgentMessageProcessor
             return null;
         }
 
+        // V044: reject an expired key (null = no expiry, back-compat).
+        if (agent.ApiKeyExpiresAt is { } expiry && expiry <= DateTime.UtcNow)
+        {
+            _logger.LogWarning(
+                "Agent {AgentId} api-key rejected: expired at {Expiry:o}", agent.AgentId, expiry);
+            return null;
+        }
+
         return new AgentIdentity(agent.AgentId, agent.Name);
+    }
+
+    /// <summary>
+    /// Stamp <c>api_key_last_used_at</c> / <c>api_key_last_used_ip</c> after a
+    /// successful auth (V044) — the "last seen" audit signal the UI surfaces.
+    /// The write is THROTTLED: it only fires when the existing stamp is null or
+    /// older than <see cref="LastUsedThrottle"/>, so a busy agent that
+    /// heartbeats/reconnects frequently does not turn every connection into a
+    /// row write. Best-effort — a transient failure never blocks the connection.
+    /// </summary>
+    public async Task StampApiKeyUsedAsync(Guid agentId, string? remoteIp, CancellationToken ct = default)
+    {
+        try
+        {
+            var now = DateTime.UtcNow;
+            var cutoff = now - LastUsedThrottle;
+            // Single set-based UPDATE guarded by the throttle window — no
+            // read-modify-write race, and a no-op when recently stamped.
+            await _db.Agents
+                .Where(a => a.AgentId == agentId
+                    && (a.ApiKeyLastUsedAt == null || a.ApiKeyLastUsedAt < cutoff))
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(a => a.ApiKeyLastUsedAt, now)
+                    .SetProperty(a => a.ApiKeyLastUsedIp, remoteIp), ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "last-used stamp failed for agent {AgentId}", agentId);
+        }
     }
 
     /// <summary>

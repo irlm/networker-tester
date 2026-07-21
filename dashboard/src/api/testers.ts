@@ -46,6 +46,12 @@ export type TesterRow = {
   shutdown_deferral_count: number;
   auto_probe_enabled: boolean;
   last_used_at: string | null;
+  /** Last time the linked agent's api-key authenticated ("last seen"). V044. */
+  api_key_last_used_at?: string | null;
+  /** Remote IP of that last successful agent auth. V044. */
+  api_key_last_used_ip?: string | null;
+  /** When the agent api-key expires (null = no expiry). V044. */
+  api_key_expires_at?: string | null;
   avg_benchmark_duration_seconds: number | null;
   benchmark_run_count: number;
   created_by: string;
@@ -110,6 +116,17 @@ export type ForceStopBody = {
 
 export type RefreshLatestVersionResponse = {
   latest_version: string;
+};
+
+/**
+ * Response of a key rotation — the new plaintext agent api-key, returned ONCE.
+ * It is never stored client-side and never re-shown; copy it immediately.
+ */
+export type RotateKeyResponse = {
+  agent_id: string;
+  tester_id: string;
+  api_key: string;
+  api_key_expires_at: string | null;
 };
 
 function base(projectId: string, suffix = ''): string {
@@ -183,6 +200,16 @@ export const testersApi = {
 
   probe: (projectId: string, testerId: string) =>
     request<TesterRow>(base(projectId, `/${testerId}/probe`), {
+      method: 'POST',
+    }),
+
+  /**
+   * Rotate the tester's agent api-key (operator only). Returns the NEW
+   * plaintext key once — the old key dies instantly and the agent must
+   * reconnect. Never stored; show-once + copy in the UI.
+   */
+  rotateKey: (projectId: string, testerId: string) =>
+    request<RotateKeyResponse>(base(projectId, `/${testerId}/rotate-key`), {
       method: 'POST',
     }),
 

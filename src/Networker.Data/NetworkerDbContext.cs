@@ -110,6 +110,11 @@ public partial class NetworkerDbContext : DbContext
             entity.Property(e => e.ApiKeyHash)
                 .HasMaxLength(64)
                 .HasColumnName("api_key_hash");
+            entity.Property(e => e.ApiKeyExpiresAt).HasColumnName("api_key_expires_at");
+            entity.Property(e => e.ApiKeyLastUsedAt).HasColumnName("api_key_last_used_at");
+            entity.Property(e => e.ApiKeyLastUsedIp)
+                .HasMaxLength(64)
+                .HasColumnName("api_key_last_used_ip");
             entity.Property(e => e.Arch)
                 .HasMaxLength(20)
                 .HasColumnName("arch");

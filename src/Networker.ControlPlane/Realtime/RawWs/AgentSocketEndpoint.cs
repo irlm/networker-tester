@@ -70,6 +70,18 @@ public static class AgentSocketEndpoint
         //    must never span the socket's lifetime.
         var apiKey = context.Request.Query[ApiKeyQueryKey].ToString();
         var scopeFactory = context.RequestServices.GetRequiredService<IServiceScopeFactory>();
+        var limiter = context.RequestServices.GetRequiredService<AgentAuthLimiter>();
+        var remoteIp = context.Connection.RemoteIpAddress?.ToString();
+
+        // Per-IP brute-force short-circuit (V044): a source IP that has flooded
+        // failed keys gets 429 for the cooldown window before any DB work.
+        if (limiter.IsBlocked(remoteIp))
+        {
+            logger.LogWarning(
+                "Raw agent connection from {Ip} short-circuited: too many failed auth attempts", remoteIp);
+            context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+            return;
+        }
 
         AgentIdentity? identity;
         using (var authScope = scopeFactory.CreateScope())
@@ -80,11 +92,21 @@ public static class AgentSocketEndpoint
 
         if (identity is null)
         {
+            limiter.RecordFailure(remoteIp);
             logger.LogWarning(
                 "Raw agent connection rejected: {Reason}",
-                string.IsNullOrEmpty(apiKey) ? "no api key" : "unknown api key");
+                string.IsNullOrEmpty(apiKey) ? "no api key" : "unknown or expired api key");
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             return;
+        }
+
+        // Successful auth: clear the IP's failure history and stamp last-used
+        // (throttled). Both are best-effort and never block the connection.
+        limiter.RecordSuccess(remoteIp);
+        using (var stampScope = scopeFactory.CreateScope())
+        {
+            await GetProcessor(stampScope)
+                .StampApiKeyUsedAsync(identity.AgentId, remoteIp, context.RequestAborted);
         }
 
         using var socket = await context.WebSockets.AcceptWebSocketAsync(new WebSocketAcceptContext
