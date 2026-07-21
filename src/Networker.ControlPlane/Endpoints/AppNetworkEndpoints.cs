@@ -165,7 +165,13 @@ public static class AppNetworkEndpoints
                    PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY s.network_ms) AS p95_network_ms,
                    PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY s.wall_ms)    AS median_wall_ms
             FROM split s
-            JOIN test_config c ON c.id = s.config_id
+            -- Belt-and-suspenders: the config name is only ever surfaced for a
+            -- config that ALSO belongs to $1's project. test_run.project_id is
+            -- written from the config's project at launch, so this holds today —
+            -- but enforcing it in SQL (not by a launch-time invariant) means a
+            -- stray/mis-written test_run can never leak another project's config
+            -- name here (project-isolation audit §3 / P2).
+            JOIN test_config c ON c.id = s.config_id AND c.project_id = $1
             GROUP BY s.config_id, c.name
             """;
 

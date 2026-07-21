@@ -233,6 +233,24 @@ public static class TestConfigWriteEndpoints
                 return Results.NotFound();
             }
 
+            // An explicitly-pinned tester_id must belong to the SAME project as
+            // the config, else it must not influence routing (project-isolation
+            // audit §6c / P2). A foreign or non-existent tester is rejected.
+            if (req?.TesterId is Guid pinnedTesterId)
+            {
+                var testerProject = await db.ProjectTesters.AsNoTracking()
+                    .Where(t => t.TesterId == pinnedTesterId)
+                    .Select(t => t.ProjectId)
+                    .FirstOrDefaultAsync(ct);
+                if (testerProject is null || !string.Equals(testerProject, owner, StringComparison.Ordinal))
+                {
+                    return Results.BadRequest(new
+                    {
+                        error = "tester_id does not belong to this config's project",
+                    });
+                }
+            }
+
             Guid runId;
             try
             {
