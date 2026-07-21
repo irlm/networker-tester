@@ -54,7 +54,8 @@ const getAppNetworkReport = vi.fn(() => Promise.resolve(makeReport()));
 
 vi.mock('../api/client', () => ({
   api: {
-    getAppNetworkReport: (...a: unknown[]) => getAppNetworkReport(...(a as [string])),
+    getAppNetworkReport: (...a: unknown[]) =>
+      (getAppNetworkReport as (...x: unknown[]) => unknown)(...a),
   },
 }));
 
