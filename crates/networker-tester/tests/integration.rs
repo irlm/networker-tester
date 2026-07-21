@@ -1285,3 +1285,198 @@ async fn curl_probe_measures_timing() {
     // Plain HTTP — no TLS result
     assert!(attempt.tls.is_none(), "no TLS expected for plain HTTP");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// sdkprobe — LagHound network-vs-server split
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Minimal LagHound-contract mock: a raw HTTP/1.1 server on 127.0.0.1 that
+/// serves `GET /laghound/echo` ONLY when `X-LagHound-Token: <token>` matches,
+/// answering `200 {"contract":"v1","ok":true}` with a
+/// `Server-Timing: app;dur=<app_ms>, total;dur=<app_ms>` header after sleeping
+/// `app_ms` to make the server-processing leg real. Any other path, or a
+/// missing/wrong token, gets a bare 404 (contract §5). Returns the bound port.
+async fn start_laghound_mock(token: &'static str, app_ms: u64) -> u16 {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        loop {
+            let (mut sock, _) = match listener.accept().await {
+                Ok(pair) => pair,
+                Err(_) => break,
+            };
+            tokio::spawn(async move {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut buf = vec![0u8; 4096];
+                let n = match sock.read(&mut buf).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(n) => n,
+                };
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let first_line = req.lines().next().unwrap_or("");
+                let has_echo = first_line.contains("/laghound/echo");
+                let has_token = req.lines().any(|l| {
+                    l.to_ascii_lowercase().starts_with("x-laghound-token:")
+                        && l.trim_end().ends_with(token)
+                });
+                let resp = if has_echo && has_token {
+                    // Simulate server-side processing so the split is non-trivial.
+                    tokio::time::sleep(std::time::Duration::from_millis(app_ms)).await;
+                    let body = "{\"contract\":\"v1\",\"ok\":true}";
+                    format!(
+                        "HTTP/1.1 200 OK\r\n\
+                         Content-Type: application/json\r\n\
+                         Content-Length: {len}\r\n\
+                         Cache-Control: no-store, no-cache, must-revalidate\r\n\
+                         Server-Timing: app;dur={app}.0, total;dur={app}.0\r\n\
+                         Connection: close\r\n\r\n{body}",
+                        len = body.len(),
+                        app = app_ms,
+                        body = body,
+                    )
+                } else {
+                    // Bare 404 — no LagHound headers, no envelope (contract §5).
+                    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        .to_string()
+                };
+                let _ = sock.write_all(resp.as_bytes()).await;
+                let _ = sock.flush().await;
+            });
+        }
+    });
+    // Readiness: wait until the listener accepts a TCP connection.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+            .await
+            .is_ok()
+        {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!("LagHound mock did not start within 5 seconds");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    port
+}
+
+/// sdkprobe against a valid LagHound endpoint computes the network/server split:
+/// server_ms == the reported `app;dur`, and server_ms + network_ms ≈ wall
+/// (TTFB), with network_ms ≥ 0.
+#[tokio::test]
+async fn sdkprobe_computes_network_server_split() {
+    init_crypto();
+    let app_ms = 40;
+    let port = start_laghound_mock("valid-token", app_ms).await;
+
+    let cfg = RunConfig {
+        dns_enabled: false,
+        timeout_ms: 5_000,
+        insecure: false,
+        laghound_token: Some("valid-token".to_string()),
+        laghound_route: "/laghound/echo".to_string(),
+        ..Default::default()
+    };
+
+    // The sdkprobe overrides the request path with laghound_route, so the target
+    // path here is irrelevant — use "/".
+    let url = url::Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+    let attempt = run_probe(Uuid::new_v4(), 0, Protocol::SdkProbe, &url, &cfg).await;
+
+    assert!(
+        attempt.success,
+        "sdkprobe should succeed against a valid LagHound endpoint: {:?}",
+        attempt.error
+    );
+    assert_eq!(attempt.protocol, Protocol::SdkProbe);
+
+    let http = attempt.http.as_ref().expect("http result missing");
+    assert_eq!(http.status_code, 200);
+
+    let st = attempt
+        .server_timing
+        .as_ref()
+        .expect("server_timing must be present (Server-Timing header parsed)");
+
+    // app;dur was parsed.
+    let app = st.app_ms.expect("app_ms must be parsed from Server-Timing");
+    assert!(
+        (app - app_ms as f64).abs() < 1e-6,
+        "app_ms should equal the reported app;dur ({app_ms}), got {app}"
+    );
+
+    // server_ms == app (app takes precedence over total).
+    let server = st.server_ms.expect("server_ms must be computed");
+    assert!(
+        (server - app).abs() < 1e-6,
+        "server_ms ({server}) must equal app ({app})"
+    );
+
+    // network_ms is non-negative and equals ttfb − server.
+    let network = st.network_ms.expect("network_ms must be computed");
+    assert!(
+        network >= 0.0,
+        "network_ms must be non-negative, got {network}"
+    );
+    assert!(
+        !st.split_anomaly,
+        "no split anomaly expected: server_ms ({server}) must not exceed ttfb ({})",
+        http.ttfb_ms
+    );
+
+    // server_ms + network_ms ≈ wall (TTFB). The mock sleeps app_ms server-side,
+    // so ttfb ≥ app; the split must reconstruct the wall within a small epsilon.
+    let reconstructed = server + network;
+    assert!(
+        (reconstructed - http.ttfb_ms).abs() < 1.0,
+        "server_ms ({server}) + network_ms ({network}) = {reconstructed} \
+         must reconstruct TTFB ({})",
+        http.ttfb_ms
+    );
+
+    // The server leg must dominate here (mock sleeps 40ms; loopback network is
+    // sub-millisecond), proving the split actually attributes time correctly.
+    assert!(
+        server > network,
+        "server leg ({server}ms) should dominate the loopback network leg ({network}ms)"
+    );
+}
+
+/// sdkprobe against a LagHound endpoint with a missing/bad token gets the
+/// contract's bare 404 and is classified as a config/auth error with the
+/// actionable message — not a generic HTTP 404.
+#[tokio::test]
+async fn sdkprobe_bad_token_is_config_error() {
+    init_crypto();
+    let port = start_laghound_mock("valid-token", 5).await;
+
+    let cfg = RunConfig {
+        dns_enabled: false,
+        timeout_ms: 5_000,
+        insecure: false,
+        laghound_token: Some("WRONG-token".to_string()),
+        laghound_route: "/laghound/echo".to_string(),
+        ..Default::default()
+    };
+
+    let url = url::Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+    let attempt = run_probe(Uuid::new_v4(), 0, Protocol::SdkProbe, &url, &cfg).await;
+
+    assert!(!attempt.success, "bad-token sdkprobe must not succeed");
+    let http = attempt.http.as_ref().expect("http result present on 404");
+    assert_eq!(http.status_code, 404);
+
+    let err = attempt.error.as_ref().expect("error record present");
+    assert_eq!(
+        err.category,
+        ErrorCategory::Config,
+        "bad-token 404 must be a config error, not {:?}",
+        err.category
+    );
+    assert!(
+        err.message.contains("SDK endpoint returned 404"),
+        "message must be the actionable SDK 404 hint, got: {}",
+        err.message
+    );
+}

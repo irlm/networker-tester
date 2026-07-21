@@ -493,6 +493,13 @@ pub enum Protocol {
     Browser2,
     /// Real headless-browser probe forced to HTTP/3 QUIC (`--enable-quic --origin-to-force-quic-on=…`).
     Browser3,
+    /// LagHound SDK probe: an HTTP/1.1 request to a customer-embedded LagHound
+    /// endpoint (`<base>/laghound/echo` by default) that splits total request
+    /// latency into a NETWORK leg and a SERVER-processing leg using the
+    /// `Server-Timing: app;dur=<ms>` header (docs/sdk/contract-v1.md §4).
+    /// Reuses the HTTP/1.1 phase-timing path (DNS/TCP/TLS/TTFB/total) and adds
+    /// the `X-LagHound-Token` auth header.
+    SdkProbe,
 }
 
 impl std::fmt::Display for Protocol {
@@ -527,6 +534,7 @@ impl std::fmt::Display for Protocol {
             Protocol::Browser1 => write!(f, "browser1"),
             Protocol::Browser2 => write!(f, "browser2"),
             Protocol::Browser3 => write!(f, "browser3"),
+            Protocol::SdkProbe => write!(f, "sdkprobe"),
         }
     }
 }
@@ -616,6 +624,13 @@ impl Protocol {
                 "Curl",
                 "Via curl CLI",
                 "Spawns curl binary, captures per-phase timing from --write-out",
+                "HTTP",
+            ),
+            m(
+                "sdkprobe",
+                "SDK Probe",
+                "Server split",
+                "Probes a customer-embedded LagHound endpoint — splits total time into DNS, TCP, TLS, network transfer, and server processing via Server-Timing",
                 "HTTP",
             ),
             // Page Load (Native)
@@ -795,6 +810,7 @@ impl std::str::FromStr for Protocol {
             "browser1" => Ok(Protocol::Browser1),
             "browser2" => Ok(Protocol::Browser2),
             "browser3" => Ok(Protocol::Browser3),
+            "sdkprobe" => Ok(Protocol::SdkProbe),
             other => Err(format!("Unknown protocol: {other}")),
         }
     }
@@ -892,6 +908,30 @@ pub struct ServerTimingResult {
     /// Total server time (Server-Timing: total;dur=X).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_server_ms: Option<f64>,
+    /// LagHound SDK server processing time (Server-Timing: app;dur=X). This is
+    /// the authoritative "server did work" number for the sdkprobe network-vs-
+    /// server split (docs/sdk/contract-v1.md §4). Populated for any response
+    /// that carries `app;dur`; None for the classic networker-endpoint which
+    /// emits `proc`/`recv`/`total` instead. Additive, serde-defaulted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_ms: Option<f64>,
+    /// Server-side portion of total request latency for the sdkprobe split (ms).
+    /// `app;dur` when present, else falls back to `total;dur`. This is the
+    /// "how much of the latency was the customer's app" half of the report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_ms: Option<f64>,
+    /// Network-transfer portion of total request latency for the sdkprobe split
+    /// (ms): `max(0, ttfb_ms − server_ms)` — request upstream + response first
+    /// byte, everything that was NOT server processing. Clamped to 0 (and the
+    /// attempt flagged via `split_anomaly`) when the reported `server_ms`
+    /// exceeds the measured wall (clock/measure anomaly, contract §4.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_ms: Option<f64>,
+    /// True when the network/server split was clamped because reported
+    /// `server_ms > ttfb_ms` (a clock or measurement anomaly). Lets reports
+    /// flag the datapoint rather than silently present a 0ms network leg.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub split_anomaly: bool,
     /// Server binary version from X-Networker-Server-Version header.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_version: Option<String>,
@@ -1551,6 +1591,9 @@ pub fn primary_metric_label(proto: &Protocol) -> &'static str {
         Protocol::Browser | Protocol::Browser1 | Protocol::Browser2 | Protocol::Browser3 => {
             "Load ms"
         }
+        // Primary metric is total request latency; the distinguishing output
+        // (network-vs-server split) is surfaced separately in the summary.
+        Protocol::SdkProbe => "Total ms",
     }
 }
 
@@ -1607,6 +1650,7 @@ pub fn primary_metric_value(a: &RequestAttempt) -> Option<f64> {
         Protocol::Browser | Protocol::Browser1 | Protocol::Browser2 | Protocol::Browser3 => {
             a.browser.as_ref().map(|b| b.load_ms)
         }
+        Protocol::SdkProbe => a.http.as_ref().map(|h| h.total_duration_ms),
     }
 }
 
@@ -2460,6 +2504,7 @@ mod tests {
             Protocol::Browser1,
             Protocol::Browser2,
             Protocol::Browser3,
+            Protocol::SdkProbe,
         ];
         for proto in &all {
             let label = primary_metric_label(proto);

@@ -103,7 +103,10 @@ pub async fn dispatch_once(
         (Protocol::UdpUpload, Some(sz)) => {
             run_udpupload_probe(run_id, seq, sz, udp_throughput_cfg).await
         }
-        (Protocol::Http1, _) | (Protocol::Http2, _) | (Protocol::Tcp, _) => {
+        (Protocol::Http1, _)
+        | (Protocol::Http2, _)
+        | (Protocol::Tcp, _)
+        | (Protocol::SdkProbe, _) => {
             run_probe(run_id, seq, proto.clone(), &impaired_target, cfg).await
         }
         (Protocol::Http3, _) => {
@@ -157,6 +160,55 @@ pub fn log_attempt(a: &RequestAttempt) {
     };
 
     match &a.protocol {
+        SdkProbe => {
+            let dns = a
+                .dns
+                .as_ref()
+                .map(|d| format!(" DNS:{:.1}ms", d.duration_ms))
+                .unwrap_or_default();
+            let tcp = a
+                .tcp
+                .as_ref()
+                .map(|t| format!(" TCP:{:.1}ms", t.connect_duration_ms))
+                .unwrap_or_default();
+            let tls_ms = a
+                .tls
+                .as_ref()
+                .map(|t| t.handshake_duration_ms)
+                .unwrap_or(0.0);
+            let tls_part = if tls_ms > 0.0 {
+                format!(" TLS:{tls_ms:.1}ms")
+            } else {
+                String::new()
+            };
+            let ttfb_ms = a.http.as_ref().map(|h| h.ttfb_ms).unwrap_or(0.0);
+            let total_ms = a.http.as_ref().map(|h| h.total_duration_ms).unwrap_or(0.0);
+            let status_code = a
+                .http
+                .as_ref()
+                .map(|h| h.status_code.to_string())
+                .unwrap_or_default();
+            // The distinguishing output: NETWORK vs SERVER split. "—" when the
+            // response carried no app/total server-timing (split unavailable).
+            let split = match a.server_timing.as_ref() {
+                Some(st) => match (st.server_ms, st.network_ms) {
+                    (Some(srv), Some(net)) => {
+                        let flag = if st.split_anomaly { " (clamped)" } else { "" };
+                        format!(" Server:{srv:.1}ms Network:{net:.1}ms{flag}")
+                    }
+                    _ => " Server:— Network:—".into(),
+                },
+                None => " Server:— Network:—".into(),
+            };
+            info!(
+                "{status} #{seq} [sdkprobe] {status_code}{dns}{tcp}{tls_part} \
+                 TTFB:{ttfb:.1}ms Total:{total:.1}ms{split}{retry}",
+                seq = a.sequence_num,
+                ttfb = ttfb_ms,
+                total = total_ms,
+                retry = retry_suffix,
+            );
+        }
         Http1 | Http2 | Http3 | Tcp | Native | Curl => {
             // Only show DNS/TCP segments when the probe actually measured them.
             // HTTP/3 sets both to None (QUIC has no separate DNS/TCP phase —

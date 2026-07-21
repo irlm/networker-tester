@@ -765,6 +765,8 @@ mod tests {
             request_body_file: None,
             request_content_type: None,
             bearer_token: None,
+            laghound_token: None,
+            laghound_route: None,
             udp_port: 9999,
             udp_throughput_port: 9998,
             udp_probes: 20,

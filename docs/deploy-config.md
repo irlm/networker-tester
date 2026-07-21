@@ -248,8 +248,46 @@ loss/jitter control yet.
 > **Note:** All `browser*` and `pageload*` modes require Chrome/Chromium on the tester
 > machine. The installer will auto-detect and install it if missing.
 >
-> `dns`, `tls`, `native`, and `curl` probe modes are supported by the tester binary but
-> are not available in deploy-config mode. Use the tester CLI directly for those modes.
+> `dns`, `tls`, `native`, `curl`, and `sdkprobe` probe modes are supported by the
+> tester binary but are not available in deploy-config mode. Use the tester CLI
+> directly for those modes.
+
+### `sdkprobe` — LagHound network-vs-server split
+
+`sdkprobe` probes a customer's app that has embedded a **LagHound SDK
+endpoint** (see [`docs/sdk/contract-v1.md`](sdk/contract-v1.md)) and splits the
+total request latency into a **network** leg and a **server-processing** leg —
+the core of the "find the main issue" report.
+
+**What it measures.** It runs an HTTP/1.1 request to `<target>/laghound/echo`
+(the cheapest LagHound route that still carries server timing), reusing the
+standard per-phase timing path (DNS → TCP → TLS → TTFB → total). The
+customer's SDK reports its own processing time via a
+`Server-Timing: app;dur=<ms>` response header, from which the tester derives:
+
+| Field | Meaning |
+|-------|---------|
+| `server_ms` | Server processing — the `app;dur` value (falls back to `total;dur`). |
+| `network_ms` | `max(0, ttfb_ms − server_ms)` — request upstream + response first byte. |
+| `app_ms` | The raw `app;dur` metric, if present. |
+| `split_anomaly` | `true` when the reported server time exceeded the measured wall (clock/measure anomaly); `network_ms` is then clamped to 0. |
+
+DNS, TCP, and TLS are measured client-side exactly as for `http1`.
+
+**Token.** LagHound routes are invisible without the shared secret: a bad or
+missing token returns a bare `404`. Provide the token via the
+`--laghound-token` flag or the `LAGHOUND_TOKEN` environment variable; it is
+sent as the `X-LagHound-Token` header (contract §5). A `404` in `sdkprobe`
+mode is classified as a **config** error with the message
+`SDK endpoint returned 404 — check token or that /laghound is mounted`.
+
+**Route.** Defaults to `/laghound/echo`. Override with `--laghound-route`
+(e.g. to point at a non-default LagHound prefix).
+
+```bash
+networker-tester --target https://checkout.example.com \
+  --modes sdkprobe --laghound-token "$LAGHOUND_TOKEN"
+```
 
 ### Page presets
 
