@@ -59,7 +59,7 @@ describe('RotateKeyDialog', () => {
     ).toBeInTheDocument();
 
     // It POSTed to the rotate-key route.
-    const url = fetchMock.mock.calls[0][0] as string;
+    const url = (fetchMock.mock.calls[0] as unknown[])[0] as string;
     expect(url).toContain('/projects/p-1/testers/t-1/rotate-key');
 
     // Copy button puts the key on the clipboard.

@@ -70,12 +70,18 @@ public static class TestersEndpoints
 
     private static async Task<IResult> ListTesters(string projectId, NetworkerDbContext db)
     {
-        var rows = await db.ProjectTesters
+        // Materialize the testers first, THEN enrich with the linked agent's
+        // key-lifecycle fields — AgentKeyInfoFor runs its own query, which EF
+        // cannot translate inside a Select projection (throws on PostgreSQL).
+        var testers = await db.ProjectTesters
             .AsNoTracking()
             .Where(t => t.ProjectId == projectId)
             .OrderByDescending(t => t.CreatedAt)
-            .Select(t => ToListDto(t, AgentKeyInfoFor(db, projectId, t.TesterId)))
             .ToListAsync();
+
+        var rows = testers
+            .Select(t => ToListDto(t, AgentKeyInfoFor(db, projectId, t.TesterId)))
+            .ToList();
 
         return Results.Ok(rows);
     }
@@ -87,14 +93,14 @@ public static class TestersEndpoints
         var tester = await db.ProjectTesters
             .AsNoTracking()
             .Where(t => t.ProjectId == projectId && t.TesterId == testerId)
-            .Select(t => ToDetailDto(t, AgentKeyInfoFor(db, projectId, t.TesterId)))
             .FirstOrDefaultAsync();
 
         // 404 on cross-project / missing — mirrors the Rust scoping so no
-        // cross-project leakage even for platform admins.
+        // cross-project leakage even for platform admins. Agent key-lifecycle
+        // fields are looked up after materialization (see ListTesters).
         return tester is null
             ? ApiError.NotFound("Tester not found")
-            : Results.Ok(tester);
+            : Results.Ok(ToDetailDto(tester, AgentKeyInfoFor(db, projectId, tester.TesterId)));
     }
 
     // ── get_queue ────────────────────────────────────────────────────────
