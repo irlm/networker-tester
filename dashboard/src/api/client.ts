@@ -2,6 +2,7 @@ import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatu
 
 export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, LogsResponse, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo, ImportResult, SendInviteResult, TestConfig, TestConfigListItem, TestConfigCreate, TestRun, TestSchedule, ComparisonReport, ComparisonGroup, ComparisonGroupCreate, AlertChannel, AlertChannelCreate, AlertRule, AlertRuleCreate, AlertEvent };
 export type { AlertMetric, AlertComparator, AlertChannelKind, AlertChannelConfig } from './types';
+export type { SdkEndpoint, SdkEndpointCreate, AppNetworkReport, AppNetworkGroup, AppNetworkFormulas, AppNetworkVerdict } from './types';
 export type { LiveAttempt, EndpointRef, EndpointKind, Workload, Methodology, RunStatus, CaptureMode, OutlierPolicy, QualityGates, PublicationGates, ComparisonCell } from './types';
 
 import { useApiLogStore } from '../stores/apiLogStore';
@@ -1178,5 +1179,32 @@ export const api = {
     if (params?.offset) search.set('offset', String(params.offset));
     const qs = search.toString();
     return request<AlertEvent[]>(`/v2/projects/${projectId}/alert-events${qs ? `?${qs}` : ''}`);
+  },
+
+  // ── LagHound SDK endpoints (Wave 2/3) ───────────────────────────────
+  // Operator-write / member-read. Token is write-only: reads mask it as
+  // '********'. Delete of a missing/foreign id is a flat 404 (not 403).
+  listSdkEndpoints: (projectId: string) =>
+    request<import('./types').SdkEndpoint[]>(projectUrl(projectId, 'sdk-endpoints')),
+
+  getSdkEndpoint: (projectId: string, id: string) =>
+    request<import('./types').SdkEndpoint>(projectUrl(projectId, `sdk-endpoints/${id}`)),
+
+  createSdkEndpoint: (projectId: string, body: import('./types').SdkEndpointCreate) =>
+    request<import('./types').SdkEndpoint>(projectUrl(projectId, 'sdk-endpoints'), {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  deleteSdkEndpoint: (projectId: string, id: string) =>
+    request<void>(projectUrl(projectId, `sdk-endpoints/${id}`), { method: 'DELETE' }),
+
+  // ── Application Network Performance report (app-network) ─────────────
+  // member-read. Optional config_id narrows to one SDK endpoint.
+  getAppNetworkReport: (projectId: string, configId?: string) => {
+    const qs = configId ? `?config_id=${encodeURIComponent(configId)}` : '';
+    return request<import('./types').AppNetworkReport>(
+      projectUrl(projectId, `reports/app-network${qs}`),
+    );
   },
 };

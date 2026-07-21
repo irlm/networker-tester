@@ -11,6 +11,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.44] — 2026-07-21
+
+### Added
+- **LagHound SDK frontend (Wave 3).** Ships the two customer-facing screens for
+  the SDK feature whose C# control-plane API landed in Wave 2 (#494):
+  - **SDK Endpoints** management page (`/projects/:id/sdk-endpoints`) — register
+    a customer's LagHound SDK endpoint (name, target URL, write-only
+    `X-LagHound-Token`, optional probe route), list existing endpoints (token
+    shown masked as `********`), and delete with confirmation. Mutations are
+    gated behind operator role; viewers get read-only. Backed by the new typed
+    `api.listSdkEndpoints` / `createSdkEndpoint` / `deleteSdkEndpoint` client
+    methods against `/api/projects/{id}/sdk-endpoints`.
+  - **Application Network Performance** report page
+    (`/projects/:id/reports/app-network`) — the sellable "is it the app or the
+    network?" screen. A prominent, color-coded overall verdict headline, a
+    NETWORK-vs-SERVER stacked split bar (per endpoint + overall, median & p95),
+    a data-dense per-endpoint table with verdict badges / server-ratio / split-
+    anomaly warnings, a canonical empty state, and the response's formula
+    disclaimer rendered verbatim. Member-read.
+- Both screens are added to the sidebar under a new **SDK** group.
+
+> This release deploys Wave 2's C# control plane and this frontend to prod
+> together.
+
+---
+
 ## [0.28.43] — 2026-07-20
 
 ### Added

@@ -1457,3 +1457,92 @@ export interface PerfPerCostReport {
   groups: PerfPerCostGroup[];
   missing_cost_skus: { provider: string; vm_size: string; region: string }[];
 }
+
+// ── LagHound SDK endpoints (Wave 2/3) ──────────────────────────────────────
+//
+// An "SDK endpoint" is a test_config running the tester `sdkprobe` mode against
+// a customer URL that mounts the LagHound SDK routes. The per-endpoint LagHound
+// token is WRITE-ONLY: reads never return it — `token_set` says whether one is
+// stored and `token` is always the mask ('********') when set, else null.
+
+/** Redacted wire view of an SDK endpoint (GET/POST/list response). */
+export interface SdkEndpoint {
+  id: string;
+  project_id: string;
+  name: string;
+  description: string | null;
+  /** Always 'sdkprobe'. */
+  mode: string;
+  /** Normalized absolute http(s) target URL. */
+  url: string | null;
+  /** Optional probe route (default /laghound/echo on the tester side). */
+  route: string | null;
+  /** Whether a LagHound token is stored. */
+  token_set: boolean;
+  /** Masked ('********') when set, else null. NEVER the real token. */
+  token: string | null;
+  max_duration_secs: number;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Create body for an SDK endpoint. `token` is required and write-only. */
+export interface SdkEndpointCreate {
+  name: string;
+  description?: string;
+  url: string;
+  token: string;
+  route?: string;
+  runs?: number;
+  concurrency?: number;
+  timeout_ms?: number;
+  max_duration_secs?: number;
+}
+
+// ── Application Network Performance report (app-network) ────────────────────
+
+/** verdict ∈ server_bound | network_bound | balanced | no_data. */
+export type AppNetworkVerdict = 'server_bound' | 'network_bound' | 'balanced' | 'no_data';
+
+/** Human-readable formula strings — render verbatim, don't re-derive. */
+export interface AppNetworkFormulas {
+  server_ms: string;
+  network_ms: string;
+  split: string;
+  split_anomaly: string;
+}
+
+/** Per-SDK-endpoint (group) aggregate. */
+export interface AppNetworkGroup {
+  config_id: string;
+  config_name: string;
+  run_count: number;
+  attempt_count: number;
+  split_anomaly_count: number;
+  median_server_ms: number | null;
+  p95_server_ms: number | null;
+  median_network_ms: number | null;
+  p95_network_ms: number | null;
+  median_wall_ms: number | null;
+  /** median_server / median_wall (0..1), or null. */
+  server_ratio: number | null;
+  verdict: AppNetworkVerdict;
+  main_issue: string;
+}
+
+export interface AppNetworkReport {
+  generated_at: string;
+  formulas: AppNetworkFormulas;
+  /** Always 'sdkprobe'. */
+  mode: string;
+  attempt_count: number;
+  split_anomaly_count: number;
+  overall_verdict: AppNetworkVerdict;
+  overall_main_issue: string;
+  overall_median_server_ms: number | null;
+  overall_median_network_ms: number | null;
+  overall_median_wall_ms: number | null;
+  overall_server_ratio: number | null;
+  groups: AppNetworkGroup[];
+}
