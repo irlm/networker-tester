@@ -159,7 +159,9 @@ public sealed class RunDispatcherTesterFkTests
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 baseline_run_id TEXT,
-                max_duration_secs INTEGER NOT NULL DEFAULT 0
+                max_duration_secs INTEGER NOT NULL DEFAULT 0,
+                token_enc BLOB,
+                token_nonce BLOB
             );
             """);
         Exec(conn, """
