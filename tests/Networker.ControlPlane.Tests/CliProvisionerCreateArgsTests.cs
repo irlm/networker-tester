@@ -193,4 +193,58 @@ public sealed class CliProvisionerCreateArgsTests
         Assert.Equal(expectedProject, args[idx + 1]);
         Assert.DoesNotContain("--metadata-from-file", args);
     }
+
+    // ── Azure delete-cascade: per-VM NSG + public IP ─────────────────────────
+
+    [Fact]
+    public void BuildAzureNsgDeleteArgs_targets_exact_vmName_NSG_by_name()
+    {
+        var args = CliComputeProvisioner.BuildAzureNsgDeleteArgs(
+            "tester-eastus-5cab8", "sub-123", "networker-testers");
+
+        Assert.Equal(new[]
+        {
+            "network", "nsg", "delete",
+            "--subscription", "sub-123",
+            "--resource-group", "networker-testers",
+            "--name", "tester-eastus-5cab8NSG",
+        }, args);
+
+        // Safety: exact name only — never a list/filter/wildcard/prefix flag that
+        // could hit another tester (the #419 reaper incident).
+        Assert.DoesNotContain("list", args);
+        Assert.DoesNotContain("--query", args);
+        Assert.DoesNotContain("--ids", args);
+    }
+
+    [Fact]
+    public void BuildAzurePublicIpDeleteArgs_targets_exact_vmName_PublicIP_by_name()
+    {
+        var args = CliComputeProvisioner.BuildAzurePublicIpDeleteArgs(
+            "tester-eastus-5cab8", "sub-123", "networker-testers");
+
+        Assert.Equal(new[]
+        {
+            "network", "public-ip", "delete",
+            "--subscription", "sub-123",
+            "--resource-group", "networker-testers",
+            "--name", "tester-eastus-5cab8PublicIP",
+        }, args);
+
+        Assert.DoesNotContain("list", args);
+        Assert.DoesNotContain("--query", args);
+        Assert.DoesNotContain("--ids", args);
+    }
+
+    [Theory]
+    [InlineData("tester-eastus-5cab8")]
+    [InlineData("ab-westus2-9911f")]
+    public void AzureNetworkDeleteArgs_derive_names_from_this_testers_vmName_only(string vmName)
+    {
+        var nsg = CliComputeProvisioner.BuildAzureNsgDeleteArgs(vmName, "s", "rg");
+        var ip = CliComputeProvisioner.BuildAzurePublicIpDeleteArgs(vmName, "s", "rg");
+
+        Assert.Equal($"{vmName}NSG", nsg[^1]);
+        Assert.Equal($"{vmName}PublicIP", ip[^1]);
+    }
 }
