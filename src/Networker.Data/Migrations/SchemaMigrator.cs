@@ -44,7 +44,7 @@ public static class SchemaMigrator
     public const int FirstVersion = 2;
 
     /// <summary>Latest known migration version.</summary>
-    public const int LatestVersion = 42;
+    public const int LatestVersion = 43;
 
     /// <summary>Versions implemented in C# rather than an embedded SQL script.</summary>
     private static readonly Dictionary<int, Func<NpgsqlConnection, CancellationToken, Task>> CodeMigrations = new()

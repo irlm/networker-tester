@@ -253,6 +253,77 @@ public class ConfigAndArgsTests
         Assert.DoesNotContain("--payload-sizes", RunExecutor.BuildArgs(view, "t"));
     }
 
+    // ── sdkprobe (LagHound SDK) token + route args ─────────────────────────
+
+    private const string SdkProbeConfig = """
+        {
+          "id": "33333333-3333-3333-3333-333333333333",
+          "endpoint": { "kind": "network", "host": "https://customer.example.com" },
+          "workload": {
+            "modes": ["sdkprobe"],
+            "runs": 10, "concurrency": 1, "timeout_ms": 30000,
+            "payload_sizes": [], "insecure": false,
+            "laghound_token": "secret-token-xyz",
+            "laghound_route": "/laghound/health"
+          }
+        }
+        """;
+
+    [Fact]
+    public void TestConfigView_reads_laghound_token_and_route_from_workload()
+    {
+        var view = TestConfigView.From(Config(SdkProbeConfig));
+        Assert.Equal(new[] { "sdkprobe" }, view.Modes);
+        Assert.Equal("secret-token-xyz", view.LagHoundToken);
+        Assert.Equal("/laghound/health", view.LagHoundRoute);
+    }
+
+    [Fact]
+    public void BuildArgs_appends_laghound_token_and_route_for_sdkprobe()
+    {
+        var view = TestConfigView.From(Config(SdkProbeConfig));
+        var args = RunExecutor.BuildArgs(view, "https://customer.example.com");
+
+        var ti = args.IndexOf("--laghound-token");
+        Assert.True(ti >= 0, "--laghound-token missing");
+        Assert.Equal("secret-token-xyz", args[ti + 1]);
+
+        var ri = args.IndexOf("--laghound-route");
+        Assert.True(ri >= 0, "--laghound-route missing");
+        Assert.Equal("/laghound/health", args[ri + 1]);
+    }
+
+    [Fact]
+    public void BuildArgs_omits_laghound_flags_when_no_token_present()
+    {
+        var view = TestConfigView.From(Config("""
+            { "id":"00000000-0000-0000-0000-000000000000",
+              "endpoint": { "kind":"network", "host":"h" },
+              "workload": { "modes":["sdkprobe"], "runs":1, "concurrency":1, "timeout_ms":3000,
+                            "payload_sizes":[], "insecure":false } }
+            """));
+        var args = RunExecutor.BuildArgs(view, "t");
+        Assert.DoesNotContain("--laghound-token", args);
+        Assert.DoesNotContain("--laghound-route", args);
+    }
+
+    [Fact]
+    public void RedactSecretArgs_masks_token_values_but_keeps_flag_names()
+    {
+        var view = TestConfigView.From(Config(SdkProbeConfig));
+        var args = RunExecutor.BuildArgs(view, "https://customer.example.com");
+
+        var redacted = RunExecutor.RedactSecretArgs(args);
+        var line = string.Join(" ", redacted);
+
+        // The flag name survives; the secret value never appears in the log line.
+        Assert.Contains("--laghound-token", line);
+        Assert.Contains("***REDACTED***", line);
+        Assert.DoesNotContain("secret-token-xyz", line);
+        // The non-secret route value is NOT masked.
+        Assert.Contains("/laghound/health", line);
+    }
+
     [Fact]
     public void Methodology_presence_flags_benchmark_mode()
     {

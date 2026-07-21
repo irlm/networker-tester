@@ -669,6 +669,8 @@ CREATE TABLE public.test_config (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     baseline_run_id uuid,
     max_duration_secs integer DEFAULT 900 NOT NULL,
+    token_enc bytea,
+    token_nonce bytea,
     CONSTRAINT test_config_endpoint_kind_check CHECK ((endpoint_kind = ANY (ARRAY['network'::text, 'proxy'::text, 'runtime'::text, 'pending'::text])))
 );
 

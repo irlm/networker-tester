@@ -166,6 +166,10 @@ app.MapTestRunWriteEndpoints();
 app.MapSchedulesEndpoints();
 app.MapComparisonGroupsEndpoints();
 
+// LagHound SDK (wave 2) — register/list/delete SDK-probe endpoints (a
+// test_config with mode 'sdkprobe' + encrypted X-LagHound-Token).
+app.MapSdkEndpointsEndpoints();
+
 // M4 provisioning + VM lifecycle — cloud credential management (encrypted) and
 // tester start/stop/upgrade/probe/postpone/schedule/force-stop/delete (202-async,
 // cloud calls behind IComputeProvisioner). Pending→provision (deploy-runner +
@@ -220,6 +224,9 @@ app.MapLeaderboardEndpoints();
 // Provider performance-per-cost report (project-scoped, member-read) — probe
 // aggregates joined to the static shared/cloud-costs.json price table.
 app.MapPerfPerCostEndpoints();
+// Application Network Performance report (project-scoped, member-read) — for
+// sdkprobe runs, the network-vs-server latency split + verdict.
+app.MapAppNetworkEndpoints();
 app.MapSystemHealthEndpoints();
 app.MapLogsEndpoints();
 app.MapPerfLogEndpoints();

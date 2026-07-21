@@ -55,9 +55,9 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
     // ── Migration chain ─────────────────────────────────────────────────
 
     [Fact]
-    public void Fresh_database_applies_the_full_chain_v002_to_v042()
+    public void Fresh_database_applies_the_full_chain_v002_to_v043()
     {
-        Assert.Equal(Enumerable.Range(2, 41), _fx.FreshRun.Applied);
+        Assert.Equal(Enumerable.Range(2, 42), _fx.FreshRun.Applied);
         Assert.Empty(_fx.FreshRun.AlreadyApplied);
     }
 
@@ -70,7 +70,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
 
         Assert.True(second.WasUpToDate);
         Assert.Empty(second.Applied);
-        Assert.Equal(Enumerable.Range(2, 41), second.AlreadyApplied);
+        Assert.Equal(Enumerable.Range(2, 42), second.AlreadyApplied);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
             }
         }
 
-        Assert.Equal(Enumerable.Range(2, 41), recorded);
+        Assert.Equal(Enumerable.Range(2, 42), recorded);
     }
 
     // ── EF-model equivalence ────────────────────────────────────────────
@@ -415,6 +415,42 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
         var settled = await SchemaMigrator.MigrateAsync(_fx.ConnectionString);
         Assert.True(settled.WasUpToDate);
     }
+
+    // ── V043: SDK-endpoint encrypted token columns ──────────────────────
+
+    [Fact]
+    public async Task V043_added_the_encrypted_token_columns_to_test_config()
+    {
+        await using var conn = new NpgsqlConnection(_fx.ConnectionString);
+        await conn.OpenAsync();
+
+        await using var cols = new NpgsqlCommand(
+            """
+            SELECT column_name, data_type, is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'test_config'
+              AND column_name IN ('token_enc', 'token_nonce')
+            ORDER BY column_name
+            """, conn);
+        var found = new List<(string Name, string Type, string Nullable)>();
+        await using (var reader = await cols.ExecuteReaderAsync())
+        {
+            while (await reader.ReadAsync())
+            {
+                found.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2)));
+            }
+        }
+
+        // Both columns exist, are bytea, and are nullable (a non-sdkprobe config
+        // has no token).
+        Assert.Equal(
+            new[]
+            {
+                ("token_enc", "bytea", "YES"),
+                ("token_nonce", "bytea", "YES"),
+            },
+            found);
+    }
 }
 
 /// <summary>
@@ -470,6 +506,7 @@ public sealed class MigrationScriptFreezeTests
         ["V040_agent_api_key_hash.sql"] = "6d5de2ba9985f56ef06d8ea93354c28b5b77551af491c4750b705744b69f4a5f",
         ["V041_alerting.sql"] = "add33d316b5e705668c0a89fc8c64ab28a51291c3bee31bcbda77a327972d36d",
         ["V042_perf_log_main_db.sql"] = "dd222a9fcb6c38d0451148df6c05761439af5980bdf4849c0376330d773e4114",
+        ["V043_sdk_endpoint_token.sql"] = "4ab8a521c29976867e78ba5fca479420353abca143571b0493506382e8524a1e",
     };
 
     [Fact]
@@ -489,7 +526,7 @@ public sealed class MigrationScriptFreezeTests
             Assert.Contains(version, scripted);
         }
 
-        Assert.Equal(40, scripted.Count);
+        Assert.Equal(41, scripted.Count);
     }
 
     [Fact]

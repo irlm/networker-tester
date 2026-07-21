@@ -9,7 +9,7 @@ the Rust control-plane crates when the decommission soak completes.
 
 | Piece | Location |
 |---|---|
-| Ordered migration scripts (V002…V042) | `src/Networker.Data/Migrations/V0NN_*.sql` (embedded resources) |
+| Ordered migration scripts (V002…V043) | `src/Networker.Data/Migrations/V0NN_*.sql` (embedded resources) |
 | V025 (UUID → base36 project ids) | `src/Networker.Data/Migrations/V025ProjectIdMigration.cs` (code, like the Rust original) |
 | ProjectId base36 + Damm implementation | `src/Networker.Data/Migrations/ProjectId36.cs` |
 | Runner | `src/Networker.Data/Migrations/SchemaMigrator.cs` |
@@ -93,12 +93,12 @@ replay).
 
 ## How to add a migration (post-decommission workflow)
 
-1. Create `src/Networker.Data/Migrations/V043_short_name.sql` (next free
+1. Create `src/Networker.Data/Migrations/V044_short_name.sql` (next free
    number, zero-padded, one underscore after the version). Make it
    idempotent where cheap (`IF NOT EXISTS` guards) — the runner's
    transaction makes idempotence optional, but it keeps manual recovery
    easy.
-2. Bump `SchemaMigrator.LatestVersion` to `43`.
+2. Bump `SchemaMigrator.LatestVersion` to `44`.
 3. Pin the script's SHA-256 in `MigrationScriptFreezeTests.FrozenSha256`.
 4. Update the EF model (`NetworkerDbContext` + entity) to match, if the
    change touches mapped tables. The equivalence test fails if they drift.
@@ -141,6 +141,11 @@ bookkeeping.
   migration ever depended on a table the Rust runner created out-of-band,
   the same recorded-but-absent pattern applies: ship a new idempotent
   re-assert migration, never edit the original.
+- **V043** adds `test_config.token_enc` / `token_nonce` (both `BYTEA`,
+  nullable) — the encrypted LagHound SDK-endpoint probe token for `sdkprobe`
+  configs. Encrypted with `Networker.Security.CredentialCipher` (the same
+  AES-256-GCM scheme as `cloud_account.credentials_enc`); never returned to a
+  client. Only populated for `sdkprobe` endpoints; NULL everywhere else.
 - `bootstrap/reset-pre-prod.sql` and the tester's V001 schema are separate,
   unaffected artifacts.
 

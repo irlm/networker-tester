@@ -389,6 +389,8 @@ public partial class NetworkerDbContext : DbContext
             entity.Property(e => e.Workload)
                 .HasColumnType("jsonb")
                 .HasColumnName("workload");
+            entity.Property(e => e.TokenEnc).HasColumnName("token_enc");
+            entity.Property(e => e.TokenNonce).HasColumnName("token_nonce");
 
             entity.HasOne(d => d.BaselineRun).WithMany(p => p.TestConfigs)
                 .HasForeignKey(d => d.BaselineRunId)
