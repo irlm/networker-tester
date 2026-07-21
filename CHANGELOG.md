@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.48] — 2026-07-21
+
+### Fixed
+- **Azure tester-delete cascade now deletes the per-VM NSG + public IP.**
+  `az vm delete` cascades away the NIC and OS disk (via the create-time
+  `--nic-delete-option Delete` / `--os-disk-delete-option Delete`) but leaves the
+  per-VM network security group (`<vm_name>NSG`) and public IP
+  (`<vm_name>PublicIP`) behind to bill until the eventual, account-scoped
+  `OrphanReaperService` sweep. The Azure delete path now deletes both immediately
+  and best-effort — IP first, then NSG — matching **only** the two exact names
+  derived from this tester's `vm_name` (never a prefix/wildcard/list filter, per
+  the #419 reaper-safety incident), skipping cleanup entirely when `vm_name` is
+  empty, and tolerating a not-found/already-deleted resource without failing the
+  tester delete. AWS (`terminate-instances`) and GCP (`instances delete`) already
+  release their own resources and are unchanged.
+
+---
+
 ## [0.28.47] — 2026-07-21
 
 ### Fixed

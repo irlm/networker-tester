@@ -115,11 +115,121 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
             logger.LogInformation(
                 "{Cloud} resource {ResourceId} already gone; treating delete as success",
                 cloud, resourceId);
-            return ProvisionResult.Ok(result.ExitCode ?? 0, result.StdOut, result.StdErr);
+            result = ProvisionResult.Ok(result.ExitCode ?? 0, result.StdOut, result.StdErr);
+        }
+
+        // Azure self-cleaning cascade: `az vm create` makes a per-VM NSG
+        // (`<vm_name>NSG`) and public IP (`<vm_name>PublicIP`) that the VM's
+        // create-time --nic-delete-option / --os-disk-delete-option do NOT cover,
+        // so `az vm delete` leaves them behind to bill until the (eventual,
+        // account-scoped) OrphanReaperService gets them. Delete them immediately
+        // here, best-effort — the VM delete outcome (already reflected in
+        // `result`) stays authoritative; NSG/IP cleanup never changes it.
+        // AWS terminate-instances / GCP delete already release their own resources.
+        if (op == LifecycleOp.Delete && result.Success && cloud == "azure")
+        {
+            await CleanupAzureNetworkResourcesAsync(tester, credentials, ct).ConfigureAwait(false);
         }
 
         return result;
     }
+
+    /// <summary>
+    /// Best-effort deletion of the per-VM Azure NSG (<c>&lt;vm_name&gt;NSG</c>) and
+    /// public IP (<c>&lt;vm_name&gt;PublicIP</c>) that <c>az vm delete</c> leaves
+    /// behind (the create-time delete-options only cover the NIC + OS disk).
+    ///
+    /// <para><b>Safety (the #419 reaper incident):</b> the orphan reaper once
+    /// deleted live testers' children because it matched on a set instead of exact
+    /// names. This path matches ONLY the two exact names derived from THIS tester's
+    /// <see cref="ProjectTester.VmName"/> — never a prefix, wildcard, or list
+    /// filter that could hit another tester. If <c>vm_name</c> is null/empty we
+    /// can't derive the names safely, so we SKIP entirely rather than guess.</para>
+    ///
+    /// <para><b>Order:</b> IP before NSG. The NIC (which references the NSG) is
+    /// already gone with the VM cascade, so neither strictly blocks the other, but
+    /// IP-then-NSG is the conventionally safe order.</para>
+    ///
+    /// <para>Never throws and never fails the tester delete: a not-found /
+    /// already-deleted resource (the reaper or a partial cascade may have gotten
+    /// it) is logged at debug, other failures at info. The overall delete result
+    /// reflects the VM delete, not this cleanup.</para>
+    /// </summary>
+    private async Task CleanupAzureNetworkResourcesAsync(
+        ProjectTester tester, ProviderCredentials? creds, CancellationToken ct)
+    {
+        var vmName = tester.VmName;
+        if (string.IsNullOrEmpty(vmName))
+        {
+            // No vm_name → can't derive `<vm_name>NSG` / `<vm_name>PublicIP` safely.
+            logger.LogDebug(
+                "Azure tester {ResourceId} has no vm_name; skipping NSG/IP cascade cleanup",
+                tester.VmResourceId);
+            return;
+        }
+
+        var file = CloudCli.AzBin();
+        var sub = creds?.SubscriptionId ?? string.Empty;
+        var rg = creds?.ResourceGroup ?? string.Empty;
+        var env = new Dictionary<string, string> { ["PYTHONWARNINGS"] = "ignore" };
+
+        // IP first, then NSG (see method summary).
+        await RunAzureNetworkDeleteAsync(
+            file, BuildAzurePublicIpDeleteArgs(vmName, sub, rg), env, "public IP", $"{vmName}PublicIP", ct)
+            .ConfigureAwait(false);
+        await RunAzureNetworkDeleteAsync(
+            file, BuildAzureNsgDeleteArgs(vmName, sub, rg), env, "NSG", $"{vmName}NSG", ct)
+            .ConfigureAwait(false);
+    }
+
+    private async Task RunAzureNetworkDeleteAsync(
+        string file, List<string> args, IReadOnlyDictionary<string, string> env,
+        string kind, string name, CancellationToken ct)
+    {
+        var res = await RunAsync(file, args, env, ct).ConfigureAwait(false);
+        if (res.Success || LooksAlreadyGone(res.StdErr))
+        {
+            logger.LogDebug("Azure cascade: {Kind} {Name} deleted (or already gone)", kind, name);
+            return;
+        }
+
+        // Best-effort — the OrphanReaperService will retry on its next sweep. Log
+        // at info (not error): a leftover NSG/IP is a cost nuisance, not a failed
+        // delete, and must never surface as a tester-delete error.
+        logger.LogInformation(
+            "Azure cascade: best-effort {Kind} {Name} delete did not succeed ({Err}); leaving for the orphan reaper",
+            kind, name, res.Error ?? res.StdErr);
+    }
+
+    /// <summary>
+    /// Pure argv builder for deleting the per-VM Azure NSG by its <b>exact</b> name
+    /// (<c>&lt;vmName&gt;NSG</c>) in the given subscription + resource group. Uses
+    /// <c>--name</c> (never a list/filter) so it can only ever target this tester's
+    /// NSG. Testable without a process spawn.
+    /// </summary>
+    public static List<string> BuildAzureNsgDeleteArgs(string vmName, string subscription, string resourceGroup) =>
+        new()
+        {
+            "network", "nsg", "delete",
+            "--subscription", subscription,
+            "--resource-group", resourceGroup,
+            "--name", $"{vmName}NSG",
+        };
+
+    /// <summary>
+    /// Pure argv builder for deleting the per-VM Azure public IP by its
+    /// <b>exact</b> name (<c>&lt;vmName&gt;PublicIP</c>) in the given subscription +
+    /// resource group. Uses <c>--name</c> (never a list/filter). Testable without a
+    /// process spawn.
+    /// </summary>
+    public static List<string> BuildAzurePublicIpDeleteArgs(string vmName, string subscription, string resourceGroup) =>
+        new()
+        {
+            "network", "public-ip", "delete",
+            "--subscription", subscription,
+            "--resource-group", resourceGroup,
+            "--name", $"{vmName}PublicIP",
+        };
 
     // ── Azure argv (az) ──────────────────────────────────────────────────────
 
