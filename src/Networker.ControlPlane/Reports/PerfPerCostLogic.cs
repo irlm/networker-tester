@@ -41,6 +41,7 @@ public static class PerfPerCostLogic
             ["http2"] = FamilyHttp,
             ["http3"] = FamilyHttp,
             ["curl"] = FamilyHttp,
+            ["sdkprobe"] = FamilyHttp,
             ["pageload"] = FamilyPage,
             ["pageload2"] = FamilyPage,
             ["pageload3"] = FamilyPage,

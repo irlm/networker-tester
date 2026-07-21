@@ -72,6 +72,7 @@ public static class PlatformEndpoints
         new("http2", "HTTP/2", "Multiplexed", "HTTP/2 over TLS with ALPN h2 negotiation", "HTTP"),
         new("http3", "HTTP/3", "QUIC", "HTTP/3 over QUIC (UDP) — 0-RTT capable", "HTTP"),
         new("curl", "Curl", "Via curl CLI", "Spawns curl binary, captures per-phase timing from --write-out", "HTTP"),
+        new("sdkprobe", "SDK Probe", "Server split", "Probes a customer-embedded LagHound endpoint — splits total time into DNS, TCP, TLS, network transfer, and server processing via Server-Timing", "HTTP"),
         // Page Load (Native)
         new("pageload", "H1", "6 parallel connections", "Fetches page manifest + assets using 6 parallel HTTP/1.1 connections (browser-like)", "Page Load (Native)"),
         new("pageload2", "H2", "Multiplexed", "Same assets multiplexed over a single TLS/HTTP2 connection", "Page Load (Native)"),

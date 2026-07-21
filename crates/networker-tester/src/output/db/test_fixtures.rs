@@ -181,6 +181,7 @@ pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
             server_version: Some(env!("CARGO_PKG_VERSION").into()),
             srv_csw_voluntary: Some(2),
             srv_csw_involuntary: Some(0),
+            ..Default::default()
         }),
         udp_throughput: None,
         page_load: None,

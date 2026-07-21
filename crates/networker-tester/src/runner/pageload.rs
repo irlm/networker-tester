@@ -1728,6 +1728,7 @@ fn parse_server_timing_simple(
         server_version,
         srv_csw_voluntary: None,
         srv_csw_involuntary: None,
+        ..Default::default()
     })
 }
 

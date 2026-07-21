@@ -201,6 +201,11 @@ pub(crate) async fn run_for_target(
         request_body,
         request_content_type: cfg.request_content_type.clone(),
         bearer_token: cfg.bearer_token.clone(),
+        laghound_token: cfg.laghound_token.clone(),
+        laghound_route: cfg
+            .laghound_route
+            .clone()
+            .unwrap_or_else(|| "/laghound/echo".to_string()),
     };
 
     let throughput_cfg = ThroughputConfig {

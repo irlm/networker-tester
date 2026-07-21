@@ -102,6 +102,19 @@ pub struct Cli {
     #[arg(long)]
     pub bearer_token: Option<String>,
 
+    /// LagHound shared secret for the `sdkprobe` mode, sent as the
+    /// `X-LagHound-Token` header (docs/sdk/contract-v1.md §5). Falls back to
+    /// the LAGHOUND_TOKEN environment variable. Without it the SDK routes
+    /// (correctly) answer 404 and the probe is classified as a config error.
+    #[arg(long, env = "LAGHOUND_TOKEN")]
+    pub laghound_token: Option<String>,
+
+    /// Route the `sdkprobe` mode probes, relative to the target origin
+    /// (default `/laghound/echo`). Use e.g. `/laghound/health` to point at a
+    /// non-default LagHound prefix.
+    #[arg(long)]
+    pub laghound_route: Option<String>,
+
     // ── UDP ───────────────────────────────────────────────────────────────────
     /// UDP echo server port on the target host
     #[arg(long)]
@@ -517,6 +530,8 @@ pub struct ConfigFile {
     pub request_body_file: Option<String>,
     pub request_content_type: Option<String>,
     pub bearer_token: Option<String>,
+    pub laghound_token: Option<String>,
+    pub laghound_route: Option<String>,
     pub udp_port: Option<u16>,
     pub udp_throughput_port: Option<u16>,
     pub udp_probes: Option<u32>,
@@ -603,6 +618,8 @@ pub struct ResolvedConfig {
     pub request_body_file: Option<String>,
     pub request_content_type: Option<String>,
     pub bearer_token: Option<String>,
+    pub laghound_token: Option<String>,
+    pub laghound_route: Option<String>,
     pub udp_port: u16,
     pub udp_throughput_port: u16,
     pub udp_probes: u32,
@@ -822,6 +839,8 @@ impl Cli {
             request_body_file: self.request_body_file.or(f.request_body_file),
             request_content_type: self.request_content_type.or(f.request_content_type),
             bearer_token: self.bearer_token.or(f.bearer_token),
+            laghound_token: self.laghound_token.or(f.laghound_token),
+            laghound_route: self.laghound_route.or(f.laghound_route),
             udp_port: pick!(udp_port, 9999),
             udp_throughput_port: pick!(udp_throughput_port, 9998),
             udp_probes: pick!(udp_probes, 10),

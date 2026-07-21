@@ -17,7 +17,7 @@ export const FAMILY_BY_MODE: Record<string, ModeFamily> = {
   // Network primitives
   tcp: 'net', dns: 'net', tls: 'net', tlsresume: 'net', native: 'net', udp: 'net',
   // HTTP semantics
-  http1: 'http', http2: 'http', http3: 'http', curl: 'http',
+  http1: 'http', http2: 'http', http3: 'http', curl: 'http', sdkprobe: 'http',
   // Throughput
   download: 'thru', upload: 'thru',
   download1: 'thru', download2: 'thru', download3: 'thru',

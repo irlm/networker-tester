@@ -75,6 +75,7 @@ fn manifest_id_of(p: &Protocol) -> &'static str {
         Protocol::Browser1 => "browser1",
         Protocol::Browser2 => "browser2",
         Protocol::Browser3 => "browser3",
+        Protocol::SdkProbe => "sdkprobe",
     }
 }
 

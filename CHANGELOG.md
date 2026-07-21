@@ -11,6 +11,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.43] — 2026-07-20
+
+### Added
+- **`sdkprobe` tester mode — LagHound network-vs-server latency split.** A new
+  probe that measures a customer's embedded LagHound SDK endpoint
+  (`docs/sdk/contract-v1.md`) and splits total request latency into a NETWORK
+  leg and a SERVER-processing leg — the core of the "find the main issue"
+  report. Reuses the HTTP/1.1 per-phase timing path (DNS/TCP/TLS/TTFB/total)
+  and adds `X-LagHound-Token` auth.
+  - `Protocol::SdkProbe` (`sdkprobe`) probes `<target>/laghound/echo` by default
+    (`--laghound-route` to override).
+  - Server-Timing parser now also reads `app;dur` (Wave 1 of the SDK
+    control-plane feature). `ServerTimingResult` gains `app_ms`, `server_ms`,
+    `network_ms`, and `split_anomaly`: `server_ms = app` (fallback `total`),
+    `network_ms = max(0, ttfb_ms − server_ms)`, clamped to 0 and flagged when
+    the reported server time exceeds the measured wall.
+  - Token via `--laghound-token` / `LAGHOUND_TOKEN` (sent as `X-LagHound-Token`,
+    which wins over `Authorization: Bearer` per contract §5). A bare `404`
+    (bad/missing token, or `/laghound` not mounted) is classified as a **config**
+    error with the message `SDK endpoint returned 404 — check token or that
+    /laghound is mounted`.
+  - Run summary prints the DNS / TCP / TLS / network-transfer / server-processing
+    breakdown and names the dominant leg.
+  - `shared/modes.json` gains the `sdkprobe` catalog entry (HTTP family); the
+    dashboard `mode-family.ts` and C# `PlatformEndpoints.AllModes` copies are
+    updated in lock-step so the three-stack drift guards pass.
+
+---
+
 ## [0.28.42] — 2026-07-20
 
 ### Added

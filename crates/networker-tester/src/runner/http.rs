@@ -73,6 +73,14 @@ pub struct RunConfig {
     /// Bearer token added as `Authorization: Bearer <token>` on every request
     /// (reference endpoints enforce BENCH_API_TOKEN on all routes but /health).
     pub bearer_token: Option<String>,
+    /// LagHound shared secret for the `sdkprobe` mode, sent as the
+    /// `X-LagHound-Token` header (docs/sdk/contract-v1.md §5). None means the
+    /// SDK routes are unauthenticated and will (correctly) answer 404.
+    pub laghound_token: Option<String>,
+    /// Route the `sdkprobe` mode probes, relative to the target origin
+    /// (default `/laghound/echo` — the cheapest route that still carries an
+    /// `app;dur` server-timing metric).
+    pub laghound_route: String,
 }
 
 impl Default for RunConfig {
@@ -91,6 +99,8 @@ impl Default for RunConfig {
             request_body: None,
             request_content_type: None,
             bearer_token: None,
+            laghound_token: None,
+            laghound_route: "/laghound/echo".to_string(),
         }
     }
 }
@@ -122,7 +132,8 @@ pub async fn run_probe(
         | Protocol::Upload1
         | Protocol::Upload2
         | Protocol::WebDownload
-        | Protocol::WebUpload => {
+        | Protocol::WebUpload
+        | Protocol::SdkProbe => {
             run_http_or_tcp(
                 run_id,
                 attempt_id,
@@ -499,13 +510,20 @@ async fn run_http_or_tcp(
     let http_started_at = Utc::now();
     let t_http = Instant::now();
 
-    let path = if target.path().is_empty() {
-        "/"
+    // sdkprobe ignores the target path and probes the configured LagHound route
+    // (default /laghound/echo) — the split target lives under the SDK prefix,
+    // not at the origin path (contract §8).
+    let full_path = if protocol == Protocol::SdkProbe {
+        cfg.laghound_route.clone()
     } else {
-        target.path()
+        let path = if target.path().is_empty() {
+            "/"
+        } else {
+            target.path()
+        };
+        let query = target.query().map(|q| format!("?{q}")).unwrap_or_default();
+        format!("{path}{query}")
     };
-    let query = target.query().map(|q| format!("?{q}")).unwrap_or_default();
-    let full_path = format!("{path}{query}");
 
     // HTTP through proxy requires an absolute-form URI:
     //   GET http://example.com:80/path HTTP/1.1
@@ -523,7 +541,8 @@ async fn run_http_or_tcp(
         | Protocol::Upload
         | Protocol::Upload1
         | Protocol::WebDownload
-        | Protocol::WebUpload => {
+        | Protocol::WebUpload
+        | Protocol::SdkProbe => {
             send_http1(
                 io_box,
                 &host,
@@ -565,6 +584,11 @@ async fn run_http_or_tcp(
             // directly comparable.
             let http_ok = h.status_code < 400;
             let status_code = h.status_code;
+            // sdkprobe: a bare 404 is the contract's "bad/missing token or the
+            // SDK isn't mounted" signal (contract §5) — the SDK is deliberately
+            // invisible to unauthenticated callers. Classify it as a config/auth
+            // problem with an actionable message rather than a generic HTTP 404.
+            let is_sdk_auth_404 = protocol == Protocol::SdkProbe && status_code == 404;
             RequestAttempt {
                 attempt_id,
                 run_id,
@@ -580,6 +604,17 @@ async fn run_http_or_tcp(
                 udp: None,
                 error: if http_ok {
                     None
+                } else if is_sdk_auth_404 {
+                    Some(ErrorRecord {
+                        category: ErrorCategory::Config,
+                        message: "SDK endpoint returned 404 — check token or that /laghound is mounted".into(),
+                        detail: Some(
+                            "LagHound routes answer a bare 404 for a bad or missing X-LagHound-Token, \
+                             or when the SDK is not mounted / is kill-switched (LAGHOUND_DISABLED)."
+                                .into(),
+                        ),
+                        occurred_at: Utc::now(),
+                    })
                 } else {
                     Some(ErrorRecord {
                         category: ErrorCategory::Http,
@@ -820,6 +855,12 @@ fn build_request(
         builder = builder.header("authorization", format!("Bearer {token}"));
     }
 
+    // LagHound SDK auth (sdkprobe). Sent as X-LagHound-Token, which wins over
+    // Bearer when both are present (contract §5).
+    if let Some(token) = &cfg.laghound_token {
+        builder = builder.header("x-laghound-token", token.clone());
+    }
+
     if let Some(len) = explicit_body_len {
         builder = builder
             // Fixed-length framing: no chunked transfer encoding on HTTP/1.1.
@@ -959,6 +1000,18 @@ fn parse_server_timing(
         .map(parse_server_timing_header)
         .unwrap_or_default();
 
+    // Network-vs-server split (LagHound sdkprobe, contract §4.3). The server
+    // half is `app;dur` when present, else the `total;dur` compat alias. The
+    // network half is everything left over from TTFB (request upstream +
+    // response first byte). Clamp to 0 and flag when the reported server time
+    // exceeds the measured wall (clock/measure anomaly).
+    let server_ms = parsed_st.app_ms.or(parsed_st.total_ms);
+    let (network_ms, split_anomaly) = match server_ms {
+        Some(srv) if ttfb_ms >= srv => (Some(ttfb_ms - srv), false),
+        Some(_) => (Some(0.0), true),
+        None => (None, false),
+    };
+
     Some(ServerTimingResult {
         request_id,
         server_timestamp,
@@ -966,6 +1019,10 @@ fn parse_server_timing(
         recv_body_ms: parsed_st.recv_ms,
         processing_ms: parsed_st.proc_ms,
         total_server_ms: parsed_st.total_ms,
+        app_ms: parsed_st.app_ms,
+        server_ms,
+        network_ms,
+        split_anomaly,
         server_version,
         srv_csw_voluntary: parsed_st.csw_v,
         srv_csw_involuntary: parsed_st.csw_i,
@@ -978,6 +1035,9 @@ struct ParsedServerTiming {
     recv_ms: Option<f64>,
     proc_ms: Option<f64>,
     total_ms: Option<f64>,
+    /// LagHound SDK server processing time (app;dur=X) — the authoritative
+    /// server-side number for the sdkprobe network-vs-server split (§4.2).
+    app_ms: Option<f64>,
     /// Server-side voluntary context switches (csw-v;dur=N).
     csw_v: Option<u64>,
     /// Server-side involuntary context switches (csw-i;dur=N).
@@ -1005,6 +1065,7 @@ fn parse_server_timing_header(value: &str) -> ParsedServerTiming {
             "recv" => parsed.recv_ms = dur,
             "proc" => parsed.proc_ms = dur,
             "total" => parsed.total_ms = dur,
+            "app" => parsed.app_ms = dur,
             "csw-v" => parsed.csw_v = dur.map(|d| d as u64),
             "csw-i" => parsed.csw_i = dur.map(|d| d as u64),
             _ => {}

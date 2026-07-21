@@ -56,6 +56,7 @@ pub fn print_summary(run: &TestRun) {
         Protocol::Http3,
         Protocol::Native,
         Protocol::Curl,
+        Protocol::SdkProbe,
         Protocol::Tcp,
         Protocol::Udp,
         Protocol::Dns,
@@ -190,6 +191,10 @@ pub fn print_summary(run: &TestRun) {
         }
     }
 
+    // sdkprobe network-vs-server latency split — the core "find the main
+    // issue" breakdown. Only rendered when a sdkprobe run produced a split.
+    print_sdk_split(run);
+
     // Protocol comparison table when any pageload or browser variant is present
     let has_pageload = run.attempts.iter().any(|a| {
         matches!(
@@ -208,6 +213,83 @@ pub fn print_summary(run: &TestRun) {
     }
 
     println!("══════════════════════════════════════════════\n");
+}
+
+/// Render the sdkprobe NETWORK-vs-SERVER latency split: the LagHound report's
+/// headline breakdown. Averages the per-phase legs (DNS/TCP/TLS from the
+/// client, network transfer + server processing from the `Server-Timing: app`
+/// split) across all successful sdkprobe attempts and prints where the time
+/// went — so an operator can tell at a glance whether the customer's latency
+/// is network or the customer's own app.
+fn print_sdk_split(run: &TestRun) {
+    let sdk: Vec<&RequestAttempt> = run
+        .attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::SdkProbe && a.success)
+        .collect();
+    if sdk.is_empty() {
+        return;
+    }
+
+    // Only meaningful once at least one attempt reported the server split.
+    let with_split = sdk
+        .iter()
+        .filter(|a| {
+            a.server_timing
+                .as_ref()
+                .is_some_and(|st| st.server_ms.is_some())
+        })
+        .count();
+    if with_split == 0 {
+        return;
+    }
+
+    let avg = |f: &dyn Fn(&RequestAttempt) -> Option<f64>| -> Option<f64> {
+        let vals: Vec<f64> = sdk.iter().filter_map(|a| f(a)).collect();
+        if vals.is_empty() {
+            None
+        } else {
+            Some(vals.iter().sum::<f64>() / vals.len() as f64)
+        }
+    };
+
+    let dns = avg(&|a| a.dns.as_ref().map(|d| d.duration_ms));
+    let tcp = avg(&|a| a.tcp.as_ref().map(|t| t.connect_duration_ms));
+    let tls = avg(&|a| a.tls.as_ref().map(|t| t.handshake_duration_ms));
+    let network = avg(&|a| a.server_timing.as_ref().and_then(|st| st.network_ms));
+    let server = avg(&|a| a.server_timing.as_ref().and_then(|st| st.server_ms));
+    let total = avg(&|a| a.http.as_ref().map(|h| h.total_duration_ms));
+    let anomalies = sdk
+        .iter()
+        .filter(|a| a.server_timing.as_ref().is_some_and(|st| st.split_anomaly))
+        .count();
+
+    let line = |label: &str, v: Option<f64>| {
+        let val = v.map_or_else(|| "—".to_string(), |x| format!("{x:>8.2}ms"));
+        println!("   {label:<18} {val:>12}");
+    };
+
+    println!();
+    println!(
+        " SDK latency split (avg over {n} probe{s}, {ws} with server timing)",
+        n = sdk.len(),
+        s = if sdk.len() == 1 { "" } else { "s" },
+        ws = with_split,
+    );
+    println!("──────────────────────────────────────────");
+    line("DNS", dns);
+    line("TCP connect", tcp);
+    line("TLS handshake", tls);
+    line("Network transfer", network);
+    line("Server processing", server);
+    line("Total", total);
+    if let (Some(net), Some(srv)) = (network, server) {
+        let leg = if srv >= net { "SERVER" } else { "NETWORK" };
+        println!("   → dominant leg: {leg} (network {net:.1}ms vs server {srv:.1}ms)");
+    }
+    if anomalies > 0 {
+        println!("   ⚠ {anomalies} probe(s) had server_ms > wall — network leg clamped to 0");
+    }
 }
 
 pub fn print_comparison(run: &TestRun) {
