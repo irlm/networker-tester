@@ -269,4 +269,88 @@ public sealed class CliProvisionerDeleteCascadeTests : IDisposable
         Assert.Contains("compute instances delete", lines[0]);
         Assert.DoesNotContain(lines, l => l.Contains("nsg") || l.Contains("public-ip"));
     }
+
+    // ── Retry-on-"in use" hardening (the NIC-teardown race) ──────────────────
+
+    /// <summary>
+    /// Fake az that logs argv and, for <c>network nsg delete</c>, fails with an
+    /// "in use" stderr until the Nth attempt (a counter file), then succeeds.
+    /// Everything else (vm delete, public-ip delete) succeeds immediately.
+    /// </summary>
+    private void WriteNsgInUseUntilAttempt(int succeedOnAttempt)
+    {
+        var counter = Path.Combine(_workDir, "nsg-attempts");
+        var path = Path.Combine(_workDir, "fake-AZ_CMD.sh");
+        File.WriteAllText(
+            path,
+            "#!/bin/sh\n" +
+            $"printf '%s\\n' \"$*\" >> '{_logPath}'\n" +
+            "case \"$*\" in\n" +
+            "  *'network nsg delete'*)\n" +
+            $"    C=$(cat '{counter}' 2>/dev/null || echo 0); C=$((C+1)); echo $C > '{counter}'\n" +
+            $"    if [ $C -lt {succeedOnAttempt} ]; then echo 'NetworkSecurityGroup ...NSG is in use by network interface and cannot be deleted' >&2; exit 1; fi\n" +
+            "    exit 0 ;;\n" +
+            "  *) exit 0 ;;\n" +
+            "esac\n");
+        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        Environment.SetEnvironmentVariable("AZ_CMD", path);
+    }
+
+    [Fact]
+    public async Task AzureDelete_retries_nsg_delete_while_in_use_then_succeeds()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var savedDelay = CliComputeProvisioner.NetworkDeleteRetryDelay;
+        CliComputeProvisioner.NetworkDeleteRetryDelay = TimeSpan.Zero;
+        try
+        {
+            WriteNsgInUseUntilAttempt(succeedOnAttempt: 3); // fail twice, succeed on 3rd
+
+            var result = await NewProvisioner().DeleteAsync(
+                AzureTester("tester-eastus-5cab8"), AzureCreds(), CancellationToken.None);
+
+            Assert.True(result.Success);
+            var nsgCalls = InvocationLines().Count(l => l.Contains("network nsg delete"));
+            Assert.Equal(3, nsgCalls); // retried through the "in use" race, then won
+        }
+        finally
+        {
+            CliComputeProvisioner.NetworkDeleteRetryDelay = savedDelay;
+        }
+    }
+
+    [Fact]
+    public async Task AzureDelete_gives_up_after_max_attempts_when_nsg_stays_in_use()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        var savedDelay = CliComputeProvisioner.NetworkDeleteRetryDelay;
+        CliComputeProvisioner.NetworkDeleteRetryDelay = TimeSpan.Zero;
+        try
+        {
+            WriteNsgInUseUntilAttempt(succeedOnAttempt: int.MaxValue); // always in use
+
+            var result = await NewProvisioner().DeleteAsync(
+                AzureTester("tester-eastus-5cab8"), AzureCreds(), CancellationToken.None);
+
+            // VM delete still succeeded; the NSG is left for the reaper (never errors).
+            Assert.True(result.Success);
+            var nsgCalls = InvocationLines().Count(l => l.Contains("network nsg delete"));
+            Assert.Equal(CliComputeProvisioner.NetworkDeleteMaxAttempts, nsgCalls);
+        }
+        finally
+        {
+            CliComputeProvisioner.NetworkDeleteRetryDelay = savedDelay;
+        }
+    }
+
+    [Theory]
+    [InlineData("NSG is in use by network interface", true)]
+    [InlineData("resource is being used by another resource", true)]
+    [InlineData("cannot be deleted because it is referenced by", true)]
+    [InlineData("AuthorizationFailed: does not have permission", false)]
+    [InlineData("BadRequest: malformed name", false)]
+    public void IsRetryableInUse_classifies_stderr(string stderr, bool expected)
+        => Assert.Equal(expected, CliComputeProvisioner.IsRetryableInUse(stderr));
 }

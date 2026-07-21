@@ -182,24 +182,71 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
             .ConfigureAwait(false);
     }
 
+    /// <summary>Cascade NSG/IP delete: total attempts including the first.</summary>
+    internal static int NetworkDeleteMaxAttempts = 4;
+
+    /// <summary>Backoff between cascade delete attempts (test-lowered to ~0).</summary>
+    internal static TimeSpan NetworkDeleteRetryDelay = TimeSpan.FromSeconds(12);
+
     private async Task RunAzureNetworkDeleteAsync(
         string file, List<string> args, IReadOnlyDictionary<string, string> env,
         string kind, string name, CancellationToken ct)
     {
-        var res = await RunAsync(file, args, env, ct).ConfigureAwait(false);
-        if (res.Success || LooksAlreadyGone(res.StdErr))
+        ProvisionResult res = default!;
+        for (var attempt = 1; attempt <= NetworkDeleteMaxAttempts; attempt++)
         {
-            logger.LogDebug("Azure cascade: {Kind} {Name} deleted (or already gone)", kind, name);
-            return;
+            res = await RunAsync(file, args, env, ct).ConfigureAwait(false);
+            if (res.Success || LooksAlreadyGone(res.StdErr))
+            {
+                logger.LogDebug("Azure cascade: {Kind} {Name} deleted (or already gone)", kind, name);
+                return;
+            }
+
+            // The per-VM NSG/IP can't be deleted until Azure finishes tearing down
+            // the NIC the `az vm delete` cascade removes asynchronously — the delete
+            // races that teardown and fails "in use". Wait + retry so the cascade
+            // wins immediately instead of deferring to the reaper's next sweep.
+            if (IsRetryableInUse(res.StdErr) && attempt < NetworkDeleteMaxAttempts)
+            {
+                logger.LogDebug(
+                    "Azure cascade: {Kind} {Name} still in use (attempt {Attempt}/{Max}); retrying after {Delay}s",
+                    kind, name, attempt, NetworkDeleteMaxAttempts, NetworkDeleteRetryDelay.TotalSeconds);
+                try
+                {
+                    await Task.Delay(NetworkDeleteRetryDelay, ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                continue;
+            }
+
+            break;
         }
 
-        // Best-effort — the OrphanReaperService will retry on its next sweep. Log
-        // at info (not error): a leftover NSG/IP is a cost nuisance, not a failed
-        // delete, and must never surface as a tester-delete error.
+        // Exhausted retries (or a non-retryable failure) — best-effort: the
+        // OrphanReaperService will collect it on its next sweep. Log at info (not
+        // error): a leftover NSG/IP is a cost nuisance, not a failed delete, and
+        // must never surface as a tester-delete error.
         logger.LogInformation(
             "Azure cascade: best-effort {Kind} {Name} delete did not succeed ({Err}); leaving for the orphan reaper",
             kind, name, res.Error ?? res.StdErr);
     }
+
+    /// <summary>
+    /// A cascade NSG/IP delete that failed because the resource is still attached
+    /// to a NIC/VM Azure is asynchronously tearing down — retryable, unlike a
+    /// permission or malformed-request error.
+    /// </summary>
+    internal static bool IsRetryableInUse(string stderr) =>
+        stderr.Contains("in use", StringComparison.OrdinalIgnoreCase)
+        || stderr.Contains("InUse", StringComparison.OrdinalIgnoreCase)
+        || stderr.Contains("is being used", StringComparison.OrdinalIgnoreCase)
+        || stderr.Contains("still allocated", StringComparison.OrdinalIgnoreCase)
+        || stderr.Contains("cannot be deleted", StringComparison.OrdinalIgnoreCase)
+        || stderr.Contains("referenced by", StringComparison.OrdinalIgnoreCase)
+        || stderr.Contains("reference", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Pure argv builder for deleting the per-VM Azure NSG by its <b>exact</b> name

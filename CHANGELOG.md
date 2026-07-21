@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.49] — 2026-07-21
+
+### Fixed
+- **Tester-delete NSG/IP cascade now retries the NIC-teardown race.** The
+  per-VM NSG/public-IP delete could fire before Azure finished tearing down the
+  NIC (async), fail "in use", and defer to the reaper. It now retries with
+  backoff so the cascade cleans up immediately instead of leaving orphans for
+  the next reaper sweep.
+
+---
+
 ## [0.28.48] — 2026-07-21
 
 ### Fixed
