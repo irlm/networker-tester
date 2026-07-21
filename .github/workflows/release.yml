@@ -367,14 +367,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           NOTES: ${{ steps.notes.outputs.notes }}
 
-  # ── Deploy to the Azure VM (laghound.com; alethedash.com bridge) ─────────
+  # ── Deploy to the Azure VM (alethedash.com; laghound.com parked pending DNS) ─────────
   # Post-cutover deploy: swaps the C# control plane (alethedash-cs), the Rust
   # endpoint + tester, the orchestrator, and the frontend. Does NOT touch
   # networker-dashboard (retired; restarting it would double-fire the background
   # loops the C# control plane now owns). nginx already proxies /api + /ws to the
   # C# control plane on :5030 and serves the SPA static from disk.
   deploy:
-    name: Deploy to laghound.com
+    name: Deploy to alethedash.com
     needs: release
     runs-on: ubuntu-latest
     if: success()
@@ -435,12 +435,12 @@ jobs:
               # bootstraps hand out the canonical domain; fielded agents keep
               # their provision-time URLs and ride the alethedash.com bridge.
               if sudo grep -q '^DASHBOARD_PUBLIC_URL=' /etc/alethedash-cs.env 2>/dev/null; then
-                if ! sudo grep -q '^DASHBOARD_PUBLIC_URL=https://laghound.com$' /etc/alethedash-cs.env; then
-                  echo '>> Rewriting stale DASHBOARD_PUBLIC_URL -> https://laghound.com'
-                  sudo sed -i 's|^DASHBOARD_PUBLIC_URL=.*|DASHBOARD_PUBLIC_URL=https://laghound.com|' /etc/alethedash-cs.env
+                if ! sudo grep -q '^DASHBOARD_PUBLIC_URL=https://alethedash.com$' /etc/alethedash-cs.env; then
+                  echo '>> Rewriting stale DASHBOARD_PUBLIC_URL -> https://alethedash.com'
+                  sudo sed -i 's|^DASHBOARD_PUBLIC_URL=.*|DASHBOARD_PUBLIC_URL=https://alethedash.com|' /etc/alethedash-cs.env
                 fi
               else
-                echo 'DASHBOARD_PUBLIC_URL=https://laghound.com' | sudo tee -a /etc/alethedash-cs.env >/dev/null
+                echo 'DASHBOARD_PUBLIC_URL=https://alethedash.com' | sudo tee -a /etc/alethedash-cs.env >/dev/null
               fi
               # INSTALL_SH_PATH: DeployRunner's testbed provisioning shell-out.
               # The tarball ships install.sh alongside the binary (build-csharp);
@@ -527,7 +527,7 @@ jobs:
               # Canonical domain AND the alethedash.com bridge (fielded agents
               # hold provision-time WS URLs — the bridge MUST stay alive until
               # its decommission window closes).
-              for DOMAIN in laghound.com alethedash.com; do
+              for DOMAIN in alethedash.com; do
                 PUB=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 https://\${DOMAIN}/api/health || echo '000')
                 echo \">> Public https://\${DOMAIN}/api/health: HTTP \${PUB}\"
                 if [ \"\${PUB}\" != '200' ]; then
@@ -578,7 +578,7 @@ jobs:
               echo \"orchestrator: \$(alethabench --version 2>/dev/null || echo 'missing')\"
 
               echo '=== Login round-trip (real user path through nginx -> C#) ==='
-              HTTP_CODE=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 https://laghound.com/api/auth/login -X POST -H 'Content-Type: application/json' -d '{\"email\":\"verify\",\"password\":\"probe\"}' 2>/dev/null || echo '000')
+              HTTP_CODE=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 https://alethedash.com/api/auth/login -X POST -H 'Content-Type: application/json' -d '{\"email\":\"verify\",\"password\":\"probe\"}' 2>/dev/null || echo '000')
               echo \"Login endpoint: HTTP \${HTTP_CODE}\"
               if [ \"\${HTTP_CODE}\" != '401' ]; then
                 echo 'VERIFY_FAILED: login endpoint not responding 401 to bad creds'
