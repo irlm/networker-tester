@@ -67,6 +67,8 @@ const TlsProfileDetailPage = lazyPage(() => import('./pages/TlsProfileDetailPage
 const FullStackPage = lazyPage(() => import('./pages/FullStackPage'), 'FullStackPage');
 const AlertsPage = lazyPage(() => import('./pages/AlertsPage'), 'AlertsPage');
 const AppBenchmarkPage = lazyPage(() => import('./pages/AppBenchmarkPage'), 'AppBenchmarkPage');
+const SdkEndpointsPage = lazyPage(() => import('./pages/SdkEndpointsPage'), 'SdkEndpointsPage');
+const AppNetworkReportPage = lazyPage(() => import('./pages/AppNetworkReportPage'), 'AppNetworkReportPage');
 
 const statusColors: Record<ConnectionStatus, string> = {
   connected: 'bg-green-400',
@@ -271,6 +273,10 @@ function AuthenticatedApp() {
             <Route path="/projects/:projectId/benchmark-regressions" element={<BenchmarkRegressionsPage />} />
             {/* Provider performance-per-cost comparison (member-read). */}
             <Route path="/projects/:projectId/reports/value" element={<ValueReportPage />} />
+            {/* LagHound SDK — endpoint management (operator-write) + the
+                Application Network Performance report (member-read). */}
+            <Route path="/projects/:projectId/sdk-endpoints" element={<SdkEndpointsPage />} />
+            <Route path="/projects/:projectId/reports/app-network" element={<AppNetworkReportPage />} />
 
             {/* Platform routes */}
             <Route path="/leaderboard" element={<LeaderboardPage />} />

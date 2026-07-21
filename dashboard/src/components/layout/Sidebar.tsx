@@ -59,6 +59,14 @@ export function Sidebar({ connectionDot }: SidebarProps) {
     { path: `/projects/${pid}/benchmarks/application/new`, label: 'Application', icon: '\u25A5', exact: true },
   ] : [];
 
+  // \u2500\u2500 SDK \u2500\u2500 group (LagHound SDK endpoints + the app-network report).
+  // "Endpoints" reads as "SDK Endpoints"; "App Network" is the sellable
+  // Application Network Performance report. Both member-visible.
+  const sdkItems: NavItem[] = pid ? [
+    { path: `/projects/${pid}/sdk-endpoints`, label: 'Endpoints', icon: '\u2726' },
+    { path: `/projects/${pid}/reports/app-network`, label: 'App Network', icon: '\u25D0' },
+  ] : [];
+
   const tailItems: NavItem[] = pid ? [
     { path: `/projects/${pid}/runs`, label: 'Runs', icon: '\u25B6' },
     // Provider performance-per-cost report \u2014 "Value" in the runs/reports tail.
@@ -216,6 +224,18 @@ export function Sidebar({ connectionDot }: SidebarProps) {
                 </div>
               )}
               {benchmarkItems.map(renderItem)}
+            </div>
+          )}
+
+          {/* ── SDK ── group (LagHound endpoints + App Network report) */}
+          {sdkItems.length > 0 && (
+            <div className="mt-4">
+              {!collapsed && (
+                <div className="px-3 mb-1 text-[10px] uppercase tracking-wider text-gray-600">
+                  sdk
+                </div>
+              )}
+              {sdkItems.map(renderItem)}
             </div>
           )}
 
