@@ -94,6 +94,14 @@ Every SDK also exposes `mark(name, duration)` so your handlers can add custom
 `Server-Timing` marks (`mark-db`, `mark-cache`, …) that show up in reports as
 a server-side breakdown.
 
+## Run all five languages on one host
+
+The [`examples/`](../../examples/) harness builds and runs every SDK sample
+(C# 8081, JS 8082, Python 8083, Rust 8084, Go 8085) via `docker compose up
+--build` on a single target — a cross-language conformance demo and the "works
+in every language" sales demo. `examples/probe-all.sh` asserts the contract
+(200 + `contract:v1` with the token, bare 404 without) across all five at once.
+
 ## Pointing the fleet at it
 
 Existing tester modes work today (see spec §8): `http1/2/3` and `curl` against
