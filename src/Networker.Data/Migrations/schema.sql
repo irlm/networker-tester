@@ -65,7 +65,10 @@ CREATE TABLE public.agent (
     tags jsonb,
     project_id character(14) NOT NULL,
     tester_id uuid,
-    api_key_hash character varying(64)
+    api_key_hash character varying(64),
+    api_key_expires_at timestamp with time zone,
+    api_key_last_used_at timestamp with time zone,
+    api_key_last_used_ip character varying(64)
 );
 
 

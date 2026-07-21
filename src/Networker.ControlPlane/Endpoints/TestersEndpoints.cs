@@ -70,12 +70,18 @@ public static class TestersEndpoints
 
     private static async Task<IResult> ListTesters(string projectId, NetworkerDbContext db)
     {
-        var rows = await db.ProjectTesters
+        // Materialize the testers first, THEN enrich with the linked agent's
+        // key-lifecycle fields — AgentKeyInfoFor runs its own query, which EF
+        // cannot translate inside a Select projection (throws on PostgreSQL).
+        var testers = await db.ProjectTesters
             .AsNoTracking()
             .Where(t => t.ProjectId == projectId)
             .OrderByDescending(t => t.CreatedAt)
-            .Select(t => ToListDto(t))
             .ToListAsync();
+
+        var rows = testers
+            .Select(t => ToListDto(t, AgentKeyInfoFor(db, projectId, t.TesterId)))
+            .ToList();
 
         return Results.Ok(rows);
     }
@@ -87,14 +93,14 @@ public static class TestersEndpoints
         var tester = await db.ProjectTesters
             .AsNoTracking()
             .Where(t => t.ProjectId == projectId && t.TesterId == testerId)
-            .Select(t => ToDetailDto(t))
             .FirstOrDefaultAsync();
 
         // 404 on cross-project / missing — mirrors the Rust scoping so no
-        // cross-project leakage even for platform admins.
+        // cross-project leakage even for platform admins. Agent key-lifecycle
+        // fields are looked up after materialization (see ListTesters).
         return tester is null
             ? ApiError.NotFound("Tester not found")
-            : Results.Ok(tester);
+            : Results.Ok(ToDetailDto(tester, AgentKeyInfoFor(db, projectId, tester.TesterId)));
     }
 
     // ── get_queue ────────────────────────────────────────────────────────
@@ -401,7 +407,28 @@ public static class TestersEndpoints
     /// vm_size/power_state/allocation/status + auto-shutdown info). Fuller than
     /// the minimal Program.cs version but lighter than full detail.
     /// </summary>
-    private static object ToListDto(ProjectTester t) => new
+    /// <summary>
+    /// The linked agent's api-key lifecycle fields (V044) — surfaced on the
+    /// tester read DTOs so the UI can show "last seen" + expiry status. Never
+    /// includes the key or its hash. Null when no agent is linked yet.
+    /// </summary>
+    private sealed record AgentKeyInfo(
+        DateTime? ApiKeyLastUsedAt,
+        string? ApiKeyLastUsedIp,
+        DateTime? ApiKeyExpiresAt);
+
+    /// <summary>
+    /// EF-translatable correlated sub-query: the api-key lifecycle fields of the
+    /// agent bound to this tester, scoped to the same project (never crosses
+    /// projects). A left-join shape — null when the tester has no agent.
+    /// </summary>
+    private static AgentKeyInfo? AgentKeyInfoFor(NetworkerDbContext db, string projectId, Guid testerId) =>
+        db.Agents
+            .Where(a => a.TesterId == testerId && a.ProjectId == projectId)
+            .Select(a => new AgentKeyInfo(a.ApiKeyLastUsedAt, a.ApiKeyLastUsedIp, a.ApiKeyExpiresAt))
+            .FirstOrDefault();
+
+    private static object ToListDto(ProjectTester t, AgentKeyInfo? agent) => new
     {
         tester_id = t.TesterId,
         name = t.Name,
@@ -416,6 +443,9 @@ public static class TestersEndpoints
         next_shutdown_at = t.NextShutdownAt,
         shutdown_deferral_count = t.ShutdownDeferralCount,
         last_used_at = t.LastUsedAt,
+        api_key_last_used_at = agent != null ? agent.ApiKeyLastUsedAt : null,
+        api_key_last_used_ip = agent != null ? agent.ApiKeyLastUsedIp : null,
+        api_key_expires_at = agent != null ? agent.ApiKeyExpiresAt : null,
         created_at = t.CreatedAt,
         updated_at = t.UpdatedAt,
     };
@@ -424,7 +454,7 @@ public static class TestersEndpoints
     /// Full detail row — the complete <c>ProjectTesterRow</c> shape incl. VM
     /// lifecycle / OS / cloud-binding fields the Rust <c>get_tester</c> returns.
     /// </summary>
-    private static object ToDetailDto(ProjectTester t) => new
+    private static object ToDetailDto(ProjectTester t, AgentKeyInfo? agent) => new
     {
         tester_id = t.TesterId,
         project_id = t.ProjectId,
@@ -448,6 +478,9 @@ public static class TestersEndpoints
         shutdown_deferral_count = t.ShutdownDeferralCount,
         auto_probe_enabled = t.AutoProbeEnabled,
         last_used_at = t.LastUsedAt,
+        api_key_last_used_at = agent != null ? agent.ApiKeyLastUsedAt : null,
+        api_key_last_used_ip = agent != null ? agent.ApiKeyLastUsedIp : null,
+        api_key_expires_at = agent != null ? agent.ApiKeyExpiresAt : null,
         avg_benchmark_duration_seconds = t.AvgBenchmarkDurationSeconds,
         benchmark_run_count = t.BenchmarkRunCount,
         created_by = t.CreatedBy,

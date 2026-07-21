@@ -140,6 +140,9 @@ public sealed class RunDispatcherTesterFkTests
                 registered_at TEXT NOT NULL,
                 api_key TEXT NOT NULL,
                 api_key_hash TEXT,
+                api_key_expires_at TEXT,
+                api_key_last_used_at TEXT,
+                api_key_last_used_ip TEXT,
                 tags TEXT,
                 project_id TEXT NOT NULL,
                 tester_id TEXT REFERENCES project_tester(tester_id)

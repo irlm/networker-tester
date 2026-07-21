@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Networker.ControlPlane.Realtime;
 
@@ -56,6 +57,8 @@ public static class AgentProtocolExtensions
     public static IServiceCollection AddAgentProtocol(this IServiceCollection services)
     {
         services.AddSingleton<AgentConnectionRegistry>();
+        // Per-IP brute-force limiter for the api-key auth path (both transports).
+        services.TryAddSingleton<RawWs.AgentAuthLimiter>();
         return services;
     }
 }

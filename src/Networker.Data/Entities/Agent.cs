@@ -34,6 +34,23 @@ public partial class Agent
     /// </summary>
     public string? ApiKeyHash { get; set; }
 
+    /// <summary>
+    /// When the api-key expires (V044). Non-null + in the past → agent auth
+    /// rejects the key (401, pre-upgrade). NULL = no expiry (back-compat for
+    /// every fielded agent; rotation defaults to no-expiry).
+    /// </summary>
+    public DateTime? ApiKeyExpiresAt { get; set; }
+
+    /// <summary>
+    /// Last time the api-key successfully authenticated (V044) — the "last seen"
+    /// signal the UI surfaces. Write-throttled to ~once per 5 min per agent so
+    /// heartbeat/reconnect churn never causes a hot write.
+    /// </summary>
+    public DateTime? ApiKeyLastUsedAt { get; set; }
+
+    /// <summary>Remote IP of the last successful api-key auth (V044, audit).</summary>
+    public string? ApiKeyLastUsedIp { get; set; }
+
     public string? Tags { get; set; }
 
     public string ProjectId { get; set; } = null!;

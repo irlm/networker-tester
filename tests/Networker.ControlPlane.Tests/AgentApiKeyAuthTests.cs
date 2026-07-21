@@ -103,6 +103,114 @@ public sealed class AgentApiKeyAuthTests
         Assert.Null(await Processor(host).AuthenticateAsync(key));
     }
 
+    // ── V044: expiry enforcement ─────────────────────────────────────────────
+
+    [Fact]
+    public async Task Authenticate_accepts_a_key_with_null_expiry()
+    {
+        // NULL expiry = no expiry: the back-compat default for the whole fleet.
+        using var host = BuildHost();
+        var key = TesterCreateLogic.GenerateAgentApiKey();
+        SeedAgent(host, key, hash: AgentApiKeys.HashHex(key), expiresAt: null);
+
+        Assert.NotNull(await Processor(host).AuthenticateAsync(key));
+    }
+
+    [Fact]
+    public async Task Authenticate_accepts_a_not_yet_expired_key()
+    {
+        using var host = BuildHost();
+        var key = TesterCreateLogic.GenerateAgentApiKey();
+        SeedAgent(host, key, hash: AgentApiKeys.HashHex(key),
+            expiresAt: DateTime.UtcNow.AddHours(1));
+
+        Assert.NotNull(await Processor(host).AuthenticateAsync(key));
+    }
+
+    [Fact]
+    public async Task Authenticate_rejects_an_expired_key()
+    {
+        using var host = BuildHost();
+        var key = TesterCreateLogic.GenerateAgentApiKey();
+        SeedAgent(host, key, hash: AgentApiKeys.HashHex(key),
+            expiresAt: DateTime.UtcNow.AddMinutes(-1));
+
+        Assert.Null(await Processor(host).AuthenticateAsync(key));
+    }
+
+    // ── V044: throttled last-used stamping ───────────────────────────────────
+
+    [Fact]
+    public async Task StampApiKeyUsed_records_time_and_ip_when_never_stamped()
+    {
+        using var host = BuildHost();
+        var key = TesterCreateLogic.GenerateAgentApiKey();
+        var agentId = SeedAgent(host, key, hash: AgentApiKeys.HashHex(key));
+
+        await Processor(host).StampApiKeyUsedAsync(agentId, "203.0.113.7");
+
+        var db = host.GetRequiredService<NetworkerDbContext>();
+        db.ChangeTracker.Clear();
+        var row = await db.Agents.AsNoTracking().FirstAsync(a => a.AgentId == agentId);
+        Assert.NotNull(row.ApiKeyLastUsedAt);
+        Assert.Equal("203.0.113.7", row.ApiKeyLastUsedIp);
+    }
+
+    [Fact]
+    public async Task StampApiKeyUsed_is_throttled_within_the_window()
+    {
+        using var host = BuildHost();
+        var key = TesterCreateLogic.GenerateAgentApiKey();
+        var agentId = SeedAgent(host, key, hash: AgentApiKeys.HashHex(key));
+
+        // A recent stamp (2 min ago) is inside the 5-min throttle window, so a
+        // fresh stamp attempt must be a no-op — neither time nor IP changes.
+        var recent = DateTime.UtcNow.AddMinutes(-2);
+        var db = host.GetRequiredService<NetworkerDbContext>();
+        await db.Agents.Where(a => a.AgentId == agentId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(a => a.ApiKeyLastUsedAt, recent)
+                .SetProperty(a => a.ApiKeyLastUsedIp, "198.51.100.1"));
+        db.ChangeTracker.Clear();
+
+        await Processor(host).StampApiKeyUsedAsync(agentId, "203.0.113.7");
+
+        db.ChangeTracker.Clear();
+        var row = await db.Agents.AsNoTracking().FirstAsync(a => a.AgentId == agentId);
+        Assert.Equal("198.51.100.1", row.ApiKeyLastUsedIp); // unchanged (throttled)
+    }
+
+    // ── V044: rotation contract ──────────────────────────────────────────────
+
+    [Fact]
+    public async Task Rotation_replaces_the_hash_so_the_old_key_dies_and_the_new_one_works()
+    {
+        using var host = BuildHost();
+        var oldKey = TesterCreateLogic.GenerateAgentApiKey();
+        var agentId = SeedAgent(host, oldKey, hash: AgentApiKeys.HashHex(oldKey),
+            expiresAt: DateTime.UtcNow.AddMinutes(-1)); // pre-rotation: expired
+
+        // Old (expired) key does not authenticate.
+        Assert.Null(await Processor(host).AuthenticateAsync(oldKey));
+
+        // Rotate: exactly what RotateAgentKey persists — new key + hash, expiry
+        // cleared.
+        var newKey = TesterCreateLogic.GenerateAgentApiKey();
+        var db = host.GetRequiredService<NetworkerDbContext>();
+        await db.Agents.Where(a => a.AgentId == agentId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(a => a.ApiKey, newKey)
+                .SetProperty(a => a.ApiKeyHash, AgentApiKeys.HashHex(newKey))
+                .SetProperty(a => a.ApiKeyExpiresAt, (DateTime?)null));
+        db.ChangeTracker.Clear();
+
+        // Old key stays dead; new key authenticates.
+        Assert.Null(await Processor(host).AuthenticateAsync(oldKey));
+        var identity = await Processor(host).AuthenticateAsync(newKey);
+        Assert.NotNull(identity);
+        Assert.Equal(agentId, identity!.AgentId);
+    }
+
     // ── Test host wiring (same pattern as RunDispatcherTesterFkTests) ────────
 
     private static ServiceProvider BuildHost()
@@ -136,6 +244,9 @@ public sealed class AgentApiKeyAuthTests
                 registered_at TEXT NOT NULL,
                 api_key TEXT NOT NULL,
                 api_key_hash TEXT,
+                api_key_expires_at TEXT,
+                api_key_last_used_at TEXT,
+                api_key_last_used_ip TEXT,
                 tags TEXT,
                 project_id TEXT NOT NULL,
                 tester_id TEXT
@@ -150,7 +261,7 @@ public sealed class AgentApiKeyAuthTests
         sp.GetRequiredService<EventBus>(),
         sp.GetRequiredService<ILogger<AgentMessageProcessor>>());
 
-    private static Guid SeedAgent(IServiceProvider sp, string apiKey, string? hash)
+    private static Guid SeedAgent(IServiceProvider sp, string apiKey, string? hash, DateTime? expiresAt = null)
     {
         var db = sp.GetRequiredService<NetworkerDbContext>();
         var id = Guid.NewGuid();
@@ -161,6 +272,7 @@ public sealed class AgentApiKeyAuthTests
             Status = "offline",
             ApiKey = apiKey,
             ApiKeyHash = hash,
+            ApiKeyExpiresAt = expiresAt,
             ProjectId = "proj-apikey-test",
             RegisteredAt = DateTime.UtcNow,
         });

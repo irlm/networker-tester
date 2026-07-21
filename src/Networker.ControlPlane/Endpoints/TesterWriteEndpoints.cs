@@ -65,6 +65,11 @@ public static partial class TesterWriteEndpoints
         app.MapPost($"{basePath}/probe", ProbeTester)
             .RequireAuthorization(AuthPolicies.ProjectOperator);
 
+        // Rotate the tester's agent api-key (Operator). Returns the new
+        // plaintext key ONCE; the old key's hash is replaced so it dies instantly.
+        app.MapPost($"{basePath}/rotate-key", RotateAgentKey)
+            .RequireAuthorization(AuthPolicies.ProjectOperator);
+
         app.MapPost($"{basePath}/postpone", PostponeShutdown)
             .RequireAuthorization(AuthPolicies.ProjectOperator);
 

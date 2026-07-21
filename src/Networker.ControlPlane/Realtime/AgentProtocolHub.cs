@@ -51,18 +51,21 @@ public sealed class AgentProtocolHub : Hub
 
     private readonly AgentMessageProcessor _processor;
     private readonly AgentConnectionRegistry _registry;
+    private readonly RawWs.AgentAuthLimiter _limiter;
     private readonly ILogger<AgentProtocolHub> _logger;
 
     public AgentProtocolHub(
         NetworkerDbContext db,
         EventBus bus,
         AgentConnectionRegistry registry,
+        RawWs.AgentAuthLimiter limiter,
         ILogger<AgentProtocolHub> logger,
         ILogger<AgentMessageProcessor> processorLogger,
         Alerting.AlertEvaluator? alerts = null)
     {
         _processor = new AgentMessageProcessor(db, bus, processorLogger, alerts);
         _registry = registry;
+        _limiter = limiter;
         _logger = logger;
     }
 
@@ -81,17 +84,35 @@ public sealed class AgentProtocolHub : Hub
     {
         var http = Context.GetHttpContext();
         var apiKey = http?.Request.Query[ApiKeyQueryKey].ToString();
+        var remoteIp = http?.Connection.RemoteIpAddress?.ToString();
+
+        // Per-IP brute-force short-circuit (V044): abort a source IP that has
+        // flooded failed keys (SignalR's pre-upgrade equivalent of a 429).
+        if (_limiter.IsBlocked(remoteIp))
+        {
+            _logger.LogWarning(
+                "Agent connection {ConnId} from {Ip} short-circuited: too many failed auth attempts",
+                Context.ConnectionId, remoteIp);
+            Context.Abort();
+            return;
+        }
 
         var identity = await _processor.AuthenticateAsync(apiKey, Context.ConnectionAborted);
         if (identity is null)
         {
+            _limiter.RecordFailure(remoteIp);
             _logger.LogWarning(
                 "Agent connection {ConnId} rejected: {Reason}",
                 Context.ConnectionId,
-                string.IsNullOrEmpty(apiKey) ? "no api key" : "unknown api key");
+                string.IsNullOrEmpty(apiKey) ? "no api key" : "unknown or expired api key");
             Context.Abort();
             return;
         }
+
+        // Successful auth: clear the IP's failure history + stamp last-used
+        // (throttled, best-effort).
+        _limiter.RecordSuccess(remoteIp);
+        await _processor.StampApiKeyUsedAsync(identity.AgentId, remoteIp, Context.ConnectionAborted);
 
         Context.Items[AgentIdItemKey] = identity.AgentId;
         Context.Items[AgentNameItemKey] = identity.Name;
