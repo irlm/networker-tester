@@ -11,6 +11,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.45] — 2026-07-21
+
+### Security
+- **P0 — project-scope run dispatch: decrypted SDK tokens must not cross
+  projects.** The run-dispatch path selected the executing agent without any
+  project constraint, so a project-A `sdkprobe` run — which ships that project's
+  **decrypted** LagHound customer token in the `assign_run` payload — could be
+  dispatched to an agent bound to a **different** project, leaking the plaintext
+  token to another tenant's machine (project-isolation audit §4). Fixes:
+  - `RunDispatcher.SelectTargetAgentAsync` now constrains candidate agents to
+    `agent.project_id == run.project_id` (both the tester-affinity branch and the
+    fallback). If no compatible **same-project** agent is online the run stays
+    queued rather than crossing projects. The redispatch and cancel paths route
+    through the same scoped selection.
+  - Defense-in-depth: before splicing the decrypted `laghound_token` into the
+    wire payload, the dispatcher re-asserts that the run, its config, and the
+    **selected agent** all share the same project; on mismatch it ships the run
+    **without** the token (SDK routes then answer 404) and logs an error — never
+    the plaintext.
+- **P2 — app-network report `test_config` join is now project-scoped in SQL**
+  (`AND c.project_id = $1`), so a stray/mis-written `test_run` can never surface
+  another project's config name (audit §3).
+- **P2 — `LaunchRequest.tester_id` is validated against the config's project.**
+  A launch that pins a `tester_id` belonging to a different project (or a
+  non-existent tester) is now rejected with 400 (audit §6c).
+
+---
+
 ## [0.28.44] — 2026-07-21
 
 ### Added

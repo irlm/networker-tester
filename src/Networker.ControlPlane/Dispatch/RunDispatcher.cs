@@ -232,8 +232,12 @@ public sealed class RunDispatcher : IRunDispatcher
             .AsNoTracking()
             .FirstOrDefaultAsync(r => r.Id == runId, ct);
 
+        // Cancel only fans out to an agent in the run's own project (a cancel
+        // frame carries no secret, but routing it cross-project is still wrong —
+        // and a foreign agent would not own the run). Falls back to any online
+        // agent only when the run itself can't be re-read.
         var targetAgentId = run is not null
-            ? await SelectTargetAgentAsync(run.TesterId, ct)
+            ? await SelectTargetAgentAsync(run.ProjectId, run.TesterId, ct)
             : _agents.AnyOnlineAgent();
 
         if (targetAgentId is Guid agentId)
@@ -264,18 +268,22 @@ public sealed class RunDispatcher : IRunDispatcher
         Data.Entities.TestConfig cfg,
         CancellationToken ct)
     {
-        var targetAgentId = await SelectTargetAgentAsync(run.TesterId, ct);
+        // Project-scoped selection: only an agent bound to run.ProjectId is ever
+        // eligible (a project-A run — and its decrypted token — must never reach
+        // a project-B agent). No same-project agent → stays queued.
+        var targetAgentId = await SelectTargetAgentAsync(run.ProjectId, run.TesterId, ct);
         if (targetAgentId is null)
         {
-            // No compatible agent online — leave queued; the redispatcher retries.
+            // No compatible same-project agent online — leave queued; the
+            // redispatcher retries.
             _logger.LogDebug(
-                "Run {RunId} has no compatible online agent (min version {MinVersion}) — remains queued for later dispatch",
-                run.Id, AgentVersionGate.MinAssignRunVersionString);
+                "Run {RunId} (project {ProjectId}) has no compatible online agent in its project (min version {MinVersion}) — remains queued for later dispatch",
+                run.Id, run.ProjectId, AgentVersionGate.MinAssignRunVersionString);
             return false;
         }
 
         var agentId = targetAgentId.Value;
-        var (runJson, configJson) = await SerializeForAssignAsync(run, cfg, ct);
+        var (runJson, configJson) = await SerializeForAssignAsync(run, cfg, agentId, ct);
 
         var sent = await _agents.AssignRunAsync(agentId, runJson, configJson, ct);
         if (!sent)
@@ -320,17 +328,26 @@ public sealed class RunDispatcher : IRunDispatcher
     // ── Target-agent selection ───────────────────────────────────────────────
 
     /// <summary>
-    /// Pick the target agent for a run. <paramref name="preferredTesterId"/> is
-    /// the run's <c>tester_id</c>, a PROJECT-TESTER id (FK to
-    /// <c>project_tester</c>): if an online, version-compatible agent is BOUND to
-    /// that tester (<c>agent.tester_id == run.tester_id</c>) it wins (tester
-    /// affinity); otherwise fall back to any online agent whose reported
-    /// <c>agent.version</c> parses and is ≥ 0.28.0 — older agents silently drop
-    /// <c>assign_run</c> (the Rust <c>any_online_agent_min_version</c> gate,
-    /// MIN_AGENT_VERSION_FOR_ASSIGN_RUN). Returns null when no compatible agent
-    /// is connected.
+    /// Pick the target agent for a run. Candidate agents are FIRST constrained to
+    /// the run's own project (<paramref name="projectId"/> ==
+    /// <c>agent.project_id</c>) — a cross-project agent is NEVER eligible, because
+    /// a <c>sdkprobe</c> run ships that project's DECRYPTED LagHound customer
+    /// token in the <c>assign_run</c> payload; delivering it to another tenant's
+    /// agent is a cross-project secret leak (project-isolation audit §4 / P0). If
+    /// no same-project, version-compatible agent is online the run stays queued
+    /// (returns null) rather than crossing projects.
+    ///
+    /// <para><paramref name="preferredTesterId"/> is the run's <c>tester_id</c>, a
+    /// PROJECT-TESTER id (FK to <c>project_tester</c>): among the same-project
+    /// candidates, if an online, version-compatible agent is BOUND to that tester
+    /// (<c>agent.tester_id == run.tester_id</c>) it wins (tester affinity);
+    /// otherwise any same-project agent whose reported <c>agent.version</c>
+    /// parses and is ≥ 0.28.0 — older agents silently drop <c>assign_run</c> (the
+    /// Rust <c>any_online_agent_min_version</c> gate,
+    /// MIN_AGENT_VERSION_FOR_ASSIGN_RUN).</para>
     /// </summary>
-    private async Task<Guid?> SelectTargetAgentAsync(Guid? preferredTesterId, CancellationToken ct)
+    private async Task<Guid?> SelectTargetAgentAsync(
+        string projectId, Guid? preferredTesterId, CancellationToken ct)
     {
         var online = _agents.OnlineAgents();
         if (online.Count == 0)
@@ -339,9 +356,13 @@ public sealed class RunDispatcher : IRunDispatcher
         }
 
         var onlineIds = online.ToHashSet();
+        // Project scope is enforced IN the query: only agents bound to the run's
+        // project are ever candidates. A foreign-project (or standalone) agent is
+        // excluded here so it can never be picked below — no project-A run, and
+        // no project-A decrypted token, ever reaches a project-B agent.
         var rows = await _db.Agents
             .AsNoTracking()
-            .Where(a => onlineIds.Contains(a.AgentId))
+            .Where(a => onlineIds.Contains(a.AgentId) && a.ProjectId == projectId)
             .Select(a => new { a.AgentId, a.Version, a.TesterId })
             .ToListAsync(ct);
 
@@ -367,6 +388,25 @@ public sealed class RunDispatcher : IRunDispatcher
         }
 
         return compatible[0].AgentId;
+    }
+
+    /// <summary>
+    /// True iff agent <paramref name="agentId"/> exists AND its
+    /// <c>project_id</c> equals <paramref name="projectId"/>. Used as the
+    /// defense-in-depth gate before a per-project SDK token is spliced into an
+    /// <c>assign_run</c> payload — an unknown agent, or one bound to a different
+    /// project, must never receive it.
+    /// </summary>
+    private async Task<bool> AgentIsInProjectAsync(Guid agentId, string projectId, CancellationToken ct)
+    {
+        var agentProject = await _db.Agents
+            .AsNoTracking()
+            .Where(a => a.AgentId == agentId)
+            .Select(a => a.ProjectId)
+            .FirstOrDefaultAsync(ct);
+
+        return agentProject is not null
+            && string.Equals(agentProject, projectId, StringComparison.Ordinal);
     }
 
     // ── Proxy endpoint resolution (Rust resolve_proxy_endpoint) ─────────────
@@ -537,6 +577,7 @@ public sealed class RunDispatcher : IRunDispatcher
     private async Task<(JsonElement Run, JsonElement Config)> SerializeForAssignAsync(
         Data.Entities.TestRun run,
         Data.Entities.TestConfig cfg,
+        Guid agentId,
         CancellationToken ct)
     {
         object endpointJson = RawJson(cfg.EndpointRef);
@@ -557,9 +598,30 @@ public sealed class RunDispatcher : IRunDispatcher
         // tester's --laghound-token). The stored config row is NEVER mutated,
         // and the token is NEVER logged (SendAsync logs only the message type;
         // this method logs nothing). Mirrors the WithInsecure copy-on-write.
+        //
+        // Defense-in-depth (project-isolation audit §4): the token is a
+        // per-project customer secret, so before splicing it we re-assert that
+        // this run, its config, and the SELECTED AGENT all live in the same
+        // project. SelectTargetAgentAsync already scopes selection to the run's
+        // project; this is the belt-and-suspenders that refuses the token even if
+        // some future caller/redispatch path bypassed selection. A mismatch
+        // ships the run WITHOUT the token (SDK routes then answer 404) and logs
+        // an error — never the plaintext.
         if (IsSdkProbeWorkload(workloadJson) && cfg.TokenEnc is { Length: > 0 } && cfg.TokenNonce is { Length: > 0 })
         {
-            workloadJson = WithLagHoundToken(workloadJson, cfg.TokenEnc, cfg.TokenNonce);
+            if (await AgentIsInProjectAsync(agentId, run.ProjectId, ct)
+                && string.Equals(cfg.ProjectId, run.ProjectId, StringComparison.Ordinal))
+            {
+                workloadJson = WithLagHoundToken(workloadJson, cfg.TokenEnc, cfg.TokenNonce);
+            }
+            else
+            {
+                _logger.LogError(
+                    "sdkprobe dispatch REFUSED to attach LagHound token for run {RunId}: "
+                    + "project mismatch (run.project={RunProject}, config.project={ConfigProject}, "
+                    + "agent {AgentId}) — cross-project token delivery blocked; shipping run without token",
+                    run.Id, run.ProjectId, cfg.ProjectId, agentId);
+            }
         }
 
         var runDto = new
