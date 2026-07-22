@@ -169,10 +169,10 @@ public sealed class SafetyTests
     }
 
     [Fact]
-    public async Task Transfer_Concurrency_Capped_At_Two()
+    public async Task Transfer_Concurrency_Cap_Rejects_Second_Then_Frees_The_Slot()
     {
-        // With max_concurrent_transfers=1 and a large download, a second
-        // concurrent transfer must be rejected 429.
+        // max_concurrent_transfers=1: a second concurrent transfer is rejected
+        // 429, and the slot is released once the first drains.
         using var host = await TestHost.StartAsync(o =>
         {
             o.MaxConcurrentTransfers = 1;
@@ -184,32 +184,32 @@ public sealed class SafetyTests
         });
         var client = TestHost.Client(host);
 
-        // Start a slow-to-read download; hold the response open.
-        var first = client.SendAsync(
+        // Deterministic slot ordering: the transfer gate is acquired BEFORE the
+        // 200 is written (LagHoundMiddleware.DownloadAsync), and the Lease is held
+        // until the body finishes streaming. Awaiting the first response's HEADERS
+        // therefore proves the single slot is held; leaving the 8 MiB body
+        // undrained keeps the writer paused on backpressure, so the slot stays
+        // held for the duration of the assertion — no timing/scheduling race.
+        var first = await client.SendAsync(
             TestHost.Authed(HttpMethod.Get, "/laghound/download?bytes=8388608"),
             HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
 
-        // While the first is in flight, a second transfer should be rejected.
-        HttpStatusCode second = HttpStatusCode.OK;
-        for (int i = 0; i < 5; i++)
-        {
-            var res = await client.SendAsync(
-                TestHost.Authed(HttpMethod.Get, "/laghound/download?bytes=8388608"),
-                HttpCompletionOption.ResponseHeadersRead);
-            second = res.StatusCode;
-            if (second == HttpStatusCode.TooManyRequests)
-            {
-                break;
-            }
+        var second = await client.SendAsync(
+            TestHost.Authed(HttpMethod.Get, "/laghound/download?bytes=8388608"),
+            HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.TooManyRequests, second.StatusCode);
 
-            await res.Content.ReadAsByteArrayAsync();
-        }
-
-        // Drain the first to release the slot.
-        var firstRes = await first;
-        await firstRes.Content.ReadAsByteArrayAsync();
-
-        Assert.Equal(HttpStatusCode.TooManyRequests, second);
+        // Fully draining the first returns from DownloadAsync → disposes the
+        // Lease → frees the slot, so the next transfer now succeeds. This proves
+        // the cap RELEASES, not just that it rejects (a cap that never frees would
+        // also pass the assertion above).
+        await first.Content.ReadAsByteArrayAsync();
+        var third = await client.SendAsync(
+            TestHost.Authed(HttpMethod.Get, "/laghound/download?bytes=8388608"),
+            HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, third.StatusCode);
+        await third.Content.ReadAsByteArrayAsync();
     }
 
     [Fact]
