@@ -42,7 +42,7 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 export function ProjectMembersPage() {
-  const { projectId } = useProject();
+  const { projectId, isProjectAdmin } = useProject();
   const currentEmail = useAuthStore(s => s.email);
   const [members, setMembers] = useState<ProjectMember[]>([]);
   const [invites, setInvites] = useState<WorkspaceInvite[]>([]);
@@ -273,23 +273,25 @@ export function ProjectMembersPage() {
       <PageHeader
         title="Settings"
         action={
-          <div className="flex gap-2">
-            <button
-              onClick={() => setShowImport(true)}
-              className="px-3 py-1.5 text-sm border border-gray-700 text-gray-300 hover:text-gray-100 hover:border-gray-600 rounded transition-colors"
-            >
-              Import CSV
-            </button>
-            <button onClick={() => { setShowInvite(true); setShowAddExisting(false); setInviteUrl(null); }} className="btn-primary">
-              Invite
-            </button>
-          </div>
+          isProjectAdmin ? (
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowImport(true)}
+                className="px-3 py-1.5 text-sm border border-gray-700 text-gray-300 hover:text-gray-100 hover:border-gray-600 rounded transition-colors"
+              >
+                Import CSV
+              </button>
+              <button onClick={() => { setShowInvite(true); setShowAddExisting(false); setInviteUrl(null); }} className="btn-primary">
+                Invite
+              </button>
+            </div>
+          ) : undefined
         }
       />
       <SettingsTabs />
 
       {/* Invite form */}
-      {showInvite && (
+      {isProjectAdmin && showInvite && (
         <div className="border border-gray-800 rounded p-4 mb-6">
           <h3 className="text-sm text-gray-200 font-medium mb-3">Invite to Workspace</h3>
           <div className="flex gap-3 items-end">
@@ -348,7 +350,7 @@ export function ProjectMembersPage() {
       )}
 
       {/* Add existing user form (secondary) */}
-      {showAddExisting && (
+      {isProjectAdmin && showAddExisting && (
         <div className="border border-gray-800 rounded p-4 mb-6">
           <h3 className="text-sm text-gray-200 font-medium mb-3">Add Existing User</h3>
           <div className="flex gap-3 items-end">
@@ -416,12 +418,14 @@ export function ProjectMembersPage() {
                     <td className="px-4 py-3 text-gray-400 text-xs">{invite.invited_by_email}</td>
                     <td className="px-4 py-3 text-gray-500 text-xs">{relativeTime(invite.expires_at)}</td>
                     <td className="px-4 py-3">
-                      <button
-                        onClick={() => handleRevokeInvite(invite.invite_id, invite.email)}
-                        className="text-xs text-gray-600 hover:text-red-400 transition-colors"
-                      >
-                        Revoke
-                      </button>
+                      {isProjectAdmin && (
+                        <button
+                          onClick={() => handleRevokeInvite(invite.invite_id, invite.email)}
+                          className="text-xs text-gray-600 hover:text-red-400 transition-colors"
+                        >
+                          Revoke
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -455,7 +459,7 @@ export function ProjectMembersPage() {
           ))}
         </div>
 
-        {selectedPending.size > 0 && (
+        {isProjectAdmin && selectedPending.size > 0 && (
           <button
             onClick={handleBulkSendInvites}
             disabled={sendingInvites}
@@ -474,7 +478,7 @@ export function ProjectMembersPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
-                {hasPendingInFilter && (
+                {isProjectAdmin && hasPendingInFilter && (
                   <th className="px-2 py-2.5 text-center font-medium w-8">
                     <input
                       type="checkbox"
@@ -498,7 +502,7 @@ export function ProjectMembersPage() {
                 const isPending = member.status === 'pending_acceptance';
                 return (
                   <tr key={member.user_id} className="border-b border-gray-800/50 hover:bg-gray-800/20">
-                    {hasPendingInFilter && (
+                    {isProjectAdmin && hasPendingInFilter && (
                       <td className="px-2 py-3 text-center">
                         {isPending ? (
                           <input
@@ -513,7 +517,7 @@ export function ProjectMembersPage() {
                     <td className="px-4 py-3 text-gray-200">{member.email}</td>
                     <td className="px-4 py-3 text-gray-400">{member.display_name || '\u2014'}</td>
                     <td className="px-4 py-3">
-                      {isSelf ? (
+                      {isSelf || !isProjectAdmin ? (
                         <RoleBadge role={member.role} className="text-xs" />
                       ) : (
                         <select
@@ -534,24 +538,26 @@ export function ProjectMembersPage() {
                       {new Date(member.joined_at).toLocaleDateString()}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        {isPending && (
-                          <button
-                            onClick={() => handleSendInvite(member.user_id)}
-                            className="text-xs text-cyan-600 hover:text-cyan-400 transition-colors"
-                          >
-                            {member.invite_sent_at ? 'Resend' : 'Send'}
-                          </button>
-                        )}
-                        {!isSelf && (
-                          <button
-                            onClick={() => handleRemove(member.user_id, member.email)}
-                            className="text-xs text-gray-600 hover:text-red-400 transition-colors"
-                          >
-                            Remove
-                          </button>
-                        )}
-                      </div>
+                      {isProjectAdmin && (
+                        <div className="flex items-center gap-2">
+                          {isPending && (
+                            <button
+                              onClick={() => handleSendInvite(member.user_id)}
+                              className="text-xs text-cyan-600 hover:text-cyan-400 transition-colors"
+                            >
+                              {member.invite_sent_at ? 'Resend' : 'Send'}
+                            </button>
+                          )}
+                          {!isSelf && (
+                            <button
+                              onClick={() => handleRemove(member.user_id, member.email)}
+                              className="text-xs text-gray-600 hover:text-red-400 transition-colors"
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 );
@@ -562,7 +568,7 @@ export function ProjectMembersPage() {
       )}
 
       {/* CSV Import Modal */}
-      {showImport && (
+      {isProjectAdmin && showImport && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
           <div className="bg-[var(--bg-base,#0d1117)] border border-gray-800 rounded-lg w-full max-w-lg mx-4 p-5">
             <h3 className="text-sm text-gray-200 font-medium mb-4">Import Members from CSV</h3>

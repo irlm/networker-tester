@@ -18,7 +18,7 @@ function statusBadge(link: ShareLink) {
 }
 
 export function ShareLinksPage() {
-  const { projectId } = useProject();
+  const { projectId, isProjectAdmin } = useProject();
   const [links, setLinks] = useState<ShareLink[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -129,33 +129,35 @@ export function ShareLinksPage() {
                       </td>
                       <td className="px-4 py-2 text-gray-500">{link.created_by_email}</td>
                       <td className="px-4 py-2 text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          {isActive && (
-                            <>
-                              <button
-                                onClick={() => handleRevoke(link.link_id)}
-                                disabled={busy}
-                                className="text-yellow-500 hover:text-yellow-400 disabled:opacity-50"
-                              >
-                                Revoke
-                              </button>
-                              <button
-                                onClick={() => handleExtend(link.link_id)}
-                                disabled={busy}
-                                className="text-cyan-500 hover:text-cyan-400 disabled:opacity-50"
-                              >
-                                +30d
-                              </button>
-                            </>
-                          )}
-                          <button
-                            onClick={() => handleDelete(link.link_id)}
-                            disabled={busy}
-                            className="text-red-500 hover:text-red-400 disabled:opacity-50"
-                          >
-                            Delete
-                          </button>
-                        </div>
+                        {isProjectAdmin && (
+                          <div className="flex items-center justify-end gap-2">
+                            {isActive && (
+                              <>
+                                <button
+                                  onClick={() => handleRevoke(link.link_id)}
+                                  disabled={busy}
+                                  className="text-yellow-500 hover:text-yellow-400 disabled:opacity-50"
+                                >
+                                  Revoke
+                                </button>
+                                <button
+                                  onClick={() => handleExtend(link.link_id)}
+                                  disabled={busy}
+                                  className="text-cyan-500 hover:text-cyan-400 disabled:opacity-50"
+                                >
+                                  +30d
+                                </button>
+                              </>
+                            )}
+                            <button
+                              onClick={() => handleDelete(link.link_id)}
+                              disabled={busy}
+                              className="text-red-500 hover:text-red-400 disabled:opacity-50"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   );
