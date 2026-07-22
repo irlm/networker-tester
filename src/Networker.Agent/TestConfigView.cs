@@ -24,6 +24,13 @@ public sealed class TestConfigView
     public required bool IsBenchmark { get; init; }
     public JsonElement Methodology { get; init; }
 
+    /// <summary>Config-level overall run budget in seconds (canonical
+    /// <c>test_config.max_duration_secs</c>, carried at the CONFIG root of the
+    /// assign_run payload — not inside <c>workload</c>). 0 = unset; the
+    /// executor then derives a worst-case deadline from the workload
+    /// (<see cref="RunExecutor.ComputeInvocationDeadline"/>, audit F4).</summary>
+    public uint MaxDurationSecs { get; init; }
+
     /// <summary>LagHound shared secret for the <c>sdkprobe</c> mode — decrypted
     /// by the control plane and spliced into the wire workload as
     /// <c>laghound_token</c>. Maps to the tester's <c>--laghound-token</c>.
@@ -91,6 +98,13 @@ public sealed class TestConfigView
             Insecure = workload.TryGetProperty("insecure", out var insEl) && insEl.ValueKind == JsonValueKind.True,
             IsBenchmark = methodologyPresent,
             Methodology = methodologyPresent ? methEl.Clone() : default,
+            // Defensive TryGetUInt32 (not GetUInt): a null/negative/garbage
+            // value degrades to 0 = "unset" rather than failing the whole run.
+            MaxDurationSecs = config.TryGetProperty("max_duration_secs", out var mdEl)
+                              && mdEl.ValueKind == JsonValueKind.Number
+                              && mdEl.TryGetUInt32(out var maxDuration)
+                ? maxDuration
+                : 0,
             LagHoundToken = GetString(workload, "laghound_token"),
             LagHoundRoute = GetString(workload, "laghound_route"),
         };

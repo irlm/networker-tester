@@ -32,10 +32,30 @@ namespace Networker.Agent;
 /// Cancellation: the <see cref="CancellationToken"/> (fired by cancel_run /
 /// shutdown / disconnect) kills the child and emits a <c>cancelled</c> terminal
 /// status — the analogue of the Rust <c>cancel_rx</c> select arm + kill_on_drop.
+///
+/// Deadline (quality audit F4): every invocation additionally runs under an
+/// overall wall-clock budget (<see cref="ComputeInvocationDeadline"/> — the
+/// config's <c>max_duration_secs</c>, else worst-case workload arithmetic); on
+/// expiry the tester process tree is killed and a <c>failed</c> terminal is
+/// emitted, so a tester that hangs without EOF-ing stdout can never park a run
+/// slot forever.
 /// </summary>
 public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions options)
 {
     private const long MaxStdoutBytes = 128L * 1024 * 1024;
+
+    /// <summary>Slack added on top of the computed per-invocation budget so a
+    /// tester finishing right at its own timeout is never killed mid-flush.</summary>
+    private const uint DeadlineSlackSecs = 60;
+
+    /// <summary>Absolute ceiling on one tester invocation regardless of what the
+    /// workload arithmetic (or a pathological <c>max_duration_secs</c>) yields.</summary>
+    private static readonly TimeSpan MaxInvocationDeadline = TimeSpan.FromHours(24);
+
+    /// <summary>Bound on the post-kill exit/drain wait: <see cref="KillTree"/>
+    /// failures are swallowed, so an unkillable process must not hold one of
+    /// the four run slots forever (quality audit F4).</summary>
+    private static readonly TimeSpan PostKillGrace = TimeSpan.FromSeconds(10);
 
     /// <summary>Run one assigned execution to completion, streaming frames via
     /// <paramref name="sink"/>. Never throws — all failures become error +
@@ -61,8 +81,7 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         {
             var msg = $"Malformed assign_run config: {ex.Message}";
             logger.LogError("{CorrelationId}: {Message}", correlationId, msg);
-            sink.TrySend(new ErrorMessage(runId, msg));
-            SendFinished(sink, runId, "failed", artifact: null);
+            await SendFailureAsync(sink, runId, msg).ConfigureAwait(false);
             return;
         }
 
@@ -76,8 +95,7 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         {
             var msg = $"Unsupported endpoint kind for standalone agent: {config.EndpointKind}";
             logger.LogError("{CorrelationId}: {Message}", correlationId, msg);
-            sink.TrySend(new ErrorMessage(runId, msg));
-            SendFinished(sink, runId, "failed", artifact: null);
+            await SendFailureAsync(sink, runId, msg).ConfigureAwait(false);
             return;
         }
 
@@ -101,8 +119,7 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             {
                 var msg = $"apibench workload set failed to load: {ex.Message}";
                 logger.LogError("{CorrelationId}: {Message}", correlationId, msg);
-                sink.TrySend(new ErrorMessage(runId, msg));
-                SendFinished(sink, runId, "failed", artifact: null);
+                await SendFailureAsync(sink, runId, msg).ConfigureAwait(false);
                 return;
             }
 
@@ -114,8 +131,7 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         {
             const string msg = "No executable modes in workload";
             logger.LogError("{CorrelationId}: {Message}", correlationId, msg);
-            sink.TrySend(new ErrorMessage(runId, msg));
-            SendFinished(sink, runId, "failed", artifact: null);
+            await SendFailureAsync(sink, runId, msg).ConfigureAwait(false);
             return;
         }
 
@@ -126,19 +142,23 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         {
             const string msg = "networker-tester binary not found on this machine";
             logger.LogError("{CorrelationId}: {Message}", correlationId, msg);
-            sink.TrySend(new ErrorMessage(runId, msg));
-            SendFinished(sink, runId, "failed", artifact: null);
+            await SendFailureAsync(sink, runId, msg).ConfigureAwait(false);
             return;
         }
 
         var successCount = 0u;
         var failureCount = 0u;
 
+        // Overall per-invocation wall-clock budget (audit F4): a tester that
+        // wedges without EOF-ing stdout would otherwise park this task forever
+        // and permanently consume one of the MaxConcurrentRuns slots.
+        var invocationDeadline = ComputeInvocationDeadline(config);
+
         foreach (var (workload, args) in invocations)
         {
             var outcome = await RunTesterOnceAsync(
                     binPath, args, workload, runId, correlationId, sink,
-                    successCount, failureCount, cancellationToken)
+                    successCount, failureCount, invocationDeadline, cancellationToken)
                 .ConfigureAwait(false);
 
             successCount = outcome.SuccessCount;
@@ -146,12 +166,12 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
 
             if (outcome.Status == InvocationStatus.Cancelled)
             {
-                SendFinished(sink, runId, "cancelled", artifact: null);
+                await SendFinishedAsync(sink, runId, "cancelled", artifact: null).ConfigureAwait(false);
                 return;
             }
             if (outcome.Status == InvocationStatus.Failed)
             {
-                SendFinished(sink, runId, "failed", artifact: null);
+                await SendFinishedAsync(sink, runId, "failed", artifact: null).ConfigureAwait(false);
                 return;
             }
         }
@@ -162,7 +182,50 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             ? BuildArtifact(config, successCount, failureCount)
             : null;
 
-        SendFinished(sink, runId, "completed", artifact);
+        await SendFinishedAsync(sink, runId, "completed", artifact).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Overall wall-clock budget for ONE tester invocation (quality audit F4).
+    /// Prefers the config's own <c>max_duration_secs</c> when set; otherwise a
+    /// generous worst case derived from the workload — every request in every
+    /// mode timing out, fully serial: <c>timeout × runs × modes</c> — plus
+    /// <see cref="DeadlineSlackSecs"/>, clamped to
+    /// <see cref="MaxInvocationDeadline"/>. On expiry the tester process TREE is
+    /// killed and the run reports a <c>failed</c> terminal — the workload
+    /// <c>timeout_ms</c> alone only bounds individual requests (it becomes the
+    /// tester's per-request <c>--timeout</c>), not a tester that hangs without
+    /// EOF-ing stdout.
+    /// </summary>
+    internal static TimeSpan ComputeInvocationDeadline(TestConfigView config)
+    {
+        double totalSecs;
+        if (config.MaxDurationSecs > 0)
+        {
+            totalSecs = (double)config.MaxDurationSecs + DeadlineSlackSecs;
+        }
+        else
+        {
+            // Same rounding as BuildArgs: timeout_ms.div_ceil(1000).max(1).
+            var timeoutSecs = Math.Max(1u, (config.TimeoutMs + 999) / 1000);
+            var runs = Math.Max(1u, config.Runs);
+            var modes = (uint)Math.Max(1, config.Modes.Count);
+            totalSecs = (double)timeoutSecs * runs * modes + DeadlineSlackSecs;
+        }
+
+        var deadline = TimeSpan.FromSeconds(totalSecs);
+        return deadline <= MaxInvocationDeadline ? deadline : MaxInvocationDeadline;
+    }
+
+    /// <summary>Terminal failure pair: the reason as an <c>error</c> frame plus
+    /// the <c>failed</c> <c>run_finished</c> — both via the critical
+    /// (non-droppable) send path, because losing either strands the run
+    /// <c>running</c> server-side until the watchdog (quality audit F2).</summary>
+    private static async Task SendFailureAsync(
+        RawWebSocketClient.IFrameSink sink, Guid runId, string message)
+    {
+        await sink.TrySendCriticalAsync(new ErrorMessage(runId, message)).ConfigureAwait(false);
+        await SendFinishedAsync(sink, runId, "failed", artifact: null).ConfigureAwait(false);
     }
 
     private enum InvocationStatus { Completed, Failed, Cancelled }
@@ -186,12 +249,21 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         RawWebSocketClient.IFrameSink sink,
         uint successCount,
         uint failureCount,
+        TimeSpan invocationDeadline,
         CancellationToken cancellationToken)
     {
         var label = workload is null ? "tester" : $"tester/{workload}";
         logger.LogInformation(
-            "{CorrelationId}: Spawning {Label} {Bin} {Args}",
-            correlationId, label, binPath, string.Join(" ", RedactSecretArgs(args)));
+            "{CorrelationId}: Spawning {Label} {Bin} {Args} (deadline {Deadline})",
+            correlationId, label, binPath, string.Join(" ", RedactSecretArgs(args)), invocationDeadline);
+
+        // Linked CTS = caller cancellation (cancel_run/shutdown/disconnect) +
+        // the overall invocation deadline (audit F4). Every await below uses
+        // this token; when it fires we distinguish the two causes via
+        // cancellationToken.IsCancellationRequested.
+        using var deadlineCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadlineCts.CancelAfter(invocationDeadline);
+        var invocationToken = deadlineCts.Token;
 
         var psi = new ProcessStartInfo
         {
@@ -214,7 +286,7 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         {
             var msg = $"Failed to spawn tester: {ex.Message}";
             logger.LogError("{CorrelationId}: {Message}", correlationId, msg);
-            sink.TrySend(new ErrorMessage(runId, msg));
+            await sink.TrySendCriticalAsync(new ErrorMessage(runId, msg)).ConfigureAwait(false);
             return new(InvocationStatus.Failed, successCount, failureCount);
         }
 
@@ -226,7 +298,7 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             try
             {
                 string? line;
-                while ((line = await process.StandardError.ReadLineAsync(cancellationToken).ConfigureAwait(false)) is not null)
+                while ((line = await process.StandardError.ReadLineAsync(invocationToken).ConfigureAwait(false)) is not null)
                 {
                     sink.TrySend(new ErrorMessage(runId, $"[{label}] {line}"));
                 }
@@ -240,11 +312,12 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         long stdoutBytes = 0;
         bool overflow = false;
         bool cancelled = false;
+        bool deadlineExpired = false;
 
         try
         {
             string? line;
-            while ((line = await process.StandardOutput.ReadLineAsync(cancellationToken).ConfigureAwait(false)) is not null)
+            while ((line = await process.StandardOutput.ReadLineAsync(invocationToken).ConfigureAwait(false)) is not null)
             {
                 stdoutBytes += line.Length + 1;
                 if (stdoutBytes > MaxStdoutBytes)
@@ -260,8 +333,18 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         }
         catch (OperationCanceledException)
         {
-            cancelled = true;
-            logger.LogWarning("{CorrelationId}: Run cancelled — killing tester subprocess", correlationId);
+            if (cancellationToken.IsCancellationRequested)
+            {
+                cancelled = true;
+                logger.LogWarning("{CorrelationId}: Run cancelled — killing tester subprocess", correlationId);
+            }
+            else
+            {
+                deadlineExpired = true; // only the invocation deadline can fire otherwise
+                logger.LogError(
+                    "{CorrelationId}: Tester exceeded the overall run deadline of {Deadline} — killing process tree",
+                    correlationId, invocationDeadline);
+            }
             KillTree(process);
         }
 
@@ -271,11 +354,19 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             return new(InvocationStatus.Cancelled, successCount, failureCount);
         }
 
+        if (deadlineExpired)
+        {
+            var msg = $"Tester ({label}) exceeded the overall run deadline of {invocationDeadline} — killed";
+            await sink.TrySendCriticalAsync(new ErrorMessage(runId, msg)).ConfigureAwait(false);
+            await WaitAndDrainAsync(process, stderrTask).ConfigureAwait(false);
+            return new(InvocationStatus.Failed, successCount, failureCount);
+        }
+
         if (overflow)
         {
             var msg = $"Tester stdout exceeded safety limit of {MaxStdoutBytes} bytes";
             logger.LogError("{CorrelationId}: {Message}", correlationId, msg);
-            sink.TrySend(new ErrorMessage(runId, msg));
+            await sink.TrySendCriticalAsync(new ErrorMessage(runId, msg)).ConfigureAwait(false);
             await WaitAndDrainAsync(process, stderrTask).ConfigureAwait(false);
             return new(InvocationStatus.Failed, successCount, failureCount);
         }
@@ -284,15 +375,28 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         int exitCode;
         try
         {
-            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            await process.WaitForExitAsync(invocationToken).ConfigureAwait(false);
             exitCode = process.ExitCode;
         }
         catch (OperationCanceledException)
         {
-            logger.LogWarning("{CorrelationId}: Run cancelled during wait — killing tester", correlationId);
+            if (cancellationToken.IsCancellationRequested)
+            {
+                logger.LogWarning("{CorrelationId}: Run cancelled during wait — killing tester", correlationId);
+                KillTree(process);
+                await WaitAndDrainAsync(process, stderrTask).ConfigureAwait(false);
+                return new(InvocationStatus.Cancelled, successCount, failureCount);
+            }
+
+            // Deadline expired between stdout EOF and process exit (audit F4).
+            logger.LogError(
+                "{CorrelationId}: Tester exceeded the overall run deadline of {Deadline} during exit wait — killing process tree",
+                correlationId, invocationDeadline);
             KillTree(process);
+            await sink.TrySendCriticalAsync(new ErrorMessage(
+                runId, $"Tester ({label}) exceeded the overall run deadline of {invocationDeadline} — killed")).ConfigureAwait(false);
             await WaitAndDrainAsync(process, stderrTask).ConfigureAwait(false);
-            return new(InvocationStatus.Cancelled, successCount, failureCount);
+            return new(InvocationStatus.Failed, successCount, failureCount);
         }
 
         try { await stderrTask.ConfigureAwait(false); } catch { /* best-effort */ }
@@ -311,7 +415,7 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             var snippet = stdoutText.Length > 512 ? stdoutText[..512] : stdoutText;
             var msg = $"Tester ({label}) exited with code {exitCode} and unparseable JSON: {parseErr.Message} (stdout starts: {snippet})";
             logger.LogError("{CorrelationId}: {Message}", correlationId, msg);
-            sink.TrySend(new ErrorMessage(runId, msg));
+            await sink.TrySendCriticalAsync(new ErrorMessage(runId, msg)).ConfigureAwait(false);
             return new(InvocationStatus.Failed, successCount, failureCount);
         }
 
@@ -497,14 +601,21 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             DataQuality: dataQuality);
     }
 
-    private static void SendFinished(
+    /// <summary>The terminal <c>run_finished</c> — always via the critical
+    /// (non-droppable) send path: silently losing it leaves the control-plane
+    /// run <c>running</c> until the watchdog fails it (quality audit F2).</summary>
+    private static async Task SendFinishedAsync(
         RawWebSocketClient.IFrameSink sink, Guid runId, string status, BenchmarkArtifactPayload? artifact)
-        => sink.TrySend(new RunFinishedMessage(runId, status, artifact));
+        => await sink.TrySendCriticalAsync(new RunFinishedMessage(runId, status, artifact)).ConfigureAwait(false);
 
     private static async Task WaitAndDrainAsync(Process process, Task stderrTask)
     {
-        try { await process.WaitForExitAsync().ConfigureAwait(false); } catch { /* already gone */ }
-        try { await stderrTask.ConfigureAwait(false); } catch { /* best-effort */ }
+        // Bounded (audit F4): KillTree failures are swallowed, so an unkillable
+        // process (or a grandchild holding the stderr pipe open) must not park
+        // this task — and its MaxConcurrentRuns slot — forever.
+        using var grace = new CancellationTokenSource(PostKillGrace);
+        try { await process.WaitForExitAsync(grace.Token).ConfigureAwait(false); } catch { /* already gone or unkillable */ }
+        try { await stderrTask.WaitAsync(grace.Token).ConfigureAwait(false); } catch { /* best-effort */ }
     }
 
     private static void KillTree(Process process)

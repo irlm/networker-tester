@@ -163,9 +163,17 @@ public sealed class RunDispatcher : IRunDispatcher
         // Candidate queued runs old enough that the inline launch dispatch has
         // certainly finished. Join the config so we can skip Pending endpoints
         // without a second round-trip.
+        //
+        // WorkerId == null: a successful TryAssignAsync stamps worker_id, so a
+        // non-null worker means the run is already CLAIMED by an agent that
+        // simply hasn't sent run_started yet (it may be waiting on a busy run
+        // slot). Re-assigning it — possibly to a DIFFERENT agent — executes the
+        // run twice and emits duplicate run_started/run_finished pairs (quality
+        // audit F5). If the claiming agent dies, the disconnect cleanup /
+        // watchdog fail the run by worker_id; it is never silently stranded.
         var candidates = await _db.TestRuns
             .AsNoTracking()
-            .Where(r => r.Status == StatusQueued && r.CreatedAt < cutoff)
+            .Where(r => r.Status == StatusQueued && r.WorkerId == null && r.CreatedAt < cutoff)
             .OrderBy(r => r.CreatedAt)
             .Take(QueuedRedispatchLimit)
             .Select(r => new { Run = r, r.TestConfig.EndpointKind })

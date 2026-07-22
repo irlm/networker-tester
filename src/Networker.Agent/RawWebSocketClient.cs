@@ -28,6 +28,16 @@ public sealed class RawWebSocketClient
     private const int WsChannelCapacity = 4096;
     private const int ReceiveBufferBytes = 64 * 1024;
 
+    /// <summary>How long <see cref="IFrameSink.TrySendCriticalAsync"/> will wait
+    /// for channel capacity before reporting the frame undeliverable.</summary>
+    private static readonly TimeSpan CriticalSendTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>Teardown drain window: after the outbound channel is completed,
+    /// the send pump gets this long to flush still-queued frames (terminal
+    /// run_finished/error frames finishing in the disconnect window) before the
+    /// connection CTS is cancelled (quality audit F2).</summary>
+    private static readonly TimeSpan TeardownDrainGrace = TimeSpan.FromSeconds(5);
+
     /// <summary>Request header carrying the agent api-key — must match the control
     /// plane's <c>AgentSocketEndpoint.ApiKeyHeader</c>. Hyphenated so nginx (which
     /// drops underscore headers by default) forwards it to the upstream.</summary>
@@ -43,8 +53,21 @@ public sealed class RawWebSocketClient
     {
         /// <summary>Enqueue a serialized <see cref="AgentMessage"/> for sending.
         /// Non-blocking; drops with a logged warning if the queue is full or the
-        /// connection is gone (Rust: <c>try_send</c> logs "channel full or closed").</summary>
+        /// connection is gone (Rust: <c>try_send</c> logs "channel full or closed").
+        /// The LOSSY fast path — heartbeats, attempt/progress/log frames.</summary>
         bool TrySend(AgentMessage message);
+
+        /// <summary>Enqueue a frame that must NOT be silently dropped — terminal
+        /// <c>run_finished</c>/<c>error</c> frames whose loss would strand the
+        /// control-plane run in <c>running</c> until the watchdog fails it
+        /// (quality audit F2). When the channel is full this WAITS (bounded, a
+        /// few seconds) for capacity instead of dropping; <c>false</c> means the
+        /// frame is definitively undeliverable on this connection (closed
+        /// channel or timeout) and IS logged. Single-writer discipline is
+        /// preserved: this only enqueues — the send pump remains the sole
+        /// socket writer.</summary>
+        ValueTask<bool> TrySendCriticalAsync(AgentMessage message, CancellationToken ct = default)
+            => ValueTask.FromResult(TrySend(message)); // default: fall back to the lossy path (tests/fakes)
     }
 
     /// <summary>
@@ -82,9 +105,15 @@ public sealed class RawWebSocketClient
         using var connCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var connToken = connCts.Token;
 
+        // FullMode = Wait (audit F2): under DropWrite a full channel's TryWrite
+        // returned TRUE and silently discarded the frame — the "channel full"
+        // log below was unreachable and a burst of attempt_events could eat a
+        // terminal run_finished with zero evidence. With Wait, TryWrite returns
+        // false when full (the lossy fast path now truthfully reports + logs
+        // its drops) and WriteAsync — the critical path — waits for capacity.
         var channel = Channel.CreateBounded<string>(new BoundedChannelOptions(WsChannelCapacity)
         {
-            FullMode = BoundedChannelFullMode.DropWrite,
+            FullMode = BoundedChannelFullMode.Wait,
             SingleReader = true,
         });
         var sink = new ChannelFrameSink(channel.Writer, _logger);
@@ -100,8 +129,16 @@ public sealed class RawWebSocketClient
         }
         finally
         {
-            // Stop the pump + heartbeat, drain, and best-effort close the socket.
+            // Teardown order matters (audit F2): complete the channel FIRST and
+            // give the pump a bounded window to DRAIN what is already queued —
+            // a run finishing in the disconnect window has its terminal
+            // run_finished sitting in this channel, and cancelling the pump
+            // before draining used to discard it permanently (CancelAllRuns
+            // then guaranteed it was never re-sent). Only after the drain (or
+            // its grace expiring, e.g. the socket is truly dead and sends
+            // block) cancel the pump + heartbeat and close the socket.
             channel.Writer.TryComplete();
+            await Task.WhenAny(sendPump, Task.Delay(TeardownDrainGrace)).ConfigureAwait(false);
             connCts.Cancel();
             try { await sendPump.ConfigureAwait(false); } catch { /* pump cancelled */ }
             try { await onConnectedTask.ConfigureAwait(false); } catch { /* heartbeat cancelled */ }
@@ -223,29 +260,73 @@ public sealed class RawWebSocketClient
         s.Length <= max ? s : s[..max];
 
     /// <summary>Channel-backed frame sink: serialises + enqueues; the single
-    /// send pump is the only writer to the socket.</summary>
+    /// send pump is the only writer to the socket (both paths only enqueue, so
+    /// the single-writer discipline holds).</summary>
     private sealed class ChannelFrameSink(ChannelWriter<string> writer, ILogger logger) : IFrameSink
     {
         public bool TrySend(AgentMessage message)
         {
-            string text;
-            try
-            {
-                text = JsonSerializer.Serialize(message, AgentProtocolJson.Options);
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Failed to encode {Type}", message.GetType().Name);
+            if (!TryEncode(message, out var text))
                 return false;
-            }
 
             if (!writer.TryWrite(text))
             {
-                logger.LogError("Failed to send message: channel full or closed");
+                logger.LogError(
+                    "Failed to send {Type}: channel full or closed", message.GetType().Name);
                 return false;
             }
 
             return true;
+        }
+
+        public async ValueTask<bool> TrySendCriticalAsync(
+            AgentMessage message, CancellationToken ct = default)
+        {
+            if (!TryEncode(message, out var text))
+                return false;
+
+            // Fast path: enqueue without waiting when there is capacity.
+            if (writer.TryWrite(text))
+                return true;
+
+            // Channel full — WAIT (bounded) for capacity rather than dropping a
+            // terminal frame (audit F2). WriteAsync waits under FullMode.Wait.
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(CriticalSendTimeout);
+            try
+            {
+                await writer.WriteAsync(text, timeoutCts.Token).ConfigureAwait(false);
+                return true;
+            }
+            catch (ChannelClosedException)
+            {
+                logger.LogError(
+                    "Failed to send critical {Type}: channel closed (connection gone)",
+                    message.GetType().Name);
+                return false;
+            }
+            catch (OperationCanceledException)
+            {
+                logger.LogError(
+                    "Failed to send critical {Type}: timed out waiting for channel capacity",
+                    message.GetType().Name);
+                return false;
+            }
+        }
+
+        private bool TryEncode(AgentMessage message, out string text)
+        {
+            try
+            {
+                text = JsonSerializer.Serialize(message, AgentProtocolJson.Options);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to encode {Type}", message.GetType().Name);
+                text = string.Empty;
+                return false;
+            }
         }
     }
 }

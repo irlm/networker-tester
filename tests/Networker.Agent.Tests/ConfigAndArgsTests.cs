@@ -378,4 +378,69 @@ public class ConfigAndArgsTests
         Assert.Equal("ws://explicit/ws/agent", opts.DashboardUrl);
         Assert.Equal("explicit-key", opts.ApiKey);
     }
+
+    // ── Overall run deadline (quality audit F4) ─────────────────────────────
+
+    [Fact]
+    public void MaxDurationSecs_is_read_from_config_root_not_workload()
+    {
+        var view = TestConfigView.From(Config("""
+            { "id":"00000000-0000-0000-0000-000000000000",
+              "endpoint": { "kind":"network", "host":"h" },
+              "workload": { "modes":["http1"], "runs":1, "concurrency":1, "timeout_ms":3000,
+                            "payload_sizes":[], "insecure":false },
+              "max_duration_secs": 900 }
+            """));
+        Assert.Equal(900u, view.MaxDurationSecs);
+    }
+
+    [Fact]
+    public void MaxDurationSecs_defaults_to_zero_when_absent_or_null()
+    {
+        Assert.Equal(0u, TestConfigView.From(Config(NetworkDnsHttp2)).MaxDurationSecs);
+
+        var withNull = TestConfigView.From(Config("""
+            { "id":"00000000-0000-0000-0000-000000000000",
+              "endpoint": { "kind":"network", "host":"h" },
+              "workload": { "modes":["http1"], "runs":1, "concurrency":1, "timeout_ms":3000,
+                            "payload_sizes":[], "insecure":false },
+              "max_duration_secs": null }
+            """));
+        Assert.Equal(0u, withNull.MaxDurationSecs);
+    }
+
+    [Fact]
+    public void InvocationDeadline_prefers_config_max_duration_plus_slack()
+    {
+        var view = TestConfigView.From(Config("""
+            { "id":"00000000-0000-0000-0000-000000000000",
+              "endpoint": { "kind":"network", "host":"h" },
+              "workload": { "modes":["http1"], "runs":1000, "concurrency":1, "timeout_ms":3000,
+                            "payload_sizes":[], "insecure":false },
+              "max_duration_secs": 600 }
+            """));
+        // max_duration_secs (600) + the 60s slack — the workload arithmetic is
+        // ignored when the config carries its own budget.
+        Assert.Equal(TimeSpan.FromSeconds(660), RunExecutor.ComputeInvocationDeadline(view));
+    }
+
+    [Fact]
+    public void InvocationDeadline_falls_back_to_timeout_times_runs_times_modes()
+    {
+        // NetworkDnsHttp2: timeout 5000ms→5s, runs=10, modes=4 → 5*10*4 + 60 slack.
+        var view = TestConfigView.From(Config(NetworkDnsHttp2));
+        Assert.Equal(TimeSpan.FromSeconds(5 * 10 * 4 + 60), RunExecutor.ComputeInvocationDeadline(view));
+    }
+
+    [Fact]
+    public void InvocationDeadline_is_clamped_to_24_hours()
+    {
+        var view = TestConfigView.From(Config("""
+            { "id":"00000000-0000-0000-0000-000000000000",
+              "endpoint": { "kind":"network", "host":"h" },
+              "workload": { "modes":["http1"], "runs":4000000, "concurrency":1, "timeout_ms":60000,
+                            "payload_sizes":[], "insecure":false } }
+            """));
+        Assert.Equal(TimeSpan.FromHours(24), RunExecutor.ComputeInvocationDeadline(view));
+    }
 }

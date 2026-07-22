@@ -26,10 +26,12 @@ namespace Networker.ControlPlane.Realtime.RawWs;
 ///   <see cref="AgentMessageProcessor.HandleFrameAsync"/> in a fresh DI scope
 ///   (the scoped <c>NetworkerDbContext</c> must not live for the whole
 ///   connection). A ~120s idle timeout closes dead peers.</item>
-///   <item>On close/error: unregister (compare-and-remove), mark offline +
-///   publish <c>AgentStatus(offline)</c> + fail orphaned runs — the same
+///   <item>On close/error: unregister (compare-and-remove); ONLY when this
+///   connection was still the live one, mark offline + publish
+///   <c>AgentStatus(offline)</c> + fail orphaned runs — the same
 ///   <see cref="AgentMessageProcessor.HandleDisconnectAsync"/> the SignalR
-///   hub's <c>OnDisconnectedAsync</c> runs.</item>
+///   hub's <c>OnDisconnectedAsync</c> runs. A stale socket whose agent already
+///   reconnected skips the cleanup entirely (audit F1).</item>
 /// </list>
 /// </summary>
 public static class AgentSocketEndpoint
@@ -166,17 +168,30 @@ public static class AgentSocketEndpoint
         {
             // Compare-and-remove FIRST so a quick reconnect that already
             // re-registered is never clobbered; then the shared disconnect
-            // cleanup (offline + AgentStatus(offline) + fail orphaned runs).
-            registry.Unregister(identity.AgentId, conn.ConnectionId);
-            try
+            // cleanup (offline + AgentStatus(offline) + fail orphaned runs) —
+            // but ONLY when this connection was still the live one. A dead
+            // socket can take up to the 120s idle timeout to be noticed; if the
+            // agent already reconnected, running the cleanup here would mark
+            // the (online) agent offline and fail runs that are alive on the
+            // new connection (quality audit F1).
+            if (registry.Unregister(identity.AgentId, conn.ConnectionId))
             {
-                using var scope = scopeFactory.CreateScope();
-                await GetProcessor(scope).HandleDisconnectAsync(identity.AgentId);
+                try
+                {
+                    using var scope = scopeFactory.CreateScope();
+                    await GetProcessor(scope).HandleDisconnectAsync(identity.AgentId);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex,
+                        "Disconnect cleanup for agent {AgentId} failed", identity.AgentId);
+                }
             }
-            catch (Exception ex)
+            else
             {
-                logger.LogError(ex,
-                    "Disconnect cleanup for agent {AgentId} failed", identity.AgentId);
+                logger.LogInformation(
+                    "Skipping disconnect cleanup for agent {AgentId}: stale connection {ConnId} was already superseded by a newer registration",
+                    identity.AgentId, conn.ConnectionId);
             }
             await conn.CloseAsync();
         }

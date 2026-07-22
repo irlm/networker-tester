@@ -107,8 +107,16 @@ public sealed class AgentConnectionRegistry
     /// single-socket model could not hit, but this side can — including a raw
     /// reconnect racing a SignalR disconnect, which is why raw ids are
     /// <c>raw-</c> prefixed and thus never collide with SignalR ids).
+    ///
+    /// <para>Returns whether THIS connection's mapping was actually removed —
+    /// <c>false</c> when a newer registration already superseded it (or the
+    /// agent was never registered). Callers MUST skip the disconnect cleanup
+    /// (<c>AgentMessageProcessor.HandleDisconnectAsync</c>: mark offline + fail
+    /// orphaned runs) on <c>false</c>: the agent is alive on the newer
+    /// connection, and failing its runs from the stale socket's teardown would
+    /// kill work that is executing right now (quality audit F1).</para>
     /// </summary>
-    public void Unregister(Guid agentId, string connectionId)
+    public bool Unregister(Guid agentId, string connectionId)
     {
         if (_connections.TryGetValue(agentId, out var current)
             && current.ConnectionId == connectionId)
@@ -116,10 +124,13 @@ public sealed class AgentConnectionRegistry
             // ICollection<KeyValuePair<>>.Remove only removes on an exact
             // key+value match — the atomic compare-and-remove we want. If a
             // re-registration slipped in between the read and this call, the
-            // value no longer matches and nothing is removed.
-            ((ICollection<KeyValuePair<Guid, Connection>>)_connections)
+            // value no longer matches and nothing is removed (Remove reports
+            // that with false, which we propagate).
+            return ((ICollection<KeyValuePair<Guid, Connection>>)_connections)
                 .Remove(new KeyValuePair<Guid, Connection>(agentId, current));
         }
+
+        return false;
     }
 
     /// <summary>

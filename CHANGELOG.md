@@ -11,6 +11,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.60] — 2026-07-22
+
+### Fixed
+- **Run-lifecycle integrity at the WebSocket seam (C# quality-review P1s).**
+  Four defects that could lose results or wedge runs, from
+  `docs/analysis/quality-csharp-2026-07.md`:
+  - A stale socket timing out after an agent reconnected no longer marks the
+    agent offline and fails its live runs — disconnect cleanup now runs only
+    when the closing connection is still the registered one (both transports;
+    `AgentConnectionRegistry.Unregister` reports whether it removed).
+  - The agent can no longer silently drop `run_finished`/error frames: the
+    outbound channel waits instead of drop-on-full, terminal frames go through
+    a guaranteed-delivery path, and teardown drains before cancelling the pump.
+  - The redispatcher no longer re-assigns runs an agent already claimed
+    (`WorkerId == null` filter), and the agent ignores re-assigns of runs it
+    recently finished — closing the duplicate-execution window.
+  - Late frames can no longer resurrect terminal runs (status preconditions on
+    `run_started`/`run_finished`/error updates; `run_finished` payload status
+    must be terminal).
+  - Runs gained an overall deadline: the agent kills the tester process tree
+    and reports failure when `max_duration_secs` (+slack) elapses — a wedged
+    tester no longer permanently consumes a concurrency slot.
+
+---
+
 ## [0.28.59] — 2026-07-22
 
 ### Fixed
