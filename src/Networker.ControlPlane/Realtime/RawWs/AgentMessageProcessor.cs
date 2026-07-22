@@ -37,13 +37,22 @@ public sealed record AgentIdentity(Guid AgentId, string Name);
 public sealed class AgentMessageProcessor
 {
     /// <summary>
-    /// The canonical run statuses (Rust <c>RunStatus</c>, rename_all="lowercase").
-    /// <see cref="OnRunFinished"/> validates the agent-reported terminal status
-    /// against this set so an arbitrary/corrupt string never reaches the DB.
+    /// The terminal run statuses (subset of the canonical Rust <c>RunStatus</c>
+    /// set, rename_all="lowercase"). Two duties (quality audit F6):
+    /// <see cref="OnRunFinished"/> validates the agent-reported status against
+    /// this set — a <c>run_finished</c> must carry a TERMINAL status, so an
+    /// arbitrary/corrupt string (or a non-terminal one like <c>running</c>,
+    /// which would resurrect the run) never reaches the DB; and the
+    /// run-mutating handlers refuse to update a run that is ALREADY terminal —
+    /// a late/duplicate frame from a slow agent must never flip
+    /// <c>completed</c>→<c>failed</c> or <c>failed</c>→<c>running</c>. The
+    /// per-handler <c>Where</c> preconditions spell the statuses out inline
+    /// (<c>r.Status != "completed" …</c>) because <c>ExecuteUpdateAsync</c>
+    /// needs a translatable predicate.
     /// </summary>
-    private static readonly HashSet<string> AllowedRunStatuses = new(StringComparer.Ordinal)
+    private static readonly HashSet<string> TerminalRunStatuses = new(StringComparer.Ordinal)
     {
-        "queued", "provisioning", "running", "completed", "failed", "cancelled",
+        "completed", "failed", "cancelled",
     };
 
     private readonly NetworkerDbContext _db;
@@ -368,14 +377,26 @@ public sealed class AgentMessageProcessor
             .FirstOrDefaultAsync(ct);
         var workerId = agentId.ToString();
 
-        await _db.TestRuns
-            .Where(r => r.Id == rs.RunId)
+        // Status precondition (audit F6): a late run_started — e.g. arriving
+        // after a cancel or a watchdog fail — must not resurrect a terminal run
+        // (failed→running would leave a "running" row with no live owner).
+        var updated = await _db.TestRuns
+            .Where(r => r.Id == rs.RunId
+                && r.Status != "completed" && r.Status != "failed" && r.Status != "cancelled")
             .ExecuteUpdateAsync(s => s
                 .SetProperty(r => r.Status, "running")
                 .SetProperty(r => r.StartedAt, rs.StartedAt.UtcDateTime)
                 .SetProperty(r => r.WorkerId, workerId)
                 .SetProperty(r => r.TesterId, boundTesterId)
                 .SetProperty(r => r.LastHeartbeat, DateTime.UtcNow), ct);
+
+        if (updated == 0)
+        {
+            _logger.LogWarning(
+                "Ignored run_started from agent {AgentId} for run {RunId}: run is missing or already terminal",
+                agentId, rs.RunId);
+            return;
+        }
 
         _bus.Publish(new JobUpdate(rs.RunId, "running", agentId, rs.StartedAt, null));
     }
@@ -422,22 +443,36 @@ public sealed class AgentMessageProcessor
     /// </summary>
     private async Task OnRunFinished(RunFinishedMessage rf, CancellationToken ct)
     {
-        // Validate the agent-reported status against the canonical RunStatus set
-        // — never write an arbitrary string into test_run.status (a corrupt or
-        // hostile frame would otherwise poison every status-keyed query).
-        if (string.IsNullOrEmpty(rf.Status) || !AllowedRunStatuses.Contains(rf.Status))
+        // Validate the agent-reported status: a run_finished must carry a
+        // TERMINAL status (audit F6) — never write an arbitrary string into
+        // test_run.status (a corrupt or hostile frame would otherwise poison
+        // every status-keyed query), and never a non-terminal one like
+        // "running"/"queued" (which would resurrect the run).
+        if (string.IsNullOrEmpty(rf.Status) || !TerminalRunStatuses.Contains(rf.Status))
         {
             _logger.LogWarning(
-                "Rejected run_finished for run {RunId}: invalid status '{Status}'",
+                "Rejected run_finished for run {RunId}: invalid or non-terminal status '{Status}'",
                 rf.RunId, rf.Status);
             return;
         }
 
-        await _db.TestRuns
-            .Where(r => r.Id == rf.RunId)
+        // Status precondition (audit F6): a late/duplicate run_finished must
+        // not rewrite a run that already reached a terminal state (e.g. a
+        // "failed" frame arriving after a cancel flipping cancelled→failed).
+        var updated = await _db.TestRuns
+            .Where(r => r.Id == rf.RunId
+                && r.Status != "completed" && r.Status != "failed" && r.Status != "cancelled")
             .ExecuteUpdateAsync(s => s
                 .SetProperty(r => r.Status, rf.Status)
                 .SetProperty(r => r.FinishedAt, DateTime.UtcNow), ct);
+
+        if (updated == 0)
+        {
+            _logger.LogWarning(
+                "Ignored run_finished ({Status}) for run {RunId}: run is missing or already terminal",
+                rf.Status, rf.RunId);
+            return;
+        }
 
         if (rf.Artifact is { } art)
         {
@@ -516,12 +551,26 @@ public sealed class AgentMessageProcessor
         }
 
         var cleanMessage = AnsiText.Strip(err.Message);
-        await _db.TestRuns
-            .Where(r => r.Id == runId)
+
+        // Status precondition (audit F6): a late error frame — the agent
+        // streams tester stderr as error frames, which can trail the terminal
+        // run_finished — must never flip an already-terminal run (a successful
+        // "completed" run rewritten to "failed" by a stderr line).
+        var updated = await _db.TestRuns
+            .Where(r => r.Id == runId
+                && r.Status != "completed" && r.Status != "failed" && r.Status != "cancelled")
             .ExecuteUpdateAsync(s => s
                 .SetProperty(r => r.Status, "failed")
                 .SetProperty(r => r.ErrorMessage, cleanMessage)
                 .SetProperty(r => r.FinishedAt, DateTime.UtcNow), ct);
+
+        if (updated == 0)
+        {
+            _logger.LogDebug(
+                "Ignored error frame from agent {AgentId} for run {RunId}: run is missing or already terminal ({Message})",
+                agentId, runId, cleanMessage);
+            return;
+        }
 
         _bus.Publish(new JobUpdate(runId, "failed", agentId, null, DateTimeOffset.UtcNow));
     }

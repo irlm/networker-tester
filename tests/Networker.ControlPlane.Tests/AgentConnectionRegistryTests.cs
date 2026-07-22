@@ -33,31 +33,43 @@ public sealed class AgentConnectionRegistryTests
     }
 
     [Fact]
-    public void Unregister_with_matching_connection_removes_agent()
+    public void Unregister_with_matching_connection_removes_agent_and_reports_it()
     {
         var reg = NewRegistry();
         var agent = Guid.NewGuid();
         reg.Register(agent, "conn-1");
 
-        reg.Unregister(agent, "conn-1");
+        // True = this connection was the live one → the caller runs the
+        // disconnect cleanup (offline + fail orphaned runs).
+        Assert.True(reg.Unregister(agent, "conn-1"));
 
         Assert.False(reg.IsOnline(agent));
     }
 
     [Fact]
-    public void Unregister_with_stale_connection_keeps_the_reconnect()
+    public void Unregister_with_stale_connection_keeps_the_reconnect_and_reports_false()
     {
         var reg = NewRegistry();
         var agent = Guid.NewGuid();
 
         // Agent connects (conn-1), drops, and reconnects (conn-2) before the
         // old socket's OnDisconnected fires. The late disconnect for conn-1
-        // must NOT evict the live conn-2 mapping.
+        // must NOT evict the live conn-2 mapping — and must return FALSE so
+        // the caller skips HandleDisconnectAsync (which would otherwise mark
+        // the reconnected agent offline and fail its live runs — audit F1).
         reg.Register(agent, "conn-1");
         reg.Register(agent, "conn-2");
-        reg.Unregister(agent, "conn-1"); // stale
+        Assert.False(reg.Unregister(agent, "conn-1")); // stale
 
         Assert.True(reg.IsOnline(agent));
+    }
+
+    [Fact]
+    public void Unregister_of_unknown_agent_reports_false()
+    {
+        var reg = NewRegistry();
+
+        Assert.False(reg.Unregister(Guid.NewGuid(), "conn-1"));
     }
 
     [Fact]

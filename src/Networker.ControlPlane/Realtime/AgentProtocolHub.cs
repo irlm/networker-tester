@@ -140,17 +140,28 @@ public sealed class AgentProtocolHub : Hub
 
     /// <summary>
     /// Deregister the connection (compare-and-remove, so a fresh reconnect that
-    /// already re-registered is never clobbered), then run the shared
-    /// disconnect cleanup: mark the agent <c>offline</c>, publish
-    /// <see cref="AgentStatus"/>(offline), and fail the agent's orphaned runs —
-    /// <see cref="AgentMessageProcessor.HandleDisconnectAsync"/>.
+    /// already re-registered is never clobbered), then — ONLY when this
+    /// connection was still the live one — run the shared disconnect cleanup:
+    /// mark the agent <c>offline</c>, publish <see cref="AgentStatus"/>(offline),
+    /// and fail the agent's orphaned runs
+    /// (<see cref="AgentMessageProcessor.HandleDisconnectAsync"/>). A stale
+    /// disconnect for a superseded connection must NOT mark the reconnected
+    /// agent offline or fail runs alive on its new connection (audit F1).
     /// </summary>
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
         if (Context.Items.TryGetValue(AgentIdItemKey, out var raw) && raw is Guid agentId)
         {
-            _registry.Unregister(agentId, Context.ConnectionId);
-            await _processor.HandleDisconnectAsync(agentId);
+            if (_registry.Unregister(agentId, Context.ConnectionId))
+            {
+                await _processor.HandleDisconnectAsync(agentId);
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "Skipping disconnect cleanup for agent {AgentId}: stale connection {ConnId} was already superseded by a newer registration",
+                    agentId, Context.ConnectionId);
+            }
         }
 
         await base.OnDisconnectedAsync(exception);

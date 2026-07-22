@@ -523,6 +523,224 @@ public sealed class RunDispatcherTesterFkTests
         var run = await db.TestRuns.AsNoTracking().FirstAsync(r => r.Id == staleRun);
         Assert.Equal("running", run.Status); // spared — worker still connected
     }
+
+    // ── 5. Redispatch must not re-assign a claimed run (quality audit F5) ────
+
+    [Fact]
+    public async Task Redispatch_skips_queued_run_already_claimed_by_a_worker()
+    {
+        using var sp = BuildHost(nameof(Redispatch_skips_queued_run_already_claimed_by_a_worker));
+        var db = Db(sp);
+        var registry = sp.GetRequiredService<AgentConnectionRegistry>();
+
+        SeedProject(db);
+        var onlineAgent = SeedAgent(db, boundTesterId: null);
+        var configId = SeedConfig(db);
+
+        // A queued run OLD enough for the redispatcher, but already CLAIMED by
+        // another agent (worker_id stamped at assign) that just hasn't sent
+        // run_started yet. Before the fix the redispatcher re-sent it — here
+        // to a DIFFERENT online agent → duplicate execution.
+        var claimedRun = Guid.NewGuid();
+        db.TestRuns.Add(new TestRun
+        {
+            Id = claimedRun,
+            TestConfigId = configId,
+            ProjectId = ProjectId,
+            Status = "queued",
+            WorkerId = Guid.NewGuid().ToString(), // claimed by a (busy) agent
+            CreatedAt = DateTime.UtcNow.AddMinutes(-5),
+        });
+        await db.SaveChangesAsync();
+
+        var frames = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        registry.Register(onlineAgent, $"raw-{onlineAgent}", (payload, _) =>
+        {
+            frames.Enqueue(payload);
+            return Task.CompletedTask;
+        });
+
+        var dispatcher = new RunDispatcher(
+            db, registry,
+            sp.GetRequiredService<EventBus>(),
+            sp.GetRequiredService<ILogger<RunDispatcher>>(),
+            TestCipher());
+
+        var dispatched = await dispatcher.RedispatchQueuedAsync(default);
+
+        // Claimed run untouched: not re-dispatched, no frame sent, and the
+        // original claimant's worker_id is preserved.
+        Assert.Equal(0, dispatched);
+        Assert.Empty(frames);
+        var run = await db.TestRuns.AsNoTracking().FirstAsync(r => r.Id == claimedRun);
+        Assert.NotEqual(onlineAgent.ToString(), run.WorkerId);
+    }
+
+    [Fact]
+    public async Task Redispatch_still_assigns_unclaimed_queued_run()
+    {
+        // Companion guard: the WorkerId == null filter must not over-block —
+        // a genuinely unclaimed stale queued run IS still redispatched.
+        using var sp = BuildHost(nameof(Redispatch_still_assigns_unclaimed_queued_run));
+        var db = Db(sp);
+        var registry = sp.GetRequiredService<AgentConnectionRegistry>();
+
+        SeedProject(db);
+        var onlineAgent = SeedAgent(db, boundTesterId: null);
+        var configId = SeedConfig(db);
+
+        var unclaimedRun = Guid.NewGuid();
+        db.TestRuns.Add(new TestRun
+        {
+            Id = unclaimedRun,
+            TestConfigId = configId,
+            ProjectId = ProjectId,
+            Status = "queued",
+            WorkerId = null, // never assigned
+            CreatedAt = DateTime.UtcNow.AddMinutes(-5),
+        });
+        await db.SaveChangesAsync();
+
+        var frames = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        registry.Register(onlineAgent, $"raw-{onlineAgent}", (payload, _) =>
+        {
+            frames.Enqueue(payload);
+            return Task.CompletedTask;
+        });
+
+        var dispatcher = new RunDispatcher(
+            db, registry,
+            sp.GetRequiredService<EventBus>(),
+            sp.GetRequiredService<ILogger<RunDispatcher>>(),
+            TestCipher());
+
+        var dispatched = await dispatcher.RedispatchQueuedAsync(default);
+
+        Assert.Equal(1, dispatched);
+        Assert.Single(frames);
+        var run = await db.TestRuns.AsNoTracking().FirstAsync(r => r.Id == unclaimedRun);
+        Assert.Equal(onlineAgent.ToString(), run.WorkerId);
+    }
+
+    // ── 6. Late frames must not resurrect terminal runs (quality audit F6) ───
+
+    private static string RunFinishedFrame(Guid runId, string status)
+        => System.Text.Json.JsonSerializer.Serialize(
+            (AgentMessage)new RunFinishedMessage(runId, status, null));
+
+    private static string ErrorFrame(Guid runId, string message)
+        => System.Text.Json.JsonSerializer.Serialize(
+            (AgentMessage)new ErrorMessage(runId, message));
+
+    private static async Task<(ServiceProvider Sp, NetworkerDbContext Db, AgentMessageProcessor Processor, Guid AgentId, Guid RunId)>
+        SeedTerminalGuardHostAsync(string testName, string runStatus)
+    {
+        var sp = BuildHost(testName);
+        var db = Db(sp);
+
+        SeedProject(db);
+        var agentId = SeedAgent(db, boundTesterId: null);
+        var configId = SeedConfig(db);
+
+        var runId = Guid.NewGuid();
+        db.TestRuns.Add(new TestRun
+        {
+            Id = runId,
+            TestConfigId = configId,
+            ProjectId = ProjectId,
+            Status = runStatus,
+            CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var processor = new AgentMessageProcessor(
+            db,
+            sp.GetRequiredService<EventBus>(),
+            sp.GetRequiredService<ILogger<AgentMessageProcessor>>());
+
+        return (sp, db, processor, agentId, runId);
+    }
+
+    [Fact]
+    public async Task Late_run_started_does_not_resurrect_terminal_run()
+    {
+        // The watchdog (or a cancel) already failed the run; the agent's
+        // run_started arrives late. Flipping failed→running would leave a
+        // "running" row with no live owner — the watchdog then fails it AGAIN.
+        var (sp, db, processor, agentId, runId) = await SeedTerminalGuardHostAsync(
+            nameof(Late_run_started_does_not_resurrect_terminal_run), "failed");
+        using var _ = sp;
+
+        await processor.HandleFrameAsync(agentId, RunStartedFrame(runId, DateTimeOffset.UtcNow));
+
+        var run = await db.TestRuns.AsNoTracking().FirstAsync(r => r.Id == runId);
+        Assert.Equal("failed", run.Status);
+        Assert.Null(run.StartedAt);
+        Assert.Null(run.WorkerId);
+    }
+
+    [Fact]
+    public async Task Late_run_finished_does_not_rewrite_cancelled_run()
+    {
+        var (sp, db, processor, agentId, runId) = await SeedTerminalGuardHostAsync(
+            nameof(Late_run_finished_does_not_rewrite_cancelled_run), "cancelled");
+        using var _ = sp;
+
+        await processor.HandleFrameAsync(agentId, RunFinishedFrame(runId, "completed"));
+
+        var run = await db.TestRuns.AsNoTracking().FirstAsync(r => r.Id == runId);
+        Assert.Equal("cancelled", run.Status); // history preserved
+        Assert.Null(run.FinishedAt);           // untouched by the late frame
+    }
+
+    [Fact]
+    public async Task Late_error_frame_does_not_fail_completed_run()
+    {
+        // The agent relays tester stderr as error frames, which can trail the
+        // terminal run_finished — a successful run must not be rewritten to
+        // failed by a late stderr line.
+        var (sp, db, processor, agentId, runId) = await SeedTerminalGuardHostAsync(
+            nameof(Late_error_frame_does_not_fail_completed_run), "completed");
+        using var _ = sp;
+
+        await processor.HandleFrameAsync(agentId, ErrorFrame(runId, "[tester] late stderr noise"));
+
+        var run = await db.TestRuns.AsNoTracking().FirstAsync(r => r.Id == runId);
+        Assert.Equal("completed", run.Status);
+        Assert.Null(run.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task Run_finished_with_non_terminal_status_is_rejected()
+    {
+        // run_finished must carry a TERMINAL status — "running"/"queued" would
+        // resurrect the run (the pre-fix allowed-set accepted them).
+        var (sp, db, processor, agentId, runId) = await SeedTerminalGuardHostAsync(
+            nameof(Run_finished_with_non_terminal_status_is_rejected), "running");
+        using var _ = sp;
+
+        await processor.HandleFrameAsync(agentId, RunFinishedFrame(runId, "queued"));
+
+        var run = await db.TestRuns.AsNoTracking().FirstAsync(r => r.Id == runId);
+        Assert.Equal("running", run.Status); // frame rejected, run untouched
+        Assert.Null(run.FinishedAt);
+    }
+
+    [Fact]
+    public async Task Run_finished_still_lands_on_a_live_run()
+    {
+        // Companion guard: the precondition must not block the normal path —
+        // a run_finished for a run still `running` persists the terminal status.
+        var (sp, db, processor, agentId, runId) = await SeedTerminalGuardHostAsync(
+            nameof(Run_finished_still_lands_on_a_live_run), "running");
+        using var _ = sp;
+
+        await processor.HandleFrameAsync(agentId, RunFinishedFrame(runId, "completed"));
+
+        var run = await db.TestRuns.AsNoTracking().FirstAsync(r => r.Id == runId);
+        Assert.Equal("completed", run.Status);
+        Assert.NotNull(run.FinishedAt);
+    }
 }
 
 /// <summary>

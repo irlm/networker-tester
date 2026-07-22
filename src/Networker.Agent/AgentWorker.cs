@@ -36,9 +36,14 @@ public sealed class AgentWorker(
     /// <summary>Max concurrent probe runs — Rust <c>MAX_CONCURRENT_RUNS = 4</c>.</summary>
     private const int MaxConcurrentRuns = 4;
 
+    /// <summary>How many recently finished run ids the assign_run dedupe
+    /// remembers (FIFO eviction) — see <see cref="RecentRunSet"/>.</summary>
+    private const int RecentlyFinishedCapacity = 128;
+
     private readonly RawWebSocketClient _client = new(logger);
     private readonly ConcurrentDictionary<Guid, RunHandle> _running = new();
     private readonly SemaphoreSlim _runSlots = new(MaxConcurrentRuns, MaxConcurrentRuns);
+    private readonly RecentRunSet _recentlyFinished = new(RecentlyFinishedCapacity);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -105,8 +110,13 @@ public sealed class AgentWorker(
         {
             while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false))
             {
-                if (!sink.TrySend(new HeartbeatMessage(Load: null, Version: AgentVersion.Current)))
-                    break; // channel closed → connection gone
+                // Deliberately lossy: with the outbound channel on
+                // FullMode.Wait (audit F2), TrySend returns false BOTH when the
+                // channel is closed and when it is momentarily full — a single
+                // full-channel drop must not kill the heartbeat loop for the
+                // rest of the connection, so the result is ignored (the sink
+                // logs the drop) and teardown ends this loop via `token`.
+                sink.TrySend(new HeartbeatMessage(Load: null, Version: AgentVersion.Current));
             }
         }
         catch (OperationCanceledException)
@@ -174,6 +184,18 @@ public sealed class AgentWorker(
 
         logger.LogInformation("AssignRun received (v2) run_id={RunId}", runId);
 
+        // Redispatch dedupe (quality audit F5): a run this agent already
+        // executed to a terminal state must never run twice — the dashboard's
+        // redispatcher can re-deliver an assign_run it believes went unclaimed,
+        // and re-executing would emit a second run_started/run_finished pair.
+        // In-flight repeats are caught by the _running.TryAdd below.
+        if (_recentlyFinished.Contains(runId))
+        {
+            logger.LogWarning(
+                "Duplicate assign_run for already-finished run {RunId} — ignoring", runId);
+            return;
+        }
+
         var runCts = CancellationTokenSource.CreateLinkedTokenSource(connToken);
         var handle = new RunHandle(runCts);
         if (!_running.TryAdd(runId, handle))
@@ -203,11 +225,19 @@ public sealed class AgentWorker(
             catch (Exception ex)
             {
                 logger.LogError(ex, "Run {RunId} failed unexpectedly", runId);
-                sink.TrySend(new ErrorMessage(runId, $"agent run task failed: {ex.Message}"));
-                sink.TrySend(new RunFinishedMessage(runId, "failed", null));
+                // Terminal frames go through the critical (non-droppable) path
+                // — losing them strands the run `running` server-side (audit F2).
+                await sink.TrySendCriticalAsync(
+                    new ErrorMessage(runId, $"agent run task failed: {ex.Message}")).ConfigureAwait(false);
+                await sink.TrySendCriticalAsync(
+                    new RunFinishedMessage(runId, "failed", null)).ConfigureAwait(false);
             }
             finally
             {
+                // Remember the run so a late redispatch of the same id is
+                // dropped (audit F5). Recorded for every outcome — completed,
+                // failed, and cancelled runs are all terminal server-side.
+                _recentlyFinished.Add(runId);
                 _runSlots.Release();
                 if (_running.TryRemove(runId, out var h))
                     h.Dispose();
@@ -262,5 +292,46 @@ public sealed class AgentWorker(
         }
 
         public void Dispose() => cts.Dispose();
+    }
+}
+
+/// <summary>
+/// Bounded set of recently seen run ids with FIFO eviction — the assign_run
+/// dedupe memory (quality audit F5). The dashboard's redispatcher may re-send
+/// an <c>assign_run</c> for a run this agent has already executed to a terminal
+/// state (the in-flight <c>_running</c> map only covers runs still executing);
+/// remembering the last <see cref="Capacity"/> finished ids lets the worker
+/// drop such repeats instead of running them twice. Bounded so an agent that
+/// stays up for months never grows this without limit; thread-safe because run
+/// tasks complete on the thread pool while assigns arrive on the receive loop.
+/// </summary>
+internal sealed class RecentRunSet(int capacity)
+{
+    private readonly object _lock = new();
+    private readonly Queue<Guid> _order = new();
+    private readonly HashSet<Guid> _members = new();
+
+    /// <summary>Maximum ids retained; the oldest is evicted beyond this.</summary>
+    public int Capacity { get; } = capacity;
+
+    public bool Contains(Guid id)
+    {
+        lock (_lock)
+        {
+            return _members.Contains(id);
+        }
+    }
+
+    public void Add(Guid id)
+    {
+        lock (_lock)
+        {
+            if (!_members.Add(id))
+                return; // already present — keep its original eviction slot
+
+            _order.Enqueue(id);
+            while (_order.Count > Capacity)
+                _members.Remove(_order.Dequeue());
+        }
     }
 }
