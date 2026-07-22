@@ -117,8 +117,12 @@ jobs:
             exit 0
           fi
 
+          # Frontend TEST files (*.test.* / *.spec.*) live under dashboard/ but
+          # are not bundled into the shipped SPA, so a test-only frontend PR must
+          # not force a release. Exclude them from the shipping match.
           SHIPPING=$(git diff --name-only origin/main...HEAD \
-            | grep -E '^(crates/|dashboard/|install\.sh$|install\.ps1$|Cargo\.(toml|lock)$|Directory\.Build\.props$)' || true)
+            | grep -E '^(crates/|dashboard/|install\.sh$|install\.ps1$|Cargo\.(toml|lock)$|Directory\.Build\.props$)' \
+            | grep -vE '^dashboard/.*\.(test|spec)\.[jt]sx?$' || true)
           if [ -z "${SHIPPING}" ]; then
             echo "✓ PR changes no shipping artifacts (crates/frontend/installers) — Rust version bump not required."
             exit 0

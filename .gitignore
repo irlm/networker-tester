@@ -44,3 +44,7 @@ sdk/**/obj/
 *.user
 .vs/
 .idea/
+
+# Python bytecode (SDK) — never commit compiled caches
+__pycache__/
+*.py[cod]
