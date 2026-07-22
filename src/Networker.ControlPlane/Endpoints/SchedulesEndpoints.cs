@@ -82,16 +82,29 @@ public static class SchedulesEndpoints
         }).RequireAuthorization(AuthPolicies.ProjectMember);
 
         // GET /api/v2/schedules/{id} — detail (incl. next_fire_at).
-        // Mirrors Rust get via db::test_schedules::get. Flat route has no
-        // {projectId}, so it can only require authentication (same limitation the
-        // TestConfigs flat GET documents; row-level membership check is a follow-up).
-        app.MapGet("/api/v2/schedules/{id:guid}", async (Guid id, NetworkerDbContext db) =>
+        // Mirrors Rust get via db::test_schedules::get. The flat route has no
+        // {projectId} in the path, so we resolve the row first, then gate on
+        // project membership (Viewer) using the row's ProjectId — a foreign id
+        // 404s rather than leaking another project's schedule metadata. This
+        // matches the PATCH/DELETE/trigger siblings below (isolation re-audit
+        // 2026-07 P2 — the flat GET was the laggard).
+        app.MapGet("/api/v2/schedules/{id:guid}", async (
+            Guid id,
+            HttpContext ctx,
+            NetworkerDbContext db,
+            ProjectAccessChecker access,
+            CancellationToken ct) =>
         {
             var row = await db.TestSchedules
                 .AsNoTracking()
-                .FirstOrDefaultAsync(s => s.Id == id);
+                .FirstOrDefaultAsync(s => s.Id == id, ct);
 
-            return row is null ? Results.NotFound() : Results.Ok(ToDto(row));
+            if (row is null || !await access.HasRoleAsync(ctx, row.ProjectId, ProjectRole.Viewer, ct))
+            {
+                return Results.NotFound();
+            }
+
+            return Results.Ok(ToDto(row));
         }).RequireAuthorization();
 
         // PATCH /api/v2/schedules/{id} — update cron_expr / timezone / enabled.
