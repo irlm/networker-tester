@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.52] — 2026-07-22
+
+### Security
+- **Dropped the plaintext `agent.api_key` column (V045).** Agent auth has looked
+  up keys only by `api_key_hash` (lowercase-hex SHA-256, constant-time compared)
+  since V040 — the plaintext column has been write-only dead weight ever since
+  (never read: not serialized, and rotation returns the freshly-minted key
+  directly rather than re-reading the row). The secrets audit flagged the
+  lingering plaintext secret as pure liability, so V045 drops the column and its
+  unique index; minting + rotation now persist only the hash. No wire/protocol
+  change — fielded agents keep authenticating with their existing key.
+
+---
+
 ## [0.28.51] — 2026-07-22
 
 ### Security

@@ -287,20 +287,19 @@ public static partial class TesterWriteEndpoints
         var vmNamePreview = TesterCreateLogic.GenerateVmName(region);
 
         // Step 1: mint the agent api_key before VM create so it can be baked
-        // into the bootstrap (Rust provision_agent_for_tester). Both columns
-        // are written: api_key_hash is what auth looks up (V040); the
-        // plaintext column stays only until the fleet is verified on
-        // hash-only lookups.
+        // into the bootstrap (Rust provision_agent_for_tester). Only the hash is
+        // persisted — auth looks up api_key_hash (V040) and the plaintext column
+        // was dropped in V045. The plaintext key lives only in memory here, just
+        // long enough to bake into the bootstrap.
         var agentApiKey = TesterCreateLogic.GenerateAgentApiKey();
         await using (var cmd = conn.CreateCommand())
         {
             cmd.CommandText = """
-                INSERT INTO agent (agent_id, name, api_key, api_key_hash, region, provider, project_id, tester_id)
-                VALUES (@agent_id, @name, @api_key, @api_key_hash, @region, @provider, @project_id, @tester_id)
+                INSERT INTO agent (agent_id, name, api_key_hash, region, provider, project_id, tester_id)
+                VALUES (@agent_id, @name, @api_key_hash, @region, @provider, @project_id, @tester_id)
                 """;
             cmd.Parameters.AddWithValue("agent_id", Guid.NewGuid());
             cmd.Parameters.AddWithValue("name", vmNamePreview);
-            cmd.Parameters.AddWithValue("api_key", agentApiKey);
             cmd.Parameters.AddWithValue("api_key_hash", AgentApiKeys.HashHex(agentApiKey));
             cmd.Parameters.AddWithValue("region", region);
             cmd.Parameters.AddWithValue("provider", tester.Cloud);

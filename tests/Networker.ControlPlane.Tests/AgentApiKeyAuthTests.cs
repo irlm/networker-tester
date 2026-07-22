@@ -199,7 +199,6 @@ public sealed class AgentApiKeyAuthTests
         var db = host.GetRequiredService<NetworkerDbContext>();
         await db.Agents.Where(a => a.AgentId == agentId)
             .ExecuteUpdateAsync(s => s
-                .SetProperty(a => a.ApiKey, newKey)
                 .SetProperty(a => a.ApiKeyHash, AgentApiKeys.HashHex(newKey))
                 .SetProperty(a => a.ApiKeyExpiresAt, (DateTime?)null));
         db.ChangeTracker.Clear();
@@ -242,7 +241,6 @@ public sealed class AgentApiKeyAuthTests
                 arch TEXT,
                 last_heartbeat TEXT,
                 registered_at TEXT NOT NULL,
-                api_key TEXT NOT NULL,
                 api_key_hash TEXT,
                 api_key_expires_at TEXT,
                 api_key_last_used_at TEXT,
@@ -270,7 +268,6 @@ public sealed class AgentApiKeyAuthTests
             AgentId = id,
             Name = $"agent-{id:N}",
             Status = "offline",
-            ApiKey = apiKey,
             ApiKeyHash = hash,
             ApiKeyExpiresAt = expiresAt,
             ProjectId = "proj-apikey-test",
