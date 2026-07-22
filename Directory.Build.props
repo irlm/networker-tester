@@ -23,7 +23,7 @@
     (own solution, own lifecycle) are untouched.
   -->
   <PropertyGroup Condition="$(MSBuildProjectDirectory.StartsWith('$(MSBuildThisFileDirectory)src')) Or $(MSBuildProjectDirectory.StartsWith('$(MSBuildThisFileDirectory)tests'))">
-    <Version>0.28.54</Version>
+    <Version>0.28.55</Version>
     <!-- Display-only brand metadata (see docs/branding.md). -->
     <Product>LagHound</Product>
     <AssemblyVersion>$(Version).0</AssemblyVersion>

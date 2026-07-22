@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.55] — 2026-07-22
+
+### Fixed
+- **Frontend RBAC render gates.** `ProjectMembersPage`, `ShareLinksPage`, and
+  `CommandApprovalsPage` rendered their mutating controls (invite / import /
+  role-change / remove / revoke / extend / delete / approve / deny) to any role
+  that could reach the route — gating was navigation-only, so a viewer who
+  deep-linked saw fully-wired admin forms. Each mutating control is now gated on
+  `isProjectAdmin` (matching the server's ProjectAdmin authority and the
+  existing `TesterDetailDrawer`/`AlertsPage` precedent); non-admins keep the full
+  read view (role rendered as a badge). Defense-in-depth — the server API was and
+  remains the true authority. Adds `*.rbac.test.tsx` for each page.
+  (`CloudAccountsPage` was already correctly gated on `isOperator`.)
+
+---
+
 ## [0.28.54] — 2026-07-22
 
 ### Added

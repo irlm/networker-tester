@@ -53,7 +53,7 @@ function TimeUntil({ iso }: { iso: string }) {
 
 export function CommandApprovalsPage() {
   usePageTitle('Settings');
-  const { projectId } = useProject();
+  const { projectId, isProjectAdmin } = useProject();
   const addToast = useToast();
   const [tab, setTab] = useState<Tab>('pending');
   const [pending, setPending] = useState<CommandApproval[]>([]);
@@ -167,22 +167,24 @@ export function CommandApprovalsPage() {
                       </pre>
                     )}
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      onClick={() => handleApprove(a.approval_id)}
-                      disabled={deciding === a.approval_id}
-                      className="px-3 py-1.5 text-xs bg-green-600 hover:bg-green-500 text-white rounded transition-colors disabled:opacity-50"
-                    >
-                      Approve
-                    </button>
-                    <button
-                      onClick={() => handleDeny(a.approval_id)}
-                      disabled={deciding === a.approval_id}
-                      className="px-3 py-1.5 text-xs bg-red-600 hover:bg-red-500 text-white rounded transition-colors disabled:opacity-50"
-                    >
-                      Deny
-                    </button>
-                  </div>
+                  {isProjectAdmin && (
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        onClick={() => handleApprove(a.approval_id)}
+                        disabled={deciding === a.approval_id}
+                        className="px-3 py-1.5 text-xs bg-green-600 hover:bg-green-500 text-white rounded transition-colors disabled:opacity-50"
+                      >
+                        Approve
+                      </button>
+                      <button
+                        onClick={() => handleDeny(a.approval_id)}
+                        disabled={deciding === a.approval_id}
+                        className="px-3 py-1.5 text-xs bg-red-600 hover:bg-red-500 text-white rounded transition-colors disabled:opacity-50"
+                      >
+                        Deny
+                      </button>
+                    </div>
+                  )}
                 </div>
                 {denyReasonFor === a.approval_id && (
                   <div className="mt-3 flex gap-2">
