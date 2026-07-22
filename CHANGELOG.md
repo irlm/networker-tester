@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.54] — 2026-07-22
+
+### Added
+- **Test-coverage batch 1: frontend statistics tests + whole-system coverage
+  surveys/strategy.** `dashboard/src/lib/analysis.ts` — the percentile/format/
+  primary-metric math behind every run and benchmark view — was untested; it is
+  a parallel reimplementation of `metrics.rs`, so it is now tested against the
+  same known-value vectors (drift guard) plus per-protocol field-selection and
+  formatter-boundary cases. Adds the risk-weighted coverage surveys and the
+  meaningful-tests strategy under `docs/analysis/`.
+
+---
+
 ## [0.28.53] — 2026-07-22
 
 ### Security
