@@ -31,8 +31,8 @@ jobs:
     steps:
       - name: Public health (200)
         run: |
-          CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://alethedash.com/api/health)
-          echo "public /api/health (alethedash.com) → $CODE" | tee -a "$GITHUB_STEP_SUMMARY"
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://laghound.com/api/health)
+          echo "public /api/health (laghound.com) → $CODE" | tee -a "$GITHUB_STEP_SUMMARY"
           [ "$CODE" = "200" ]
 
       # Fielded agents still hold provision-time alethedash.com WS URLs; the
@@ -40,7 +40,7 @@ jobs:
       # (docs/branding.md domain bridge policy). This alerts if it dies early.
       - name: Bridge health — alethedash.com still 200
         run: |
-          CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://alethedash.com/api/health)
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://laghound.com/api/health)
           echo "bridge /api/health (alethedash.com) → $CODE" | tee -a "$GITHUB_STEP_SUMMARY"
           [ "$CODE" = "200" ]
 
