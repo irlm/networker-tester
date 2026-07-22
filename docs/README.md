@@ -18,6 +18,11 @@ points here for the detailed material.
 - [`cloud-auth.md`](cloud-auth.md): zero-credential Azure-to-AWS/GCP federation for the control plane
 - [`alerting.md`](alerting.md): threshold alert rules + notification channels (webhook/email) — concepts, API, webhook payload + signature contract
 - [`schema-ownership.md`](schema-ownership.md): the control-plane PostgreSQL schema is owned by `src/Networker.Data` (migrations, migrator, compatibility guarantees)
+- [`ops-nginx-ws-redaction.md`](ops-nginx-ws-redaction.md): nginx access-log redaction for the `/ws/*` credential query strings — re-apply procedure for a VM rebuild
+- [`reports-app-network.md`](reports-app-network.md): the Application Network Performance report — splits SDK-probe latency into application (server) vs network time
+- [`reports-perf-per-cost.md`](reports-perf-per-cost.md): the provider performance-per-cost report — probe results + tester metadata + curated price table
+- [`sdk/`](sdk/README.md): the LagHound SDK — embeddable diagnostic endpoint spec ([`sdk/contract-v1.md`](sdk/contract-v1.md) is the v1 wire contract)
+- [`dead-code-removal-strategy.md`](dead-code-removal-strategy.md): the post-decommission dead-code sweep plan (what dies with the retired crates, what is a deliberate keep)
 - [`dotnet-migration.md`](dotnet-migration.md): the Rust↔C# seam — versioned JSON contract, differential-testing architecture
 - [`phase2-cutover-runbook.md`](phase2-cutover-runbook.md): production ops runbook — leader election, health endpoints, soak checklist (§4), rollback (§5), decommission criteria (§7). Cutover is complete; §4/§5/§7 remain operative until the Rust crates are decommissioned
 - [`tls-endpoint-profile-design.md`](tls-endpoint-profile-design.md): TLS endpoint profiling feature design

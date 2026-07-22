@@ -263,6 +263,10 @@ sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
+Also apply the `/ws/*` access-log redaction so legacy query-string credentials
+never land in `access.log` — see
+[`ops-nginx-ws-redaction.md`](ops-nginx-ws-redaction.md).
+
 ---
 
 ## 4. Configure Microsoft SSO

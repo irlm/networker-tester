@@ -212,7 +212,7 @@ Key environment variables:
 | `ASPNETCORE_URLS` | no | `http://localhost:5000` | Listen address, e.g. `http://0.0.0.0:5030` |
 | `DASHBOARD_BACKGROUND_SERVICES` | no | on | Set `0` for an API-only replica (no scheduler/watchdog/reaper loops) |
 | `AGENT_DASHBOARD_URL` | no | `ws://localhost:3000/ws/agent` | Full agent WebSocket URL (also accepted: `AGENT_DASHBOARDURL`) |
-| `AGENT_API_KEY` | yes | -- | Agent authentication key, validated against `agent.api_key` (also accepted: `AGENT_APIKEY`) |
+| `AGENT_API_KEY` | yes | -- | Agent authentication key, sent in the `X-LagHound-Agent-Key` header and validated against the SHA-256 `agent.api_key_hash` (also accepted: `AGENT_APIKEY`) |
 
 See [`docs/phase2-cutover-runbook.md`](docs/phase2-cutover-runbook.md) for
 production operations and [`docs/setup-guide.md`](docs/setup-guide.md) for

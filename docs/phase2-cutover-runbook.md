@@ -48,10 +48,15 @@ the SAME schema during the transition window.
 | `DASHBOARD_PUBLIC_URL` | **Yes for provisioning** | The publicly reachable base URL (`https://laghound.com` in prod). The tester-provisioning bootstrap derives the agent WebSocket URL from it; unset, new tester agents are pointed at `ws://localhost:3000` and never come online (the control plane logs a warning). The prod deploy asserts it into `/etc/alethedash-cs.env` idempotently, replacing a stale value (e.g. the pre-cutover `https://alethedash.com`) if present. |
 | `AZ_CMD`, `AWS_CMD`, `GCLOUD_CMD` | No | Absolute-path overrides for the cloud CLIs the provisioner shells out to. Unset, the bare names resolve via the service's `PATH` — the codified unit (`deploy/alethedash-cs.service`) extends `PATH` with `/usr/local/bin` and `/snap/bin` (snap-installed `gcloud`). A CLI that fails to launch reports which binary was missing and which of these vars overrides it. |
 
-Agent side (C# `Networker.Agent`): `AGENT_DASHBOARDURL` (base URL; the agent
-connects to `{url}/ws/agent`), `AGENT_TESTERPATH`, `AGENT_NAME` — note the
-config-binder naming: `AGENT_DASHBOARDURL`, **not** `AGENT_DASHBOARD_URL`.
-Agents authenticate with their `api_key` inside the hub handshake.
+Agent side (C# `Networker.Agent`): `AGENT_DASHBOARDURL` (the full agent WS
+URL, e.g. `ws://host:5030/ws/agent` — dialed as-is, nothing is appended),
+`AGENT_TESTERPATH`, `AGENT_NAME`. The config-binder naming is
+`AGENT_DASHBOARDURL`, but the operator-facing underscore spellings
+(`AGENT_DASHBOARD_URL`, `AGENT_API_KEY`) are also accepted.
+Agents authenticate with their `api_key`, sent in the `X-LagHound-Agent-Key`
+request header since v0.28.56 (the server still accepts the legacy `?key=`
+query for fielded agents; validation is hash-only against
+`agent.api_key_hash`).
 
 ### 1.2 Program.cs wiring (one-time, before the cutover build)
 
@@ -303,23 +308,13 @@ agent registry. Native SignalR hubs then live at **`/hub/*`** for future
 clients (the C# agent, upcoming integrations), which get reconnection/groups/
 backplane for free.
 
-**Current state (honest):** the C# app maps **SignalR hubs directly at
-`/ws/dashboard`, `/ws/testers`, `/ws/agent`**. SignalR's handshake is not raw
-WS, so today:
-
-- the React frontend's `new WebSocket(...)` hooks **cannot** talk to the C#
-  `/ws/*` endpoints;
-- the Rust agent **cannot** connect to the C# agent hub; only the C#
-  (`Networker.Agent`) SignalR agent can.
-
-Before step 3.5's `/ws` flip, one of these must ship: (a) the raw-WS bridge at
-`/ws/*` (+ move SignalR to `/hub/*`) — preferred, zero client churn; or (b) the
-frontend adopts `@microsoft/signalr` and all agents are replaced with the C#
-agent — more churn, no bridge to maintain. This is open item #1 below.
-
-The event **contract** already matches (seq numbers, replay-on-`since`, dedup by
-`seq <= maxApplied`, same event JSON shapes) — the gap is framing/handshake,
-not semantics.
+**Resolved — the target state shipped** (option (a), before the cutover):
+Program.cs maps the raw-WS surface at `/ws/dashboard`, `/ws/testers`, and
+`/ws/agent` (`MapRawWebSockets()` + `MapAgentRawSocket()`), with the SignalR
+hubs moved to `/hub/*` for future SignalR-native clients. The React frontend
+and agents connect to `/ws/*` unmodified; the event contract (seq numbers,
+replay-on-`since`, dedup by `seq <= maxApplied`, same event JSON shapes)
+matches the Rust dashboard's.
 
 ---
 
@@ -346,12 +341,12 @@ Delete `crates/networker-dashboard`, `crates/networker-common`, and the
 
 ## 8. Known gaps / open items
 
-Honest list — none of these block the side-by-side deploy; items 1–2 block the
-full `/ws` flip / feature parity claims:
+Honest list — none of these block the side-by-side deploy; item 1 is now
+resolved, item 2 still qualifies full feature-parity claims:
 
-1. **Raw-WS bridge** (§6): SignalR sits on `/ws/*`; the legacy raw-WS clients
-   (React frontend, Rust agents) can't connect. Bridge at `/ws/*` + hubs to
-   `/hub/*`, or migrate the clients.
+1. **Raw-WS bridge** (§6): ~~SignalR sits on `/ws/*`~~ **RESOLVED** — the
+   raw-WS surface shipped at `/ws/*` with the SignalR hubs at `/hub/*`; this
+   is what production runs.
 2. **Email stubs**: the workspace-inactivity loop logs
    `TODO email stub` instead of sending the 90-day member warning and the
    hard-delete admin notice (no mailer wired). Suspend/delete actions DO run —

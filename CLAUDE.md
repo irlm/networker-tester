@@ -188,11 +188,13 @@ When writing documentation for CLI flags or environment variables (e.g., RUST_LO
   and the Gist sync run automatically on the main push — verify both landed.
 - Required CI checks (branch protection): `Test (ubuntu-latest)`,
   `Test (windows-latest)`, `Detect changed areas`, `Build & audit (C#)`,
-  `bats (installer unit tests)`, `shellcheck`, `cargo audit (RUSTSEC advisories)`.
-- Release = deploy-first graph: the tag triggers release.yml; build-linux +
-  build-csharp gate the GitHub release and the prod deploy to laghound.com
-  (~8-9 min, auto-rollback on failed readiness); mac/windows binaries attach
-  asynchronously. Full flow + rollback: `docs/release-flow.md`.
+  `bats (installer unit tests)`, `shellcheck`, `cargo audit (RUSTSEC advisories)`,
+  `Orchestrator lint & test`.
+- Release: the tag triggers release.yml; build-linux + build-csharp +
+  build-native all gate ONE complete GitHub release (releases are immutable —
+  no async asset attach), then deploy ships to laghound.com (~12-14 min after
+  the tag, auto-rollback on failed readiness). Full flow + rollback:
+  `docs/release-flow.md`.
 
 ## Design Context
 

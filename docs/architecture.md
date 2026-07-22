@@ -138,7 +138,9 @@ cutover (2026-07). They are:
 - still in the tree only for the decommission soak/rollback window, tracked by
   the nightly soak check against the criteria in
   [`phase2-cutover-runbook.md`](phase2-cutover-runbook.md) §7;
-- snapshotted at the `rust-legacy-*` tag and the `legacy/rust` branch.
+- snapshotted at the `rust-legacy-*` tag and the `legacy/rust` branch;
+- scheduled for deletion from `main` in the held draft PR #518, which merges
+  once the decommission criteria (runbook §7) are met after the 14-day soak.
 
 Do not add features to the retired crates.
 

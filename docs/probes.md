@@ -352,4 +352,4 @@ networker-tester \
 - optional PCAP artifact + structured packet summary
 
 **Outputs:** JSON artifact always, plus optional HAR/PCAP artifacts when supported.
-**Dashboard API:** `GET /api/url-tests`, `GET /api/url-tests/:run_id`, `GET /api/url-tests/:run_id/sections`
+**Dashboard API:** `GET /api/projects/{projectId}/url-tests`, `GET /api/projects/{projectId}/url-tests/{run_id}`, `GET /api/projects/{projectId}/url-tests/{run_id}/sections`
