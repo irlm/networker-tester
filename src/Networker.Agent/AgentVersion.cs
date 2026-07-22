@@ -26,7 +26,7 @@ public static class AgentVersion
     /// any "+buildmetadata" defensively; fall back to the 4-part assembly
     /// version truncated to major.minor.patch.
     /// </summary>
-    public static string FromAssembly(Assembly assembly)
+    private static string FromAssembly(Assembly assembly)
     {
         var info = assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?

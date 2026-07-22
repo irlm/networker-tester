@@ -86,9 +86,10 @@ builder.Services.AddNetworkerCloudLifecycleServices();
 builder.Services.AddNetworkerInactivityService();
 builder.Services.AddSsoModule();
 // Phase-3 completeness: email sender (ACS or no-op), VM-lifecycle audit recorder,
-// GitHub version-refresh cache. AddTesterLoops (legacy benchmark_config dispatch/
-// recovery loops) is intentionally NOT wired — the unified C# schema has no
-// benchmark_config table; the M3 dispatcher/redispatcher own run assignment.
+// GitHub version-refresh cache. (The legacy benchmark_config tester loops were
+// never wired and were removed in the 2026-07 dead-code sweep — the unified C#
+// schema has no benchmark_config table; the M3 dispatcher/redispatcher own run
+// assignment.)
 builder.Services.AddNetworkerEmailSender();
 builder.Services.AddVmLifecycleRecorder();
 // Alerting (wave 1): threshold rules + notification channels. The evaluator

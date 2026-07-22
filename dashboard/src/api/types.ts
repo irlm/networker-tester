@@ -219,19 +219,6 @@ export interface JobConfig {
   capture_mode?: 'none' | 'tester' | 'endpoint' | 'both';
 }
 
-/** @deprecated Use TestRun */
-export interface RunSummary {
-  run_id: string;
-  started_at: string;
-  finished_at: string | null;
-  target_url: string;
-  target_host: string;
-  modes: string;
-  total_runs: number;
-  success_count: number;
-  failure_count: number;
-}
-
 /** @deprecated Use TestRun + BenchmarkArtifact */
 export interface BenchmarkRunSummary {
   run_id: string;
@@ -256,32 +243,6 @@ export interface BenchmarkRunSummary {
   sufficiency: string;
   publication_blocker_count: number;
   warnings: string[];
-}
-
-export interface BenchmarkComparePresetFilters {
-  targetSearch: string;
-  scenario: string;
-  phaseModel: string;
-  serverRegion: string;
-  networkType: string;
-}
-
-export interface BenchmarkComparePresetInput {
-  id?: string;
-  name: string;
-  runIds: string[];
-  baselineRunId: string | null;
-  filters?: BenchmarkComparePresetFilters;
-}
-
-export interface BenchmarkComparePreset {
-  id: string;
-  name: string;
-  createdAt: string;
-  updatedAt: string;
-  runIds: string[];
-  baselineRunId: string | null;
-  filters?: BenchmarkComparePresetFilters;
 }
 
 export interface BenchmarkHostInfo {
@@ -637,19 +598,6 @@ export interface DeployEndpoint {
   http_stacks?: string[];
 }
 
-export interface CloudStatus {
-  azure: ProviderStatus;
-  aws: ProviderStatus;
-  gcp: ProviderStatus;
-  ssh: ProviderStatus;
-}
-
-export interface ProviderStatus {
-  available: boolean;
-  authenticated: boolean;
-  account: string | null;
-}
-
 export interface ModeInfo {
   id: string;
   name: string;
@@ -704,25 +652,6 @@ export interface PacketCaptureSummary {
   observed_tcp_only: boolean;
   observed_mixed_transport: boolean;
   capture_may_be_ambiguous: boolean;
-}
-
-/** @deprecated Use TestSchedule */
-export interface Schedule {
-  schedule_id: string;
-  name: string | null;
-  definition_id: string | null;
-  agent_id: string | null;
-  deployment_id: string | null;
-  cron_expr: string;
-  enabled: boolean;
-  config: JobConfig | null;
-  auto_start_vm: boolean;
-  auto_stop_vm: boolean;
-  created_by: string | null;
-  created_at: string;
-  next_run_at: string | null;
-  last_run_at: string | null;
-  benchmark_config_id: string | null;
 }
 
 export interface DashUser {
@@ -1130,10 +1059,6 @@ export interface BenchmarkLanguageProgress {
   language: string;
   testbed_id: string | null;
   modes: BenchmarkModeProgress[];
-}
-
-export interface BenchmarkProgressResponse {
-  progress: BenchmarkLanguageProgress[];
 }
 
 // ── Benchmark Creation (wizard) ─────────────────────────────────────────

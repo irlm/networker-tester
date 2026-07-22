@@ -140,14 +140,6 @@ export const testersApi = {
   getTester: (projectId: string, testerId: string) =>
     request<TesterRow>(base(projectId, `/${testerId}`)),
 
-  getRegions: (projectId: string) =>
-    request<{ regions: string[] }>(base(projectId, '/regions')).then(
-      (r) => r.regions,
-    ),
-
-  getQueue: (projectId: string, testerId: string) =>
-    request<TesterQueue>(base(projectId, `/${testerId}/queue`)),
-
   getCostEstimate: (projectId: string, testerId: string) =>
     request<CostEstimate>(base(projectId, `/${testerId}/cost_estimate`)),
 
