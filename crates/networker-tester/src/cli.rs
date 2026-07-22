@@ -1364,27 +1364,6 @@ fn config_from_test_config_value(
     Ok(cfg)
 }
 
-/// Build a serde_json::Value representing a default `Methodology` block
-/// matching spec §5.2 defaults (warmup 5, measured 30, CV 5%, IQR outlier, standard gates).
-pub fn default_methodology_json() -> serde_json::Value {
-    serde_json::json!({
-        "warmup_runs": 5,
-        "measured_runs": 30,
-        "cooldown_ms": 100,
-        "target_error_pct": 5.0,
-        "outlier_policy": { "policy": "iqr", "k": 1.5 },
-        "quality_gates": {
-            "max_cv_pct": 5.0,
-            "min_samples": 20,
-            "max_noise_level": 0.3
-        },
-        "publication_gates": {
-            "max_failure_pct": 1.0,
-            "require_all_phases": true
-        }
-    })
-}
-
 /// Returns true if the current process is running as root / Administrator.
 /// On Unix this checks `getuid() == 0`; on Windows it always returns true
 /// (elevated privilege detection requires Windows-specific APIs).

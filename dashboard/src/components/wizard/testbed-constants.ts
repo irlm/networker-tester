@@ -1,7 +1,5 @@
 // ── Shared constants for testbed-based wizards ─────────────────────────
 
-export const CLOUDS = ['Azure', 'AWS', 'GCP'] as const;
-
 export const REGIONS: Record<string, string[]> = {
   Azure: ['eastus', 'eastus2', 'westus2', 'westus3', 'centralus', 'northeurope', 'westeurope', 'southeastasia', 'japaneast', 'australiaeast'],
   AWS: ['us-east-1', 'us-east-2', 'us-west-2', 'eu-west-1', 'eu-central-1', 'ap-southeast-1', 'ap-northeast-1', 'ap-southeast-2'],
@@ -352,13 +350,3 @@ export const RUNTIME_TEMPLATES: RuntimeTemplate[] = [
     methodology: 'standard',
   },
 ];
-
-// ── Deploy regions (for proxy target creation) ─────────────────────────
-
-export const DEPLOY_REGIONS: Record<string, string[]> = {
-  azure: ['eastus', 'westus2', 'westeurope', 'northeurope', 'southeastasia'],
-  aws: ['us-east-1', 'us-west-2', 'eu-west-1', 'eu-central-1', 'ap-southeast-1'],
-  gcp: ['us-central1', 'us-east1', 'europe-west1', 'europe-west4', 'asia-southeast1'],
-};
-
-export const HTTP_STACKS = ['nginx', 'iis'] as const;

@@ -52,14 +52,6 @@ impl DbLayer {
             context,
         }
     }
-
-    /// Close this layer's sender slot so no more entries are forwarded.
-    ///
-    /// Called by [`LogGuard::shutdown`] before dropping its own `BatchHandle`
-    /// sender copy, guaranteeing the channel closes and the writer exits.
-    pub fn close(&self) {
-        let _ = self.tx.lock().unwrap().take();
-    }
 }
 
 // ── FieldVisitor ──────────────────────────────────────────────────────────────

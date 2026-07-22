@@ -1,6 +1,6 @@
-import type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, LogsResponse, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo, PerfLogInput, PerfLogRow, PerfLogStats, ImportResult, SendInviteResult, TestConfig, TestConfigListItem, TestConfigCreate, TestRun, TestSchedule, ComparisonReport, ComparisonGroup, ComparisonGroupCreate, AlertChannel, AlertChannelCreate, AlertRule, AlertRuleCreate, AlertEvent } from './types';
+import type { Agent, Job, JobConfig, Attempt, Deployment, ModeGroup, PacketCaptureSummary, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, LogsResponse, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo, PerfLogRow, PerfLogStats, ImportResult, SendInviteResult, TestConfig, TestConfigListItem, TestConfigCreate, TestRun, TestSchedule, ComparisonReport, ComparisonGroup, ComparisonGroupCreate, AlertChannel, AlertChannelCreate, AlertRule, AlertRuleCreate, AlertEvent } from './types';
 
-export type { Agent, Job, JobConfig, RunSummary, Attempt, Deployment, CloudStatus, ModeGroup, PacketCaptureSummary, Schedule, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, LogsResponse, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, BenchmarkComparePreset, BenchmarkComparePresetInput, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo, ImportResult, SendInviteResult, TestConfig, TestConfigListItem, TestConfigCreate, TestRun, TestSchedule, ComparisonReport, ComparisonGroup, ComparisonGroupCreate, AlertChannel, AlertChannelCreate, AlertRule, AlertRuleCreate, AlertEvent };
+export type { Agent, Job, JobConfig, Attempt, Deployment, ModeGroup, PacketCaptureSummary, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, LogsResponse, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo, ImportResult, SendInviteResult, TestConfig, TestConfigListItem, TestConfigCreate, TestRun, TestSchedule, ComparisonReport, ComparisonGroup, ComparisonGroupCreate, AlertChannel, AlertChannelCreate, AlertRule, AlertRuleCreate, AlertEvent };
 export type { AlertMetric, AlertComparator, AlertChannelKind, AlertChannelConfig } from './types';
 export type { SdkEndpoint, SdkEndpointCreate, AppNetworkReport, AppNetworkGroup, AppNetworkFormulas, AppNetworkVerdict } from './types';
 export type { LiveAttempt, EndpointRef, EndpointKind, Workload, Methodology, RunStatus, CaptureMode, OutlierPolicy, QualityGates, PublicationGates, ComparisonCell } from './types';
@@ -321,16 +321,6 @@ export const api = {
   checkEmail: (_email: string) =>
     Promise.resolve<{ provider: string | null }>({ provider: null }),
 
-  exchangeCode: (code: string) =>
-    fetch(`${API_BASE}/auth/sso/exchange`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code }),
-    }).then(async r => {
-      if (!r.ok) throw new Error(await r.text());
-      return r.json() as Promise<{ token: string; email: string; role: string; status: string }>;
-    }),
-
   // ── Pending project invitations ──────────────────────────────────────
   getPendingProjects: () =>
     request<{ pending: PendingProject[] }>('/me/pending-projects'),
@@ -455,40 +445,6 @@ export const api = {
       Array.isArray(r) ? r : (r?.agents ?? [])
     ),
 
-  createAgent: (projectId: string, params: {
-    name: string;
-    location: 'ssh';
-    region?: string;
-    provider?: string;
-    ssh_host?: string;
-    ssh_user?: string;
-    ssh_port?: number;
-  }) =>
-    request<{ agent_id: string; api_key: string; name: string; status: string }>(projectUrl(projectId, 'agents'), {
-      method: 'POST',
-      body: JSON.stringify(params),
-    }),
-
-  deleteAgent: (projectId: string, agentId: string) =>
-    request<{ deleted: boolean }>(projectUrl(projectId, `agents/${agentId}`), { method: 'DELETE' }),
-
-  deployTesterVm: (projectId: string, params: { name: string; provider: string; region: string; vm_size: string }) =>
-    request<{ agent_id: string; status: string }>(projectUrl(projectId, 'agents/deploy-vm'), {
-      method: 'POST',
-      body: JSON.stringify(params),
-    }),
-
-  getJobs: (projectId: string, params?: { status?: string; agent_id?: string; created_by?: string; limit?: number; offset?: number }) => {
-    const search = new URLSearchParams();
-    if (params?.status) search.set('status', params.status);
-    if (params?.agent_id) search.set('agent_id', params.agent_id);
-    if (params?.created_by) search.set('created_by', params.created_by);
-    if (params?.limit) search.set('limit', String(params.limit));
-    if (params?.offset) search.set('offset', String(params.offset));
-    const qs = search.toString();
-    return request<Job[]>(projectUrl(projectId, `jobs${qs ? `?${qs}` : ''}`));
-  },
-
   getJob: (projectId: string, jobId: string) => request<Job>(projectUrl(projectId, `jobs/${jobId}`)),
 
   createJob: (projectId: string, config: JobConfig, agentId?: string) =>
@@ -499,16 +455,6 @@ export const api = {
 
   cancelJob: (projectId: string, jobId: string) =>
     request<{ status: string }>(projectUrl(projectId, `jobs/${jobId}/cancel`), { method: 'POST' }),
-
-  getRuns: (projectId: string, params?: { target_host?: string; mode?: string; limit?: number; offset?: number }) => {
-    const search = new URLSearchParams();
-    if (params?.target_host) search.set('target_host', params.target_host);
-    if (params?.mode) search.set('mode', params.mode);
-    if (params?.limit) search.set('limit', String(params.limit));
-    if (params?.offset) search.set('offset', String(params.offset));
-    const qs = search.toString();
-    return request<RunSummary[]>(projectUrl(projectId, `runs${qs ? `?${qs}` : ''}`));
-  },
 
   getRun: (projectId: string, runId: string) =>
     request<{
@@ -537,38 +483,6 @@ export const api = {
 
   getTlsProfile: (projectId: string, runId: string) =>
     request<TlsProfileDetail>(projectUrl(projectId, `tls-profiles/${runId}`)),
-
-  getBenchmarks: (projectId: string, params?: { target_host?: string; limit?: number; offset?: number }) => {
-    const search = new URLSearchParams();
-    if (params?.target_host) search.set('target_host', params.target_host);
-    if (params?.limit) search.set('limit', String(params.limit));
-    if (params?.offset) search.set('offset', String(params.offset));
-    const qs = search.toString();
-    return request<BenchmarkRunSummary[]>(projectUrl(projectId, `benchmarks${qs ? `?${qs}` : ''}`));
-  },
-
-  getBenchmark: (projectId: string, runId: string) =>
-    request<BenchmarkArtifact>(projectUrl(projectId, `benchmarks/${runId}`)),
-
-  compareBenchmarks: (projectId: string, runIds: string[], baselineRunId?: string) =>
-    request<BenchmarkComparisonReport>(projectUrl(projectId, 'benchmarks/compare'), {
-      method: 'POST',
-      body: JSON.stringify({ run_ids: runIds, baseline_run_id: baselineRunId }),
-    }),
-
-  getBenchmarkComparePresets: (projectId: string) =>
-    request<BenchmarkComparePreset[]>(projectUrl(projectId, 'benchmarks/presets')),
-
-  saveBenchmarkComparePreset: (projectId: string, preset: BenchmarkComparePresetInput) =>
-    request<BenchmarkComparePreset[]>(projectUrl(projectId, 'benchmarks/presets'), {
-      method: 'POST',
-      body: JSON.stringify(preset),
-    }),
-
-  deleteBenchmarkComparePreset: (projectId: string, presetId: string) =>
-    request<BenchmarkComparePreset[]>(projectUrl(projectId, `benchmarks/presets/${presetId}`), {
-      method: 'DELETE',
-    }),
 
   // Deployments
   getDeployments: (projectId: string, params?: { limit?: number; offset?: number }) => {
@@ -603,18 +517,12 @@ export const api = {
   updateEndpoint: (projectId: string, deploymentId: string) =>
     request<{ status: string }>(projectUrl(projectId, `deployments/${deploymentId}/update`), { method: 'POST' }),
 
-  // Cloud status
-  getCloudStatus: (projectId: string) => request<CloudStatus>(projectUrl(projectId, 'cloud/status')),
-
   // Modes (NOT project-scoped). language_capabilities is optional so the UI
   // degrades gracefully against control planes that predate the matrix.
   getModes: () =>
     request<{ groups: ModeGroup[]; language_capabilities?: import('./types').LanguageCapability[] }>('/modes'),
 
   // Updates (NOT project-scoped)
-  updateLocalTester: () =>
-    request<{ status: string; update_id: string }>('/update/tester', { method: 'POST' }),
-
   updateDashboard: () =>
     request<{ status: string; update_id: string }>('/update/dashboard', { method: 'POST' }),
 
@@ -635,56 +543,6 @@ export const api = {
       }[];
       errors: string[];
     }>(projectUrl(projectId, 'inventory')),
-
-  // Schedules
-  getSchedules: (projectId: string, params?: { agent_id?: string; enabled?: boolean }) => {
-    const search = new URLSearchParams();
-    if (params?.agent_id) search.set('agent_id', params.agent_id);
-    if (params?.enabled !== undefined) search.set('enabled', String(params.enabled));
-    const qs = search.toString();
-    return request<Schedule[]>(projectUrl(projectId, `schedules${qs ? `?${qs}` : ''}`));
-  },
-
-  getSchedule: (projectId: string, scheduleId: string) =>
-    request<{ schedule: Schedule; recent_jobs: Job[] }>(projectUrl(projectId, `schedules/${scheduleId}`)),
-
-  createSchedule: (projectId: string, params: {
-    name: string;
-    cron_expr: string;
-    config: JobConfig | Record<string, never>;
-    agent_id?: string;
-    deployment_id?: string;
-    auto_start_vm?: boolean;
-    auto_stop_vm?: boolean;
-    benchmark_config_id?: string;
-  }) =>
-    request<{ schedule_id: string; next_run_at: string }>(projectUrl(projectId, 'schedules'), {
-      method: 'POST',
-      body: JSON.stringify(params),
-    }),
-
-  updateSchedule: (projectId: string, scheduleId: string, params: {
-    name: string;
-    cron_expr: string;
-    config: JobConfig;
-    agent_id?: string;
-    deployment_id?: string;
-    auto_start_vm?: boolean;
-    auto_stop_vm?: boolean;
-  }) =>
-    request<{ status: string; next_run_at: string }>(projectUrl(projectId, `schedules/${scheduleId}`), {
-      method: 'PUT',
-      body: JSON.stringify(params),
-    }),
-
-  deleteSchedule: (projectId: string, scheduleId: string) =>
-    request<{ deleted: boolean }>(projectUrl(projectId, `schedules/${scheduleId}`), { method: 'DELETE' }),
-
-  toggleSchedule: (projectId: string, scheduleId: string) =>
-    request<{ enabled: boolean }>(projectUrl(projectId, `schedules/${scheduleId}/toggle`), { method: 'POST' }),
-
-  triggerSchedule: (projectId: string, scheduleId: string) =>
-    request<{ job_id: string; status: string }>(projectUrl(projectId, `schedules/${scheduleId}/trigger`), { method: 'POST' }),
 
   // Users (admin-only, NOT project-scoped)
   getUsers: () =>
@@ -798,19 +656,6 @@ export const api = {
       if (!r.ok) throw new Error(await r.text());
       return r.json();
     }),
-
-  // Visibility Rules (project-scoped, admin only)
-  getVisibilityRules: (projectId: string) =>
-    request<Record<string, unknown>[]>(projectUrl(projectId, 'visibility-rules')),
-
-  addVisibilityRule: (projectId: string, params: { user_id?: string; resource_type: string; resource_id: string }) =>
-    request<{ rule_id: string }>(projectUrl(projectId, 'visibility-rules'), {
-      method: 'POST',
-      body: JSON.stringify(params),
-    }),
-
-  removeVisibilityRule: (projectId: string, ruleId: string) =>
-    request<void>(projectUrl(projectId, `visibility-rules/${ruleId}`), { method: 'DELETE' }),
 
   // Command Approvals (project-scoped, admin only)
   getPendingApprovals: (projectId: string) =>
@@ -932,31 +777,8 @@ export const api = {
     request<{ languages: string[] }>(projectUrl(projectId, `benchmark-catalog/${vmId}/detect`), { method: 'POST' }),
 
   // ── Benchmark Configs (wizard) ────────────────────────────────────────
-  listBenchmarkConfigs: (projectId: string) =>
-    request<BenchmarkConfigSummary[]>(projectUrl(projectId, 'benchmark-configs')),
-
-  getBenchmarkConfig: (projectId: string, configId: string) =>
-    request<BenchmarkConfigSummary>(projectUrl(projectId, `benchmark-configs/${configId}`)),
-
-  createBenchmarkConfig: (projectId: string, payload: { name: string; template: string | null; testbeds: import('./types').BenchmarkTestbedConfig[]; languages: string[]; methodology: Record<string, unknown>; benchmark_type?: string; tester_id?: string; auto_teardown?: boolean }) =>
-    request<{ config_id: string }>(projectUrl(projectId, 'benchmark-configs'), {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
-
-  launchBenchmarkConfig: (projectId: string, configId: string) =>
-    request<{ status: string; error?: string; message?: string }>(projectUrl(projectId, `benchmark-configs/${configId}/launch`), { method: 'POST' }),
-
-  cancelBenchmarkConfig: (projectId: string, configId: string) =>
-    request<{ status: string }>(projectUrl(projectId, `benchmark-configs/${configId}/cancel`), { method: 'POST' }),
-
   getBenchmarkConfigResults: (projectId: string, configId: string) =>
     request<import('./types').BenchmarkConfigResults>(projectUrl(projectId, `benchmark-configs/${configId}/results`)),
-
-  getBenchmarkProgress: (projectId: string, configId: string) =>
-    request<{ progress: import('./types').BenchmarkLanguageProgress[] }>(
-      projectUrl(projectId, `benchmark-configs/${configId}/progress`)
-    ),
 
   getGroupedLeaderboard: async (group?: string): Promise<import('./types').GroupedLeaderboard> => {
     const params = group ? `?group=${encodeURIComponent(group)}` : '';
@@ -975,11 +797,6 @@ export const api = {
       projectUrl(projectId, `benchmark-regressions${limit ? `?limit=${limit}` : ''}`)
     ),
 
-  getBenchmarkConfigRegressions: (projectId: string, configId: string) =>
-    request<import('./types').BenchmarkRegression[]>(
-      projectUrl(projectId, `benchmark-configs/${configId}/regressions`)
-    ),
-
   // ── Benchmark Tokens (platform admin only, NOT project-scoped) ──────
   listBenchTokens: () =>
     request<BenchTokenInfo[]>('/bench-tokens'),
@@ -991,12 +808,6 @@ export const api = {
     request<{ deleted: number }>('/bench-tokens', { method: 'DELETE' }),
 
   // ── Performance Logs ──────────────────────────────────────────────
-  ingestPerfLogs: (sessionId: string, entries: PerfLogInput[]) =>
-    request<{ inserted: number }>('/perf-log', {
-      method: 'POST',
-      body: JSON.stringify({ session_id: sessionId, entries }),
-    }),
-
   getPerfLogs: (params?: { kind?: string; path?: string; user_id?: string; limit?: number; offset?: number }) => {
     const search = new URLSearchParams();
     if (params?.kind) search.set('kind', params.kind);

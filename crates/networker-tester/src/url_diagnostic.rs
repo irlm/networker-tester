@@ -229,12 +229,6 @@ impl UrlDiagnosticOrchestrator {
         run.capture_errors.push(reason.into());
     }
 
-    pub fn mark_partial(&self, run: &mut UrlTestRun, note: impl Into<String>) {
-        run.status = UrlDiagnosticStatus::Partial;
-        run.completed_at = Some(Utc::now());
-        run.capture_errors.push(note.into());
-    }
-
     pub fn mark_completed(&self, run: &mut UrlTestRun) {
         run.status = if run.capture_errors.is_empty() {
             UrlDiagnosticStatus::Completed

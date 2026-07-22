@@ -1,6 +1,5 @@
 use serde::Serialize;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::Arc;
 
 /// Thresholds used by [`MetricsSnapshot::status`].
 const DEGRADED_DROP_RATIO: f64 = 0.01; // 1 % drop rate → degraded
@@ -93,9 +92,6 @@ impl MetricsSnapshot {
         "healthy"
     }
 }
-
-/// Convenience wrapper for sharing metrics across tasks.
-pub type SharedMetrics = Arc<LogPipelineMetrics>;
 
 #[cfg(test)]
 mod tests {
@@ -225,15 +221,5 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains("\"entries_written\":100"));
         assert!(json.contains("\"entries_dropped\":2"));
-    }
-
-    // ── SharedMetrics alias ───────────────────────────────────────────────────
-
-    #[test]
-    fn shared_metrics_arc_clone() {
-        let m: SharedMetrics = Arc::new(LogPipelineMetrics::default());
-        let m2 = Arc::clone(&m);
-        m.entries_written.fetch_add(1, Ordering::Relaxed);
-        assert_eq!(m2.entries_written.load(Ordering::Relaxed), 1);
     }
 }

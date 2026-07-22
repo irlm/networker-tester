@@ -1,7 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { usePhaseSubscription } from './usePhaseSubscription';
 import { useTesterSubscription } from './useTesterSubscription';
 
 /**
@@ -138,92 +137,5 @@ describe('useTesterSubscription', () => {
   it('is a no-op when projectId or testerIds is empty', () => {
     renderHook(() => useTesterSubscription('', []));
     expect(sockets.length).toBe(0);
-  });
-});
-
-describe('usePhaseSubscription', () => {
-  it('filters phase_update by entity_type + entity_id', async () => {
-    const { result } = renderHook(() =>
-      usePhaseSubscription('proj-1', 't-a', 'benchmark', 'cfg-1'),
-    );
-
-    await waitFor(() => expect(sockets.length).toBe(1));
-    const ws = sockets[0];
-    act(() => ws.open());
-
-    expect(JSON.parse(ws.sent[0])).toEqual({
-      type: 'subscribe_tester_queue',
-      project_id: 'proj-1',
-      tester_ids: ['t-a'],
-    });
-
-    // Different entity_id → ignored
-    act(() => {
-      ws.emit({
-        type: 'phase_update',
-        project_id: 'proj-1',
-        entity_type: 'benchmark',
-        entity_id: 'cfg-other',
-        seq: 1,
-        phase: 'running',
-        applied_stages: ['queued', 'starting', 'deploy', 'running'],
-      });
-    });
-    expect(result.current).toBeNull();
-
-    // Matching entity → applied
-    act(() => {
-      ws.emit({
-        type: 'phase_update',
-        project_id: 'proj-1',
-        entity_type: 'benchmark',
-        entity_id: 'cfg-1',
-        seq: 2,
-        phase: 'running',
-        applied_stages: ['queued', 'starting', 'deploy', 'running'],
-      });
-    });
-    expect(result.current).toEqual({
-      phase: 'running',
-      outcome: null,
-      message: null,
-      appliedStages: ['queued', 'starting', 'deploy', 'running'],
-      seq: 2,
-    });
-
-    // Older seq dropped
-    act(() => {
-      ws.emit({
-        type: 'phase_update',
-        project_id: 'proj-1',
-        entity_type: 'benchmark',
-        entity_id: 'cfg-1',
-        seq: 1,
-        phase: 'queued',
-        applied_stages: ['queued'],
-      });
-    });
-    expect(result.current?.seq).toBe(2);
-
-    // Terminal phase with outcome
-    act(() => {
-      ws.emit({
-        type: 'phase_update',
-        project_id: 'proj-1',
-        entity_type: 'benchmark',
-        entity_id: 'cfg-1',
-        seq: 3,
-        phase: 'done',
-        outcome: 'success',
-        message: 'all good',
-        applied_stages: ['queued', 'starting', 'deploy', 'running', 'collect', 'done'],
-      });
-    });
-    expect(result.current).toMatchObject({
-      phase: 'done',
-      outcome: 'success',
-      message: 'all good',
-      seq: 3,
-    });
   });
 });

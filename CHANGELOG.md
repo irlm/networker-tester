@@ -11,6 +11,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.57] — 2026-07-22
+
+### Removed
+- **Dead-code sweep (HIGH-confidence batch).** Three surveys
+  (`docs/analysis/deadcode-{rust,csharp,frontend}-2026-07.md`) + per-candidate
+  re-verification per `docs/dead-code-removal-strategy.md`:
+  - **Frontend (−579 lines + 57.7 KB):** 32 dead `api` client methods (legacy
+    benchmark-config/schedule/agents/visibility families superseded by the
+    v0.28 unification + 4 superseded singletons), 8 dead types, the unused
+    `usePhaseSubscription` hook, dead assets (`hero.png`, scaffold svgs), 3
+    dead wizard constants, 2 dead testers-api methods, a stray committed
+    runtime artifact. Verified: `tsc --noEmit` clean, 190 vitest pass, eslint
+    clean.
+  - **Rust (−55 lines):** `default_methodology_json`, `mark_partial`,
+    `DbLayer::close` (stale doc-comment claimed a caller; none exists),
+    `SharedMetrics` alias. Verified: `clippy -D warnings` clean, 930 lib tests
+    pass.
+  - **C# (−220 lines):** the never-wired legacy `benchmark_config` tester loops
+    (`TesterDispatcherService`, `TesterRecoveryService`, `AddTesterLoops`) —
+    they queried tables the unified schema doesn't have; demoted
+    `AgentVersion.FromAssembly` to private.
+  - **Parked, deliberately NOT deleted:** wire-contract types
+    (`BenchmarkComparison` — serialized field the frontend declares),
+    dead-after-decommission items (`LogStats` et al. — still referenced by the
+    retired crates until #518), SignalR `/hub/*` transport +
+    `TesterQueueBroadcaster` (owner decisions — the latter may be a feature
+    gap: it is the only producer of `tester_queue_update`), feature-policy code
+    (`db-postgres` sink, `native` runner), and "plausibly next-sprint" client
+    singletons.
+
+---
+
 ## [0.28.56] — 2026-07-22
 
 ### Security
