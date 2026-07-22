@@ -28,6 +28,11 @@ public sealed class RawWebSocketClient
     private const int WsChannelCapacity = 4096;
     private const int ReceiveBufferBytes = 64 * 1024;
 
+    /// <summary>Request header carrying the agent api-key — must match the control
+    /// plane's <c>AgentSocketEndpoint.ApiKeyHeader</c>. Hyphenated so nginx (which
+    /// drops underscore headers by default) forwards it to the upstream.</summary>
+    public const string ApiKeyHeader = "X-LagHound-Agent-Key";
+
     private readonly ILogger _logger;
 
     public RawWebSocketClient(ILogger logger) => _logger = logger;
@@ -47,7 +52,8 @@ public sealed class RawWebSocketClient
     /// the socket closes (normally or on error) — the caller reconnects.
     /// </summary>
     /// <param name="dashboardUrl">Base WS URL, e.g. <c>ws://host:3000/ws/agent</c>.</param>
-    /// <param name="apiKey">Agent api-key appended as <c>?key=</c>.</param>
+    /// <param name="apiKey">Agent api-key, sent in the <see cref="ApiKeyHeader"/>
+    /// request header so it never appears in the URL / proxy access log.</param>
     /// <param name="onControl">Dispatcher for each decoded inbound frame. Given
     /// the message + the outbound sink so handlers can stream replies.</param>
     /// <param name="onConnected">Invoked once the socket is open + the pump is
@@ -59,10 +65,14 @@ public sealed class RawWebSocketClient
         Func<IFrameSink, CancellationToken, Task>? onConnected,
         CancellationToken cancellationToken)
     {
-        var uri = BuildUri(dashboardUrl, apiKey);
+        // The api-key travels in a header, not the URL query, so it never lands
+        // in the proxy access log. The control plane accepts the header and (until
+        // the Rust-agent decommission) still falls back to the legacy ?key=.
+        var uri = new Uri(dashboardUrl);
         _logger.LogInformation("Connecting to {DashboardUrl}", dashboardUrl);
 
         using var socket = new ClientWebSocket();
+        socket.Options.SetRequestHeader(ApiKeyHeader, apiKey);
         await socket.ConnectAsync(uri, cancellationToken).ConfigureAwait(false);
         _logger.LogInformation("Connected to dashboard (raw WS v2)");
 
@@ -195,6 +205,10 @@ public sealed class RawWebSocketClient
         }
     }
 
+    // LEGACY transport (no longer used by RunOnceAsync — the key now travels in
+    // the ApiKeyHeader). Retained only as the reference for the ?key= form the
+    // control plane still accepts as a fallback for fielded pre-header agents,
+    // pinned by ConfigAndArgsTests until the Rust-agent decommission.
     internal static Uri BuildUri(string dashboardUrl, string apiKey)
     {
         // Rust: format!("{}?key={}", cfg.dashboard_url, cfg.api_key) — a naive

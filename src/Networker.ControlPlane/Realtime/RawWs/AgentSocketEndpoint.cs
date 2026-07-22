@@ -37,8 +37,17 @@ public static class AgentSocketEndpoint
     /// <summary>Route the fielded Rust agents dial (see <c>ws_client.rs</c>).</summary>
     public const string Path = "/ws/agent";
 
-    /// <summary>Query-string key carrying the agent api-key (Rust: <c>?key=</c>).</summary>
+    /// <summary>Query-string key carrying the agent api-key (Rust: <c>?key=</c>).
+    /// Legacy transport — kept for fielded agents that predate the header; the
+    /// secret lands in the URL (nginx access log) so it is redacted at the proxy
+    /// and removed entirely at the Rust-agent decommission.</summary>
     public const string ApiKeyQueryKey = "key";
+
+    /// <summary>Preferred transport: the agent api-key in a request header, so it
+    /// never appears in the URL / access log. Hyphenated (nginx drops
+    /// underscore headers by default). New agents send this; the server accepts
+    /// either.</summary>
+    public const string ApiKeyHeader = "X-LagHound-Agent-Key";
 
     /// <summary>
     /// Server-side staleness guard: no inbound data frame for this long →
@@ -68,7 +77,7 @@ public static class AgentSocketEndpoint
         // ── Authenticate BEFORE the upgrade (Rust returns 401 from the
         //    upgrade handler). The DI scope is per-step: the scoped DbContext
         //    must never span the socket's lifetime.
-        var apiKey = context.Request.Query[ApiKeyQueryKey].ToString();
+        var apiKey = ResolveAgentApiKey(context);
         var scopeFactory = context.RequestServices.GetRequiredService<IServiceScopeFactory>();
         var limiter = context.RequestServices.GetRequiredService<AgentAuthLimiter>();
         var remoteIp = ResolveClientIp(context);
@@ -191,6 +200,24 @@ public static class AgentSocketEndpoint
     /// left-most hop of <c>X-Forwarded-For</c>, and only fall back to the
     /// socket peer when neither header is present (direct/local connection).
     /// </summary>
+    /// <summary>
+    /// Resolve the agent api-key, preferring the <see cref="ApiKeyHeader"/>
+    /// request header (keeps the secret out of the URL / access log) and falling
+    /// back to the legacy <c>?key=</c> query for fielded agents that predate it.
+    /// The query fallback is removed at the Rust-agent decommission, after which
+    /// the header is the only accepted transport.
+    /// </summary>
+    internal static string ResolveAgentApiKey(HttpContext context)
+    {
+        var header = context.Request.Headers[ApiKeyHeader].ToString();
+        if (!string.IsNullOrEmpty(header))
+        {
+            return header.Trim();
+        }
+
+        return context.Request.Query[ApiKeyQueryKey].ToString();
+    }
+
     internal static string? ResolveClientIp(HttpContext context)
     {
         var realIp = context.Request.Headers["X-Real-IP"].ToString();

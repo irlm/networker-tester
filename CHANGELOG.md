@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.56] — 2026-07-22
+
+### Security
+- **Agent WS api-key moved out of the URL into a request header.** The agent
+  authenticated at `/ws/agent?key=<api_key>`, so the credential landed in the
+  nginx access log on every connect (mitigated by log redaction; this
+  eliminates it). The C# agent now sends the key in the `X-LagHound-Agent-Key`
+  header (hyphenated so nginx forwards it) and connects to the bare `/ws/agent`
+  URL; the control plane reads the header first and **falls back to the legacy
+  `?key=` query** for fielded agents that predate it (removed at the Rust-agent
+  decommission). Backward-compatible — no fielded agent is affected. Browser/
+  tester hubs keep `?access_token=`/`?token=` (browsers cannot set WebSocket
+  request headers — the nginx `/ws/` redaction remains their mitigation).
+
+---
+
 ## [0.28.55] — 2026-07-22
 
 ### Fixed
