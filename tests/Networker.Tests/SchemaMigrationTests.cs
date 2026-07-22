@@ -581,7 +581,7 @@ public sealed class MigrationScriptFreezeTests
         ["V042_perf_log_main_db.sql"] = "dd222a9fcb6c38d0451148df6c05761439af5980bdf4849c0376330d773e4114",
         ["V043_sdk_endpoint_token.sql"] = "4ab8a521c29976867e78ba5fca479420353abca143571b0493506382e8524a1e",
         ["V044_agent_api_key_lifecycle.sql"] = "02ed690dac68e6aca9790d6dbdcd0d2ac38bf1d7412ec7d00a9b430a9b3ede81",
-        ["V045_drop_agent_api_key_plaintext.sql"] = "8ae346ab2faab1bc83614bf2213bf185a56a5d54e4518798f6d8853537834d3f",
+        ["V045_drop_agent_api_key_plaintext.sql"] = "4c1e010d1195ca489d73a331c0659e77c31ffb35f721fb99f285189ab006066b",
     };
 
     [Fact]

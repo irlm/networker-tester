@@ -9,10 +9,11 @@
 -- docs/analysis/secrets-audit-2026-07.md) flagged the lingering plaintext column
 -- as pure liability, so this removes it.
 --
--- Order matters: the UNIQUE index agent_api_key_key is defined ON the plaintext
--- column, so it must be dropped first (api_key_hash keeps its own unique index
--- agent_api_key_hash_key). Idempotent (IF EXISTS) so re-running the chain no-ops
--- and a database already lacking the column/index is unaffected.
-DROP INDEX IF EXISTS agent_api_key_key;
-
+-- The uniqueness of api_key was declared as a UNIQUE CONSTRAINT (agent_api_key_key),
+-- not a standalone index, so an explicit DROP INDEX would fail with 2BP01.
+-- Dropping the column is enough: Postgres automatically drops the constraint (and
+-- its backing index) because it depends solely on this column. api_key_hash keeps
+-- its own unique index (agent_api_key_hash_key). Idempotent (IF EXISTS) so
+-- re-running the chain no-ops and a database already lacking the column is
+-- unaffected.
 ALTER TABLE agent DROP COLUMN IF EXISTS api_key;
