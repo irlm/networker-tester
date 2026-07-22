@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
+using Networker.ControlPlane.Realtime.RawWs;
 using Npgsql;
 
 namespace Networker.ControlPlane.Auth;
@@ -57,6 +58,9 @@ public static class AuthExtensions
 
         services.AddHttpContextAccessor();
         services.AddMemoryCache();
+        // Per-IP brute-force throttle for POST /api/auth/login (separate bucket
+        // from the agent-key limiter).
+        services.AddSingleton<LoginRateLimiter>();
         services.AddScoped<AuthUserAccessor>();
         // Row-level project authorization for flat (non-{projectId}) routes;
         // also the shared engine behind ProjectRoleHandler.
@@ -127,17 +131,30 @@ public static class AuthExtensions
             LoginRequest req,
             AuthRepository repo,
             JwtTokenService tokens,
+            LoginRateLimiter limiter,
+            HttpContext ctx,
             CancellationToken ct) =>
         {
-            var candidate = await repo.FindByEmailForLoginAsync(req.Email, ct);
-            if (candidate is null)
+            // Per-IP brute-force throttle: short-circuit BEFORE the bcrypt verify
+            // so an attacker can't cheaply enumerate passwords, and so a flood
+            // doesn't pin a CPU on hashing. Real client IP resolved the same way
+            // the agent limiter does (nginx X-Real-IP / left-most X-Forwarded-For).
+            var ip = AgentSocketEndpoint.ResolveClientIp(ctx);
+            if (limiter.IsBlocked(ip))
             {
-                return Results.Unauthorized();
+                return Results.Json(
+                    new { error = "too many failed login attempts — try again later" },
+                    statusCode: StatusCodes.Status429TooManyRequests);
             }
 
-            // Rust: only 'active' local accounts with a password may log in.
-            if (candidate.Status != "active" || candidate.SsoOnly || candidate.PasswordHash is null)
+            var candidate = await repo.FindByEmailForLoginAsync(req.Email, ct);
+            // Rust: only 'active' local accounts with a password may log in. A
+            // missing candidate and a disabled/SSO-only/passwordless one are the
+            // same opaque 401 (no account enumeration) and both count as a failure.
+            if (candidate is null ||
+                candidate.Status != "active" || candidate.SsoOnly || candidate.PasswordHash is null)
             {
+                limiter.RecordFailure(ip);
                 return Results.Unauthorized();
             }
 
@@ -154,9 +171,12 @@ public static class AuthExtensions
 
             if (!valid)
             {
+                limiter.RecordFailure(ip);
                 return Results.Unauthorized();
             }
 
+            // Legitimate login clears the IP's failure history.
+            limiter.RecordSuccess(ip);
             await repo.TouchLastLoginAsync(candidate.UserId, ct);
 
             var token = tokens.CreateToken(

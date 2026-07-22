@@ -11,6 +11,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.51] — 2026-07-22
+
+### Security
+- **Security audit follow-ups (control plane).** Three read-only audits
+  (project isolation, secret/token protection, web-security best practice)
+  found no P0 and confirmed strict per-project isolation and sound
+  AES-256-GCM secret handling; this ships the clean P1/P2 hardening:
+  - **Per-IP brute-force throttle on `POST /api/auth/login`** — the agent-key
+    auth path was already limited, but the human login was an unbounded
+    bcrypt-verify oracle. A separate 15-minute per-IP bucket short-circuits
+    before the hash (`DASHBOARD_LOGIN_MAX_FAILURES`, default 10).
+  - **Baseline response-hardening headers** on every control-plane response:
+    `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+    `Referrer-Policy: no-referrer`, a deny-all `Content-Security-Policy`, and
+    `Strict-Transport-Security` on HTTPS requests.
+  - **`GET /api/v2/schedules/{id}` now enforces project membership** (Viewer)
+    on the row's project — the flat route previously only required
+    authentication, letting any authenticated user read another project's
+    schedule metadata (cron/config id; no token, no results). Now 404s like
+    its PATCH/DELETE/trigger siblings.
+  - Follow-ups tracked separately (need a data migration / auth-path change):
+    encrypt the alert-webhook HMAC secret via `CredentialCipher`, drop the
+    now-hash-superseded plaintext `agent.api_key` column, and move the agent
+    key / SignalR JWT out of the WebSocket query string (nginx `/ws/` access-log
+    redaction as the interim mitigation).
+
+---
+
 ## [0.28.50] — 2026-07-22
 
 ### Fixed

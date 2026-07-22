@@ -127,6 +127,11 @@ if (builder.Configuration["NETWORKER_RUN_MIGRATIONS"] != "0")
 // 4xx envelopes are untouched (this only fires on unhandled exceptions).
 app.UseErrorEnvelope();
 
+// Baseline response hardening headers (X-Content-Type-Options, X-Frame-Options,
+// Referrer-Policy, CSP, and HSTS on HTTPS) on every response — right after the
+// error envelope so they ride the 500 body too.
+app.UseSecurityHeaders();
+
 // Order matters: authentication → DB-status middleware → authorization, all
 // after routing so {projectId} route values reach the project-scope handler.
 app.UseNetworkerAuth();
