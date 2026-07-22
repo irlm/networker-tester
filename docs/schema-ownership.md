@@ -1,20 +1,36 @@
 # Database schema ownership
 
-**As of this document, the control-plane PostgreSQL schema is owned by
-`src/Networker.Data` — not by the Rust dashboard.** This removes the last
-structural dependency on `crates/networker-dashboard` and unblocks deleting
-the Rust control-plane crates when the decommission soak completes.
+**The control-plane PostgreSQL schema is owned by `src/Networker.Data` — not by
+the Rust dashboard.** This removes the last structural dependency on
+`crates/networker-dashboard` and unblocks deleting the Rust control-plane crates
+when the decommission soak completes.
+
+**Status (2026-07-22): COMPLETE and decommission-ready.** The transfer is
+finished and re-verified end to end:
+
+- **Every table** the Rust `migrations.rs` creates is present in the C# scripts —
+  a `CREATE TABLE` set comparison shows the 42 Rust-created tables are a subset
+  of the 46 C# ones (the extra four are the C#-era `alert_channel`/`alert_rule`/
+  `alert_event`). Nothing is orphaned by deleting the crate.
+- The **only** reference to `crates/networker-dashboard/src/db/migrations.rs`
+  anywhere on the current stack is a historical comment in `SchemaMigrationTests`.
+- The C# control plane **serves production** and **runs `SchemaMigrator` at its
+  own startup** (`Program.cs`, gated on `NETWORKER_RUN_MIGRATIONS != 0`); the
+  retired Rust dashboard no longer boots in prod. The C# migrator is now the sole
+  runtime schema authority.
+
+Chain latest: **V045** (`SchemaMigrator.LatestVersion`).
 
 ## Where the schema lives
 
 | Piece | Location |
 |---|---|
-| Ordered migration scripts (V002…V044) | `src/Networker.Data/Migrations/V0NN_*.sql` (embedded resources) |
+| Ordered migration scripts (V002…V045) | `src/Networker.Data/Migrations/V0NN_*.sql` (embedded resources) |
 | V025 (UUID → base36 project ids) | `src/Networker.Data/Migrations/V025ProjectIdMigration.cs` (code, like the Rust original) |
 | ProjectId base36 + Damm implementation | `src/Networker.Data/Migrations/ProjectId36.cs` |
 | Runner | `src/Networker.Data/Migrations/SchemaMigrator.cs` |
-| Cumulative snapshot (reference only) | `src/Networker.Data/Migrations/schema.sql` |
-| Legacy source (frozen, to be deleted) | `crates/networker-dashboard/src/db/migrations.rs` |
+| Cumulative snapshot (reference only, currently a V041-era dump — see note) | `src/Networker.Data/Migrations/schema.sql` |
+| Legacy source (frozen, UNREFERENCED — deletable) | `crates/networker-dashboard/src/db/migrations.rs` |
 
 The scripts are byte-for-byte extractions of the SQL constants in
 `migrations.rs` (generated mechanically, not transcribed). Four migrations
@@ -69,7 +85,7 @@ a healthy deployment):
 `tests/Networker.Tests/SchemaMigrationTests.cs` (runs in CI's dotnet
 workflow, Testcontainers + `postgres:16-alpine`):
 
-- applies the full chain to a fresh database and asserts versions 2…39 land
+- applies the full chain to a fresh database and asserts versions 2…45 land
   in `_migrations`;
 - re-runs the migrator and asserts **zero pending** (the prod-cutover case);
 - queries **every** EF-mapped entity (30 DbSets) against the migrated
@@ -86,19 +102,28 @@ workflow, Testcontainers + `postgres:16-alpine`):
 shipped script, plus reference vectors proving the C# Damm/base36 port
 matches `project_id.rs`.
 
-The chain was additionally validated by replaying all 38 migrations against
+The chain was additionally validated by replaying all migrations against
 a live PostgreSQL 16 container and diffing the resulting table/column sets
 against the EF model (`schema.sql` is the `pg_dump --schema-only` of that
 replay).
 
+**Note — `schema.sql` lags at V041.** It has not been regenerated since V042
+(the reference-only snapshot; the source of truth is the ordered `V0NN` scripts,
+which are current, frozen, and CI-tested). Regenerating it requires the C#
+migrator (V025 is a code migration — base36/Damm can't run in raw SQL), so it is
+a low-priority refresh, not a correctness gap: the V042–V045 deltas are small and
+documented under "Out-of-band DDL" below, and every mapped table is proven
+against the live-applied chain by `SchemaMigrationTests`. Refresh it (fresh PG16
+→ `SchemaMigrator.MigrateAsync` → `pg_dump`) next time a migration is added.
+
 ## How to add a migration (post-decommission workflow)
 
-1. Create `src/Networker.Data/Migrations/V044_short_name.sql` (next free
+1. Create `src/Networker.Data/Migrations/V046_short_name.sql` (next free
    number, zero-padded, one underscore after the version). Make it
    idempotent where cheap (`IF NOT EXISTS` guards) — the runner's
    transaction makes idempotence optional, but it keeps manual recovery
    easy.
-2. Bump `SchemaMigrator.LatestVersion` to `44`.
+2. Bump `SchemaMigrator.LatestVersion` to `46`.
 3. Pin the script's SHA-256 in `MigrationScriptFreezeTests.FrozenSha256`.
 4. Update the EF model (`NetworkerDbContext` + entity) to match, if the
    change touches mapped tables. The equivalence test fails if they drift.
@@ -110,7 +135,14 @@ replay).
 
 ## Invoking the migrator
 
-`Networker.Data` is a library; nothing runs migrations automatically yet.
+**DONE — the control plane runs the migrator at startup.** `Program.cs` calls
+`SchemaMigrator.MigrateAsync(connString)` during boot, gated on
+`NETWORKER_RUN_MIGRATIONS != "0"`, before the app serves traffic; on failure the
+app refuses to start and the deploy's readiness check rolls back. On an
+already-migrated database this is a no-op (the `_migrations` bookkeeping rows
+short-circuit). The C# control plane boots first in production (it *is*
+production — the Rust dashboard is retired and no longer runs), so it owns
+applying the chain.
 
 ```csharp
 using Networker.Data.Migrations;
@@ -120,12 +152,9 @@ var result = await SchemaMigrator.MigrateAsync(connectionString);
 // result.WasUpToDate  → true on an already-migrated database
 ```
 
-**Follow-up (deliberately out of scope here):** wire this into
-`Networker.ControlPlane` startup (env-gated, e.g.
-`NETWORKER_RUN_MIGRATIONS=1`) once the Rust dashboard stops being the
-process that boots first. Until then the Rust dashboard still runs its own
-copy of the same chain at startup, which is harmless — same scripts, same
-bookkeeping.
+Test hosts that materialize the schema themselves opt out with
+`NETWORKER_RUN_MIGRATIONS=0` (the integration fixture renders the EF model's own
+DDL instead of replaying the chain).
 
 ## Out-of-band DDL to be aware of
 
@@ -153,6 +182,11 @@ bookkeeping.
   fleet); `api_key_last_used_at` / `_ip` are the write-throttled "last seen"
   audit stamps. The rotate endpoint replaces `api_key` + `api_key_hash` and
   resets the expiry.
+- **V045** drops the plaintext `agent.api_key` column (auth has been hash-only —
+  `api_key_hash` — since V040; the plaintext column was write-only dead weight).
+  Dropping the column also drops its `agent_api_key_key` UNIQUE constraint via
+  the column dependency (an explicit `DROP INDEX` would fail — it is a constraint,
+  not a standalone index).
 - `bootstrap/reset-pre-prod.sql` and the tester's V001 schema are separate,
   unaffected artifacts.
 
