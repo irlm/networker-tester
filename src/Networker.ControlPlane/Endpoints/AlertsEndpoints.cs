@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Alerting;
 using Networker.ControlPlane.Auth;
 using Networker.Data;
+using Networker.Security;
 
 namespace Networker.ControlPlane.Endpoints;
 
@@ -51,6 +52,7 @@ public static class AlertsEndpoints
             string projectId,
             ChannelRequest body,
             NetworkerDbContext db,
+            CredentialCipher cipher,
             CancellationToken ct) =>
         {
             if (string.IsNullOrWhiteSpace(body.name))
@@ -66,6 +68,9 @@ public static class AlertsEndpoints
             {
                 return ApiError.BadRequest(configError);
             }
+            // Encrypt the webhook secret before it touches the database (no-op for
+            // email / secret-less configs).
+            config = AlertSecretCipher.ProtectConfigSecret(cipher, config!);
 
             var row = new Data.Entities.AlertChannel
             {
@@ -105,6 +110,7 @@ public static class AlertsEndpoints
             HttpContext ctx,
             NetworkerDbContext db,
             ProjectAccessChecker access,
+            CredentialCipher cipher,
             CancellationToken ct) =>
         {
             var row = await db.AlertChannels.FirstOrDefaultAsync(c => c.ChannelId == id, ct);
@@ -132,7 +138,8 @@ public static class AlertsEndpoints
                 {
                     return ApiError.BadRequest(configError);
                 }
-                row.Config = config!;
+                // Encrypt the webhook secret at rest (no-op for email / secret-less).
+                row.Config = AlertSecretCipher.ProtectConfigSecret(cipher, config!);
             }
             if (body.enabled is not null)
             {

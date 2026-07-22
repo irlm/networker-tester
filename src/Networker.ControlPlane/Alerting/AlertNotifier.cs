@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Networker.ControlPlane.Notifications;
 using Networker.Data.Entities;
+using Networker.Security;
 
 namespace Networker.ControlPlane.Alerting;
 
@@ -28,6 +29,7 @@ public interface IAlertNotifier
 public sealed class AlertNotifier(
     IHttpClientFactory httpFactory,
     IEmailSender emailSender,
+    CredentialCipher cipher,
     ILogger<AlertNotifier> logger) : IAlertNotifier
 {
     /// <summary>Named HttpClient with the 10s webhook timeout (registered by
@@ -77,7 +79,9 @@ public sealed class AlertNotifier(
             }
             if (doc.RootElement.TryGetProperty("secret", out var s) && s.ValueKind == JsonValueKind.String)
             {
-                secret = s.GetString();
+                // Stored encrypted (AlertSecretCipher); legacy plaintext rows pass
+                // through unchanged until the backfill / next edit re-encrypts them.
+                secret = AlertSecretCipher.Unprotect(cipher, s.GetString());
             }
         }
         catch (JsonException)
