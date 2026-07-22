@@ -15,6 +15,7 @@ using Networker.ControlPlane.Sso;
 using Networker.Contracts;
 using Networker.Data;
 using Networker.Data.Migrations;
+using Networker.Security;
 
 // Phase 2 proof-of-concept control plane.
 //
@@ -119,6 +120,19 @@ if (builder.Configuration["NETWORKER_RUN_MIGRATIONS"] != "0")
     app.Logger.LogInformation(
         "Schema migrations: {Applied} applied, {Existing} already recorded (latest V{Latest:D3})",
         migrationResult.Applied.Count, migrationResult.AlreadyApplied.Count, SchemaMigrator.LatestVersion);
+
+    // One-shot: encrypt any legacy plaintext alert-webhook secret still in
+    // alert_channel.config (secrets audit 2026-07). Idempotent + best-effort —
+    // only runs where we own the schema, so the alert_channel table is present.
+    using var backfillScope = app.Services.CreateScope();
+    var backfilled = await AlertSecretCipher.BackfillAsync(
+        backfillScope.ServiceProvider.GetRequiredService<NetworkerDbContext>(),
+        backfillScope.ServiceProvider.GetRequiredService<CredentialCipher>(),
+        app.Logger);
+    if (backfilled > 0)
+    {
+        app.Logger.LogInformation("Encrypted {Count} legacy alert-webhook secret(s) at rest", backfilled);
+    }
 }
 
 // Global 500 contract — FIRST middleware so any unhandled exception below

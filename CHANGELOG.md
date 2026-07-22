@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.53] — 2026-07-22
+
+### Security
+- **Encrypted the alert-webhook HMAC secret at rest (secrets audit follow-up).**
+  It was the only user-supplied shared secret still stored in plaintext (inside
+  `alert_channel.config`). It is now AES-256-GCM encrypted with the same
+  `CredentialCipher` as cloud credentials + SDK tokens, stored in place in the
+  config JSON behind a versioned `lhenc$1$` marker (no schema change). The
+  channel create/patch handlers encrypt before persisting; delivery decrypts
+  just-in-time to sign the `X-Networker-Signature` header; reads stay masked.
+  A one-shot idempotent startup backfill encrypts any legacy plaintext secrets,
+  and the delivery path falls back to legacy plaintext for un-migrated rows so
+  nothing breaks mid-rollout.
+
+---
+
 ## [0.28.52] — 2026-07-22
 
 ### Security
