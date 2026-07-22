@@ -1,9 +1,11 @@
 # Networker Hybrid (Rust probe core + C# app layer)
 
 The C# solution (`Networker.sln` at the repo root — projects under `src/`,
-tests under `tests/Networker.Tests/`) implements the first two phases of a
-**hybrid** migration for the network-diagnostics platform. The decision is
-settled:
+tests under `tests/Networker.*Tests/`) implements a **hybrid** migration for
+the network-diagnostics platform — **now complete (2026-07)**: the C# control
+plane serves production (see [`architecture.md`](architecture.md)). This doc
+remains the reference for the Rust↔C# seam and the differential-testing
+architecture. The decision is settled:
 
 - **Keep** the Rust probe engine (`networker-tester`) — the measurement core.
 - **Rewrite** the control-plane / agent / endpoint app layer in C# (.NET 10),
@@ -96,7 +98,7 @@ Design notes:
 
 ---
 
-## What is built vs stubbed (this branch)
+## What is built vs stubbed (the Phase 1 proof-of-seam — historical)
 
 **Proof-of-seam (real, buildable):**
 - `schema_version` added to the Rust `TestRun` output (additive, serde-defaulted).
@@ -110,11 +112,18 @@ Design notes:
 
 **Stubbed (clearly marked TODO):**
 - `IDashboardClient` / `NoOpDashboardClient` — logs instead of talking to a
-  control plane. This is exactly where the Phase 2 SignalR hub client slots in.
+  control plane. This is where the Phase 2 dashboard client slotted in (today:
+  the raw-WebSocket client dialing the control plane's `/ws/agent`).
 
 ---
 
-## Roadmap (Phase 2 / 3 — not implemented)
+## Roadmap (Phase 2 / 3 — since delivered)
+
+> Both phases have shipped: the C# control plane serves production and the
+> Rust control-plane crates are retired (see
+> [`phase2-cutover-runbook.md`](phase2-cutover-runbook.md)). The plan below is
+> preserved as written. Note the transport evolved: agents connect over a raw
+> WebSocket at `/ws/agent`, not SignalR (which lives at `/hub/*`).
 
 - **Phase 2 — Control plane (ASP.NET Core + EF Core + SignalR):**
   REST API for test configs / runs, JWT auth, PostgreSQL via EF Core, and a

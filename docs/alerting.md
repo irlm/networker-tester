@@ -5,8 +5,8 @@ and alert rules are what turn a 3 AM latency regression into a notification
 instead of a table row nobody is watching.
 
 Wave 1 (this document) is the backend: rules, channels, evaluation, delivery,
-and the REST surface. The dashboard UI ships in a follow-up wave on top of
-these endpoints.
+and the REST surface. The dashboard UI has since shipped on top of these
+endpoints (`dashboard/src/pages/AlertsPage.tsx`).
 
 ## Concepts
 

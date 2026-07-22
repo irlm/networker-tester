@@ -6,10 +6,14 @@ VM-managed and not otherwise in this repo.
 
 ## Problem
 
-Agents authenticate at `/ws/agent?key=<api_key>`; browsers/testers at
-`/ws/dashboard?access_token=<jwt>` and `/ws/testers?token=<jwt>`. The credential
-is in the **query string** (a wire-compat carryover from the retired Rust
-dashboard). nginx's default `combined` log format logs `$request` — the full
+Agents authenticate at `/ws/agent`; browsers/testers at
+`/ws/dashboard?access_token=<jwt>` and `/ws/testers?token=<jwt>`. Since
+v0.28.56 the C# agent sends its key in the `X-LagHound-Agent-Key` request
+header, but the server still accepts the legacy `?key=<api_key>` query for
+fielded agents that predate it — so for those clients (and for the browser
+`?access_token=`/`?token=` JWTs) the credential is in the **query string** (a
+wire-compat carryover from the retired Rust dashboard). nginx's default
+`combined` log format logs `$request` — the full
 request line including the query — so the live credential is written to
 `/var/log/nginx/access.log` in cleartext on every WebSocket connect. Flagged P1
 by the 2026-07 audit (`docs/analysis/websec-audit-2026-07.md`,
@@ -74,7 +78,9 @@ Remove `/etc/nginx/conf.d/ws-log-redaction.conf` and the per-location
 
 ## Definitive fix
 
-Move the credential out of the query string into a header
-(`Sec-WebSocket-Protocol` for browsers, `Authorization` for the tungstenite
-agents) at the Rust-agent decommission. Once no client sends `?key=` /
-`?access_token=`, this redaction is obsolete and can be removed.
+Move the credential out of the query string into a header. **Done for agents
+(v0.28.56):** the C# agent sends `X-LagHound-Agent-Key`; the server-side
+`?key=` fallback is removed at the Rust-agent decommission. Still pending for
+browsers (`Sec-WebSocket-Protocol` or equivalent for the `?access_token=` /
+`?token=` JWTs). Once no client sends a credential in the query string, this
+redaction is obsolete and can be removed.

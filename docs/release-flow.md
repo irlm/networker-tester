@@ -36,7 +36,8 @@ Docs-only / C#-source-only / CI-only PRs do **not** require a bump (the
 The `Version bump check` job fails the PR if any of the five locations is
 missing or inconsistent. Branch protection additionally requires:
 `Test (ubuntu-latest)`, `Test (windows-latest)`, `Detect changed areas`,
-`Build & audit (C#)`, `bats (installer unit tests)`, and `shellcheck`.
+`Build & audit (C#)`, `bats (installer unit tests)`, `shellcheck`,
+`cargo audit (RUSTSEC advisories)`, and `Orchestrator lint & test`.
 
 ## 3. Auto-tag on main push
 
