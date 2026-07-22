@@ -353,4 +353,52 @@ public sealed class CliProvisionerDeleteCascadeTests : IDisposable
     [InlineData("BadRequest: malformed name", false)]
     public void IsRetryableInUse_classifies_stderr(string stderr, bool expected)
         => Assert.Equal(expected, CliComputeProvisioner.IsRetryableInUse(stderr));
+
+    [Theory]
+    [InlineData(
+        "/subscriptions/14f3-abc/resourceGroups/alethedash-rg/providers/Microsoft.Compute/virtualMachines/tester-eastus-c81c2",
+        "14f3-abc", "alethedash-rg")]
+    [InlineData("/SUBSCRIPTIONS/S1/RESOURCEGROUPS/RG1/providers/x", "S1", "RG1")]
+    [InlineData("", "", "")]
+    [InlineData("not-a-resource-id", "", "")]
+    public void ParseAzureScope_extracts_sub_and_rg(string id, string sub, string rg)
+    {
+        var (s, r) = CliComputeProvisioner.ParseAzureScope(id);
+        Assert.Equal(sub, s);
+        Assert.Equal(rg, r);
+    }
+
+    /// <summary>
+    /// The real-flow regression (found live 2026-07-21): the delete creds carry
+    /// EMPTY subscription/resource-group (scope lives in the VM resource id), so
+    /// the cascade must derive them from the id — otherwise the NSG/IP delete
+    /// commands go out blank, az errors, and the resources leak to the reaper.
+    /// </summary>
+    [Fact]
+    public async Task AzureDelete_derives_scope_from_resourceId_when_creds_are_empty()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        WriteFakeCli("AZ_CMD", exitCode: 0);
+
+        var emptyCreds = new ProviderCredentials("azure"); // no sub/rg — the real flow
+        var result = await NewProvisioner().DeleteAsync(
+            AzureTester("tester-eastus-5cab8"), emptyCreds, CancellationToken.None);
+
+        Assert.True(result.Success);
+        var lines = InvocationLines();
+        Assert.Equal(3, lines.Count);
+
+        // The NSG (line 2) + IP (line 1) deletes carry the sub + rg parsed from the
+        // resource id — never blank. (The vm delete on line 0 legitimately uses
+        // empty --subscription/--resource-group because it targets by self-
+        // describing --ids.)
+        foreach (var line in new[] { lines[1], lines[2] })
+        {
+            Assert.Contains("--subscription sub-123", line);
+            Assert.Contains("--resource-group networker-testers", line);
+            Assert.DoesNotContain("--subscription  ", line);
+            Assert.DoesNotContain("--resource-group  ", line);
+        }
+    }
 }
