@@ -288,7 +288,30 @@ public static class TesterQueueSocketEndpoint
         CancellationToken ct)
     {
         var seq = registry.NextSeq(projectId, testerId.ToString());
+        var (running, queued) = await BuildQueueStateAsync(db, projectId, testerId, ct)
+            .ConfigureAwait(false);
 
+        return new TesterQueueSnapshotMessage(
+            projectId,
+            testerId.ToString(),
+            seq,
+            queued,
+            running);
+    }
+
+    /// <summary>
+    /// The seq-free core of the snapshot: current (running, queued) for a tester
+    /// with 1-based positions + rolling-average ETAs. Shared by the snapshot
+    /// above and by <see cref="TesterQueueUpdateProducer"/>, which pushes the
+    /// same shape as a <c>tester_queue_update</c> delta on run transitions.
+    /// </summary>
+    internal static async Task<(TesterQueueEntry? Running, IReadOnlyList<TesterQueueEntry> Queued)>
+        BuildQueueStateAsync(
+            NetworkerDbContext db,
+            string projectId,
+            Guid testerId,
+            CancellationToken ct)
+    {
         var avgSecs = await db.ProjectTesters
             .AsNoTracking()
             .Where(t => t.ProjectId == projectId && t.TesterId == testerId)
@@ -333,12 +356,7 @@ public static class TesterQueueSocketEndpoint
             queued[i] = queued[i] with { Position = position, EtaSeconds = etaSeconds };
         }
 
-        return new TesterQueueSnapshotMessage(
-            projectId,
-            testerId.ToString(),
-            seq,
-            queued,
-            running);
+        return (running, queued);
     }
 
     private static List<string> ReadStringArray(JsonElement root, string property)

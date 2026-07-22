@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.58] — 2026-07-22
+
+### Fixed
+- **Live tester-queue updates now actually arrive.** The dashboard's
+  `useTesterSubscription` hook has always subscribed to `tester_queue_update`
+  deltas, and `TesterQueueBroadcaster` could always send them — but **nothing
+  ever called it** (a gap carried over from the Rust hub, which also only sent
+  snapshots; surfaced by the 2026-07 dead-code sweep). The queue panel only
+  refreshed on reconnect snapshots. New `TesterQueueUpdateProducer` observes
+  the dashboard `EventBus` (every run transition already publishes there —
+  dispatcher, agent processor, watchdog) via a new `IDashboardEventObserver`
+  hook, rebuilds the tester's queue with the same query the snapshots use
+  (extracted, de-duplicating the raw-WS builder), and pushes through the
+  broadcaster — reaching both the SignalR and raw-WS transports. Skips cheaply
+  when nobody is subscribed.
+
+---
+
 ## [0.28.57] — 2026-07-22
 
 ### Removed
