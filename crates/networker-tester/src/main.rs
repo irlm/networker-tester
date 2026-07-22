@@ -37,9 +37,7 @@ use networker_tester::summary::{copy_default_css, print_summary, print_url_test_
 use networker_tester::tls_profile::{
     run_tls_endpoint_profile, TlsProfileRequest, TlsProfileTargetKind,
 };
-use networker_tester::url_diagnostic::{
-    UrlDiagnosticCapabilities, UrlDiagnosticOrchestrator, UrlDiagnosticRequest,
-};
+use networker_tester::url_diagnostic::{UrlDiagnosticOrchestrator, UrlDiagnosticRequest};
 use std::path::PathBuf;
 use tracing::{error, info, warn};
 use uuid::Uuid;

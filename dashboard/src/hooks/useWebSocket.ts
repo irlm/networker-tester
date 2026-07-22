@@ -25,6 +25,9 @@ export function useWebSocket() {
   const activeProjectId = useProjectStore((s) => s.activeProjectId);
   const activeProjectIdRef = useRef(activeProjectId);
   const connectRef = useRef<() => void>(() => {});
+  // Tracks the first run of the project-change effect (initial mount), which
+  // the mount effect already handles.
+  const firstProjectEffectRef = useRef(true);
 
   // Sync refs in effects instead of during render
   useEffect(() => { addEventRef.current = addEvent; }, [addEvent]);
@@ -124,9 +127,15 @@ export function useWebSocket() {
 
   // Reconnect when project changes
   useEffect(() => {
-    // Skip initial mount — the effect above handles that
-    if (!wsRef.current) return;
-    if (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING) {
+    // Skip only the very first run (initial mount — the effect above handles
+    // that). Do NOT gate on wsRef: it is also null while a reconnect timer is
+    // pending, and skipping then would keep the old project's seq watermark,
+    // silently discarding the new project's events below it.
+    if (firstProjectEffectRef.current) {
+      firstProjectEffectRef.current = false;
+      return;
+    }
+    if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
       wsRef.current.onclose = null;
       wsRef.current.close();
       wsRef.current = null;

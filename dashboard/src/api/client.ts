@@ -119,7 +119,21 @@ export function handleUnauthorized(): void {
 // Anonymous auth endpoints where a 401 means "bad credentials", not "session
 // expired" — they must surface the error to the caller instead of wiping the
 // session and hard-reloading the login page mid-interaction.
-const AUTH_401_EXEMPT = new Set(['/auth/login', '/auth/sso/exchange']);
+const AUTH_401_EXEMPT = new Set([
+  '/auth/login',
+  '/auth/sso/exchange',
+  '/auth/forgot-password',
+  '/auth/reset-password',
+]);
+
+// Anonymous endpoints whose path embeds a dynamic token — same exemption as
+// above, but matched by prefix. `/invite/{token}/accept` in particular
+// returns 401 for bad credentials mid-interaction.
+const AUTH_401_EXEMPT_PREFIXES = ['/invite/', '/share/'];
+
+function isAuth401Exempt(path: string): boolean {
+  return AUTH_401_EXEMPT.has(path) || AUTH_401_EXEMPT_PREFIXES.some(p => path.startsWith(p));
+}
 
 /**
  * Shared low-level REST helper: auth header, 401/403 session handling,
@@ -169,7 +183,7 @@ export async function request<T>(path: string, options?: RequestInit): Promise<T
     const serverTime = res.headers.get('x-process-time-ms');
     if (serverTime) serverMs = parseFloat(serverTime);
 
-    if (res.status === 401 && !AUTH_401_EXEMPT.has(path)) {
+    if (res.status === 401 && !isAuth401Exempt(path)) {
       handleUnauthorized();
       throw new ApiError(401, 'Unauthorized');
     }
@@ -289,24 +303,16 @@ export const api = {
     }),
 
   forgotPassword: (email: string) =>
-    fetch(`${API_BASE}/auth/forgot-password`, {
+    request<{ sent: boolean }>('/auth/forgot-password', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email }),
-    }).then(async r => {
-      if (!r.ok) throw new ApiError(r.status, await r.text().catch(() => `API error: ${r.status}`));
-      return r.json();
-    }) as Promise<{ sent: boolean }>,
+    }),
 
   resetPassword: (token: string, newPassword: string) =>
-    fetch(`${API_BASE}/auth/reset-password`, {
+    request<{ success: boolean }>('/auth/reset-password', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token, new_password: newPassword }),
-    }).then(async r => {
-      if (!r.ok) throw new Error(await r.text());
-      return r.json();
-    }) as Promise<{ success: boolean }>,
+    }),
 
   // SSO
   getProviders: () =>
@@ -317,7 +323,6 @@ export const api = {
   // Every call 404'd and LoginPage fell back to the password form via its
   // catch block. Resolve locally so the login flow skips the guaranteed-404
   // round-trip. If per-email SSO routing ships, restore the POST here.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   checkEmail: (_email: string) =>
     Promise.resolve<{ provider: string | null }>({ provider: null }),
 
@@ -409,22 +414,15 @@ export const api = {
 
   // ── Public invite endpoints (no auth) ───────────────────────────────
   resolveInvite: (token: string) =>
-    fetch(`${API_BASE}/invite/${token}`).then(async r => {
-      if (!r.ok) throw new Error(await r.text());
-      return r.json() as Promise<ResolvedInvite>;
-    }),
+    request<ResolvedInvite>(`/invite/${token}`),
 
   acceptInvite: (token: string, password?: string, currentPassword?: string) =>
-    fetch(`${API_BASE}/invite/${token}/accept`, {
+    request<{ token: string; email: string; role: string; project_id: string }>(`/invite/${token}/accept`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...(password ? { password } : {}),
         ...(currentPassword ? { current_password: currentPassword } : {}),
       }),
-    }).then(async r => {
-      if (!r.ok) throw new Error(await r.text());
-      return r.json() as Promise<{ token: string; email: string; role: string; project_id: string }>;
     }),
 
   // ── Project-scoped resources ──────────────────────────────────────────
@@ -652,10 +650,14 @@ export const api = {
     request<void>(projectUrl(projectId, `share-links/${linkId}`), { method: 'DELETE' }),
 
   resolveShareLink: (token: string) =>
-    fetch(`${API_BASE}/share/${token}`).then(async r => {
-      if (!r.ok) throw new Error(await r.text());
-      return r.json();
-    }),
+    request<{
+      resource_type: string;
+      resource_id: string | null;
+      label: string | null;
+      data: unknown;
+      shared_by: string;
+      expires_at: string;
+    }>(`/share/${token}`),
 
   // Command Approvals (project-scoped, admin only)
   getPendingApprovals: (projectId: string) =>

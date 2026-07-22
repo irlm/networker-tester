@@ -11,6 +11,7 @@ use crate::metrics::{
     ServerTimingResult, TcpResult, TlsResult,
 };
 use crate::runner::{dns as dns_runner, socket_info::SocketInfo};
+use anyhow::Context as _;
 use bytes::Bytes;
 use chrono::Utc;
 use futures::stream;
@@ -633,12 +634,10 @@ async fn run_http_or_tcp(
         }
         Err(e) => {
             warn!("HTTP request failed: {e}");
-            // Request-phase timeouts must be classified as Timeout, not Http.
-            let category = if e.to_string().contains("timed out") {
-                ErrorCategory::Timeout
-            } else {
-                ErrorCategory::Http
-            };
+            // Structured classification: inspect the error's source chain so
+            // timeouts, transport resets, and TLS failures are not mislabeled
+            // as HTTP-layer failures.
+            let category = classify_request_error(&e);
             failed_attempt(
                 run_id,
                 attempt_id,
@@ -693,7 +692,9 @@ async fn send_http1(
         sender.send_request(req),
     )
     .await
-    .map_err(|_| anyhow::anyhow!("HTTP/1.1 request timed out"))??;
+    // `.context` (not `map_err`) keeps the `Elapsed` source in the chain so
+    // `classify_request_error` can classify it structurally as a timeout.
+    .context("HTTP/1.1 request timed out")??;
 
     let ttfb_ms = t_sent.elapsed().as_secs_f64() * 1000.0;
     collect_response(
@@ -744,7 +745,9 @@ async fn send_http2(
         sender.send_request(req),
     )
     .await
-    .map_err(|_| anyhow::anyhow!("HTTP/2 request timed out"))??;
+    // `.context` (not `map_err`) keeps the `Elapsed` source in the chain so
+    // `classify_request_error` can classify it structurally as a timeout.
+    .context("HTTP/2 request timed out")??;
 
     let ttfb_ms = t_sent.elapsed().as_secs_f64() * 1000.0;
     collect_response(
@@ -1297,6 +1300,54 @@ fn pick_ip(ips: &[std::net::IpAddr], prefer_v4: bool) -> std::net::IpAddr {
     }
 }
 
+/// Classify a request-phase failure (TCP connect + TLS handshake already
+/// succeeded) into the layer that actually failed. Walks the error's source
+/// chain instead of sniffing message text: explicit timeouts → `Timeout`,
+/// transport I/O failures (resets, broken pipes) → `Tcp`, mid-stream TLS
+/// failures → `Tls`, everything else → `Http`.
+fn classify_request_error(e: &anyhow::Error) -> ErrorCategory {
+    for cause in e.chain() {
+        if cause
+            .downcast_ref::<tokio::time::error::Elapsed>()
+            .is_some()
+        {
+            return ErrorCategory::Timeout;
+        }
+        if let Some(h) = cause.downcast_ref::<hyper::Error>() {
+            if h.is_timeout() {
+                return ErrorCategory::Timeout;
+            }
+        }
+        if cause.downcast_ref::<rustls::Error>().is_some() {
+            return ErrorCategory::Tls;
+        }
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            // Mid-stream TLS failures surface as io::InvalidData wrapping the
+            // rustls error (tokio-rustls). `io::Error::source()` skips the
+            // wrapped error, so it must be inspected via `get_ref()` here.
+            if io
+                .get_ref()
+                .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+                .is_some()
+            {
+                return ErrorCategory::Tls;
+            }
+            match io.kind() {
+                std::io::ErrorKind::TimedOut => return ErrorCategory::Timeout,
+                std::io::ErrorKind::ConnectionRefused
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::NotConnected => return ErrorCategory::Tcp,
+                // Anything else (parse errors, unexpected EOF, …) is not
+                // clearly transport-layer — fall through to `Http`.
+                _ => {}
+            }
+        }
+    }
+    ErrorCategory::Http
+}
+
 #[allow(clippy::too_many_arguments)]
 fn failed_attempt(
     run_id: Uuid,
@@ -1784,6 +1835,57 @@ mod tests {
         assert!(a.tls.is_none());
         assert!(a.finished_at.is_some());
         assert_eq!(a.retry_count, 0);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // classify_request_error — structured taxonomy
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn classify_request_error_elapsed_source_is_timeout() {
+        // Same shape as the send_request timeout wrappers: an Elapsed source
+        // under a human-readable context message.
+        let elapsed = tokio::time::timeout(std::time::Duration::ZERO, std::future::pending::<()>())
+            .await
+            .unwrap_err();
+        let e = anyhow::Error::new(elapsed).context("HTTP/1.1 request timed out");
+        assert_eq!(classify_request_error(&e), ErrorCategory::Timeout);
+        assert_eq!(e.to_string(), "HTTP/1.1 request timed out");
+    }
+
+    #[test]
+    fn classify_request_error_io_reset_is_tcp() {
+        let e = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "connection reset by peer",
+        ));
+        assert_eq!(classify_request_error(&e), ErrorCategory::Tcp);
+    }
+
+    #[test]
+    fn classify_request_error_io_timed_out_is_timeout() {
+        let e = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "read timed out",
+        ));
+        assert_eq!(classify_request_error(&e), ErrorCategory::Timeout);
+    }
+
+    #[test]
+    fn classify_request_error_tls_source_is_tls() {
+        // Mid-stream TLS failures surface as io::InvalidData wrapping the
+        // rustls error (tokio-rustls) — the walk must reach the inner source.
+        let e = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            rustls::Error::General("bad record mac".into()),
+        ));
+        assert_eq!(classify_request_error(&e), ErrorCategory::Tls);
+    }
+
+    #[test]
+    fn classify_request_error_defaults_to_http() {
+        let e = anyhow::anyhow!("unexpected end of stream");
+        assert_eq!(classify_request_error(&e), ErrorCategory::Http);
     }
 
     // ─────────────────────────────────────────────────────────────────────────

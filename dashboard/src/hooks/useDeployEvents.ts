@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAuthStore } from '../stores/authStore';
 
+// Reconnect backoff bounds (same as useApprovalSSE). Multi-minute Azure
+// deploys watched through nginx are the worst case for proxy idle timeouts;
+// without a reconnect loop the deploy log freezes mid-deploy. Replay after a
+// reconnect is deduped by `lastSeqRef`.
+const INITIAL_BACKOFF_MS = 1_000;
+const MAX_BACKOFF_MS = 30_000;
+
 export interface DeployLogLine {
   seq: number;
   line: string;
@@ -72,8 +79,18 @@ export function useDeployEvents(
     }
 
     const controller = new AbortController();
+    let cancelled = false;
+    let backoff = INITIAL_BACKOFF_MS;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
-    (async () => {
+    const scheduleReconnect = () => {
+      if (cancelled) return;
+      const delay = backoff;
+      backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
+      retryTimer = setTimeout(() => void connect(), delay);
+    };
+
+    const connect = async () => {
       try {
         const res = await fetch(
           `/api/projects/${projectId}/deployments/${deploymentId}/events`,
@@ -85,11 +102,17 @@ export function useDeployEvents(
             signal: controller.signal,
           },
         );
+        // Auth is dead — retrying with the same token is pointless. The next
+        // REST call will handle the 401 redirect.
+        if (res.status === 401 || res.status === 403) return;
         if (!res.ok || !res.body) {
-          setConnected(false);
+          scheduleReconnect();
           return;
         }
+        if (cancelled) return;
         setConnected(true);
+        // Connected — reset backoff so the next drop retries quickly.
+        backoff = INITIAL_BACKOFF_MS;
 
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
@@ -135,14 +158,31 @@ export function useDeployEvents(
             }
           }
         }
-      } catch {
-        // AbortError on unmount / navigation is expected — swallow silently.
-      } finally {
+        // Stream ended server-side (restart, proxy idle timeout) — reconnect.
+        // The seq guard above dedupes the replayed ring-buffer history.
+        if (cancelled) return;
         setConnected(false);
+        scheduleReconnect();
+      } catch (err) {
+        // Guarded so an aborted StrictMode first-pass can't race the second
+        // mount's setConnected(true).
+        if (cancelled) return;
+        setConnected(false);
+        // AbortError on unmount / navigation is expected — anything else is
+        // a real drop: log it and go through the reconnect path.
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        console.error('Deploy event stream failed', err);
+        scheduleReconnect();
       }
-    })();
+    };
 
-    return () => controller.abort();
+    void connect();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      controller.abort();
+    };
   }, [projectId, deploymentId, token]);
 
   return { lines, complete, connected };

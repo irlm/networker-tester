@@ -4,6 +4,7 @@ import type { BenchmarkLeaderboardEntry, BenchmarkRun, GroupedLeaderboard } from
 import { HorizontalBoxWhiskerChart } from '../components/charts/HorizontalBoxWhiskerChart';
 import type { HBoxGroup } from '../components/charts/HorizontalBoxWhiskerChart';
 import { usePageTitle } from '../hooks/usePageTitle';
+import { useToast } from '../hooks/useToast';
 import { languageColor } from '../lib/languageColors';
 
 type Tab = 'grouped' | 'leaderboard' | 'comparison' | 'timeline';
@@ -353,6 +354,7 @@ function ComparisonTab({ entries }: { entries: BenchmarkLeaderboardEntry[] }) {
 function TimelineTab({ runs }: { runs: BenchmarkRun[] }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [details, setDetails] = useState<Record<string, BenchmarkRun>>({});
+  const addToast = useToast();
 
   const toggleRun = useCallback(async (runId: string) => {
     if (expandedId === runId) {
@@ -365,10 +367,11 @@ function TimelineTab({ runs }: { runs: BenchmarkRun[] }) {
         const run = await api.getLeaderboardRun(runId);
         setDetails(prev => ({ ...prev, [runId]: run }));
       } catch {
-        // ignore
+        addToast('error', 'Failed to load run detail');
+        setExpandedId(null);
       }
     }
-  }, [expandedId, details]);
+  }, [expandedId, details, addToast]);
 
   if (runs.length === 0) {
     return (

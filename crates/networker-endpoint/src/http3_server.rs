@@ -24,7 +24,17 @@ pub mod server {
     use std::net::SocketAddr;
     use std::sync::Arc;
     use std::time::Instant;
+    use tokio::sync::Semaphore;
     use tracing::{debug, info, warn};
+
+    /// Concurrency bounds for the QUIC/H3 server. The endpoint is a load-test
+    /// target that legitimately receives high fan-out, so task spawning must
+    /// be bounded. No explicit cap exists in the HTTP/1.1+2 axum server to
+    /// mirror (hyper's own limits apply there); these values comfortably
+    /// exceed legitimate probe concurrency while keeping the worst-case task
+    /// count finite (1024 × 256).
+    const MAX_CONNECTIONS: usize = 1024;
+    const MAX_STREAMS_PER_CONN: usize = 256;
 
     // ─────────────────────────────────────────────────────────────────────────
     // Entry point
@@ -44,8 +54,20 @@ pub mod server {
             addr.port()
         );
 
+        let conn_permits = Arc::new(Semaphore::new(MAX_CONNECTIONS));
         while let Some(incoming) = endpoint.accept().await {
+            // Acquire before spawning: at the connection cap, refuse the new
+            // connection instead of queueing an unbounded number of tasks.
+            let permit = match conn_permits.clone().try_acquire_owned() {
+                Ok(p) => p,
+                Err(_) => {
+                    debug!("H3 connection cap ({MAX_CONNECTIONS}) reached — refusing connection");
+                    incoming.refuse();
+                    continue;
+                }
+            };
             tokio::spawn(async move {
+                let _permit = permit;
                 let conn = match incoming.await {
                     Ok(c) => c,
                     Err(e) => {
@@ -100,12 +122,26 @@ pub mod server {
     // ─────────────────────────────────────────────────────────────────────────
 
     async fn handle_connection(mut conn: h3::server::Connection<H3QuinnConn, Bytes>) {
+        // Bound in-flight request streams per connection: excess streams are
+        // dropped (resetting the stream) rather than queued as tasks.
+        let stream_permits = Arc::new(Semaphore::new(MAX_STREAMS_PER_CONN));
         loop {
             match conn.accept().await {
                 Ok(Some(resolver)) => match resolver.resolve_request().await {
-                    Ok((req, stream)) => {
-                        tokio::spawn(handle_request(req, stream));
-                    }
+                    Ok((req, stream)) => match stream_permits.clone().try_acquire_owned() {
+                        Ok(permit) => {
+                            tokio::spawn(async move {
+                                let _permit = permit;
+                                handle_request(req, stream).await;
+                            });
+                        }
+                        Err(_) => {
+                            debug!(
+                                "H3 stream cap ({MAX_STREAMS_PER_CONN}) reached — dropping stream"
+                            );
+                            drop(stream);
+                        }
+                    },
                     Err(e) => debug!("H3 resolve_request error: {e}"),
                 },
                 Ok(None) => break,
