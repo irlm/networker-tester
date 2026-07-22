@@ -55,9 +55,9 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
     // ── Migration chain ─────────────────────────────────────────────────
 
     [Fact]
-    public void Fresh_database_applies_the_full_chain_v002_to_v044()
+    public void Fresh_database_applies_the_full_chain_v002_to_v045()
     {
-        Assert.Equal(Enumerable.Range(2, 43), _fx.FreshRun.Applied);
+        Assert.Equal(Enumerable.Range(2, 44), _fx.FreshRun.Applied);
         Assert.Empty(_fx.FreshRun.AlreadyApplied);
     }
 
@@ -70,7 +70,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
 
         Assert.True(second.WasUpToDate);
         Assert.Empty(second.Applied);
-        Assert.Equal(Enumerable.Range(2, 43), second.AlreadyApplied);
+        Assert.Equal(Enumerable.Range(2, 44), second.AlreadyApplied);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
             }
         }
 
-        Assert.Equal(Enumerable.Range(2, 43), recorded);
+        Assert.Equal(Enumerable.Range(2, 44), recorded);
     }
 
     // ── EF-model equivalence ────────────────────────────────────────────
@@ -486,6 +486,44 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
             },
             found);
     }
+
+    [Fact]
+    public async Task V045_dropped_the_plaintext_api_key_column_but_kept_the_hash()
+    {
+        await using var conn = new NpgsqlConnection(_fx.ConnectionString);
+        await conn.OpenAsync();
+
+        // The plaintext api_key column is gone; api_key_hash (what auth uses)
+        // and its unique index remain.
+        await using var colCmd = new NpgsqlCommand(
+            """
+            SELECT COUNT(*) FILTER (WHERE column_name = 'api_key'),
+                   COUNT(*) FILTER (WHERE column_name = 'api_key_hash')
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'agent'
+            """, conn);
+        await using (var reader = await colCmd.ExecuteReaderAsync())
+        {
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(0, reader.GetInt64(0)); // api_key dropped
+            Assert.Equal(1, reader.GetInt64(1)); // api_key_hash kept
+        }
+
+        // The plaintext column's unique index is gone; the hash's is retained.
+        await using var idxCmd = new NpgsqlCommand(
+            """
+            SELECT COUNT(*) FILTER (WHERE indexname = 'agent_api_key_key'),
+                   COUNT(*) FILTER (WHERE indexname = 'agent_api_key_hash_key')
+            FROM pg_indexes
+            WHERE schemaname = 'public' AND tablename = 'agent'
+            """, conn);
+        await using (var reader = await idxCmd.ExecuteReaderAsync())
+        {
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(0, reader.GetInt64(0)); // agent_api_key_key dropped
+            Assert.Equal(1, reader.GetInt64(1)); // agent_api_key_hash_key kept
+        }
+    }
 }
 
 /// <summary>
@@ -543,6 +581,7 @@ public sealed class MigrationScriptFreezeTests
         ["V042_perf_log_main_db.sql"] = "dd222a9fcb6c38d0451148df6c05761439af5980bdf4849c0376330d773e4114",
         ["V043_sdk_endpoint_token.sql"] = "4ab8a521c29976867e78ba5fca479420353abca143571b0493506382e8524a1e",
         ["V044_agent_api_key_lifecycle.sql"] = "02ed690dac68e6aca9790d6dbdcd0d2ac38bf1d7412ec7d00a9b430a9b3ede81",
+        ["V045_drop_agent_api_key_plaintext.sql"] = "8ae346ab2faab1bc83614bf2213bf185a56a5d54e4518798f6d8853537834d3f",
     };
 
     [Fact]
@@ -562,7 +601,7 @@ public sealed class MigrationScriptFreezeTests
             Assert.Contains(version, scripted);
         }
 
-        Assert.Equal(42, scripted.Count);
+        Assert.Equal(43, scripted.Count);
     }
 
     [Fact]

@@ -25,12 +25,12 @@ public partial class Agent
 
     public DateTime RegisteredAt { get; set; }
 
-    public string ApiKey { get; set; } = null!;
-
     /// <summary>
-    /// Lowercase-hex SHA-256 of <see cref="ApiKey"/> (V040) — the column agent
-    /// auth actually looks up. Nullable only for not-yet-migrated rows; V040
-    /// backfills every existing row and minting writes both columns.
+    /// Lowercase-hex SHA-256 of the agent's api-key (V040) — the ONLY column
+    /// agent auth looks up (constant-time compared). The plaintext api_key
+    /// column was dropped in V045; minting/rotation persist only this hash and
+    /// hand the plaintext key back to the caller once. Nullable only for
+    /// not-yet-migrated rows; V040 backfilled every existing row.
     /// </summary>
     public string? ApiKeyHash { get; set; }
 

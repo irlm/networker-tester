@@ -63,7 +63,8 @@ public static partial class TesterWriteEndpoints
         }
 
         var newKey = TesterCreateLogic.GenerateAgentApiKey();
-        agent.ApiKey = newKey;
+        // Only the hash is persisted (auth looks up api_key_hash; the plaintext
+        // column was dropped in V045). The new key is returned once below.
         agent.ApiKeyHash = AgentApiKeys.HashHex(newKey);
         agent.ApiKeyExpiresAt = null; // rotated keys start with no expiry
         await db.SaveChangesAsync(ct);
