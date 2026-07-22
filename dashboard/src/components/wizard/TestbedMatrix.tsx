@@ -51,17 +51,19 @@ export function TestbedMatrix({
 }: TestbedMatrixProps) {
   const [testbedKey, setTestbedKey] = useState(() => testbeds.length);
   const [testers, setTesters] = useState<TesterRow[]>([]);
-  // Starts true so "No runners available." doesn't flash while the list loads.
-  const [testersLoading, setTestersLoading] = useState(true);
+  // Which project the tester list was last loaded for. Loading is *derived*
+  // (loaded !== current project) so "No runners available." doesn't flash on
+  // mount or project switch — without a synchronous setState in the effect.
+  const [loadedProjectId, setLoadedProjectId] = useState<string | null>(null);
+  const testersLoading = loadedProjectId !== projectId;
   const [cloudAccounts, setCloudAccounts] = useState<CloudAccountSummary[]>([]);
 
   useEffect(() => {
     let cancelled = false;
-    setTestersLoading(true);
     testersApi.listTesters(projectId)
       .then(rows => { if (!cancelled) setTesters(rows); })
       .catch(() => { if (!cancelled) setTesters([]); })
-      .finally(() => { if (!cancelled) setTestersLoading(false); });
+      .finally(() => { if (!cancelled) setLoadedProjectId(projectId); });
     api.getCloudAccounts(projectId)
       .then(rows => { if (!cancelled) setCloudAccounts(rows); })
       .catch(() => { if (!cancelled) setCloudAccounts([]); });

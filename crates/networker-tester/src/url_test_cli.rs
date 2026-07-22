@@ -53,11 +53,8 @@ pub(crate) async fn run_url_test_cli(cfg: &ResolvedConfig) -> anyhow::Result<()>
         artifact_output_dir: Some(cfg.output_dir.clone()),
     };
 
-    let capabilities = UrlDiagnosticOrchestrator::detect_capabilities();
-    let orchestrator = UrlDiagnosticOrchestrator::new(UrlDiagnosticCapabilities {
-        protocol_probe_available: false,
-        ..capabilities
-    });
+    let orchestrator =
+        UrlDiagnosticOrchestrator::new(UrlDiagnosticOrchestrator::detect_capabilities());
 
     let out_dir = PathBuf::from(&cfg.output_dir);
     std::fs::create_dir_all(&out_dir).context("Cannot create output directory")?;
@@ -80,7 +77,7 @@ pub(crate) async fn run_url_test_cli(cfg: &ResolvedConfig) -> anyhow::Result<()>
         None => None,
     };
 
-    let plan = orchestrator.plan(request)?;
+    let plan = orchestrator.plan(request.clone())?;
     let mut run = orchestrator.execute_primary_page_diagnostic(plan).await?;
 
     if let Some(session) = capture_session.take() {
@@ -137,15 +134,45 @@ pub(crate) async fn run_url_test_cli(cfg: &ResolvedConfig) -> anyhow::Result<()>
         }
     }
 
+    // Protocol validation probes (h1/h2/h3) run after the pcap capture is
+    // finalized so the capture stays scoped to the primary page load. A probe
+    // failure degrades the run rather than failing it.
+    if let Err(e) = orchestrator
+        .execute_protocol_validation_probes(&mut run, &request)
+        .await
+    {
+        run.capture_errors
+            .push(format!("protocol validation probes failed: {e}"));
+    }
+
+    // The primary diagnostic finalized run.status before the pcap summary and
+    // protocol probes could add capture_errors — recompute Completed vs
+    // Partial so those errors are reflected (a Failed run stays Failed).
+    if run.status != networker_tester::metrics::UrlDiagnosticStatus::Failed {
+        orchestrator.mark_completed(&mut run);
+    }
+
     let ts = run.started_at.format("%Y%m%d-%H%M%S");
     if run.har_path.is_some() {
         let src = PathBuf::from(run.har_path.as_deref().unwrap_or_default());
         if src.exists() {
-            let dst = out_dir.join(src.file_name().unwrap_or_default());
-            if src != dst {
-                std::fs::copy(&src, &dst)
-                    .context("Failed to copy HAR artifact to output directory")?;
-                run.har_path = Some(dst.display().to_string());
+            // An empty file name would "copy" to the output directory itself —
+            // skip the copy rather than produce a garbage destination path.
+            match src.file_name().filter(|n| !n.is_empty()) {
+                Some(name) => {
+                    let dst = out_dir.join(name);
+                    if src != dst {
+                        std::fs::copy(&src, &dst)
+                            .context("Failed to copy HAR artifact to output directory")?;
+                        run.har_path = Some(dst.display().to_string());
+                    }
+                }
+                None => {
+                    tracing::warn!(
+                        "HAR artifact path '{}' has no file name — skipping copy to output directory",
+                        src.display()
+                    );
+                }
             }
         }
     }

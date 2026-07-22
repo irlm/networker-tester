@@ -44,6 +44,18 @@ type IncomingMessage =
     }
   | { type: string; [k: string]: unknown };
 
+// Reconnect backoff cap (delay and growth share one constant — they were
+// previously 15s/30s, leaving the larger cap unreachable dead logic).
+const MAX_BACKOFF_MS = 30_000;
+// WS close codes that mean "auth rejected" — retrying with the same token is
+// pointless. 1008 = policy violation, 4401 = app-level 401 convention.
+const AUTH_CLOSE_CODES = new Set([1008, 4401]);
+// A pre-upgrade 401 (expired JWT) surfaces in the browser as a generic close
+// (1006) with no `open` event, indistinguishable from a server restart. After
+// this many consecutive never-opened attempts, assume the token is dead and
+// stop hammering — the next REST call's 401 handles the re-login redirect.
+const MAX_CONSECUTIVE_FAILURES = 5;
+
 function buildWsUrl(): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const token = localStorage.getItem('token') || '';
@@ -77,9 +89,14 @@ export function useTesterSubscription(
     let socket: WebSocket | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let backoff = 1000;
+    // Consecutive attempts that closed without ever opening — the signature
+    // of a pre-upgrade auth rejection (see MAX_CONSECUTIVE_FAILURES).
+    let consecutiveFailures = 0;
+    let openedThisAttempt = false;
 
     const connect = () => {
       if (cancelled) return;
+      openedThisAttempt = false;
       try {
         socket = new WebSocket(buildWsUrl());
       } catch {
@@ -89,6 +106,8 @@ export function useTesterSubscription(
 
       socket.addEventListener('open', () => {
         if (cancelled || !socket) return;
+        openedThisAttempt = true;
+        consecutiveFailures = 0;
         backoff = 1000;
         socket.send(
           JSON.stringify({
@@ -135,8 +154,15 @@ export function useTesterSubscription(
         });
       });
 
-      socket.addEventListener('close', () => {
+      socket.addEventListener('close', (ev: CloseEvent) => {
         if (cancelled) return;
+        // Server rejected auth — a retry with the same token can only fail.
+        if (AUTH_CLOSE_CODES.has(ev.code)) return;
+        if (!openedThisAttempt) {
+          consecutiveFailures += 1;
+          // Likely a dead token being 401'd pre-upgrade — stop hammering.
+          if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) return;
+        }
         scheduleReconnect();
       });
 
@@ -147,8 +173,8 @@ export function useTesterSubscription(
 
     const scheduleReconnect = () => {
       if (cancelled) return;
-      const delay = Math.min(backoff, 15000);
-      backoff = Math.min(backoff * 2, 30000);
+      const delay = Math.min(backoff, MAX_BACKOFF_MS);
+      backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
       reconnectTimer = setTimeout(connect, delay);
     };
 
@@ -158,8 +184,10 @@ export function useTesterSubscription(
       cancelled = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (socket) {
-        // Prevent the close handler from scheduling a reconnect after teardown.
-        socket.onclose = null;
+        // The close handler was attached via addEventListener, so it still
+        // fires on this close() — the `cancelled` flag above (checked first
+        // in the handler) is what actually prevents a post-teardown
+        // reconnect. Intentional: no removeEventListener needed.
         try {
           socket.close();
         } catch {

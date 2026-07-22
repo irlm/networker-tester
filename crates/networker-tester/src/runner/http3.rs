@@ -258,6 +258,12 @@ mod real {
         let attempt_id = Uuid::new_v4();
         let started_at = Utc::now();
         let t0 = Instant::now();
+        // Single per-probe deadline: every post-connect HTTP/3 phase races the
+        // *remaining* budget, so a server that completes the QUIC handshake and
+        // then stalls (or dribbles the body) cannot extend the probe past
+        // `timeout_ms` and contaminate `total_ms`.
+        let deadline =
+            tokio::time::Instant::now() + std::time::Duration::from_millis(cfg.timeout_ms);
         let cpu_start = cpu_time::ProcessTime::now();
         #[cfg(unix)]
         let (csw_v0, csw_i0) = get_rusage_csw();
@@ -384,9 +390,9 @@ mod real {
             .unwrap();
 
         let t_sent = Instant::now();
-        let mut stream = match send_req.send_request(req).await {
-            Ok(s) => s,
-            Err(e) => {
+        let mut stream = match tokio::time::timeout_at(deadline, send_req.send_request(req)).await {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
                 return h3_failed(
                     run_id,
                     attempt_id,
@@ -395,6 +401,17 @@ mod real {
                     started_at,
                     ErrorCategory::Http,
                     &format!("h3 send_request: {e}"),
+                );
+            }
+            Err(_) => {
+                return h3_failed(
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    protocol.clone(),
+                    started_at,
+                    ErrorCategory::Timeout,
+                    "h3 send_request timeout",
                 );
             }
         };
@@ -422,9 +439,9 @@ mod real {
         }
         stream.finish().await.ok();
 
-        let resp = match stream.recv_response().await {
-            Ok(r) => r,
-            Err(e) => {
+        let resp = match tokio::time::timeout_at(deadline, stream.recv_response()).await {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => {
                 return h3_failed(
                     run_id,
                     attempt_id,
@@ -433,6 +450,17 @@ mod real {
                     started_at,
                     ErrorCategory::Http,
                     &format!("h3 recv_response: {e}"),
+                );
+            }
+            Err(_) => {
+                return h3_failed(
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    protocol.clone(),
+                    started_at,
+                    ErrorCategory::Timeout,
+                    "h3 recv_response timeout",
                 );
             }
         };
@@ -450,8 +478,24 @@ mod real {
             .collect();
 
         let mut body_size = 0;
-        while let Some(chunk) = stream.recv_data().await.ok().flatten() {
-            body_size += chunk.remaining();
+        loop {
+            match tokio::time::timeout_at(deadline, stream.recv_data()).await {
+                Ok(Ok(Some(chunk))) => body_size += chunk.remaining(),
+                // End of body, or a stream error — treated as end of body,
+                // matching the previous `.ok().flatten()` semantics.
+                Ok(_) => break,
+                Err(_) => {
+                    return h3_failed(
+                        run_id,
+                        attempt_id,
+                        sequence_num,
+                        protocol.clone(),
+                        started_at,
+                        ErrorCategory::Timeout,
+                        "h3 body read timeout",
+                    );
+                }
+            }
         }
 
         let total_ms = t0.elapsed().as_secs_f64() * 1000.0;

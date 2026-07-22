@@ -10,7 +10,6 @@
  * CSI sequences (ESC [ params intermediates final-byte — SGR colors, cursor
  * movement, erase), and two-byte ESC codes.
  */
-// eslint-disable-next-line no-control-regex
 const ANSI_PATTERN = new RegExp(
   [
     '\\u001B\\][^\\u0007\\u001B]*(?:\\u0007|\\u001B\\\\)',

@@ -11,6 +11,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.59] — 2026-07-22
+
+### Fixed
+- **Quality-review fixes (Rust + frontend).** From the 2026-07 deep reviews
+  (`docs/analysis/quality-{rust,frontend,csharp}-2026-07.md`, reports included):
+  - **Rust:** URL diagnostics now actually run the protocol validation probes
+    (`validated_http_versions`/`protocol_runs` shipped empty in every live run —
+    the CLI hardcoded the capability off and never invoked them; probe/pcap
+    errors now correctly flip Completed→Partial); HTTP/3 probes gained per-phase
+    timeouts (send/response/body race the remaining budget — a slow-but-alive
+    server can no longer stall past `timeout_ms`); HTTP request errors are
+    classified structurally (timeout/TCP/TLS/HTTP by source chain, replacing a
+    `"timed out"` substring sniff that mislabeled resets and TLS failures as
+    HTTP); the endpoint's `/asset` route streams instead of allocating up to
+    100 MiB per request; the HTTP/3 test server bounds concurrent
+    connections/streams; HAR copy no longer targets the directory root on an
+    empty filename.
+  - **Frontend:** switching projects during a pending reconnect no longer
+    discards the new project's live events (stale seq guard); the deploy log
+    reconnects with backoff instead of freezing on a dropped stream; tester
+    subscriptions stop retrying forever on auth failure; perf-log flush no
+    longer loses entries on a failed POST (cursors advance only on `res.ok`,
+    chunked under the keepalive cap); five raw-fetch endpoints now flow through
+    the instrumented client (friendly errors + perf-log); the leaderboard
+    detail fetch surfaces failures instead of silently leaving an empty row;
+    eslint debt cleared to zero.
+
+---
+
 ## [0.28.58] — 2026-07-22
 
 ### Fixed

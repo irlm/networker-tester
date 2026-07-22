@@ -1076,11 +1076,29 @@ async fn browser_page(Query(p): Query<PageParams>) -> impl IntoResponse {
 /// GET /asset?id=X&bytes=B → B zero bytes, content-type: application/octet-stream.
 async fn asset_handler(Query(p): Query<AssetParams>) -> impl IntoResponse {
     let n = p.bytes.unwrap_or(10_240).min(100 * 1024 * 1024); // cap 100 MiB
+
+    // Stream the zero fill in fixed-size chunks (same approach as
+    // `download_response`) instead of allocating the full payload — a few
+    // concurrent 100 MiB /asset requests would otherwise spike memory.
+    let full_chunks = n / DOWNLOAD_CHUNK;
+    let remainder = n % DOWNLOAD_CHUNK;
+    let fill_chunk = Bytes::from(vec![0u8; DOWNLOAD_CHUNK]);
+
+    let body = Body::from_stream(futures::stream::iter(
+        (0..full_chunks)
+            .map(move |_| Ok::<_, std::io::Error>(fill_chunk.clone()))
+            .chain(if remainder > 0 {
+                vec![Ok(Bytes::from(vec![0u8; remainder]))].into_iter()
+            } else {
+                vec![].into_iter()
+            }),
+    ));
+
     Response::builder()
         .status(200)
         .header("content-type", "application/octet-stream")
         .header("content-length", n.to_string())
-        .body(Body::from(vec![0u8; n]))
+        .body(body)
         .unwrap()
 }
 
