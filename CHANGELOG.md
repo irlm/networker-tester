@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.50] — 2026-07-22
+
+### Fixed
+- **Tester-delete NSG/IP cascade now derives the subscription + resource group
+  from the VM resource id.** The delete flow's creds carry an empty
+  subscription/resource-group (the scope lives in the resource id), so the
+  cascade's `az network {nsg,public-ip} delete --name` commands went out with
+  blank `--subscription`/`--resource-group` and failed — leaking the NSG + IP
+  to the reaper. Parse the scope from the resource id (found live).
+
+---
+
 ## [0.28.49] — 2026-07-21
 
 ### Fixed

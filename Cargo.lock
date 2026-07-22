@@ -195,7 +195,7 @@ checksum = "ae36dc4177970ef04fde5178d3e2429882def40e57a451f919c098f72baa6cec"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.2",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -629,7 +629,7 @@ dependencies = [
  "heck",
  "proc-macro2",
  "quote",
- "syn 3.0.2",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -2146,7 +2146,7 @@ checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
 
 [[package]]
 name = "networker-agent"
-version = "0.28.49"
+version = "0.28.50"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2166,7 +2166,7 @@ dependencies = [
 
 [[package]]
 name = "networker-common"
-version = "0.28.49"
+version = "0.28.50"
 dependencies = [
  "chrono",
  "networker-tester",
@@ -2177,7 +2177,7 @@ dependencies = [
 
 [[package]]
 name = "networker-dashboard"
-version = "0.28.49"
+version = "0.28.50"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2221,7 +2221,7 @@ dependencies = [
 
 [[package]]
 name = "networker-endpoint"
-version = "0.28.49"
+version = "0.28.50"
 dependencies = [
  "anyhow",
  "axum",
@@ -2257,7 +2257,7 @@ dependencies = [
 
 [[package]]
 name = "networker-log"
-version = "0.28.49"
+version = "0.28.50"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2273,7 +2273,7 @@ dependencies = [
 
 [[package]]
 name = "networker-tester"
-version = "0.28.49"
+version = "0.28.50"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3452,7 +3452,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.2",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -3692,9 +3692,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.2"
+version = "3.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a207d6d6a2b7fc470b80443726053f18a2481b7e1eee970597051596567987a3"
+checksum = "53e9bae58849f64dfa4f5d5ae372c8341f7305f82a3868709269343628b659a3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3812,7 +3812,7 @@ checksum = "43cbfe0cf76104d42a574802844187e84a305e531ed54455f11fbde0f10541cd"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.2",
+ "syn 3.0.3",
 ]
 
 [[package]]

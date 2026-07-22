@@ -169,8 +169,24 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         }
 
         var file = CloudCli.AzBin();
-        var sub = creds?.SubscriptionId ?? string.Empty;
-        var rg = creds?.ResourceGroup ?? string.Empty;
+
+        // The NSG/IP deletes target by --name, so they NEED an explicit
+        // --subscription + --resource-group (unlike `az vm delete`, which uses
+        // the self-describing --ids). In the real delete flow the creds object's
+        // SubscriptionId/ResourceGroup are empty (scope lives in the resource id),
+        // so derive them from the VM resource id first, falling back to creds.
+        // Empty scope → az fails with a bogus API-version dump and the resources
+        // leak to the reaper (found live 2026-07-21).
+        var (idSub, idRg) = ParseAzureScope(tester.VmResourceId);
+        var sub = FirstNonEmpty(idSub, creds?.SubscriptionId);
+        var rg = FirstNonEmpty(idRg, creds?.ResourceGroup);
+        if (string.IsNullOrEmpty(sub) || string.IsNullOrEmpty(rg))
+        {
+            logger.LogInformation(
+                "Azure cascade: no subscription/resource-group for {VmName} (id={ResourceId}); leaving NSG/IP for the reaper",
+                vmName, tester.VmResourceId);
+            return;
+        }
         var env = new Dictionary<string, string> { ["PYTHONWARNINGS"] = "ignore" };
 
         // IP first, then NSG (see method summary).
@@ -180,6 +196,39 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         await RunAzureNetworkDeleteAsync(
             file, BuildAzureNsgDeleteArgs(vmName, sub, rg), env, "NSG", $"{vmName}NSG", ct)
             .ConfigureAwait(false);
+    }
+
+    private static string FirstNonEmpty(string? a, string? b) =>
+        !string.IsNullOrEmpty(a) ? a : (b ?? string.Empty);
+
+    /// <summary>
+    /// Parse the subscription id + resource group out of an Azure VM resource id
+    /// (<c>/subscriptions/{sub}/resourceGroups/{rg}/providers/…</c>,
+    /// case-insensitive). Returns empty strings if a segment is absent.
+    /// </summary>
+    internal static (string Subscription, string ResourceGroup) ParseAzureScope(string? resourceId)
+    {
+        if (string.IsNullOrEmpty(resourceId))
+        {
+            return (string.Empty, string.Empty);
+        }
+
+        var parts = resourceId.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var sub = string.Empty;
+        var rg = string.Empty;
+        for (var i = 0; i + 1 < parts.Length; i++)
+        {
+            if (parts[i].Equals("subscriptions", StringComparison.OrdinalIgnoreCase))
+            {
+                sub = parts[i + 1];
+            }
+            else if (parts[i].Equals("resourceGroups", StringComparison.OrdinalIgnoreCase))
+            {
+                rg = parts[i + 1];
+            }
+        }
+
+        return (sub, rg);
     }
 
     /// <summary>Cascade NSG/IP delete: total attempts including the first.</summary>
