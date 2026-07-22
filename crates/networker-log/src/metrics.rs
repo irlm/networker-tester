@@ -222,5 +222,4 @@ mod tests {
         assert!(json.contains("\"entries_written\":100"));
         assert!(json.contains("\"entries_dropped\":2"));
     }
-
 }
