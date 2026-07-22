@@ -87,7 +87,7 @@ public sealed class TesterQueueUpdateProducerTests
                 benchmark_run_count INTEGER NOT NULL DEFAULT 0,
                 created_by TEXT,
                 created_at TEXT NOT NULL,
-                updated_at TEXT,
+                updated_at TEXT NOT NULL,
                 vm_name TEXT, vm_resource_id TEXT, public_ip TEXT,
                 locked_by_config_id TEXT, installer_version TEXT,
                 last_installed_at TEXT, next_shutdown_at TEXT, last_used_at TEXT,
@@ -169,6 +169,10 @@ public sealed class TesterQueueUpdateProducerTests
             AvgBenchmarkDurationSeconds = avgSecs,
             BenchmarkRunCount = 0,
             CreatedAt = DateTime.UtcNow,
+            // updated_at is store-generated (now() default) in the EF mapping;
+            // set it explicitly so EF doesn't read back NULL from the minimal
+            // SQLite schema (DbUpdateException "NULL at ordinal N" otherwise).
+            UpdatedAt = DateTime.UtcNow,
         });
         db.SaveChanges();
         return testerId;
