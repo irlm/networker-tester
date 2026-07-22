@@ -72,12 +72,18 @@ public sealed class EventBus
     public EventBus(
         IHubContext<BrowserHub> hub,
         ILogger<EventBus> logger,
-        RawSocketRegistry? rawSockets = null)
+        RawSocketRegistry? rawSockets = null,
+        IEnumerable<IDashboardEventObserver>? observers = null)
     {
         _hub = hub;
         _logger = logger;
         _rawSockets = rawSockets;
+        _observers = observers?.ToArray() ?? [];
     }
+
+    // In-process observers (e.g. the tester-queue update producer) — see
+    // IDashboardEventObserver. Snapshotted to an array at construction.
+    private readonly IDashboardEventObserver[] _observers;
 
     /// <summary>
     /// Publish an event: assign the next <c>seq</c>, append to the replay ring
@@ -105,6 +111,23 @@ public sealed class EventBus
                 _buffer.Dequeue();
             }
             _buffer.Enqueue(seqEvent);
+        }
+
+        // In-process observers (tester-queue producer etc.) — synchronous but
+        // contractually non-blocking (they detach real work); an observer bug
+        // must never break publishing.
+        foreach (var observer in _observers)
+        {
+            try
+            {
+                observer.OnEvent(evt);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex, "Dashboard event observer {Observer} failed for seq={Seq}",
+                    observer.GetType().Name, seq);
+            }
         }
 
         // Broadcast live. Detached so Publish stays synchronous and non-blocking

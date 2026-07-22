@@ -60,8 +60,34 @@ public static class TesterQueueHubExtensions
         // The broadcaster lets non-hub code (schedulers, agent-result handlers)
         // push queue updates without holding a hub instance.
         services.AddSingleton<TesterQueueBroadcaster>();
+        services.AddSingleton<ITesterQueuePush>(
+            sp => sp.GetRequiredService<TesterQueueBroadcaster>());
+
+        // THE producer of tester_queue_update deltas: observes EventBus run
+        // transitions (JobUpdate/JobComplete) and pushes the rebuilt queue to
+        // subscribers via the broadcaster. Without this the dashboard's live
+        // queue panel only refreshed on reconnect snapshots (2026-07 gap fix).
+        services.AddSingleton<TesterQueueUpdateProducer>();
+        services.AddSingleton<IDashboardEventObserver>(
+            sp => sp.GetRequiredService<TesterQueueUpdateProducer>());
         return services;
     }
+}
+
+/// <summary>
+/// Push seam over <see cref="TesterQueueBroadcaster"/> so producers (and their
+/// tests) depend on the send contract rather than SignalR's <c>IHubContext</c>.
+/// </summary>
+public interface ITesterQueuePush
+{
+    /// <inheritdoc cref="TesterQueueBroadcaster.NotifyQueueUpdateAsync"/>
+    Task NotifyQueueUpdateAsync(
+        string projectId,
+        string testerId,
+        string trigger,
+        TesterQueueEntry? running,
+        IReadOnlyList<TesterQueueEntry> queued,
+        CancellationToken ct = default);
 }
 
 /// <summary>
@@ -86,7 +112,7 @@ public static class TesterQueueHubExtensions
 /// </summary>
 public sealed class TesterQueueBroadcaster(
     IHubContext<TesterQueueHub> hub,
-    TesterQueueRegistry registry)
+    TesterQueueRegistry registry) : ITesterQueuePush
 {
     /// <summary>
     /// Push a <c>tester_queue_update</c> to all subscribers of a tester. No-op if
