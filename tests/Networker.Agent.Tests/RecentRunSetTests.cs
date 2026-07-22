@@ -64,7 +64,9 @@ public class RecentRunSetTests
         var set = new RecentRunSet(capacity: 64);
         var perThread = 500;
 
-        Parallel.For(0, 4, _ =>
+        // Parameter must not be named `_` — that would make the `_ =` below an
+        // assignment to it (CS0029) instead of a discard.
+        Parallel.For(0, 4, worker =>
         {
             for (var i = 0; i < perThread; i++)
             {
