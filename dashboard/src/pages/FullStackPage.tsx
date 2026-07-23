@@ -7,6 +7,7 @@ import { WizardStepper } from '../components/wizard/WizardStepper';
 import { TestbedMatrix } from '../components/wizard/TestbedMatrix';
 import { WorkloadPanel } from '../components/wizard/WorkloadPanel';
 import { MethodologyPanel } from '../components/wizard/MethodologyPanel';
+import { unsupportedReason } from '../lib/mode-capabilities';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
 import { useToast } from '../hooks/useToast';
@@ -49,6 +50,24 @@ export function FullStackPage() {
   const [insecure, setInsecure] = useState(false);
   const [connectionReuse, setConnectionReuse] = useState(true);
   const [captureMode, setCaptureMode] = useState<'none' | 'tester' | 'endpoint' | 'both'>('none');
+
+  // A full-stack run always targets a provisioned networker-endpoint (a proxy
+  // stack), so gate the mode picker to that target kind — greys out sdkprobe
+  // (needs an SDK endpoint) and apibench (needs the Application Benchmark's
+  // reference APIs), which would only ever fail here.
+  const modeUnsupported = useMemo(
+    () => (id: string) => unsupportedReason(id, { kind: 'endpoint' }),
+    [],
+  );
+
+  // Defensively drop any unsupported mode from the selection (e.g. from a
+  // prefilled/saved config) so a launch can never include one.
+  useEffect(() => {
+    setSelectedModes(prev => {
+      const pruned = new Set([...prev].filter(m => modeUnsupported(m) === null));
+      return pruned.size === prev.size ? prev : pruned;
+    });
+  }, [modeUnsupported]);
 
   // Step 2: Methodology (always on). Seeded from the 'standard' preset so the
   // Review step always shows exactly what the highlighted preset says (F14).
@@ -252,6 +271,7 @@ export function FullStackPage() {
           modeGroups={modeGroups}
           selectedModes={selectedModes}
           onModesChange={setSelectedModes}
+          unsupported={modeUnsupported}
           runs={runs}
           onRunsChange={setRuns}
           concurrency={concurrency}
