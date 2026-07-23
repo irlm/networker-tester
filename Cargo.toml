@@ -2,16 +2,13 @@
 members = [
     "crates/networker-tester",
     "crates/networker-endpoint",
-    "crates/networker-common",
-    "crates/networker-dashboard",
-    "crates/networker-agent",
     "crates/networker-log",
 ]
 resolver = "2"
 exclude = ["benchmarks/orchestrator", "benchmarks/metrics-agent"]
 
 [workspace.package]
-version     = "0.28.66"
+version     = "0.28.67"
 edition     = "2021"
 authors     = ["NetworkerTester Contributors"]
 license     = "MIT"
