@@ -38,6 +38,22 @@ A burst of these after a restart is expected recovery (the 30-min deployment swe
 is what unblocks an orphaned deploy). A steady stream of stale-running/queued
 reaps points at agent connectivity or dispatch problems.
 
+## Automated monitoring
+
+Two GitHub Actions watch prod so an outage pages watchers instead of waiting to
+be noticed:
+
+| Workflow | Cadence | Checks | On failure |
+|---|---|---|---|
+| **Prod uptime monitor** (`.github/workflows/uptime-monitor.yml`) | ~10 min | `/api/health` is 200 + `status=ok` + `db=ok` on both domains; SPA root + API routes don't 5xx/502/503; TLS cert not expiring (<7 d fails, <14 d warns) | Opens/updates the deduped issue **"Prod uptime monitor failing"** (pinned), closes it on recovery |
+| **Prod soak check** (`.github/workflows/soak-check.yml`) | Nightly | Deep on-VM checklist: background loops healthy, no stuck-queued runs, no Rust writers, advisory-lock count, orphan-resource count; also the decommission soak streak | Opens/updates the deduped issue **"Soak check failing"** |
+
+The uptime monitor is public-endpoint-only (no secrets); the soak needs
+`AZURE_CREDENTIALS` + `DASHBOARD_ADMIN_PASSWORD` (keep the latter in sync after an
+[admin password reset](admin-password-reset.md), or the soak login breaks).
+Neither watches disk space or DB growth on the VM — for those, `df -h` /
+`pg_database_size()` via `az vm run-command`, not yet automated.
+
 ## Related
 
 - Run-lifecycle guarantees and the full watchdog table:
