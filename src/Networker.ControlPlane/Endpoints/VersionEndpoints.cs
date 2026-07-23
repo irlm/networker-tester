@@ -48,7 +48,10 @@ public static class VersionEndpoints
         {
             var dashboardVersion = DashboardVersion;
 
-            var testerVersion = await GetTesterVersionAsync();
+            // The local tester binary's version never changes at runtime — probe
+            // it once (subprocess), then serve from the memoised task on every
+            // subsequent poll (keeps /api/version off the process-spawn path).
+            var testerVersion = await TesterVersionLazy.Value;
 
             // Treat the bootstrap-fallback value (equal to our own version) as
             // "unknown" so the UI doesn't show a spurious "no update" message
@@ -97,7 +100,10 @@ public static class VersionEndpoints
                 }
             }
 
-            var endpoints = await Task.WhenAll(hosts.Select(CheckEndpointVersionAsync));
+            // Synchronous, non-blocking: each host returns its last cached probe
+            // result immediately (background-refreshed if stale). No await, no
+            // network I/O on the request path.
+            var endpoints = hosts.Select(CheckEndpointVersion).ToArray();
 
             return Results.Json(new VersionInfoDto(
                 dashboardVersion,
@@ -142,6 +148,11 @@ public static class VersionEndpoints
     }
 
     private const string TesterBinaryEnvVar = "AGENT_TESTERPATH";
+
+    // The tester binary version is fixed for the process lifetime — spawn the
+    // subprocess ONCE and memoise the task so every /api/version poll reuses it.
+    private static readonly Lazy<Task<string?>> TesterVersionLazy =
+        new(GetTesterVersionAsync);
 
     /// <summary>
     /// Best-effort local <c>networker-tester --version</c>. Returns the trailing
@@ -226,30 +237,62 @@ public static class VersionEndpoints
     // Per-host probe cache. /api/version is POLLED by the frontend, so without a
     // short TTL every poll re-probes every recent deployment host — and a host
     // that has since gone dead (tester deallocated / VM deleted) costs the full
-    // probe timeout on every poll. Cache the result briefly so at most one poll
-    // per window pays the network cost. (Observed: /version was 3s server-side
-    // from a single dead host — quality fix 2026-07.)
+    // probe timeout on every poll. So the request NEVER probes on its own path:
+    // it returns the last cached per-host result immediately (stale-while-
+    // revalidate) and, if stale/missing, kicks off a background refresh that is
+    // NOT awaited. Result: /api/version server time is a couple ms (DB query +
+    // cache reads), not 1.5–3s. (Observed: /version was 3s server-side from a
+    // single dead host — quality fix 2026-07.)
     private static readonly ConcurrentDictionary<string, (EndpointVersionDto Dto, long At)>
         EndpointProbeCache = new();
+
+    // Hosts with an in-flight background probe — dedups so N concurrent polls
+    // trigger at most ONE probe per host.
+    private static readonly ConcurrentDictionary<string, byte> EndpointProbeInFlight = new();
 
     private static readonly TimeSpan EndpointProbeTtl = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// Endpoint-version for a host, memoised for <see cref="EndpointProbeTtl"/> so
-    /// the polled <c>/api/version</c> doesn't re-probe (or re-time-out on a dead
-    /// host) every call.
+    /// The last-known endpoint-version for a host, returned IMMEDIATELY (never
+    /// blocks the request on a probe). If the cached value is missing or older
+    /// than <see cref="EndpointProbeTtl"/>, a background refresh is triggered
+    /// (fire-and-forget); the fresher value is picked up by a later poll. A host
+    /// never seen before shows as unreachable until its first background probe
+    /// completes (~1.5s later).
     /// </summary>
-    private static async Task<EndpointVersionDto> CheckEndpointVersionAsync(string host)
+    private static EndpointVersionDto CheckEndpointVersion(string host)
     {
-        if (EndpointProbeCache.TryGetValue(host, out var cached)
-            && Stopwatch.GetElapsedTime(cached.At) < EndpointProbeTtl)
+        var have = EndpointProbeCache.TryGetValue(host, out var cached);
+        if (!have || Stopwatch.GetElapsedTime(cached.At) >= EndpointProbeTtl)
         {
-            return cached.Dto;
+            TriggerBackgroundProbe(host);
         }
+        return have ? cached.Dto : new EndpointVersionDto(host, null, false);
+    }
 
-        var dto = await ProbeEndpointVersionAsync(host).ConfigureAwait(false);
-        EndpointProbeCache[host] = (dto, Stopwatch.GetTimestamp());
-        return dto;
+    private static void TriggerBackgroundProbe(string host)
+    {
+        // One in-flight probe per host at a time.
+        if (!EndpointProbeInFlight.TryAdd(host, 0))
+        {
+            return;
+        }
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var dto = await ProbeEndpointVersionAsync(host).ConfigureAwait(false);
+                EndpointProbeCache[host] = (dto, Stopwatch.GetTimestamp());
+            }
+            catch
+            {
+                // Best-effort background refresh — never surfaces to the request.
+            }
+            finally
+            {
+                EndpointProbeInFlight.TryRemove(host, out _);
+            }
+        });
     }
 
     /// <summary>

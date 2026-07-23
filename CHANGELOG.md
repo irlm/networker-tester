@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.66] — 2026-07-23
+
+### Fixed
+- **`GET /api/version` no longer probes tester hosts on the request path** — the
+  real fix for its multi-second server time (v0.28.65 reduced a dead host from
+  3s→1.5s but still blocked on a cache miss). The handler now returns each host's
+  last cached probe result **synchronously** (stale-while-revalidate): a
+  missing/stale host serves immediately and triggers a background refresh that
+  the request never awaits (deduped to one in-flight probe per host). The local
+  tester-binary `--version` subprocess is memoised too. Server time for
+  `/api/version` drops from ~3s to a few ms (just the deployments query); a host
+  never seen before shows as unreachable until its first background probe
+  (~1.5s) completes.
+
 ## [0.28.65] — 2026-07-23
 
 ### Fixed
