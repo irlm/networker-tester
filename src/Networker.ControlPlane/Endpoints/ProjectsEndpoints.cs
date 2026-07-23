@@ -25,6 +25,32 @@ namespace Networker.ControlPlane.Endpoints;
 /// </summary>
 public static class ProjectsEndpoints
 {
+    /// <summary>
+    /// Projects a non-platform-admin user is a member of, ordered by created_at.
+    /// Extracted for the EF-translation regression test. The OrderBy MUST be on
+    /// the entity column <c>p.CreatedAt</c> BEFORE the Join projects into the
+    /// client-constructed <see cref="ProjectListItem"/> — ordering after the
+    /// projection cannot be translated by EF Core and 500s (perf sweep 2026-07).
+    /// The platform-admin branch already orders before its Select and was fine.
+    /// </summary>
+    internal static IQueryable<ProjectListItem> BuildMemberProjectsQuery(
+        NetworkerDbContext db, Guid userId) =>
+        db.Projects
+            .AsNoTracking()
+            .Where(p => p.DeletedAt == null)
+            .OrderBy(p => p.CreatedAt)
+            .Join(
+                db.ProjectMembers.Where(m => m.UserId == userId),
+                p => p.ProjectId,
+                m => m.ProjectId,
+                (p, m) => new ProjectListItem(
+                    p.ProjectId,
+                    p.Name,
+                    p.Slug,
+                    p.Description,
+                    m.Role,
+                    p.CreatedAt));
+
     public static void MapProjectsEndpoints(this IEndpointRouteBuilder app)
     {
         // GET /api/projects — projects visible to the caller.
@@ -64,22 +90,7 @@ public static class ProjectsEndpoints
             }
             else
             {
-                projects = await db.Projects
-                    .AsNoTracking()
-                    .Where(p => p.DeletedAt == null)
-                    .Join(
-                        db.ProjectMembers.Where(m => m.UserId == user.UserId),
-                        p => p.ProjectId,
-                        m => m.ProjectId,
-                        (p, m) => new ProjectListItem(
-                            p.ProjectId,
-                            p.Name,
-                            p.Slug,
-                            p.Description,
-                            m.Role,
-                            p.CreatedAt))
-                    .OrderBy(p => p.created_at)
-                    .ToListAsync();
+                projects = await BuildMemberProjectsQuery(db, user.UserId).ToListAsync();
             }
 
             return Results.Ok(new { projects });

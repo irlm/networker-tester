@@ -9,6 +9,7 @@ using Networker.ControlPlane.Endpoints;
 using Networker.ControlPlane.Realtime;
 using Networker.ControlPlane.Realtime.RawWs;
 using Networker.ControlPlane.Notifications;
+using Networker.ControlPlane.Observability;
 using Networker.ControlPlane.Provisioning;
 using Networker.ControlPlane.Security;
 using Networker.ControlPlane.Sso;
@@ -135,6 +136,11 @@ if (builder.Configuration["NETWORKER_RUN_MIGRATIONS"] != "0")
         app.Logger.LogInformation("Encrypted {Count} legacy alert-webhook secret(s) at rest", backfilled);
     }
 }
+
+// Server processing time header (X-Process-Time-Ms) — outermost so the
+// stopwatch wraps the whole request; the frontend perf log reads it to split
+// each call into server_ms vs network_ms (perf sweep 2026-07).
+app.UseServerTiming();
 
 // Global 500 contract — FIRST middleware so any unhandled exception below
 // (auth, endpoints, raw WS) becomes the uniform { "error": ... } envelope
