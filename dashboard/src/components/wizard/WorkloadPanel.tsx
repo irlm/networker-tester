@@ -24,6 +24,8 @@ export interface WorkloadPanelProps {
   onConnectionReuseChange?: (v: boolean) => void;
   captureMode?: 'none' | 'tester' | 'endpoint' | 'both';
   onCaptureModeChange?: (v: 'none' | 'tester' | 'endpoint' | 'both') => void;
+  /** Capability gate passed through to the mode picker (see ModeSelector). */
+  unsupported?: (id: string) => string | null | undefined;
 }
 
 export function WorkloadPanel({
@@ -45,6 +47,7 @@ export function WorkloadPanel({
   onConnectionReuseChange,
   captureMode = 'none',
   onCaptureModeChange,
+  unsupported,
 }: WorkloadPanelProps) {
   const handleModeToggle = useCallback((id: string) => {
     const next = new Set(selectedModes);
@@ -83,6 +86,7 @@ export function WorkloadPanel({
             selectedModes={selectedModes}
             onToggle={handleModeToggle}
             onToggleGroup={handleGroupToggle}
+            unsupported={unsupported}
           />
         </div>
       )}

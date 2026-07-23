@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.67] — 2026-07-23
+
+### Added
+- **Capability-gated mode selection (first slice).** The mode picker now greys
+  out — with a tooltip reason — probe modes that can only fail against the chosen
+  target, so you can't launch an always-failing run. A new frontend
+  `mode-capabilities` classifier maps each mode to what its target must provide
+  (`any` URL / `networker-endpoint` / `sdk-endpoint` / `reference-apis`); the
+  `ModeSelector` disables unsupported rows and excludes them from group-select,
+  and the picker prunes any unsupported mode from the selection. Wired into the
+  **Full Stack** wizard first (target = a provisioned endpoint → `sdkprobe` and
+  `apibench` are greyed as inapplicable). The classification is intended to move
+  to a `requires` field in `shared/modes.json` as the cross-stack source of truth
+  in a follow-up.
+
 ## [0.28.66] — 2026-07-23
 
 ### Fixed
