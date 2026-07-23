@@ -24,7 +24,8 @@ public class ModesManifestTests
     private static readonly JsonDocument Manifest = JsonDocument.Parse(
         File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "shared", "modes.json")));
 
-    private sealed record CatalogEntry(string Id, string Name, string Description, string Detail, string Group);
+    private sealed record CatalogEntry(
+        string Id, string Name, string Description, string Detail, string Group, string Requires);
 
     /// <summary>Manifest entries that belong in the /api/modes catalog (catalog == true), in order.</summary>
     private static List<CatalogEntry> ManifestCatalog()
@@ -42,7 +43,8 @@ public class ModesManifestTests
                 m.GetProperty("name").GetString()!,
                 m.GetProperty("description").GetString()!,
                 m.GetProperty("detail").GetString()!,
-                m.GetProperty("group").GetString()!));
+                m.GetProperty("group").GetString()!,
+                m.GetProperty("requires").GetString()!));
         }
 
         return list;
@@ -60,7 +62,8 @@ public class ModesManifestTests
         {
             var t = item.GetType();
             string Prop(string name) => (string)t.GetProperty(name)!.GetValue(item)!;
-            list.Add(new CatalogEntry(Prop("Id"), Prop("Name"), Prop("Description"), Prop("Detail"), Prop("Group")));
+            list.Add(new CatalogEntry(
+                Prop("Id"), Prop("Name"), Prop("Description"), Prop("Detail"), Prop("Group"), Prop("Requires")));
         }
 
         return list;
