@@ -11,6 +11,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.62] — 2026-07-23
+
+### Fixed
+- **Provisioning/dispatch reliability batch (C# quality-review P2s F3/F8/F9/F10).**
+  - **Provisioning pipeline no longer wedges permanently (F3).** A `cancelled`
+    deployment now fails its run instead of leaving it in `provisioning` forever;
+    a `completed` deployment with no captured endpoint IPs (a permanent
+    condition) fails the run instead of retrying every tick; `DeployRunner`
+    persists terminal state under `CancellationToken.None` and marks the
+    deployment `failed` on shutdown-cancellation so it can't stick at
+    `pending`/`running`; and the watchdog now sweeps deployments stuck in
+    `pending`/`running` past 30 min (control-plane restart mid-deploy) and
+    `provisioning` runs whose deployment is gone — nothing timed these out before.
+  - **Orphan VM with no DB record (F8).** When `az vm create` succeeds but a
+    follow-up step (Windows extension set) fails, or an AWS IP-poll is cancelled,
+    the known resource id is no longer discarded — it's carried on the failure
+    result and persisted onto the tester row (+ logged) so the reaper/operator
+    can reclaim the billing VM.
+  - **Empty `--subscription ""` no longer hard-fails every tick (F9).** Under
+    ambient CLI auth (no stored credentials) the Azure lifecycle argv omits the
+    empty `--subscription`/`--resource-group` flags (the ARM `--ids` is
+    self-describing) instead of erroring before dispatch and retrying forever.
+  - **Cancel no longer clobbers terminal run status (F10).** `CancelAsync` guards
+    on non-terminal status and sets `FinishedAt`; a cancel racing/after completion
+    is a logged no-op instead of rewriting `completed`/`failed` history to
+    `cancelled`.
+
 ## [0.28.61] — 2026-07-22
 
 ### Fixed

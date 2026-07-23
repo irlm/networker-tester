@@ -63,6 +63,25 @@ public sealed class WatchdogService : BackgroundService
     /// </summary>
     private static readonly TimeSpan RunningStaleCutoff = TimeSpan.FromSeconds(120);
 
+    /// <summary>
+    /// How long a deployment may sit in <c>pending</c>/<c>running</c> (or a run in
+    /// <c>provisioning</c> whose deployment is gone) before it is failed. The
+    /// deploy runs on a DETACHED in-process task; a control-plane restart
+    /// mid-deploy (every release!) orphans the deployment forever with nothing to
+    /// time it out (quality audit F3(b)). 30 min comfortably exceeds the
+    /// <c>DeployRunner.DeployTimeout</c> (30 min) plus slack, so a live deploy is
+    /// never falsely reaped.
+    /// </summary>
+    private static readonly TimeSpan DeploymentStaleCutoff = TimeSpan.FromMinutes(30);
+
+    /// <summary>User-facing message for a deployment orphaned by a restart.</summary>
+    private const string DeploymentReapedError =
+        "Deployment did not finish within 30 minutes — the control plane may have restarted mid-deploy";
+
+    /// <summary>User-facing message for a provisioning run whose deployment is gone.</summary>
+    private const string ProvisioningOrphanError =
+        "Provisioning stalled — the deployment was lost or never finished; no VM was provisioned";
+
     /// <summary>Rust reaper's user-facing message for a dead running run.</summary>
     private const string RunningReapedError =
         "Agent disconnected — tester may have been deleted or restarted";
@@ -251,16 +270,115 @@ public sealed class WatchdogService : BackgroundService
                 runId, QueuedCutoff.TotalSeconds);
         }
 
-        if (reapedRunning > 0 || reapedQueued > 0)
+        // ── Stale `pending`/`running` deployments (restart-orphan sweep) ─────
+        // The deploy runs on a detached in-process Task.Run; a control-plane
+        // restart mid-deploy orphans the deployment at pending/running forever,
+        // and with it any run in `provisioning`. Nothing else times these out.
+        // Fail deployments older than the cutoff — the orchestrator's next tick
+        // then fails their run via the DeploymentFailed arm (quality audit F3(b)).
+        var deploymentStaleBefore = now - DeploymentStaleCutoff;
+        var stuckDeployments = await db.Deployments
+            .Where(d => (d.Status == "pending" || d.Status == "running")
+                && d.CreatedAt < deploymentStaleBefore)
+            .Select(d => d.DeploymentId)
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        var reapedDeployments = 0;
+        foreach (var deploymentId in stuckDeployments)
+        {
+            var affected = await db.Deployments
+                .Where(d => d.DeploymentId == deploymentId
+                    && (d.Status == "pending" || d.Status == "running"))
+                .ExecuteUpdateAsync(
+                    s => s
+                        .SetProperty(d => d.Status, "failed")
+                        .SetProperty(d => d.ErrorMessage, DeploymentReapedError)
+                        .SetProperty(d => d.FinishedAt, now),
+                    ct)
+                .ConfigureAwait(false);
+
+            if (affected == 0)
+            {
+                // The deploy runner finished it between query and update.
+                continue;
+            }
+
+            reapedDeployments++;
+            _logger.LogWarning(
+                "Reaped stale deployment {DeploymentId} — pending/running for more than {Cutoff}m (control plane likely restarted mid-deploy)",
+                deploymentId, DeploymentStaleCutoff.TotalMinutes);
+        }
+
+        // ── Orphaned `provisioning` runs whose deployment is gone/missing ────
+        // A run stuck in `provisioning` whose linked deployment no longer exists
+        // (or was never created) can never be promoted or failed by the
+        // orchestrator (its DeploymentFailed/Cancelled arms need a deployment
+        // row). Fail such runs directly once they are older than the cutoff.
+        var provisioningStaleBefore = now - DeploymentStaleCutoff;
+        var provisioningRuns = await db.TestRuns
+            .Where(r => r.Status == "provisioning" && r.CreatedAt < provisioningStaleBefore)
+            .Select(r => new { r.Id, r.ProvisioningDeploymentId })
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        var reapedProvisioning = 0;
+        foreach (var run in provisioningRuns)
+        {
+            // Only reap when the deployment is genuinely gone/missing — a run with
+            // a live deployment is owned by the orchestrator (which fails it via
+            // the DeploymentFailed arm once the sweep above marks the deployment
+            // failed). A null link, or a link to a vanished deployment row, means
+            // the orchestrator can never resolve it.
+            var deploymentExists = run.ProvisioningDeploymentId is Guid depId
+                && await db.Deployments
+                    .AnyAsync(d => d.DeploymentId == depId, ct)
+                    .ConfigureAwait(false);
+            if (deploymentExists)
+            {
+                continue;
+            }
+
+            var affected = await db.TestRuns
+                .Where(r => r.Id == run.Id && r.Status == "provisioning")
+                .ExecuteUpdateAsync(
+                    s => s
+                        .SetProperty(r => r.Status, "failed")
+                        .SetProperty(r => r.ErrorMessage, ProvisioningOrphanError)
+                        .SetProperty(r => r.FinishedAt, now),
+                    ct)
+                .ConfigureAwait(false);
+
+            if (affected == 0)
+            {
+                continue;
+            }
+
+            _events.Publish(new JobUpdate(
+                JobId: run.Id,
+                Status: "failed",
+                AgentId: null,
+                StartedAt: null,
+                FinishedAt: eventNow));
+
+            reapedProvisioning++;
+            _logger.LogWarning(
+                "Reaped orphaned provisioning run {RunId} — its deployment {DeploymentId} is gone/missing",
+                run.Id, run.ProvisioningDeploymentId);
+        }
+
+        if (reapedRunning > 0 || reapedQueued > 0 || reapedDeployments > 0 || reapedProvisioning > 0)
         {
             _logger.LogInformation(
-                "Stale-job watchdog: failed {Running} running + {Queued} queued run(s)",
-                reapedRunning, reapedQueued);
+                "Stale-job watchdog: failed {Running} running + {Queued} queued run(s), "
+                + "{Deployments} deployment(s), {Provisioning} orphaned provisioning run(s)",
+                reapedRunning, reapedQueued, reapedDeployments, reapedProvisioning);
         }
 
         _monitor.ReportTick(
             OpsServiceNames.Watchdog,
-            reapedRunning + reapedQueued,
-            $"reaped_running={reapedRunning} reaped_queued={reapedQueued}");
+            reapedRunning + reapedQueued + reapedDeployments + reapedProvisioning,
+            $"reaped_running={reapedRunning} reaped_queued={reapedQueued} "
+            + $"reaped_deployments={reapedDeployments} reaped_provisioning={reapedProvisioning}");
     }
 }

@@ -364,6 +364,31 @@ public static partial class TesterWriteEndpoints
             creds).ConfigureAwait(false);
         if (!created.Success)
         {
+            // A failed create can still carry a KNOWN resource id — e.g. the VM
+            // was created but a follow-up step (Windows extension set) failed
+            // (quality audit F8). Persist that resource id onto the tester row and
+            // log it loudly so the orphan reaper / an operator can clean up the
+            // billing VM instead of losing it entirely.
+            if (!string.IsNullOrEmpty(created.ResourceId))
+            {
+                logger.LogError(
+                    "VM create for tester {TesterId} failed AFTER the VM was created "
+                    + "(resource_id={ResourceId}): {Error} — orphaned VM, manual/reaper "
+                    + "cleanup required; persisting vm_resource_id so it can be reclaimed.",
+                    testerId, created.ResourceId, created.Error ?? "VM create failed");
+
+                await using var orphanCmd = conn.CreateCommand();
+                orphanCmd.CommandText = """
+                    UPDATE project_tester
+                       SET vm_name = @vm_name, vm_resource_id = @resource_id, updated_at = NOW()
+                     WHERE tester_id = @tester
+                    """;
+                orphanCmd.Parameters.AddWithValue("vm_name", created.VmName ?? vmNamePreview);
+                orphanCmd.Parameters.AddWithValue("resource_id", created.ResourceId);
+                orphanCmd.Parameters.AddWithValue("tester", testerId);
+                await orphanCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+            }
+
             throw new InvalidOperationException(created.Error ?? "VM create failed");
         }
 

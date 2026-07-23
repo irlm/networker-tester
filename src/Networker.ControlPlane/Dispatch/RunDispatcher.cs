@@ -225,13 +225,41 @@ public sealed class RunDispatcher : IRunDispatcher
     public async Task CancelAsync(Guid runId, CancellationToken ct)
     {
         // Set status → cancelled. Mirrors the Rust test_runs::update_status(Cancelled).
+        // GUARDED so a cancel racing (or arriving after) completion never rewrites
+        // completed/failed history to cancelled (quality audit F10). Only a
+        // non-terminal run is cancellable; a terminal run is a no-op. Also stamp
+        // FinishedAt so the cancelled run has a terminal timestamp like every other
+        // terminal transition.
+        var now = DateTime.UtcNow;
         var affected = await _db.TestRuns
-            .Where(r => r.Id == runId)
-            .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, StatusCancelled), ct);
+            .Where(r => r.Id == runId
+                && (r.Status == StatusQueued || r.Status == StatusRunning || r.Status == "provisioning"))
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.Status, StatusCancelled)
+                .SetProperty(r => r.FinishedAt, now), ct);
 
         if (affected == 0)
         {
-            throw new RunDispatchNotFoundException($"test_run {runId} not found");
+            // Nothing cancelled. Distinguish "not found" from "already terminal":
+            // re-query the run. If it exists it is already in a terminal state, so
+            // the cancel is a legitimate no-op — log and return WITHOUT throwing,
+            // WITHOUT fanning out a cancel frame, and WITHOUT publishing a spurious
+            // JobUpdate that would flip the UI off its real terminal status. Only a
+            // genuinely missing run is a 404.
+            var existing = await _db.TestRuns
+                .AsNoTracking()
+                .Where(r => r.Id == runId)
+                .Select(r => new { r.Status })
+                .FirstOrDefaultAsync(ct);
+            if (existing is null)
+            {
+                throw new RunDispatchNotFoundException($"test_run {runId} not found");
+            }
+
+            _logger.LogInformation(
+                "Cancel of test_run {RunId} is a no-op — run is already terminal ({Status})",
+                runId, existing.Status);
+            return;
         }
 
         // Fan-out cancel to the owning agent if we know it, else any online agent

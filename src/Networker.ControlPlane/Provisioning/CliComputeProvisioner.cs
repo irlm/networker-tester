@@ -347,22 +347,56 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
             _ => "show",
         };
 
-        var args = new List<string> { "vm", verb, "--subscription", sub, "--resource-group", rg, "--ids", resourceId };
-        if (op == LifecycleOp.Delete)
-        {
-            args.Add("--yes");
-        }
-        if (op == LifecycleOp.Show)
-        {
-            args.Add("--show-details");
-            args.Add("--output");
-            args.Add("json");
-        }
+        var args = BuildAzureLifecycleArgs(
+            verb, sub, rg, resourceId,
+            isDelete: op == LifecycleOp.Delete,
+            isShow: op == LifecycleOp.Show);
 
         // PYTHONWARNINGS=ignore keeps az's Python SyntaxWarnings out of stdout so
         // JSON parsing stays clean — same as the Rust az_cmd().
         var env = new Dictionary<string, string> { ["PYTHONWARNINGS"] = "ignore" };
         return (file, args, env);
+    }
+
+    /// <summary>
+    /// Build the <c>az vm &lt;verb&gt;</c> argv for a power-lifecycle op on an
+    /// existing VM (<c>--ids</c>). Passes <c>--subscription</c> /
+    /// <c>--resource-group</c> ONLY when non-empty: under ambient CLI auth
+    /// (managed identity / <c>az login</c>) the credentials are absent → sub/rg
+    /// are "", and az errors before dispatch on an empty <c>--subscription ""</c>,
+    /// so AutoShutdown treated the non-zero exit as a real failure and retried
+    /// every 60 s tick forever (quality audit F9). The ARM <c>--ids</c> is
+    /// self-describing (it encodes the subscription + resource group), so both
+    /// scope flags are optional. Public so the arg-shape is unit-tested directly.
+    /// </summary>
+    public static List<string> BuildAzureLifecycleArgs(
+        string verb, string subscription, string resourceGroup, string resourceId,
+        bool isDelete, bool isShow)
+    {
+        var args = new List<string> { "vm", verb };
+        if (!string.IsNullOrEmpty(subscription))
+        {
+            args.Add("--subscription");
+            args.Add(subscription);
+        }
+        if (!string.IsNullOrEmpty(resourceGroup))
+        {
+            args.Add("--resource-group");
+            args.Add(resourceGroup);
+        }
+        args.Add("--ids");
+        args.Add(resourceId);
+        if (isDelete)
+        {
+            args.Add("--yes");
+        }
+        if (isShow)
+        {
+            args.Add("--show-details");
+            args.Add("--output");
+            args.Add("json");
+        }
+        return args;
     }
 
     // ── AWS argv (aws ec2) ───────────────────────────────────────────────────
@@ -607,8 +641,13 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
                         azBin, env, sub, rg, request.Name, ct).ConfigureAwait(false);
                     if (!extRes.Success)
                     {
+                        // The VM already exists and bills — carry its known
+                        // resourceId on the failure so the caller can record it
+                        // for the reaper / operator cleanup instead of orphaning a
+                        // billing VM with no DB record (quality audit F8).
                         return VmCreateResult.Fail(
-                            $"az vm extension set failed: {extRes.Error ?? extRes.StdErr}");
+                            $"az vm extension set failed: {extRes.Error ?? extRes.StdErr}",
+                            resourceId);
                     }
                 }
 
@@ -905,7 +944,18 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
                 }
             }
 
-            await Task.Delay(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false);
+            // A cancellation here (shutdown) must NOT discard the known
+            // instanceId — the VM exists and bills. Treat it as created with
+            // whatever public IP we captured so far so the caller records the
+            // resource id (quality audit F8).
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return VmCreateResult.Created(instanceId, publicIp, request.Name);
+            }
         }
 
         return VmCreateResult.Created(instanceId, publicIp, request.Name);
