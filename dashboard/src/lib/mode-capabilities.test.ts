@@ -17,10 +17,15 @@ describe('requirementOf', () => {
     }
   });
 
-  it('classifies throughput / UDP / page-load as needing a networker-endpoint', () => {
-    for (const m of ['download', 'upload', 'download3', 'webupload', 'udp', 'udpdownload',
-      'pageload', 'pageload3', 'browser2']) {
+  it('classifies THROUGHPUT modes as needing a networker-endpoint', () => {
+    for (const m of ['download', 'upload', 'download3', 'webupload', 'udpdownload', 'udpupload']) {
       expect(requirementOf(m)).toBe('networker-endpoint');
+    }
+  });
+
+  it('classifies udp / page-load / browser as any-target (the URL Probe runs them against raw URLs)', () => {
+    for (const m of ['udp', 'pageload', 'pageload3', 'browser1', 'browser2', 'browser3']) {
+      expect(requirementOf(m)).toBe('any');
     }
   });
 
@@ -37,13 +42,18 @@ describe('requirementOf', () => {
 });
 
 describe('unsupportedReason / isModeSupported', () => {
-  it('URL target: only any-target modes are allowed', () => {
+  it('URL target: primitives + udp + page-load + browser ok; only throughput/sdk/apibench blocked', () => {
+    // The URL Probe runs all of these against arbitrary URLs.
     expect(isModeSupported('http3', url)).toBe(true);
     expect(isModeSupported('tls', url)).toBe(true);
-    // endpoint-only modes fail against a raw URL — the "always fails" case.
+    expect(isModeSupported('udp', url)).toBe(true);
+    expect(isModeSupported('pageload3', url)).toBe(true);
+    expect(isModeSupported('browser2', url)).toBe(true);
+    // Throughput needs the endpoint's servers — the "always fails" case on a raw URL.
     expect(isModeSupported('download', url)).toBe(false);
     expect(isModeSupported('udpdownload', url)).toBe(false);
-    expect(isModeSupported('pageload3', url)).toBe(false);
+    expect(isModeSupported('sdkprobe', url)).toBe(false);
+    expect(isModeSupported('apibench', url)).toBe(false);
     expect(unsupportedReason('download', url)).toContain('networker-endpoint');
   });
 

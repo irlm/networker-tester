@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.70] — 2026-07-23
+
+### Fixed
+- **Mode-capability classifier corrected: `udp` / `pageload*` / `browser*` are
+  not endpoint-only.** The first-slice classifier (v0.28.67) wrongly required a
+  networker-endpoint for those modes, but the URL Probe runs all of them against
+  arbitrary URLs (a UDP RTT probe, a native page fetch, a real Chrome load).
+  Only the **throughput** modes (download/upload/web/udp-throughput) truly need
+  the endpoint's servers. This has no visible effect on the shipped Full Stack
+  gate (its endpoint target supports all of them either way) but makes the model
+  correct for the URL-target flows and the planned `shared/modes.json`
+  source-of-truth migration. (The URL flows themselves need no gating today —
+  URL Diagnostics is preset-only and its presets are already URL-appropriate;
+  Network Test targets a provisioned endpoint.)
+
 ## [0.28.69] — 2026-07-23
 
 ### Added
