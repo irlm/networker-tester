@@ -1,0 +1,146 @@
+name: Prod uptime monitor
+
+# Frequent lightweight production probe — fills the gap the nightly "Prod soak
+# check" leaves: nothing watched prod between soak runs, so a daytime outage
+# could surface up to ~24h late (ops audit 2026-07). This runs every ~10 min
+# and checks, for both prod domains:
+#   - /api/health is 200 with status=ok AND db=ok (the app + its DB),
+#   - a sample of surfaces do NOT server-error (SPA root + auth'd API routes,
+#     which return 401 when healthy and 5xx/502/503 when the app is down),
+#   - the TLS cert isn't about to expire.
+# On failure it opens/updates a single deduped issue (same create-or-comment /
+# resolve-on-green pattern as soak-check.yml) so an outage pages watchers in
+# minutes. Public endpoints only — no secrets, no Azure login.
+#
+# Frequency note: */10 on a PUBLIC repo (free Actions minutes). GitHub may delay
+# scheduled runs under load, so real resolution is ~10-20 min — still vastly
+# better than the nightly gap. Bump the cron if you need tighter (or move to an
+# external uptime service for sub-minute SLAs).
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write   # failure alerting opens/updates the dedup issue
+
+concurrency:
+  group: prod-uptime-monitor
+  cancel-in-progress: false
+
+jobs:
+  uptime:
+    name: Uptime + 5xx probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Health — 200 + status ok + db ok (both domains)
+        run: |
+          FAIL=0
+          for HOST in laghound.com alethedash.com; do
+            # --retry rides out a transient blip (a single flaky 5xx/timeout
+            # from the runner must not page) but still returns the real code
+            # for a persistent failure.
+            BODY=$(curl -s --max-time 15 --retry 3 --retry-delay 3 --retry-connrefused \
+              "https://${HOST}/api/health" || true)
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 --retry 3 --retry-delay 3 \
+              --retry-connrefused "https://${HOST}/api/health" || echo 000)
+            echo "${HOST}/api/health → ${CODE}  ${BODY}" | tee -a "$GITHUB_STEP_SUMMARY"
+            [ "$CODE" = "200" ] || { echo "::error::${HOST} /api/health HTTP ${CODE}"; FAIL=1; }
+            echo "$BODY" | grep -q '"status":"ok"' || { echo "::error::${HOST} status != ok"; FAIL=1; }
+            echo "$BODY" | grep -q '"db":"ok"'     || { echo "::error::${HOST} db != ok"; FAIL=1; }
+          done
+          [ "$FAIL" = "0" ]
+
+      - name: 5xx probe — no surface may server-error
+        run: |
+          FAIL=0
+          # Healthy responses: / and the SPA are 200; the API routes are 401
+          # (auth required). A 5xx/502/503 (app down / crash) or 000
+          # (unreachable) on ANY of these is an incident.
+          for URL in \
+            https://laghound.com/ \
+            https://laghound.com/api/version \
+            https://laghound.com/api/modes \
+            https://laghound.com/api/zones \
+            https://alethedash.com/api/health ; do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 --retry 2 --retry-delay 3 \
+              --retry-connrefused "$URL" || echo 000)
+            echo "${URL} → ${CODE}" | tee -a "$GITHUB_STEP_SUMMARY"
+            if [ "$CODE" = "000" ] || [ "$CODE" -ge 500 ]; then
+              echo "::error::${URL} returned ${CODE}"; FAIL=1
+            fi
+          done
+          [ "$FAIL" = "0" ]
+
+      - name: TLS cert expiry (fail < 7 days, warn < 14)
+        run: |
+          FAIL=0
+          for HOST in laghound.com alethedash.com; do
+            END=$(echo | openssl s_client -servername "$HOST" -connect "${HOST}:443" 2>/dev/null \
+              | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
+            if [ -z "$END" ]; then
+              echo "::warning::${HOST}: could not read TLS cert" | tee -a "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+            EPOCH=$(date -d "$END" +%s 2>/dev/null || echo 0)
+            DAYS=$(( (EPOCH - $(date +%s)) / 86400 ))
+            echo "${HOST} TLS cert expires in ${DAYS}d (${END})" | tee -a "$GITHUB_STEP_SUMMARY"
+            if [ "$DAYS" -lt 7 ]; then
+              echo "::error::${HOST} TLS cert expires in ${DAYS}d — renewal likely broken"; FAIL=1
+            elif [ "$DAYS" -lt 14 ]; then
+              echo "::warning::${HOST} TLS cert expires in ${DAYS}d — renew soon"
+            fi
+          done
+          [ "$FAIL" = "0" ]
+
+      # ── Failure alerting — one deduped issue (mirrors soak-check.yml) ────
+      - name: Alert — open/update issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TITLE='Prod uptime monitor failing'
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          FAILED=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
+            --jq '[.jobs[].steps[]? | select(.conclusion=="failure") | .name] | join(", ")' || true)
+          [ -n "$FAILED" ] || FAILED='(see run log)'
+          {
+            echo "Prod uptime monitor failed — prod may be down or throwing 5xx."
+            echo ""
+            echo "- Run: ${RUN_URL}"
+            echo "- Failing check(s): ${FAILED}"
+            echo ""
+            echo "Triage: docs/runbooks/observability.md (health endpoints, journald, perf_log)."
+          } > /tmp/uptime-issue-body.md
+          NUM=$(gh issue list --state open --json number,title \
+            --jq "first(.[] | select(.title==\"${TITLE}\")).number // empty")
+          if [ -z "$NUM" ]; then
+            URL=$(gh issue create --title "$TITLE" --body-file /tmp/uptime-issue-body.md)
+            NUM="${URL##*/}"
+            echo "Opened issue #${NUM}"
+            gh issue pin "$NUM" || echo "::warning::could not pin issue #${NUM} (still open)"
+          else
+            gh issue comment "$NUM" --body-file /tmp/uptime-issue-body.md
+            echo "Commented on existing issue #${NUM}"
+          fi
+
+      - name: Resolve alert issue on green
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TITLE='Prod uptime monitor failing'
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          NUM=$(gh issue list --state open --json number,title \
+            --jq "first(.[] | select(.title==\"${TITLE}\")).number // empty")
+          if [ -z "$NUM" ]; then
+            exit 0
+          fi
+          gh issue unpin "$NUM" || echo "::warning::could not unpin issue #${NUM}"
+          gh issue close "$NUM" --comment "Resolved — prod uptime monitor is green again: ${RUN_URL}."
+          echo "Closed issue #${NUM}"
