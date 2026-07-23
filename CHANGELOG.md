@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.71] — 2026-07-23
+
+### Changed
+- **Mode → target capability (`requires`) is now sourced from `shared/modes.json`,
+  cross-stack.** The capability gate's classification (`any` /
+  `networker-endpoint` / `sdk-endpoint` / `reference-apis`) was frontend-only; it
+  now lives in the canonical manifest as a `requires` field on every mode. The
+  control plane's `GET /api/modes` catalog serves it, and both drift guards lock
+  it: `ModesManifestTests` (C#) folds `requires` into its byte-for-byte
+  manifest⇄`PlatformEndpoints.AllModes` check, and `modes-manifest.test.ts`
+  (frontend) asserts `requirementOf()` matches every manifest mode's `requires`.
+  So the mode picker's gating can no longer drift from the manifest, and the data
+  is available to the backend + SDKs. (The Rust manifest guard is id-only and
+  unaffected.) Server-side *enforcement* of the gate at config-create is the
+  documented next step.
+
 ## [0.28.70] — 2026-07-23
 
 ### Fixed

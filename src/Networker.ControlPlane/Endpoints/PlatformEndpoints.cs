@@ -54,50 +54,53 @@ public static class PlatformEndpoints
         return app;
     }
 
-    private record ModeInfo(string Id, string Name, string Description, string Detail, string Group);
+    // Requires = the target capability a mode needs (canonical values in
+    // shared/modes.json's `requires` field, guarded by ModesManifestTests):
+    // "any" | "networker-endpoint" | "sdk-endpoint" | "reference-apis".
+    private record ModeInfo(string Id, string Name, string Description, string Detail, string Group, string Requires);
 
     // Mirror of Protocol::all_modes() — single source of truth for the mode
     // pickers. Order is preserved so grouping matches the Rust output exactly.
     private static readonly ModeInfo[] AllModes =
     [
         // Network
-        new("tcp", "TCP", "Connect", "TCP 3-way handshake timing to measure raw connection latency", "Network"),
-        new("dns", "DNS", "Resolve", "DNS resolution timing for the target hostname", "Network"),
-        new("tls", "TLS", "Handshake", "TLS handshake via rustls — reports version, cipher, ALPN, cert chain", "Network"),
-        new("tlsresume", "TLS Resume", "Warm handshake", "Two fresh TLS handshakes with a real HTTP request; the second should resume", "Network"),
-        new("native", "Native TLS", "OS TLS stack", "Uses SChannel (Win), SecureTransport (macOS), or OpenSSL (Linux)", "Network"),
-        new("udp", "UDP", "Round-trip", "UDP echo probe — measures RTT, jitter, and packet loss", "Network"),
+        new("tcp", "TCP", "Connect", "TCP 3-way handshake timing to measure raw connection latency", "Network", "any"),
+        new("dns", "DNS", "Resolve", "DNS resolution timing for the target hostname", "Network", "any"),
+        new("tls", "TLS", "Handshake", "TLS handshake via rustls — reports version, cipher, ALPN, cert chain", "Network", "any"),
+        new("tlsresume", "TLS Resume", "Warm handshake", "Two fresh TLS handshakes with a real HTTP request; the second should resume", "Network", "any"),
+        new("native", "Native TLS", "OS TLS stack", "Uses SChannel (Win), SecureTransport (macOS), or OpenSSL (Linux)", "Network", "any"),
+        new("udp", "UDP", "Round-trip", "UDP echo probe — measures RTT, jitter, and packet loss", "Network", "any"),
         // HTTP
-        new("http1", "HTTP/1.1", "Single request", "Full HTTP/1.1 request: DNS + TCP + TLS + request/response", "HTTP"),
-        new("http2", "HTTP/2", "Multiplexed", "HTTP/2 over TLS with ALPN h2 negotiation", "HTTP"),
-        new("http3", "HTTP/3", "QUIC", "HTTP/3 over QUIC (UDP) — 0-RTT capable", "HTTP"),
-        new("curl", "Curl", "Via curl CLI", "Spawns curl binary, captures per-phase timing from --write-out", "HTTP"),
-        new("sdkprobe", "SDK Probe", "Server split", "Probes a customer-embedded LagHound endpoint — splits total time into DNS, TCP, TLS, network transfer, and server processing via Server-Timing", "HTTP"),
+        new("http1", "HTTP/1.1", "Single request", "Full HTTP/1.1 request: DNS + TCP + TLS + request/response", "HTTP", "any"),
+        new("http2", "HTTP/2", "Multiplexed", "HTTP/2 over TLS with ALPN h2 negotiation", "HTTP", "any"),
+        new("http3", "HTTP/3", "QUIC", "HTTP/3 over QUIC (UDP) — 0-RTT capable", "HTTP", "any"),
+        new("curl", "Curl", "Via curl CLI", "Spawns curl binary, captures per-phase timing from --write-out", "HTTP", "any"),
+        new("sdkprobe", "SDK Probe", "Server split", "Probes a customer-embedded LagHound endpoint — splits total time into DNS, TCP, TLS, network transfer, and server processing via Server-Timing", "HTTP", "sdk-endpoint"),
         // Page Load (Native)
-        new("pageload", "H1", "6 parallel connections", "Fetches page manifest + assets using 6 parallel HTTP/1.1 connections (browser-like)", "Page Load (Native)"),
-        new("pageload2", "H2", "Multiplexed", "Same assets multiplexed over a single TLS/HTTP2 connection", "Page Load (Native)"),
-        new("pageload3", "H3", "QUIC", "Same assets multiplexed over a single QUIC connection", "Page Load (Native)"),
+        new("pageload", "H1", "6 parallel connections", "Fetches page manifest + assets using 6 parallel HTTP/1.1 connections (browser-like)", "Page Load (Native)", "any"),
+        new("pageload2", "H2", "Multiplexed", "Same assets multiplexed over a single TLS/HTTP2 connection", "Page Load (Native)", "any"),
+        new("pageload3", "H3", "QUIC", "Same assets multiplexed over a single QUIC connection", "Page Load (Native)", "any"),
         // Page Load (Browser)
-        new("browser1", "H1", "Chrome HTTP/1.1", "Chrome headless with HTTP/2 disabled — forces HTTP/1.1", "Page Load (Browser)"),
-        new("browser2", "H2", "Chrome HTTP/2", "Chrome headless with QUIC disabled — forces HTTP/2", "Page Load (Browser)"),
-        new("browser3", "H3", "Chrome QUIC", "Chrome headless with QUIC forced via origin flag + SPKI cert pinning", "Page Load (Browser)"),
+        new("browser1", "H1", "Chrome HTTP/1.1", "Chrome headless with HTTP/2 disabled — forces HTTP/1.1", "Page Load (Browser)", "any"),
+        new("browser2", "H2", "Chrome HTTP/2", "Chrome headless with QUIC disabled — forces HTTP/2", "Page Load (Browser)", "any"),
+        new("browser3", "H3", "Chrome QUIC", "Chrome headless with QUIC forced via origin flag + SPKI cert pinning", "Page Load (Browser)", "any"),
         // Throughput
-        new("download", "Download", "Server→client", "Large payload download via HTTP — measures sustained throughput", "Throughput"),
-        new("upload", "Upload", "Client→server", "Large payload upload via HTTP POST — measures sustained throughput", "Throughput"),
-        new("download1", "Download H1", "H1 download", "Throughput download forced over HTTP/1.1", "Throughput"),
-        new("download2", "Download H2", "H2 download", "Throughput download over HTTP/2 multiplexed stream", "Throughput"),
-        new("download3", "Download H3", "H3 download", "Throughput download over QUIC/HTTP3", "Throughput"),
-        new("upload1", "Upload H1", "H1 upload", "Throughput upload forced over HTTP/1.1", "Throughput"),
-        new("upload2", "Upload H2", "H2 upload", "Throughput upload over HTTP/2", "Throughput"),
-        new("upload3", "Upload H3", "H3 upload", "Throughput upload over QUIC/HTTP3", "Throughput"),
-        new("webdownload", "Web Download", "HTTP GET", "Download via /download endpoint route", "Throughput"),
-        new("webupload", "Web Upload", "HTTP POST", "Upload via /upload endpoint route", "Throughput"),
-        new("udpdownload", "UDP Download", "UDP bulk DL", "Bulk download via UDP throughput server (port 9998)", "Throughput"),
-        new("udpupload", "UDP Upload", "UDP bulk UL", "Bulk upload via UDP throughput server (port 9998)", "Throughput"),
+        new("download", "Download", "Server→client", "Large payload download via HTTP — measures sustained throughput", "Throughput", "networker-endpoint"),
+        new("upload", "Upload", "Client→server", "Large payload upload via HTTP POST — measures sustained throughput", "Throughput", "networker-endpoint"),
+        new("download1", "Download H1", "H1 download", "Throughput download forced over HTTP/1.1", "Throughput", "networker-endpoint"),
+        new("download2", "Download H2", "H2 download", "Throughput download over HTTP/2 multiplexed stream", "Throughput", "networker-endpoint"),
+        new("download3", "Download H3", "H3 download", "Throughput download over QUIC/HTTP3", "Throughput", "networker-endpoint"),
+        new("upload1", "Upload H1", "H1 upload", "Throughput upload forced over HTTP/1.1", "Throughput", "networker-endpoint"),
+        new("upload2", "Upload H2", "H2 upload", "Throughput upload over HTTP/2", "Throughput", "networker-endpoint"),
+        new("upload3", "Upload H3", "H3 upload", "Throughput upload over QUIC/HTTP3", "Throughput", "networker-endpoint"),
+        new("webdownload", "Web Download", "HTTP GET", "Download via /download endpoint route", "Throughput", "networker-endpoint"),
+        new("webupload", "Web Upload", "HTTP POST", "Upload via /upload endpoint route", "Throughput", "networker-endpoint"),
+        new("udpdownload", "UDP Download", "UDP bulk DL", "Bulk download via UDP throughput server (port 9998)", "Throughput", "networker-endpoint"),
+        new("udpupload", "UDP Upload", "UDP bulk UL", "Bulk upload via UDP throughput server (port 9998)", "Throughput", "networker-endpoint"),
         // API Workloads — orchestrator-level mode, NOT a tester Protocol
         // variant: the orchestrator expands it into one tester run per
         // workload in benchmarks/configs/apibench.json (API-SPEC.md §4).
-        new("apibench", "API Workloads", "Server compute", "Measured /api/* JSON workload suite: api-users, api-transform, api-aggregate, api-search, api-compress (benchmarks/configs/apibench.json). nginx is skipped — it serves no /api/* endpoints.", "API Workloads"),
+        new("apibench", "API Workloads", "Server compute", "Measured /api/* JSON workload suite: api-users, api-transform, api-aggregate, api-search, api-compress (benchmarks/configs/apibench.json). nginx is skipped — it serves no /api/* endpoints.", "API Workloads", "reference-apis"),
     ];
 
     private static string GroupDetail(string label) => label switch
@@ -147,6 +150,7 @@ public static class PlatformEndpoints
                 name = mode.Name,
                 desc = mode.Description,
                 detail = mode.Detail,
+                requires = mode.Requires,
             });
         }
 

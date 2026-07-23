@@ -13,6 +13,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { familyOf, FAMILY_BY_MODE } from '../components/common/mode-family';
+import { requirementOf } from './mode-capabilities';
 import { RUNTIME_TEMPLATES } from '../components/wizard/testbed-constants';
 // The canonical manifest at the repo root — imported directly (vite/vitest
 // resolve JSON natively; resolveJsonModule covers tsc) so the guard always
@@ -24,6 +25,7 @@ interface ManifestMode {
   level: 'tester' | 'runner';
   catalog: boolean;
   family: string;
+  requires: string;
 }
 
 interface Manifest {
@@ -47,6 +49,17 @@ describe('shared/modes.json manifest sanity', () => {
 
   it('has unique mode ids', () => {
     expect(modeIds.size).toBe(manifest.modes.length);
+  });
+});
+
+describe('mode-capabilities.ts ⇄ manifest requires', () => {
+  // shared/modes.json's `requires` is the canonical source of truth for the
+  // capability gate (also served by /api/modes, guarded C#-side by
+  // ModesManifestTests). The frontend's requirementOf() must not drift from it.
+  it('classifies every manifest mode exactly as its manifest `requires`', () => {
+    for (const m of manifest.modes) {
+      expect(requirementOf(m.id), `requirementOf(${m.id})`).toBe(m.requires);
+    }
   });
 });
 
