@@ -309,10 +309,18 @@ public static partial class TesterWriteEndpoints
             return ApiError.NotFound("Tester not found");
         }
 
+        // A tester genuinely mid-operation updates UpdatedAt as it progresses, so
+        // block the delete only while that transient state is RECENT. A tester
+        // WEDGED in a transient state (e.g. a failed auto-shutdown that stuck it in
+        // "stopping" long ago) must stay deletable — otherwise it can never be
+        // removed ("delete but doesn't delete"). 15 min comfortably exceeds any
+        // real transition.
         var transient = tester.PowerState is "provisioning" or "starting" or "stopping" or "upgrading" or "deleting";
-        if (transient)
+        var recentlyActive = (DateTime.UtcNow - tester.UpdatedAt) < TimeSpan.FromMinutes(15);
+        if (transient && recentlyActive)
         {
-            return Conflict($"cannot delete tester in transient power_state={tester.PowerState}");
+            return Conflict(
+                $"cannot delete tester in transient power_state={tester.PowerState}; retry once it settles");
         }
         if (tester.Allocation != "idle")
         {
@@ -348,7 +356,12 @@ public static partial class TesterWriteEndpoints
             // CLI) keeps the row so the user can retry — refuse to orphan cloud
             // resources. A missing CLI (ExitCode == null) is a soft/no-op path:
             // proceed with row deletion so CI + credential-less hosts still work.
-            var realFailure = !res.Success && res.ExitCode is not null;
+            //
+            // EXCEPTION: a cloud "resource not found / already gone" error is the
+            // DESIRED end state (no VM), not a failure — otherwise a tester whose
+            // VM was deleted out-of-band can never be removed ("delete but doesn't
+            // delete"). Treat it as success and remove the row.
+            var realFailure = !res.Success && res.ExitCode is not null && !VmAlreadyGone(res);
             if (realFailure)
             {
                 row.PowerState = "stopped";
@@ -361,11 +374,42 @@ public static partial class TesterWriteEndpoints
 
             sdb.ProjectTesters.Remove(row);
             await sdb.SaveChangesAsync(token);
-            l.LogInformation("tester {TesterId} deleted (VM destroyed + row removed)", testerId);
+            if (!res.Success && res.ExitCode is not null)
+            {
+                l.LogInformation(
+                    "tester {TesterId} deleted (VM was already gone — cloud reported not-found; row removed)", testerId);
+            }
+            else
+            {
+                l.LogInformation("tester {TesterId} deleted (VM destroyed + row removed)", testerId);
+            }
         });
 
         return Results.Accepted(
             $"/api/projects/{projectId}/testers/{testerId}",
             new { deleted = false, status = "deleting" });
+    }
+
+    /// <summary>
+    /// True when a failed cloud delete actually means "the VM is already gone" —
+    /// a delete of a non-existent resource is the DESIRED end state, not a failure
+    /// that should keep the tester row. Covers the not-found signals of az / aws /
+    /// gcloud (e.g. Azure <c>ResourceNotFound</c>, AWS <c>InvalidInstanceID.NotFound</c>,
+    /// GCP <c>was not found</c>).
+    /// </summary>
+    internal static bool VmAlreadyGone(ProvisionResult res)
+    {
+        if (res.Success)
+        {
+            return false;
+        }
+        var text = $"{res.Error} {res.StdErr}".ToLowerInvariant();
+        return text.Contains("not found")
+            || text.Contains("notfound")
+            || text.Contains("does not exist")
+            || text.Contains("could not be found")
+            || text.Contains("was not found")
+            || text.Contains("no longer exists")
+            || text.Contains("resourcenotfound");
     }
 }

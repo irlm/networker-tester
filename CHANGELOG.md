@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.68] — 2026-07-23
+
+### Fixed
+- **"Delete but doesn't delete" — a tester whose cloud VM is gone (or that's
+  wedged in a transient state) can now actually be deleted.** Two bugs left old
+  testers un-deletable:
+  - The background VM-destroy treated a cloud **"resource not found"** error as a
+    failure and *kept* the row for retry — so a tester whose VM was deleted
+    out-of-band could never be removed. Not-found now counts as success (the
+    VM is already gone → row removed); genuine failures (auth, timeout, quota)
+    still keep the row so a live VM is never orphaned. New `VmAlreadyGone`
+    helper covers the az / aws / gcloud not-found signals (unit-tested).
+  - The delete guard blocked *any* transient `power_state`
+    (`provisioning`/`stopping`/`deleting`/…) — so a tester **wedged** in one
+    (e.g. by a long-ago failed auto-shutdown) was permanently un-deletable. It
+    now blocks only while that state is **recent** (updated < 15 min ago); a
+    stale/wedged tester is deletable.
+
 ## [0.28.67] — 2026-07-23
 
 ### Added
