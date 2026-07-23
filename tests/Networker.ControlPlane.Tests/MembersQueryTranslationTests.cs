@@ -44,11 +44,17 @@ public sealed class MembersQueryTranslationTests
                 deleted_at TEXT, delete_protection INTEGER NOT NULL DEFAULT 0
             );
             """);
+        // All DashUser-mapped columns — EF's INSERT writes every mapped column,
+        // so an omitted one (e.g. avatar_url) fails the seed.
         Exec(conn, """
             CREATE TABLE dash_user (
-                user_id TEXT PRIMARY KEY, email TEXT, display_name TEXT,
-                role TEXT NOT NULL, status TEXT NOT NULL, password_hash TEXT,
-                must_change_password INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+                user_id TEXT PRIMARY KEY, auth_provider TEXT, avatar_url TEXT,
+                created_at TEXT NOT NULL, display_name TEXT, email TEXT,
+                is_platform_admin INTEGER NOT NULL DEFAULT 0, last_login_at TEXT,
+                must_change_password INTEGER NOT NULL DEFAULT 0, password_hash TEXT,
+                password_reset_expires TEXT, password_reset_token TEXT,
+                role TEXT NOT NULL, sso_only INTEGER NOT NULL DEFAULT 0,
+                sso_subject_id TEXT, status TEXT NOT NULL
             );
             """);
         Exec(conn, """
