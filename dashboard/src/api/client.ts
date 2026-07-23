@@ -157,6 +157,10 @@ export async function request<T>(path: string, options?: RequestInit): Promise<T
   let status = 0;
   let serverMs: number | null = null;
   let errorMsg: string | null = null;
+  // Aborted requests (a poll cancelled by navigation/unmount) never complete,
+  // so their wall-clock is meaningless — the timer runs until teardown and logs
+  // fake 30–40s entries that pollute the perf-log p95. Don't record them.
+  let aborted = false;
 
   try {
     let res: Response;
@@ -169,6 +173,7 @@ export async function request<T>(path: string, options?: RequestInit): Promise<T
       // Preserve AbortError so callers using AbortController can distinguish
       // cancellation from real network failures.
       if (fetchErr instanceof DOMException && fetchErr.name === 'AbortError') {
+        aborted = true;
         throw fetchErr;
       }
       throw new ApiError(
@@ -219,7 +224,7 @@ export async function request<T>(path: string, options?: RequestInit): Promise<T
   } finally {
     const totalMs = performance.now() - start;
     const store = useApiLogStore.getState();
-    if (store.enabled) {
+    if (store.enabled && !aborted) {
       store.add({
         timestamp: Date.now(),
         method,

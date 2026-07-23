@@ -11,6 +11,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.61] — 2026-07-22
+
+### Fixed
+- **Members page 500 (active) + Projects list 500 for non-admins (latent).**
+  Found by a full-app page-load sweep. Both endpoints ordered by a property of a
+  client-constructed record (`MemberRow` / `ProjectListItem`) *after* the Join
+  projection, which EF Core cannot translate to SQL — `GET
+  /api/projects/{id}/members` threw on every load, and the non-platform-admin
+  branch of `GET /api/projects` had the identical untranslatable order (the
+  admin branch ordered correctly, so it was masked). Fix: order on the entity
+  column before the projection. Both queries extracted and covered by an
+  EF-translation regression test.
+
+### Added
+- **`X-Process-Time-Ms` response header** on every control-plane response
+  (`UseServerTiming`). The frontend perf log already read this header to split
+  each request into `server_ms` vs `network_ms`, but the server never emitted it
+  — so every perf-log row had a null server time and slowness could not be
+  attributed to server vs client/network. Now populated.
+
+### Changed
+- **Aborted requests are no longer recorded in the perf log.** A poll cancelled
+  by navigation/unmount never completes, so its wall-clock (timer running until
+  teardown) logged fake 30–40 s entries that polluted the perf-log p95. The
+  sweep confirmed these were the only "slow" outliers; real completed calls are
+  fast (server p50 ~40 ms, page FCP 68–188 ms).
+
 ## [0.28.60] — 2026-07-22
 
 ### Fixed

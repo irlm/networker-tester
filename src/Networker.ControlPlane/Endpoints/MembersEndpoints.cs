@@ -35,6 +35,36 @@ public static class MembersEndpoints
 {
     private static readonly string[] ValidRoles = ["admin", "operator", "viewer"];
 
+    /// <summary>
+    /// The project-members list query, ordered by joined_at. Extracted so the
+    /// EF-translation regression test can execute it directly (see
+    /// MembersQueryTranslationTests). The OrderBy MUST be on the entity column
+    /// <c>m.JoinedAt</c> BEFORE the Join projects into the client-constructed
+    /// <see cref="MemberRow"/> record — ordering after the projection cannot be
+    /// translated by EF Core and throws InvalidOperationException → 500
+    /// (perf sweep 2026-07).
+    /// </summary>
+    internal static IQueryable<MemberRow> BuildMembersQuery(
+        NetworkerDbContext db, string projectId) =>
+        db.ProjectMembers
+            .AsNoTracking()
+            .Where(m => m.ProjectId == projectId)
+            .OrderBy(m => m.JoinedAt)
+            .Join(
+                db.DashUsers,
+                m => m.UserId,
+                u => u.UserId,
+                (m, u) => new MemberRow(
+                    m.ProjectId,
+                    m.UserId,
+                    m.Role,
+                    m.JoinedAt,
+                    m.InvitedBy,
+                    u.Email ?? string.Empty,
+                    u.DisplayName,
+                    m.Status,
+                    m.InviteSentAt));
+
     public static IEndpointRouteBuilder MapMembersEndpoints(this IEndpointRouteBuilder app)
     {
         // GET /api/projects/{projectId}/members — list members (project admin).
@@ -46,25 +76,7 @@ public static class MembersEndpoints
             NetworkerDbContext db,
             CancellationToken ct) =>
         {
-            var members = await db.ProjectMembers
-                .AsNoTracking()
-                .Where(m => m.ProjectId == projectId)
-                .Join(
-                    db.DashUsers,
-                    m => m.UserId,
-                    u => u.UserId,
-                    (m, u) => new MemberRow(
-                        m.ProjectId,
-                        m.UserId,
-                        m.Role,
-                        m.JoinedAt,
-                        m.InvitedBy,
-                        u.Email ?? string.Empty,
-                        u.DisplayName,
-                        m.Status,
-                        m.InviteSentAt))
-                .OrderBy(x => x.joined_at)
-                .ToListAsync(ct);
+            var members = await BuildMembersQuery(db, projectId).ToListAsync(ct);
 
             return Results.Ok(new { members });
         }).RequireAuthorization(AuthPolicies.ProjectAdmin);
