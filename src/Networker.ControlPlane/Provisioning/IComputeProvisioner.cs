@@ -123,6 +123,16 @@ public sealed record VmCreateResult(
 
     public static VmCreateResult Fail(string error) =>
         new(false, null, null, null, error);
+
+    /// <summary>
+    /// A failure that nonetheless carries a KNOWN cloud resource id — e.g. the VM
+    /// was created (<c>az vm create</c> succeeded) but a follow-up step (extension
+    /// set) failed. The caller must record/log this resource id so the orphan
+    /// reaper or an operator can clean it up; discarding it leaves a billing VM
+    /// with no DB record (quality audit F8).
+    /// </summary>
+    public static VmCreateResult Fail(string error, string? resourceId) =>
+        new(false, resourceId, null, null, error);
 }
 
 /// <summary>

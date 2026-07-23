@@ -61,6 +61,7 @@ public sealed class ProvisioningOrchestrator : BackgroundService
     private const string DeploymentPending = "pending";
     private const string DeploymentCompleted = "completed";
     private const string DeploymentFailed = "failed";
+    private const string DeploymentCancelled = "cancelled";
 
     private const int KickBatchLimit = 25;
 
@@ -334,7 +335,23 @@ public sealed class ProvisioningOrchestrator : BackgroundService
                     runId, deploymentId, msg);
                 return true;
 
-            // pending / running / cancelled — leave alone; re-check next tick.
+            case DeploymentCancelled:
+                // A cancelled deployment is terminal — its run can never make
+                // progress, so fail it instead of leaving it in `provisioning`
+                // forever (quality audit F3(a)). Mirror the DeploymentFailed arm.
+                await db.TestRuns
+                    .Where(r => r.Id == runId)
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(r => r.Status, "failed")
+                        .SetProperty(r => r.ErrorMessage, "Provisioning cancelled")
+                        .SetProperty(r => r.FinishedAt, DateTime.UtcNow), ct)
+                    .ConfigureAwait(false);
+                _logger.LogWarning(
+                    "Run {RunId} failed: provisioning deployment {DeploymentId} was cancelled",
+                    runId, deploymentId);
+                return true;
+
+            // pending / running — leave alone; re-check next tick.
             default:
                 return false;
         }
@@ -367,8 +384,19 @@ public sealed class ProvisioningOrchestrator : BackgroundService
         var host = FirstEndpointHost(deployment.EndpointIps);
         if (host is null)
         {
+            // A completed deployment with no captured endpoint IPs is a PERMANENT
+            // condition — retrying every tick never produces a host, it only spins
+            // the run in `provisioning` and spams the log forever (quality audit
+            // F3(d)). Fail the run terminally instead.
+            await db.TestRuns
+                .Where(r => r.Id == runId)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(r => r.Status, "failed")
+                    .SetProperty(r => r.ErrorMessage, "Provisioning completed but captured no endpoint IPs")
+                    .SetProperty(r => r.FinishedAt, DateTime.UtcNow), ct)
+                .ConfigureAwait(false);
             _logger.LogWarning(
-                "Deployment {DeploymentId} completed but captured no endpoint IPs — cannot promote run {RunId}",
+                "Deployment {DeploymentId} completed but captured no endpoint IPs — failing run {RunId} (permanent)",
                 deployment.DeploymentId, runId);
             return;
         }

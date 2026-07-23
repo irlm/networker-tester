@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Networker.ControlPlane.Auth;
 using Networker.ControlPlane.Background;
 using Networker.ControlPlane.Dispatch;
+using Networker.ControlPlane.Provisioning;
 using Networker.ControlPlane.Realtime;
 using Networker.ControlPlane.Realtime.RawWs;
 using Networker.Data;
@@ -185,6 +186,28 @@ public sealed class RunDispatcherTesterFkTests
                 created_at TEXT NOT NULL,
                 comparison_group_id TEXT,
                 provisioning_deployment_id TEXT
+            );
+            """);
+        // The watchdog's restart-orphan sweep (F3b) reads/updates the deployment
+        // table, so it must exist even for tests that never seed a deployment —
+        // real column names, all NOT-NULL columns present so EF inserts succeed.
+        Exec(conn, """
+            CREATE TABLE deployment (
+                deployment_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                config TEXT NOT NULL,
+                provider_summary TEXT,
+                created_by TEXT,
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT,
+                endpoint_ips TEXT,
+                agent_id TEXT,
+                error_message TEXT,
+                log TEXT,
+                project_id TEXT NOT NULL,
+                cloud_account_id TEXT
             );
             """);
     }
@@ -740,6 +763,219 @@ public sealed class RunDispatcherTesterFkTests
         var run = await db.TestRuns.AsNoTracking().FirstAsync(r => r.Id == runId);
         Assert.Equal("completed", run.Status);
         Assert.NotNull(run.FinishedAt);
+    }
+
+    // ── 7. Cancel must not clobber a terminal run (quality audit F10) ─────────
+
+    private static RunDispatcher Dispatcher(ServiceProvider sp, NetworkerDbContext db)
+        => new(
+            db,
+            sp.GetRequiredService<AgentConnectionRegistry>(),
+            sp.GetRequiredService<EventBus>(),
+            sp.GetRequiredService<ILogger<RunDispatcher>>(),
+            TestCipher());
+
+    private static async Task<(ServiceProvider Sp, NetworkerDbContext Db, Guid RunId)>
+        SeedCancelHostAsync(string testName, string runStatus)
+    {
+        var sp = BuildHost(testName);
+        var db = Db(sp);
+
+        SeedProject(db);
+        var configId = SeedConfig(db);
+
+        var runId = Guid.NewGuid();
+        db.TestRuns.Add(new TestRun
+        {
+            Id = runId,
+            TestConfigId = configId,
+            ProjectId = ProjectId,
+            Status = runStatus,
+            CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        return (sp, db, runId);
+    }
+
+    [Fact]
+    public async Task Cancel_does_not_rewrite_a_completed_run()
+    {
+        // A cancel racing (or arriving after) completion must NOT rewrite the
+        // terminal status to cancelled, and must NOT throw (0-rows path).
+        var (sp, db, runId) = await SeedCancelHostAsync(
+            nameof(Cancel_does_not_rewrite_a_completed_run), "completed");
+        using var _ = sp;
+
+        // No throw despite 0 rows affected (run exists but is terminal).
+        await Dispatcher(sp, db).CancelAsync(runId, default);
+
+        var run = await db.TestRuns.AsNoTracking().FirstAsync(r => r.Id == runId);
+        Assert.Equal("completed", run.Status); // history preserved
+    }
+
+    [Fact]
+    public async Task Cancel_does_not_rewrite_a_failed_run()
+    {
+        var (sp, db, runId) = await SeedCancelHostAsync(
+            nameof(Cancel_does_not_rewrite_a_failed_run), "failed");
+        using var _ = sp;
+
+        await Dispatcher(sp, db).CancelAsync(runId, default);
+
+        var run = await db.TestRuns.AsNoTracking().FirstAsync(r => r.Id == runId);
+        Assert.Equal("failed", run.Status);
+    }
+
+    [Fact]
+    public async Task Cancel_missing_run_throws_not_found()
+    {
+        var sp = BuildHost(nameof(Cancel_missing_run_throws_not_found));
+        using var _ = sp;
+        var db = Db(sp);
+        SeedProject(db);
+        await db.SaveChangesAsync();
+
+        await Assert.ThrowsAsync<RunDispatchNotFoundException>(
+            () => Dispatcher(sp, db).CancelAsync(Guid.NewGuid(), default));
+    }
+
+    [Fact]
+    public async Task Cancel_of_queued_run_sets_cancelled_and_finished_at()
+    {
+        var (sp, db, runId) = await SeedCancelHostAsync(
+            nameof(Cancel_of_queued_run_sets_cancelled_and_finished_at), "queued");
+        using var _ = sp;
+
+        await Dispatcher(sp, db).CancelAsync(runId, default);
+
+        var run = await db.TestRuns.AsNoTracking().FirstAsync(r => r.Id == runId);
+        Assert.Equal("cancelled", run.Status);
+        Assert.NotNull(run.FinishedAt);
+    }
+
+    [Fact]
+    public async Task Cancel_of_running_run_sets_cancelled_and_finished_at()
+    {
+        var (sp, db, runId) = await SeedCancelHostAsync(
+            nameof(Cancel_of_running_run_sets_cancelled_and_finished_at), "running");
+        using var _ = sp;
+
+        await Dispatcher(sp, db).CancelAsync(runId, default);
+
+        var run = await db.TestRuns.AsNoTracking().FirstAsync(r => r.Id == runId);
+        Assert.Equal("cancelled", run.Status);
+        Assert.NotNull(run.FinishedAt);
+    }
+
+    // ── 8. Provisioning orchestrator terminal resolution (F3 a/d) ────────────
+
+    private static ProvisioningOrchestrator Orchestrator(ServiceProvider sp)
+        => new(
+            sp.GetRequiredService<IServiceScopeFactory>(),
+            new DeployRunner(
+                sp.GetRequiredService<IServiceScopeFactory>(),
+                sp.GetRequiredService<EventBus>(),
+                sp.GetRequiredService<ILogger<DeployRunner>>()),
+            sp.GetRequiredService<ILogger<ProvisioningOrchestrator>>());
+
+    private static async Task InvokePromotePassAsync(ServiceProvider sp)
+    {
+        // PromoteProvisioningRunsAsync is private; drive it reflectively with a
+        // fresh scope's DbContext, exactly as TickAsync does. (Kicking is not
+        // exercised — these tests seed the provisioning run + deployment directly.)
+        var orch = Orchestrator(sp);
+        using var scope = sp.GetRequiredService<IServiceScopeFactory>().CreateScope();
+        var scopedDb = scope.ServiceProvider.GetRequiredService<NetworkerDbContext>();
+        var m = typeof(ProvisioningOrchestrator).GetMethod(
+            "PromoteProvisioningRunsAsync",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        await (Task<int>)m.Invoke(orch, new object[] { scopedDb, CancellationToken.None })!;
+    }
+
+    private static Guid SeedDeployment(NetworkerDbContext db, string status, string? endpointIps)
+    {
+        var id = Guid.NewGuid();
+        db.Deployments.Add(new Deployment
+        {
+            DeploymentId = id,
+            Name = "dep",
+            Status = status,
+            Config = "{}",
+            EndpointIps = endpointIps,
+            ProjectId = ProjectId,
+            CreatedAt = DateTime.UtcNow,
+        });
+        return id;
+    }
+
+    private static Guid SeedProvisioningRun(NetworkerDbContext db, Guid configId, Guid deploymentId)
+    {
+        var id = Guid.NewGuid();
+        db.TestRuns.Add(new TestRun
+        {
+            Id = id,
+            TestConfigId = configId,
+            ProjectId = ProjectId,
+            Status = "provisioning",
+            ProvisioningDeploymentId = deploymentId,
+            CreatedAt = DateTime.UtcNow,
+        });
+        return id;
+    }
+
+    [Fact]
+    public async Task Provisioning_run_with_cancelled_deployment_is_failed()
+    {
+        var sp = BuildHost(nameof(Provisioning_run_with_cancelled_deployment_is_failed));
+        using var _ = sp;
+        var db = Db(sp);
+
+        SeedProject(db);
+        var configId = SeedConfig(db);
+        var depId = SeedDeployment(db, status: "cancelled", endpointIps: null);
+        var runId = SeedProvisioningRun(db, configId, depId);
+        await db.SaveChangesAsync();
+
+        await InvokePromotePassAsync(sp);
+
+        var run = await db.TestRuns.AsNoTracking().FirstAsync(r => r.Id == runId);
+        Assert.Equal("failed", run.Status);
+        Assert.NotNull(run.FinishedAt);
+    }
+
+    [Fact]
+    public async Task Provisioning_run_completed_with_no_endpoint_ips_is_failed()
+    {
+        var sp = BuildHost(nameof(Provisioning_run_completed_with_no_endpoint_ips_is_failed));
+        using var _ = sp;
+        var db = Db(sp);
+
+        SeedProject(db);
+        // A Pending-endpoint config so PromoteAsync's ParsePending succeeds and it
+        // reaches the "no endpoint IPs" branch (rather than the already-rewritten
+        // shortcut).
+        var configId = Guid.NewGuid();
+        db.TestConfigs.Add(new TestConfig
+        {
+            Id = configId,
+            ProjectId = ProjectId,
+            Name = "cfg-pending",
+            EndpointKind = "pending",
+            EndpointRef = $$"""{"kind":"pending","cloud_account_id":"{{Guid.NewGuid()}}","region":"eastus","vm_size":"Standard_B1s","os":"ubuntu-24.04","proxy_stack":"nginx"}""",
+            Workload = """{"insecure":false}""",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        var depId = SeedDeployment(db, status: "completed", endpointIps: null);
+        var runId = SeedProvisioningRun(db, configId, depId);
+        await db.SaveChangesAsync();
+
+        await InvokePromotePassAsync(sp);
+
+        var run = await db.TestRuns.AsNoTracking().FirstAsync(r => r.Id == runId);
+        Assert.Equal("failed", run.Status);
+        Assert.NotNull(run.FinishedAt);
+        Assert.Contains("no endpoint IPs", run.ErrorMessage);
     }
 }
 

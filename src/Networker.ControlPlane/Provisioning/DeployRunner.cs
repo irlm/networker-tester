@@ -137,6 +137,14 @@ public sealed class DeployRunner
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
+            // Caller cancelled (shutdown). The deployment must NOT stick at
+            // running/pending — persist it as failed (best-effort, under
+            // CancellationToken.None inside FinishAsync) before rethrowing so the
+            // orchestrator's DeploymentFailed arm can fail the run (quality audit
+            // F3(c)).
+            await FinishAsync(deploymentId, success: false, ips: [],
+                log: output.FullLog, error: "Deployment cancelled", ct)
+                .ConfigureAwait(false);
             TryDelete(deployFile);
             throw;
         }
@@ -257,10 +265,17 @@ public sealed class DeployRunner
 
     /// <summary>Persist the terminal state (log + ips/error + status) and publish
     /// <see cref="DeployComplete"/>. Best-effort: a DB error here is logged, not
-    /// thrown, so the completion event still fires.</summary>
+    /// thrown, so the completion event still fires.
+    ///
+    /// <para>The terminal-persist ExecuteUpdate runs under
+    /// <see cref="CancellationToken.None"/>, NOT the caller's <c>ct</c>: this is
+    /// cleanup that MUST complete even during shutdown. If it honoured a cancelled
+    /// token the deployment could never be marked terminal and would wedge at
+    /// <c>running</c> forever (quality audit F3(c)).</para></summary>
     private async Task FinishAsync(
         Guid deploymentId, bool success, IReadOnlyList<string> ips, string? log, string? error, CancellationToken ct)
     {
+        _ = ct; // terminal cleanup is intentionally not cancellable — see summary.
         var status = success ? "completed" : "failed";
         try
         {
@@ -277,7 +292,7 @@ public sealed class DeployRunner
                     .SetProperty(d => d.Log, log)
                     .SetProperty(d => d.EndpointIps, success ? ipsJson : (string?)null)
                     .SetProperty(d => d.ErrorMessage, error)
-                    .SetProperty(d => d.FinishedAt, now), ct)
+                    .SetProperty(d => d.FinishedAt, now), CancellationToken.None)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)

@@ -194,6 +194,71 @@ public sealed class CliProvisionerCreateArgsTests
         Assert.DoesNotContain("--metadata-from-file", args);
     }
 
+    // ── az vm lifecycle argv: empty scope flags omitted (F9) ─────────────────
+
+    [Fact]
+    public void BuildAzureLifecycleArgs_with_scope_includes_subscription_and_resource_group()
+    {
+        var args = CliComputeProvisioner.BuildAzureLifecycleArgs(
+            "deallocate", "sub-123", "rg-testers",
+            "/subscriptions/sub-123/resourceGroups/rg-testers/providers/Microsoft.Compute/virtualMachines/vm1",
+            isDelete: false, isShow: false);
+
+        Assert.Equal(new[]
+        {
+            "vm", "deallocate",
+            "--subscription", "sub-123",
+            "--resource-group", "rg-testers",
+            "--ids", "/subscriptions/sub-123/resourceGroups/rg-testers/providers/Microsoft.Compute/virtualMachines/vm1",
+        }, args);
+    }
+
+    [Fact]
+    public void BuildAzureLifecycleArgs_empty_scope_omits_subscription_and_resource_group_but_keeps_ids()
+    {
+        // Ambient CLI auth: LoadCredentialsAsync returns null → sub/rg are "".
+        // An empty --subscription "" made az hard-fail every tick (F9). The scope
+        // flags must be omitted entirely; --ids alone is self-describing.
+        var args = CliComputeProvisioner.BuildAzureLifecycleArgs(
+            "start", "", "",
+            "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm1",
+            isDelete: false, isShow: false);
+
+        Assert.DoesNotContain("--subscription", args);
+        Assert.DoesNotContain("--resource-group", args);
+        Assert.Contains("--ids", args);
+        Assert.Equal(new[]
+        {
+            "vm", "start",
+            "--ids", "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm1",
+        }, args);
+    }
+
+    [Fact]
+    public void BuildAzureLifecycleArgs_delete_appends_yes_and_omits_empty_scope()
+    {
+        var args = CliComputeProvisioner.BuildAzureLifecycleArgs(
+            "delete", "", "rg-only", "/subscriptions/s/.../vm1", isDelete: true, isShow: false);
+
+        // Only the non-empty resource-group flag is present; subscription omitted.
+        Assert.DoesNotContain("--subscription", args);
+        Assert.Contains("--resource-group", args);
+        Assert.Equal("rg-only", args[args.IndexOf("--resource-group") + 1]);
+        Assert.Contains("--yes", args);
+        Assert.Contains("--ids", args);
+    }
+
+    [Fact]
+    public void BuildAzureLifecycleArgs_show_appends_show_details_json()
+    {
+        var args = CliComputeProvisioner.BuildAzureLifecycleArgs(
+            "show", "sub-1", "rg-1", "/subscriptions/sub-1/.../vm1", isDelete: false, isShow: true);
+
+        Assert.Contains("--show-details", args);
+        Assert.Equal("--output", args[^2]);
+        Assert.Equal("json", args[^1]);
+    }
+
     // ── Azure delete-cascade: per-VM NSG + public IP ─────────────────────────
 
     [Fact]
