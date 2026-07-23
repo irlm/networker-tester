@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.65] — 2026-07-23
+
+### Fixed
+- **`GET /api/version` could take ~3s server-side.** The handler probes each
+  recent completed deployment's endpoint host for its version, trying HTTPS :8443
+  then HTTP :8080 **sequentially** — so a host that has since gone dead (tester
+  deallocated / VM deleted) cost `1.5s × 2 = 3s`, and since the frontend *polls*
+  `/api/version`, every poll paid it. Now the two ports are probed **concurrently**
+  under one 1.5s budget (dead host → ~1.5s, not 3s) and per-host results are
+  cached for 30s, so a polled `/api/version` returns instantly on cache hits and
+  only pays the probe once per window per host. (Surfaced by the new
+  `server_ms`/`network_ms` perf-log split — the 3s was entirely server-side.)
+
 ## [0.28.64] — 2026-07-23
 
 ### Documentation
