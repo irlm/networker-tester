@@ -36,6 +36,7 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<Program>, IAsync
 
     public const string SeededProjectId = "proj-itest-001";
     public const string SeededTesterName = "itest-tester-eastus";
+    public static readonly Guid SeededTesterId = Guid.Parse("55555555-5555-4555-8555-555555555555");
     public static readonly Guid SeededUserId = Guid.Parse("11111111-1111-4111-8111-111111111111");
     public const string SeededUserEmail = "itest@networker.local";
     public static readonly Guid SeededConfigId = Guid.Parse("22222222-2222-4222-8222-222222222222");
@@ -99,7 +100,7 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<Program>, IAsync
         });
         ctx.ProjectTesters.Add(new ProjectTester
         {
-            TesterId = Guid.NewGuid(),
+            TesterId = SeededTesterId,
             ProjectId = SeededProjectId,
             Name = SeededTesterName,
             Cloud = "azure",
