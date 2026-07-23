@@ -537,23 +537,40 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
             && ExtraValue(creds, "client_secret") is { } clientSecret
             && ExtraValue(creds, "tenant_id") is { } tenantId)
         {
+            // 0700 so the token cache az writes here (the access token minted
+            // from the SP secret) isn't world-readable (quality audit F11).
             spConfigDir = Path.Combine(Path.GetTempPath(), $"az-sp-{Guid.NewGuid():N}");
-            Directory.CreateDirectory(spConfigDir);
-            var login = await RunAsync(
-                azBin,
-                new List<string>
-                {
-                    "login", "--service-principal", "-u", clientId, "-p", clientSecret,
-                    "--tenant", tenantId, "--output", "none",
-                },
-                new Dictionary<string, string>
-                {
-                    ["AZURE_CONFIG_DIR"] = spConfigDir,
-                    ["PYTHONWARNINGS"] = "ignore",
-                },
-                ct,
-                CreateTimeout,
-                sensitiveArgs: true).ConfigureAwait(false);
+            SecretFile.CreateDir0700(spConfigDir);
+
+            // Feed the client secret through a 0600 file via az's @file loading
+            // instead of putting it on argv (world-visible in ps/proc for the
+            // whole login). NOT env vars: az CLI login reads -u/-p from argv, the
+            // AZURE_CLIENT_* env vars are honoured only by the SDKs, not `az login`.
+            var spSecretFile = Path.Combine(Path.GetTempPath(), $"az-sp-secret-{Guid.NewGuid():N}");
+            await SecretFile.WriteAsync(spSecretFile, clientSecret, ct).ConfigureAwait(false);
+            ProvisionResult login;
+            try
+            {
+                login = await RunAsync(
+                    azBin,
+                    new List<string>
+                    {
+                        "login", "--service-principal", "-u", clientId, "-p", $"@{spSecretFile}",
+                        "--tenant", tenantId, "--output", "none",
+                    },
+                    new Dictionary<string, string>
+                    {
+                        ["AZURE_CONFIG_DIR"] = spConfigDir,
+                        ["PYTHONWARNINGS"] = "ignore",
+                    },
+                    ct,
+                    CreateTimeout,
+                    sensitiveArgs: true).ConfigureAwait(false);
+            }
+            finally
+            {
+                TryDeleteFile(spSecretFile);
+            }
             if (!login.Success)
             {
                 TryDeleteDir(spConfigDir);
@@ -578,17 +595,27 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
                 ? $"Nx!{Guid.NewGuid():N}{new string(request.Name.Take(4).ToArray())}aZ9"
                 : null;
 
+            // The admin password goes through a 0600 file via az's @file loading
+            // rather than onto argv (world-visible in ps for the whole create).
+            string? winPasswordFile = null;
+            if (winPassword is not null)
+            {
+                winPasswordFile = Path.Combine(Path.GetTempPath(), $"az-winpw-{Guid.NewGuid():N}");
+                await SecretFile.WriteAsync(winPasswordFile, winPassword, ct).ConfigureAwait(false);
+            }
+
+            // The bootstrap script embeds the minted agent API key — 0600 it too.
             string? customDataPath = null;
             if (request.BootstrapScript is { } script)
             {
                 customDataPath = Path.GetTempFileName();
-                await File.WriteAllTextAsync(customDataPath, script, ct).ConfigureAwait(false);
+                await SecretFile.WriteAsync(customDataPath, script, ct).ConfigureAwait(false);
             }
 
             try
             {
-                var args = BuildAzureCreateArgs(request, sub, rg, winPassword, customDataPath);
-                // Windows argv carries --admin-password — never log it.
+                var args = BuildAzureCreateArgs(request, sub, rg, winPasswordFile, customDataPath);
+                // Windows argv carries --admin-password @file — never log it.
                 var res = await RunAsync(azBin, args, env, ct, CreateTimeout, sensitiveArgs: isWindows)
                     .ConfigureAwait(false);
                 if (!res.Success)
@@ -659,6 +686,10 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
                 {
                     TryDeleteFile(customDataPath);
                 }
+                if (winPasswordFile is not null)
+                {
+                    TryDeleteFile(winPasswordFile);
+                }
             }
         }
         finally
@@ -687,7 +718,8 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         var protectedSettings = JsonSerializer.Serialize(new { commandToExecute = command });
 
         var settingsPath = Path.GetTempFileName();
-        await File.WriteAllTextAsync(settingsPath, protectedSettings, ct).ConfigureAwait(false);
+        // Protected settings carry secrets (bootstrap incl. the API key) — 0600.
+        await SecretFile.WriteAsync(settingsPath, protectedSettings, ct).ConfigureAwait(false);
         try
         {
             return await RunAsync(
@@ -717,12 +749,17 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
     /// Pure argv builder for <c>az vm create</c> — the C# port of the Rust
     /// <c>AzureProvider::build_vm_create_args</c> (same flags, same order; tags
     /// omitted because every Rust create call site passes an empty tag map).
+    ///
+    /// <para><paramref name="adminPasswordFile"/> is the path to a 0600 file
+    /// holding the Windows admin password; it is passed as
+    /// <c>--admin-password @&lt;path&gt;</c> so the secret never appears on argv
+    /// (quality audit F11). Null for Linux (SSH keys instead).</para>
     /// </summary>
     public static List<string> BuildAzureCreateArgs(
         VmCreateRequest request,
         string subscriptionId,
         string resourceGroup,
-        string? adminPassword,
+        string? adminPasswordFile,
         string? customDataPath)
     {
         var isWindows = request.Image.Contains("windows", StringComparison.OrdinalIgnoreCase);
@@ -751,10 +788,12 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
 
         if (isWindows)
         {
-            if (adminPassword is not null)
+            if (adminPasswordFile is not null)
             {
+                // @file → az loads the password from the 0600 file; keeps it off
+                // argv (quality audit F11).
                 args.Add("--admin-password");
-                args.Add(adminPassword);
+                args.Add($"@{adminPasswordFile}");
             }
         }
         else
@@ -875,7 +914,8 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         if (request.BootstrapScript is { } script)
         {
             userDataPath = Path.GetTempFileName();
-            await File.WriteAllTextAsync(userDataPath, script, ct).ConfigureAwait(false);
+            // Cloud-init user-data embeds the minted agent API key — 0600.
+            await SecretFile.WriteAsync(userDataPath, script, ct).ConfigureAwait(false);
         }
 
         ProvisionResult runRes;
@@ -1171,7 +1211,9 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         }
 
         var keyFile = Path.Combine(Path.GetTempPath(), $"gcp-key-{Guid.NewGuid():N}.json");
-        await File.WriteAllTextAsync(keyFile, jsonKey, ct).ConfigureAwait(false);
+        // The GCP service-account key is a long-lived credential — 0600, never
+        // world-readable in /tmp (quality audit F11).
+        await SecretFile.WriteAsync(keyFile, jsonKey, ct).ConfigureAwait(false);
 
         var env = new Dictionary<string, string>
         {
@@ -1202,7 +1244,8 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         if (request.BootstrapScript is { } script)
         {
             startupScriptPath = Path.GetTempFileName();
-            await File.WriteAllTextAsync(startupScriptPath, script, ct).ConfigureAwait(false);
+            // GCP startup script embeds the minted agent API key — 0600.
+            await SecretFile.WriteAsync(startupScriptPath, script, ct).ConfigureAwait(false);
         }
 
         ProvisionResult res;

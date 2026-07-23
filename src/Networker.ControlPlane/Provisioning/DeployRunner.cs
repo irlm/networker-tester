@@ -95,7 +95,9 @@ public sealed class DeployRunner
         var deployFile = Path.Combine(Path.GetTempPath(), $"deploy-{deploymentId}.json");
         try
         {
-            await File.WriteAllTextAsync(deployFile, deployJson, ct).ConfigureAwait(false);
+            // deploy.json carries the minted agent API key — write it 0600, never
+            // world-readable in the shared temp dir (quality audit F11).
+            await SecretFile.WriteAsync(deployFile, deployJson, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

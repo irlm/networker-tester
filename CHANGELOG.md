@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.63] — 2026-07-23
+
+### Security
+- **Cloud secrets no longer exposed via argv or world-readable temp files (C#
+  quality-review F11).** Provisioning shells out to `az`/`aws`/`gcloud` and fed
+  them secrets two unsafe ways:
+  - **On argv** (visible in `ps`/`/proc/*/cmdline` to any local user for the
+    multi-minute CLI call): the Azure service-principal client secret
+    (`az login … -p <secret>`) and the Windows VM admin password
+    (`az vm create --admin-password <pw>`). Both now go through a 0600 temp file
+    via az's `@file` loading (`-p @<file>`, `--admin-password @<file>`) — the
+    same mechanism the builder already uses for `--custom-data`. (Azure SDK
+    `AZURE_CLIENT_*` env vars don't work here — `az login` reads `-u`/`-p` from
+    argv, not the environment.)
+  - **World-readable in `/tmp`** (umask-default 0644): the GCP service-account
+    key, the `deploy.json` that carries the minted agent API key, Azure
+    protected-settings, and the cloud-init/user-data/startup scripts that embed
+    the API key. All are now created 0600 (new `SecretFile` helper using
+    `FileStreamOptions.UnixCreateMode` — atomic, no 0644→0600 race), and the az
+    SP token-cache dir is created 0700. The SSH private key already self-chmod'd;
+    the only remaining plaintext temp write is the SSH *public* key (not a secret).
+
 ## [0.28.62] — 2026-07-23
 
 ### Fixed
