@@ -82,17 +82,22 @@ public sealed class MembersQueryTranslationTests
         var conn = sp.GetRequiredService<SqliteConnection>();
         var u1 = Guid.NewGuid();
         var u2 = Guid.NewGuid();
+        // Microsoft.Data.Sqlite serializes Guid parameters as UPPERCASE TEXT, so
+        // seed the user_id columns in that exact form — otherwise the projects
+        // query's parameterized `WHERE m.UserId == userId` matches nothing.
+        var s1 = u1.ToString().ToUpperInvariant();
+        var s2 = u2.ToString().ToUpperInvariant();
         Exec(conn, $"""
             INSERT INTO project (project_id, name, slug, settings, created_at, updated_at, delete_protection)
             VALUES ('{ProjectId}', 'Memq', 'memq', '[]', '2026-07-22 12:00:00', '2026-07-22 12:00:00', 0);
             INSERT INTO dash_user (user_id, email, display_name, role, status, created_at, is_platform_admin, must_change_password, sso_only)
-            VALUES ('{u1}', 'a@x.io', 'Alice', 'operator', 'active', '2026-07-22 12:00:00', 0, 0, 0);
+            VALUES ('{s1}', 'a@x.io', 'Alice', 'operator', 'active', '2026-07-22 12:00:00', 0, 0, 0);
             INSERT INTO dash_user (user_id, email, display_name, role, status, created_at, is_platform_admin, must_change_password, sso_only)
-            VALUES ('{u2}', 'b@x.io', 'Bob', 'viewer', 'active', '2026-07-22 12:00:00', 0, 0, 0);
+            VALUES ('{s2}', 'b@x.io', 'Bob', 'viewer', 'active', '2026-07-22 12:00:00', 0, 0, 0);
             INSERT INTO project_member (project_id, user_id, role, status, joined_at)
-            VALUES ('{ProjectId}', '{u2}', 'viewer', 'active', '2026-07-22 11:50:00');
+            VALUES ('{ProjectId}', '{s2}', 'viewer', 'active', '2026-07-22 11:50:00');
             INSERT INTO project_member (project_id, user_id, role, status, joined_at)
-            VALUES ('{ProjectId}', '{u1}', 'operator', 'active', '2026-07-22 12:00:00');
+            VALUES ('{ProjectId}', '{s1}', 'operator', 'active', '2026-07-22 12:00:00');
             """);
         return (u1, u2);
     }
