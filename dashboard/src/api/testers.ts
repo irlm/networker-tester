@@ -169,10 +169,14 @@ export const testersApi = {
       body: JSON.stringify(opts),
     }),
 
-  deleteTester: (projectId: string, testerId: string) =>
-    request<{ deleted: boolean }>(base(projectId, `/${testerId}`), {
-      method: 'DELETE',
-    }),
+  // force=true removes the record even if the cloud VM delete fails (dead creds /
+  // unreachable cloud) — the escape hatch for an otherwise un-deletable tester,
+  // at the risk of orphaning a VM the operator must clean up in their console.
+  deleteTester: (projectId: string, testerId: string, force = false) =>
+    request<{ deleted: boolean }>(
+      base(projectId, `/${testerId}${force ? '?force=true' : ''}`),
+      { method: 'DELETE' },
+    ),
 
   updateSchedule: (
     projectId: string,

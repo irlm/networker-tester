@@ -294,6 +294,13 @@ public static partial class TesterWriteEndpoints
     private static async Task<IResult> DeleteTester(
         string projectId,
         Guid testerId,
+        // ?force=true removes the tester record even if the cloud VM delete fails
+        // (e.g. the cloud creds are gone / unreachable, so the VM can't be
+        // verified or destroyed). The escape hatch for a tester that would
+        // otherwise be un-deletable — at the cost of possibly orphaning a VM the
+        // operator must clean up in their cloud console. Bound from the query
+        // string (absent → false).
+        bool force,
         HttpContext http,
         NetworkerDbContext db,
         IServiceScopeFactory scopeFactory,
@@ -362,7 +369,7 @@ public static partial class TesterWriteEndpoints
             // VM was deleted out-of-band can never be removed ("delete but doesn't
             // delete"). Treat it as success and remove the row.
             var realFailure = !res.Success && res.ExitCode is not null && !VmAlreadyGone(res);
-            if (realFailure)
+            if (realFailure && !force)
             {
                 row.PowerState = "stopped";
                 row.StatusMessage = $"delete failed: {res.Error ?? res.StdErr}";
@@ -370,6 +377,16 @@ public static partial class TesterWriteEndpoints
                 await sdb.SaveChangesAsync(token);
                 l.LogError("tester {TesterId} VM delete failed; row kept for retry: {Err}", testerId, res.Error ?? res.StdErr);
                 return;
+            }
+
+            if (realFailure)
+            {
+                // force=true — the cloud delete genuinely failed (e.g. dead creds),
+                // but the operator chose to remove the record anyway. The VM may be
+                // orphaned and must be cleaned up in the cloud console.
+                l.LogWarning(
+                    "tester {TesterId} FORCE-deleted despite cloud VM delete failure — the VM may be orphaned "
+                    + "and must be cleaned up in the cloud console: {Err}", testerId, res.Error ?? res.StdErr);
             }
 
             sdb.ProjectTesters.Remove(row);
