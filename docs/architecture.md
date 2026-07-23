@@ -126,6 +126,88 @@ versioned JSON contract (`schema_version`), and `Networker.Contracts` mirrors
 it on the C# side with golden contract tests in CI. Details in
 [`dotnet-migration.md`](dotnet-migration.md).
 
+## Run Lifecycle & Reliability Guarantees
+
+A test run flows queued → provisioning (if it needs a VM) → running → terminal
+(`completed` / `failed` / `cancelled`). Several guards protect that lifecycle from
+duplicate execution, late/stale frames, and orphaned work (shipped v0.28.60–62).
+
+### Terminal-status preconditions (v0.28.60)
+
+`AgentMessageProcessor` gates `run_started`, `run_finished`, and `error` frames on a
+non-terminal WHERE clause (`Status != completed/failed/cancelled`). A frame that
+arrives for an already-terminal run updates 0 rows and is a logged no-op, so a late
+frame can never resurrect a terminal run
+(`src/Networker.ControlPlane/Realtime/RawWs/AgentMessageProcessor.cs`). `run_finished`
+additionally rejects any status not in the terminal set.
+
+### Run deadline (v0.28.60)
+
+The agent runs every tester invocation under an overall wall-clock budget of
+`max_duration_secs + 60s` slack (or, when `max_duration_secs` is 0, the worst-case
+`timeout_ms × runs × modes + 60s`, capped). On expiry it kills the tester **process
+tree** (`Process.Kill(entireProcessTree: true)`) and emits a `failed` terminal. The
+slack ensures a tester finishing right at its own timeout is never killed mid-flush
+(`src/Networker.Agent/RunExecutor.cs`).
+
+### Duplicate-execution guards (v0.28.60)
+
+- **Agent-side dedup:** a `RecentRunSet` (128-entry FIFO of finished run ids) lets the
+  worker drop a re-sent `assign_run` for a run it already executed, instead of running
+  it twice (`src/Networker.Agent/AgentWorker.cs`).
+- **Redispatcher claim filter:** the queued-run redispatcher only re-assigns rows with
+  `WorkerId == null`. A non-null worker means an agent has already claimed the run (even
+  before it sends `run_started`), so re-assigning it would double-execute
+  (`src/Networker.ControlPlane/Dispatch/RunDispatcher.cs`).
+
+### Stale-socket safety (v0.28.60)
+
+`AgentConnectionRegistry.Unregister` returns `bool` and only removes the mapping if it
+still points at the given connection id. When a reconnected agent has re-registered
+under a new connection, the stale socket's teardown gets `false` and skips the
+disconnect cleanup — so it never fails runs the reconnected agent is executing right now
+(`src/Networker.ControlPlane/Realtime/AgentConnectionRegistry.cs`).
+
+### Cancel terminal guard (v0.28.62)
+
+`RunDispatcher.CancelAsync` only cancels runs in `queued` / `running` / `provisioning`,
+setting `FinishedAt`. Cancelling an already-terminal run affects 0 rows and is a logged
+no-op (returns without throwing, fanning a cancel frame, or publishing an update) — it
+never rewrites a `completed` / `failed` run to `cancelled`. A genuinely missing run is a
+404 (`src/Networker.ControlPlane/Dispatch/RunDispatcher.cs`).
+
+### Watchdog provisioning sweeps (v0.28.62)
+
+`WatchdogService` reaps stuck work each tick (`src/Networker.ControlPlane/Background/WatchdogService.cs`):
+
+| Sweep | Cutoff | Effect |
+|---|---|---|
+| Stale `running` runs | 120 s | Fail runs whose agent is offline |
+| Stale `queued` runs | 300 s | Fail runs no runner claimed |
+| Stale `deployments` | **30 min** | Fail deployments stuck `pending`/`running` (control plane restarted mid-deploy) |
+| Orphaned `provisioning` runs | 30 min | Fail provisioning runs whose deployment is gone/missing |
+
+The 30-minute deployment sweep is what recovers an orphaned deploy after a control-plane
+restart.
+
+## Observability & Realtime
+
+### Server-timing header (v0.28.61–63)
+
+Every control-plane response carries `X-Process-Time-Ms` — the server-side duration in
+ms, set in an `OnStarting` callback (`src/Networker.ControlPlane/Observability/ServerTiming.cs`).
+The frontend perf log reads it to split each call into `server_ms` vs `network_ms`;
+aborted requests are excluded from `perf_log` so they don't pollute p95. See
+[`runbooks/perf-log-diagnosis.md`](runbooks/perf-log-diagnosis.md).
+
+### Live tester-queue deltas (v0.28.58)
+
+`TesterQueueUpdateProducer` implements `IDashboardEventObserver` and observes the
+EventBus (`JobUpdate` / `JobComplete`). On every run transition it pushes a
+`tester_queue_update` delta to `/ws/testers` subscribers, so the tester-queue panel
+updates live instead of only on reconnect snapshots
+(`src/Networker.ControlPlane/Realtime/TesterQueueUpdateProducer.cs`).
+
 ## Retired Components (Rust control plane)
 
 `crates/networker-dashboard`, `crates/networker-agent`, and

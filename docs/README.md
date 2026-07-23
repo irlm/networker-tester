@@ -15,7 +15,7 @@ points here for the detailed material.
 - [`config-examples.md`](config-examples.md): which JSON sample to copy for tester, endpoint, and deploy workflows
 - [`deploy-config.md`](deploy-config.md): full `--deploy` schema and execution flow (the `dashboard` object is legacy)
 - [`setup-guide.md`](setup-guide.md): production deployment guide (infrastructure, SSO, cloud federation, email) — some manual-setup sections still show the legacy Rust service and are marked as such
-- [`cloud-auth.md`](cloud-auth.md): zero-credential Azure-to-AWS/GCP federation for the control plane
+- [`cloud-auth.md`](cloud-auth.md): cloud authentication for the control plane — ambient CLI auth + AES-256-GCM stored credentials (materialised to 0600 temp files at provision time)
 - [`alerting.md`](alerting.md): threshold alert rules + notification channels (webhook/email) — concepts, API, webhook payload + signature contract
 - [`schema-ownership.md`](schema-ownership.md): the control-plane PostgreSQL schema is owned by `src/Networker.Data` (migrations, migrator, compatibility guarantees)
 - [`ops-nginx-ws-redaction.md`](ops-nginx-ws-redaction.md): nginx access-log redaction for the `/ws/*` credential query strings — re-apply procedure for a VM rebuild
@@ -27,6 +27,13 @@ points here for the detailed material.
 - [`phase2-cutover-runbook.md`](phase2-cutover-runbook.md): production ops runbook — leader election, health endpoints, soak checklist (§4), rollback (§5), decommission criteria (§7). Cutover is complete; §4/§5/§7 remain operative until the Rust crates are decommissioned
 - [`tls-endpoint-profile-design.md`](tls-endpoint-profile-design.md): TLS endpoint profiling feature design
 - [`tls-endpoint-profile-phase1-checklist.md`](tls-endpoint-profile-phase1-checklist.md): implementation checklist companion to the TLS profile design
+
+## Operational Runbooks
+
+- [`runbooks/observability.md`](runbooks/observability.md): every control-plane signal — health endpoints, TickMonitor, perf_log, journald, and the watchdog/reaper WARN messages
+- [`runbooks/admin-password-reset.md`](runbooks/admin-password-reset.md): reset the production admin login (base64-ship the bcrypt SQL; update the `DASHBOARD_ADMIN_PASSWORD` soak secret)
+- [`runbooks/credential-rotation.md`](runbooks/credential-rotation.md): rotate `DASHBOARD_CREDENTIAL_KEY` (dual-key window) and `DASHBOARD_JWT_SECRET`
+- [`runbooks/perf-log-diagnosis.md`](runbooks/perf-log-diagnosis.md): read `perf_log` for a slow-page investigation (server_ms vs network_ms; aborted-poll artifact)
 
 ## Historical / Archive
 
@@ -72,9 +79,16 @@ Read [`release-flow.md`](release-flow.md).
 
 Read [`phase2-cutover-runbook.md`](phase2-cutover-runbook.md).
 
-### Understand dashboard cloud identity setup
+### Understand control-plane cloud authentication
 
 Read [`cloud-auth.md`](cloud-auth.md).
+
+### Operate the control plane day-to-day
+
+Read [`runbooks/observability.md`](runbooks/observability.md), and the task-specific
+runbooks for [password reset](runbooks/admin-password-reset.md),
+[credential rotation](runbooks/credential-rotation.md), and
+[perf-log diagnosis](runbooks/perf-log-diagnosis.md).
 
 ### Deploy the control plane to production
 
