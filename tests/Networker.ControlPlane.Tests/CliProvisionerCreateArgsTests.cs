@@ -37,7 +37,7 @@ public sealed class CliProvisionerCreateArgsTests
     public void BuildAzureCreateArgs_linux_matches_rust_argv()
     {
         var args = CliComputeProvisioner.BuildAzureCreateArgs(
-            LinuxRequest(), "sub-123", "rg-testers", adminPassword: null, customDataPath: null);
+            LinuxRequest(), "sub-123", "rg-testers", adminPasswordFile: null, customDataPath: null);
 
         Assert.Equal(new[]
         {
@@ -70,8 +70,10 @@ public sealed class CliProvisionerCreateArgsTests
     [Fact]
     public void BuildAzureCreateArgs_windows_uses_computer_name_and_password_not_ssh_keys()
     {
+        // 4th arg is now the 0600 admin-password FILE path → emitted as @path so
+        // the secret stays off argv (quality audit F11).
         var args = CliComputeProvisioner.BuildAzureCreateArgs(
-            WindowsRequest(), "sub-123", "rg-testers", "Sup3r!Secret9x", "/tmp/cd456");
+            WindowsRequest(), "sub-123", "rg-testers", "/tmp/pw789", "/tmp/cd456");
 
         Assert.DoesNotContain("--generate-ssh-keys", args);
 
@@ -81,7 +83,8 @@ public sealed class CliProvisionerCreateArgsTests
 
         var pwIdx = args.IndexOf("--admin-password");
         Assert.True(pwIdx >= 0);
-        Assert.Equal("Sup3r!Secret9x", args[pwIdx + 1]);
+        Assert.Equal("@/tmp/pw789", args[pwIdx + 1]); // @file, not the raw secret
+        Assert.DoesNotContain("/tmp/pw789", args); // the bare path (secret) never on argv
 
         Assert.Equal("--custom-data", args[^2]);
         Assert.Equal("@/tmp/cd456", args[^1]);
