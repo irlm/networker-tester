@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.69] — 2026-07-23
+
+### Added
+- **Force-delete for un-deletable testers.** A tester whose cloud VM can't be
+  reached (credentials gone / cloud unreachable) previously couldn't be removed —
+  the delete kept the row for a retry that could never succeed (v0.28.68 handled
+  "VM already gone" but not "cloud unreachable"). `DELETE
+  …/testers/{id}?force=true` now removes the record even when the cloud delete
+  genuinely fails, logging a warning that the VM may be orphaned and must be
+  cleaned up in the cloud console. The tester detail drawer surfaces a **Force
+  delete** button (with an explicit orphan warning) only once a normal delete has
+  failed. Non-force delete behaviour is unchanged (still keeps the row on a real
+  failure so a live VM is never silently orphaned).
+
 ## [0.28.68] — 2026-07-23
 
 ### Fixed

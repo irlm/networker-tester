@@ -70,6 +70,10 @@ export function TesterDetailDrawer({
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmForceStop, setConfirmForceStop] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmForceDelete, setConfirmForceDelete] = useState(false);
+  // A prior delete whose cloud VM teardown failed (e.g. dead creds) leaves the
+  // tester with this status — surface the force-delete escape hatch then.
+  const deleteFailed = /delete failed/i.test(tester?.status_message ?? '');
   const [rotatingKey, setRotatingKey] = useState(false);
   const [latestVersion, setLatestVersion] = useState<string | null>(null);
   const [editingSchedule, setEditingSchedule] = useState(false);
@@ -125,12 +129,12 @@ export function TesterDetailDrawer({
     if (!tester) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      if (confirmForceStop || confirmDelete) return;
+      if (confirmForceStop || confirmDelete || confirmForceDelete) return;
       onClose();
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [tester, confirmForceStop, confirmDelete, onClose]);
+  }, [tester, confirmForceStop, confirmDelete, confirmForceDelete, onClose]);
 
   const run = useCallback(
     async (fn: () => Promise<unknown>) => {
@@ -663,6 +667,17 @@ export function TesterDetailDrawer({
               >
                 Delete runner
               </button>
+              {deleteFailed && (
+                <button
+                  type="button"
+                  disabled={isBusy || isRunningOrQueued}
+                  onClick={() => setConfirmForceDelete(true)}
+                  title="The cloud VM delete failed (e.g. credentials are gone). Remove the record anyway — the VM may be orphaned."
+                  className="px-3 py-1 text-xs rounded border border-red-500 bg-red-500/10 text-red-300 hover:bg-red-500/20 disabled:opacity-50"
+                >
+                  Force delete
+                </button>
+              )}
             </div>
             {isRunningOrQueued && (
               <p className="text-xs text-gray-500 mt-2">
@@ -713,6 +728,29 @@ export function TesterDetailDrawer({
             });
           }}
           onCancel={() => setConfirmDelete(false)}
+        />
+      )}
+
+      {/* ── Confirm FORCE delete ───────────────────────────────────────────── */}
+      {confirmForceDelete && (
+        <ConfirmDialog
+          title={`Force-delete runner "${tester.name}"?`}
+          message={
+            'The cloud VM could not be deleted (its credentials are likely gone). '
+            + 'Force-delete removes the runner record anyway — the VM may still exist '
+            + 'and must be deleted in your cloud console. This cannot be undone.'
+          }
+          confirmLabel="Force delete"
+          danger
+          onConfirm={() => {
+            setConfirmForceDelete(false);
+            run(async () => {
+              await testersApi.deleteTester(projectId, tester.tester_id, true);
+              onChanged();
+              onClose();
+            });
+          }}
+          onCancel={() => setConfirmForceDelete(false)}
         />
       )}
 
