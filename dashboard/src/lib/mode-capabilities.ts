@@ -28,7 +28,8 @@ export const MODE_REQUIREMENT: Readonly<Record<string, ModeRequirement>> = {
   sdkprobe: 'sdk-endpoint',
   apibench: 'reference-apis',
 
-  // Throughput — needs the endpoint's /download, /upload, and UDP (:9998) servers.
+  // Throughput — needs the endpoint's /download, /upload, and UDP-throughput
+  // (:9998) servers, which an arbitrary URL doesn't run.
   download: 'networker-endpoint',
   upload: 'networker-endpoint',
   download1: 'networker-endpoint',
@@ -39,19 +40,14 @@ export const MODE_REQUIREMENT: Readonly<Record<string, ModeRequirement>> = {
   upload3: 'networker-endpoint',
   webdownload: 'networker-endpoint',
   webupload: 'networker-endpoint',
-  udp: 'networker-endpoint',
   udpdownload: 'networker-endpoint',
   udpupload: 'networker-endpoint',
 
-  // Page load — needs the endpoint's page-manifest server (native + browser).
-  pageload: 'networker-endpoint',
-  pageload1: 'networker-endpoint',
-  pageload2: 'networker-endpoint',
-  pageload3: 'networker-endpoint',
-  browser: 'networker-endpoint',
-  browser1: 'networker-endpoint',
-  browser2: 'networker-endpoint',
-  browser3: 'networker-endpoint',
+  // NOTE: `udp` (echo RTT), `pageload*` (native page fetch), and `browser*`
+  // (Chrome) are 'any' — the URL Probe runs all of them against arbitrary URLs
+  // (they load a real page / probe a real host), so they must NOT be gated as
+  // endpoint-only. Chrome-on-tester is a tester capability, not a target one —
+  // a separate axis for a later slice.
 };
 
 export function requirementOf(mode: string): ModeRequirement {
