@@ -2,7 +2,7 @@
 # ==============================================================================
 # backup-daily.sh — Daily pg_dump to Azure Blob Storage
 #
-# Dumps networker_core (or configured DB), gzips it, uploads via azcopy.
+# Dumps alethedash_core (or configured DB), gzips it, uploads via azcopy.
 # On the 1st of the month, also archives a monthly copy.
 # Writes a last_backup.json marker to the blob container root.
 #
@@ -14,7 +14,7 @@
 #   BACKUP_DB_HOST     — localhost
 #   BACKUP_DB_USER     — backup_user
 #   BACKUP_DB_PORT     — 5432
-#   BACKUP_DB_NAME     — networker_core
+#   BACKUP_DB_NAME     — alethedash_core
 #   BACKUP_RETAIN_DAYS — 30
 #
 # Usage (typically from cron):
@@ -26,7 +26,9 @@ set -euo pipefail
 BACKUP_DB_HOST="${BACKUP_DB_HOST:-localhost}"
 BACKUP_DB_USER="${BACKUP_DB_USER:-backup_user}"
 BACKUP_DB_PORT="${BACKUP_DB_PORT:-5432}"
-BACKUP_DB_NAME="${BACKUP_DB_NAME:-networker_core}"
+# Prod DB is alethedash_core (verified from /etc/alethedash-cs.env); the old
+# networker_core default silently dumped a nonexistent DB.
+BACKUP_DB_NAME="${BACKUP_DB_NAME:-alethedash_core}"
 BACKUP_RETAIN_DAYS="${BACKUP_RETAIN_DAYS:-30}"
 
 if [ -z "${BACKUP_BLOB_URL:-}" ]; then
