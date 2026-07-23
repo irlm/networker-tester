@@ -3,7 +3,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Networker.ControlPlane.Endpoints;
 using Networker.Data;
-using Networker.Data.Entities;
 
 namespace Networker.ControlPlane.Tests;
 
@@ -74,40 +73,27 @@ public sealed class MembersQueryTranslationTests
         cmd.ExecuteNonQuery();
     }
 
+    // Seed with raw SQL, NOT EF entities: several columns are mapped
+    // ValueGenerated.OnAdd (HasDefaultValueSql), so an EF insert reads the value
+    // back and throws "data is NULL at ordinal" against the minimal SQLite
+    // schema. Raw INSERTs make the SELECT-under-test the only EF operation.
     private static (Guid u1, Guid u2) Seed(IServiceProvider sp)
     {
-        using var scope = sp.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<NetworkerDbContext>();
-        var now = new DateTime(2026, 7, 22, 12, 0, 0, DateTimeKind.Utc);
+        var conn = sp.GetRequiredService<SqliteConnection>();
         var u1 = Guid.NewGuid();
         var u2 = Guid.NewGuid();
-        db.Projects.Add(new Project
-        {
-            ProjectId = ProjectId, Name = "Memq", Slug = "memq", Settings = "{}",
-            CreatedAt = now, UpdatedAt = now,
-        });
-        db.DashUsers.Add(new DashUser
-        {
-            UserId = u1, Email = "a@x.io", DisplayName = "Alice",
-            Role = "operator", Status = "active", CreatedAt = now,
-        });
-        db.DashUsers.Add(new DashUser
-        {
-            UserId = u2, Email = "b@x.io", DisplayName = "Bob",
-            Role = "viewer", Status = "active", CreatedAt = now,
-        });
-        // u2 joined earlier than u1 → must come first when ordered by joined_at.
-        db.ProjectMembers.Add(new ProjectMember
-        {
-            ProjectId = ProjectId, UserId = u2, Role = "viewer", Status = "active",
-            JoinedAt = now.AddMinutes(-10),
-        });
-        db.ProjectMembers.Add(new ProjectMember
-        {
-            ProjectId = ProjectId, UserId = u1, Role = "operator", Status = "active",
-            JoinedAt = now,
-        });
-        db.SaveChanges();
+        Exec(conn, $"""
+            INSERT INTO project (project_id, name, slug, settings, created_at, updated_at, delete_protection)
+            VALUES ('{ProjectId}', 'Memq', 'memq', '{{}}', '2026-07-22 12:00:00', '2026-07-22 12:00:00', 0);
+            INSERT INTO dash_user (user_id, email, display_name, role, status, created_at, is_platform_admin, must_change_password, sso_only)
+            VALUES ('{u1}', 'a@x.io', 'Alice', 'operator', 'active', '2026-07-22 12:00:00', 0, 0, 0);
+            INSERT INTO dash_user (user_id, email, display_name, role, status, created_at, is_platform_admin, must_change_password, sso_only)
+            VALUES ('{u2}', 'b@x.io', 'Bob', 'viewer', 'active', '2026-07-22 12:00:00', 0, 0, 0);
+            INSERT INTO project_member (project_id, user_id, role, status, joined_at)
+            VALUES ('{ProjectId}', '{u2}', 'viewer', 'active', '2026-07-22 11:50:00');
+            INSERT INTO project_member (project_id, user_id, role, status, joined_at)
+            VALUES ('{ProjectId}', '{u1}', 'operator', 'active', '2026-07-22 12:00:00');
+            """);
         return (u1, u2);
     }
 
