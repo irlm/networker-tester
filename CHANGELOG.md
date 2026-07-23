@@ -11,6 +11,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.64] — 2026-07-23
+
+### Documentation
+- **Docs-accuracy pass + new operational runbooks** (from the 2026-07 docs/ops
+  audit; every claim re-verified against source).
+  - **docs/cloud-auth.md rewritten** — the old "zero-credential / no credentials
+    on disk" model was wrong. Documents the real dual model: ambient CLI auth +
+    per-project credentials stored **AES-256-GCM** (`CredentialCipher`) and
+    decrypted at provision time into **0600** temp files referenced via az
+    `@file` (never world-readable, never on argv), plus the `/cloud-accounts` /
+    `/cloud-connections` management APIs.
+  - **docs/architecture.md** — new sections documenting the run-lifecycle
+    guarantees (terminal-status preconditions, run deadline, dedup/claim
+    filters), the `CancelAsync` terminal guard, the watchdog provisioning
+    sweeps (30-min cutoffs), `X-Process-Time-Ms`/`server_ms` split, and live
+    `tester_queue_update` deltas — all shipped 0.28.58–0.28.63, previously
+    CHANGELOG-only.
+  - **docs/probes.md** — added the missing shipped modes (`sdkprobe`,
+    `download1-3`, `upload1-3`, `browser1-3`) + a target-requirement legend.
+  - **docs/phase2-cutover-runbook.md** — §1.2/§8 corrected to reflect that the
+    response-hardening middleware has landed.
+  - **New docs/runbooks/**: admin-password-reset (the base64-ship-the-bcrypt-SQL
+    recipe + the mandatory `DASHBOARD_ADMIN_PASSWORD` secret refresh),
+    credential-rotation (`_OLD` dual-key window), perf-log-diagnosis, and an
+    observability one-pager.
+
+### Fixed
+- **Frontend dev proxy** (`dashboard/vite.config.ts`) targeted the dead Rust
+  port `3000`; pointed at the C# control plane's `5030` so the documented local
+  dev flow works.
+
 ## [0.28.63] — 2026-07-23
 
 ### Security

@@ -1,317 +1,152 @@
-# Zero-Credential Multi-Cloud Authentication
-
-The networker dashboard runs on an Azure VM with a system-assigned managed
-identity. It manages cloud resources (EC2 instances on AWS, GCE instances on
-GCP) without storing any long-lived credentials. Instead, it uses
-**federated identity** — exchanging an Azure AD token for temporary
-credentials on each target cloud.
-
-## Architecture Overview
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                      Azure Dashboard VM                                │
-│                                                                        │
-│  1. Request token from IMDS                                            │
-│     GET http://169.254.169.254/metadata/identity/oauth2/token          │
-│         ?resource=<APP_REGISTRATION_APP_ID>                            │
-│                                                                        │
-│  2. Azure AD returns JWT:                                              │
-│     iss: https://sts.windows.net/<TENANT_ID>/                          │
-│     aud: <APP_REGISTRATION_APP_ID>                                     │
-│     sub: <MI_PRINCIPAL_ID>                                             │
-│                                                                        │
-│                    ┌───────────────┬───────────────┐                   │
-│                    │     AWS       │     GCP       │                   │
-│                    │               │               │                   │
-│  3a. STS           │ AssumeRole    │ STS exchange  │                   │
-│      exchange      │ WithWeb       │ + access      │                   │
-│                    │ Identity      │ token         │                   │
-│                    │               │               │                   │
-│  4. Temp creds     │ AccessKey +   │ OAuth2        │                   │
-│     returned       │ SecretKey +   │ access token  │                   │
-│                    │ SessionToken  │               │                   │
-│                    └───────────────┴───────────────┘                   │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-## Critical Design Decision: App Registration as Audience
-
-Azure managed identity tokens **cannot** use the MI's own `appId` (client
-ID) as the token audience. Requesting a token with
-`resource=<MI_CLIENT_ID>` fails with:
-
-```
-AADSTS500011: The resource principal named <MI_CLIENT_ID> was not found
-```
-
-or:
-
-```
-AADSTS100040: The request body must contain the following parameter: 'resource' or 'scope'
-```
-
-The solution is to create an **Azure AD App Registration** (a separate
-resource from the managed identity) and use its `appId` as the token
-audience:
-
-1. Create App Registration: `az ad app create --display-name networker-dashboard-federation`
-2. Request IMDS token with `resource=<APP_REGISTRATION_APP_ID>`
-3. Configure AWS OIDC client-id and GCP allowed-audiences to match the App ID
-
-Both the AWS and GCP setup scripts handle this automatically.
-
-## Prerequisites
-
-| Requirement | Purpose |
-|---|---|
-| Azure VM with system-assigned managed identity | Source of identity tokens |
-| Azure AD App Registration | Token audience (created by setup scripts) |
-| Azure CLI (`az`) authenticated | Creating the App Registration |
-| AWS CLI authenticated (for AWS setup) | Creating OIDC provider + IAM role |
-| gcloud CLI authenticated (for GCP setup) | Creating WIF pool + service account |
-| `AWS_ACCOUNT_ID` env var | Required by AWS setup script |
-| `GCP_PROJECT_ID` env var | Required by GCP setup script |
-
-## Setup Steps
-
-### 1. Azure: Managed Identity (already done if VM exists)
-
-The dashboard VM needs a system-assigned managed identity. This is
-typically enabled at VM creation time or via:
-
-```bash
-az vm identity assign --resource-group <RG> --name <VM_NAME>
-```
-
-No additional Azure-side configuration is needed — the setup scripts
-create the App Registration automatically.
-
-### 2. AWS: OIDC Federation
-
-```bash
-export AWS_ACCOUNT_ID="123456789012"
-bash scripts/setup-aws-federation.sh
-```
-
-This script:
-1. Creates (or reuses) the Azure AD App Registration
-   `networker-dashboard-federation`
-2. Creates an AWS OIDC Identity Provider trusting
-   `https://sts.windows.net/<TENANT_ID>/`
-3. Creates an IAM policy with least-privilege EC2 permissions
-4. Creates an IAM role with a trust policy checking `aud == <APP_ID>`
-5. Generates a credential helper script for the VM
-
-Then on the dashboard VM:
-1. Install the credential helper at `/usr/local/bin/networker-aws-credential-helper.sh`
-2. Configure `~/.aws/config` with `credential_process` pointing to the helper
-
-### 3. GCP: Workload Identity Federation
-
-```bash
-export GCP_PROJECT_ID="my-project-123"
-bash scripts/setup-gcp-federation.sh
-```
-
-This script:
-1. Creates (or reuses) the same Azure AD App Registration
-2. Enables required GCP APIs (IAM, STS, Compute, Cloud Resource Manager)
-3. Creates a Workload Identity Pool and OIDC provider
-4. Creates a service account with Compute Instance Admin role
-5. Binds the Azure MI principal to the service account
-6. Generates a credential config JSON file
-
-Then on the dashboard VM:
-1. Copy the credential config to `/etc/networker-gcp-credentials.json`
-2. Set `GOOGLE_APPLICATION_CREDENTIALS=/etc/networker-gcp-credentials.json`
-
-## How the AWS Credential Helper Works
-
-AWS does not natively support Azure AD tokens. The credential helper
-bridges the gap using the `credential_process` mechanism in `~/.aws/config`.
-
-**Flow:**
-
-```
-AWS CLI/SDK needs credentials
-  → runs credential_process
-    → helper requests token from Azure IMDS (resource=APP_ID)
-    → helper calls aws sts assume-role-with-web-identity
-    → returns AccessKeyId + SecretAccessKey + SessionToken as JSON
-  → AWS CLI uses temporary credentials
-  → credentials expire after 1 hour → process repeats automatically
-```
-
-**`~/.aws/config` on the VM:**
-
-```ini
-[default]
-region = us-east-1
-credential_process = /usr/local/bin/networker-aws-credential-helper.sh
-```
-
-The helper script is generated by `setup-aws-federation.sh` with the
-correct `APP_ID` and `ROLE_ARN` baked in.
-
-## How the GCP Credential Config Works
-
-GCP natively supports external identity federation via a JSON credential
-config file. The Google Cloud client libraries read this file when
-`GOOGLE_APPLICATION_CREDENTIALS` points to it.
-
-**Flow:**
-
-```
-Google Cloud SDK/library needs access token
-  → reads credential config JSON
-  → fetches Azure AD token from IMDS URL in credential_source
-    (URL includes resource=APP_ID as query parameter)
-  → sends token to GCP STS (securitytoken.googleapis.com)
-  → GCP validates: issuer matches, audience matches allowed-audiences
-  → GCP STS returns a federated access token
-  → library uses access token for Compute Engine API calls
-  → token expires → process repeats automatically
-```
-
-The credential config JSON looks like:
-
-```json
-{
-  "type": "external_account",
-  "audience": "//iam.googleapis.com/projects/<NUMBER>/locations/global/workloadIdentityPools/<POOL>/providers/<PROVIDER>",
-  "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
-  "token_url": "https://sts.googleapis.com/v1/token",
-  "credential_source": {
-    "url": "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=<APP_ID>",
-    "headers": { "Metadata": "true" },
-    "format": { "type": "json", "subject_token_field_name": "access_token" }
-  },
-  "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/<SA>:generateAccessToken"
-}
-```
-
-The critical field is `credential_source.url` — its `resource=` parameter
-**must** be the App Registration's App ID, not the MI client ID.
-
-## Troubleshooting
-
-### AADSTS100040: Missing resource or scope
-
-**Error:** `The request body must contain the following parameter: 'resource' or 'scope'`
-
-**Cause:** The IMDS token request is missing the `resource` query parameter,
-or the resource value is empty.
-
-**Fix:** Ensure the credential helper or config uses
-`resource=<APP_REGISTRATION_APP_ID>` in the IMDS URL.
-
-### AADSTS500011: Resource principal not found
-
-**Error:** `The resource principal named <ID> was not found in the tenant`
-
-**Cause:** You are using the MI's own client ID as the `resource` parameter.
-Managed identity client IDs are not valid token audiences.
-
-**Fix:** Create an App Registration (`az ad app create`) and use its `appId`
-as the resource. The setup scripts do this automatically.
-
-### AWS AccessDenied on AssumeRoleWithWebIdentity
-
-**Error:** `An error occurred (AccessDenied) when calling the AssumeRoleWithWebIdentity operation`
-
-**Common causes:**
-
-1. **Trust policy checks `sub` claim.** The `sub` in an Azure MI token is
-   the MI's principal ID (object ID). If the trust policy has a
-   `StringEquals` condition on `sub`, even minor formatting differences
-   (uppercase vs lowercase GUID) cause rejection. **Fix:** Remove the `sub`
-   condition — check only `aud`.
-
-2. **Wrong `aud` value.** The trust policy expects the OIDC client-id
-   (audience) to be the App Registration's App ID, but the OIDC provider
-   was created with the MI client ID. **Fix:** Update the OIDC provider's
-   client-id list: `aws iam add-client-id-to-open-id-connect-provider`.
-
-3. **Wrong issuer URL.** Azure AD v1 tokens use
-   `https://sts.windows.net/<TENANT_ID>/` (with trailing slash). The v2
-   endpoint (`login.microsoftonline.com/<TENANT_ID>/v2.0`) issues tokens
-   with a different `iss` claim. IMDS uses the v1 endpoint, so the OIDC
-   provider must use `sts.windows.net`. **Fix:** Recreate the OIDC provider
-   with the correct issuer URL.
-
-### GCP: INVALID_GRANT or token exchange failure
-
-**Error:** Token exchange returns 400 or the credential config does not work.
-
-**Common causes:**
-
-1. **Issuer mismatch.** The WIF provider's `issuer-uri` must be
-   `https://sts.windows.net/<TENANT_ID>/` — same issuer that appears in the
-   token's `iss` claim.
-
-2. **Audience mismatch.** The provider's `allowed-audiences` must match the
-   `aud` in the token, which is the App Registration's App ID.
-
-3. **Wrong resource in credential_source URL.** If the `resource=` in the
-   IMDS URL is wrong (e.g., uses MI client ID), the token's `aud` will not
-   match `allowed-audiences`. Regenerate the credential config with
-   `--app-id-uri=<APP_ID>`.
-
-4. **Subject binding mismatch.** The service account binding uses
-   `subject/<MI_PRINCIPAL_ID>`. If the MI principal ID is wrong, GCP cannot
-   map the federated identity to the service account. Verify with:
-   `az vm show --name <VM> --query identity.principalId -o tsv`
-
-### Verifying the token contents
-
-To inspect what Azure IMDS returns (run on the dashboard VM):
-
-```bash
-# Request token with the App Registration as audience
-TOKEN=$(curl -s -H "Metadata: true" \
-    "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=<APP_ID>" \
-    | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
-
-# Decode the JWT (without validating signature)
-echo "$TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null | python3 -m json.tool
-```
-
-Check that:
-- `iss` is `https://sts.windows.net/<TENANT_ID>/` (with trailing slash)
-- `aud` is the App Registration's App ID
-- `sub` is the MI's principal ID (object ID)
-
-## Security Model
-
-### What is trusted
-
-| Cloud | Trust anchor | What is checked |
+# Cloud Authentication (Ambient + Stored Credentials)
+
+The C# control plane (`Networker.ControlPlane`) manages cloud resources (Azure
+VMs, AWS EC2, GCP GCE) by shelling out to the vendor CLIs (`az`, `aws`,
+`gcloud`) from `CliComputeProvisioner`. It authenticates those CLI calls with a
+**dual model**:
+
+1. **Ambient CLI auth** — when a project has no stored credentials, the CLI uses
+   whatever identity the host already has: an Azure system-assigned managed
+   identity / `az login` session, an AWS instance profile / default profile, and
+   so on. Nothing is written to disk in this mode.
+2. **Per-project stored credentials** — a project can register provider
+   credentials (`CloudAccount`) that are encrypted at rest and materialised into
+   short-lived, owner-only temp files at provision time so the CLI can read them.
+
+> **This is not an IMDS token-exchange / federated-identity system.** The C#
+> control plane contains **zero** IMDS references
+> (`grep 169.254.169.254 src/Networker.ControlPlane` returns nothing). The
+> Azure→AWS/GCP OIDC-federation flow that earlier revisions of this document
+> described was a Rust-dashboard design and is **not** how the current control
+> plane works. The only IMDS use anywhere in the codebase is
+> `src/Networker.Endpoint/CloudMetadata.cs`, where a *tester* detects which cloud
+> it is running on — unrelated to control-plane auth.
+
+## The two authentication modes
+
+### Ambient CLI auth (no stored credentials)
+
+When a provision request carries no credentials (or the subscription/region
+fields are empty), `CliComputeProvisioner` omits the corresponding CLI flags and
+lets the CLI resolve identity from the host:
+
+| Provider | Ambient source | Behaviour in code |
 |---|---|---|
-| AWS | OIDC provider → Azure AD | `iss` (issuer URL) + `aud` (App ID) |
-| GCP | WIF pool → Azure AD | `iss` (issuer URL) + `aud` (App ID) + `sub` (MI principal → SA binding) |
+| Azure | Managed identity / `az login` | `--subscription` / `--resource-group` flags omitted when empty; ARM `--ids` is self-describing (`BuildAzure`, `CliComputeProvisioner.cs`) |
+| AWS | Instance profile / default profile | No `AWS_*` env vars set → the CLI falls back to the host's ambient profile (`BuildAws`, `CliComputeProvisioner.cs`) |
+| GCP | *Not supported ambiently* | GCP requires a stored `json_key`; `CreateGcpVmAsync` fails with `gcp config: missing json_key` if none is present |
 
-### Least privilege
+### Stored per-project credentials
 
-- **AWS:** The IAM policy restricts to EC2 actions in specific regions,
-  with tagging for resource tracking. No S3, Lambda, RDS, etc.
-- **GCP:** The service account has only `roles/compute.instanceAdmin.v1`.
-  No storage, BigQuery, etc.
+A project registers credentials through the cloud-account API (below). They are
+stored **AES-256-GCM encrypted** in the database (`CredentialCipher`) and, at
+provision time, decrypted and written to **owner-only (`0600`) temp files** that
+the CLI reads via `@file` / `file://` references. Secrets never appear on `argv`.
 
-### No stored secrets
+## How stored credentials are protected
 
-- No AWS access keys on disk
-- No GCP service account JSON keys
-- Credentials are ephemeral (1-hour lifetime) and auto-refresh
-- Revoking access: delete the App Registration, or remove the OIDC
-  provider (AWS) / WIF pool (GCP)
+### At rest — AES-256-GCM
+
+`src/Networker.Security/CredentialCipher.cs`:
+
+- Algorithm: **AES-256-GCM** — 32-byte key, random 12-byte nonce per encryption,
+  16-byte GCM auth tag.
+- Key: `DASHBOARD_CREDENTIAL_KEY` — 64 hex chars (32 bytes), byte-compatible with
+  the legacy Rust cipher so C# can decrypt rows Rust wrote.
+- Key rotation: `DASHBOARD_CREDENTIAL_KEY_OLD` (optional). `Decrypt` tries the
+  primary key first and falls back to the old key on a `CryptographicException`
+  (identical to the Rust `decrypt_with_fallback`). See
+  [`runbooks/credential-rotation.md`](runbooks/credential-rotation.md) for the
+  rotation procedure.
+- Fail-closed: outside `Development`, the control plane refuses to start without a
+  valid `DASHBOARD_CREDENTIAL_KEY` (`CredentialCipherExtensions.cs`).
+
+The encrypted bytes live in `CloudAccount.credentials_enc` +
+`CloudAccount.credentials_nonce` (`src/Networker.Data/Entities/CloudAccount.cs`).
+The list/detail APIs return the account **redacted** — the ciphertext is never
+sent to a client.
+
+### In transit to the CLI — 0600 temp files, never argv
+
+`src/Networker.ControlPlane/Provisioning/SecretFile.cs` writes each secret to a
+temp file created with `UnixFileMode.UserRead | UserWrite` (`0600`, owner-only)
+at file-creation time (not a post-hoc `chmod`), with no trailing newline. On
+Windows the mode flag is skipped (no POSIX modes). The caller deletes the file
+best-effort after the CLI call.
+
+`CliComputeProvisioner` routes every secret through `SecretFile` and references
+it by path, so credentials never land on the process command line (which would
+be visible in `ps` / logs):
+
+| Secret | CLI reference |
+|---|---|
+| Azure service-principal secret | `az login --service-principal -p @<file>` |
+| Azure Windows admin password | `az vm create --admin-password @<file>` |
+| Azure protected settings / API key | `--protected-settings @<file>` |
+| Azure custom-data bootstrap (carries API key) | `--custom-data @<file>` |
+| AWS user-data bootstrap | `--user-data file://<file>` |
+| GCP service-account key | `GOOGLE_APPLICATION_CREDENTIALS=<file>` (env, not argv) |
+| GCP startup script | `--metadata-from-file startup-script=<file>` |
+
+When spawning a process whose args contain a credential, the provisioner logs
+`(args redacted: contains credentials)` instead of the arg list.
+
+## Managing stored credentials — the API
+
+Two resources, both project-scoped
+(`src/Networker.ControlPlane/Endpoints/CloudAccountsEndpoints.cs`,
+`CloudConnectionsEndpoints.cs`):
+
+### Cloud accounts (encrypted provider credentials)
+
+| Verb | Route |
+|---|---|
+| GET | `/api/projects/{projectId}/cloud-accounts` (redacted list) |
+| POST | `/api/projects/{projectId}/cloud-accounts` (encrypts on create) |
+| GET | `/api/projects/{projectId}/cloud-accounts/{id}` (redacted) |
+| PUT | `/api/projects/{projectId}/cloud-accounts/{id}` (re-encrypts) |
+| DELETE | `/api/projects/{projectId}/cloud-accounts/{id}` |
+| POST | `/api/projects/{projectId}/cloud-accounts/{id}/validate` |
+
+Credentials submitted here are what get AES-256-GCM encrypted and later written
+to the `0600` temp files above.
+
+### Cloud connections (non-secret provider config)
+
+| Verb | Route |
+|---|---|
+| GET | `/api/projects/{projectId}/cloud-connections` |
+| POST | `/api/projects/{projectId}/cloud-connections` |
+| GET | `/api/projects/{projectId}/cloud-connections/{id}` (admin only) |
+| PUT | `/api/projects/{projectId}/cloud-connections/{id}` |
+| DELETE | `/api/projects/{projectId}/cloud-connections/{id}` |
+| POST | `/api/projects/{projectId}/cloud-connections/{id}/validate` |
+
+`CloudConnection.config` is stored **plaintext** (it holds non-secret provider
+configuration, not credentials) and is not returned by the list endpoint.
+
+## Security model
+
+### What is protected, and how
+
+| Concern | Mechanism |
+|---|---|
+| Credentials at rest | AES-256-GCM (`CredentialCipher`), key `DASHBOARD_CREDENTIAL_KEY`, fail-closed outside Development |
+| Credentials during a CLI call | `0600` owner-only temp file (`SecretFile`), read via `@file` / env — never on `argv` |
+| Log exposure | provisioner redacts credential-bearing arg lists |
+| Key rotation | `DASHBOARD_CREDENTIAL_KEY_OLD` decrypt-fallback window |
 
 ### Attack surface
 
-If the Azure VM is compromised, the attacker can manage EC2/GCE instances
-within the scoped permissions. Mitigations:
-- Restrict EC2 regions in the IAM policy
-- Use GCP organization policies to limit instance creation
-- Monitor CloudTrail (AWS) and Cloud Audit Logs (GCP) for anomalous activity
-- The MI token is only obtainable from the specific VM (IMDS is
-  link-local, not routable)
+If the control-plane VM is compromised, an attacker can (a) read the
+`DASHBOARD_CREDENTIAL_KEY` from the service environment and decrypt stored
+provider credentials, and (b) act as any ambient identity the host holds
+(managed identity / instance profile). Mitigations:
+
+- Scope provider credentials and any ambient identity to least privilege
+  (single subscription/account, compute-only roles).
+- Keep `DASHBOARD_CREDENTIAL_KEY` in the service unit environment
+  (`/etc/alethedash-cs.env`), not in the repo or the database.
+- Monitor Azure Activity Log / AWS CloudTrail / GCP Audit Logs for anomalous
+  instance activity.
+- Prefer ambient auth (no stored secret on disk) where the provider supports it.

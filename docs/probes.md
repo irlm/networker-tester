@@ -4,6 +4,25 @@ Each probe mode runs a specific measurement sequence and populates a correspondi
 JSON fields in the `RequestAttempt` output. This reference describes what each probe
 measures, which fields it populates, and example CLI commands.
 
+The canonical list of modes is [`shared/modes.json`](../shared/modes.json) (generated from
+the `Protocol` enum in `crates/networker-tester/src/metrics.rs`); this doc documents every
+mode there.
+
+## Target requirements
+
+Each mode needs one of three kinds of target:
+
+- **Arbitrary URL** — hits any HTTP(S)/UDP target you point it at
+  (`tcp`, `dns`, `tls`, `tlsresume`, `native`, `curl`, `udp`, `http1`, `http2`, `http3`).
+- **`networker-endpoint` target** — needs the diagnostic server's routes
+  (`/download`, `/upload`, `/page`, `/asset`, UDP throughput port)
+  (`download`, `download1`–`download3`, `upload`, `upload1`–`upload3`, `webdownload`,
+  `webupload`, `udpdownload`, `udpupload`, `pageload`, `pageload2`, `pageload3`).
+- **LagHound SDK endpoint** — probes a customer-embedded LagHound endpoint that emits
+  `Server-Timing` (`sdkprobe`).
+- **Chrome/Chromium required** — needs a local Chrome install and `--features browser`
+  (`browser`, `browser1`, `browser2`, `browser3`).
+
 ---
 
 ## Common Fields (all probes that reach HTTP)
@@ -178,6 +197,38 @@ networker-tester --target https://host:8443/health \
 
 ---
 
+## `download1` / `download2` / `download3` — Protocol-Pinned Download (endpoint only)
+
+Same as `download`, but force the HTTP version instead of negotiating it: `download1`
+over HTTP/1.1, `download2` over HTTP/2, `download3` over QUIC/HTTP3. Use these to compare
+sustained download throughput across protocol versions against the same
+`networker-endpoint` `/download` route.
+
+```bash
+networker-tester --target https://127.0.0.1:8443/health \
+  --modes download1,download2,download3 --payload-sizes 10m --runs 5 --insecure
+```
+
+**Requires:** `networker-endpoint`.
+**Populated:** same as `download`; `http.negotiated_version` reflects the forced version.
+
+---
+
+## `upload1` / `upload2` / `upload3` — Protocol-Pinned Upload (endpoint only)
+
+Same as `upload`, but force the HTTP version: `upload1` over HTTP/1.1, `upload2` over
+HTTP/2, `upload3` over QUIC/HTTP3, against the `networker-endpoint` `/upload` route.
+
+```bash
+networker-tester --target https://127.0.0.1:8443/health \
+  --modes upload1,upload2,upload3 --payload-sizes 10m --runs 5 --insecure
+```
+
+**Requires:** `networker-endpoint`.
+**Populated:** same as `upload`; `http.negotiated_version` reflects the forced version.
+
+---
+
 ## `udp` — UDP Echo
 
 Measures round-trip time for UDP packets to a UDP echo server.
@@ -304,6 +355,24 @@ networker-tester --target https://example.com/health --modes curl --runs 5
 
 ---
 
+## `sdkprobe` — LagHound SDK Endpoint (server-time split)
+
+Probes a **customer-embedded LagHound SDK endpoint** (not the `networker-endpoint`
+diagnostic server, and not an arbitrary URL). Splits total time into DNS, TCP, TLS,
+network transfer, and server processing using the endpoint's `Server-Timing` header.
+
+```bash
+networker-tester --target https://app.example.com/__laghound --modes sdkprobe --runs 10
+```
+
+**Requires:** a target that speaks the LagHound SDK contract (emits `Server-Timing`).
+**Populated:** `dns`, `tcp`, `tls`, `http`, `server_timing` (server processing split out
+from network transfer).
+
+See [`sdk/`](sdk/README.md) and the [Application Network Performance report](reports-app-network.md).
+
+---
+
 ## `browser` — Real Headless Chromium (CDP)
 
 Drives a real headless Chromium instance via the Chrome DevTools Protocol (chromiumoxide)
@@ -324,6 +393,26 @@ resource counts, e.g. `[("h2", 18), ("h3", 2)]`)
 `NETWORKER_CHROME_PATH` env var → system paths (`/usr/bin/google-chrome`, etc. on Linux;
 `/Applications/Google Chrome.app/…` on macOS). If no Chrome binary is found the probe
 returns a skipped `RequestAttempt` rather than crashing the run.
+
+---
+
+## `browser1` / `browser2` / `browser3` — Protocol-Pinned Headless Chrome
+
+Like `browser`, but force the transport the real Chrome uses:
+
+- `browser1` — HTTP/2 disabled, so Chrome falls back to HTTP/1.1.
+- `browser2` — QUIC disabled, so Chrome uses HTTP/2.
+- `browser3` — QUIC forced via origin flag + SPKI cert pinning, so Chrome uses HTTP/3.
+
+The `--modes browser` CLI shorthand expands to `browser1,browser2,browser3`.
+
+```bash
+networker-tester --target https://127.0.0.1:8443/health \
+  --modes browser1,browser2,browser3 --runs 3 --insecure
+```
+
+**Requires:** Chrome/Chromium + `--features browser`.
+**Populated:** same as `browser`.
 
 ---
 

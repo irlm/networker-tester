@@ -58,21 +58,29 @@ request header since v0.28.56 (the server still accepts the legacy `?key=`
 query for fielded agents; validation is hash-only against
 `agent.api_key_hash`).
 
-### 1.2 Program.cs wiring (one-time, before the cutover build)
+### 1.2 Program.cs wiring — **landed**
 
-M6's ops infrastructure is wired with two lines:
+Both the M6 ops infrastructure and the response-hardening middleware are wired in
+`src/Networker.ControlPlane/Program.cs` in the shipping build (verified 2026-07):
 
 ```csharp
 // service registrations — after AddNetworkerAuth (needs its NpgsqlDataSource):
-builder.Services.AddOpsInfrastructure();   // TickMonitor + PgAdvisoryLeaderLock
+builder.Services.AddOpsInfrastructure();   // TickMonitor + PgAdvisoryLeaderLock (Program.cs)
+
+// request pipeline — outermost first:
+app.UseServerTiming();     // X-Process-Time-Ms on every response (Observability/ServerTiming.cs)
+app.UseErrorEnvelope();    // uniform { "error": ... } 500 contract
+app.UseSecurityHeaders();  // X-Content-Type-Options / X-Frame-Options / Referrer-Policy / CSP / HSTS
+app.UseNetworkerAuth();    // authn → DB-status → authz
 
 // endpoint mapping — alongside the other Map* calls:
-app.MapOpsEndpoints();                     // /api/health/background, /api/health/ready
+app.MapOpsEndpoints();     // /api/health/background, /api/health/ready
 ```
 
-Until these lines land, the background services run **unguarded** (identical to
-pre-M6 behaviour — the lock and monitor are optional dependencies), and the two
-ops endpoints don't exist. **Do not start the cutover without them.**
+Historically these were optional dependencies that degraded gracefully if
+omitted; they are now unconditionally registered, so `/api/health/background`,
+`/api/health/ready`, per-tick leader election, and the response-hardening headers
+are all present in production.
 
 ### 1.3 Pre-flight checks
 
@@ -368,6 +376,7 @@ resolved, item 2 still qualifies full feature-parity claims:
    other only — they do NOT coordinate with the Rust dashboard's loops (managed
    manually in 3.4), and `/api/health/background` is per-replica (each replica
    reports its own ticks).
-8. **Program.cs wiring**: `AddOpsInfrastructure()` + `MapOpsEndpoints()` must be
-   added by the Program.cs owner (§1.2) — the services degrade gracefully
-   (unguarded ticks, invisible monitor) until then.
+8. ~~**Program.cs wiring**~~: **landed** — `AddOpsInfrastructure()` +
+   `MapOpsEndpoints()` and the response-hardening middleware
+   (`UseServerTiming`/`UseErrorEnvelope`/`UseSecurityHeaders`/`UseNetworkerAuth`)
+   are wired in the shipping `Program.cs` (§1.2).
