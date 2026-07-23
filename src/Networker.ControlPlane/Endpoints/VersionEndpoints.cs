@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
@@ -222,13 +223,43 @@ public static class VersionEndpoints
         return null;
     }
 
+    // Per-host probe cache. /api/version is POLLED by the frontend, so without a
+    // short TTL every poll re-probes every recent deployment host — and a host
+    // that has since gone dead (tester deallocated / VM deleted) costs the full
+    // probe timeout on every poll. Cache the result briefly so at most one poll
+    // per window pays the network cost. (Observed: /version was 3s server-side
+    // from a single dead host — quality fix 2026-07.)
+    private static readonly ConcurrentDictionary<string, (EndpointVersionDto Dto, long At)>
+        EndpointProbeCache = new();
+
+    private static readonly TimeSpan EndpointProbeTtl = TimeSpan.FromSeconds(30);
+
     /// <summary>
-    /// Probe a deployment host's <c>/health</c> (HTTPS :8443 then HTTP :8080)
-    /// with a tight budget — a dead endpoint must not drag the summary past
-    /// ~1.5s. Accepts self-signed certs, matching Rust's
-    /// <c>danger_accept_invalid_certs(true)</c>.
+    /// Endpoint-version for a host, memoised for <see cref="EndpointProbeTtl"/> so
+    /// the polled <c>/api/version</c> doesn't re-probe (or re-time-out on a dead
+    /// host) every call.
     /// </summary>
     private static async Task<EndpointVersionDto> CheckEndpointVersionAsync(string host)
+    {
+        if (EndpointProbeCache.TryGetValue(host, out var cached)
+            && Stopwatch.GetElapsedTime(cached.At) < EndpointProbeTtl)
+        {
+            return cached.Dto;
+        }
+
+        var dto = await ProbeEndpointVersionAsync(host).ConfigureAwait(false);
+        EndpointProbeCache[host] = (dto, Stopwatch.GetTimestamp());
+        return dto;
+    }
+
+    /// <summary>
+    /// Probe a deployment host's <c>/health</c> on HTTPS :8443 and HTTP :8080
+    /// CONCURRENTLY under one 1.5s budget — a dead endpoint must not drag the
+    /// summary past ~1.5s. (Trying the two ports sequentially doubled a dead host
+    /// to ~3s despite the per-call 1.5s timeout.) Accepts self-signed certs,
+    /// matching Rust's <c>danger_accept_invalid_certs(true)</c>.
+    /// </summary>
+    private static async Task<EndpointVersionDto> ProbeEndpointVersionAsync(string host)
     {
         using var handler = new HttpClientHandler
         {
@@ -240,31 +271,38 @@ public static class VersionEndpoints
             Timeout = TimeSpan.FromMilliseconds(1500),
         };
 
-        foreach (var url in new[]
-                 {
-                     $"https://{host}:8443/health",
-                     $"http://{host}:8080/health",
-                 })
+        var urls = new[]
         {
-            try
-            {
-                using var resp = await client.GetAsync(url);
-                var body = await resp.Content.ReadAsStringAsync();
-                using var doc = JsonDocument.Parse(body);
-                string? version =
-                    doc.RootElement.TryGetProperty("version", out var v)
-                    && v.ValueKind == JsonValueKind.String
-                        ? v.GetString()
-                        : null;
-                return new EndpointVersionDto(host, version, true);
-            }
-            catch (Exception)
-            {
-                // Try the next URL; unreachable if both fail.
-            }
-        }
+            $"https://{host}:8443/health",
+            $"http://{host}:8080/health",
+        };
 
-        return new EndpointVersionDto(host, null, false);
+        // Both run under the shared 1.5s timeout, so a dead host resolves in
+        // ~1.5s total (not 1.5s × 2). Take the first successful response.
+        var results = await Task.WhenAll(urls.Select(u => ProbeOneAsync(client, host, u)))
+            .ConfigureAwait(false);
+        return Array.Find(results, r => r is not null) ?? new EndpointVersionDto(host, null, false);
+    }
+
+    private static async Task<EndpointVersionDto?> ProbeOneAsync(
+        HttpClient client, string host, string url)
+    {
+        try
+        {
+            using var resp = await client.GetAsync(url).ConfigureAwait(false);
+            var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+            using var doc = JsonDocument.Parse(body);
+            string? version =
+                doc.RootElement.TryGetProperty("version", out var v)
+                && v.ValueKind == JsonValueKind.String
+                    ? v.GetString()
+                    : null;
+            return new EndpointVersionDto(host, version, true);
+        }
+        catch (Exception)
+        {
+            return null; // unreachable on this URL
+        }
     }
 
     /// <summary>Semver "is a newer than b" — port of Rust <c>version_newer</c>:
