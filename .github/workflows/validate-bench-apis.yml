@@ -47,7 +47,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
       - name: generate-variants.py --check
         run: python3 benchmarks/reference-apis/csharp-template/generate-variants.py --check
 
@@ -56,7 +56,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
 
       # The canonical implementation must pass EVERYTHING, including the §7
       # canonical-response checksums against the shared dataset
@@ -93,7 +93,7 @@ jobs:
           && '["go","python","nodejs","java","ruby","php","cpp","csharp-net6","csharp-net7","csharp-net8","csharp-net8-aot","csharp-net9","csharp-net9-aot","csharp-net10","csharp-net10-aot"]'
           || '["go","python","nodejs","java","ruby","php","cpp","csharp-net8"]') }}
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
 
       - name: Build image
         run: docker build -t bench-${{ matrix.lang }} benchmarks/reference-apis/${{ matrix.lang }}
