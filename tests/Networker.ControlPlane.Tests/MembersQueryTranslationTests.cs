@@ -84,7 +84,7 @@ public sealed class MembersQueryTranslationTests
         var u2 = Guid.NewGuid();
         Exec(conn, $"""
             INSERT INTO project (project_id, name, slug, settings, created_at, updated_at, delete_protection)
-            VALUES ('{ProjectId}', 'Memq', 'memq', '{{}}', '2026-07-22 12:00:00', '2026-07-22 12:00:00', 0);
+            VALUES ('{ProjectId}', 'Memq', 'memq', '[]', '2026-07-22 12:00:00', '2026-07-22 12:00:00', 0);
             INSERT INTO dash_user (user_id, email, display_name, role, status, created_at, is_platform_admin, must_change_password, sso_only)
             VALUES ('{u1}', 'a@x.io', 'Alice', 'operator', 'active', '2026-07-22 12:00:00', 0, 0, 0);
             INSERT INTO dash_user (user_id, email, display_name, role, status, created_at, is_platform_admin, must_change_password, sso_only)
