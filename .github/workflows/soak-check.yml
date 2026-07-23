@@ -64,7 +64,7 @@ jobs:
               # 1. background loops all_healthy (authenticated via localhost login)
               TOKEN=\$(curl -sf --max-time 8 http://127.0.0.1:5030/api/auth/login \
                 -H 'Content-Type: application/json' \
-                -d '{\"email\":\"admin@alethedash.com\",\"password\":\"${ADMIN_PW}\"}' \
+                -d '{\"email\":\"admin@laghound.com\",\"password\":\"${ADMIN_PW}\"}' \
                 | python3 -c 'import sys,json;print(json.load(sys.stdin)[\"token\"])')
               HB=\$(curl -s --max-time 8 -H \"Authorization: Bearer \$TOKEN\" http://127.0.0.1:5030/api/health/background)
               # Quoting-proof check (no inline python — it does not survive the

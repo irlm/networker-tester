@@ -4,7 +4,7 @@ Resets the production admin login for the C# control plane.
 
 ## Facts
 
-- Admin user: `admin@alethedash.com`.
+- Admin user: `admin@laghound.com`.
 - Password is stored as a **BCrypt** hash (`BCrypt.Net`, cost 11) in
   `dash_user.password_hash`.
 - Database: `alethedash_core` on the **alethedash-vm** (resource group
@@ -30,7 +30,7 @@ script.
        must_change_password = false,
        password_reset_token = NULL,
        password_reset_expires = NULL
-   WHERE email = 'admin@alethedash.com';
+   WHERE email = 'admin@laghound.com';
    ```
 
 3. Base64-encode that SQL, then ship + decode + apply on the VM (NOT inline):
@@ -45,7 +45,7 @@ script.
                 rm -f /tmp/reset.sql"
    ```
 
-4. Verify by logging in as `admin@alethedash.com` with the new password.
+4. Verify by logging in as `admin@laghound.com` with the new password.
 
 ## MANDATORY follow-up — update the soak secret
 
