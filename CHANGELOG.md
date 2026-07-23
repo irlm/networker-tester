@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.72] — 2026-07-23
+
+### Added
+- **Server-side mode → target capability enforcement (Phase 2).** Creating a
+  test config with a mode that can only ever fail against the chosen target now
+  returns **422** at `POST /api/v2/projects/{id}/test-configs` instead of
+  silently producing a run that errors every time — e.g. throughput /
+  `sdkprobe` / `apibench` against a raw URL (`endpoint.kind: "network"`). The
+  gate (`ModeTargetCompatibility`) mirrors the frontend
+  `mode-capabilities.ts` contract exactly, sourced from the same
+  `shared/modes.json` `requires` field (via `PlatformEndpoints.RequirementOf`,
+  guarded by `ModesManifestTests`), so the API and the UI can't disagree. It's
+  defense-in-depth for API clients that bypass the wizards.
+- Mapping: `network → url`, `proxy → endpoint`, `runtime → sdk`. The `pending`
+  provisioning kind **fails open** — the same `pending` legitimately carries
+  throughput (Full Stack Benchmark) *and* `apibench` (Application Benchmark), so
+  its real capability is decided by the wizard + per-language matrix, not by
+  kind; enforcing it here would reject valid Application Benchmark configs.
+  Enforcement is create-only (the orchestrator's `pending → network` rewrite is
+  never rejected).
+
+---
+
 ## [0.28.71] — 2026-07-23
 
 ### Changed

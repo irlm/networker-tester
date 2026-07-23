@@ -103,6 +103,22 @@ public static class PlatformEndpoints
         new("apibench", "API Workloads", "Server compute", "Measured /api/* JSON workload suite: api-users, api-transform, api-aggregate, api-search, api-compress (benchmarks/configs/apibench.json). nginx is skipped — it serves no /api/* endpoints.", "API Workloads", "reference-apis"),
     ];
 
+    // Mode id → required target capability, built from AllModes (whose Requires
+    // values are guarded byte-for-byte against shared/modes.json's `requires`
+    // field by ModesManifestTests). Single source for the server-side
+    // mode↔target compatibility gate (ModeTargetCompatibility) — mirrors the
+    // frontend requirementOf() in dashboard/src/lib/mode-capabilities.ts.
+    private static readonly IReadOnlyDictionary<string, string> ModeRequirements =
+        AllModes.ToDictionary(m => m.Id, m => m.Requires, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The target capability a mode needs: <c>"any"</c> | <c>"networker-endpoint"</c>
+    /// | <c>"sdk-endpoint"</c> | <c>"reference-apis"</c>. Unknown modes default to
+    /// <c>"any"</c>, matching the frontend <c>requirementOf()</c>.
+    /// </summary>
+    public static string RequirementOf(string mode) =>
+        !string.IsNullOrWhiteSpace(mode) && ModeRequirements.TryGetValue(mode, out var r) ? r : "any";
+
     private static string GroupDetail(string label) => label switch
     {
         "Network" => "Low-level connection probes. Measures DNS resolution, TCP handshake, TLS negotiation, and UDP round-trip independently — isolates each layer of the network stack.",

@@ -67,6 +67,21 @@ public static class TestConfigWriteEndpoints
                 return ApiError.BadRequest("endpoint.kind is required");
             }
 
+            // Phase 2 capability enforcement: reject (mode, target) combos that
+            // can only ever fail — e.g. throughput / sdkprobe / apibench against a
+            // raw URL (endpoint.kind "network"). Mirrors the frontend gate; the
+            // `pending` provisioning kind fails open (see ModeTargetCompatibility).
+            var incompatible = ModeTargetCompatibility.IncompatibleModes(
+                ExtractModes(req.Workload), endpointKind);
+            if (incompatible.Count > 0)
+            {
+                var detail = string.Join("; ", incompatible.Select(
+                    x => $"'{x.Mode}' {ModeTargetCompatibility.ReasonFor(x.Requirement)}"));
+                return ApiError.Status(
+                    StatusCodes.Status422UnprocessableEntity,
+                    $"incompatible mode(s) for endpoint kind '{endpointKind}': {detail}");
+            }
+
             var now = DateTime.UtcNow;
             var cfg = new Data.Entities.TestConfig
             {
@@ -340,6 +355,34 @@ public static class TestConfigWriteEndpoints
             return string.IsNullOrWhiteSpace(value) ? null : value;
         }
         return null;
+    }
+
+    /// <summary>
+    /// Extract <c>workload.modes</c> (the string[] of mode ids) from the
+    /// polymorphic workload blob for the capability gate. Returns empty when
+    /// absent or not an array — the gate then no-ops.
+    /// </summary>
+    private static IReadOnlyList<string> ExtractModes(JsonElement workload)
+    {
+        if (workload.ValueKind == JsonValueKind.Object &&
+            workload.TryGetProperty("modes", out var modes) &&
+            modes.ValueKind == JsonValueKind.Array)
+        {
+            var list = new List<string>();
+            foreach (var m in modes.EnumerateArray())
+            {
+                if (m.ValueKind == JsonValueKind.String)
+                {
+                    var s = m.GetString();
+                    if (!string.IsNullOrWhiteSpace(s))
+                    {
+                        list.Add(s);
+                    }
+                }
+            }
+            return list;
+        }
+        return [];
     }
 
     private static bool IsUniqueViolation(DbUpdateException ex)
