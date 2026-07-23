@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.67] — 2026-07-23
+
+### Removed
+- **Decommissioned the retired Rust control-plane crates** — `networker-dashboard`,
+  `networker-agent`, and `networker-common` (~40.9k lines) are removed from the
+  workspace now that the C# control plane has served production since the cutover.
+  The kept crates (`networker-tester`, `networker-endpoint`, `networker-log`) have
+  zero dependency on the removed ones; workspace build + clippy + tests are green
+  without them. The full Rust snapshot remains on the `legacy/rust` branch and the
+  `rust-legacy-v0.28.13` tag for rollback (runbook §7 #5). See
+  `docs/phase2-cutover-runbook.md` §7.
+
 ## [0.28.66] — 2026-07-23
 
 ### Fixed
