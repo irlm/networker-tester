@@ -30,8 +30,14 @@ internal static class SecretFile
         {
             Mode = FileMode.Create,
             Access = FileAccess.Write,
-            UnixCreateMode = OwnerReadWrite,
         };
+        // UnixCreateMode is unsupported (throws) on Windows — guard it. The
+        // control plane runs on Linux in production; on Windows the file is
+        // created with default ACLs (not a concern for that non-prod path).
+        if (!OperatingSystem.IsWindows())
+        {
+            options.UnixCreateMode = OwnerReadWrite;
+        }
         await using var stream = new FileStream(path, options);
         await stream.WriteAsync(System.Text.Encoding.UTF8.GetBytes(content), ct).ConfigureAwait(false);
     }

@@ -37,7 +37,7 @@ public sealed class CliProvisionerCreateArgsTests
     public void BuildAzureCreateArgs_linux_matches_rust_argv()
     {
         var args = CliComputeProvisioner.BuildAzureCreateArgs(
-            LinuxRequest(), "sub-123", "rg-testers", adminPassword: null, customDataPath: null);
+            LinuxRequest(), "sub-123", "rg-testers", adminPasswordFile: null, customDataPath: null);
 
         Assert.Equal(new[]
         {
