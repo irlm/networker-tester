@@ -1,13 +1,15 @@
 //! Data-gated report cards for the measurement-depth probe modes
 //! (rpm / ping / path / dualstack / websocket / pmtud) plus the per-record
-//! DNS depth captured by the standalone `dns` mode.
+//! DNS depth captured by the standalone `dns` mode, and their cross-target
+//! comparison tables for the multi-target report.
 //!
 //! Every writer renders ONLY when an attempt of its type carries a result —
 //! runs without that data produce byte-identical reports (enforced by
 //! `tests/html_snapshot.rs`). The aggregation rules mirror the CLI summary
 //! (`summary.rs`): averages skip absent values, fully-lost attempts' 0.0
 //! sentinel RTTs are never averaged in (trust audit V11), and hop/MTU data
-//! is never fabricated.
+//! is never fabricated. In the cross-target tables a target lacking a mode
+//! renders em dashes — never invented values.
 
 use super::*;
 
@@ -22,47 +24,134 @@ pub(super) fn write_probe_depth_sections(run: &TestRun, out: &mut String) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Shared collectors + aggregation helpers (single-run cards and the
+// cross-target comparison both go through these — one set of trust rules)
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn rpm_results(run: &TestRun) -> Vec<&crate::metrics::RpmResult> {
+    run.attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::Rpm)
+        .filter_map(|a| a.rpm.as_ref())
+        .collect()
+}
+
+fn ping_results(run: &TestRun) -> Vec<&crate::metrics::PingResult> {
+    run.attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::Ping)
+        .filter_map(|a| a.ping.as_ref())
+        .collect()
+}
+
+/// First attempt's trace, like the CLI summary — the path rarely changes
+/// between attempts of one run; per-attempt data is in the JSON output.
+fn first_path_result(run: &TestRun) -> Option<&crate::metrics::PathResult> {
+    run.attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::Path)
+        .find_map(|a| a.path.as_ref())
+}
+
+fn dualstack_results(run: &TestRun) -> Vec<&crate::metrics::DualStackResult> {
+    run.attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::DualStack)
+        .filter_map(|a| a.dualstack.as_ref())
+        .collect()
+}
+
+fn websocket_results(run: &TestRun) -> Vec<&crate::metrics::WebSocketResult> {
+    run.attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::WebSocket)
+        .filter_map(|a| a.websocket.as_ref())
+        .collect()
+}
+
+/// First attempt's verdict, like the CLI summary — the path MTU rarely
+/// changes between attempts of one run.
+fn first_pmtud_result(run: &TestRun) -> Option<&crate::metrics::PmtudResult> {
+    run.attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::Pmtud)
+        .find_map(|a| a.pmtud.as_ref())
+}
+
+/// Plain average. Callers must guarantee `items` is non-empty.
+fn avg_of<T>(items: &[&T], f: impl Fn(&T) -> f64) -> f64 {
+    items.iter().map(|r| f(r)).sum::<f64>() / items.len() as f64
+}
+
+/// Average over present values only; `None` when no item carries the value.
+fn avg_opt_of<T>(items: &[&T], f: impl Fn(&T) -> Option<f64>) -> Option<f64> {
+    let vals: Vec<f64> = items.iter().filter_map(|r| f(r)).collect();
+    (!vals.is_empty()).then(|| vals.iter().sum::<f64>() / vals.len() as f64)
+}
+
+/// "reached (X ms RTT)" / "NOT reached" verdict cell for a path result.
+fn path_destination_cell(p: &crate::metrics::PathResult) -> String {
+    if p.destination_reached {
+        let rtt = p
+            .destination_rtt_ms
+            .map(|r| format!(" ({r:.2}ms RTT)"))
+            .unwrap_or_default();
+        format!(r#"<span class="ok">reached</span>{rtt}"#)
+    } else {
+        r#"<span class="warn">NOT reached</span>"#.into()
+    }
+}
+
+/// "faster family by N ms" cell shared by the single-run card and the
+/// cross-target table. Verdict from the first result (stable across
+/// attempts); delta averaged.
+fn dualstack_faster_cell(results: &[&crate::metrics::DualStackResult]) -> String {
+    match (
+        &results[0].faster_family,
+        avg_opt_of(results, |r| r.delta_ms),
+    ) {
+        (Some(fam), Some(delta)) => format!(
+            "<strong>{fam}</strong> by {delta:.2}ms avg",
+            fam = escape_html(fam)
+        ),
+        _ => "no comparison (only one family completed)".into(),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // rpm — latency under load / bufferbloat
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn write_rpm_section(run: &TestRun, out: &mut String) {
-    let results: Vec<&crate::metrics::RpmResult> = run
-        .attempts
-        .iter()
-        .filter(|a| a.protocol == Protocol::Rpm)
-        .filter_map(|a| a.rpm.as_ref())
-        .collect();
+    let results = rpm_results(run);
     if results.is_empty() {
         return;
     }
 
-    let avg = |f: &dyn Fn(&crate::metrics::RpmResult) -> f64| -> f64 {
-        results.iter().map(|r| f(r)).sum::<f64>() / results.len() as f64
-    };
-    let avg_opt = |f: &dyn Fn(&crate::metrics::RpmResult) -> Option<f64>| -> Option<f64> {
-        let vals: Vec<f64> = results.iter().filter_map(|r| f(r)).collect();
-        (!vals.is_empty()).then(|| vals.iter().sum::<f64>() / vals.len() as f64)
+    let avg = |f: fn(&crate::metrics::RpmResult) -> f64| -> f64 { avg_of(&results, f) };
+    let avg_opt = |f: fn(&crate::metrics::RpmResult) -> Option<f64>| -> Option<f64> {
+        avg_opt_of(&results, f)
     };
     let loss_cls = |loss: f64| if loss > 0.0 { "warn" } else { "ok" };
 
-    let rpm_cell = avg_opt(&|r| r.rpm)
+    let rpm_cell = avg_opt(|r| r.rpm)
         .map(|x| format!("<strong>{x:.0}</strong> round-trips/min"))
         .unwrap_or_else(|| "—".into());
     // Warn styling when the loaded/unloaded ratio exceeds 2x — the link
     // queues noticeably under load (bufferbloat).
-    let factor_cell = match avg_opt(&|r| r.bufferbloat_factor) {
+    let factor_cell = match avg_opt(|r| r.bufferbloat_factor) {
         Some(f) if f > 2.0 => {
             format!(r#"<span class="warn">{f:.2}x — latency inflates under load</span>"#)
         }
         Some(f) => format!(r#"<span class="ok">{f:.2}x</span>"#),
         None => "—".into(),
     };
-    let load_cell = avg_opt(&|r| r.load_throughput_mbps)
+    let load_cell = avg_opt(|r| r.load_throughput_mbps)
         .map(|x| format!("{x:.2} MB/s"))
         .unwrap_or_else(|| "—".into());
 
-    let uloss = avg(&|r| r.unloaded_loss_percent);
-    let lloss = avg(&|r| r.loaded_loss_percent);
+    let uloss = avg(|r| r.unloaded_loss_percent);
+    let lloss = avg(|r| r.loaded_loss_percent);
     let _ = write!(
         out,
         r#"
@@ -99,16 +188,16 @@ fn write_rpm_section(run: &TestRun, out: &mut String) {
   <p class="note">Averaged over {n} rpm attempt(s). UDP echo probes while sustained downloads saturate the link; RPM = 60000 / loaded avg RTT (higher is better), factor = loaded avg / unloaded avg (1.0 &asymp; no bufferbloat).</p>
 </section>
 "#,
-        umin = avg(&|r| r.unloaded_rtt_min_ms),
-        uavg = avg(&|r| r.unloaded_rtt_avg_ms),
-        up95 = avg(&|r| r.unloaded_rtt_p95_ms),
-        ujit = avg(&|r| r.unloaded_jitter_ms),
+        umin = avg(|r| r.unloaded_rtt_min_ms),
+        uavg = avg(|r| r.unloaded_rtt_avg_ms),
+        up95 = avg(|r| r.unloaded_rtt_p95_ms),
+        ujit = avg(|r| r.unloaded_jitter_ms),
         uloss_cls = loss_cls(uloss),
         uloss = uloss,
-        lmin = avg(&|r| r.loaded_rtt_min_ms),
-        lavg = avg(&|r| r.loaded_rtt_avg_ms),
-        lp95 = avg(&|r| r.loaded_rtt_p95_ms),
-        ljit = avg(&|r| r.loaded_jitter_ms),
+        lmin = avg(|r| r.loaded_rtt_min_ms),
+        lavg = avg(|r| r.loaded_rtt_avg_ms),
+        lp95 = avg(|r| r.loaded_rtt_p95_ms),
+        ljit = avg(|r| r.loaded_jitter_ms),
         lloss_cls = loss_cls(lloss),
         lloss = lloss,
         rpm = rpm_cell,
@@ -195,14 +284,7 @@ fn write_ping_section(run: &TestRun, out: &mut String) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn write_path_section(run: &TestRun, out: &mut String) {
-    // First attempt's trace, like the CLI summary — the path rarely changes
-    // between attempts of one run; per-attempt data is in the JSON output.
-    let Some(p) = run
-        .attempts
-        .iter()
-        .filter(|a| a.protocol == Protocol::Path)
-        .find_map(|a| a.path.as_ref())
-    else {
+    let Some(p) = first_path_result(run) else {
         return;
     };
 
@@ -210,15 +292,7 @@ fn write_path_section(run: &TestRun, out: &mut String) {
         .hop_count
         .map(|h| h.to_string())
         .unwrap_or_else(|| "unknown".into());
-    let dest = if p.destination_reached {
-        let rtt = p
-            .destination_rtt_ms
-            .map(|r| format!(" ({r:.2}ms RTT)"))
-            .unwrap_or_default();
-        format!(r#"<span class="ok">reached</span>{rtt}"#)
-    } else {
-        r#"<span class="warn">NOT reached</span>"#.into()
-    };
+    let dest = path_destination_cell(p);
     let _ = write!(
         out,
         r#"
@@ -286,19 +360,13 @@ fn write_path_section(run: &TestRun, out: &mut String) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn write_dualstack_section(run: &TestRun, out: &mut String) {
-    let results: Vec<&crate::metrics::DualStackResult> = run
-        .attempts
-        .iter()
-        .filter(|a| a.protocol == Protocol::DualStack)
-        .filter_map(|a| a.dualstack.as_ref())
-        .collect();
+    let results = dualstack_results(run);
     if results.is_empty() {
         return;
     }
 
-    let avg = |f: &dyn Fn(&crate::metrics::DualStackResult) -> Option<f64>| -> Option<f64> {
-        let vals: Vec<f64> = results.iter().filter_map(|r| f(r)).collect();
-        (!vals.is_empty()).then(|| vals.iter().sum::<f64>() / vals.len() as f64)
+    let avg = |f: fn(&crate::metrics::DualStackResult) -> Option<f64>| -> Option<f64> {
+        avg_opt_of(&results, f)
     };
     let fmt = |v: Option<f64>| v.map(|x| format!("{x:.2}ms")).unwrap_or_else(|| "—".into());
     let leg_status = |attempted: bool, success: bool| -> &'static str {
@@ -339,8 +407,8 @@ fn write_dualstack_section(run: &TestRun, out: &mut String) {
     );
     let mut phase_row =
         |label: &str,
-         f4: &dyn Fn(&crate::metrics::DualStackResult) -> Option<f64>,
-         f6: &dyn Fn(&crate::metrics::DualStackResult) -> Option<f64>| {
+         f4: fn(&crate::metrics::DualStackResult) -> Option<f64>,
+         f6: fn(&crate::metrics::DualStackResult) -> Option<f64>| {
             let _ = writeln!(
                 out,
                 "      <tr><td>{label}</td><td>{v4}</td><td>{v6}</td></tr>",
@@ -348,19 +416,13 @@ fn write_dualstack_section(run: &TestRun, out: &mut String) {
                 v6 = fmt(avg(f6)),
             );
         };
-    phase_row("DNS", &|r| r.ipv4.dns_ms, &|r| r.ipv6.dns_ms);
-    phase_row("TCP", &|r| r.ipv4.tcp_ms, &|r| r.ipv6.tcp_ms);
-    phase_row("TLS", &|r| r.ipv4.tls_ms, &|r| r.ipv6.tls_ms);
-    phase_row("TTFB", &|r| r.ipv4.ttfb_ms, &|r| r.ipv6.ttfb_ms);
-    phase_row("Total", &|r| r.ipv4.total_ms, &|r| r.ipv6.total_ms);
+    phase_row("DNS", |r| r.ipv4.dns_ms, |r| r.ipv6.dns_ms);
+    phase_row("TCP", |r| r.ipv4.tcp_ms, |r| r.ipv6.tcp_ms);
+    phase_row("TLS", |r| r.ipv4.tls_ms, |r| r.ipv6.tls_ms);
+    phase_row("TTFB", |r| r.ipv4.ttfb_ms, |r| r.ipv6.ttfb_ms);
+    phase_row("Total", |r| r.ipv4.total_ms, |r| r.ipv6.total_ms);
 
-    let faster = match (&first.faster_family, avg(&|r| r.delta_ms)) {
-        (Some(fam), Some(delta)) => format!(
-            "<strong>{fam}</strong> by {delta:.2}ms avg",
-            fam = escape_html(fam)
-        ),
-        _ => "no comparison (only one family completed)".into(),
-    };
+    let faster = dualstack_faster_cell(&results);
     let _ = write!(
         out,
         r#"    </tbody>
@@ -467,14 +529,7 @@ fn write_websocket_section(run: &TestRun, out: &mut String) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn write_pmtud_section(run: &TestRun, out: &mut String) {
-    // First attempt's verdict, like the CLI summary — the path MTU rarely
-    // changes between attempts of one run.
-    let Some(p) = run
-        .attempts
-        .iter()
-        .filter(|a| a.protocol == Protocol::Pmtud)
-        .find_map(|a| a.pmtud.as_ref())
-    else {
+    let Some(p) = first_pmtud_result(run) else {
         return;
     };
 
@@ -554,10 +609,8 @@ pub(super) fn write_dns_depth_section(run: &TestRun, out: &mut String) {
         return;
     }
 
-    let avg = |f: &dyn Fn(&crate::metrics::DnsResult) -> Option<f64>| -> Option<f64> {
-        let vals: Vec<f64> = dns.iter().filter_map(|d| f(d)).collect();
-        (!vals.is_empty()).then(|| vals.iter().sum::<f64>() / vals.len() as f64)
-    };
+    let avg =
+        |f: fn(&crate::metrics::DnsResult) -> Option<f64>| -> Option<f64> { avg_opt_of(&dns, f) };
     // Record counts and the chain are stable across attempts — report the
     // first observation rather than a meaningless average.
     let a_count = dns.iter().find_map(|d| d.a_record_count);
@@ -599,9 +652,262 @@ pub(super) fn write_dns_depth_section(run: &TestRun, out: &mut String) {
   <p class="note">Per-record-type timing from the standalone <code>dns</code> probe mode (over {n} probe(s)).</p>
 </section>
 "#,
-        a = lookup(avg(&|d| d.a_ms), a_count),
-        aaaa = lookup(avg(&|d| d.aaaa_ms), aaaa_count),
+        a = lookup(avg(|d| d.a_ms), a_count),
+        aaaa = lookup(avg(|d| d.aaaa_ms), aaaa_count),
         chain = chain_cell,
         n = dns.len(),
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cross-target comparisons (multi-target report)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Cross-target comparison tables for the six depth-probe modes, in the same
+/// fixed order as the single-run cards. Each table renders only when at least
+/// one target carries that mode's data; targets lacking the mode get em-dash
+/// rows. Per-hop path detail stays in the single-run sections.
+pub(super) fn write_multi_probe_comparisons(
+    runs: &[TestRun],
+    short_names: &[String],
+    out: &mut String,
+) {
+    write_multi_rpm_comparison(runs, short_names, out);
+    write_multi_ping_comparison(runs, short_names, out);
+    write_multi_path_comparison(runs, short_names, out);
+    write_multi_dualstack_comparison(runs, short_names, out);
+    write_multi_websocket_comparison(runs, short_names, out);
+    write_multi_pmtud_comparison(runs, short_names, out);
+}
+
+/// Open a cross-target card + table with the given title and column headers
+/// (first column is always Target).
+fn open_multi_probe_table(title: &str, columns: &[&str], out: &mut String) {
+    let _ = write!(
+        out,
+        "\n<section class=\"card\">\n  <h2>{title}</h2>\n  <table>\n    <thead>\n      <tr><th>Target</th>"
+    );
+    for col in columns {
+        let _ = write!(out, "<th>{col}</th>");
+    }
+    let _ = writeln!(out, "</tr>\n    </thead>\n    <tbody>");
+}
+
+/// One target row: name + pre-rendered cells.
+fn multi_probe_row(name: &str, cells: &[String], out: &mut String) {
+    let _ = write!(out, "      <tr><td>{}</td>", escape_html(name));
+    for cell in cells {
+        let _ = write!(out, "<td>{cell}</td>");
+    }
+    let _ = writeln!(out, "</tr>");
+}
+
+fn close_multi_probe_table(out: &mut String) {
+    let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
+}
+
+fn dash() -> String {
+    "—".into()
+}
+
+fn write_multi_rpm_comparison(runs: &[TestRun], short_names: &[String], out: &mut String) {
+    let per_target: Vec<Vec<&crate::metrics::RpmResult>> = runs.iter().map(rpm_results).collect();
+    if per_target.iter().all(|r| r.is_empty()) {
+        return;
+    }
+
+    open_multi_probe_table(
+        "Cross-Target Latency Under Load (RPM)",
+        &[
+            "Unloaded Avg RTT",
+            "Loaded Avg RTT",
+            "RPM",
+            "Bufferbloat Factor",
+        ],
+        out,
+    );
+    for (i, results) in per_target.iter().enumerate() {
+        let cells = if results.is_empty() {
+            vec![dash(), dash(), dash(), dash()]
+        } else {
+            // Warn styling when the loaded/unloaded ratio exceeds 2x — same
+            // threshold as the single-run card.
+            let factor = match avg_opt_of(results, |r| r.bufferbloat_factor) {
+                Some(f) if f > 2.0 => format!(r#"<span class="warn">{f:.2}x</span>"#),
+                Some(f) => format!(r#"<span class="ok">{f:.2}x</span>"#),
+                None => dash(),
+            };
+            vec![
+                format!("{:.2}ms", avg_of(results, |r| r.unloaded_rtt_avg_ms)),
+                format!("{:.2}ms", avg_of(results, |r| r.loaded_rtt_avg_ms)),
+                avg_opt_of(results, |r| r.rpm)
+                    .map(|x| format!("<strong>{x:.0}</strong>"))
+                    .unwrap_or_else(dash),
+                factor,
+            ]
+        };
+        multi_probe_row(&short_names[i], &cells, out);
+    }
+    close_multi_probe_table(out);
+}
+
+fn write_multi_ping_comparison(runs: &[TestRun], short_names: &[String], out: &mut String) {
+    let per_target: Vec<Vec<&crate::metrics::PingResult>> = runs.iter().map(ping_results).collect();
+    if per_target.iter().all(|r| r.is_empty()) {
+        return;
+    }
+
+    open_multi_probe_table(
+        "Cross-Target ICMP Ping",
+        &["Avg RTT", "P95 RTT", "Loss %"],
+        out,
+    );
+    for (i, results) in per_target.iter().enumerate() {
+        let cells = if results.is_empty() {
+            vec![dash(), dash(), dash()]
+        } else {
+            // Fully-lost attempts carry 0.0 sentinel RTTs — they are excluded
+            // from RTT averages, never averaged in (trust audit V11).
+            let live: Vec<&crate::metrics::PingResult> = results
+                .iter()
+                .copied()
+                .filter(|p| p.success_count > 0)
+                .collect();
+            let rtt = |f: fn(&crate::metrics::PingResult) -> f64| -> String {
+                if live.is_empty() {
+                    dash()
+                } else {
+                    format!("{:.2}ms", avg_of(&live, f))
+                }
+            };
+            let loss = avg_of(results, |p| p.loss_percent);
+            let loss_cls = if loss > 0.0 { "warn" } else { "ok" };
+            vec![
+                rtt(|p| p.rtt_avg_ms),
+                rtt(|p| p.rtt_p95_ms),
+                format!(r#"<span class="{loss_cls}">{loss:.1}%</span>"#),
+            ]
+        };
+        multi_probe_row(&short_names[i], &cells, out);
+    }
+    close_multi_probe_table(out);
+}
+
+fn write_multi_path_comparison(runs: &[TestRun], short_names: &[String], out: &mut String) {
+    let per_target: Vec<Option<&crate::metrics::PathResult>> =
+        runs.iter().map(first_path_result).collect();
+    if per_target.iter().all(|p| p.is_none()) {
+        return;
+    }
+
+    open_multi_probe_table(
+        "Cross-Target Network Path",
+        &["Hop Count", "Destination", "Method"],
+        out,
+    );
+    for (i, path) in per_target.iter().enumerate() {
+        let cells = match path {
+            None => vec![dash(), dash(), dash()],
+            Some(p) => vec![
+                p.hop_count
+                    .map(|h| h.to_string())
+                    .unwrap_or_else(|| "unknown".into()),
+                path_destination_cell(p),
+                format!("<code>{}</code>", escape_html(&p.method)),
+            ],
+        };
+        multi_probe_row(&short_names[i], &cells, out);
+    }
+    close_multi_probe_table(out);
+}
+
+fn write_multi_dualstack_comparison(runs: &[TestRun], short_names: &[String], out: &mut String) {
+    let per_target: Vec<Vec<&crate::metrics::DualStackResult>> =
+        runs.iter().map(dualstack_results).collect();
+    if per_target.iter().all(|r| r.is_empty()) {
+        return;
+    }
+
+    open_multi_probe_table(
+        "Cross-Target Dual-Stack (IPv4 vs IPv6)",
+        &["Faster Family"],
+        out,
+    );
+    for (i, results) in per_target.iter().enumerate() {
+        let cells = if results.is_empty() {
+            vec![dash()]
+        } else {
+            vec![dualstack_faster_cell(results)]
+        };
+        multi_probe_row(&short_names[i], &cells, out);
+    }
+    close_multi_probe_table(out);
+}
+
+fn write_multi_websocket_comparison(runs: &[TestRun], short_names: &[String], out: &mut String) {
+    let per_target: Vec<Vec<&crate::metrics::WebSocketResult>> =
+        runs.iter().map(websocket_results).collect();
+    if per_target.iter().all(|r| r.is_empty()) {
+        return;
+    }
+
+    open_multi_probe_table(
+        "Cross-Target WebSocket",
+        &["Upgrade (ms)", "Avg Msg RTT", "Loss %"],
+        out,
+    );
+    for (i, results) in per_target.iter().enumerate() {
+        let cells = if results.is_empty() {
+            vec![dash(), dash(), dash()]
+        } else {
+            // Message RTTs only from attempts where echoes actually arrived —
+            // a fully-lost attempt's 0.0 sentinel is not a measurement.
+            let live: Vec<&crate::metrics::WebSocketResult> = results
+                .iter()
+                .copied()
+                .filter(|w| w.echo_count > 0)
+                .collect();
+            let rtt = if live.is_empty() {
+                dash()
+            } else {
+                format!("{:.2}ms", avg_of(&live, |w| w.msg_rtt_avg_ms))
+            };
+            let loss = avg_of(results, |w| w.loss_percent);
+            let loss_cls = if loss > 0.0 { "warn" } else { "ok" };
+            vec![
+                format!("{:.2}", avg_of(results, |w| w.upgrade_ms)),
+                rtt,
+                format!(r#"<span class="{loss_cls}">{loss:.1}%</span>"#),
+            ]
+        };
+        multi_probe_row(&short_names[i], &cells, out);
+    }
+    close_multi_probe_table(out);
+}
+
+fn write_multi_pmtud_comparison(runs: &[TestRun], short_names: &[String], out: &mut String) {
+    let per_target: Vec<Option<&crate::metrics::PmtudResult>> =
+        runs.iter().map(first_pmtud_result).collect();
+    if per_target.iter().all(|p| p.is_none()) {
+        return;
+    }
+
+    open_multi_probe_table("Cross-Target Path MTU", &["Path MTU", "Method"], out);
+    for (i, pmtud) in per_target.iter().enumerate() {
+        let cells = match pmtud {
+            None => vec![dash(), dash()],
+            Some(p) => {
+                let mtu = match (p.path_mtu, p.lower_bound_only) {
+                    (Some(m), false) => format!("<strong>{m} bytes</strong>"),
+                    (Some(m), true) => format!(
+                        r#"<strong>&ge;{m} bytes</strong> <span class="warn">(lower bound)</span>"#
+                    ),
+                    (None, _) => r#"<span class="warn">unknown</span>"#.into(),
+                };
+                vec![mtu, format!("<code>{}</code>", escape_html(&p.method))]
+            }
+        };
+        multi_probe_row(&short_names[i], &cells, out);
+    }
+    close_multi_probe_table(out);
 }
