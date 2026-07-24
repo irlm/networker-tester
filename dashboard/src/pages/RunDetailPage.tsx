@@ -611,7 +611,13 @@ function StatsRow({ ps }: { ps: ProtocolStats }) {
   );
 }
 
-function AttemptRow({ a }: { a: LiveAttempt }) {
+// Exported for RunDetailPage.attempts.test.tsx — renders one probe attempt's
+// per-phase cards. Every row below the core timings is conditional: older runs
+// (pre phase-detail widening) simply render fewer lines.
+export function AttemptRow({ a }: { a: LiveAttempt }) {
+  const st = a.server_timing;
+  const hasSplit = st != null && (st.server_ms != null || st.network_ms != null || st.app_ms != null);
+  const hasServerTimings = st != null && (hasSplit || st.processing_ms != null || st.total_server_ms != null);
   return (
     <div className="px-4 py-3 border-b border-gray-800/30 hover:bg-gray-800/10">
       <div className="flex items-center gap-4 mb-2">
@@ -635,12 +641,41 @@ function AttemptRow({ a }: { a: LiveAttempt }) {
           <SubResult label="TCP" color="gray">
             <p className="text-gray-300">{formatMs(a.tcp.connect_duration_ms)}</p>
             <p className="text-gray-500 font-mono truncate">{a.tcp.remote_addr}</p>
+            {(a.tcp.total_retrans != null || a.tcp.congestion_algorithm != null || a.tcp.rtt_estimate_ms != null) && (
+              <p className="font-mono truncate">
+                {a.tcp.total_retrans != null && (
+                  <span className={a.tcp.total_retrans > 0 ? 'text-yellow-400' : 'text-gray-500'}>
+                    {a.tcp.total_retrans} retrans
+                  </span>
+                )}
+                {a.tcp.congestion_algorithm != null && (
+                  <span className="text-gray-500">{a.tcp.total_retrans != null ? ' · ' : ''}{a.tcp.congestion_algorithm}</span>
+                )}
+                {a.tcp.rtt_estimate_ms != null && (
+                  <span className="text-gray-500"> · rtt {formatMs(a.tcp.rtt_estimate_ms)}</span>
+                )}
+              </p>
+            )}
           </SubResult>
         )}
         {a.tls && (
           <SubResult label="TLS" color="gray">
             <p className="text-gray-300">{formatMs(a.tls.handshake_duration_ms)}</p>
             <p className="text-gray-500 font-mono truncate">{a.tls.protocol_version} · {a.tls.cipher_suite}</p>
+            {(a.tls.handshake_kind != null || a.tls.resumed != null || a.tls.alpn_negotiated != null) && (
+              <p className="font-mono truncate">
+                {(a.tls.handshake_kind != null || a.tls.resumed != null) && (
+                  <span className={(a.tls.resumed ?? a.tls.handshake_kind === 'resumed') ? 'text-cyan-400' : 'text-gray-500'}>
+                    {a.tls.handshake_kind ?? (a.tls.resumed ? 'resumed' : 'full')}
+                  </span>
+                )}
+                {a.tls.alpn_negotiated != null && (
+                  <span className="text-gray-500">
+                    {(a.tls.handshake_kind != null || a.tls.resumed != null) ? ' · ' : ''}alpn {a.tls.alpn_negotiated}
+                  </span>
+                )}
+              </p>
+            )}
           </SubResult>
         )}
         {a.http && (
@@ -652,14 +687,44 @@ function AttemptRow({ a }: { a: LiveAttempt }) {
             <p className="text-gray-500 font-mono truncate">
               {a.http.negotiated_version}
               {a.http.throughput_mbps != null && ` · ${a.http.throughput_mbps.toFixed(1)} MB/s`}
+              {a.http.goodput_mbps != null && ` · goodput ${a.http.goodput_mbps.toFixed(1)} MB/s`}
               {a.http.payload_bytes != null && a.http.payload_bytes > 0 && ` · ${formatBytes(a.http.payload_bytes)}`}
             </p>
           </SubResult>
         )}
         {a.udp && (
           <SubResult label="UDP" color="gray">
-            <p className="text-gray-300">RTT avg {formatMs(a.udp.rtt_avg_ms)} · Loss {a.udp.loss_percent.toFixed(1)}%</p>
-            <p className="text-gray-500">{a.udp.probe_count} probes</p>
+            <p className="text-gray-300">
+              RTT avg {formatMs(a.udp.rtt_avg_ms)} · Loss {a.udp.loss_percent.toFixed(1)}%
+              {a.udp.jitter_ms != null && ` · Jitter ${formatMs(a.udp.jitter_ms)}`}
+            </p>
+            <p className="text-gray-500">
+              {a.udp.probe_count} probes
+              {a.udp.rtt_p95_ms != null && ` · p95 ${formatMs(a.udp.rtt_p95_ms)}`}
+            </p>
+          </SubResult>
+        )}
+        {hasServerTimings && st && (
+          <SubResult label="Server" color="cyan">
+            {hasSplit ? (
+              <>
+                <p className="text-gray-300">
+                  {st.server_ms != null && <>Server {formatMs(st.server_ms)}</>}
+                  {st.server_ms != null && st.network_ms != null && ' · '}
+                  {st.network_ms != null && <>Network {formatMs(st.network_ms)}</>}
+                  {st.split_anomaly && (
+                    <span className="text-yellow-400"> · split anomaly</span>
+                  )}
+                </p>
+                {st.app_ms != null && <p className="text-gray-500 font-mono">app {formatMs(st.app_ms)}</p>}
+              </>
+            ) : (
+              <p className="text-gray-300">
+                {st.processing_ms != null && <>Proc {formatMs(st.processing_ms)}</>}
+                {st.processing_ms != null && st.total_server_ms != null && ' · '}
+                {st.total_server_ms != null && <>Total {formatMs(st.total_server_ms)}</>}
+              </p>
+            )}
           </SubResult>
         )}
         {a.page_load && (
