@@ -185,6 +185,7 @@ impl UrlDiagnosticOrchestrator {
             observed_protocol_primary_load: None,
             advertised_alt_svc: None,
             validated_http_versions: Vec::new(),
+            security_headers: None,
             tls_version: None,
             cipher_suite: None,
             alpn: None,
@@ -332,6 +333,17 @@ impl UrlDiagnosticOrchestrator {
                     }
                     _ => unreachable!("validated by request parser"),
                 };
+                // Security-header audit (measurement gap #14): derive once from
+                // the first probe response that captured headers — the same
+                // pure-parsing derivation applied to TestRun http results.
+                if run.security_headers.is_none() {
+                    if let Some(http) = attempt.http.as_ref() {
+                        run.security_headers =
+                            crate::metrics::SecurityHeaders::from_response_headers(
+                                &http.response_headers,
+                            );
+                    }
+                }
                 self.add_protocol_run(
                     run,
                     protocol_probe_from_attempt(run.id, mode, run_number, attempt),
@@ -1356,6 +1368,7 @@ mod tests {
             observed_protocol_primary_load: Some("h3".into()),
             advertised_alt_svc: None,
             validated_http_versions: vec![],
+            security_headers: None,
             tls_version: None,
             cipher_suite: None,
             alpn: Some("h3".into()),

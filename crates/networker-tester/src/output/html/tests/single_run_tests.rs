@@ -464,6 +464,7 @@ fn html_contains_page_load_section() {
                 per_connection_tls_ms: vec![4.0; 6],
                 cpu_time_ms: Some(8.3),
                 connection_reused: false,
+                per_connection_socket_stats: vec![],
             }),
             browser: None,
             http_stack: None,

@@ -16,7 +16,7 @@ use crate::metrics::{
 };
 use crate::runner::dns as dns_runner;
 use crate::runner::http::{build_tls_config, RunConfig};
-use crate::runner::socket_info::SocketInfo;
+use crate::runner::socket_info::{SocketInfo, SocketProbe};
 use bytes::Bytes;
 use chrono::Utc;
 use http_body_util::{BodyExt, Full};
@@ -183,6 +183,9 @@ struct ConnResult {
     server_timing: Option<ServerTimingResult>,
     manifest_ttfb_ms: f64,
     asset_results: AssetResultVec,
+    /// Post-transfer kernel TCP stats for this connection (dup-fd TCP_INFO,
+    /// sampled after the last asset fetch). None on non-Unix / probe failure.
+    socket_stats: Option<crate::metrics::SocketStats>,
     /// Non-empty if the connection itself failed to establish.
     conn_error: Option<String>,
 }
@@ -402,6 +405,14 @@ pub async fn run_pageload_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) ->
         0.0
     };
 
+    // Post-transfer TCP stats per connection (dup-fd TCP_INFO; Unix only —
+    // empty elsewhere). Failed/unsampled connections are skipped, so length
+    // == connections_opened only when every connection was captured.
+    let per_connection_socket_stats: Vec<crate::metrics::SocketStats> = conn_results
+        .iter()
+        .filter_map(|r| r.socket_stats.clone())
+        .collect();
+
     let page_load = PageLoadResult {
         asset_count: n,
         assets_fetched,
@@ -416,6 +427,7 @@ pub async fn run_pageload_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) ->
         per_connection_tls_ms,
         cpu_time_ms,
         connection_reused: false,
+        per_connection_socket_stats,
     };
 
     RequestAttempt {
@@ -481,6 +493,7 @@ async fn run_h1_keepalive_connection(
                 server_timing: None,
                 manifest_ttfb_ms: 0.0,
                 asset_results: Vec::new(),
+                socket_stats: None,
                 conn_error: Some(format!("TCP connect failed: {e}")),
             };
         }
@@ -494,6 +507,7 @@ async fn run_h1_keepalive_connection(
                 server_timing: None,
                 manifest_ttfb_ms: 0.0,
                 asset_results: Vec::new(),
+                socket_stats: None,
                 conn_error: Some(format!("TCP connect timed out after {timeout_ms}ms")),
             };
         }
@@ -502,6 +516,9 @@ async fn run_h1_keepalive_connection(
     let _ = tcp_stream.set_nodelay(true);
     let local_addr = tcp_stream.local_addr().ok().map(|a| a.to_string());
     let sock_info = SocketInfo::from_stream(&tcp_stream);
+    // Dup the fd now — TLS/hyper consume the stream below; the dup lets us
+    // sample post-transfer TCP_INFO once this connection's fetches finish.
+    let socket_probe = SocketProbe::new(&tcp_stream);
     let tcp_result_data = TcpResult {
         local_addr,
         remote_addr: server_addr.to_string(),
@@ -545,6 +562,7 @@ async fn run_h1_keepalive_connection(
                 server_timing: None,
                 manifest_ttfb_ms: 0.0,
                 asset_results: Vec::new(),
+                socket_stats: None,
                 conn_error: Some($msg),
             }
         };
@@ -734,6 +752,13 @@ async fn run_h1_keepalive_connection(
         }
     }
 
+    // ── Post-transfer socket stats (dup-fd TCP_INFO; Unix only) ──────────────
+    let socket_stats = socket_probe.as_ref().and_then(|p| p.stats_for_result());
+    let mut manifest_http = manifest_http;
+    if let Some(http) = manifest_http.as_mut() {
+        http.socket_stats = socket_stats.clone();
+    }
+
     ConnResult {
         conn_idx,
         tls_ms,
@@ -747,6 +772,7 @@ async fn run_h1_keepalive_connection(
         server_timing,
         manifest_ttfb_ms,
         asset_results,
+        socket_stats,
         conn_error: None,
     }
 }
@@ -857,6 +883,9 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
     let _ = tcp_stream.set_nodelay(true);
     let local_addr = tcp_stream.local_addr().ok().map(|a| a.to_string());
     let sock_info = SocketInfo::from_stream(&tcp_stream);
+    // Dup the fd now — TLS/hyper consume the stream below; the dup lets us
+    // sample post-transfer TCP_INFO after all multiplexed fetches finish.
+    let socket_probe = SocketProbe::new(&tcp_stream);
     let tcp_result = TcpResult {
         local_addr,
         remote_addr: addr.to_string(),
@@ -1062,7 +1091,7 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
     let manifest_total_ms = t_manifest.elapsed().as_secs_f64() * 1000.0;
 
     let server_timing = parse_server_timing_simple(&manifest_headers, manifest_send_at, ttfb_ms);
-    let manifest_http = HttpResult {
+    let mut manifest_http = HttpResult {
         negotiated_version: "HTTP/2".into(),
         status_code: manifest_status,
         headers_size_bytes: manifest_headers
@@ -1156,6 +1185,10 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         0.0
     };
 
+    // ── Post-transfer socket stats for the single H2 connection (Unix only) ──
+    let socket_stats = socket_probe.as_ref().and_then(|p| p.stats_for_result());
+    manifest_http.socket_stats = socket_stats.clone();
+
     let page_load = PageLoadResult {
         asset_count: n,
         assets_fetched,
@@ -1170,6 +1203,7 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         per_connection_tls_ms: vec![tls_duration_ms],
         cpu_time_ms,
         connection_reused: false,
+        per_connection_socket_stats: socket_stats.into_iter().collect(),
     };
 
     RequestAttempt {
@@ -1715,6 +1749,8 @@ pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         per_connection_tls_ms: vec![handshake_ms],
         cpu_time_ms,
         connection_reused: false,
+        // QUIC runs over UDP — no TCP socket, so no TCP_INFO to sample.
+        per_connection_socket_stats: vec![],
     };
 
     RequestAttempt {
@@ -2323,6 +2359,9 @@ async fn fetch_h2_pageload(
         },
         cpu_time_ms,
         connection_reused,
+        // Warm path: the connection is owned by the shared warmup handle, so
+        // no dup-fd probe is threaded through — stats stay absent (honest).
+        per_connection_socket_stats: vec![],
     };
 
     RequestAttempt {
@@ -2884,6 +2923,8 @@ async fn fetch_h3_pageload(
         },
         cpu_time_ms,
         connection_reused,
+        // QUIC runs over UDP — no TCP socket, so no TCP_INFO to sample.
+        per_connection_socket_stats: vec![],
     };
 
     RequestAttempt {

@@ -33,6 +33,17 @@ pub struct HostInfo {
     /// Cloud region or location (auto-detected from cloud metadata on the server).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region: Option<String>,
+    /// 1-minute load average sampled on the server when GET /info was served
+    /// (server only — client load lives in the run-level [`LoadSample`]s).
+    /// None for old endpoints that don't report it, and on Windows servers.
+    /// Additive; `schema_version` stays 1.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_avg_1m: Option<f64>,
+    /// Available (reclaimable) memory in MB sampled on the server when GET
+    /// /info was served (server only; Linux endpoints only — same per-platform
+    /// honesty as [`LoadSample`]). Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mem_available_mb: Option<u64>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -392,6 +403,9 @@ impl HostInfo {
             server_version: None,
             uptime_secs: None,
             region: None,
+            // Client-side load lives in the run-level LoadSamples, not here.
+            load_avg_1m: None,
+            mem_available_mb: None,
         }
     }
 }
@@ -501,10 +515,14 @@ fn detect_os_version() -> Option<String> {
 /// expose it, never fabricated:
 ///
 /// * Linux: `load_avg_1m` from `/proc/loadavg`, `mem_available_mb` from
-///   `/proc/meminfo` (`MemAvailable`), `cpu_busy_percent` stays `None`
-///   (a two-sample `/proc/stat` delta is not worth the run-time cost).
-/// * macOS: `load_avg_1m` from `sysctl -n vm.loadavg`; memory availability
-///   has no cheap equivalent so `mem_available_mb` stays `None`.
+///   `/proc/meminfo` (`MemAvailable`). `cpu_busy_percent` comes from a
+///   two-sample `/proc/stat` delta over the whole run window (see
+///   [`CpuTicks`]) — it is set on the *after* sample only; the *before*
+///   sample keeps `None` because a point-in-time busy% does not exist.
+/// * macOS: `load_avg_1m` from `sysctl -n vm.loadavg`; `cpu_busy_percent`
+///   from a `host_statistics(HOST_CPU_LOAD_INFO)` tick delta (after sample
+///   only, like Linux); memory availability has no cheap equivalent so
+///   `mem_available_mb` stays `None`.
 /// * Windows / other: everything `None` (the whole sample is omitted).
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct LoadSample {
@@ -513,8 +531,10 @@ pub struct LoadSample {
     /// measurements may be noisy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub load_avg_1m: Option<f64>,
-    /// CPU busy percentage over a sampling window. Currently always `None`
-    /// (reserved; honesty over fabrication — no platform collector yet).
+    /// CPU busy percentage over a sampling window. Set on the end-of-run
+    /// sample from a two-snapshot [`CpuTicks`] delta spanning the run
+    /// (Linux `/proc/stat`, macOS `host_statistics`); `None` on the
+    /// start-of-run sample and on platforms without a collector (Windows).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_busy_percent: Option<f64>,
     /// Available (reclaimable) memory in MB.
@@ -590,6 +610,116 @@ fn detect_mem_available_mb() -> Option<u64> {
         // Honesty over fabrication — stays None.
         None
     }
+}
+
+/// Cumulative CPU tick counters snapshotted at a point in time. Two snapshots
+/// bracket a window; [`CpuTicks::busy_percent_since`] turns the deltas into a
+/// busy percentage (`100 * (1 - idle_delta / total_delta)`, idle including
+/// iowait on Linux). Sources:
+///
+/// * Linux: the aggregate `cpu` line of `/proc/stat`.
+/// * macOS: `host_statistics(HOST_CPU_LOAD_INFO)` via libSystem (no extra
+///   dependency; the counters are `u32` and may wrap on very long uptimes —
+///   a wrapped delta yields `None`, never a fabricated value).
+/// * Windows / other: no collector; [`CpuTicks::snapshot`] returns `None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CpuTicks {
+    /// Ticks spent idle (Linux: idle + iowait; macOS: `CPU_STATE_IDLE`).
+    pub idle: u64,
+    /// Ticks across all accounted CPU states.
+    pub total: u64,
+}
+
+impl CpuTicks {
+    /// Best-effort snapshot of the platform's cumulative CPU tick counters.
+    pub fn snapshot() -> Option<Self> {
+        #[cfg(target_os = "linux")]
+        {
+            parse_proc_stat_cpu(&std::fs::read_to_string("/proc/stat").ok()?)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            snapshot_cpu_ticks_macos()
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            None
+        }
+    }
+
+    /// Busy percentage over the window from `earlier` to `self`, or `None`
+    /// when the counters went backwards (reboot/wrap) or no time elapsed.
+    pub fn busy_percent_since(&self, earlier: &Self) -> Option<f64> {
+        let total_delta = self.total.checked_sub(earlier.total)?;
+        let idle_delta = self.idle.checked_sub(earlier.idle)?;
+        if total_delta == 0 || idle_delta > total_delta {
+            return None;
+        }
+        Some((1.0 - idle_delta as f64 / total_delta as f64) * 100.0)
+    }
+}
+
+/// Parse the aggregate `cpu` line of a `/proc/stat` dump into [`CpuTicks`].
+/// Fields (Linux): user nice system idle iowait irq softirq steal
+/// [guest guest_nice]. Idle includes iowait; guest/guest_nice are excluded
+/// from the total (the kernel already folds them into user/nice).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))] // exercised by unit tests on every platform
+fn parse_proc_stat_cpu(text: &str) -> Option<CpuTicks> {
+    let line = text.lines().find(|l| {
+        l.starts_with("cpu")
+            && l.split_whitespace()
+                .next()
+                .is_some_and(|first| first == "cpu")
+    })?;
+    let fields: Vec<u64> = line
+        .split_whitespace()
+        .skip(1)
+        .take(8)
+        .map(|tok| tok.parse::<u64>())
+        .collect::<Result<_, _>>()
+        .ok()?;
+    // Need at least user/nice/system/idle to say anything meaningful.
+    if fields.len() < 4 {
+        return None;
+    }
+    let idle = fields[3] + fields.get(4).copied().unwrap_or(0);
+    let total = fields.iter().sum();
+    Some(CpuTicks { idle, total })
+}
+
+#[cfg(target_os = "macos")]
+fn snapshot_cpu_ticks_macos() -> Option<CpuTicks> {
+    // host_statistics(HOST_CPU_LOAD_INFO) — plain libSystem symbols, declared
+    // here to avoid pulling in a mach bindings crate for one call.
+    const HOST_CPU_LOAD_INFO: libc::c_int = 3;
+    const CPU_STATE_MAX: usize = 4; // user, system, idle, nice
+    const CPU_STATE_IDLE: usize = 2;
+    extern "C" {
+        fn mach_host_self() -> libc::c_uint;
+        fn host_statistics(
+            host: libc::c_uint,
+            flavor: libc::c_int,
+            host_info_out: *mut libc::c_uint,
+            host_info_out_cnt: *mut libc::c_uint,
+        ) -> libc::c_int;
+    }
+    let mut ticks = [0u32; CPU_STATE_MAX];
+    let mut count = CPU_STATE_MAX as libc::c_uint;
+    let kr = unsafe {
+        host_statistics(
+            mach_host_self(),
+            HOST_CPU_LOAD_INFO,
+            ticks.as_mut_ptr(),
+            &mut count,
+        )
+    };
+    if kr != 0 || (count as usize) < CPU_STATE_MAX {
+        return None;
+    }
+    Some(CpuTicks {
+        idle: ticks[CPU_STATE_IDLE] as u64,
+        total: ticks.iter().map(|&t| t as u64).sum(),
+    })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1978,6 +2108,13 @@ pub struct PageLoadResult {
     /// Warm probes skip DNS/TCP/TLS setup; compare with cold probes to see savings.
     #[serde(default)]
     pub connection_reused: bool,
+    /// Post-transfer kernel TCP stats sampled per opened connection (dup-fd
+    /// `TCP_INFO`, same mechanism as `HttpResult::socket_stats`). Length ==
+    /// `connections_opened` when captured; empty on non-Unix platforms, for
+    /// QUIC (pageload3 — UDP, no TCP socket) and for warm probes that reuse a
+    /// pre-established connection. Additive; `schema_version` stays 1.0.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub per_connection_socket_stats: Vec<SocketStats>,
 }
 
 /// Real-browser page-load result (browser mode, requires `--features browser`).
@@ -2119,6 +2256,12 @@ pub struct UrlTestRun {
     pub advertised_alt_svc: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub validated_http_versions: Vec<String>,
+    /// Security-header audit derived from the response headers captured by the
+    /// protocol validation probes — the same derivation as
+    /// `HttpResult::security_headers` (see [`SecurityHeaders`], measurement
+    /// gap #14). `None` when no probe captured headers. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security_headers: Option<SecurityHeaders>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2977,6 +3120,7 @@ mod tests {
             observed_protocol_primary_load: Some("h3".into()),
             advertised_alt_svc: Some("h3=\":443\"".into()),
             validated_http_versions: vec!["h1".into(), "h2".into(), "h3".into()],
+            security_headers: None,
             tls_version: Some("TLS 1.3".into()),
             cipher_suite: Some("TLS_AES_128_GCM_SHA256".into()),
             alpn: Some("h3".into()),
@@ -3547,6 +3691,7 @@ mod tests {
                 per_connection_tls_ms: vec![],
                 cpu_time_ms: None,
                 connection_reused: false,
+                per_connection_socket_stats: vec![],
             });
             assert!(
                 (primary_metric_value(&a).unwrap() - 500.0).abs() < 1e-9,
@@ -4030,5 +4175,62 @@ mod tests {
             ..Default::default()
         };
         assert!(!sample.is_empty());
+    }
+
+    // ── CpuTicks / cpu_busy_percent (reserved-field collector) ───────────────
+
+    #[test]
+    fn proc_stat_cpu_line_parses_idle_including_iowait() {
+        // user nice system idle iowait irq softirq steal guest guest_nice
+        let stat = "cpu  100 20 30 400 50 5 5 10 7 3\n\
+                    cpu0 50 10 15 200 25 2 2 5 0 0\n\
+                    intr 12345\n";
+        let ticks = parse_proc_stat_cpu(stat).unwrap();
+        // idle = idle + iowait; total = first 8 fields (guest excluded).
+        assert_eq!(ticks.idle, 450);
+        assert_eq!(ticks.total, 100 + 20 + 30 + 400 + 50 + 5 + 5 + 10);
+    }
+
+    #[test]
+    fn proc_stat_cpu_line_parses_older_kernels_without_steal() {
+        // Pre-2.6.11 shape: user nice system idle (no iowait either).
+        let ticks = parse_proc_stat_cpu("cpu 10 0 10 80\n").unwrap();
+        assert_eq!(ticks.idle, 80);
+        assert_eq!(ticks.total, 100);
+    }
+
+    #[test]
+    fn proc_stat_cpu_rejects_malformed_input() {
+        assert_eq!(parse_proc_stat_cpu(""), None);
+        assert_eq!(parse_proc_stat_cpu("intr 12345\n"), None);
+        // Per-cpu line only (no aggregate) must not match.
+        assert_eq!(parse_proc_stat_cpu("cpu0 10 0 10 80\n"), None);
+        assert_eq!(parse_proc_stat_cpu("cpu ten zero ten eighty\n"), None);
+        // Too few fields to be meaningful.
+        assert_eq!(parse_proc_stat_cpu("cpu 10 0 10\n"), None);
+    }
+
+    #[test]
+    fn cpu_busy_percent_from_two_snapshots() {
+        let before = CpuTicks {
+            idle: 400,
+            total: 1000,
+        };
+        let after = CpuTicks {
+            idle: 480, // 80 idle ticks over a 200-tick window → 60% busy
+            total: 1200,
+        };
+        let busy = after.busy_percent_since(&before).unwrap();
+        assert!((busy - 60.0).abs() < 1e-9);
+        // No elapsed ticks → None (never NaN/fabricated).
+        assert_eq!(before.busy_percent_since(&before), None);
+        // Counters going backwards (reboot / u32 wrap on macOS) → None.
+        assert_eq!(before.busy_percent_since(&after), None);
+        // idle_delta > total_delta (inconsistent sources) → None.
+        let weird = CpuTicks {
+            idle: 900,
+            total: 1100,
+        };
+        assert_eq!(weird.busy_percent_since(&before), None);
     }
 }

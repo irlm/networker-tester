@@ -333,5 +333,9 @@ pub async fn fetch_server_info(target: &url::Url, insecure: bool) -> Option<Host
             .get("region")
             .and_then(|v| v.as_str())
             .map(String::from),
+        // Live server load sampled when /info was served. Additive tolerance:
+        // old endpoints simply omit the fields → None.
+        load_avg_1m: json.get("load_avg_1m").and_then(|v| v.as_f64()),
+        mem_available_mb: json.get("mem_available_mb").and_then(|v| v.as_u64()),
     })
 }

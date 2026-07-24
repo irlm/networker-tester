@@ -343,6 +343,7 @@ fn make_page_load_attempt(
         per_connection_tls_ms: vec![5.0],
         cpu_time_ms: None,
         connection_reused,
+        per_connection_socket_stats: vec![],
     });
     a
 }
@@ -391,5 +392,7 @@ fn make_host_info(
         server_version: server_version.map(|v| v.to_string()),
         uptime_secs: None,
         region: region.map(|r| r.to_string()),
+        load_avg_1m: None,
+        mem_available_mb: None,
     }
 }

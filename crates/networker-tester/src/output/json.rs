@@ -1953,6 +1953,7 @@ mod tests {
             observed_protocol_primary_load: Some("h3".into()),
             advertised_alt_svc: None,
             validated_http_versions: vec!["h3".into()],
+            security_headers: None,
             tls_version: None,
             cipher_suite: None,
             alpn: Some("h3".into()),

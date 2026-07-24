@@ -45,7 +45,7 @@ pub(crate) async fn run_for_target(
     let server_info = match fetch_server_info(&target, cfg.insecure).await {
         Some(info) => {
             info!(
-                "Server: {} {} | {} cores | {} MB RAM | {} | v{} | region: {}",
+                "Server: {} {} | {} cores | {} MB RAM | {} | v{} | region: {} | load: {}",
                 info.os,
                 info.arch,
                 info.cpu_cores,
@@ -53,6 +53,10 @@ pub(crate) async fn run_for_target(
                 info.os_version.as_deref().unwrap_or("?"),
                 info.server_version.as_deref().unwrap_or("?"),
                 info.region.as_deref().unwrap_or("unknown"),
+                info.load_avg_1m
+                    .map(|l| format!("{l:.2}"))
+                    .as_deref()
+                    .unwrap_or("?"),
             );
             Some(info)
         }
@@ -113,6 +117,11 @@ pub(crate) async fn run_for_target(
     // Both best-effort (measurement gaps #15/#16): None is stored when the
     // platform exposes nothing / NTP is unreachable or disabled.
     let client_load_before = networker_tester::metrics::LoadSample::collect_local();
+    // CPU tick snapshot bracketing the whole run: paired with a second
+    // snapshot at run end to derive `cpu_busy_percent` on the *after* load
+    // sample (the before sample keeps None — a point-in-time busy% does not
+    // exist). Linux /proc/stat, macOS host_statistics, elsewhere None.
+    let cpu_ticks_before = networker_tester::metrics::CpuTicks::snapshot();
     let clock_sync = networker_tester::clock_sync::query_clock_sync().await;
     if let Some(ref cs) = clock_sync {
         info!(
@@ -863,7 +872,16 @@ pub(crate) async fn run_for_target(
     let finished_at = Utc::now();
 
     // ── End-of-run tester load sample (pairs with client_load_before) ────────
-    let client_load_after = networker_tester::metrics::LoadSample::collect_local();
+    let mut client_load_after = networker_tester::metrics::LoadSample::collect_local();
+    // Run-window CPU busy% from the paired tick snapshots (after sample only).
+    if let Some(busy) = cpu_ticks_before.and_then(|before| {
+        networker_tester::metrics::CpuTicks::snapshot()
+            .and_then(|after| after.busy_percent_since(&before))
+    }) {
+        client_load_after
+            .get_or_insert_with(Default::default)
+            .cpu_busy_percent = Some(busy);
+    }
 
     // ── Security-header audit: derive from already-captured response headers ─
     // Pure parsing at result-build time (measurement gap #14) — no network.

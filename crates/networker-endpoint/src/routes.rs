@@ -307,6 +307,59 @@ fn detect_total_memory_mb() -> Option<u64> {
     }
 }
 
+/// Parse the leading 1-minute load average from a `/proc/loadavg`-style line
+/// ("0.52 0.58 0.59 1/467 1234") or a macOS `sysctl -n vm.loadavg` line
+/// ("{ 1.86 1.99 2.06 }"). Mirrors the tester's LoadSample parser.
+fn parse_load_avg_1m(text: &str) -> Option<f64> {
+    text.split_whitespace()
+        .find(|tok| !tok.starts_with('{'))
+        .and_then(|tok| tok.parse::<f64>().ok())
+        .filter(|v| v.is_finite() && *v >= 0.0)
+}
+
+/// Live 1-minute load average, sampled per /info request. Same per-platform
+/// honesty as the tester's LoadSample: Linux + macOS report it, Windows/other
+/// have no cheap equivalent and stay `None` (field omitted from the JSON).
+fn detect_load_avg_1m() -> Option<f64> {
+    #[cfg(target_os = "linux")]
+    {
+        parse_load_avg_1m(&std::fs::read_to_string("/proc/loadavg").ok()?)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let out = std::process::Command::new("sysctl")
+            .args(["-n", "vm.loadavg"])
+            .output()
+            .ok()?;
+        parse_load_avg_1m(&String::from_utf8_lossy(&out.stdout))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        None
+    }
+}
+
+/// Live available (reclaimable) memory in MB, sampled per /info request.
+/// Linux only (`MemAvailable` in /proc/meminfo); macOS/Windows have no cheap
+/// equivalent so the field is omitted — honesty over fabrication.
+fn detect_mem_available_mb() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+        for line in meminfo.lines() {
+            if let Some(rest) = line.strip_prefix("MemAvailable:") {
+                let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
+                return Some(kb / 1024);
+            }
+        }
+        None
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
 fn detect_os_version() -> Option<String> {
     #[cfg(target_os = "linux")]
     {
@@ -1023,7 +1076,7 @@ async fn http_version(req: Request) -> impl IntoResponse {
 /// GET /info – server capabilities and system metadata
 async fn server_info(State(state): State<AppState>) -> impl IntoResponse {
     let uptime_secs = state.started_at.elapsed().as_secs();
-    Json(serde_json::json!({
+    let mut body = serde_json::json!({
         "service": "networker-endpoint",
         "version": env!("CARGO_PKG_VERSION"),
         "protocols": if cfg!(feature = "http3") {
@@ -1042,7 +1095,17 @@ async fn server_info(State(state): State<AppState>) -> impl IntoResponse {
         "region": &state.system_meta.region,
         "uptime_secs": uptime_secs,
         "timestamp": Utc::now().to_rfc3339(),
-    }))
+    });
+    // Live load sampled per request (unlike the startup-time system_meta).
+    // Additive; absent on platforms that don't expose the value (honesty
+    // over fabrication — mirrors the tester's LoadSample semantics).
+    if let Some(load) = detect_load_avg_1m() {
+        body["load_avg_1m"] = serde_json::json!(load);
+    }
+    if let Some(mem) = detect_mem_available_mb() {
+        body["mem_available_mb"] = serde_json::json!(mem);
+    }
+    Json(body)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
