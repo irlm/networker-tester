@@ -1169,9 +1169,13 @@ mod tests {
         let attempt = run_pmtud_probe(Uuid::new_v4(), 0, &cfg).await;
         assert!(!attempt.success);
         assert!(attempt.pmtud.is_none());
-        assert_eq!(
-            attempt.error.expect("error must be set").category,
+        // Windows short-circuits with the unsupported-platform Config error
+        // BEFORE resolution; Unix reaches the resolver and reports Dns.
+        let expected = if cfg!(windows) {
+            ErrorCategory::Config
+        } else {
             ErrorCategory::Dns
-        );
+        };
+        assert_eq!(attempt.error.expect("error must be set").category, expected);
     }
 }
