@@ -3,6 +3,7 @@ use chrono::Utc;
 use hickory_resolver::{
     config::{LookupIpStrategy, ResolverConfig, ResolverOpts, GOOGLE},
     net::runtime::TokioRuntimeProvider,
+    proto::rr::{RData, Record, RecordType},
     TokioResolver,
 };
 use std::net::IpAddr;
@@ -131,6 +132,11 @@ pub async fn resolve(
         started_at,
         success: !ips.is_empty(),
         resolver: Some(resolver_label.clone()),
+        a_ms: None,
+        aaaa_ms: None,
+        a_record_count: None,
+        aaaa_record_count: None,
+        cname_chain: Vec::new(),
     };
 
     if ips.is_empty() {
@@ -145,8 +151,197 @@ pub async fn resolve(
     Ok((ips, result))
 }
 
+/// Outcome of one timed, single-record-type lookup (dns probe mode only).
+struct TypedLookup {
+    duration_ms: f64,
+    record_count: u32,
+    ips: Vec<IpAddr>,
+    cname_chain: Vec<String>,
+    error: Option<String>,
+}
+
+/// Perform one timed lookup for a specific record type. Errors (including
+/// NODATA/NXDOMAIN responses) are captured, not propagated: the observed
+/// duration is still a valid latency for that query.
+async fn timed_typed_lookup(
+    resolver: &TokioResolver,
+    hostname: &str,
+    record_type: RecordType,
+) -> TypedLookup {
+    let t0 = Instant::now();
+    match resolver.lookup(hostname, record_type).await {
+        Ok(lookup) => {
+            let duration_ms = t0.elapsed().as_secs_f64() * 1000.0;
+            let answers = lookup.answers();
+            let mut ips = Vec::new();
+            let mut record_count = 0u32;
+            for record in answers {
+                match &record.data {
+                    RData::A(a) if record_type == RecordType::A => {
+                        record_count += 1;
+                        ips.push(IpAddr::V4(a.0));
+                    }
+                    RData::AAAA(aaaa) if record_type == RecordType::AAAA => {
+                        record_count += 1;
+                        ips.push(IpAddr::V6(aaaa.0));
+                    }
+                    _ => {}
+                }
+            }
+            let cname_chain = extract_cname_chain(hostname, answers);
+            TypedLookup {
+                duration_ms,
+                record_count,
+                ips,
+                cname_chain,
+                error: None,
+            }
+        }
+        Err(e) => TypedLookup {
+            duration_ms: t0.elapsed().as_secs_f64() * 1000.0,
+            record_count: 0,
+            ips: Vec::new(),
+            cname_chain: Vec::new(),
+            error: Some(e.to_string()),
+        },
+    }
+}
+
+/// Walk the CNAME records in a DNS answer section and return the chain of
+/// targets in resolution order, starting from `query_name`. Comparison is
+/// case-insensitive and ignores the trailing root dot; output names are
+/// normalized the same way. Bounded by the number of CNAME records in the
+/// answer, so a malicious CNAME loop cannot spin forever.
+fn extract_cname_chain(query_name: &str, records: &[Record]) -> Vec<String> {
+    fn normalize(name: &str) -> String {
+        name.trim_end_matches('.').to_ascii_lowercase()
+    }
+    let pairs: Vec<(String, String)> = records
+        .iter()
+        .filter_map(|r| match &r.data {
+            RData::CNAME(cname) => {
+                Some((normalize(&r.name.to_utf8()), normalize(&cname.0.to_utf8())))
+            }
+            _ => None,
+        })
+        .collect();
+
+    let mut chain = Vec::new();
+    let mut current = normalize(query_name);
+    while chain.len() < pairs.len() {
+        match pairs.iter().find(|(owner, _)| *owner == current) {
+            Some((_, target)) => {
+                if chain.contains(target) {
+                    break; // CNAME loop — stop rather than repeat
+                }
+                chain.push(target.clone());
+                current = target.clone();
+            }
+            None => break,
+        }
+    }
+    chain
+}
+
+/// Detailed resolution for the standalone `dns` probe mode ONLY: performs
+/// separately-timed A and AAAA lookups (skipping the family excluded by
+/// `ipv4_only`/`ipv6_only`) and captures per-record-type timing, record counts,
+/// and the CNAME chain. Other modes keep using [`resolve`] — a single
+/// dual-stack lookup — so their resolution path is not slowed down.
+pub async fn resolve_detailed(
+    hostname: &str,
+    ipv4_only: bool,
+    ipv6_only: bool,
+) -> Result<(Vec<IpAddr>, DnsResult), ErrorRecord> {
+    // Cached resolver obtained before the timer, exactly like `resolve`.
+    let (resolver, resolver_label) = shared_resolver().map_err(|msg| ErrorRecord {
+        category: ErrorCategory::Dns,
+        message: msg,
+        detail: Some("resolver construction failed before any query was sent".to_string()),
+        occurred_at: Utc::now(),
+    })?;
+
+    let started_at = Utc::now();
+    let t0 = Instant::now();
+
+    let a = if ipv6_only {
+        None
+    } else {
+        Some(timed_typed_lookup(resolver, hostname, RecordType::A).await)
+    };
+    let aaaa = if ipv4_only {
+        None
+    } else {
+        Some(timed_typed_lookup(resolver, hostname, RecordType::AAAA).await)
+    };
+
+    let duration_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+    // Hard failure only when every performed lookup errored (a missing AAAA on
+    // an IPv4-only host is a NODATA answer, not a probe failure).
+    let performed: Vec<&TypedLookup> = a.iter().chain(aaaa.iter()).collect();
+    if performed.iter().all(|l| l.error.is_some()) {
+        let message = performed
+            .iter()
+            .filter_map(|l| l.error.clone())
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(ErrorRecord {
+            category: ErrorCategory::Dns,
+            message,
+            detail: Some(format!("A/AAAA lookups for {hostname} failed")),
+            occurred_at: Utc::now(),
+        });
+    }
+
+    let mut ips: Vec<IpAddr> = Vec::new();
+    if let Some(l) = &a {
+        ips.extend(&l.ips);
+    }
+    if let Some(l) = &aaaa {
+        ips.extend(&l.ips);
+    }
+
+    // The chain is the same regardless of address family; prefer the A answer,
+    // fall back to AAAA (e.g. --ipv6-only or IPv6-only hosts).
+    let cname_chain = a
+        .as_ref()
+        .map(|l| l.cname_chain.clone())
+        .filter(|c| !c.is_empty())
+        .or_else(|| aaaa.as_ref().map(|l| l.cname_chain.clone()))
+        .unwrap_or_default();
+
+    let result = DnsResult {
+        query_name: hostname.to_string(),
+        resolved_ips: ips.iter().map(IpAddr::to_string).collect(),
+        duration_ms,
+        started_at,
+        success: !ips.is_empty(),
+        resolver: Some(resolver_label.clone()),
+        a_ms: a.as_ref().map(|l| l.duration_ms),
+        aaaa_ms: aaaa.as_ref().map(|l| l.duration_ms),
+        a_record_count: a.as_ref().map(|l| l.record_count),
+        aaaa_record_count: aaaa.as_ref().map(|l| l.record_count),
+        cname_chain,
+    };
+
+    if ips.is_empty() {
+        return Err(ErrorRecord {
+            category: ErrorCategory::Dns,
+            message: format!(
+                "No IPs resolved for {hostname} (filter: ipv4_only={ipv4_only}, ipv6_only={ipv6_only})"
+            ),
+            detail: None,
+            occurred_at: Utc::now(),
+        });
+    }
+
+    Ok((ips, result))
+}
+
 /// Standalone DNS probe: resolves the target hostname and returns a complete
 /// `RequestAttempt` with only a `DnsResult` populated (no TCP/TLS/HTTP).
+/// Uses [`resolve_detailed`] for per-record-type timing and the CNAME chain.
 pub async fn run_dns_probe(
     run_id: Uuid,
     sequence_num: u32,
@@ -157,7 +352,7 @@ pub async fn run_dns_probe(
     let attempt_id = Uuid::new_v4();
     let started_at = Utc::now();
 
-    match resolve(hostname, ipv4_only, ipv6_only).await {
+    match resolve_detailed(hostname, ipv4_only, ipv6_only).await {
         Ok((_, dns_result)) => RequestAttempt {
             attempt_id,
             run_id,
@@ -272,6 +467,110 @@ mod tests {
         assert!(!dns.resolved_ips.is_empty());
         assert!(attempt.tcp.is_none());
         assert!(attempt.http.is_none());
+    }
+
+    // ── extract_cname_chain ──────────────────────────────────────────────────
+
+    use hickory_resolver::proto::rr::{rdata, Name};
+
+    fn cname_rec(owner: &str, target: &str) -> Record {
+        Record::from_rdata(
+            Name::from_utf8(owner).unwrap(),
+            60,
+            RData::CNAME(rdata::CNAME(Name::from_utf8(target).unwrap())),
+        )
+    }
+
+    fn a_rec(owner: &str) -> Record {
+        Record::from_rdata(
+            Name::from_utf8(owner).unwrap(),
+            60,
+            RData::A(rdata::A(std::net::Ipv4Addr::new(192, 0, 2, 1))),
+        )
+    }
+
+    #[test]
+    fn cname_chain_walks_in_order() {
+        // Answer section deliberately out of order — the walk must follow the
+        // owner→target links, not record order.
+        let records = vec![
+            cname_rec("cdn.example.net.", "edge.host.example."),
+            a_rec("edge.host.example."),
+            cname_rec("www.example.com.", "cdn.example.net."),
+        ];
+        let chain = extract_cname_chain("www.example.com", &records);
+        assert_eq!(chain, vec!["cdn.example.net", "edge.host.example"]);
+    }
+
+    #[test]
+    fn cname_chain_empty_when_no_cnames() {
+        let records = vec![a_rec("example.com.")];
+        assert!(extract_cname_chain("example.com", &records).is_empty());
+    }
+
+    #[test]
+    fn cname_chain_is_case_insensitive_and_ignores_root_dot() {
+        let records = vec![cname_rec("WWW.Example.COM.", "CDN.Example.NET.")];
+        let chain = extract_cname_chain("www.example.com", &records);
+        assert_eq!(chain, vec!["cdn.example.net"]);
+    }
+
+    #[test]
+    fn cname_chain_loop_terminates() {
+        let records = vec![
+            cname_rec("a.example.", "b.example."),
+            cname_rec("b.example.", "a.example."),
+        ];
+        let chain = extract_cname_chain("a.example", &records);
+        // Walk stops when it would revisit a name — no infinite loop.
+        assert_eq!(chain, vec!["b.example", "a.example"]);
+    }
+
+    #[test]
+    fn cname_chain_ignores_unrelated_cnames() {
+        let records = vec![cname_rec("other.example.", "target.example.")];
+        assert!(extract_cname_chain("www.example.com", &records).is_empty());
+    }
+
+    // ── resolve_detailed ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn resolve_detailed_populates_per_type_fields() {
+        let (ips, r) = resolve_detailed("localhost", false, false).await.unwrap();
+        assert!(!ips.is_empty());
+        assert!(r.success);
+        // Both lookups performed → both timings and counts present.
+        assert!(r.a_ms.is_some(), "a_ms must be recorded");
+        assert!(r.aaaa_ms.is_some(), "aaaa_ms must be recorded");
+        assert!(r.a_record_count.is_some());
+        assert!(r.aaaa_record_count.is_some());
+        // localhost resolves directly, no CNAME chain.
+        assert!(r.cname_chain.is_empty());
+        assert!(r.resolver.is_some());
+    }
+
+    #[tokio::test]
+    async fn resolve_detailed_ipv4_only_skips_aaaa() {
+        let (ips, r) = resolve_detailed("localhost", true, false).await.unwrap();
+        assert!(ips.iter().all(|ip| ip.is_ipv4()));
+        assert!(r.a_ms.is_some());
+        assert!(r.aaaa_ms.is_none(), "AAAA lookup must be skipped");
+        assert!(r.aaaa_record_count.is_none());
+    }
+
+    #[tokio::test]
+    async fn resolve_detailed_unresolvable_returns_error() {
+        let result = resolve_detailed("this-hostname-does-not-exist.invalid", false, false).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn run_dns_probe_carries_detailed_fields() {
+        let attempt = run_dns_probe(uuid::Uuid::new_v4(), 0, "localhost", false, false).await;
+        assert!(attempt.success, "probe should succeed: {:?}", attempt.error);
+        let dns = attempt.dns.expect("dns result");
+        assert!(dns.a_ms.is_some());
+        assert!(dns.aaaa_ms.is_some());
     }
 
     #[tokio::test]

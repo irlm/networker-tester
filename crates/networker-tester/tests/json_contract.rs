@@ -36,6 +36,11 @@ fn sample_run() -> TestRun {
             started_at: now,
             success: true,
             resolver: Some("system (192.168.1.1:53)".into()),
+            a_ms: None,
+            aaaa_ms: None,
+            a_record_count: None,
+            aaaa_record_count: None,
+            cname_chain: Vec::new(),
         }),
         tcp: Some(TcpResult {
             local_addr: Some("10.0.0.2:51000".into()),
@@ -77,6 +82,8 @@ fn sample_run() -> TestRun {
             previous_handshake_kind: None,
             previous_http_status_code: None,
             http_status_code: None,
+            ocsp_stapled: None,
+            ocsp_response_bytes: None,
         }),
         http: Some(HttpResult {
             negotiated_version: "HTTP/2".into(),
@@ -251,6 +258,46 @@ fn http_handshake_ms_is_additive_and_optional() {
         .expect("http")
         .http_handshake_ms
         .is_none());
+}
+
+/// Measurement-gap #6/#7 additive fields (dns.a_ms/aaaa_ms/record counts/
+/// cname_chain, tls.ocsp_stapled/ocsp_response_bytes, cert key/signature
+/// detail): all serde-defaulted and skip-serialized when unset, so a run that
+/// doesn't populate them serializes to the exact pre-existing shape and old
+/// JSON (without them) still deserializes. schema_version stays 1.0.
+#[test]
+fn dns_and_tls_depth_fields_are_additive_and_optional() {
+    let run = sample_run();
+    let v: serde_json::Value = serde_json::to_value(&run).expect("serialize");
+
+    let dns = v.pointer("/attempts/0/dns").expect("dns block");
+    for absent in [
+        "a_ms",
+        "aaaa_ms",
+        "a_record_count",
+        "aaaa_record_count",
+        "cname_chain",
+    ] {
+        assert!(
+            dns.get(absent).is_none(),
+            "dns.{absent} must be omitted when unset (shape unchanged)"
+        );
+    }
+    let tls = v.pointer("/attempts/0/tls").expect("tls block");
+    for absent in ["ocsp_stapled", "ocsp_response_bytes"] {
+        assert!(
+            tls.get(absent).is_none(),
+            "tls.{absent} must be omitted when unset (shape unchanged)"
+        );
+    }
+
+    // Round-trip: absent fields deserialize to their defaults.
+    let back: TestRun = serde_json::from_value(v).expect("deserialize");
+    let dns = back.attempts[0].dns.as_ref().unwrap();
+    assert!(dns.a_ms.is_none() && dns.aaaa_ms.is_none());
+    assert!(dns.cname_chain.is_empty());
+    let tls = back.attempts[0].tls.as_ref().unwrap();
+    assert!(tls.ocsp_stapled.is_none() && tls.ocsp_response_bytes.is_none());
 }
 
 /// A run serialized without `schema_version` (a pre-contract producer) must

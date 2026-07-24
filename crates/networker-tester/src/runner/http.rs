@@ -1268,6 +1268,8 @@ fn extract_tls_info(
         previous_handshake_kind: None,
         previous_http_status_code: None,
         http_status_code: None,
+        ocsp_stapled: None,
+        ocsp_response_bytes: None,
     }
 }
 

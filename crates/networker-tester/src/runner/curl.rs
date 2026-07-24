@@ -151,6 +151,11 @@ pub async fn run_curl_probe(
             started_at,
             success: true,
             resolver: None, // curl resolves internally; identity not observable
+            a_ms: None,
+            aaaa_ms: None,
+            a_record_count: None,
+            aaaa_record_count: None,
+            cname_chain: Vec::new(),
         })
     } else {
         None
@@ -222,6 +227,8 @@ pub async fn run_curl_probe(
             previous_handshake_kind: None,
             previous_http_status_code: None,
             http_status_code: None,
+            ocsp_stapled: None,
+            ocsp_response_bytes: None,
         })
     } else {
         None

@@ -92,6 +92,11 @@ pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
             started_at: Utc::now(),
             success: true,
             resolver: None,
+            a_ms: None,
+            aaaa_ms: None,
+            a_record_count: None,
+            aaaa_record_count: None,
+            cname_chain: Vec::new(),
         }),
         tcp: Some(TcpResult {
             local_addr: Some("127.0.0.1:12345".into()),
@@ -133,6 +138,8 @@ pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
             previous_handshake_kind: None,
             previous_http_status_code: None,
             http_status_code: None,
+            ocsp_stapled: None,
+            ocsp_response_bytes: None,
         }),
         http: Some(HttpResult {
             negotiated_version: "HTTP/1.1".into(),

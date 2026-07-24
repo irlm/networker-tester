@@ -195,6 +195,11 @@ pub fn print_summary(run: &TestRun) {
     // issue" breakdown. Only rendered when a sdkprobe run produced a split.
     print_sdk_split(run);
 
+    // Per-record-type DNS detail (dns mode) and certificate/OCSP detail
+    // (tls mode) — rendered only when the probes captured the extra depth.
+    print_dns_detail(run);
+    print_tls_detail(run);
+
     // Protocol comparison table when any pageload or browser variant is present
     let has_pageload = run.attempts.iter().any(|a| {
         matches!(
@@ -289,6 +294,110 @@ fn print_sdk_split(run: &TestRun) {
     }
     if anomalies > 0 {
         println!("   ⚠ {anomalies} probe(s) had server_ms > wall — network leg clamped to 0");
+    }
+}
+
+/// Render per-record-type DNS depth for the standalone `dns` probe mode:
+/// separately-timed A/AAAA lookups, record counts, and the CNAME chain.
+/// Silent unless a dns-mode attempt captured the detail (older probes and all
+/// other modes leave the fields unset).
+fn print_dns_detail(run: &TestRun) {
+    let dns: Vec<&crate::metrics::DnsResult> = run
+        .attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::Dns)
+        .filter_map(|a| a.dns.as_ref())
+        .collect();
+    let has_detail = dns
+        .iter()
+        .any(|d| d.a_ms.is_some() || d.aaaa_ms.is_some() || !d.cname_chain.is_empty());
+    if !has_detail {
+        return;
+    }
+
+    let avg = |f: &dyn Fn(&crate::metrics::DnsResult) -> Option<f64>| -> Option<f64> {
+        let vals: Vec<f64> = dns.iter().filter_map(|d| f(d)).collect();
+        (!vals.is_empty()).then(|| vals.iter().sum::<f64>() / vals.len() as f64)
+    };
+    let a_ms = avg(&|d| d.a_ms);
+    let aaaa_ms = avg(&|d| d.aaaa_ms);
+
+    // Record counts and the chain are stable across attempts — report the
+    // first observation rather than a meaningless average.
+    let a_count = dns.iter().find_map(|d| d.a_record_count);
+    let aaaa_count = dns.iter().find_map(|d| d.aaaa_record_count);
+    let chain = dns.iter().find(|d| !d.cname_chain.is_empty());
+
+    let records = |n: Option<u32>| match n {
+        Some(1) => "1 record".to_string(),
+        Some(n) => format!("{n} records"),
+        None => "skipped".to_string(),
+    };
+    let line = |label: &str, ms: Option<f64>, count: Option<u32>| match ms {
+        Some(v) => println!("   {label:<18} {v:>8.2}ms avg │ {}", records(count)),
+        None => println!("   {label:<18} {:>10} │ {}", "—", records(count)),
+    };
+
+    println!();
+    println!(
+        " DNS detail (over {n} probe{s})",
+        n = dns.len(),
+        s = if dns.len() == 1 { "" } else { "s" },
+    );
+    println!("──────────────────────────────────────────");
+    line("A lookup", a_ms, a_count);
+    line("AAAA lookup", aaaa_ms, aaaa_count);
+    if let Some(d) = chain {
+        println!(
+            "   {label:<18} {query} → {chain}",
+            label = "CNAME chain",
+            query = d.query_name,
+            chain = d.cname_chain.join(" → "),
+        );
+    }
+}
+
+/// Render certificate/OCSP depth for the standalone `tls` / `tlsresume`
+/// modes: leaf key algorithm + size, signature algorithm, and whether the
+/// server stapled an OCSP response. Silent when no attempt captured it.
+fn print_tls_detail(run: &TestRun) {
+    let Some(tls) = run
+        .attempts
+        .iter()
+        .filter(|a| matches!(a.protocol, Protocol::Tls | Protocol::TlsResume))
+        .filter_map(|a| a.tls.as_ref())
+        .find(|t| {
+            t.ocsp_stapled.is_some()
+                || t.cert_chain
+                    .first()
+                    .is_some_and(|c| c.key_algorithm.is_some() || c.signature_algorithm.is_some())
+        })
+    else {
+        return;
+    };
+
+    println!();
+    println!(" TLS certificate detail");
+    println!("──────────────────────────────────────────");
+    if let Some(leaf) = tls.cert_chain.first() {
+        if let Some(alg) = &leaf.key_algorithm {
+            match leaf.key_size_bits {
+                Some(bits) => println!("   {:<18} {alg} ({bits} bit)", "Leaf key"),
+                None => println!("   {:<18} {alg}", "Leaf key"),
+            }
+        }
+        if let Some(sig) = &leaf.signature_algorithm {
+            println!("   {:<18} {sig}", "Signature");
+        }
+    }
+    match tls.ocsp_stapled {
+        Some(true) => println!(
+            "   {:<18} stapled ({} bytes)",
+            "OCSP",
+            tls.ocsp_response_bytes.unwrap_or(0)
+        ),
+        Some(false) => println!("   {:<18} not stapled", "OCSP"),
+        None => println!("   {:<18} not observed (resumed handshake)", "OCSP"),
     }
 }
 
