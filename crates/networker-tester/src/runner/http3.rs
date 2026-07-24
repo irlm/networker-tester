@@ -139,6 +139,11 @@ mod real {
         )
         .map_err(|e| format!("TLS config error: {e}"))?;
         tls_config.alpn_protocols = vec![b"h3".to_vec()];
+        // Allow the rustls client to store session tickets with an early-data
+        // allowance. Without this, `Connecting::into_0rtt()` can never return
+        // `Ok` and the QUIC resumption/0-RTT measurement always reports
+        // `zero_rtt_attempted = false`. Has no effect on the cold handshake.
+        tls_config.enable_early_data = true;
 
         let quinn_tls = quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
             .map_err(|e| format!("QUIC TLS config error: {e}"))?;
@@ -230,6 +235,118 @@ mod real {
             cname_chain: Vec::new(),
         };
         Ok((addr, Some(dns)))
+    }
+
+    /// Facts from the follow-up (second) QUIC connection that measures TLS 1.3
+    /// session resumption and 0-RTT early data. All fields default to `None`
+    /// (nothing measured) and the measurement never fails the parent attempt.
+    #[derive(Default)]
+    struct QuicResumptionFacts {
+        quic_resumed: Option<bool>,
+        zero_rtt_attempted: Option<bool>,
+        zero_rtt_accepted: Option<bool>,
+        resumed_handshake_ms: Option<f64>,
+    }
+
+    /// Open a follow-up QUIC connection through the same endpoint (and
+    /// therefore the same rustls client config + session-ticket store) and
+    /// measure whether the TLS 1.3 session resumes and whether the server
+    /// accepts 0-RTT early data.
+    ///
+    /// Design note — why a second connection *inside* the attempt (the
+    /// tlsresume idiom) rather than sharing ticket state across sequential
+    /// attempts: probe attempts are architecturally stateless (`dispatch_once`
+    /// builds a fresh runner per attempt), and a shared cross-attempt cache
+    /// would silently turn attempts 2..n of every http3 run into warm
+    /// handshakes — skewing the h1/h2/h3 head-to-head comparison, whose
+    /// per-attempt connections are cold across all protocols. The follow-up
+    /// connection leaves the primary (cold) connection's numbers untouched and
+    /// is reported only through the additive `quic_*`/`zero_rtt_*` fields.
+    ///
+    /// What is actually measured: quinn's `Connecting::into_0rtt()` succeeds
+    /// only when 0-RTT keys derived from a stored session ticket are
+    /// available; the request is then sent in 0-RTT early data on the wire,
+    /// and the `ZeroRttAccepted` future (resolving at handshake completion)
+    /// reports whether the server *accepted* that early data. Acceptance
+    /// requires PSK resumption, so it doubles as proof of session resumption
+    /// (quinn does not expose rustls' handshake kind for QUIC).
+    async fn measure_quic_resumption(
+        endpoint: &Endpoint,
+        server_addr: std::net::SocketAddr,
+        host: &str,
+        port: u16,
+        deadline: tokio::time::Instant,
+    ) -> QuicResumptionFacts {
+        let mut facts = QuicResumptionFacts::default();
+        let Ok(connecting) = endpoint.connect(server_addr, host) else {
+            return facts;
+        };
+        let t0 = Instant::now();
+        let (conn, accepted) = match connecting.into_0rtt() {
+            Ok(v) => v,
+            Err(_connecting) => {
+                // No 0-RTT keys — the client has no usable session ticket
+                // with an early-data allowance, so resumption cannot be
+                // attempted (dropping `_connecting` cancels the handshake).
+                facts.zero_rtt_attempted = Some(false);
+                facts.quic_resumed = Some(false);
+                return facts;
+            }
+        };
+        facts.zero_rtt_attempted = Some(true);
+
+        // Best-effort: put a real request on the wire in 0-RTT early data
+        // before the handshake completes. Bounded by the probe's remaining
+        // deadline so a stalled peer cannot extend the attempt.
+        let early_request = async {
+            let (mut driver, mut send_req) =
+                h3::client::new(QuinnH3Connection::new(conn)).await.ok()?;
+            tokio::spawn(async move {
+                let _ = futures::future::poll_fn(|cx| driver.poll_close(cx)).await;
+            });
+            let req = http::Request::builder()
+                .method("GET")
+                .uri(format!("https://{host}:{port}/health"))
+                .header("user-agent", "networker-tester/0.1 (h3 0-rtt)")
+                .body(())
+                .ok()?;
+            let mut stream = send_req.send_request(req).await.ok()?;
+            stream.finish().await.ok()?;
+            // Keep `send_req` alive alongside the stream: dropping the last
+            // SendRequest makes the h3 client shut the connection down, which
+            // would resolve ZeroRttAccepted to a spurious `false` before the
+            // handshake completes.
+            Some((send_req, stream))
+        };
+        let stream = tokio::time::timeout_at(deadline, early_request)
+            .await
+            .ok()
+            .flatten();
+
+        // Handshake completion doubles as the acceptance verdict: the future
+        // resolves true iff the server accepted the early data.
+        match tokio::time::timeout_at(deadline, accepted).await {
+            Ok(acc) => {
+                facts.resumed_handshake_ms = Some(t0.elapsed().as_secs_f64() * 1000.0);
+                facts.zero_rtt_accepted = Some(acc);
+                // Acceptance proves PSK resumption; rejection leaves
+                // resumption unproven → reported false.
+                facts.quic_resumed = Some(acc);
+            }
+            Err(_timeout) => return facts,
+        }
+
+        // Drain the early request's response so the exchange completes
+        // cleanly (best-effort; ignored on 0-RTT rejection, where the
+        // stream errors with ZeroRttRejected).
+        if let Some((_send_req, mut stream)) = stream {
+            if let Ok(Ok(_resp)) = tokio::time::timeout_at(deadline, stream.recv_response()).await {
+                while let Ok(Ok(Some(_chunk))) =
+                    tokio::time::timeout_at(deadline, stream.recv_data()).await
+                {}
+            }
+        }
+        facts
     }
 
     pub async fn run_http3_probe(
@@ -518,6 +635,17 @@ mod real {
         let (csw_voluntary, csw_involuntary) = (None::<u64>, None::<u64>);
         let http_started_at = Utc::now();
 
+        // Follow-up connection: QUIC session-resumption + 0-RTT measurement.
+        // Runs after total_ms/cpu accounting so it cannot contaminate the
+        // primary (cold) connection's numbers. Only for plain http3 latency
+        // probes — the throughput/pageload H3 variants reuse this runner but
+        // don't need the extra connection per attempt.
+        let resumption = if matches!(protocol, Protocol::Http3) {
+            Some(measure_quic_resumption(&endpoint, server_addr, &host, port, deadline).await)
+        } else {
+            None
+        };
+
         let tls_result = TlsResult {
             protocol_version: "TLSv1.3 (QUIC)".into(),
             cipher_suite: "QUIC-embedded".into(),
@@ -539,6 +667,10 @@ mod real {
             http_status_code: None,
             ocsp_stapled: None,
             ocsp_response_bytes: None,
+            quic_resumed: resumption.as_ref().and_then(|r| r.quic_resumed),
+            zero_rtt_attempted: resumption.as_ref().and_then(|r| r.zero_rtt_attempted),
+            zero_rtt_accepted: resumption.as_ref().and_then(|r| r.zero_rtt_accepted),
+            quic_resumed_handshake_ms: resumption.as_ref().and_then(|r| r.resumed_handshake_ms),
         };
 
         // Content negotiation metadata (gap #9), from the captured h3 headers.
@@ -865,6 +997,81 @@ mod real {
                 assert!(http.csw_voluntary.is_some());
                 assert!(http.csw_involuntary.is_some());
             }
+        }
+
+        /// The follow-up connection must measure QUIC session resumption /
+        /// 0-RTT and populate the additive tls fields. Acceptance itself is
+        /// not asserted — a server may legitimately reject early data — only
+        /// the attempted/populated semantics.
+        #[cfg(not(target_os = "windows"))]
+        #[tokio::test]
+        async fn h3_probe_measures_quic_resumption() {
+            let ep = TestEndpoint::start().await;
+            ep.wait_for_quic().await;
+            let target = ep.https_url("/health");
+            let a = run_http3_probe(Uuid::new_v4(), 0, &target, 10_000, true, None).await;
+            assert!(a.success, "H3 probe failed: {:?}", a.error);
+            let tls = a.tls.expect("tls facts must be present");
+
+            assert!(
+                tls.zero_rtt_attempted.is_some(),
+                "http3 attempts must always report whether 0-RTT was attempted"
+            );
+            assert!(
+                tls.quic_resumed.is_some(),
+                "http3 attempts must always report the resumption verdict"
+            );
+            if tls.zero_rtt_attempted == Some(true) {
+                // With a 10s budget on loopback the handshake always
+                // completes, so the verdict and timing must be recorded.
+                assert!(
+                    tls.zero_rtt_accepted.is_some(),
+                    "attempted 0-RTT must record the server's accept/reject verdict"
+                );
+                let warm = tls
+                    .quic_resumed_handshake_ms
+                    .expect("attempted 0-RTT must time the resumed handshake");
+                assert!(warm > 0.0, "resumed handshake time must be positive");
+                assert_eq!(
+                    tls.quic_resumed, tls.zero_rtt_accepted,
+                    "resumption is verified via early-data acceptance"
+                );
+            } else {
+                assert_eq!(
+                    tls.quic_resumed,
+                    Some(false),
+                    "no ticket → resumption not attempted"
+                );
+            }
+        }
+
+        /// Throughput/pageload H3 variants reuse the request runner but must
+        /// NOT pay for (or report) the extra resumption connection.
+        #[cfg(not(target_os = "windows"))]
+        #[tokio::test]
+        async fn h3_request_probe_skips_resumption_for_non_http3_protocols() {
+            let ep = TestEndpoint::start().await;
+            ep.wait_for_quic().await;
+            let target = ep.https_url("/download?bytes=1024");
+            let a = run_http3_request_probe(
+                Uuid::new_v4(),
+                0,
+                Protocol::Download3,
+                &target,
+                0,
+                &crate::runner::http::RunConfig {
+                    timeout_ms: 10_000,
+                    insecure: true,
+                    ..Default::default()
+                },
+            )
+            .await;
+            assert!(a.success, "H3 download failed: {:?}", a.error);
+            let tls = a.tls.expect("tls facts must be present");
+            assert!(tls.zero_rtt_attempted.is_none());
+            assert!(tls.quic_resumed.is_none());
+            assert!(tls.zero_rtt_accepted.is_none());
+            assert!(tls.quic_resumed_handshake_ms.is_none());
         }
 
         #[tokio::test]

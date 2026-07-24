@@ -606,6 +606,10 @@ async fn run_h1_keepalive_connection(
                 http_status_code: None,
                 ocsp_stapled: None,
                 ocsp_response_bytes: None,
+                quic_resumed: None,
+                zero_rtt_attempted: None,
+                zero_rtt_accepted: None,
+                quic_resumed_handshake_ms: None,
             })
         } else {
             None
@@ -970,6 +974,10 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
             http_status_code: None,
             ocsp_stapled: None,
             ocsp_response_bytes: None,
+            quic_resumed: None,
+            zero_rtt_attempted: None,
+            zero_rtt_accepted: None,
+            quic_resumed_handshake_ms: None,
         }
     };
 
@@ -1589,6 +1597,10 @@ pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         http_status_code: None,
         ocsp_stapled: None,
         ocsp_response_bytes: None,
+        quic_resumed: None,
+        zero_rtt_attempted: None,
+        zero_rtt_accepted: None,
+        quic_resumed_handshake_ms: None,
     };
     let manifest_http = crate::metrics::HttpResult {
         negotiated_version: "HTTP/3".into(),
@@ -2021,6 +2033,10 @@ pub async fn warmup_pageload2(
             http_status_code: None,
             ocsp_stapled: None,
             ocsp_response_bytes: None,
+            quic_resumed: None,
+            zero_rtt_attempted: None,
+            zero_rtt_accepted: None,
+            quic_resumed_handshake_ms: None,
         }
     };
 
@@ -2737,6 +2753,10 @@ async fn fetch_h3_pageload(
         http_status_code: None,
         ocsp_stapled: None,
         ocsp_response_bytes: None,
+        quic_resumed: None,
+        zero_rtt_attempted: None,
+        zero_rtt_accepted: None,
+        quic_resumed_handshake_ms: None,
     };
     let manifest_http = crate::metrics::HttpResult {
         negotiated_version: "HTTP/3".into(),

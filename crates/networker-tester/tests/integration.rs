@@ -18,6 +18,8 @@ use networker_tester::runner::curl::run_curl_probe;
 use networker_tester::runner::dns::run_dns_probe;
 use networker_tester::runner::dualstack::run_dualstack_probe;
 use networker_tester::runner::http::{run_probe, RunConfig};
+#[cfg(feature = "http3")]
+use networker_tester::runner::http3::run_http3_probe;
 use networker_tester::runner::native::run_native_probe;
 #[cfg(feature = "http3")]
 use networker_tester::runner::pageload::run_pageload3_probe;
@@ -1037,6 +1039,52 @@ async fn pageload_h3_multiplexes_assets() {
     assert_eq!(pl.asset_count, 5);
     assert!(pl.assets_fetched > 0);
     assert_eq!(pl.connections_opened, 1, "H3 uses a single QUIC connection");
+}
+
+/// HTTP/3 latency probe: the follow-up connection measures QUIC session
+/// resumption + 0-RTT against the in-process endpoint. Acceptance is not
+/// asserted (a server may reject early data); the attempted/populated
+/// semantics are.
+#[cfg(feature = "http3")]
+#[tokio::test]
+async fn http3_probe_measures_quic_resumption() {
+    init_crypto();
+    let ep = Endpoint::start().await;
+    ep.wait_for_quic().await;
+
+    let a = run_http3_probe(
+        Uuid::new_v4(),
+        0,
+        &ep.https_url("/health"),
+        10_000,
+        true,
+        None,
+    )
+    .await;
+
+    assert!(a.success, "H3 probe failed: {:?}", a.error);
+    assert_eq!(a.protocol, Protocol::Http3);
+    let tls = a.tls.expect("tls facts missing");
+
+    // Cold/full handshake of the primary connection stays the headline number.
+    assert!(tls.handshake_duration_ms > 0.0);
+
+    // Additive resumption facts must be populated on every http3 attempt.
+    assert!(
+        tls.zero_rtt_attempted.is_some(),
+        "zero_rtt_attempted must be reported"
+    );
+    assert!(tls.quic_resumed.is_some(), "quic_resumed must be reported");
+    if tls.zero_rtt_attempted == Some(true) {
+        assert!(
+            tls.zero_rtt_accepted.is_some(),
+            "accept/reject verdict must be recorded when 0-RTT was attempted"
+        );
+        let warm = tls
+            .quic_resumed_handshake_ms
+            .expect("resumed handshake must be timed when 0-RTT was attempted");
+        assert!(warm > 0.0);
+    }
 }
 
 /// POST /upload with a 64 KiB body → endpoint reads and acknowledges it.

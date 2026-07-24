@@ -1175,6 +1175,29 @@ pub struct TlsResult {
     /// `ocsp_stapled` is `Some(true)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ocsp_response_bytes: Option<u32>,
+    /// HTTP/3 (QUIC) only: whether the follow-up connection provably resumed
+    /// the TLS 1.3 session. quinn does not expose rustls' handshake kind for
+    /// QUIC, so this is verified via early-data acceptance: `Some(true)` iff
+    /// the server accepted 0-RTT (which requires PSK resumption). `Some(false)`
+    /// when no session ticket was available or the server rejected early data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quic_resumed: Option<bool>,
+    /// HTTP/3 (QUIC) only: the follow-up connection had 0-RTT keys available
+    /// (a TLS 1.3 session ticket with an early-data allowance) and sent the
+    /// request in 0-RTT early data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zero_rtt_attempted: Option<bool>,
+    /// HTTP/3 (QUIC) only: the server accepted the 0-RTT early data
+    /// (quinn `ZeroRttAccepted` resolved true). Only present when
+    /// `zero_rtt_attempted` is `Some(true)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zero_rtt_accepted: Option<bool>,
+    /// HTTP/3 (QUIC) only: handshake-completion time of the follow-up
+    /// (resumption/0-RTT) connection, comparable against
+    /// `handshake_duration_ms` (the cold/full handshake of this attempt's
+    /// primary connection) to quantify the resumption latency win.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quic_resumed_handshake_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2728,6 +2751,10 @@ mod tests {
             http_status_code: None,
             ocsp_stapled: None,
             ocsp_response_bytes: None,
+            quic_resumed: None,
+            zero_rtt_attempted: None,
+            zero_rtt_accepted: None,
+            quic_resumed_handshake_ms: None,
         });
         assert!((primary_metric_value(&a).unwrap() - 7.5).abs() < 1e-9);
     }
@@ -3084,6 +3111,10 @@ mod tests {
             http_status_code: None,
             ocsp_stapled: None,
             ocsp_response_bytes: None,
+            quic_resumed: None,
+            zero_rtt_attempted: None,
+            zero_rtt_accepted: None,
+            quic_resumed_handshake_ms: None,
         });
         assert!((primary_metric_value(&a).unwrap() - 3.0).abs() < 1e-9);
     }

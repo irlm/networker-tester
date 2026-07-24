@@ -84,6 +84,10 @@ fn sample_run() -> TestRun {
             http_status_code: None,
             ocsp_stapled: None,
             ocsp_response_bytes: None,
+            quic_resumed: None,
+            zero_rtt_attempted: None,
+            zero_rtt_accepted: None,
+            quic_resumed_handshake_ms: None,
         }),
         http: Some(HttpResult {
             negotiated_version: "HTTP/2".into(),
@@ -305,6 +309,59 @@ fn dns_and_tls_depth_fields_are_additive_and_optional() {
     assert!(dns.cname_chain.is_empty());
     let tls = back.attempts[0].tls.as_ref().unwrap();
     assert!(tls.ocsp_stapled.is_none() && tls.ocsp_response_bytes.is_none());
+/// Additive QUIC resumption/0-RTT fields on `tls` (`quic_resumed`,
+/// `zero_rtt_attempted`, `zero_rtt_accepted`, `quic_resumed_handshake_ms`)
+/// are optional and skip-serialized when `None`: a run that doesn't set them
+/// serializes to the exact same shape as before and pre-existing JSON
+/// deserializes unchanged — schema_version stays 1.0.
+#[test]
+fn quic_zero_rtt_fields_are_additive_and_optional() {
+    let run = sample_run();
+    let v: serde_json::Value = serde_json::to_value(&run).expect("serialize");
+
+    let tls = v
+        .pointer("/attempts/0/tls")
+        .expect("tls block must be present");
+    for field in [
+        "quic_resumed",
+        "zero_rtt_attempted",
+        "zero_rtt_accepted",
+        "quic_resumed_handshake_ms",
+    ] {
+        assert!(
+            tls.get(field).is_none(),
+            "{field} must be omitted when unset (frozen 1.0 shape unchanged)"
+        );
+    }
+
+    // Round-trip: absent fields deserialize to None.
+    let back: TestRun = serde_json::from_value(v).expect("deserialize");
+    let tls = back.attempts[0].tls.as_ref().expect("tls");
+    assert!(tls.quic_resumed.is_none());
+    assert!(tls.zero_rtt_attempted.is_none());
+    assert!(tls.zero_rtt_accepted.is_none());
+    assert!(tls.quic_resumed_handshake_ms.is_none());
+
+    // And a populated producer serializes them.
+    let mut run = sample_run();
+    {
+        let tls = run.attempts[0].tls.as_mut().unwrap();
+        tls.quic_resumed = Some(true);
+        tls.zero_rtt_attempted = Some(true);
+        tls.zero_rtt_accepted = Some(true);
+        tls.quic_resumed_handshake_ms = Some(1.25);
+    }
+    let v: serde_json::Value = serde_json::to_value(&run).expect("serialize");
+    assert_eq!(
+        v.pointer("/attempts/0/tls/zero_rtt_accepted")
+            .and_then(|b| b.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        v.pointer("/attempts/0/tls/quic_resumed_handshake_ms")
+            .and_then(|n| n.as_f64()),
+        Some(1.25)
+    );
 }
 
 /// A run serialized without `schema_version` (a pre-contract producer) must

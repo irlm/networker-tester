@@ -144,6 +144,10 @@ pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
             http_status_code: None,
             ocsp_stapled: None,
             ocsp_response_bytes: None,
+            quic_resumed: None,
+            zero_rtt_attempted: None,
+            zero_rtt_accepted: None,
+            quic_resumed_handshake_ms: None,
         }),
         http: Some(HttpResult {
             negotiated_version: "HTTP/1.1".into(),

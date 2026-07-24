@@ -217,6 +217,9 @@ pub fn print_summary(run: &TestRun) {
     // (tls mode) — rendered only when the probes captured the extra depth.
     print_dns_detail(run);
     print_tls_detail(run);
+    // HTTP/3 QUIC session-resumption / 0-RTT note — only rendered when an
+    // http3 attempt actually carried the measurement.
+    print_h3_zero_rtt(run);
 
     // Protocol comparison table when any pageload or browser variant is present
     let has_pageload = run.attempts.iter().any(|a| {
@@ -626,6 +629,69 @@ fn print_tls_detail(run: &TestRun) {
         ),
         Some(false) => println!("   {:<18} not stapled", "OCSP"),
         None => println!("   {:<18} not observed (resumed handshake)", "OCSP"),
+/// Render the HTTP/3 QUIC session-resumption / 0-RTT note: for each http3
+/// attempt the probe opens a follow-up connection that tries to resume the
+/// TLS 1.3 session and send the request in 0-RTT early data. This prints the
+/// averaged cold-vs-resumed handshake comparison and the 0-RTT verdict.
+fn print_h3_zero_rtt(run: &TestRun) {
+    let h3: Vec<&RequestAttempt> = run
+        .attempts
+        .iter()
+        .filter(|a| {
+            a.protocol == Protocol::Http3
+                && a.tls
+                    .as_ref()
+                    .is_some_and(|t| t.zero_rtt_attempted.is_some())
+        })
+        .collect();
+    if h3.is_empty() {
+        return;
+    }
+
+    let attempted = h3
+        .iter()
+        .filter(|a| {
+            a.tls
+                .as_ref()
+                .is_some_and(|t| t.zero_rtt_attempted == Some(true))
+        })
+        .count();
+    let accepted = h3
+        .iter()
+        .filter(|a| {
+            a.tls
+                .as_ref()
+                .is_some_and(|t| t.zero_rtt_accepted == Some(true))
+        })
+        .count();
+
+    let avg = |f: &dyn Fn(&RequestAttempt) -> Option<f64>| -> Option<f64> {
+        let vals: Vec<f64> = h3.iter().filter_map(|a| f(a)).collect();
+        if vals.is_empty() {
+            None
+        } else {
+            Some(vals.iter().sum::<f64>() / vals.len() as f64)
+        }
+    };
+    let full = avg(&|a| a.tls.as_ref().map(|t| t.handshake_duration_ms));
+    let resumed = avg(&|a| a.tls.as_ref().and_then(|t| t.quic_resumed_handshake_ms));
+
+    println!();
+    println!(
+        " QUIC 0-RTT (http3, {n} attempt{s}): 0-RTT attempted {attempted}/{n}, accepted {accepted}/{n}",
+        n = h3.len(),
+        s = if h3.len() == 1 { "" } else { "s" },
+    );
+    if let (Some(full), Some(resumed)) = (full, resumed) {
+        let saved = full - resumed;
+        let pct = if full > 0.0 {
+            saved / full * 100.0
+        } else {
+            0.0
+        };
+        println!(
+            "   handshake: full {full:.1}ms → resumed {resumed:.1}ms  (saved {saved:.1}ms, {pct:.0}%)"
+        );
     }
 }
 
