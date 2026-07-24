@@ -629,6 +629,9 @@ fn print_tls_detail(run: &TestRun) {
         ),
         Some(false) => println!("   {:<18} not stapled", "OCSP"),
         None => println!("   {:<18} not observed (resumed handshake)", "OCSP"),
+    }
+}
+
 /// Render the HTTP/3 QUIC session-resumption / 0-RTT note: for each http3
 /// attempt the probe opens a follow-up connection that tries to resume the
 /// TLS 1.3 session and send the request in 0-RTT early data. This prints the

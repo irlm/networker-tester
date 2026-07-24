@@ -310,6 +310,8 @@ fn dns_and_tls_depth_fields_are_additive_and_optional() {
     assert!(dns.cname_chain.is_empty());
     let tls = back.attempts[0].tls.as_ref().unwrap();
     assert!(tls.ocsp_stapled.is_none() && tls.ocsp_response_bytes.is_none());
+}
+
 /// Additive QUIC resumption/0-RTT fields on `tls` (`quic_resumed`,
 /// `zero_rtt_attempted`, `zero_rtt_accepted`, `quic_resumed_handshake_ms`)
 /// are optional and skip-serialized when `None`: a run that doesn't set them
@@ -363,6 +365,8 @@ fn quic_zero_rtt_fields_are_additive_and_optional() {
             .and_then(|n| n.as_f64()),
         Some(1.25)
     );
+}
+
 /// Additive extension (measurement gap #11): `client_network` carries the
 /// SOURCE network context (default interface, kind, MTU, egress IP, gateway,
 /// VPN heuristic). Optional and skip-serialized when `None`: old JSON without
