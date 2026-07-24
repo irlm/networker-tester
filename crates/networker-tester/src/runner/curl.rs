@@ -311,6 +311,9 @@ pub async fn run_curl_probe(
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 
@@ -422,6 +425,9 @@ fn make_failed(
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 

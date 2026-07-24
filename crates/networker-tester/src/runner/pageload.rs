@@ -439,6 +439,9 @@ pub async fn run_pageload_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) ->
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 
@@ -1178,6 +1181,9 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 
@@ -1287,6 +1293,9 @@ fn error_attempt_proto(
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 
@@ -1708,6 +1717,9 @@ pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 
@@ -2306,6 +2318,9 @@ async fn fetch_h2_pageload(
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 
@@ -2861,6 +2876,9 @@ async fn fetch_h3_pageload(
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 

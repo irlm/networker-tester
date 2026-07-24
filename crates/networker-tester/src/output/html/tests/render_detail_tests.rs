@@ -866,6 +866,9 @@ fn throughput_protocol_comparison_higher_is_better() {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         }
     };
     // r1 has 200 MB/s (better), r2 has 100 MB/s (worse)

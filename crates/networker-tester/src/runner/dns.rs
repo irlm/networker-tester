@@ -88,6 +88,12 @@ fn shared_resolver() -> Result<&'static (TokioResolver, String), String> {
 
 /// Resolve `hostname` and return the list of IPs plus a timing record.
 /// Respects `ipv4_only` / `ipv6_only` filtering.
+///
+/// Family pinning queries the requested record type DIRECTLY: the shared
+/// resolver's `Ipv4thenIpv6` strategy answers with A records whenever any
+/// exist, so "resolve everything then filter to v6" silently produced "no
+/// IPs" for every dual-homed host (`--ipv6-only` could never work; found by
+/// the `dualstack` probe's IPv6 leg).
 pub async fn resolve(
     hostname: &str,
     ipv4_only: bool,
@@ -105,18 +111,41 @@ pub async fn resolve(
     let started_at = Utc::now();
     let t0 = Instant::now();
 
-    let lookup = resolver
-        .lookup_ip(hostname)
-        .await
-        .map_err(|e| ErrorRecord {
-            category: ErrorCategory::Dns,
-            message: e.to_string(),
-            detail: Some(format!("lookup_ip({hostname}) failed")),
-            occurred_at: Utc::now(),
-        })?;
+    let mut ips: Vec<IpAddr> = if let Ok(ip) = hostname.parse::<IpAddr>() {
+        // IP literal: nothing to query (lookup_ip's literal fast-path does
+        // not exist on typed lookups, so handle it before pinning).
+        vec![ip]
+    } else if ipv4_only || ipv6_only {
+        let record_type = if ipv4_only {
+            RecordType::A
+        } else {
+            RecordType::AAAA
+        };
+        let lookup = timed_typed_lookup(resolver, hostname, record_type).await;
+        if let Some(err) = lookup.error {
+            return Err(ErrorRecord {
+                category: ErrorCategory::Dns,
+                message: err,
+                detail: Some(format!("{record_type} lookup for {hostname} failed")),
+                occurred_at: Utc::now(),
+            });
+        }
+        lookup.ips
+    } else {
+        let lookup = resolver
+            .lookup_ip(hostname)
+            .await
+            .map_err(|e| ErrorRecord {
+                category: ErrorCategory::Dns,
+                message: e.to_string(),
+                detail: Some(format!("lookup_ip({hostname}) failed")),
+                occurred_at: Utc::now(),
+            })?;
+        lookup.iter().collect()
+    };
 
-    let mut ips: Vec<IpAddr> = lookup.iter().collect();
-
+    // Defense in depth: a pinned lookup only collects records of the
+    // requested family, but keep the filter for any stray answers.
     if ipv4_only {
         ips.retain(|ip| ip.is_ipv4());
     } else if ipv6_only {
@@ -374,6 +403,9 @@ pub async fn run_dns_probe(
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         },
         Err(err) => RequestAttempt {
             attempt_id,
@@ -396,6 +428,9 @@ pub async fn run_dns_probe(
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         },
     }
 }
@@ -457,6 +492,25 @@ mod tests {
     async fn unresolvable_hostname_returns_error() {
         let result = resolve("this-hostname-does-not-exist.invalid", false, false).await;
         assert!(result.is_err(), "should fail for an unresolvable hostname");
+    }
+
+    /// IP literals resolve without a DNS query even when family-pinned
+    /// (the typed-lookup path has no literal fast-path of its own).
+    #[tokio::test]
+    async fn ip_literal_with_matching_family_pin_resolves() {
+        let (ips, r) = resolve("127.0.0.1", true, false).await.unwrap();
+        assert_eq!(ips, vec!["127.0.0.1".parse::<IpAddr>().unwrap()]);
+        assert!(r.success);
+        let (ips, _) = resolve("::1", false, true).await.unwrap();
+        assert_eq!(ips, vec!["::1".parse::<IpAddr>().unwrap()]);
+    }
+
+    /// An IP literal of the WRONG family under a pin is an honest error,
+    /// not a silent fallback to the other family.
+    #[tokio::test]
+    async fn ip_literal_with_mismatched_family_pin_errors() {
+        assert!(resolve("127.0.0.1", false, true).await.is_err());
+        assert!(resolve("::1", true, false).await.is_err());
     }
 
     #[tokio::test]

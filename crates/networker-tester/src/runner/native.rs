@@ -72,6 +72,9 @@ pub async fn run_native_probe(
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         }
     }
 
@@ -430,6 +433,9 @@ async fn run_native_probe_impl(
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         }
     }
 }
@@ -724,6 +730,9 @@ async fn run_native_https(
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 
@@ -848,6 +857,9 @@ fn make_failed(
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 

@@ -16,11 +16,14 @@
 use networker_tester::metrics::{ErrorCategory, Protocol};
 use networker_tester::runner::curl::run_curl_probe;
 use networker_tester::runner::dns::run_dns_probe;
+use networker_tester::runner::dualstack::run_dualstack_probe;
 use networker_tester::runner::http::{run_probe, RunConfig};
 use networker_tester::runner::native::run_native_probe;
 #[cfg(feature = "http3")]
 use networker_tester::runner::pageload::run_pageload3_probe;
 use networker_tester::runner::pageload::{run_pageload2_probe, run_pageload_probe, PageLoadConfig};
+use networker_tester::runner::path::{run_path_probe, PathProbeConfig};
+use networker_tester::runner::ping::{run_ping_probe, PingProbeConfig};
 use networker_tester::runner::rpm::{run_rpm_probe, RpmProbeConfig};
 use networker_tester::runner::throughput::{
     run_download_probe, run_upload_probe, run_webdownload_probe, run_webupload_probe,
@@ -490,6 +493,157 @@ async fn rpm_probe_reports_latency_under_load() {
         "factor must equal loaded/unloaded avg"
     );
     assert!(factor > 0.0);
+}
+
+/// ICMP echo (`ping`) against loopback: asserts the STRUCTURE of the result
+/// (per-probe RTTs recorded, aggregates consistent), not RTT magnitudes.
+/// SKIPs gracefully where the environment forbids unprivileged ICMP sockets
+/// (Linux with a restrictive `ping_group_range`, Windows).
+#[tokio::test]
+async fn ping_probe_loopback_structure() {
+    let cfg = PingProbeConfig {
+        target_host: "127.0.0.1".into(),
+        probe_count: 4,
+        timeout_ms: 2000,
+        payload_size: 56,
+    };
+    let attempt = run_ping_probe(Uuid::new_v4(), 0, &cfg).await;
+
+    if !attempt.success
+        && attempt
+            .error
+            .as_ref()
+            .is_some_and(|e| e.category == ErrorCategory::Config)
+    {
+        eprintln!(
+            "SKIP ping_probe_loopback_structure: unprivileged ICMP unavailable: {:?}",
+            attempt.error
+        );
+        return;
+    }
+
+    assert!(attempt.success, "ping failed: {:?}", attempt.error);
+    assert_eq!(attempt.protocol, Protocol::Ping);
+    assert_eq!(attempt.protocol.to_string(), "ping");
+    let p = attempt.ping.expect("ping result missing");
+    assert_eq!(p.probe_count, 4);
+    assert!(p.success_count > 0, "no echoes on loopback");
+    assert_eq!(p.probe_rtts_ms.len(), 4);
+    assert!(p.rtt_avg_ms > 0.0);
+    assert!(p.rtt_p95_ms >= p.rtt_min_ms);
+    assert!(p.loss_percent < 100.0);
+    assert_eq!(p.remote_addr, "127.0.0.1");
+}
+
+/// Hop discovery (`path`) against loopback: Linux discovers the single
+/// loopback hop with its address via IP_RECVERR; degraded platforms report
+/// hop_count 1 with an EMPTY hop list (honest estimate). SKIPs when even
+/// loopback ICMP errors are filtered.
+#[tokio::test]
+async fn path_probe_loopback_one_hop_or_honest_degradation() {
+    let cfg = PathProbeConfig {
+        target_host: "127.0.0.1".into(),
+        max_ttl: 4,
+        per_hop_timeout_ms: 1000,
+        ..Default::default()
+    };
+    let attempt = run_path_probe(Uuid::new_v4(), 0, &cfg).await;
+    let Some(p) = attempt.path.as_ref() else {
+        panic!("path result missing: {:?}", attempt.error);
+    };
+
+    if !p.destination_reached {
+        eprintln!(
+            "SKIP path_probe_loopback_one_hop_or_honest_degradation: loopback ICMP \
+             not observable (method={}, hops={:?})",
+            p.method, p.hops
+        );
+        return;
+    }
+
+    assert!(attempt.success, "path failed: {:?}", attempt.error);
+    assert_eq!(attempt.protocol, Protocol::Path);
+    assert_eq!(attempt.protocol.to_string(), "path");
+    assert_eq!(p.hop_count, Some(1), "loopback is exactly one hop");
+    assert!(p.destination_rtt_ms.unwrap_or(0.0) > 0.0);
+    assert!(!p.method.is_empty(), "method must always be recorded");
+    if p.method == "udp-ttl-estimate" {
+        // Degraded mode must not fabricate hops.
+        assert!(
+            p.hops.is_empty(),
+            "estimate mode fabricated hops: {:?}",
+            p.hops
+        );
+    } else {
+        assert_eq!(p.hops.len(), 1, "full trace should list the loopback hop");
+        assert_eq!(p.hops[0].addr.as_deref(), Some("127.0.0.1"));
+        assert!(p.hops[0].rtt_ms.unwrap_or(0.0) > 0.0);
+    }
+}
+
+/// IPv4-vs-IPv6 (`dualstack`) against the in-process endpoint via
+/// `localhost`: the IPv4 leg must complete; the IPv6 leg is attempted only
+/// when localhost has AAAA records and may fail (endpoint binds v4) — which
+/// must NOT fail the attempt (one working family = success). Asserts
+/// structure, not timing magnitudes.
+#[tokio::test]
+async fn dualstack_probe_compares_families() {
+    let ep = Endpoint::start().await;
+    let target = url::Url::parse(&format!("http://localhost:{}/health", ep.http_port)).unwrap();
+    let cfg = RunConfig {
+        dns_enabled: true,
+        timeout_ms: 10_000,
+        ..Default::default()
+    };
+
+    let attempt = run_dualstack_probe(Uuid::new_v4(), 0, &target, &cfg).await;
+
+    assert_eq!(attempt.protocol, Protocol::DualStack);
+    assert_eq!(attempt.protocol.to_string(), "dualstack");
+    let d = attempt
+        .dualstack
+        .as_ref()
+        .expect("dualstack result missing");
+
+    // IPv4 leg: localhost → 127.0.0.1 → in-process endpoint must answer.
+    assert!(d.ipv4.attempted, "localhost always has an A record");
+    assert!(
+        d.ipv4.success,
+        "ipv4 leg failed against the endpoint: {:?}",
+        d.ipv4.error
+    );
+    assert!(d.ipv4.total_ms.unwrap_or(0.0) > 0.0);
+    assert!(d.ipv4.tcp_ms.unwrap_or(-1.0) >= 0.0, "tcp phase recorded");
+
+    // One working family = attempt success, regardless of the v6 leg.
+    assert!(attempt.success, "dualstack failed: {:?}", attempt.error);
+
+    // IPv6 leg: honest either way — absent (no AAAA), failed (endpoint not
+    // listening on ::1) with an error recorded, or fully successful.
+    if d.ipv6.attempted {
+        if d.ipv6.success {
+            assert!(d.ipv6.total_ms.unwrap_or(0.0) > 0.0);
+        } else {
+            assert!(d.ipv6.error.is_some(), "failed leg must say why");
+            assert!(
+                d.ipv6.total_ms.is_none(),
+                "failed leg must not report a total"
+            );
+        }
+    } else {
+        assert!(d.ipv6.error.is_some(), "absent leg must say why");
+    }
+
+    // Comparison fields only when both legs completed.
+    if d.ipv4.success && d.ipv6.success {
+        assert!(d.faster_family.is_some());
+        assert!(d.delta_ms.unwrap_or(-1.0) >= 0.0);
+    } else {
+        assert!(d.faster_family.is_none());
+        assert!(d.delta_ms.is_none());
+    }
+    assert!(!d.happy_eyeballs_verdict.is_empty());
+    assert!((d.happy_eyeballs_grace_ms - 250.0).abs() < f64::EPSILON);
 }
 
 #[tokio::test]

@@ -107,6 +107,9 @@ fn make_run() -> TestRun {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         }],
     }
 }
@@ -194,6 +197,9 @@ fn make_http_attempt(success: bool, ttfb: f64, total: f64) -> RequestAttempt {
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 // ─────────────────────────────────────────────────────────────────────────
@@ -285,6 +291,9 @@ fn make_attempt(proto: Protocol, success: bool) -> RequestAttempt {
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 

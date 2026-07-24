@@ -778,6 +778,9 @@ mod real {
             }),
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         }
     }
 
@@ -892,6 +895,9 @@ mod real {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         }
     }
 
@@ -1138,6 +1144,9 @@ mod stub {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         }
     }
 }

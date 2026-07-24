@@ -1095,6 +1095,9 @@ fn metric_unit_for_protocol(protocol: &Protocol) -> &'static str {
     if matches!(protocol, Protocol::Rpm) {
         // Round-trips per minute under load (higher is better).
         "RPM"
+    } else if matches!(protocol, Protocol::Path) {
+        // Path length, not a duration.
+        "hops"
     } else if protocol_is_throughput(protocol) {
         "MB/s"
     } else {
@@ -1320,6 +1323,9 @@ mod tests {
                 browser: None,
                 http_stack: None,
                 rpm: None,
+                ping: None,
+                path: None,
+                dualstack: None,
             }],
         }
     }
@@ -1572,6 +1578,9 @@ mod tests {
                 browser: None,
                 http_stack: None,
                 rpm: None,
+                ping: None,
+                path: None,
+                dualstack: None,
             })
             .collect();
         let run = TestRun {
@@ -1751,6 +1760,9 @@ mod tests {
                 browser: None,
                 http_stack: None,
                 rpm: None,
+                ping: None,
+                path: None,
+                dualstack: None,
             })
             .collect();
         let run = TestRun {

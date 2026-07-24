@@ -115,6 +115,9 @@ fn sample_run() -> TestRun {
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     };
 
     TestRun {

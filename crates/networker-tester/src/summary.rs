@@ -60,6 +60,9 @@ pub fn print_summary(run: &TestRun) {
         Protocol::Tcp,
         Protocol::Udp,
         Protocol::Rpm,
+        Protocol::Ping,
+        Protocol::Path,
+        Protocol::DualStack,
         Protocol::Dns,
         Protocol::Tls,
         Protocol::TlsResume,
@@ -204,6 +207,11 @@ pub fn print_summary(run: &TestRun) {
     // rpm latency-under-load breakdown — unloaded vs loaded RTT, bufferbloat
     // factor, and RPM. Only rendered when an rpm attempt produced a result.
     print_rpm_summary(run);
+
+    // path hop table and dualstack family comparison — rendered only when
+    // those probes produced results.
+    print_path_summary(run);
+    print_dualstack_summary(run);
 
     // Per-record-type DNS detail (dns mode) and certificate/OCSP detail
     // (tls mode) — rendered only when the probes captured the extra depth.
@@ -401,6 +409,120 @@ fn print_rpm_summary(run: &TestRun) {
         factor = fmt(avg_opt(&|r| r.bufferbloat_factor), "x"),
         mbps = fmt(avg_opt(&|r| r.load_throughput_mbps), " MB/s"),
     );
+}
+
+/// Render the `path` hop table: per-hop router address + RTT on platforms
+/// where hop addresses are observable unprivileged (Linux `IP_RECVERR`), or
+/// the honest hop-count estimate + reachability line elsewhere. Shows the
+/// FIRST attempt's trace (the path rarely changes between attempts of one
+/// run; per-attempt data is in the JSON output).
+fn print_path_summary(run: &TestRun) {
+    let Some(p) = run
+        .attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::Path)
+        .find_map(|a| a.path.as_ref())
+    else {
+        return;
+    };
+
+    println!();
+    println!(" Path to {} (method: {})", p.remote_addr, p.method);
+    println!("──────────────────────────────────────────");
+    for hop in &p.hops {
+        let addr = hop.addr.as_deref().unwrap_or("*");
+        let rtt = hop
+            .rtt_ms
+            .map(|r| format!("{r:>8.2}ms"))
+            .unwrap_or_else(|| format!("{:>10}", "*"));
+        println!("   {idx:>3}  {addr:<40} {rtt}", idx = hop.index);
+    }
+    if p.hops.is_empty() {
+        println!("   (hop addresses not observable unprivileged on this platform)");
+    }
+    let hops = p
+        .hop_count
+        .map(|h| h.to_string())
+        .unwrap_or_else(|| "unknown".into());
+    let dest_rtt = p
+        .destination_rtt_ms
+        .map(|r| format!(", RTT {r:.2}ms"))
+        .unwrap_or_default();
+    println!(
+        "   → hops: {hops}  |  destination {}{dest_rtt}",
+        if p.destination_reached {
+            "reached"
+        } else {
+            "NOT reached"
+        },
+    );
+}
+
+/// Render the `dualstack` IPv4-vs-IPv6 comparison: per-phase timing side by
+/// side, which family was faster (+delta), and the happy-eyeballs verdict.
+/// Averages phase timings across all dualstack attempts that carry a result.
+fn print_dualstack_summary(run: &TestRun) {
+    let results: Vec<&crate::metrics::DualStackResult> = run
+        .attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::DualStack)
+        .filter_map(|a| a.dualstack.as_ref())
+        .collect();
+    if results.is_empty() {
+        return;
+    }
+
+    let avg = |f: &dyn Fn(&crate::metrics::DualStackResult) -> Option<f64>| -> Option<f64> {
+        let vals: Vec<f64> = results.iter().filter_map(|r| f(r)).collect();
+        (!vals.is_empty()).then(|| vals.iter().sum::<f64>() / vals.len() as f64)
+    };
+    let fmt = |v: Option<f64>| v.map_or_else(|| format!("{:>10}", "—"), |x| format!("{x:>8.2}ms"));
+    let leg_status = |attempted: bool, success: bool| {
+        if !attempted {
+            "absent"
+        } else if success {
+            "ok"
+        } else {
+            "FAILED"
+        }
+    };
+
+    // Status/verdict come from the first result (stable across attempts).
+    let first = results[0];
+
+    println!();
+    println!(
+        " Dual-stack comparison (avg over {n} attempt{s})",
+        n = results.len(),
+        s = if results.len() == 1 { "" } else { "s" },
+    );
+    println!("──────────────────────────────────────────────────────");
+    println!(
+        "              │       IPv4 │       IPv6\n   Status     │ {v4:>10} │ {v6:>10}",
+        v4 = leg_status(first.ipv4.attempted, first.ipv4.success),
+        v6 = leg_status(first.ipv6.attempted, first.ipv6.success),
+    );
+    let row = |label: &str,
+               f4: &dyn Fn(&crate::metrics::DualStackResult) -> Option<f64>,
+               f6: &dyn Fn(&crate::metrics::DualStackResult) -> Option<f64>| {
+        println!(
+            "   {label:<10} │ {v4:>10} │ {v6:>10}",
+            v4 = fmt(avg(f4)),
+            v6 = fmt(avg(f6)),
+        );
+    };
+    row("DNS", &|r| r.ipv4.dns_ms, &|r| r.ipv6.dns_ms);
+    row("TCP", &|r| r.ipv4.tcp_ms, &|r| r.ipv6.tcp_ms);
+    row("TLS", &|r| r.ipv4.tls_ms, &|r| r.ipv6.tls_ms);
+    row("TTFB", &|r| r.ipv4.ttfb_ms, &|r| r.ipv6.ttfb_ms);
+    row("Total", &|r| r.ipv4.total_ms, &|r| r.ipv6.total_ms);
+    match (&first.faster_family, avg(&|r| r.delta_ms)) {
+        (Some(fam), Some(delta)) => {
+            println!("   → faster family: {fam} by {delta:.2}ms avg");
+        }
+        _ => println!("   → no comparison (only one family completed)"),
+    }
+    println!("   → happy eyeballs: {}", first.happy_eyeballs_verdict);
 }
 
 /// Render per-record-type DNS depth for the standalone `dns` probe mode:

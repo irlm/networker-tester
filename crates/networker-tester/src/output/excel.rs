@@ -857,6 +857,9 @@ mod tests {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         };
 
         let udp_attempt = RequestAttempt {
@@ -891,6 +894,9 @@ mod tests {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         };
 
         let udp_throughput_attempt = RequestAttempt {
@@ -924,6 +930,9 @@ mod tests {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         };
 
         let pageload_attempt = RequestAttempt {
@@ -961,6 +970,9 @@ mod tests {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         };
 
         let error_attempt = RequestAttempt {
@@ -989,6 +1001,9 @@ mod tests {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         };
 
         TestRun {
@@ -1184,6 +1199,9 @@ mod tests {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         };
 
         let upload_attempt = RequestAttempt {
@@ -1227,6 +1245,9 @@ mod tests {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         };
 
         let run = TestRun {
