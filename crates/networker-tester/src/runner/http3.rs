@@ -531,6 +531,17 @@ mod real {
             http_status_code: None,
         };
 
+        // Content negotiation metadata (gap #9), from the captured h3 headers.
+        let content_encoding = response_headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("content-encoding"))
+            .map(|(_, v)| v.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty());
+        let content_length_header = response_headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+            .and_then(|(_, v)| v.trim().parse::<u64>().ok());
+
         RequestAttempt {
             attempt_id,
             run_id,
@@ -561,6 +572,10 @@ mod real {
                 csw_voluntary,
                 csw_involuntary,
                 http_handshake_ms: None,
+                // HTTP/3 runs over QUIC/UDP — TCP kernel stats do not apply.
+                socket_stats: None,
+                content_encoding,
+                content_length_header,
             }),
             udp: None,
             error: None,

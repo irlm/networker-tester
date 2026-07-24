@@ -266,6 +266,11 @@ pub async fn run_curl_probe(
         csw_voluntary: None,
         csw_involuntary: None,
         http_handshake_ms: None,
+        // curl owns the socket and --write-out exposes no headers, so neither
+        // post-transfer kernel stats nor content metadata are available.
+        socket_stats: None,
+        content_encoding: None,
+        content_length_header: None,
     };
     let success = parsed.code > 0 && parsed.code < 400;
 

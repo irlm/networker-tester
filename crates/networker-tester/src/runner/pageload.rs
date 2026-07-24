@@ -677,6 +677,9 @@ async fn run_h1_keepalive_connection(
                     csw_voluntary: None,
                     csw_involuntary: None,
                     http_handshake_ms: None,
+                    socket_stats: None,
+                    content_encoding: crate::runner::http::extract_content_meta(&headers).0,
+                    content_length_header: crate::runner::http::extract_content_meta(&headers).1,
                 };
                 (Some(http), st, ttfb_ms)
             }
@@ -1064,6 +1067,9 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         csw_voluntary: None,
         csw_involuntary: None,
         http_handshake_ms: None,
+        socket_stats: None,
+        content_encoding: crate::runner::http::extract_content_meta(&manifest_headers).0,
+        content_length_header: crate::runner::http::extract_content_meta(&manifest_headers).1,
     };
 
     // ── Asset requests (all in-flight simultaneously over the H2 connection) ──
@@ -1592,6 +1598,9 @@ pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         csw_voluntary: None,
         csw_involuntary: None,
         http_handshake_ms: None,
+        socket_stats: None,
+        content_encoding: crate::runner::http::extract_content_meta(&manifest_headers).0,
+        content_length_header: crate::runner::http::extract_content_meta(&manifest_headers).1,
     };
 
     // ── Asset requests: send + receive all concurrently (like a real browser) ──
@@ -2180,6 +2189,9 @@ async fn fetch_h2_pageload(
         csw_voluntary: None,
         csw_involuntary: None,
         http_handshake_ms: None,
+        socket_stats: None,
+        content_encoding: crate::runner::http::extract_content_meta(&manifest_headers).0,
+        content_length_header: crate::runner::http::extract_content_meta(&manifest_headers).1,
     };
 
     // ── Asset requests ──
@@ -2724,6 +2736,9 @@ async fn fetch_h3_pageload(
         csw_voluntary: None,
         csw_involuntary: None,
         http_handshake_ms: None,
+        socket_stats: None,
+        content_encoding: crate::runner::http::extract_content_meta(&manifest_headers).0,
+        content_length_header: crate::runner::http::extract_content_meta(&manifest_headers).1,
     };
 
     // ── Asset requests ──

@@ -192,6 +192,11 @@ pub fn print_summary(run: &TestRun) {
         }
     }
 
+    // Post-transfer TCP kernel stats note (gap #5): sampled after each
+    // HTTP-family transfer completes. Only printed when segments actually
+    // retransmitted — silence means clean transfers.
+    print_retransmission_note(run);
+
     // sdkprobe network-vs-server latency split — the core "find the main
     // issue" breakdown. Only rendered when a sdkprobe run produced a split.
     print_sdk_split(run);
@@ -218,6 +223,43 @@ pub fn print_summary(run: &TestRun) {
     }
 
     println!("══════════════════════════════════════════════\n");
+}
+
+/// Warn when post-transfer TCP kernel stats (`http.socket_stats`, sampled on a
+/// dup of the probe socket after the transfer) show retransmitted segments —
+/// the single most common explanation for a throughput anomaly. Quiet when no
+/// attempt retransmitted or the platform reports no kernel stats (Windows).
+fn print_retransmission_note(run: &TestRun) {
+    let mut attempts_with_retrans = 0usize;
+    let mut total_retrans: u64 = 0;
+    let mut algos: BTreeSet<String> = BTreeSet::new();
+    for a in &run.attempts {
+        let Some(s) = a.http.as_ref().and_then(|h| h.socket_stats.as_ref()) else {
+            continue;
+        };
+        if let Some(algo) = &s.congestion_algorithm {
+            algos.insert(algo.clone());
+        }
+        let n = s.total_retrans.unwrap_or(0).max(s.retransmits.unwrap_or(0));
+        if n > 0 {
+            attempts_with_retrans += 1;
+            total_retrans += n as u64;
+        }
+    }
+    if attempts_with_retrans > 0 {
+        let algo_note = if algos.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " (congestion control: {})",
+                algos.into_iter().collect::<Vec<_>>().join(", ")
+            )
+        };
+        println!(
+            "\n ⚠ TCP retransmissions during transfer: {total_retrans} segment(s) across \
+             {attempts_with_retrans} attempt(s){algo_note} — throughput numbers may reflect loss recovery"
+        );
+    }
 }
 
 /// Render the sdkprobe NETWORK-vs-SERVER latency split: the LagHound report's
