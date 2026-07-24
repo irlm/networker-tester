@@ -15,7 +15,10 @@ import { usePerfLogFlush } from './hooks/usePerfLogFlush';
 const HelpPanel = lazy(() => import('./components/docs/HelpPanel'));
 const CommandPalette = lazy(() => import('./components/docs/CommandPalette'));
 
-function lazyPage<TModule extends Record<string, ComponentType<unknown>>>(
+// Constraint is ComponentType<never> (the contravariant supertype of every
+// component type) so pages may also export prop-taking subcomponents for tests
+// (e.g. RunDetailPage's AttemptRow) without breaking the module constraint.
+function lazyPage<TModule extends Record<string, ComponentType<never>>>(
   load: () => Promise<TModule>,
   exportName: keyof TModule,
 ) {
