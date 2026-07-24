@@ -46,6 +46,8 @@ fn request_attempt(success: bool, retry_count: u32) -> RequestAttempt {
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 
@@ -101,6 +103,8 @@ fn measured_http_attempt(
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 
@@ -135,6 +139,8 @@ fn failed_http_attempt(
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 

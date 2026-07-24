@@ -406,6 +406,8 @@ pub async fn run_dns_probe(
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         },
         Err(err) => RequestAttempt {
             attempt_id,
@@ -431,6 +433,8 @@ pub async fn run_dns_probe(
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         },
     }
 }

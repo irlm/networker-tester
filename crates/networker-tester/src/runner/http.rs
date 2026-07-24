@@ -178,6 +178,8 @@ pub async fn run_probe(
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         },
     }
 }
@@ -426,6 +428,8 @@ async fn run_http_or_tcp(
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         };
     }
 
@@ -655,6 +659,8 @@ async fn run_http_or_tcp(
                 ping: None,
                 path: None,
                 dualstack: None,
+                websocket: None,
+                pmtud: None,
             }
         }
         Err(e) => {
@@ -1446,6 +1452,8 @@ fn failed_attempt(
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 

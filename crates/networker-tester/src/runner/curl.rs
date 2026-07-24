@@ -318,6 +318,8 @@ pub async fn run_curl_probe(
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 
@@ -432,6 +434,8 @@ fn make_failed(
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 

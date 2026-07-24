@@ -158,6 +158,8 @@ pub async fn run_dualstack_probe(
         ping: None,
         path: None,
         dualstack: Some(result),
+        websocket: None,
+        pmtud: None,
     }
 }
 
@@ -291,6 +293,8 @@ fn dualstack_failed(
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 

@@ -74,6 +74,8 @@ public static class PlatformEndpoints
         new("ping", "Ping", "ICMP echo", "ICMP echo RTT probe — measures network-layer RTT, jitter, and packet loss without TCP/UDP (unprivileged ICMP sockets)", "Network", "any"),
         new("path", "Path", "Hop discovery", "Traceroute-style probe — UDP probes with rising TTL map the hops toward the target; degrades to an honest hop-count estimate where ICMP errors are not readable unprivileged", "Network", "any"),
         new("dualstack", "Dual Stack", "IPv4 vs IPv6", "Resolves A and AAAA separately, runs an HTTP GET pinned to each family, and compares per-phase timing with a happy-eyeballs verdict", "Network", "any"),
+        new("websocket", "WebSocket", "Msg round-trip", "WebSocket probe — DNS/TCP/TLS ladder, HTTP 101 upgrade time, then echo-message RTT, jitter, and loss over the open socket", "Network", "networker-endpoint"),
+        new("pmtud", "Path MTU", "DF-bit discovery", "Path-MTU discovery — binary-searches DF-flagged UDP datagram sizes toward the target; reads ICMP fragmentation-needed where the platform allows and never fabricates an MTU", "Network", "any"),
         // HTTP
         new("http1", "HTTP/1.1", "Single request", "Full HTTP/1.1 request: DNS + TCP + TLS + request/response", "HTTP", "any"),
         new("http2", "HTTP/2", "Multiplexed", "HTTP/2 over TLS with ALPN h2 negotiation", "HTTP", "any"),

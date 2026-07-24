@@ -1244,6 +1244,8 @@ mod tests {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         };
         let probe = protocol_probe_from_attempt(Uuid::new_v4(), "h1", 1, attempt);
         assert!(!probe.succeeded);

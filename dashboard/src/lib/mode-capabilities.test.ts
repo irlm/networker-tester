@@ -12,9 +12,10 @@ const sdk: TargetCapabilities = { kind: 'sdk' };
 
 describe('requirementOf', () => {
   it('classifies the network + HTTP primitives as any-target', () => {
-    // ping (ICMP echo), path (hop discovery), and dualstack (IPv4-vs-IPv6)
+    // ping (ICMP echo), path (hop discovery), dualstack (IPv4-vs-IPv6), and
+    // pmtud (DF-bit path-MTU discovery — concludes from ICMP errors alone)
     // probe any reachable host — no endpoint routes required.
-    for (const m of ['tcp', 'dns', 'tls', 'tlsresume', 'native', 'http1', 'http2', 'http3', 'curl', 'ping', 'path', 'dualstack']) {
+    for (const m of ['tcp', 'dns', 'tls', 'tlsresume', 'native', 'http1', 'http2', 'http3', 'curl', 'ping', 'path', 'dualstack', 'pmtud']) {
       expect(requirementOf(m)).toBe('any');
     }
   });
@@ -29,6 +30,12 @@ describe('requirementOf', () => {
     // rpm saturates the link via the endpoint /download route while probing
     // its UDP echo server — an arbitrary URL runs neither.
     expect(requirementOf('rpm')).toBe('networker-endpoint');
+  });
+
+  it('classifies websocket as needing a networker-endpoint', () => {
+    // The message-RTT phase needs the endpoint's /ws echo route — an
+    // arbitrary URL has no frame-echoing WebSocket server.
+    expect(requirementOf('websocket')).toBe('networker-endpoint');
   });
 
   it('classifies udp / page-load / browser as any-target (the URL Probe runs them against raw URLs)', () => {

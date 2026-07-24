@@ -186,6 +186,8 @@ pub async fn run_ping_probe(
         ping: Some(result),
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 
@@ -243,6 +245,8 @@ fn ping_failed(
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 

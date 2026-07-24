@@ -76,6 +76,8 @@ pub(crate) fn bare_attempt(run_id: Uuid) -> RequestAttempt {
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 
@@ -210,6 +212,8 @@ pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 

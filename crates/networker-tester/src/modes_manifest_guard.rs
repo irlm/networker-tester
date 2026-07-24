@@ -67,6 +67,8 @@ fn manifest_id_of(p: &Protocol) -> &'static str {
         Protocol::Ping => "ping",
         Protocol::Path => "path",
         Protocol::DualStack => "dualstack",
+        Protocol::WebSocket => "websocket",
+        Protocol::Pmtud => "pmtud",
         Protocol::Dns => "dns",
         Protocol::Tls => "tls",
         Protocol::TlsResume => "tlsresume",

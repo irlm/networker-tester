@@ -111,6 +111,8 @@ fn make_run() -> TestRun {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         }],
     }
 }
@@ -201,6 +203,8 @@ fn make_http_attempt(success: bool, ttfb: f64, total: f64) -> RequestAttempt {
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 // ─────────────────────────────────────────────────────────────────────────
@@ -296,6 +300,8 @@ fn make_attempt(proto: Protocol, success: bool) -> RequestAttempt {
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 

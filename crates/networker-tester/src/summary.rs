@@ -63,6 +63,8 @@ pub fn print_summary(run: &TestRun) {
         Protocol::Ping,
         Protocol::Path,
         Protocol::DualStack,
+        Protocol::WebSocket,
+        Protocol::Pmtud,
         Protocol::Dns,
         Protocol::Tls,
         Protocol::TlsResume,
@@ -220,6 +222,11 @@ pub fn print_summary(run: &TestRun) {
     // HTTP/3 QUIC session-resumption / 0-RTT note — only rendered when an
     // http3 attempt actually carried the measurement.
     print_h3_zero_rtt(run);
+
+    // websocket upgrade + message-RTT breakdown and pmtud path-MTU verdict —
+    // rendered only when those probes produced results.
+    print_websocket_summary(run);
+    print_pmtud_summary(run);
 
     // Protocol comparison table when any pageload or browser variant is present
     let has_pageload = run.attempts.iter().any(|a| {
@@ -910,4 +917,124 @@ pub fn copy_default_css(out_dir: &Path) {
     } else {
         let _ = std::fs::write(&dest, crate::output::html::FALLBACK_CSS);
     }
+}
+
+/// Render the `websocket` breakdown: connection ladder (DNS/TCP/TLS), the
+/// one-time HTTP 101 upgrade cost, and the steady-state message-RTT
+/// distribution. Averages across all websocket attempts that carry a result.
+fn print_websocket_summary(run: &TestRun) {
+    let attempts: Vec<&RequestAttempt> = run
+        .attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::WebSocket && a.websocket.is_some())
+        .collect();
+    if attempts.is_empty() {
+        return;
+    }
+
+    let avg = |f: &dyn Fn(&RequestAttempt) -> Option<f64>| -> Option<f64> {
+        let vals: Vec<f64> = attempts.iter().filter_map(|a| f(a)).collect();
+        (!vals.is_empty()).then(|| vals.iter().sum::<f64>() / vals.len() as f64)
+    };
+    let ws = |f: &dyn Fn(&crate::metrics::WebSocketResult) -> Option<f64>| -> Option<f64> {
+        avg(&|a| a.websocket.as_ref().and_then(f))
+    };
+    let fmt = |v: Option<f64>| v.map_or_else(|| "—".to_string(), |x| format!("{x:.2}ms"));
+
+    let echoes: u32 = attempts
+        .iter()
+        .filter_map(|a| a.websocket.as_ref())
+        .map(|w| w.echo_count)
+        .sum();
+    let sent: u32 = attempts
+        .iter()
+        .filter_map(|a| a.websocket.as_ref())
+        .map(|w| w.message_count)
+        .sum();
+
+    println!();
+    println!(
+        " WebSocket (avg over {n} attempt{s})",
+        n = attempts.len(),
+        s = if attempts.len() == 1 { "" } else { "s" },
+    );
+    println!("──────────────────────────────────────────");
+    let line = |label: &str, v: Option<f64>| {
+        println!("   {label:<16} {val:>12}", val = fmt(v));
+    };
+    line("DNS", avg(&|a| a.dns.as_ref().map(|d| d.duration_ms)));
+    line(
+        "TCP connect",
+        avg(&|a| a.tcp.as_ref().map(|t| t.connect_duration_ms)),
+    );
+    line(
+        "TLS handshake",
+        avg(&|a| a.tls.as_ref().map(|t| t.handshake_duration_ms)),
+    );
+    line("Upgrade (101)", ws(&|w| Some(w.upgrade_ms)));
+    // Message RTTs only over attempts that actually received echoes — a
+    // fully-lost attempt's 0.0 sentinel is not a measurement (V11).
+    let echoed = |f: &dyn Fn(&crate::metrics::WebSocketResult) -> f64| -> Option<f64> {
+        ws(&|w| (w.echo_count > 0).then(|| f(w)))
+    };
+    line("Msg RTT min", echoed(&|w| w.msg_rtt_min_ms));
+    line("Msg RTT avg", echoed(&|w| w.msg_rtt_avg_ms));
+    line("Msg RTT p95", echoed(&|w| w.msg_rtt_p95_ms));
+    line("Msg jitter", echoed(&|w| w.jitter_ms));
+    println!(
+        "   → echoes: {echoes}/{sent} ({loss:.1}% loss)",
+        loss = if sent > 0 {
+            100.0 * (sent - echoes) as f64 / sent as f64
+        } else {
+            0.0
+        },
+    );
+}
+
+/// Render the `pmtud` verdict: discovered path MTU (flagged when it is only a
+/// lower bound), the ICMP-reported next-hop MTU, the local interface MTU for
+/// contrast, and the method that produced the number. Shows the FIRST
+/// attempt's result (the path MTU rarely changes between attempts of one
+/// run; per-attempt data is in the JSON output).
+fn print_pmtud_summary(run: &TestRun) {
+    let Some(p) = run
+        .attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::Pmtud)
+        .find_map(|a| a.pmtud.as_ref())
+    else {
+        return;
+    };
+
+    println!();
+    println!(" Path MTU to {} (method: {})", p.remote_addr, p.method);
+    println!("──────────────────────────────────────────");
+    match (p.path_mtu, p.lower_bound_only) {
+        (Some(mtu), false) => {
+            println!(
+                "   path MTU: {mtu} bytes (max unfragmented payload {payload} + {hdr} header)",
+                payload = p.max_unfragmented_payload.unwrap_or(0),
+                hdr = p.header_bytes,
+            );
+        }
+        (Some(mtu), true) => {
+            println!(
+                "   path MTU: ≥{mtu} bytes (search ceiling fit unfragmented — true MTU may be higher)"
+            );
+        }
+        (None, _) => {
+            println!("   path MTU: unknown — no echo, no ICMP, no send errors (black hole or silent path)");
+        }
+    }
+    if let Some(m) = p.icmp_mtu {
+        println!("   ICMP next-hop MTU: {m} bytes");
+    }
+    if let Some(m) = p.local_mtu {
+        let note = match p.path_mtu {
+            Some(pm) if pm < m => " — path is narrower than the local link",
+            _ => "",
+        };
+        println!("   local interface MTU: {m} bytes{note}");
+    }
+    println!("   → {probes} DF probe(s) sent", probes = p.probes_sent);
 }

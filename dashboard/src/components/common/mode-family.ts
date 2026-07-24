@@ -15,9 +15,10 @@ export type ModeFamily = 'net' | 'http' | 'thru' | 'page' | 'other';
 
 export const FAMILY_BY_MODE: Record<string, ModeFamily> = {
   // Network primitives (rpm = latency-under-load / bufferbloat; ping = ICMP
-  // echo; path = hop discovery; dualstack = IPv4-vs-IPv6 comparison)
+  // echo; path = hop discovery; dualstack = IPv4-vs-IPv6 comparison;
+  // websocket = upgrade + message RTT; pmtud = DF-bit path-MTU discovery)
   tcp: 'net', dns: 'net', tls: 'net', tlsresume: 'net', native: 'net', udp: 'net', rpm: 'net',
-  ping: 'net', path: 'net', dualstack: 'net',
+  ping: 'net', path: 'net', dualstack: 'net', websocket: 'net', pmtud: 'net',
   // HTTP semantics
   http1: 'http', http2: 'http', http3: 'http', curl: 'http', sdkprobe: 'http',
   // Throughput

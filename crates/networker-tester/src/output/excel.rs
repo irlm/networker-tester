@@ -864,6 +864,8 @@ mod tests {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         };
 
         let udp_attempt = RequestAttempt {
@@ -901,6 +903,8 @@ mod tests {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         };
 
         let udp_throughput_attempt = RequestAttempt {
@@ -937,6 +941,8 @@ mod tests {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         };
 
         let pageload_attempt = RequestAttempt {
@@ -977,6 +983,8 @@ mod tests {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         };
 
         let error_attempt = RequestAttempt {
@@ -1008,6 +1016,8 @@ mod tests {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         };
 
         TestRun {
@@ -1208,6 +1218,8 @@ mod tests {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         };
 
         let upload_attempt = RequestAttempt {
@@ -1254,6 +1266,8 @@ mod tests {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         };
 
         let run = TestRun {

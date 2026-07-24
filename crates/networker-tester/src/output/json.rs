@@ -1102,6 +1102,9 @@ fn metric_unit_for_protocol(protocol: &Protocol) -> &'static str {
     } else if matches!(protocol, Protocol::Path) {
         // Path length, not a duration.
         "hops"
+    } else if matches!(protocol, Protocol::Pmtud) {
+        // Discovered path MTU, not a duration.
+        "bytes"
     } else if protocol_is_throughput(protocol) {
         "MB/s"
     } else {
@@ -1331,6 +1334,8 @@ mod tests {
                 ping: None,
                 path: None,
                 dualstack: None,
+                websocket: None,
+                pmtud: None,
             }],
         }
     }
@@ -1586,6 +1591,8 @@ mod tests {
                 ping: None,
                 path: None,
                 dualstack: None,
+                websocket: None,
+                pmtud: None,
             })
             .collect();
         let run = TestRun {
@@ -1769,6 +1776,8 @@ mod tests {
                 ping: None,
                 path: None,
                 dualstack: None,
+                websocket: None,
+                pmtud: None,
             })
             .collect();
         let run = TestRun {

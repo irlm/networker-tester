@@ -41,6 +41,8 @@ public static class PerfPerCostLogic
             ["ping"] = FamilyNet,
             ["path"] = FamilyNet,
             ["dualstack"] = FamilyNet,
+            ["websocket"] = FamilyNet,
+            ["pmtud"] = FamilyNet,
             ["http1"] = FamilyHttp,
             ["http2"] = FamilyHttp,
             ["http3"] = FamilyHttp,

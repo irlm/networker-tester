@@ -122,6 +122,8 @@ fn sample_run() -> TestRun {
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     };
 
     TestRun {

@@ -22,7 +22,7 @@ pub struct Cli {
 
     // ── Modes ─────────────────────────────────────────────────────────────────
     /// Comma-separated probe modes:
-    /// tcp,http1,http2,http3,udp,rpm,ping,path,dualstack,download,download1,download2,download3,upload,upload1,upload2,upload3,webdownload,webupload,udpdownload,udpupload,
+    /// tcp,http1,http2,http3,udp,rpm,ping,path,dualstack,websocket,pmtud,download,download1,download2,download3,upload,upload1,upload2,upload3,webdownload,webupload,udpdownload,udpupload,
     /// dns,tls,tlsresume,native,curl,pageload,pageload1,pageload2,pageload3,browser,browser1,browser2,browser3.
     /// rpm: latency-under-load / bufferbloat probe (UDP echo RTT idle vs during a sustained
     ///   /download transfer; requires a networker-endpoint target).
@@ -32,6 +32,12 @@ pub struct Cli {
     ///   (IP_RECVERR), honest hop-count estimate elsewhere.
     /// dualstack: resolves A and AAAA separately, runs an HTTP GET pinned to IPv4 and to
     ///   IPv6, and compares per-phase timing with a happy-eyeballs (RFC 8305) verdict.
+    /// websocket: DNS + TCP + TLS ladder, HTTP 101 upgrade time, then echo-message RTT/
+    ///   jitter/loss against the endpoint's /ws route (message count/size/timeout follow
+    ///   --udp-probes / --udp-payload / --udp-timeout; requires a networker-endpoint target).
+    /// pmtud: path-MTU discovery via DF-bit UDP probing at binary-searched sizes toward the
+    ///   UDP echo port; Linux reads ICMP frag-needed (IP_RECVERR, next-hop MTU), macOS uses
+    ///   IP_DONTFRAG/EMSGSIZE, Windows reports a clean unsupported error.
     /// pageload: shorthand that runs pageload1+pageload2+pageload3 (all three HTTP versions).
     /// pageload1: HTTP/1.1 page-load (same as the original pageload single-version mode).
     /// browser: shorthand that runs browser1+browser2+browser3 (all three HTTP versions).

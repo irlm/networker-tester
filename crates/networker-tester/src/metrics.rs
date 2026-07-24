@@ -495,6 +495,12 @@ pub struct RequestAttempt {
     /// IPv4-vs-IPv6 comparison result (`dualstack` mode only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dualstack: Option<DualStackResult>,
+    /// WebSocket upgrade + message-RTT result (`websocket` mode only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub websocket: Option<WebSocketResult>,
+    /// Path-MTU discovery result (`pmtud` mode only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pmtud: Option<PmtudResult>,
 }
 
 impl RequestAttempt {
@@ -556,6 +562,22 @@ pub enum Protocol {
     /// (DNS/TCP/TLS/TTFB/total) with a happy-eyeballs (RFC 8305) verdict.
     /// One working family is a success; the other is reported absent/failed.
     DualStack,
+    /// WebSocket probe: full DNS + TCP + TLS timing ladder, then the HTTP 101
+    /// upgrade round-trip (`upgrade_ms`), then N echo messages against the
+    /// networker-endpoint's `/ws` route — per-message RTT min/avg/p95,
+    /// arrival-order jitter, and loss. Uses ws:// or wss:// derived from the
+    /// target scheme.
+    WebSocket,
+    /// Path-MTU discovery probe: UDP datagrams with the DF bit set at
+    /// binary-searched sizes toward the target. On Linux, ICMP
+    /// fragmentation-needed errors (with the next-hop MTU) are read from the
+    /// socket error queue unprivileged (`IP_RECVERR`); on macOS `IP_DONTFRAG`
+    /// relies on EMSGSIZE surfacing on the connected socket. Pairs with the
+    /// endpoint's UDP echo (port 9999) when available so unfragmented delivery
+    /// is positively confirmed; without any feedback the probe reports an
+    /// honest `path_mtu: None` — it never fabricates. Windows is reported as a
+    /// clean unsupported Config error.
+    Pmtud,
     /// Standalone DNS resolution probe — resolves the target host and records timing without TCP.
     Dns,
     /// Standalone TLS probe — DNS + TCP + TLS handshake only, no HTTP request.
@@ -621,6 +643,8 @@ impl std::fmt::Display for Protocol {
             Protocol::Ping => write!(f, "ping"),
             Protocol::Path => write!(f, "path"),
             Protocol::DualStack => write!(f, "dualstack"),
+            Protocol::WebSocket => write!(f, "websocket"),
+            Protocol::Pmtud => write!(f, "pmtud"),
             Protocol::Dns => write!(f, "dns"),
             Protocol::Tls => write!(f, "tls"),
             Protocol::TlsResume => write!(f, "tlsresume"),
@@ -722,6 +746,20 @@ impl Protocol {
                 "Dual Stack",
                 "IPv4 vs IPv6",
                 "Resolves A and AAAA separately, runs an HTTP GET pinned to each family, and compares per-phase timing with a happy-eyeballs verdict",
+                "Network",
+            ),
+            m(
+                "websocket",
+                "WebSocket",
+                "Msg round-trip",
+                "WebSocket probe — DNS/TCP/TLS ladder, HTTP 101 upgrade time, then echo-message RTT, jitter, and loss over the open socket",
+                "Network",
+            ),
+            m(
+                "pmtud",
+                "Path MTU",
+                "DF-bit discovery",
+                "Path-MTU discovery — binary-searches DF-flagged UDP datagram sizes toward the target; reads ICMP fragmentation-needed where the platform allows and never fabricates an MTU",
                 "Network",
             ),
             // HTTP
@@ -929,6 +967,8 @@ impl std::str::FromStr for Protocol {
             "ping" => Ok(Protocol::Ping),
             "path" => Ok(Protocol::Path),
             "dualstack" => Ok(Protocol::DualStack),
+            "websocket" => Ok(Protocol::WebSocket),
+            "pmtud" => Ok(Protocol::Pmtud),
             "dns" => Ok(Protocol::Dns),
             "tls" => Ok(Protocol::Tls),
             "tlsresume" | "tls-resume" => Ok(Protocol::TlsResume),
@@ -1539,6 +1579,90 @@ pub struct DualStackResult {
     pub started_at: DateTime<Utc>,
 }
 
+/// WebSocket probe result (`websocket` mode).
+///
+/// The connection phases (DNS/TCP/TLS) live in the attempt's `dns`/`tcp`/`tls`
+/// sub-results exactly like the `tls` probe; this struct carries what happens
+/// after the socket is up: the HTTP 101 upgrade round-trip and the echo
+/// message RTT distribution. Message RTTs share [`UdpResult`]'s aggregate
+/// semantics (min/avg/p95 via [`aggregate_udp_rtts`], RFC-3550-style
+/// arrival-order jitter, per-message RTTs with `None` for lost echoes).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebSocketResult {
+    /// ws:// or wss:// URL the probe connected to.
+    pub url: String,
+    /// HTTP 101 upgrade round-trip: client handshake request sent → server
+    /// 101 response processed (ms). Excludes DNS/TCP/TLS (reported separately).
+    pub upgrade_ms: f64,
+    /// Status code of the upgrade response (101 on success).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upgrade_status: Option<u16>,
+    /// Echo messages sent after the upgrade.
+    pub message_count: u32,
+    /// Echoes received (matched by embedded sequence id).
+    pub echo_count: u32,
+    /// 100 × (message_count − echo_count) / message_count.
+    pub loss_percent: f64,
+    pub msg_rtt_min_ms: f64,
+    pub msg_rtt_avg_ms: f64,
+    pub msg_rtt_p95_ms: f64,
+    /// Arrival-order jitter over received echoes (mean |Δ| of consecutive RTTs).
+    pub jitter_ms: f64,
+    /// Per-message RTT values (ms), `None` if the echo never arrived.
+    pub msg_rtts_ms: Vec<Option<f64>>,
+    /// Bytes per echo message payload.
+    pub payload_size: usize,
+    pub started_at: DateTime<Utc>,
+}
+
+/// Path-MTU discovery result (`pmtud` mode).
+///
+/// `method` records HOW the verdict was reached, because unprivileged
+/// capability differs per platform (same honesty contract as [`PathResult`]):
+/// - `"df-udp-echo/ip-recverr"` (Linux, echo replies observed): DF-flagged
+///   probes binary-searched with positive delivery confirmation from the
+///   endpoint's UDP echo; ICMP frag-needed (with next-hop MTU) read from the
+///   error queue tightens the bound.
+/// - `"df-icmp/ip-recverr"` (Linux, no echo service): verdict from ICMP
+///   fragmentation-needed errors alone — the classic PMTUD signal; works
+///   against targets that never answer.
+/// - `"df-dontfrag/udp-echo"` (macOS, echo replies observed): `IP_DONTFRAG`
+///   probes confirmed by echo; ICMP surfaces only as EMSGSIZE on the
+///   connected socket (no next-hop MTU value available).
+/// - `"df-dontfrag/emsgsize"` (macOS, no echo): EMSGSIZE-only evidence.
+/// - `"df-no-feedback"`: no echo, no ICMP, no send errors — `path_mtu` is
+///   `None` because nothing was measured (ICMP black hole or silent path).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PmtudResult {
+    /// Destination address the DF probes were aimed at.
+    pub remote_addr: String,
+    /// Discovered path MTU in bytes at the IP layer (largest unfragmented
+    /// payload + IP/UDP headers). `None` when no feedback allowed a verdict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_mtu: Option<u32>,
+    /// Largest UDP payload that traversed unfragmented (path_mtu − headers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_unfragmented_payload: Option<u32>,
+    /// DF-flagged datagrams sent during the search.
+    pub probes_sent: u32,
+    /// How the MTU was (or was not) determined — see the struct docs.
+    pub method: String,
+    /// Next-hop MTU reported by an ICMP fragmentation-needed message, when
+    /// one was observed (Linux error queue only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icmp_mtu: Option<u32>,
+    /// MTU of the default-route interface, for contrast with the path value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_mtu: Option<u32>,
+    /// IP + UDP header bytes assumed when converting payload ⇄ MTU
+    /// (28 for IPv4, 48 for IPv6).
+    pub header_bytes: u32,
+    /// True when the search confirmed its ceiling size without ever finding a
+    /// "too big" bound — the true path MTU may be larger than `path_mtu`.
+    pub lower_bound_only: bool,
+    pub started_at: DateTime<Utc>,
+}
+
 /// Page-load simulation result (pageload / pageload2 / pageload3 modes).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PageLoadResult {
@@ -2053,6 +2177,12 @@ pub fn primary_metric_label(proto: &Protocol) -> &'static str {
         // pick is diagnostic detail; the winning family's total is the number
         // a user experiences.
         Protocol::DualStack => "Total ms",
+        // Steady-state message round-trip is the probe's distinguishing
+        // number; the one-time upgrade cost is reported separately in the
+        // summary section.
+        Protocol::WebSocket => "Msg RTT avg ms",
+        // Bytes, not milliseconds — the discovered path MTU itself.
+        Protocol::Pmtud => "Path MTU",
         Protocol::Dns => "Resolve ms",
         Protocol::Tls | Protocol::TlsResume => "Handshake ms",
         Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 => "Total ms",
@@ -2135,6 +2265,17 @@ pub fn primary_metric_value(a: &RequestAttempt) -> Option<f64> {
                 _ => None,
             }
         }),
+        // An attempt whose every echo was lost carries a 0.0 sentinel avg,
+        // not a measurement — excluded exactly like the UDP arm above
+        // (trust audit V11).
+        Protocol::WebSocket => a
+            .websocket
+            .as_ref()
+            .filter(|w| w.echo_count > 0)
+            .map(|w| w.msg_rtt_avg_ms),
+        // Discovered path MTU in bytes; None when no feedback allowed a
+        // verdict (an unknown MTU must not enter the distribution as 0).
+        Protocol::Pmtud => a.pmtud.as_ref().and_then(|p| p.path_mtu).map(|m| m as f64),
         Protocol::Dns => a.dns.as_ref().map(|d| d.duration_ms),
         Protocol::Tls | Protocol::TlsResume => a.tls.as_ref().map(|t| t.handshake_duration_ms),
         Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 => {
@@ -2406,6 +2547,8 @@ mod tests {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         };
         let run = TestRun {
             schema_version: crate::metrics::SCHEMA_VERSION.to_string(),
@@ -2727,6 +2870,8 @@ mod tests {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         }
     }
 
@@ -3216,11 +3361,124 @@ mod tests {
             Protocol::Browser2,
             Protocol::Browser3,
             Protocol::SdkProbe,
+            Protocol::Rpm,
+            Protocol::Ping,
+            Protocol::Path,
+            Protocol::DualStack,
+            Protocol::WebSocket,
+            Protocol::Pmtud,
         ];
         for proto in &all {
             let label = primary_metric_label(proto);
             assert!(!label.is_empty(), "{proto}: label must not be empty");
         }
+    }
+
+    // ── websocket / pmtud (measurement gaps #10, #13) ────────────────────────
+
+    fn sample_websocket_result() -> WebSocketResult {
+        WebSocketResult {
+            url: "ws://127.0.0.1:8080/ws".into(),
+            upgrade_ms: 3.2,
+            upgrade_status: Some(101),
+            message_count: 10,
+            echo_count: 10,
+            loss_percent: 0.0,
+            msg_rtt_min_ms: 0.4,
+            msg_rtt_avg_ms: 0.9,
+            msg_rtt_p95_ms: 1.8,
+            jitter_ms: 0.2,
+            msg_rtts_ms: vec![Some(0.9); 10],
+            payload_size: 64,
+            started_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn primary_metric_label_websocket_and_pmtud() {
+        assert_eq!(primary_metric_label(&Protocol::WebSocket), "Msg RTT avg ms");
+        assert_eq!(primary_metric_label(&Protocol::Pmtud), "Path MTU");
+    }
+
+    #[test]
+    fn primary_metric_value_websocket_present() {
+        let mut a = bare_attempt(Protocol::WebSocket);
+        a.websocket = Some(sample_websocket_result());
+        assert_eq!(primary_metric_value(&a), Some(0.9));
+    }
+
+    #[test]
+    fn primary_metric_value_websocket_all_echoes_lost_is_excluded() {
+        // A 0.0 sentinel avg with zero echoes is not a measurement (V11).
+        let mut a = bare_attempt(Protocol::WebSocket);
+        a.success = false;
+        a.websocket = Some(WebSocketResult {
+            echo_count: 0,
+            loss_percent: 100.0,
+            msg_rtt_min_ms: 0.0,
+            msg_rtt_avg_ms: 0.0,
+            msg_rtt_p95_ms: 0.0,
+            jitter_ms: 0.0,
+            msg_rtts_ms: vec![None; 10],
+            ..sample_websocket_result()
+        });
+        assert_eq!(primary_metric_value(&a), None);
+    }
+
+    #[test]
+    fn primary_metric_value_pmtud_is_the_discovered_mtu() {
+        let mut a = bare_attempt(Protocol::Pmtud);
+        a.pmtud = Some(PmtudResult {
+            remote_addr: "1.2.3.4".into(),
+            path_mtu: Some(1500),
+            max_unfragmented_payload: Some(1472),
+            probes_sent: 12,
+            method: "df-udp-echo/ip-recverr".into(),
+            icmp_mtu: None,
+            local_mtu: Some(1500),
+            header_bytes: 28,
+            lower_bound_only: false,
+            started_at: Utc::now(),
+        });
+        assert_eq!(primary_metric_value(&a), Some(1500.0));
+    }
+
+    #[test]
+    fn primary_metric_value_pmtud_unknown_mtu_is_excluded() {
+        // No feedback → path_mtu None → an unknown MTU must not enter the
+        // distribution as a number.
+        let mut a = bare_attempt(Protocol::Pmtud);
+        a.success = false;
+        a.pmtud = Some(PmtudResult {
+            remote_addr: "1.2.3.4".into(),
+            path_mtu: None,
+            max_unfragmented_payload: None,
+            probes_sent: 12,
+            method: "df-no-feedback".into(),
+            icmp_mtu: None,
+            local_mtu: Some(1500),
+            header_bytes: 28,
+            lower_bound_only: false,
+            started_at: Utc::now(),
+        });
+        assert_eq!(primary_metric_value(&a), None);
+    }
+
+    #[test]
+    fn websocket_and_pmtud_attempt_fields_are_additive() {
+        // Pre-0.28.77 JSON (no websocket/pmtud fields) must still deserialize,
+        // and None fields must be omitted on the wire (schema stays 1.0).
+        let a = bare_attempt(Protocol::Tcp);
+        let json = serde_json::to_value(&a).unwrap();
+        assert!(json.get("websocket").is_none());
+        assert!(json.get("pmtud").is_none());
+
+        let mut old = serde_json::to_value(&a).unwrap();
+        old.as_object_mut().unwrap().remove("websocket");
+        old.as_object_mut().unwrap().remove("pmtud");
+        let back: RequestAttempt = serde_json::from_value(old).unwrap();
+        assert!(back.websocket.is_none());
+        assert!(back.pmtud.is_none());
     }
 
     // ── attempt_payload_bytes ─────────────────────────────────────────────────
