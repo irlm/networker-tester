@@ -220,6 +220,11 @@ mod real {
             // lookup_host goes through the OS (getaddrinfo); the concrete
             // nameserver is not observable from here.
             resolver: Some("system (OS getaddrinfo)".to_string()),
+            a_ms: None,
+            aaaa_ms: None,
+            a_record_count: None,
+            aaaa_record_count: None,
+            cname_chain: Vec::new(),
         };
         Ok((addr, Some(dns)))
     }
@@ -529,6 +534,8 @@ mod real {
             previous_handshake_kind: None,
             previous_http_status_code: None,
             http_status_code: None,
+            ocsp_stapled: None,
+            ocsp_response_bytes: None,
         };
 
         // Content negotiation metadata (gap #9), from the captured h3 headers.

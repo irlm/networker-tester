@@ -9,6 +9,7 @@ use crate::runner::{dns as dns_runner, socket_info::SocketInfo};
 use chrono::Utc;
 use rustls::pki_types::ServerName;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -167,22 +168,23 @@ pub async fn run_tls_probe(
     // ── 3. TLS handshake ──────────────────────────────────────────────────────
     // Config (trust store, ALPN) is built BEFORE the handshake timer starts
     // (trust audit V5).
-    let tls_config = match build_tls_config_for_probe(cfg.insecure, cfg.ca_bundle.as_deref()) {
-        Ok(c) => c,
-        Err(e) => {
-            return make_failed(
-                run_id,
-                attempt_id,
-                sequence_num,
-                started_at,
-                ErrorCategory::Tls,
-                e.to_string(),
-                None,
-                dns_result,
-                Some(tcp_result),
-            );
-        }
-    };
+    let (tls_config, ocsp_capture) =
+        match build_tls_config_for_probe(cfg.insecure, cfg.ca_bundle.as_deref()) {
+            Ok(c) => c,
+            Err(e) => {
+                return make_failed(
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    started_at,
+                    ErrorCategory::Tls,
+                    e.to_string(),
+                    None,
+                    dns_result,
+                    Some(tcp_result),
+                );
+            }
+        };
     let connector = TlsConnector::from(Arc::new(tls_config));
 
     let server_name = match ServerName::try_from(host.clone()) {
@@ -243,7 +245,9 @@ pub async fn run_tls_probe(
     let tls_duration_ms = t_tls.elapsed().as_secs_f64() * 1000.0;
     debug!("TLS probe: handshake done in {tls_duration_ms:.1}ms");
 
-    let tls_result = extract_tls_probe_info(&tls_stream, tls_started_at, tls_duration_ms);
+    let mut tls_result = extract_tls_probe_info(&tls_stream, tls_started_at, tls_duration_ms);
+    tls_result.ocsp_stapled = ocsp_capture.stapled();
+    tls_result.ocsp_response_bytes = ocsp_capture.response_bytes();
 
     RequestAttempt {
         attempt_id,
@@ -364,23 +368,23 @@ pub async fn run_tls_resumption_probe(
         }
     };
 
-    let tls_config = match build_tls_config_for_http1_probe(cfg.insecure, cfg.ca_bundle.as_deref())
-    {
-        Ok(c) => Arc::new(c),
-        Err(e) => {
-            return make_failed_resume(
-                run_id,
-                attempt_id,
-                sequence_num,
-                started_at,
-                ErrorCategory::Tls,
-                e.to_string(),
-                None,
-                dns_result,
-                None,
-            );
-        }
-    };
+    let (tls_config, ocsp_capture) =
+        match build_tls_config_for_http1_probe(cfg.insecure, cfg.ca_bundle.as_deref()) {
+            Ok((c, capture)) => (Arc::new(c), capture),
+            Err(e) => {
+                return make_failed_resume(
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    started_at,
+                    ErrorCategory::Tls,
+                    e.to_string(),
+                    None,
+                    dns_result,
+                    None,
+                );
+            }
+        };
 
     let first = match run_one_tls_http_request(addr, &host, target, cfg, tls_config.clone()).await {
         Ok(v) => v,
@@ -422,6 +426,10 @@ pub async fn run_tls_resumption_probe(
     tls_result.previous_handshake_kind = first.tls.handshake_kind.clone();
     tls_result.previous_http_status_code = first.http_status_code;
     tls_result.http_status_code = second.http_status_code;
+    // Verification runs on the cold (full) handshake only — the resumed
+    // connection skips it — so this reflects the cold connection's staple.
+    tls_result.ocsp_stapled = ocsp_capture.stapled();
+    tls_result.ocsp_response_bytes = ocsp_capture.response_bytes();
 
     let resumed = tls_result.resumed.unwrap_or(false);
     let success = resumed;
@@ -688,14 +696,14 @@ fn handshake_kind_label(kind: rustls::HandshakeKind) -> &'static str {
 fn build_tls_config_for_http1_probe(
     insecure: bool,
     ca_bundle: Option<&str>,
-) -> anyhow::Result<rustls::ClientConfig> {
+) -> anyhow::Result<(rustls::ClientConfig, Arc<OcspCapture>)> {
     build_tls_config_for_probe_with_alpn(insecure, ca_bundle, vec![b"http/1.1".to_vec()])
 }
 
 fn build_tls_config_for_probe(
     insecure: bool,
     ca_bundle: Option<&str>,
-) -> anyhow::Result<rustls::ClientConfig> {
+) -> anyhow::Result<(rustls::ClientConfig, Arc<OcspCapture>)> {
     build_tls_config_for_probe_with_alpn(
         insecure,
         ca_bundle,
@@ -722,27 +730,131 @@ pub(crate) fn base_root_store() -> &'static rustls::RootCertStore {
     })
 }
 
+/// Build the probe ClientConfig with the verifier wrapped in an
+/// [`OcspRecordingVerifier`] so the probe can report whether the server
+/// stapled an OCSP response. Verification behavior is IDENTICAL to the
+/// unwrapped config: the secure path delegates to the same
+/// `WebPkiServerVerifier` that `with_root_certificates` installs, and the
+/// `--insecure` path delegates to the same accept-all `NoVerifier`.
 fn build_tls_config_for_probe_with_alpn(
     insecure: bool,
     ca_bundle: Option<&str>,
     alpn_protocols: Vec<Vec<u8>>,
-) -> anyhow::Result<rustls::ClientConfig> {
-    let mut config = if insecure {
-        rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(NoVerifier))
-            .with_no_client_auth()
+) -> anyhow::Result<(rustls::ClientConfig, Arc<OcspCapture>)> {
+    let inner: Arc<dyn rustls::client::danger::ServerCertVerifier> = if insecure {
+        Arc::new(NoVerifier)
     } else {
         let mut root_store = base_root_store().clone();
         if let Some(bundle_path) = ca_bundle {
             load_ca_bundle(&mut root_store, bundle_path)?;
         }
-        rustls::ClientConfig::builder()
-            .with_root_certificates(root_store)
-            .with_no_client_auth()
+        rustls::client::WebPkiServerVerifier::builder_with_provider(
+            Arc::new(root_store),
+            Arc::new(rustls::crypto::ring::default_provider()),
+        )
+        .build()
+        .map_err(|e| anyhow::anyhow!("failed to build certificate verifier: {e}"))?
     };
+    let capture = Arc::new(OcspCapture::default());
+    let verifier = Arc::new(OcspRecordingVerifier {
+        inner,
+        capture: capture.clone(),
+    });
+    let mut config = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(verifier)
+        .with_no_client_auth();
     config.alpn_protocols = alpn_protocols;
-    Ok(config)
+    Ok((config, capture))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OCSP stapling observation (measurement-gap #7)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Records whether a stapled OCSP response was presented for the leaf during
+/// certificate verification. rustls only surfaces the stapled bytes to the
+/// `ServerCertVerifier`, so the probe wraps the real verifier and notes
+/// presence + length before delegating.
+#[derive(Debug, Default)]
+pub(crate) struct OcspCapture {
+    /// True once `verify_server_cert` ran (verification is skipped on resumed
+    /// handshakes — in that case the answer is "unobserved", not "no").
+    observed: AtomicBool,
+    len: AtomicU32,
+}
+
+impl OcspCapture {
+    fn record(&self, ocsp_response: &[u8]) {
+        self.len.store(
+            u32::try_from(ocsp_response.len()).unwrap_or(u32::MAX),
+            Ordering::Relaxed,
+        );
+        self.observed.store(true, Ordering::Relaxed);
+    }
+
+    /// Some(true/false) once verification observed the (possibly empty)
+    /// stapled response; None when verification never ran.
+    pub(crate) fn stapled(&self) -> Option<bool> {
+        self.observed
+            .load(Ordering::Relaxed)
+            .then(|| self.len.load(Ordering::Relaxed) > 0)
+    }
+
+    /// Stapled response length in bytes; only when a staple was present.
+    pub(crate) fn response_bytes(&self) -> Option<u32> {
+        let len = self.len.load(Ordering::Relaxed);
+        (self.observed.load(Ordering::Relaxed) && len > 0).then_some(len)
+    }
+}
+
+/// Pass-through `ServerCertVerifier` that records the stapled OCSP response
+/// metadata and delegates every decision to the wrapped verifier unchanged.
+#[derive(Debug)]
+struct OcspRecordingVerifier {
+    inner: Arc<dyn rustls::client::danger::ServerCertVerifier>,
+    capture: Arc<OcspCapture>,
+}
+
+impl rustls::client::danger::ServerCertVerifier for OcspRecordingVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &rustls::pki_types::CertificateDer,
+        intermediates: &[rustls::pki_types::CertificateDer],
+        server_name: &rustls::pki_types::ServerName,
+        ocsp_response: &[u8],
+        now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        self.capture.record(ocsp_response);
+        self.inner
+            .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        self.inner.verify_tls12_signature(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        self.inner.verify_tls13_signature(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.inner.supported_verify_schemes()
+    }
+
+    fn requires_raw_public_keys(&self) -> bool {
+        self.inner.requires_raw_public_keys()
+    }
 }
 
 pub(crate) fn load_ca_bundle(
@@ -825,6 +937,8 @@ fn extract_tls_probe_info(
         previous_handshake_kind: None,
         previous_http_status_code: None,
         http_status_code: None,
+        ocsp_stapled: None,
+        ocsp_response_bytes: None,
     }
 }
 
@@ -839,7 +953,9 @@ fn extract_full_cert_chain(conn: &rustls::ClientConnection) -> Vec<CertEntry> {
         .unwrap_or_default()
 }
 
-fn parse_cert_entry(der: &[u8]) -> Option<CertEntry> {
+/// Parse a DER certificate into a `CertEntry` (subject, issuer, expiry, SANs,
+/// key algorithm/size, signature algorithm). Shared with the `native` probe.
+pub(crate) fn parse_cert_entry(der: &[u8]) -> Option<CertEntry> {
     use x509_parser::prelude::*;
     let (_, cert) = X509Certificate::from_der(der).ok()?;
 
@@ -874,12 +990,81 @@ fn parse_cert_entry(der: &[u8]) -> Option<CertEntry> {
         })
         .unwrap_or_default();
 
+    let (key_algorithm, key_size_bits) = extract_key_info(&cert);
+    let signature_algorithm = Some(signature_algorithm_label(
+        &cert.signature_algorithm.algorithm.to_id_string(),
+    ));
+
     Some(CertEntry {
         subject,
         issuer,
         expiry,
         sans,
+        key_algorithm,
+        key_size_bits,
+        signature_algorithm,
     })
+}
+
+/// Public key algorithm name + key size in bits, from SubjectPublicKeyInfo.
+fn extract_key_info(
+    cert: &x509_parser::certificate::X509Certificate,
+) -> (Option<String>, Option<u32>) {
+    let spki = cert.public_key();
+    let alg_oid = spki.algorithm.algorithm.to_id_string();
+    let parsed_bits = || {
+        spki.parsed()
+            .ok()
+            .map(|k| k.key_size() as u32)
+            .filter(|b| *b > 0)
+    };
+    match alg_oid.as_str() {
+        // rsaEncryption — size is the modulus length.
+        "1.2.840.113549.1.1.1" => (Some("RSA".to_string()), parsed_bits()),
+        // id-ecPublicKey — curve identified by the algorithm parameters OID.
+        "1.2.840.10045.2.1" => {
+            let curve_oid = spki
+                .algorithm
+                .parameters
+                .as_ref()
+                .and_then(|p| p.as_oid().ok())
+                .map(|oid| oid.to_id_string());
+            let (name, bits) = ec_curve_label(curve_oid.as_deref());
+            (Some(name.to_string()), bits.or_else(parsed_bits))
+        }
+        "1.3.101.112" => (Some("Ed25519".to_string()), Some(256)),
+        "1.3.101.113" => (Some("Ed448".to_string()), Some(456)),
+        _ => (None, parsed_bits()),
+    }
+}
+
+/// Map an EC named-curve OID to a display label + key size in bits.
+fn ec_curve_label(curve_oid: Option<&str>) -> (&'static str, Option<u32>) {
+    match curve_oid {
+        Some("1.2.840.10045.3.1.7") => ("ECDSA P-256", Some(256)),
+        Some("1.3.132.0.34") => ("ECDSA P-384", Some(384)),
+        Some("1.3.132.0.35") => ("ECDSA P-521", Some(521)),
+        Some("1.3.132.0.10") => ("ECDSA secp256k1", Some(256)),
+        _ => ("ECDSA", None),
+    }
+}
+
+/// Human name for a certificate signature-algorithm OID; falls back to the
+/// raw dotted OID for anything outside the common set.
+fn signature_algorithm_label(oid: &str) -> String {
+    match oid {
+        "1.2.840.113549.1.1.5" => "SHA1 with RSA".into(),
+        "1.2.840.113549.1.1.11" => "SHA256 with RSA".into(),
+        "1.2.840.113549.1.1.12" => "SHA384 with RSA".into(),
+        "1.2.840.113549.1.1.13" => "SHA512 with RSA".into(),
+        "1.2.840.113549.1.1.10" => "RSASSA-PSS".into(),
+        "1.2.840.10045.4.3.2" => "ECDSA with SHA256".into(),
+        "1.2.840.10045.4.3.3" => "ECDSA with SHA384".into(),
+        "1.2.840.10045.4.3.4" => "ECDSA with SHA512".into(),
+        "1.3.101.112" => "Ed25519".into(),
+        "1.3.101.113" => "Ed448".into(),
+        other => other.to_string(),
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1043,7 +1228,7 @@ mod tests {
     #[test]
     fn tls_config_insecure_builds_without_error() {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let cfg = build_tls_config_for_probe(true, None).unwrap();
+        let (cfg, _ocsp) = build_tls_config_for_probe(true, None).unwrap();
         assert_eq!(
             cfg.alpn_protocols,
             vec![b"h2".to_vec(), b"http/1.1".to_vec()]
@@ -1053,7 +1238,7 @@ mod tests {
     #[test]
     fn tls_config_secure_builds_without_error() {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let cfg = build_tls_config_for_probe(false, None).unwrap();
+        let (cfg, _ocsp) = build_tls_config_for_probe(false, None).unwrap();
         assert_eq!(
             cfg.alpn_protocols,
             vec![b"h2".to_vec(), b"http/1.1".to_vec()]
@@ -1236,7 +1421,108 @@ mod tests {
     #[test]
     fn build_tls_config_for_http1_probe_only_advertises_http11() {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let cfg = build_tls_config_for_http1_probe(true, None).expect("http1 tls config");
+        let (cfg, _ocsp) = build_tls_config_for_http1_probe(true, None).expect("http1 tls config");
         assert_eq!(cfg.alpn_protocols, vec![b"http/1.1".to_vec()]);
+    }
+
+    // ── key / signature algorithm extraction (measurement-gap #7) ────────────
+
+    #[test]
+    fn parse_cert_entry_extracts_key_and_signature_info() {
+        // rcgen's generate_simple_self_signed uses ECDSA P-256 with SHA-256.
+        let der = self_signed_der();
+        let entry = parse_cert_entry(&der).unwrap();
+        assert_eq!(entry.key_algorithm.as_deref(), Some("ECDSA P-256"));
+        assert_eq!(entry.key_size_bits, Some(256));
+        assert_eq!(
+            entry.signature_algorithm.as_deref(),
+            Some("ECDSA with SHA256")
+        );
+    }
+
+    #[test]
+    fn signature_algorithm_label_maps_common_oids() {
+        assert_eq!(
+            signature_algorithm_label("1.2.840.113549.1.1.11"),
+            "SHA256 with RSA"
+        );
+        assert_eq!(
+            signature_algorithm_label("1.2.840.10045.4.3.3"),
+            "ECDSA with SHA384"
+        );
+        assert_eq!(signature_algorithm_label("1.3.101.112"), "Ed25519");
+        // Unknown OIDs fall back to the raw dotted string, never panic.
+        assert_eq!(signature_algorithm_label("1.2.3.4.5"), "1.2.3.4.5");
+    }
+
+    #[test]
+    fn ec_curve_label_maps_named_curves() {
+        assert_eq!(
+            ec_curve_label(Some("1.2.840.10045.3.1.7")),
+            ("ECDSA P-256", Some(256))
+        );
+        assert_eq!(
+            ec_curve_label(Some("1.3.132.0.34")),
+            ("ECDSA P-384", Some(384))
+        );
+        assert_eq!(ec_curve_label(Some("9.9.9")), ("ECDSA", None));
+        assert_eq!(ec_curve_label(None), ("ECDSA", None));
+    }
+
+    // ── OCSP capture (measurement-gap #7) ────────────────────────────────────
+
+    #[test]
+    fn ocsp_capture_unobserved_reports_none() {
+        let capture = OcspCapture::default();
+        assert_eq!(capture.stapled(), None);
+        assert_eq!(capture.response_bytes(), None);
+    }
+
+    #[test]
+    fn ocsp_capture_empty_response_is_not_stapled() {
+        let capture = OcspCapture::default();
+        capture.record(&[]);
+        assert_eq!(capture.stapled(), Some(false));
+        assert_eq!(capture.response_bytes(), None);
+    }
+
+    #[test]
+    fn ocsp_capture_nonempty_response_is_stapled_with_length() {
+        let capture = OcspCapture::default();
+        capture.record(&[0u8; 471]);
+        assert_eq!(capture.stapled(), Some(true));
+        assert_eq!(capture.response_bytes(), Some(471));
+    }
+
+    #[test]
+    fn ocsp_recording_verifier_records_and_delegates() {
+        use rustls::client::danger::ServerCertVerifier;
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let capture = Arc::new(OcspCapture::default());
+        let verifier = OcspRecordingVerifier {
+            inner: Arc::new(NoVerifier),
+            capture: capture.clone(),
+        };
+
+        let der = self_signed_der();
+        let cert = rustls::pki_types::CertificateDer::from(der);
+        let name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
+        let ocsp = [1u8, 2, 3];
+        let result = verifier.verify_server_cert(
+            &cert,
+            &[],
+            &name,
+            &ocsp,
+            rustls::pki_types::UnixTime::now(),
+        );
+        // Delegation: NoVerifier accepts everything, so the wrapper must too.
+        assert!(result.is_ok());
+        assert_eq!(capture.stapled(), Some(true));
+        assert_eq!(capture.response_bytes(), Some(3));
+        // Scheme list passes straight through to the inner verifier.
+        assert_eq!(
+            verifier.supported_verify_schemes(),
+            NoVerifier.supported_verify_schemes()
+        );
     }
 }

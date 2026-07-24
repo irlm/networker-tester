@@ -334,6 +334,8 @@ fn html_contains_tls_section_for_tls_attempt() {
                 previous_handshake_kind: None,
                 previous_http_status_code: None,
                 http_status_code: None,
+                ocsp_stapled: None,
+                ocsp_response_bytes: None,
             }),
             http: None,
             udp: None,

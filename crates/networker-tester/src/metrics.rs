@@ -851,6 +851,27 @@ pub struct DnsResult {
     /// pre-0.28.19 JSON. (Trust audit V1.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolver: Option<String>,
+    /// Duration of the A-record lookup alone (ms). Populated by the standalone
+    /// `dns` probe mode only (measurement-gap #6); other modes resolve via a
+    /// single dual-stack lookup and leave this None. Additive, serde-defaulted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub a_ms: Option<f64>,
+    /// Duration of the AAAA-record lookup alone (ms). `dns` probe mode only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aaaa_ms: Option<f64>,
+    /// Number of A records in the answer. `dns` probe mode only; None when the
+    /// A lookup was skipped (`--ipv6-only`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub a_record_count: Option<u32>,
+    /// Number of AAAA records in the answer. `dns` probe mode only; None when
+    /// the AAAA lookup was skipped (`--ipv4-only`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aaaa_record_count: Option<u32>,
+    /// CNAME chain from the answer section, in resolution order (targets only:
+    /// `query_name → cname_chain[0] → cname_chain[1] → …`). Empty when the
+    /// name resolves directly. `dns` probe mode only. Additive, serde-defaulted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cname_chain: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1035,6 +1056,18 @@ pub struct CertEntry {
     /// Subject Alternative Names (DNS names and IP addresses).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sans: Vec<String>,
+    /// Public key algorithm, e.g. "RSA", "ECDSA P-256", "Ed25519". Parsed from
+    /// the certificate's SubjectPublicKeyInfo. Additive (measurement-gap #7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_algorithm: Option<String>,
+    /// Public key size in bits (modulus size for RSA, curve size for ECDSA).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_size_bits: Option<u32>,
+    /// Signature algorithm the certificate was signed with, e.g.
+    /// "SHA256 with RSA", "ECDSA with SHA256". Falls back to the raw OID string
+    /// for algorithms outside the common set. Additive (measurement-gap #7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature_algorithm: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1077,6 +1110,18 @@ pub struct TlsResult {
     /// HTTP status from this connection when a real request was sent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_status_code: Option<u16>,
+    /// Whether the server presented a stapled OCSP response for the leaf
+    /// certificate during the handshake. Observed via the rustls certificate
+    /// verifier, so it is None when verification did not run for this
+    /// connection (resumed handshakes) or the backend can't observe it
+    /// (native/curl paths). For `tlsresume`, reflects the cold connection.
+    /// Additive (measurement-gap #7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ocsp_stapled: Option<bool>,
+    /// Length of the stapled OCSP response in bytes; only set when
+    /// `ocsp_stapled` is `Some(true)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ocsp_response_bytes: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2110,6 +2155,11 @@ mod tests {
             started_at: Utc::now(),
             success: true,
             resolver: Some("system (192.168.1.1:53)".into()),
+            a_ms: None,
+            aaaa_ms: None,
+            a_record_count: None,
+            aaaa_record_count: None,
+            cname_chain: Vec::new(),
         };
         let json = serde_json::to_string(&r).unwrap();
         let de: DnsResult = serde_json::from_str(&json).unwrap();
@@ -2130,6 +2180,63 @@ mod tests {
         }"#;
         let de: DnsResult = serde_json::from_str(json).unwrap();
         assert_eq!(de.resolver, None);
+    }
+
+    /// Measurement-gap #6 additive fields: JSON produced before the per-record-
+    /// type DNS depth (a_ms/aaaa_ms/counts/cname_chain) must still deserialize,
+    /// defaulting every new field.
+    #[test]
+    fn test_dns_result_deserializes_without_per_type_fields() {
+        let json = r#"{
+            "query_name": "example.com",
+            "resolved_ips": ["93.184.216.34"],
+            "duration_ms": 3.5,
+            "started_at": "2026-01-01T00:00:00Z",
+            "success": true,
+            "resolver": "system (192.168.1.1:53)"
+        }"#;
+        let de: DnsResult = serde_json::from_str(json).unwrap();
+        assert_eq!(de.a_ms, None);
+        assert_eq!(de.aaaa_ms, None);
+        assert_eq!(de.a_record_count, None);
+        assert_eq!(de.aaaa_record_count, None);
+        assert!(de.cname_chain.is_empty());
+        // And the new fields are omitted on serialize when unset — the frozen
+        // 1.0 shape is unchanged for producers that don't populate them.
+        let v = serde_json::to_value(&de).unwrap();
+        assert!(v.get("a_ms").is_none());
+        assert!(v.get("cname_chain").is_none());
+    }
+
+    /// Measurement-gap #7 additive fields: old TlsResult/CertEntry JSON
+    /// (without key/signature/OCSP detail) must still deserialize.
+    #[test]
+    fn test_tls_result_deserializes_without_cert_depth_fields() {
+        let json = r#"{
+            "protocol_version": "TLSv1.3",
+            "cipher_suite": "TLS13_AES_128_GCM_SHA256",
+            "alpn_negotiated": null,
+            "cert_subject": null,
+            "cert_issuer": null,
+            "cert_expiry": null,
+            "handshake_duration_ms": 12.0,
+            "started_at": "2026-01-01T00:00:00Z",
+            "success": true,
+            "cert_chain": [
+                {"subject": "CN=x", "issuer": "CN=y"}
+            ]
+        }"#;
+        let de: TlsResult = serde_json::from_str(json).unwrap();
+        assert_eq!(de.ocsp_stapled, None);
+        assert_eq!(de.ocsp_response_bytes, None);
+        let leaf = &de.cert_chain[0];
+        assert_eq!(leaf.key_algorithm, None);
+        assert_eq!(leaf.key_size_bits, None);
+        assert_eq!(leaf.signature_algorithm, None);
+        // Unset new fields stay omitted on serialize.
+        let v = serde_json::to_value(&de).unwrap();
+        assert!(v.get("ocsp_stapled").is_none());
+        assert!(v.pointer("/cert_chain/0/key_algorithm").is_none());
     }
 
     #[test]
@@ -2367,6 +2474,11 @@ mod tests {
             started_at: Utc::now(),
             success: true,
             resolver: None,
+            a_ms: None,
+            aaaa_ms: None,
+            a_record_count: None,
+            aaaa_record_count: None,
+            cname_chain: Vec::new(),
         });
         assert!((primary_metric_value(&a).unwrap() - 42.0).abs() < 1e-9);
     }
@@ -2399,6 +2511,8 @@ mod tests {
             previous_handshake_kind: None,
             previous_http_status_code: None,
             http_status_code: None,
+            ocsp_stapled: None,
+            ocsp_response_bytes: None,
         });
         assert!((primary_metric_value(&a).unwrap() - 7.5).abs() < 1e-9);
     }
@@ -2753,6 +2867,8 @@ mod tests {
             previous_handshake_kind: None,
             previous_http_status_code: None,
             http_status_code: None,
+            ocsp_stapled: None,
+            ocsp_response_bytes: None,
         });
         assert!((primary_metric_value(&a).unwrap() - 3.0).abs() < 1e-9);
     }

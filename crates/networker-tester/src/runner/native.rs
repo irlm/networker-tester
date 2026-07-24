@@ -1,5 +1,5 @@
 #[cfg(feature = "native")]
-use crate::metrics::{CertEntry, DnsResult, HttpResult, TcpResult, TlsResult};
+use crate::metrics::{DnsResult, HttpResult, TcpResult, TlsResult};
 /// Native-TLS probe: DNS + TCP + platform TLS + HTTP/1.1.
 ///
 /// Uses the OS TLS stack via the `native-tls` crate:
@@ -739,13 +739,14 @@ fn extract_native_tls_result(
 ) -> TlsResult {
     let inner = stream.get_ref();
 
-    // peer_certificate() gives us the leaf cert as DER.
+    // peer_certificate() gives us the leaf cert as DER. Parsing is shared with
+    // the rustls TLS probe so both report key/signature algorithm detail.
     let cert_chain = inner
         .peer_certificate()
         .ok()
         .flatten()
         .and_then(|c| c.to_der().ok())
-        .and_then(|der| parse_cert_entry(&der))
+        .and_then(|der| crate::runner::tls::parse_cert_entry(&der))
         .map(|entry| vec![entry])
         .unwrap_or_default();
 
@@ -774,48 +775,9 @@ fn extract_native_tls_result(
         previous_handshake_kind: None,
         previous_http_status_code: None,
         http_status_code: None,
+        ocsp_stapled: None,
+        ocsp_response_bytes: None,
     }
-}
-
-#[cfg(feature = "native")]
-fn parse_cert_entry(der: &[u8]) -> Option<CertEntry> {
-    use x509_parser::prelude::*;
-    let (_, cert) = X509Certificate::from_der(der).ok()?;
-    let subject = cert.subject().to_string();
-    let issuer = cert.issuer().to_string();
-    let expiry = chrono::DateTime::from_timestamp(cert.validity().not_after.timestamp(), 0);
-    let sans = cert
-        .subject_alternative_name()
-        .ok()
-        .flatten()
-        .map(|ext| {
-            ext.value
-                .general_names
-                .iter()
-                .filter_map(|gn| match gn {
-                    GeneralName::DNSName(name) => Some(name.to_string()),
-                    GeneralName::IPAddress(ip) => match ip.len() {
-                        4 => {
-                            let octets: [u8; 4] = (*ip).try_into().ok()?;
-                            Some(std::net::Ipv4Addr::from(octets).to_string())
-                        }
-                        16 => {
-                            let octets: [u8; 16] = (*ip).try_into().ok()?;
-                            Some(std::net::Ipv6Addr::from(octets).to_string())
-                        }
-                        _ => None,
-                    },
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    Some(CertEntry {
-        subject,
-        issuer,
-        expiry,
-        sans,
-    })
 }
 
 #[cfg(feature = "native")]
@@ -947,6 +909,11 @@ mod tests {
             started_at: now,
             success: true,
             resolver: None,
+            a_ms: None,
+            aaaa_ms: None,
+            a_record_count: None,
+            aaaa_record_count: None,
+            cname_chain: Vec::new(),
         };
         let tcp = TcpResult {
             local_addr: None,
