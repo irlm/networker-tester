@@ -630,6 +630,11 @@ pub(super) fn write_run_sections(run: &TestRun, out: &mut String) {
         }
     }
 
+    // ── Depth-probe cards (rpm/ping/path/dualstack/websocket/pmtud) ──────────
+    // Data-gated: each card renders only when an attempt of that type carries
+    // a result, so runs without those modes stay byte-identical.
+    write_probe_depth_sections(run, out);
+
     // ── Individual attempts ───────────────────────────────────────────────────
     {
         let total_attempts = run.attempts.len();
@@ -854,6 +859,10 @@ pub(super) fn write_run_sections(run: &TestRun, out: &mut String) {
             "      </tbody>\n    </table>\n  </details>\n</section>"
         );
     }
+
+    // ── DNS depth (dns mode: A/AAAA split timing, record counts, CNAME) ──────
+    // Data-gated on the wave-1 depth fields; plain resolves render nothing new.
+    write_dns_depth_section(run, out);
 
     // ── TLS info ─────────────────────────────────────────────────────────────
     let tls_rows: Vec<&RequestAttempt> = run.attempts.iter().filter(|a| a.tls.is_some()).collect();

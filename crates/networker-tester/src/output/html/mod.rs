@@ -19,6 +19,7 @@ use std::path::Path;
 // ─────────────────────────────────────────────────────────────────────────────
 
 mod charts;
+mod probe_sections;
 mod protocol_sections;
 mod render_multi;
 mod run_sections;
@@ -27,6 +28,7 @@ mod tables;
 pub use render_multi::render_multi;
 
 use charts::*;
+use probe_sections::*;
 use protocol_sections::*;
 use render_multi::*;
 use run_sections::*;
