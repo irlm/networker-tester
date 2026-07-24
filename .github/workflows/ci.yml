@@ -225,6 +225,37 @@ jobs:
         run: cargo build -p networker-tester --no-default-features
 
   # ──────────────────────────────────────────────────────────────────────────
+  # musl type-check: the RELEASE builds target x86_64-unknown-linux-musl, whose
+  # libc types differ from the glibc the test jobs run against (e.g. msghdr's
+  # msg_controllen is usize on glibc but u32 on musl — exactly what broke the
+  # v0.28.76 release AFTER merge). This job catches that class at PR time.
+  # cargo check is enough: it type-checks against musl's libc definitions.
+  # ──────────────────────────────────────────────────────────────────────────
+  musl-check:
+    name: musl check (release target types)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+        with:
+          key: musl-check
+          cache-on-failure: "true"
+
+      - name: Install musl tools (ring/aws-lc build scripts)
+        run: sudo apt-get update -qq && sudo apt-get install -y musl-tools
+
+      # The shipped-to-prod set (what release.yml's build-linux compiles).
+      - name: Check shipped crates against musl
+        run: cargo check -p networker-tester -p networker-endpoint --target x86_64-unknown-linux-musl
+
+  # ──────────────────────────────────────────────────────────────────────────
   # Benchmark orchestrator (alethabench): workspace-excluded, so the lint job
   # above never touches it. Guards the clippy debt cleared in #441 (53→0).
   # Gated like the other areas: PRs run it only when benchmarks/orchestrator/**

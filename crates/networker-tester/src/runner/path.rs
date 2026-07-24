@@ -443,7 +443,10 @@ pub(crate) mod linux_impl {
         msg.msg_iov = &mut iov;
         msg.msg_iovlen = 1;
         msg.msg_control = ctrl.as_mut_ptr() as *mut libc::c_void;
-        msg.msg_controllen = ctrl.len();
+        // `as _`: msg_controllen is usize on glibc but u32 (socklen_t) on musl —
+        // the release binaries build for x86_64-unknown-linux-musl (v0.28.76's
+        // release broke on exactly this line).
+        msg.msg_controllen = ctrl.len() as _;
 
         // SAFETY: MSG_ERRQUEUE recvmsg never blocks; returns -1/EAGAIN when
         // the queue is empty.
