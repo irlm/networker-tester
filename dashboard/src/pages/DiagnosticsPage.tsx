@@ -455,7 +455,11 @@ export function DiagnosticsPage() {
 
   const inputRef = useRef<HTMLInputElement>(null);
   const [url, setUrl] = useState(searchParams.get('host') || '');
-  const [preset, setPreset] = useState<DiagPreset>('quick');
+  // Prefill the preset from ?preset= (scenario launcher); fall back to 'quick'.
+  const [preset, setPreset] = useState<DiagPreset>(() => {
+    const p = searchParams.get('preset');
+    return p === 'standard' || p === 'full' ? p : 'quick';
+  });
   const [submitting, setSubmitting] = useState(false);
 
   // Data
