@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import type { Workload, Methodology, TestConfigCreate, ModeGroup, ComparisonCell, ComparisonGroupCreate } from '../api/types';
 import { Breadcrumb } from '../components/common/Breadcrumb';
@@ -50,6 +50,22 @@ export function FullStackPage() {
   const [insecure, setInsecure] = useState(false);
   const [connectionReuse, setConnectionReuse] = useState(true);
   const [captureMode, setCaptureMode] = useState<'none' | 'tester' | 'endpoint' | 'both'>('none');
+
+  // Prefill the mode selection from ?modes= (scenario launcher), once on mount.
+  // The prune effect below still greys/drops anything incompatible with the
+  // endpoint target, so a bad param can't select an unsupported mode.
+  const [searchParams] = useSearchParams();
+  const modesPrefilledRef = useRef(false);
+  useEffect(() => {
+    if (modesPrefilledRef.current) return;
+    const modesParam = searchParams.get('modes');
+    if (!modesParam) return;
+    const modes = modesParam.split(',').map(m => m.trim()).filter(Boolean);
+    if (modes.length > 0) {
+      modesPrefilledRef.current = true;
+      setSelectedModes(new Set(modes));
+    }
+  }, [searchParams]);
 
   // A full-stack run always targets a provisioned networker-endpoint (a proxy
   // stack), so gate the mode picker to that target kind — greys out sdkprobe

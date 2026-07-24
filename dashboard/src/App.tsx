@@ -35,6 +35,7 @@ const RunsPage = lazyPage(() => import('./pages/RunsPage'), 'RunsPage');
 const RunDetailPage = lazyPage(() => import('./pages/RunDetailPage'), 'RunDetailPage');
 const NewRunPage = lazyPage(() => import('./pages/NewRunPage'), 'NewRunPage');
 const DiagnosticsPage = lazyPage(() => import('./pages/DiagnosticsPage'), 'DiagnosticsPage');
+const ScenariosPage = lazyPage(() => import('./pages/ScenariosPage'), 'ScenariosPage');
 const RunComparePage = lazyPage(() => import('./pages/RunComparePage'), 'RunComparePage');
 const DeployDetailPage = lazyPage(() => import('./pages/DeployDetailPage'), 'DeployDetailPage');
 const SchedulesPage = lazyPage(() => import('./pages/SchedulesPage'), 'SchedulesPage');
@@ -208,6 +209,8 @@ function AuthenticatedApp() {
             <Route path="/projects/:projectId" element={<DashboardPage />} />
             <Route path="/projects/:projectId/runs" element={<RunsPage />} />
             <Route path="/projects/:projectId/runs/new" element={<NewRunPage />} />
+            {/* Scenario launcher — pre-fills one of the four flows below */}
+            <Route path="/projects/:projectId/scenarios" element={<ScenariosPage />} />
             <Route path="/projects/:projectId/tests/new" element={<NetworkTestPage />} />
             <Route path="/projects/:projectId/benchmarks/full-stack/new" element={<FullStackPage />} />
             <Route path="/projects/:projectId/benchmarks/application/new" element={<AppBenchmarkPage />} />

@@ -1,5 +1,5 @@
-import { useState, useCallback, useMemo, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import type { Workload, Methodology, TestConfigCreate, ComparisonCell, ComparisonGroupCreate, LanguageCapability } from '../api/types';
 import { Breadcrumb } from '../components/common/Breadcrumb';
@@ -37,6 +37,7 @@ export function AppBenchmarkPage() {
   const addToast = useToast();
   usePageTitle('New Application Benchmark');
 
+  const [searchParams] = useSearchParams();
   const [step, setStep] = useState(0);
 
   // Step 0: Template
@@ -128,6 +129,21 @@ export function AppBenchmarkPage() {
     setProxyWarning(false);
     setStep(1);
   }, [testbedKey]);
+
+  // Prefill from ?template= (scenario launcher): apply the named RuntimeTemplate
+  // once on mount, which seeds langs/modes/testbeds/methodology and advances to
+  // step 1. No-op if the param is missing or unknown.
+  const prefilledRef = useRef(false);
+  useEffect(() => {
+    if (prefilledRef.current) return;
+    const templateId = searchParams.get('template');
+    if (!templateId) return;
+    const tmpl = RUNTIME_TEMPLATES.find(t => t.id === templateId);
+    if (tmpl) {
+      prefilledRef.current = true;
+      applyTemplate(tmpl);
+    }
+  }, [searchParams, applyTemplate]);
 
   // ── Navigation ──────────────────────────────────────────────────────
 

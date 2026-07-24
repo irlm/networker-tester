@@ -11,6 +11,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.73] — 2026-07-23
+
+### Added
+- **Scenario launcher — "New Test" (first slice).** A new `/projects/:id/scenarios`
+  page (sidebar: ★ New Test) presents a curated catalog of pre-determined
+  scenarios grouped by outcome (Diagnose a URL · Measure your endpoint ·
+  Benchmark & compare). Picking one drops the user into the right existing flow,
+  **pre-filled** — so they choose an outcome instead of knowing which of the four
+  test types to open and hand-picking modes. Config-only prefill (nothing is
+  provisioned here); everything stays editable before launch.
+- Prefill rides query params the flows already read or now read:
+  DiagnosticsPage `?preset=`, NetworkTestPage `?modes=` (already supported),
+  FullStackPage `?modes=`, AppBenchmarkPage `?template=` (applies a
+  `RUNTIME_TEMPLATES` entry on mount). All readers are backward-compatible —
+  no param = current behavior.
+- The catalog is guarded against the capability model (`scenarios.test.ts`): a
+  `url` scenario may carry only `any`-target modes, endpoint scenarios only
+  endpoint-supported modes, and application scenarios must name a real template —
+  so a scenario can never prefill a mode the v0.28.72 server gate would 422.
+- Deferred to Phase 2 (documented): scenarios that also **auto-provision** the
+  target + runner (today they land on the wizard where the user picks/provisions
+  infrastructure).
+
+---
+
 ## [0.28.72] — 2026-07-23
 
 ### Added

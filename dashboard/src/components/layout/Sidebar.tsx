@@ -45,6 +45,9 @@ export function Sidebar({ connectionDot }: SidebarProps) {
 
   const mainItems: NavItem[] = pid ? [
     { path: `/projects/${pid}`, label: 'Dashboard', icon: '\u25C8', exact: true },
+    // Scenario launcher \u2014 the recommended starting point: pick an outcome,
+    // land in the right pre-filled flow (probe / network / benchmarks below).
+    { path: `/projects/${pid}/scenarios`, label: 'New Test', icon: '\u2605' },
     { path: `/projects/${pid}/vms`, label: 'Infrastructure', icon: '\u25A3' },
   ] : [];
 
