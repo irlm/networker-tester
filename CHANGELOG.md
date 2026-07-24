@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.81] — 2026-08-06
+
+### Removed
+- **The retired Rust control-plane crates are deleted** — `networker-dashboard`
+  (legacy axum control plane), `networker-agent` (legacy worker), and
+  `networker-common` (their message types) are removed from the workspace, per
+  `docs/phase2-cutover-runbook.md` §7 after the 14-clean-day production soak
+  window. The C# control plane (`Networker.ControlPlane`) has served prod since
+  the cutover; the DB schema is fully owned by `Networker.Data` (verified
+  #516); the full-Rust snapshot remains on the `legacy/rust` branch and the
+  `rust-legacy-*` tag for rollback archaeology.
+- The nightly soak's "no Rust writers" check now treats the purged units'
+  `not-found` as healthy (only `active`/`activating` fail) and documents the
+  decommission.
+
+### Notes
+- No current crate depended on the removed ones (workspace builds, clippy,
+  and all suites green without them; `Cargo.lock` carries zero references).
+- This also permanently removes the legacy WS query-string token surface the
+  retired dashboard exposed — the last item of the 2026-07 security wave.
+
+---
+
 ## [0.28.80] — 2026-07-24
 
 ### Added
