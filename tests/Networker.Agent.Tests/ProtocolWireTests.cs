@@ -133,6 +133,24 @@ public class ProtocolWireTests
         Assert.Equal("run_finished", doc.RootElement.GetProperty("type").GetString());
         Assert.Equal("completed", doc.RootElement.GetProperty("status").GetString());
         Assert.False(doc.RootElement.TryGetProperty("artifact", out _)); // skip when null
+        // Envelope is additive AND null-omitted: without one, the frame is
+        // byte-compatible with what pre-envelope control planes expect.
+        Assert.False(doc.RootElement.TryGetProperty("envelope", out _));
+    }
+
+    [Fact]
+    public void RunFinished_carries_the_envelope_verbatim_when_present()
+    {
+        using var env = JsonDocument.Parse(
+            """{"client_geo":{"country":"US","asn":13335},"clock_sync":{"offset_ms":-2.5}}""");
+        var json = Encode(new RunFinishedMessage(
+            Guid.Empty, "completed", null, env.RootElement.Clone()));
+
+        using var doc = JsonDocument.Parse(json);
+        var envelope = doc.RootElement.GetProperty("envelope");
+        Assert.Equal("US", envelope.GetProperty("client_geo").GetProperty("country").GetString());
+        Assert.Equal(13335, envelope.GetProperty("client_geo").GetProperty("asn").GetInt32());
+        Assert.Equal(-2.5, envelope.GetProperty("clock_sync").GetProperty("offset_ms").GetDouble());
     }
 
     [Fact]

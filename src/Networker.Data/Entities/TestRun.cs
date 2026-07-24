@@ -37,6 +37,15 @@ public partial class TestRun
 
     public Guid? ProvisioningDeploymentId { get; set; }
 
+    /// <summary>
+    /// V046: the tester's run envelope (client_network / client_geo /
+    /// target_geo / client_load_before / client_load_after / clock_sync /
+    /// client_info / server_info) as compact JSON, extracted from the final
+    /// TestRun the agent parsed and relayed on run_finished. Null for runs
+    /// executed by pre-envelope agents/testers — never backfilled.
+    /// </summary>
+    public string? ClientEnvelope { get; set; }
+
     public virtual Project Project { get; set; } = null!;
 
     public virtual TestConfig TestConfig { get; set; } = null!;

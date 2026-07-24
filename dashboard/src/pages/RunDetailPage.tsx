@@ -7,6 +7,7 @@ import { useProject } from '../hooks/useProject';
 import { Breadcrumb } from '../components/common/Breadcrumb';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { RunResult } from '../components/common/RunResult';
+import { RunEnvelopeBlock } from '../components/RunEnvelopeBlock';
 import { runDisplayStatus } from '../lib/runStatus';
 import { ShareDialog } from '../components/ShareDialog';
 import { usePageTitle } from '../hooks/usePageTitle';
@@ -190,6 +191,9 @@ export function RunDetailPage() {
             {run?.modes && <>Modes: <span className="text-gray-300">{run.modes.join(', ')}</span> · </>}
             {attempts.length} attempts
           </p>
+          {/* Run-envelope context (V046 pass-through) — data-gated: old runs
+              have no envelope and render nothing here. */}
+          <RunEnvelopeBlock envelope={run?.envelope} />
         </div>
         <div className="flex items-center gap-2">
           {run && (run.status === 'queued' || run.status === 'running') && (

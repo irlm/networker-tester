@@ -436,10 +436,62 @@ public sealed class AgentMessageProcessor
     }
 
     /// <summary>
-    /// RunFinished → set terminal <c>test_run.status</c>, persist the benchmark
-    /// artifact if present, read back the final counts, and publish
-    /// <see cref="JobComplete"/>. Rust: <c>update_status</c> +
-    /// <c>benchmark_artifacts::create</c> + read-back + <c>JobComplete</c>.
+    /// The run-envelope members accepted from a <c>run_finished</c> frame —
+    /// the server-side twin of the agent's allowlist
+    /// (<c>RunExecutor.RunEnvelopeFields</c>): the run-scoped context fields
+    /// of the tester's TestRun JSON. Anything else in a received envelope is
+    /// dropped on ingest (defence in depth against a hostile or skewed agent
+    /// stuffing arbitrary payloads into <c>test_run.client_envelope</c>).
+    /// </summary>
+    private static readonly string[] RunEnvelopeFields =
+    [
+        "client_network", "client_geo", "target_geo",
+        "client_load_before", "client_load_after", "clock_sync",
+        "client_info", "server_info",
+    ];
+
+    /// <summary>
+    /// Filter a received <c>run_finished.envelope</c> through
+    /// <see cref="RunEnvelopeFields"/> and re-serialize the surviving members
+    /// as one compact JSON object (snake_case preserved — values pass through
+    /// verbatim). Returns <c>null</c> for a missing/non-object envelope or one
+    /// with no allowed members, so old agents (which never send the field) and
+    /// junk payloads both leave <c>client_envelope</c> NULL.
+    /// </summary>
+    internal static string? ExtractEnvelopeJson(JsonElement? envelope)
+    {
+        if (envelope is not { ValueKind: JsonValueKind.Object } env)
+        {
+            return null;
+        }
+
+        using var buffer = new MemoryStream();
+        var any = false;
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            foreach (var field in RunEnvelopeFields)
+            {
+                if (env.TryGetProperty(field, out var value)
+                    && value.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined)
+                {
+                    writer.WritePropertyName(field);
+                    value.WriteTo(writer);
+                    any = true;
+                }
+            }
+            writer.WriteEndObject();
+        }
+
+        return any ? System.Text.Encoding.UTF8.GetString(buffer.ToArray()) : null;
+    }
+
+    /// <summary>
+    /// RunFinished → set terminal <c>test_run.status</c> (+ the run envelope
+    /// when the agent sent one), persist the benchmark artifact if present,
+    /// read back the final counts, and publish <see cref="JobComplete"/>.
+    /// Rust: <c>update_status</c> + <c>benchmark_artifacts::create</c> +
+    /// read-back + <c>JobComplete</c>.
     /// </summary>
     private async Task OnRunFinished(RunFinishedMessage rf, CancellationToken ct)
     {
@@ -456,6 +508,13 @@ public sealed class AgentMessageProcessor
             return;
         }
 
+        // Run envelope (v0.28.80): allowlist-filtered pass-through of the
+        // tester's run-scoped context. Null when the agent predates the field
+        // or the tester emitted none — the column simply stays NULL, and
+        // setting it unconditionally is safe because the terminal-status
+        // precondition below guarantees this row has never carried one.
+        var envelopeJson = ExtractEnvelopeJson(rf.Envelope);
+
         // Status precondition (audit F6): a late/duplicate run_finished must
         // not rewrite a run that already reached a terminal state (e.g. a
         // "failed" frame arriving after a cancel flipping cancelled→failed).
@@ -464,6 +523,7 @@ public sealed class AgentMessageProcessor
                 && r.Status != "completed" && r.Status != "failed" && r.Status != "cancelled")
             .ExecuteUpdateAsync(s => s
                 .SetProperty(r => r.Status, rf.Status)
+                .SetProperty(r => r.ClientEnvelope, envelopeJson)
                 .SetProperty(r => r.FinishedAt, DateTime.UtcNow), ct);
 
         if (updated == 0)

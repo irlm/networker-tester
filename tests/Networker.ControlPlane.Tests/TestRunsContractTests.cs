@@ -145,6 +145,76 @@ public sealed class TestRunsContractTests
         Assert.Equal(0.9, item["udp"]!["jitter_ms"]!.GetValue<double>());
     }
 
+    // ── Run detail: envelope pass-through (V046) ────────────────────────────
+
+    private static TestRunsEndpoints.RunDetailRow SampleRunDetail(string? envelope) => new(
+        Id: Guid.Parse("11111111-2222-3333-4444-555555555555"),
+        TestConfigId: Guid.Parse("66666666-7777-8888-9999-aaaaaaaaaaaa"),
+        ProjectId: "p1",
+        Status: "completed",
+        StartedAt: new DateTime(2026, 7, 14, 1, 22, 0, DateTimeKind.Utc),
+        FinishedAt: new DateTime(2026, 7, 14, 1, 23, 0, DateTimeKind.Utc),
+        SuccessCount: 10,
+        FailureCount: 0,
+        ErrorMessage: null,
+        ArtifactId: null,
+        TesterId: null,
+        WorkerId: "worker-1",
+        LastHeartbeat: null,
+        CreatedAt: new DateTime(2026, 7, 14, 1, 21, 0, DateTimeKind.Utc),
+        ComparisonGroupId: null,
+        ClientEnvelope: envelope);
+
+    /// The exact pre-envelope field set of GET /api/v2/test-runs/{id} — the
+    /// wire shape every consumer saw before V046, which runs WITHOUT a stored
+    /// envelope must keep serving byte-identically.
+    private static readonly string[] RunDetailBaseFields =
+    {
+        "id", "test_config_id", "project_id", "status", "result_status",
+        "started_at", "finished_at", "success_count", "failure_count",
+        "error_message", "artifact_id", "tester_id", "worker_id",
+        "last_heartbeat", "created_at", "comparison_group_id",
+    };
+
+    [Fact]
+    public void Run_detail_without_envelope_pins_the_pre_envelope_field_set()
+    {
+        // Old runs (and runs finished by pre-envelope agents) have a NULL
+        // client_envelope — the response must not gain an `"envelope": null`
+        // member; the old wire shape is unchanged.
+        var json = JsonSerializer.Serialize(
+            TestRunsEndpoints.BuildRunDetail(SampleRunDetail(envelope: null)), WebOptions);
+        var root = JsonNode.Parse(json)!.AsObject();
+
+        Assert.Equal(RunDetailBaseFields, root.Select(p => p.Key).ToArray());
+        Assert.False(root.ContainsKey("envelope"));
+    }
+
+    [Fact]
+    public void Run_detail_with_envelope_serves_it_verbatim_as_raw_json()
+    {
+        // Stored compact JSON (snake_case, as ingested from the agent's
+        // run_finished) must re-emit as raw JSON — parsed pass-through, not an
+        // escaped string — appended after the pinned base field set.
+        const string stored = """
+            {"client_geo":{"country":"US","asn":13335,"as_org":"Cloudflare"},"clock_sync":{"offset_ms":-3.2},"client_load_before":{"load_avg_1m":0.42},"client_info":{"os":"linux","cpu_cores":4}}
+            """;
+        var json = JsonSerializer.Serialize(
+            TestRunsEndpoints.BuildRunDetail(SampleRunDetail(stored.Trim())), WebOptions);
+        var root = JsonNode.Parse(json)!.AsObject();
+
+        Assert.Equal(
+            RunDetailBaseFields.Append("envelope").ToArray(),
+            root.Select(p => p.Key).ToArray());
+
+        var envelope = root["envelope"]!.AsObject();
+        Assert.Equal("US", envelope["client_geo"]!["country"]!.GetValue<string>());
+        Assert.Equal(13335, envelope["client_geo"]!["asn"]!.GetValue<int>());
+        Assert.Equal(-3.2, envelope["clock_sync"]!["offset_ms"]!.GetValue<double>());
+        Assert.Equal(0.42, envelope["client_load_before"]!["load_avg_1m"]!.GetValue<double>());
+        Assert.Equal(4, envelope["client_info"]!["cpu_cores"]!.GetValue<int>());
+    }
+
     [Fact]
     public void Null_optional_phase_fields_are_omitted_within_a_phase()
     {

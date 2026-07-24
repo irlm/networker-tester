@@ -148,6 +148,7 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
 
         var successCount = 0u;
         var failureCount = 0u;
+        JsonElement? envelope = null;
 
         // Overall per-invocation wall-clock budget (audit F4): a tester that
         // wedges without EOF-ing stdout would otherwise park this task forever
@@ -163,6 +164,10 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
 
             successCount = outcome.SuccessCount;
             failureCount = outcome.FailureCount;
+            // Keep the latest non-null envelope across invocations (apibench
+            // fans one run out into several tester spawns on the same host —
+            // the run-scoped context is the same, the freshest wins).
+            envelope = outcome.Envelope ?? envelope;
 
             if (outcome.Status == InvocationStatus.Cancelled)
             {
@@ -182,7 +187,7 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             ? BuildArtifact(config, successCount, failureCount)
             : null;
 
-        await SendFinishedAsync(sink, runId, "completed", artifact).ConfigureAwait(false);
+        await SendFinishedAsync(sink, runId, "completed", artifact, envelope).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -231,7 +236,61 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
     private enum InvocationStatus { Completed, Failed, Cancelled }
 
     private readonly record struct InvocationOutcome(
-        InvocationStatus Status, uint SuccessCount, uint FailureCount);
+        InvocationStatus Status, uint SuccessCount, uint FailureCount,
+        JsonElement? Envelope = null);
+
+    /// <summary>
+    /// The run-envelope fields of the tester's TestRun JSON — run-scoped
+    /// context, NOT measurement data. Everything else in the TestRun (attempts,
+    /// benchmark blocks, ...) is intentionally excluded: attempts stream live
+    /// as <c>attempt_event</c>s and the rest has its own persistence paths.
+    /// The control plane re-filters the received envelope through the same
+    /// allowlist, so the two lists must stay in sync
+    /// (AgentMessageProcessor.RunEnvelopeFields).
+    /// </summary>
+    internal static readonly string[] RunEnvelopeFields =
+    [
+        "client_network", "client_geo", "target_geo",
+        "client_load_before", "client_load_after", "clock_sync",
+        "client_info", "server_info",
+    ];
+
+    /// <summary>
+    /// Extract the run-envelope fields from a parsed TestRun root into one
+    /// compact JSON object (snake_case preserved — the values are forwarded
+    /// verbatim). Returns <c>null</c> when the root is not an object or none
+    /// of the envelope fields are present/non-null, so an old tester's output
+    /// yields no <c>envelope</c> member at all on the wire.
+    /// </summary>
+    internal static JsonElement? ExtractRunEnvelope(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object)
+            return null;
+
+        using var buffer = new MemoryStream();
+        var any = false;
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            foreach (var field in RunEnvelopeFields)
+            {
+                if (root.TryGetProperty(field, out var value)
+                    && value.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined)
+                {
+                    writer.WritePropertyName(field);
+                    value.WriteTo(writer);
+                    any = true;
+                }
+            }
+            writer.WriteEndObject();
+        }
+
+        if (!any)
+            return null;
+
+        using var doc = JsonDocument.Parse(buffer.ToArray());
+        return doc.RootElement.Clone();
+    }
 
     /// <summary>
     /// Spawn one tester process and stream its output — the single-invocation
@@ -419,9 +478,16 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             return new(InvocationStatus.Failed, successCount, failureCount);
         }
 
+        JsonElement? envelope;
         using (parsed)
         {
             var root = parsed.RootElement;
+
+            // Run envelope (v0.28.80): geo / network / clock / load / host-info
+            // context the tester attaches to the TestRun root. Previously this
+            // died here — only attempts + a bare run_finished left the agent.
+            envelope = ExtractRunEnvelope(root);
+
             // Stream per-attempt events + progress counts (every 10 + final).
             if (root.TryGetProperty("attempts", out var attempts) && attempts.ValueKind == JsonValueKind.Array)
             {
@@ -448,7 +514,7 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             }
         }
 
-        return new(InvocationStatus.Completed, successCount, failureCount);
+        return new(InvocationStatus.Completed, successCount, failureCount, envelope);
     }
 
     // ── endpoint_to_target (Rust parity) ─────────────────────────────────────────
@@ -603,10 +669,13 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
 
     /// <summary>The terminal <c>run_finished</c> — always via the critical
     /// (non-droppable) send path: silently losing it leaves the control-plane
-    /// run <c>running</c> until the watchdog fails it (quality audit F2).</summary>
+    /// run <c>running</c> until the watchdog fails it (quality audit F2).
+    /// <paramref name="envelope"/> rides along only on the completed path —
+    /// failed/cancelled runs never parsed a full TestRun.</summary>
     private static async Task SendFinishedAsync(
-        RawWebSocketClient.IFrameSink sink, Guid runId, string status, BenchmarkArtifactPayload? artifact)
-        => await sink.TrySendCriticalAsync(new RunFinishedMessage(runId, status, artifact)).ConfigureAwait(false);
+        RawWebSocketClient.IFrameSink sink, Guid runId, string status,
+        BenchmarkArtifactPayload? artifact, JsonElement? envelope = null)
+        => await sink.TrySendCriticalAsync(new RunFinishedMessage(runId, status, artifact, envelope)).ConfigureAwait(false);
 
     private static async Task WaitAndDrainAsync(Process process, Task stderrTask)
     {

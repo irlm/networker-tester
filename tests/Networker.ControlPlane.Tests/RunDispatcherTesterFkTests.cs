@@ -185,7 +185,8 @@ public sealed class RunDispatcherTesterFkTests
                 last_heartbeat TEXT,
                 created_at TEXT NOT NULL,
                 comparison_group_id TEXT,
-                provisioning_deployment_id TEXT
+                provisioning_deployment_id TEXT,
+                client_envelope TEXT
             );
             """);
         // The watchdog's restart-orphan sweep (F3b) reads/updates the deployment

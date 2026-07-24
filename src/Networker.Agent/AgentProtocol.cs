@@ -68,14 +68,24 @@ public sealed record AttemptEventMessage(
     [property: JsonPropertyName("attempt")] JsonElement Attempt
 ) : AgentMessage;
 
-/// <summary><c>{"type":"run_finished","run_id":...,"status":...,"artifact":{...}?}</c>.
-/// <c>artifact</c> omitted when null (Rust <c>skip_serializing_if = Option::is_none</c>).</summary>
+/// <summary><c>{"type":"run_finished","run_id":...,"status":...,"artifact":{...}?,"envelope":{...}?}</c>.
+/// <c>artifact</c> omitted when null (Rust <c>skip_serializing_if = Option::is_none</c>).
+/// <c>envelope</c> (additive, v0.28.80+) carries the run-envelope fields
+/// extracted from the tester's final TestRun JSON
+/// (<see cref="RunExecutor.ExtractRunEnvelope"/>); omitted when the tester
+/// emitted none. Version skew is safe in both directions: an old control
+/// plane ignores the unknown member (System.Text.Json drops unmapped
+/// properties), and an old agent simply never sends it (the server-side
+/// column stays null).</summary>
 public sealed record RunFinishedMessage(
     [property: JsonPropertyName("run_id")] Guid RunId,
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("artifact")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    BenchmarkArtifactPayload? Artifact
+    BenchmarkArtifactPayload? Artifact,
+    [property: JsonPropertyName("envelope")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    JsonElement? Envelope = null
 ) : AgentMessage;
 
 /// <summary><c>{"type":"error","run_id":?,"message":...}</c> — <c>run_id</c> omitted

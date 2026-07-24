@@ -117,6 +117,8 @@ export interface TestRun {
   config_name?: string;
   endpoint_kind?: EndpointKind;
   modes?: string[];
+  /** V046 run-envelope pass-through (detail route only; absent on old runs). */
+  envelope?: RunEnvelope;
 }
 
 export interface TestSchedule {
@@ -812,6 +814,48 @@ export interface RunLoadSample {
   load_avg_1m?: number;
   cpu_busy_percent?: number;
   mem_available_mb?: number;
+}
+
+/** Host metadata (mirrors Rust HostInfo; run envelope client_info/server_info). */
+export interface RunHostInfo {
+  os?: string;
+  arch?: string;
+  cpu_cores?: number;
+  total_memory_mb?: number;
+  os_version?: string;
+  hostname?: string;
+  server_version?: string;
+  uptime_secs?: number;
+  region?: string;
+}
+
+/** Source-network context (mirrors Rust NetworkContext; run envelope). */
+export interface RunNetworkContext {
+  default_interface?: string;
+  interface_kind?: string;
+  mtu?: number;
+  local_ip?: string;
+  gateway_ip?: string;
+  vpn_detected?: boolean;
+  vpn_interface?: string;
+  ipv6_available?: boolean;
+}
+
+/**
+ * Run envelope served by GET /api/v2/test-runs/{id} (V046 pass-through of the
+ * tester's TestRun context fields, snake_case preserved). ADDITIVE and
+ * data-gated: absent for runs recorded before the envelope existed or executed
+ * by pre-envelope agents — render nothing in that case.
+ */
+export interface RunEnvelope {
+  client_network?: RunNetworkContext | null;
+  client_geo?: RunGeoInfo | null;
+  target_geo?: RunGeoInfo | null;
+  client_load_before?: RunLoadSample | null;
+  client_load_after?: RunLoadSample | null;
+  clock_sync?: RunClockSync | null;
+  client_info?: RunHostInfo | null;
+  server_info?: RunHostInfo | null;
 }
 
 // Cloud account types

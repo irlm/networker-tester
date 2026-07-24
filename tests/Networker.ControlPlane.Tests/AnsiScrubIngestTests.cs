@@ -138,7 +138,8 @@ public sealed class AnsiScrubIngestTests
                 last_heartbeat TEXT,
                 created_at TEXT NOT NULL,
                 comparison_group_id TEXT,
-                provisioning_deployment_id TEXT
+                provisioning_deployment_id TEXT,
+                client_envelope TEXT
             );
             """);
         Exec(conn, """
