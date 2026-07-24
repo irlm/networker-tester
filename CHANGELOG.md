@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.77] — 2026-07-24
+
+### Fixed
+- **v0.28.76's release never shipped** — the musl release build failed on
+  `path.rs` (`msghdr.msg_controllen` is `usize` on glibc but `u32`/socklen_t on
+  musl; PR CI tests run against glibc so it passed pre-merge). Fixed with a
+  target-typed cast; prod stayed safely on 0.28.75 (release gates ONE complete
+  release — no partial deploy happened). This release carries all of 0.28.76's
+  wave-2 content.
+- **CI gap closed:** new `musl check (release target types)` job type-checks the
+  shipped crates against `x86_64-unknown-linux-musl` at PR time, so
+  glibc-vs-musl libc type drift fails before merge instead of at release.
+
+---
+
 ## [0.28.76] — 2026-07-24
 
 Measurement-depth wave 2 — gaps #4, #8, #3, #11 of
