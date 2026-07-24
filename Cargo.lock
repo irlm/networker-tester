@@ -2174,7 +2174,7 @@ checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
 
 [[package]]
 name = "networker-agent"
-version = "0.28.78"
+version = "0.28.79"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2194,7 +2194,7 @@ dependencies = [
 
 [[package]]
 name = "networker-common"
-version = "0.28.78"
+version = "0.28.79"
 dependencies = [
  "chrono",
  "networker-tester",
@@ -2205,7 +2205,7 @@ dependencies = [
 
 [[package]]
 name = "networker-dashboard"
-version = "0.28.78"
+version = "0.28.79"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2249,7 +2249,7 @@ dependencies = [
 
 [[package]]
 name = "networker-endpoint"
-version = "0.28.78"
+version = "0.28.79"
 dependencies = [
  "anyhow",
  "axum",
@@ -2285,7 +2285,7 @@ dependencies = [
 
 [[package]]
 name = "networker-log"
-version = "0.28.78"
+version = "0.28.79"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2301,7 +2301,7 @@ dependencies = [
 
 [[package]]
 name = "networker-tester"
-version = "0.28.78"
+version = "0.28.79"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2347,6 +2347,7 @@ dependencies = [
  "url",
  "uuid",
  "webpki-roots 1.0.9",
+ "windows-sys 0.61.2",
  "x509-parser",
 ]
 

@@ -1,7 +1,8 @@
 //! ICMP echo probe (`ping` mode) — network-layer RTT without TCP/UDP.
 //!
-//! Uses UNPRIVILEGED ICMP datagram sockets (`SOCK_DGRAM` + `IPPROTO_ICMP` /
-//! `IPPROTO_ICMPV6`), never raw sockets:
+//! Unix uses UNPRIVILEGED ICMP datagram sockets (`SOCK_DGRAM` +
+//! `IPPROTO_ICMP` / `IPPROTO_ICMPV6`), never raw sockets; Windows uses the
+//! iphlpapi echo API. No platform needs elevation:
 //!
 //! - **Linux**: works when the process gid is inside
 //!   `net.ipv4.ping_group_range` (many distros default it to `1 0` = nobody).
@@ -10,8 +11,10 @@
 //! - **macOS**: ICMP datagram sockets are unprivileged out of the box. Received
 //!   datagrams include the IP header, which this module strips (and reads the
 //!   reply TTL from).
-//! - **Windows**: not yet supported — reported as a clean Config error
-//!   (`IcmpSendEcho` support is a follow-up), never a bogus timeout.
+//! - **Windows**: `IcmpSendEcho` (IPv4) / `Icmp6SendEcho2` (IPv6) — the
+//!   kernel ICMP helper, unprivileged by design. The echo-reply TTL comes
+//!   from the v4 reply options; the v6 reply structure carries no hop limit,
+//!   so `reply_ttl` is honestly absent for IPv6 targets on Windows.
 //!
 //! Probes are sent back-to-back like the `udp` probe (next probe fires when
 //! the previous echo arrives or times out); late/reordered/duplicate echoes
@@ -263,6 +266,9 @@ pub(crate) mod icmp {
         /// network. `hint` carries the per-platform fix.
         Permission { message: String, hint: String },
         /// The platform has no unprivileged ICMP path in this build.
+        /// (Never constructed on Windows — IcmpSendEcho always exists there —
+        /// hence the target-scoped allow.)
+        #[cfg_attr(windows, allow(dead_code))]
         Unsupported(String),
         /// Everything else (bind/send errors, ...).
         Io(String),
@@ -280,10 +286,22 @@ pub(crate) mod icmp {
         unix_impl::ping(addr, count, timeout_ms, payload_size)
     }
 
-    /// Windows: honestly unsupported (no unprivileged BSD-style ICMP socket;
-    /// `IcmpSendEcho` integration is a planned follow-up). Classified as a
-    /// Config error upstream so it can never masquerade as packet loss.
-    #[cfg(not(unix))]
+    /// Windows: the iphlpapi `IcmpSendEcho` / `Icmp6SendEcho2` family — no
+    /// raw sockets, no privileges required (the API is backed by the kernel
+    /// ICMP driver and works for standard users, unlike BSD-style ICMP
+    /// sockets which Windows does not offer unprivileged).
+    #[cfg(windows)]
+    pub fn ping_blocking(
+        addr: IpAddr,
+        count: u32,
+        timeout_ms: u64,
+        payload_size: usize,
+    ) -> Result<(Vec<Option<f64>>, Option<u32>), PingError> {
+        windows_impl::ping(addr, count, timeout_ms, payload_size)
+    }
+
+    /// Exotic targets (neither unix nor windows): honestly unsupported.
+    #[cfg(not(any(unix, windows)))]
     pub fn ping_blocking(
         _addr: IpAddr,
         _count: u32,
@@ -291,8 +309,8 @@ pub(crate) mod icmp {
         _payload_size: usize,
     ) -> Result<(Vec<Option<f64>>, Option<u32>), PingError> {
         Err(PingError::Unsupported(
-            "ping mode is not supported on Windows yet (IcmpSendEcho integration pending) — \
-             use the tcp or udp probes for RTT on this platform"
+            "ping mode has no ICMP backend on this platform — \
+             use the tcp or udp probes for RTT"
                 .to_string(),
         ))
     }
@@ -669,6 +687,218 @@ pub(crate) mod icmp {
             Ok((n as usize, ttl))
         }
     }
+
+    #[cfg(windows)]
+    mod windows_impl {
+        use super::PingError;
+        use std::mem;
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+        use std::time::Instant;
+        use windows_sys::Win32::Foundation::{
+            GetLastError, ERROR_ACCESS_DENIED, HANDLE, INVALID_HANDLE_VALUE,
+        };
+        use windows_sys::Win32::NetworkManagement::IpHelper::{
+            Icmp6CreateFile, Icmp6SendEcho2, IcmpCloseHandle, IcmpCreateFile, IcmpSendEcho,
+            ICMPV6_ECHO_REPLY_LH, ICMP_ECHO_REPLY, IP_SUCCESS,
+        };
+        use windows_sys::Win32::Networking::WinSock::{AF_INET6, SOCKADDR_IN6};
+
+        /// Owned iphlpapi ICMP handle, closed on drop.
+        struct IcmpFile(HANDLE);
+        impl Drop for IcmpFile {
+            fn drop(&mut self) {
+                // SAFETY: the handle came from Icmp(6)CreateFile and is
+                // closed exactly once.
+                unsafe {
+                    IcmpCloseHandle(self.0);
+                }
+            }
+        }
+
+        fn open(v6: bool) -> Result<IcmpFile, PingError> {
+            // SAFETY: plain handle-creating API call; ownership is taken
+            // immediately by IcmpFile.
+            let h = unsafe {
+                if v6 {
+                    Icmp6CreateFile()
+                } else {
+                    IcmpCreateFile()
+                }
+            };
+            if h == INVALID_HANDLE_VALUE || h.is_null() {
+                // SAFETY: reads the calling thread's last-error value.
+                let code = unsafe { GetLastError() };
+                return Err(if code == ERROR_ACCESS_DENIED {
+                    PingError::Permission {
+                        message: format!("Windows denied the ICMP helper handle (error {code})"),
+                        hint: "IcmpCreateFile normally needs no privileges — check endpoint \
+                               security policies, or use the tcp/udp probes."
+                            .to_string(),
+                    }
+                } else {
+                    PingError::Io(format!("IcmpCreateFile failed (error {code})"))
+                });
+            }
+            Ok(IcmpFile(h))
+        }
+
+        pub fn ping(
+            addr: IpAddr,
+            count: u32,
+            timeout_ms: u64,
+            payload_size: usize,
+        ) -> Result<(Vec<Option<f64>>, Option<u32>), PingError> {
+            // Payload floor of 8 mirrors the unix path (room for the
+            // send-timestamp marker); ceiling keeps the u16 request-size and
+            // reply-buffer arithmetic safe.
+            let payload_size = payload_size.clamp(8, 65_000);
+            let timeout = u32::try_from(timeout_ms).unwrap_or(u32::MAX).max(1);
+            match addr {
+                IpAddr::V4(v4) => ping_v4(v4, count, timeout, payload_size),
+                IpAddr::V6(v6) => ping_v6(v6, count, timeout, payload_size),
+            }
+        }
+
+        fn ping_v4(
+            dest: Ipv4Addr,
+            count: u32,
+            timeout_ms: u32,
+            payload_size: usize,
+        ) -> Result<(Vec<Option<f64>>, Option<u32>), PingError> {
+            let handle = open(false)?;
+            let mut payload = vec![0u8; payload_size];
+            // Per the IcmpSendEcho docs: one ICMP_ECHO_REPLY + the echoed
+            // payload + 8 bytes for an ICMP error message. Backed by u64s so
+            // the reply-struct read below is properly aligned.
+            let reply_len = mem::size_of::<ICMP_ECHO_REPLY>() + payload_size + 8;
+            let mut reply_buf = vec![0u64; reply_len.div_ceil(8)];
+
+            let mut probe_rtts: Vec<Option<f64>> = Vec::with_capacity(count as usize);
+            let mut reply_ttl: Option<u32> = None;
+            for _ in 0..count {
+                stamp(&mut payload);
+                let sent_at = Instant::now();
+                // SAFETY: handle is live; payload/reply buffers outlive the
+                // synchronous call and the passed sizes match them.
+                let replies = unsafe {
+                    IcmpSendEcho(
+                        handle.0,
+                        u32::from_ne_bytes(dest.octets()), // network order in memory
+                        payload.as_ptr().cast(),
+                        payload.len() as u16,
+                        std::ptr::null(),
+                        reply_buf.as_mut_ptr().cast(),
+                        reply_len as u32,
+                        timeout_ms,
+                    )
+                };
+                if replies > 0 {
+                    // SAFETY: replies > 0 guarantees an ICMP_ECHO_REPLY at
+                    // the start of the (aligned) reply buffer.
+                    let reply = unsafe { &*(reply_buf.as_ptr() as *const ICMP_ECHO_REPLY) };
+                    if reply.Status == IP_SUCCESS {
+                        // Timed from our own send Instant (sub-ms) like the
+                        // unix path; the API's RoundTripTime is whole ms.
+                        probe_rtts.push(Some(sent_at.elapsed().as_secs_f64() * 1000.0));
+                        // Echo-reply IP TTL from the reply options.
+                        reply_ttl = Some(u32::from(reply.Options.Ttl));
+                    } else {
+                        // Network-level status (unreachable, TTL expired, …):
+                        // an honest lost probe.
+                        probe_rtts.push(None);
+                    }
+                } else {
+                    classify_send_error(&mut probe_rtts)?;
+                }
+            }
+            Ok((probe_rtts, reply_ttl))
+        }
+
+        fn ping_v6(
+            dest: Ipv6Addr,
+            count: u32,
+            timeout_ms: u32,
+            payload_size: usize,
+        ) -> Result<(Vec<Option<f64>>, Option<u32>), PingError> {
+            let handle = open(true)?;
+
+            // SAFETY: SOCKADDR_IN6 is plain old data; zeroed is a valid
+            // "unspecified" init (:: source lets the stack pick).
+            let mut src: SOCKADDR_IN6 = unsafe { mem::zeroed() };
+            src.sin6_family = AF_INET6;
+            // SAFETY: same POD zero-init as above.
+            let mut dst: SOCKADDR_IN6 = unsafe { mem::zeroed() };
+            dst.sin6_family = AF_INET6;
+            dst.sin6_addr.u.Byte = dest.octets();
+
+            let mut payload = vec![0u8; payload_size];
+            let reply_len = mem::size_of::<ICMPV6_ECHO_REPLY_LH>() + payload_size + 8;
+            let mut reply_buf = vec![0u64; reply_len.div_ceil(8)];
+
+            let mut probe_rtts: Vec<Option<f64>> = Vec::with_capacity(count as usize);
+            for _ in 0..count {
+                stamp(&mut payload);
+                let sent_at = Instant::now();
+                // SAFETY: handle is live; sockaddrs and buffers outlive the
+                // synchronous call (no event handle, no APC routine).
+                let replies = unsafe {
+                    Icmp6SendEcho2(
+                        handle.0,
+                        std::ptr::null_mut(), // no event — fully synchronous
+                        None,                 // no APC routine
+                        std::ptr::null(),     // no APC context
+                        &src,
+                        &dst,
+                        payload.as_ptr().cast(),
+                        payload.len() as u16,
+                        std::ptr::null(),
+                        reply_buf.as_mut_ptr().cast(),
+                        reply_len as u32,
+                        timeout_ms,
+                    )
+                };
+                if replies > 0 {
+                    // SAFETY: replies > 0 guarantees an ICMPV6_ECHO_REPLY_LH
+                    // at the start of the (aligned) reply buffer.
+                    let reply = unsafe { &*(reply_buf.as_ptr() as *const ICMPV6_ECHO_REPLY_LH) };
+                    if reply.Status == IP_SUCCESS {
+                        probe_rtts.push(Some(sent_at.elapsed().as_secs_f64() * 1000.0));
+                    } else {
+                        probe_rtts.push(None);
+                    }
+                } else {
+                    classify_send_error(&mut probe_rtts)?;
+                }
+            }
+            // ICMPV6_ECHO_REPLY_LH carries no hop limit — the reply TTL is
+            // honestly unobservable for IPv6 through this API.
+            Ok((probe_rtts, None))
+        }
+
+        /// Icmp(6)SendEcho returned 0 replies. IP_STATUS codes (the 11000
+        /// range: IP_REQ_TIMED_OUT = 11010, host/net unreachable, TTL
+        /// expired, …) are network outcomes — the probe is honestly lost.
+        /// Anything else is an API/environment failure and must abort rather
+        /// than masquerade as packet loss.
+        fn classify_send_error(probe_rtts: &mut Vec<Option<f64>>) -> Result<(), PingError> {
+            // SAFETY: reads the calling thread's last-error value.
+            let code = unsafe { GetLastError() };
+            if (11_000..=11_999).contains(&code) {
+                probe_rtts.push(None);
+                Ok(())
+            } else {
+                Err(PingError::Io(format!("IcmpSendEcho failed (error {code})")))
+            }
+        }
+
+        /// Same diagnostic payload marker as the unix path: micros-since-
+        /// epoch in the first 8 bytes (useful in captures; RTTs are timed
+        /// from the send Instant, not this wire timestamp).
+        fn stamp(payload: &mut [u8]) {
+            let now_us = chrono::Utc::now().timestamp_micros();
+            payload[0..8].copy_from_slice(&now_us.to_be_bytes());
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -680,13 +910,22 @@ mod tests {
     use super::*;
 
     /// True when this environment cannot open unprivileged ICMP sockets
-    /// (e.g. Linux CI with a restrictive ping_group_range, or Windows).
+    /// (e.g. Linux CI with a restrictive ping_group_range). Windows must
+    /// never land here: IcmpSendEcho needs no privileges, so a Config error
+    /// there is a probe bug, not an environment limitation.
     fn env_lacks_icmp(attempt: &RequestAttempt) -> bool {
-        !attempt.success
+        let config_denied = !attempt.success
             && attempt
                 .error
                 .as_ref()
-                .is_some_and(|e| e.category == ErrorCategory::Config)
+                .is_some_and(|e| e.category == ErrorCategory::Config);
+        if config_denied && cfg!(windows) {
+            panic!(
+                "Windows ping must not report a Config error: {:?}",
+                attempt.error
+            );
+        }
+        config_denied
     }
 
     #[tokio::test]

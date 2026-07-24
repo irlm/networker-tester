@@ -93,6 +93,17 @@ tokio-tungstenite = { version = "0.29", default-features = false, features = ["h
 # --- offline GeoIP enrichment (reader only; user supplies GeoLite2 .mmdb files) ---
 maxminddb = { version = "0.30", default-features = false }
 
+# --- Windows probe backends: ping (IcmpSendEcho) + pmtud (IP_DONTFRAGMENT).
+#     0.61 is already in the dependency graph (lockfile) via transitive deps;
+#     only the modules these features unlock are compiled in. ---
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Networking_WinSock",
+    "Win32_System_IO",
+] }
+
 [features]
 default = ["http3", "db-mssql", "browser"]
 http3   = ["quinn", "h3", "h3-quinn"]

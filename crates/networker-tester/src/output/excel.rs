@@ -1,6 +1,6 @@
 /// Excel (.xlsx) report generation using `rust_xlsxwriter`.
 ///
-/// One workbook per run with 10 worksheets:
+/// One workbook per run with 11 worksheets:
 ///   1.  Summary        – run metadata
 ///   2.  Statistics     – per-protocol aggregate stats (min/mean/p50/p95/p99/max/stddev)
 ///   3.  HTTP Timings   – per-attempt HTTP phase times
@@ -9,8 +9,9 @@
 ///   6.  UDP Stats      – loss / RTT / jitter
 ///   7.  Throughput     – download/upload bandwidth
 ///   8.  UDP Throughput – bulk UDP transfer metrics
-///   9.  Server Timing  – server-side timing from X-Networker-* headers
-///   10. Errors         – failed attempts
+///   9.  Probe Depth    – rpm/ping/path/dualstack/websocket/pmtud/dns-depth blocks (only populated when those modes ran)
+///   10. Server Timing  – server-side timing from X-Networker-* headers
+///   11. Errors         – failed attempts
 use crate::{
     capture::PacketCaptureSummary,
     metrics::{compute_stats, primary_metric_label, primary_metric_value, Protocol, TestRun},
@@ -39,6 +40,7 @@ pub fn save(
     write_udp_stats(&mut wb, run, &bold, &num2)?;
     write_throughput(&mut wb, run, &bold, &num2)?;
     write_udp_throughput(&mut wb, run, &bold, &num2)?;
+    write_probe_depth(&mut wb, run, &bold, &num2, &num0)?;
     write_server_timing(&mut wb, run, &bold, &num2)?;
     write_errors(&mut wb, run, &bold)?;
 
@@ -181,6 +183,12 @@ fn write_statistics(
         Protocol::WebUpload,
         Protocol::UdpDownload,
         Protocol::UdpUpload,
+        Protocol::Rpm,
+        Protocol::Ping,
+        Protocol::Path,
+        Protocol::DualStack,
+        Protocol::WebSocket,
+        Protocol::Pmtud,
     ];
 
     let mut row = 1u32;
@@ -610,7 +618,420 @@ fn write_udp_throughput(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sheet 8 – Server Timing
+// Sheet 9 – Probe Depth (rpm / ping / path / dualstack / websocket / pmtud /
+// dns-depth). Stacked blocks in one sheet, mirroring the packet-capture block
+// idiom on Summary; each block only appears when that probe mode produced data.
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn write_probe_depth(
+    wb: &mut Workbook,
+    run: &TestRun,
+    bold: &Format,
+    num2: &Format,
+    num0: &Format,
+) -> anyhow::Result<()> {
+    let ws = wb.add_worksheet();
+    ws.set_name("Probe Depth")?;
+    let mut row = 0u32;
+
+    let write_headers =
+        |ws: &mut rust_xlsxwriter::Worksheet, row: u32, headers: &[&str]| -> anyhow::Result<()> {
+            for (col, h) in headers.iter().enumerate() {
+                ws.write_with_format(row, col as u16, *h, bold)?;
+            }
+            Ok(())
+        };
+
+    // ── RPM (latency under load) ─────────────────────────────────────────────
+    let rpm: Vec<(u32, &crate::metrics::RpmResult)> = run
+        .attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::Rpm)
+        .filter_map(|a| a.rpm.as_ref().map(|r| (a.sequence_num, r)))
+        .collect();
+    if !rpm.is_empty() {
+        ws.write_with_format(row, 0, "RPM (latency under load)", bold)?;
+        row += 1;
+        write_headers(
+            ws,
+            row,
+            &[
+                "Seq",
+                "Remote",
+                "Unloaded Min ms",
+                "Unloaded Avg ms",
+                "Unloaded p95 ms",
+                "Unloaded Jitter ms",
+                "Unloaded Loss %",
+                "Loaded Min ms",
+                "Loaded Avg ms",
+                "Loaded p95 ms",
+                "Loaded Jitter ms",
+                "Loaded Loss %",
+                "RPM",
+                "Bufferbloat Factor",
+                "Load MB/s",
+            ],
+        )?;
+        row += 1;
+        for (seq, r) in &rpm {
+            ws.write(row, 0, *seq as f64)?;
+            ws.write(row, 1, r.remote_addr.as_str())?;
+            ws.write_with_format(row, 2, r.unloaded_rtt_min_ms, num2)?;
+            ws.write_with_format(row, 3, r.unloaded_rtt_avg_ms, num2)?;
+            ws.write_with_format(row, 4, r.unloaded_rtt_p95_ms, num2)?;
+            ws.write_with_format(row, 5, r.unloaded_jitter_ms, num2)?;
+            ws.write_with_format(row, 6, r.unloaded_loss_percent, num2)?;
+            ws.write_with_format(row, 7, r.loaded_rtt_min_ms, num2)?;
+            ws.write_with_format(row, 8, r.loaded_rtt_avg_ms, num2)?;
+            ws.write_with_format(row, 9, r.loaded_rtt_p95_ms, num2)?;
+            ws.write_with_format(row, 10, r.loaded_jitter_ms, num2)?;
+            ws.write_with_format(row, 11, r.loaded_loss_percent, num2)?;
+            if let Some(v) = r.rpm {
+                ws.write_with_format(row, 12, v, num0)?;
+            }
+            if let Some(v) = r.bufferbloat_factor {
+                ws.write_with_format(row, 13, v, num2)?;
+            }
+            if let Some(v) = r.load_throughput_mbps {
+                ws.write_with_format(row, 14, v, num2)?;
+            }
+            row += 1;
+        }
+        row += 1;
+    }
+
+    // ── Ping (ICMP echo) ─────────────────────────────────────────────────────
+    let ping: Vec<(u32, &crate::metrics::PingResult)> = run
+        .attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::Ping)
+        .filter_map(|a| a.ping.as_ref().map(|p| (a.sequence_num, p)))
+        .collect();
+    if !ping.is_empty() {
+        ws.write_with_format(row, 0, "Ping (ICMP echo)", bold)?;
+        row += 1;
+        write_headers(
+            ws,
+            row,
+            &[
+                "Seq",
+                "Remote",
+                "Sent",
+                "Received",
+                "Loss %",
+                "RTT Min ms",
+                "RTT Avg ms",
+                "RTT p95 ms",
+                "Jitter ms",
+                "Reply TTL",
+            ],
+        )?;
+        row += 1;
+        for (seq, p) in &ping {
+            ws.write(row, 0, *seq as f64)?;
+            ws.write(row, 1, p.remote_addr.as_str())?;
+            ws.write(row, 2, p.probe_count as f64)?;
+            ws.write(row, 3, p.success_count as f64)?;
+            ws.write_with_format(row, 4, p.loss_percent, num2)?;
+            // Blank RTT cells when every echo was lost — the 0.0 aggregate is
+            // a sentinel, not a measurement (trust audit V11).
+            if p.success_count > 0 {
+                ws.write_with_format(row, 5, p.rtt_min_ms, num2)?;
+                ws.write_with_format(row, 6, p.rtt_avg_ms, num2)?;
+                ws.write_with_format(row, 7, p.rtt_p95_ms, num2)?;
+                ws.write_with_format(row, 8, p.jitter_ms, num2)?;
+            }
+            if let Some(ttl) = p.reply_ttl {
+                ws.write_with_format(row, 9, ttl as f64, num0)?;
+            }
+            row += 1;
+        }
+        row += 1;
+    }
+
+    // ── Path (hop discovery) ─────────────────────────────────────────────────
+    let paths: Vec<(u32, &crate::metrics::PathResult)> = run
+        .attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::Path)
+        .filter_map(|a| a.path.as_ref().map(|p| (a.sequence_num, p)))
+        .collect();
+    if !paths.is_empty() {
+        ws.write_with_format(row, 0, "Path (hop discovery)", bold)?;
+        row += 1;
+        write_headers(
+            ws,
+            row,
+            &[
+                "Seq",
+                "Destination",
+                "Method",
+                "Hop Count",
+                "Dest Reached",
+                "Dest RTT ms",
+                "Max TTL",
+            ],
+        )?;
+        row += 1;
+        for (seq, p) in &paths {
+            ws.write(row, 0, *seq as f64)?;
+            ws.write(row, 1, p.remote_addr.as_str())?;
+            ws.write(row, 2, p.method.as_str())?;
+            if let Some(h) = p.hop_count {
+                ws.write_with_format(row, 3, h as f64, num0)?;
+            }
+            ws.write(row, 4, p.destination_reached)?;
+            if let Some(rtt) = p.destination_rtt_ms {
+                ws.write_with_format(row, 5, rtt, num2)?;
+            }
+            ws.write(row, 6, p.max_ttl as f64)?;
+            row += 1;
+        }
+        // Per-hop rows only when hops were actually observed — never invented.
+        if paths.iter().any(|(_, p)| !p.hops.is_empty()) {
+            row += 1;
+            write_headers(ws, row, &["Seq", "Hop", "Address", "RTT ms"])?;
+            row += 1;
+            for (seq, p) in &paths {
+                for hop in &p.hops {
+                    ws.write(row, 0, *seq as f64)?;
+                    ws.write(row, 1, hop.index as f64)?;
+                    if let Some(addr) = hop.addr.as_deref() {
+                        ws.write(row, 2, addr)?;
+                    }
+                    if let Some(rtt) = hop.rtt_ms {
+                        ws.write_with_format(row, 3, rtt, num2)?;
+                    }
+                    row += 1;
+                }
+            }
+        }
+        row += 1;
+    }
+
+    // ── Dual-stack (IPv4 vs IPv6) ────────────────────────────────────────────
+    let dual: Vec<(u32, &crate::metrics::DualStackResult)> = run
+        .attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::DualStack)
+        .filter_map(|a| a.dualstack.as_ref().map(|d| (a.sequence_num, d)))
+        .collect();
+    if !dual.is_empty() {
+        ws.write_with_format(row, 0, "Dual-stack (IPv4 vs IPv6)", bold)?;
+        row += 1;
+        write_headers(
+            ws,
+            row,
+            &[
+                "Seq",
+                "Family",
+                "Attempted",
+                "Success",
+                "Address",
+                "DNS ms",
+                "TCP ms",
+                "TLS ms",
+                "TTFB ms",
+                "Total ms",
+                "Faster Family",
+                "Delta ms",
+                "Happy Eyeballs",
+            ],
+        )?;
+        row += 1;
+        for (seq, d) in &dual {
+            for (family, leg) in [("ipv4", &d.ipv4), ("ipv6", &d.ipv6)] {
+                ws.write(row, 0, *seq as f64)?;
+                ws.write(row, 1, family)?;
+                ws.write(row, 2, leg.attempted)?;
+                ws.write(row, 3, leg.success)?;
+                ws.write(row, 4, leg.addr.as_deref().unwrap_or(""))?;
+                let phases = [
+                    leg.dns_ms,
+                    leg.tcp_ms,
+                    leg.tls_ms,
+                    leg.ttfb_ms,
+                    leg.total_ms,
+                ];
+                for (i, v) in phases.iter().enumerate() {
+                    if let Some(v) = v {
+                        ws.write_with_format(row, 5 + i as u16, *v, num2)?;
+                    }
+                }
+                // Verdict columns once per attempt, on the ipv4 row.
+                if family == "ipv4" {
+                    if let Some(fam) = d.faster_family.as_deref() {
+                        ws.write(row, 10, fam)?;
+                    }
+                    if let Some(delta) = d.delta_ms {
+                        ws.write_with_format(row, 11, delta, num2)?;
+                    }
+                    ws.write(row, 12, d.happy_eyeballs_verdict.as_str())?;
+                }
+                row += 1;
+            }
+        }
+        row += 1;
+    }
+
+    // ── WebSocket ────────────────────────────────────────────────────────────
+    let websockets: Vec<(u32, &crate::metrics::WebSocketResult)> = run
+        .attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::WebSocket)
+        .filter_map(|a| a.websocket.as_ref().map(|w| (a.sequence_num, w)))
+        .collect();
+    if !websockets.is_empty() {
+        ws.write_with_format(row, 0, "WebSocket", bold)?;
+        row += 1;
+        write_headers(
+            ws,
+            row,
+            &[
+                "Seq",
+                "URL",
+                "Upgrade ms",
+                "Upgrade Status",
+                "Msgs",
+                "Echoes",
+                "Loss %",
+                "RTT Min ms",
+                "RTT Avg ms",
+                "RTT p95 ms",
+                "Jitter ms",
+                "Payload B",
+            ],
+        )?;
+        row += 1;
+        for (seq, w) in &websockets {
+            ws.write(row, 0, *seq as f64)?;
+            ws.write(row, 1, w.url.as_str())?;
+            ws.write_with_format(row, 2, w.upgrade_ms, num2)?;
+            if let Some(s) = w.upgrade_status {
+                ws.write_with_format(row, 3, s as f64, num0)?;
+            }
+            ws.write(row, 4, w.message_count as f64)?;
+            ws.write(row, 5, w.echo_count as f64)?;
+            ws.write_with_format(row, 6, w.loss_percent, num2)?;
+            // Blank RTT cells when no echo arrived (sentinel rule, V11).
+            if w.echo_count > 0 {
+                ws.write_with_format(row, 7, w.msg_rtt_min_ms, num2)?;
+                ws.write_with_format(row, 8, w.msg_rtt_avg_ms, num2)?;
+                ws.write_with_format(row, 9, w.msg_rtt_p95_ms, num2)?;
+                ws.write_with_format(row, 10, w.jitter_ms, num2)?;
+            }
+            ws.write(row, 11, w.payload_size as f64)?;
+            row += 1;
+        }
+        row += 1;
+    }
+
+    // ── PMTUD (path MTU discovery) ───────────────────────────────────────────
+    let pmtud: Vec<(u32, &crate::metrics::PmtudResult)> = run
+        .attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::Pmtud)
+        .filter_map(|a| a.pmtud.as_ref().map(|p| (a.sequence_num, p)))
+        .collect();
+    if !pmtud.is_empty() {
+        ws.write_with_format(row, 0, "PMTUD (path MTU discovery)", bold)?;
+        row += 1;
+        write_headers(
+            ws,
+            row,
+            &[
+                "Seq",
+                "Destination",
+                "Path MTU",
+                "Lower Bound Only",
+                "Max Payload",
+                "ICMP Next-Hop MTU",
+                "Local MTU",
+                "Header Bytes",
+                "DF Probes",
+                "Method",
+            ],
+        )?;
+        row += 1;
+        for (seq, p) in &pmtud {
+            ws.write(row, 0, *seq as f64)?;
+            ws.write(row, 1, p.remote_addr.as_str())?;
+            if let Some(mtu) = p.path_mtu {
+                ws.write_with_format(row, 2, mtu as f64, num0)?;
+            }
+            ws.write(row, 3, p.lower_bound_only)?;
+            if let Some(v) = p.max_unfragmented_payload {
+                ws.write_with_format(row, 4, v as f64, num0)?;
+            }
+            if let Some(v) = p.icmp_mtu {
+                ws.write_with_format(row, 5, v as f64, num0)?;
+            }
+            if let Some(v) = p.local_mtu {
+                ws.write_with_format(row, 6, v as f64, num0)?;
+            }
+            ws.write(row, 7, p.header_bytes as f64)?;
+            ws.write(row, 8, p.probes_sent as f64)?;
+            ws.write(row, 9, p.method.as_str())?;
+            row += 1;
+        }
+        row += 1;
+    }
+
+    // ── DNS depth (dns mode: A/AAAA split, record counts, CNAME chain) ───────
+    let dns_depth: Vec<(u32, &crate::metrics::DnsResult)> = run
+        .attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::Dns)
+        .filter_map(|a| a.dns.as_ref().map(|d| (a.sequence_num, d)))
+        .filter(|(_, d)| d.a_ms.is_some() || d.aaaa_ms.is_some() || !d.cname_chain.is_empty())
+        .collect();
+    if !dns_depth.is_empty() {
+        ws.write_with_format(row, 0, "DNS depth", bold)?;
+        row += 1;
+        write_headers(
+            ws,
+            row,
+            &[
+                "Seq",
+                "Query",
+                "Resolve ms",
+                "A ms",
+                "AAAA ms",
+                "A Records",
+                "AAAA Records",
+                "CNAME Chain",
+            ],
+        )?;
+        row += 1;
+        for (seq, d) in &dns_depth {
+            ws.write(row, 0, *seq as f64)?;
+            ws.write(row, 1, d.query_name.as_str())?;
+            ws.write_with_format(row, 2, d.duration_ms, num2)?;
+            if let Some(v) = d.a_ms {
+                ws.write_with_format(row, 3, v, num2)?;
+            }
+            if let Some(v) = d.aaaa_ms {
+                ws.write_with_format(row, 4, v, num2)?;
+            }
+            if let Some(v) = d.a_record_count {
+                ws.write_with_format(row, 5, v as f64, num0)?;
+            }
+            if let Some(v) = d.aaaa_record_count {
+                ws.write_with_format(row, 6, v as f64, num0)?;
+            }
+            if !d.cname_chain.is_empty() {
+                ws.write(row, 7, d.cname_chain.join(" -> "))?;
+            }
+            row += 1;
+        }
+    }
+
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sheet 10 – Server Timing
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn write_server_timing(
@@ -667,7 +1088,7 @@ fn write_server_timing(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sheet 8 – Errors
+// Sheet 11 – Errors
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn write_errors(wb: &mut Workbook, run: &TestRun, bold: &Format) -> anyhow::Result<()> {
@@ -1168,6 +1589,248 @@ mod tests {
             observed_mixed_transport: true,
             capture_may_be_ambiguous: true,
         }
+    }
+
+    /// Base attempt with every sub-result unset, for probe-depth fixtures.
+    fn empty_attempt(proto: Protocol, seq: u32, run_id: Uuid) -> RequestAttempt {
+        RequestAttempt {
+            attempt_id: Uuid::new_v4(),
+            run_id,
+            protocol: proto,
+            sequence_num: seq,
+            started_at: Utc::now(),
+            finished_at: Some(Utc::now()),
+            success: true,
+            dns: None,
+            tcp: None,
+            tls: None,
+            http: None,
+            udp: None,
+            error: None,
+            retry_count: 0,
+            server_timing: None,
+            udp_throughput: None,
+            page_load: None,
+            browser: None,
+            http_stack: None,
+            rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
+            websocket: None,
+            pmtud: None,
+        }
+    }
+
+    /// A run exercising every block of the Probe Depth sheet (rpm, ping,
+    /// path with hops, dualstack, websocket, pmtud, dns depth) plus the
+    /// Statistics rows for the new protocols.
+    #[test]
+    fn save_with_probe_depth_attempts_does_not_panic() {
+        let tmp = NamedTempFile::new().unwrap();
+        let run_id = Uuid::new_v4();
+        let now = Utc::now();
+
+        let mut rpm_attempt = empty_attempt(Protocol::Rpm, 0, run_id);
+        rpm_attempt.rpm = Some(RpmResult {
+            remote_addr: "10.0.0.1:9999".into(),
+            unloaded_probe_count: 20,
+            unloaded_success_count: 20,
+            unloaded_loss_percent: 0.0,
+            unloaded_rtt_min_ms: 1.0,
+            unloaded_rtt_avg_ms: 2.0,
+            unloaded_rtt_p95_ms: 3.0,
+            unloaded_jitter_ms: 0.3,
+            loaded_probe_count: 20,
+            loaded_success_count: 19,
+            loaded_loss_percent: 5.0,
+            loaded_rtt_min_ms: 4.0,
+            loaded_rtt_avg_ms: 8.0,
+            loaded_rtt_p95_ms: 16.0,
+            loaded_jitter_ms: 1.2,
+            rpm: Some(7500.0),
+            bufferbloat_factor: Some(4.0),
+            load_duration_ms: 5000.0,
+            load_bytes_transferred: 100_000_000,
+            load_downloads_completed: 4,
+            load_throughput_mbps: Some(20.0),
+            started_at: now,
+        });
+
+        let mut ping_attempt = empty_attempt(Protocol::Ping, 1, run_id);
+        ping_attempt.ping = Some(PingResult {
+            remote_addr: "192.0.2.7".into(),
+            probe_count: 10,
+            success_count: 9,
+            loss_percent: 10.0,
+            rtt_min_ms: 1.1,
+            rtt_avg_ms: 2.2,
+            rtt_p95_ms: 3.3,
+            jitter_ms: 0.4,
+            probe_rtts_ms: vec![Some(2.2); 9],
+            reply_ttl: Some(64),
+            started_at: now,
+        });
+
+        let mut path_attempt = empty_attempt(Protocol::Path, 2, run_id);
+        path_attempt.path = Some(PathResult {
+            remote_addr: "203.0.113.9:443".into(),
+            hops: vec![
+                PathHop {
+                    index: 1,
+                    addr: Some("192.168.1.1".into()),
+                    rtt_ms: Some(0.8),
+                },
+                PathHop {
+                    index: 2,
+                    addr: None,
+                    rtt_ms: None,
+                },
+            ],
+            hop_count: Some(2),
+            destination_reached: true,
+            destination_rtt_ms: Some(12.5),
+            method: "udp-ttl/ip-recverr".into(),
+            max_ttl: 30,
+            started_at: now,
+        });
+
+        let mut dual_attempt = empty_attempt(Protocol::DualStack, 3, run_id);
+        dual_attempt.dualstack = Some(DualStackResult {
+            ipv4: DualStackLeg {
+                attempted: true,
+                success: true,
+                addr: Some("192.0.2.10:443".into()),
+                dns_ms: Some(1.0),
+                tcp_ms: Some(2.0),
+                tls_ms: Some(6.0),
+                ttfb_ms: Some(11.0),
+                total_ms: Some(15.0),
+                error: None,
+            },
+            ipv6: DualStackLeg {
+                attempted: false,
+                success: false,
+                addr: None,
+                dns_ms: None,
+                tcp_ms: None,
+                tls_ms: None,
+                ttfb_ms: None,
+                total_ms: None,
+                error: Some("no AAAA records".into()),
+            },
+            faster_family: None,
+            delta_ms: None,
+            happy_eyeballs_verdict: "ipv4 (only family available)".into(),
+            happy_eyeballs_grace_ms: 250.0,
+            started_at: now,
+        });
+
+        let mut ws_attempt = empty_attempt(Protocol::WebSocket, 4, run_id);
+        ws_attempt.websocket = Some(WebSocketResult {
+            url: "wss://localhost:8443/ws/echo".into(),
+            upgrade_ms: 4.25,
+            upgrade_status: Some(101),
+            message_count: 20,
+            echo_count: 19,
+            loss_percent: 5.0,
+            msg_rtt_min_ms: 0.9,
+            msg_rtt_avg_ms: 1.8,
+            msg_rtt_p95_ms: 3.6,
+            jitter_ms: 0.25,
+            msg_rtts_ms: vec![Some(1.8); 19],
+            payload_size: 64,
+            started_at: now,
+        });
+
+        let mut pmtud_attempt = empty_attempt(Protocol::Pmtud, 5, run_id);
+        pmtud_attempt.pmtud = Some(PmtudResult {
+            remote_addr: "203.0.113.9:9999".into(),
+            path_mtu: Some(1492),
+            max_unfragmented_payload: Some(1464),
+            probes_sent: 11,
+            method: "df-udp-echo/ip-recverr".into(),
+            icmp_mtu: Some(1492),
+            local_mtu: Some(1500),
+            header_bytes: 28,
+            lower_bound_only: false,
+            started_at: now,
+        });
+
+        let mut dns_attempt = empty_attempt(Protocol::Dns, 6, run_id);
+        dns_attempt.dns = Some(DnsResult {
+            query_name: "www.example.com".into(),
+            resolved_ips: vec!["192.0.2.1".into()],
+            duration_ms: 12.0,
+            started_at: now,
+            success: true,
+            resolver: Some("system (192.168.1.1:53)".into()),
+            a_ms: Some(7.5),
+            aaaa_ms: Some(9.25),
+            a_record_count: Some(2),
+            aaaa_record_count: Some(1),
+            cname_chain: vec!["cdn.example.net".into()],
+        });
+
+        let run = TestRun {
+            schema_version: crate::metrics::SCHEMA_VERSION.to_string(),
+            run_id,
+            started_at: now,
+            finished_at: Some(now),
+            target_url: "http://localhost:8080/health".into(),
+            target_host: "localhost".into(),
+            modes: vec![
+                "rpm".into(),
+                "ping".into(),
+                "path".into(),
+                "dualstack".into(),
+                "websocket".into(),
+                "pmtud".into(),
+                "dns".into(),
+            ],
+            total_runs: 1,
+            concurrency: 1,
+            timeout_ms: 5000,
+            client_os: "test".into(),
+            client_version: "0.0.0".into(),
+            server_info: None,
+            client_info: None,
+            client_network: None,
+            client_load_before: None,
+            client_load_after: None,
+            clock_sync: None,
+            baseline: None,
+            packet_capture_summary: None,
+            benchmark_environment_check: None,
+            benchmark_stability_check: None,
+            benchmark_phase: None,
+            benchmark_scenario: None,
+            benchmark_launch_index: None,
+            benchmark_warmup_attempt_count: 0,
+            benchmark_pilot_attempt_count: 0,
+            benchmark_overhead_attempt_count: 0,
+            benchmark_cooldown_attempt_count: 0,
+            benchmark_execution_plan: None,
+            benchmark_noise_thresholds: None,
+            client_geo: None,
+            target_geo: None,
+            attempts: vec![
+                rpm_attempt,
+                ping_attempt,
+                path_attempt,
+                dual_attempt,
+                ws_attempt,
+                pmtud_attempt,
+                dns_attempt,
+            ],
+        };
+
+        save(&run, tmp.path(), None).unwrap();
+        let metadata = std::fs::metadata(tmp.path()).unwrap();
+        assert!(
+            metadata.len() > 1000,
+            "xlsx with probe depth data must be non-empty"
+        );
     }
 
     #[test]

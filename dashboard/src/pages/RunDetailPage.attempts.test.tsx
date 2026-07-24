@@ -128,6 +128,238 @@ describe('AttemptRow — widened phase detail', () => {
     expect(screen.queryByText('Server')).not.toBeInTheDocument();
   });
 
+  it('renders the rpm card with bufferbloat warn color when the factor is high', () => {
+    render(
+      <AttemptRow
+        a={attempt({
+          protocol: 'rpm',
+          rpm: {
+            remote_addr: '203.0.113.7:4000',
+            unloaded_probe_count: 20,
+            unloaded_success_count: 20,
+            unloaded_loss_percent: 0,
+            unloaded_rtt_min_ms: 8.1,
+            unloaded_rtt_avg_ms: 10.0,
+            unloaded_rtt_p95_ms: 14.2,
+            unloaded_jitter_ms: 0.8,
+            loaded_probe_count: 40,
+            loaded_success_count: 38,
+            loaded_loss_percent: 5.0,
+            loaded_rtt_min_ms: 12.3,
+            loaded_rtt_avg_ms: 85.0,
+            loaded_rtt_p95_ms: 190.4,
+            loaded_jitter_ms: 9.6,
+            rpm: 705.88,
+            bufferbloat_factor: 8.5,
+            load_duration_ms: 10000,
+            load_bytes_transferred: 524288000,
+            load_downloads_completed: 5,
+            load_throughput_mbps: 50.0,
+          },
+        })}
+      />
+    );
+
+    expect(screen.getByText('RPM')).toBeInTheDocument();
+    expect(screen.getByText(/10\.00ms/)).toBeInTheDocument(); // unloaded avg
+    expect(screen.getByText(/85\.00ms under load/)).toBeInTheDocument();
+    expect(screen.getByText(/706 RPM/)).toBeInTheDocument();
+    const bloat = screen.getByText(/bufferbloat ×8\.50/);
+    expect(bloat).toHaveClass('text-yellow-400'); // factor ≥ 2 → warn
+    expect(screen.getByText(/load 50\.0 MB\/s/)).toBeInTheDocument();
+  });
+
+  it('renders bufferbloat factor without warn color when near 1.0', () => {
+    render(
+      <AttemptRow
+        a={attempt({
+          protocol: 'rpm',
+          rpm: {
+            remote_addr: '203.0.113.7:4000',
+            unloaded_probe_count: 20,
+            unloaded_success_count: 20,
+            unloaded_loss_percent: 0,
+            unloaded_rtt_min_ms: 8.1,
+            unloaded_rtt_avg_ms: 10.0,
+            unloaded_rtt_p95_ms: 14.2,
+            unloaded_jitter_ms: 0.8,
+            loaded_probe_count: 40,
+            loaded_success_count: 40,
+            loaded_loss_percent: 0,
+            loaded_rtt_min_ms: 9.0,
+            loaded_rtt_avg_ms: 11.0,
+            loaded_rtt_p95_ms: 13.5,
+            loaded_jitter_ms: 0.9,
+            rpm: 5454.5,
+            bufferbloat_factor: 1.1,
+            load_duration_ms: 10000,
+            load_bytes_transferred: 524288000,
+            load_downloads_completed: 5,
+          },
+        })}
+      />
+    );
+
+    expect(screen.getByText(/bufferbloat ×1\.10/)).toHaveClass('text-gray-500');
+  });
+
+  it('renders the dualstack card with per-family totals and the faster family', () => {
+    render(
+      <AttemptRow
+        a={attempt({
+          protocol: 'dualstack',
+          dualstack: {
+            ipv4: { attempted: true, success: true, addr: '203.0.113.7:443', total_ms: 55.0 },
+            ipv6: { attempted: true, success: true, addr: '[2001:db8::7]:443', total_ms: 48.0 },
+            faster_family: 'ipv6',
+            delta_ms: 7.0,
+            happy_eyeballs_verdict: 'ipv6 (connect within 250ms grace of ipv4)',
+            happy_eyeballs_grace_ms: 250,
+          },
+        })}
+      />
+    );
+
+    expect(screen.getByText('Dual Stack')).toBeInTheDocument();
+    expect(screen.getByText(/v4 55\.00ms/)).toBeInTheDocument();
+    expect(screen.getByText(/v6 48\.00ms/)).toBeInTheDocument();
+    expect(screen.getByText(/ipv6 faster by 7\.00ms/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/ipv6 \(connect within 250ms grace of ipv4\)/)
+    ).toBeInTheDocument();
+  });
+
+  it('marks a failed dualstack leg instead of fabricating a total', () => {
+    render(
+      <AttemptRow
+        a={attempt({
+          protocol: 'dualstack',
+          dualstack: {
+            ipv4: { attempted: true, success: true, addr: '203.0.113.7:443', total_ms: 55.0 },
+            ipv6: { attempted: true, success: false, error: 'connect timeout' },
+            happy_eyeballs_verdict: 'ipv4 (ipv6 connect failed)',
+            happy_eyeballs_grace_ms: 250,
+          },
+        })}
+      />
+    );
+
+    expect(screen.getByText('fail')).toBeInTheDocument();
+    expect(screen.queryByText(/faster/)).not.toBeInTheDocument();
+  });
+
+  it('renders the pmtud card with the MTU verdict and method', () => {
+    render(
+      <AttemptRow
+        a={attempt({
+          protocol: 'pmtud',
+          pmtud: {
+            remote_addr: '203.0.113.7:4000',
+            path_mtu: 1472,
+            max_unfragmented_payload: 1444,
+            probes_sent: 11,
+            method: 'df-udp-echo/ip-recverr',
+            icmp_mtu: 1472,
+            local_mtu: 1500,
+            header_bytes: 28,
+            lower_bound_only: false,
+          },
+        })}
+      />
+    );
+
+    expect(screen.getByText('PMTUD')).toBeInTheDocument();
+    expect(screen.getByText('1472')).toBeInTheDocument();
+    expect(screen.getByText(/local 1500/)).toBeInTheDocument();
+    expect(screen.getByText('df-udp-echo/ip-recverr')).toBeInTheDocument();
+    expect(screen.queryByText(/no MTU verdict/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/lower bound/)).not.toBeInTheDocument();
+  });
+
+  it('renders the pmtud no-feedback case honestly (no fabricated MTU)', () => {
+    render(
+      <AttemptRow
+        a={attempt({
+          protocol: 'pmtud',
+          pmtud: {
+            remote_addr: '203.0.113.7:4000',
+            probes_sent: 4,
+            method: 'df-no-feedback',
+            header_bytes: 28,
+            lower_bound_only: false,
+          },
+        })}
+      />
+    );
+
+    expect(screen.getByText(/no MTU verdict/)).toBeInTheDocument();
+    expect(screen.getByText('df-no-feedback')).toBeInTheDocument();
+  });
+
+  it('renders ping, path and websocket cards when present', () => {
+    render(
+      <AttemptRow
+        a={attempt({
+          ping: {
+            remote_addr: '203.0.113.7',
+            probe_count: 10,
+            success_count: 9,
+            loss_percent: 10.0,
+            rtt_min_ms: 7.9,
+            rtt_avg_ms: 9.4,
+            rtt_p95_ms: 12.6,
+            jitter_ms: 0.7,
+            probe_rtts_ms: [8.0, null, 9.1],
+            reply_ttl: 54,
+          },
+          path: {
+            remote_addr: '203.0.113.7:4000',
+            hops: [
+              { index: 1, addr: '192.168.1.1', rtt_ms: 1.2 },
+              { index: 2 },
+              { index: 3, addr: '10.10.0.1', rtt_ms: 6.5 },
+            ],
+            hop_count: 3,
+            destination_reached: true,
+            destination_rtt_ms: 9.8,
+            method: 'udp-ttl/ip-recverr',
+            max_ttl: 30,
+          },
+          websocket: {
+            url: 'wss://example.com/ws',
+            upgrade_ms: 22.4,
+            upgrade_status: 101,
+            message_count: 20,
+            echo_count: 19,
+            loss_percent: 5.0,
+            msg_rtt_min_ms: 3.1,
+            msg_rtt_avg_ms: 4.6,
+            msg_rtt_p95_ms: 8.2,
+            jitter_ms: 0.5,
+            msg_rtts_ms: [3.5, null, 4.0],
+            payload_size: 125,
+          },
+        })}
+      />
+    );
+
+    // Ping
+    expect(screen.getByText('Ping')).toBeInTheDocument();
+    expect(screen.getByText(/RTT avg 9\.40ms · Jitter 700µs · Loss 10\.0%/)).toBeInTheDocument();
+    expect(screen.getByText(/10 probes · ttl 54/)).toBeInTheDocument();
+
+    // Path — silent hop rendered as a traceroute '*'
+    expect(screen.getByText('Path')).toBeInTheDocument();
+    expect(screen.getByText(/3 hops/)).toBeInTheDocument();
+    expect(screen.getByText('reached')).toBeInTheDocument();
+    expect(screen.getByText('192.168.1.1 → * → 10.10.0.1')).toBeInTheDocument();
+
+    // WebSocket
+    expect(screen.getByText('WebSocket')).toBeInTheDocument();
+    expect(screen.getByText(/Upgrade 22\.40ms · RTT avg 4\.60ms · Loss 5\.0%/)).toBeInTheDocument();
+    expect(screen.getByText(/19\/20 echoes · p95 8\.20ms/)).toBeInTheDocument();
+  });
+
   it('renders an old minimal attempt without any of the widened rows', () => {
     render(
       <AttemptRow
@@ -154,5 +386,12 @@ describe('AttemptRow — widened phase detail', () => {
     expect(screen.queryByText(/retrans/)).not.toBeInTheDocument();
     expect(screen.queryByText(/goodput/)).not.toBeInTheDocument();
     expect(screen.queryByText(/alpn/)).not.toBeInTheDocument();
+    // Measurement-depth cards (v0.28.78) are strictly data-gated
+    expect(screen.queryByText('RPM')).not.toBeInTheDocument();
+    expect(screen.queryByText('Ping')).not.toBeInTheDocument();
+    expect(screen.queryByText('Path')).not.toBeInTheDocument();
+    expect(screen.queryByText('Dual Stack')).not.toBeInTheDocument();
+    expect(screen.queryByText('WebSocket')).not.toBeInTheDocument();
+    expect(screen.queryByText('PMTUD')).not.toBeInTheDocument();
   });
 });

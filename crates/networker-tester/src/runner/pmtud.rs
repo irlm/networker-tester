@@ -14,8 +14,16 @@
 //! - **macOS**: `IP_DONTFRAG` / `IPV6_DONTFRAG`. There is no error queue; an
 //!   ICMP error surfaces as `EMSGSIZE` / `ECONNREFUSED` on a subsequent
 //!   operation on the connected socket (no next-hop MTU value).
-//! - **Windows**: reported as a clean `config` unsupported error (winsock
-//!   `IP_DONTFRAGMENT` is a follow-up), never fake results.
+//! - **Windows**: winsock `IP_DONTFRAGMENT` / `IPV6_DONTFRAG`. A DF send
+//!   larger than the local/route MTU fails with `WSAEMSGSIZE`; an ICMP
+//!   port-unreachable surfaces as `WSAECONNRESET` on the connected socket
+//!   (delivery confirmation, mirroring the macOS approach). Path ICMP
+//!   fragmentation-needed is NOT reliably surfaced to UDP sockets on
+//!   Windows, so: with delivery confirmation (echo or port-unreachable) the
+//!   search still finds a path MTU below the local MTU (oversized DF probes
+//!   simply never confirm); without any confirmation a path MTU below the
+//!   local MTU is undetectable and the result is an honest `path_mtu: None`
+//!   — never fake results.
 //!
 //! ## Delivery confirmation
 //!
@@ -95,19 +103,6 @@ pub async fn run_pmtud_probe(
 ) -> RequestAttempt {
     let attempt_id = Uuid::new_v4();
     let started_at = Utc::now();
-
-    if cfg!(windows) {
-        return pmtud_failed(
-            run_id,
-            attempt_id,
-            sequence_num,
-            started_at,
-            ErrorCategory::Config,
-            "pmtud mode is not supported on Windows yet — DF-bit probing needs \
-             winsock IP_DONTFRAGMENT plumbing (follow-up); use a Linux or macOS tester"
-                .to_string(),
-        );
-    }
 
     let addr: IpAddr = match resolve_host(&cfg.target_host).await {
         Ok(a) => a,
@@ -429,8 +424,10 @@ impl ConfirmKind {
 
 #[cfg(target_os = "linux")]
 pub(crate) use linux_impl as platform;
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 pub(crate) use portable_impl as platform;
+#[cfg(windows)]
+pub(crate) use windows_impl as platform;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Linux: IP_PMTUDISC_DO + IP_RECVERR — full ICMP feedback with next-hop MTU
@@ -841,7 +838,7 @@ pub(crate) mod linux_impl {
 // macOS / other unix: IP_DONTFRAG — EMSGSIZE-based, honest degradation
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 pub(crate) mod portable_impl {
     use super::{search_largest_fit, ConfirmKind, DiscoverOutcome, SizeClass};
     use std::io::ErrorKind;
@@ -1068,10 +1065,241 @@ pub(crate) mod portable_impl {
 
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     fn set_dontfrag(_socket: &UdpSocket, _addr: &IpAddr) -> Result<(), String> {
-        // Windows never reaches here (clean Config error upstream); other
-        // unixes without a known DF socket option refuse honestly rather
-        // than probe without DF (which would measure nothing).
+        // Windows has its own module (windows_impl); other unixes without a
+        // known DF socket option refuse honestly rather than probe without
+        // DF (which would measure nothing).
         Err("pmtud mode has no DF socket-option support on this platform".to_string())
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Windows: winsock IP_DONTFRAGMENT — WSAEMSGSIZE on send, honest degradation
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(windows)]
+pub(crate) mod windows_impl {
+    use super::{search_largest_fit, ConfirmKind, DiscoverOutcome, SizeClass};
+    use std::io::ErrorKind;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
+    use std::os::windows::io::AsRawSocket;
+    use std::time::{Duration, Instant};
+    use windows_sys::Win32::Networking::WinSock::{
+        setsockopt, IPPROTO_IP, IPPROTO_IPV6, IPV6_DONTFRAG, IP_DONTFRAGMENT, SOCKET,
+        WSAECONNRESET, WSAEMSGSIZE,
+    };
+
+    pub fn discover_blocking(
+        addr: IpAddr,
+        port: u16,
+        probe_timeout_ms: u64,
+        retries: u32,
+        max_mtu: u32,
+    ) -> Result<DiscoverOutcome, String> {
+        let bind: SocketAddr = match addr {
+            IpAddr::V4(_) => (Ipv4Addr::UNSPECIFIED, 0).into(),
+            IpAddr::V6(_) => (Ipv6Addr::UNSPECIFIED, 0).into(),
+        };
+        let socket = UdpSocket::bind(bind).map_err(|e| format!("UDP bind failed: {e}"))?;
+        socket
+            .connect(SocketAddr::new(addr, port))
+            .map_err(|e| format!("UDP connect failed: {e}"))?;
+        set_dontfragment(&socket, &addr)?;
+
+        let header: u32 = if addr.is_ipv6() { 48 } else { 28 };
+        let floor_mtu: u32 = if addr.is_ipv6() { 1280 } else { 576 };
+        let floor = floor_mtu - header;
+        let ceil = max_mtu.saturating_sub(header).max(floor);
+
+        let mut probes_sent: u32 = 0;
+        let mut buf = vec![0u8; ceil as usize];
+        let mut confirm_kind: Option<ConfirmKind> = None;
+
+        // Capability probe at floor size: does the destination answer (echo
+        // or port-unreachable) at all?
+        {
+            probes_sent += 1;
+            stamp(&mut buf, 0);
+            let _ = socket.send(&buf[..floor as usize]);
+            match recv_within(&socket, probe_timeout_ms) {
+                RecvOutcome::Data => confirm_kind = Some(ConfirmKind::UdpEcho),
+                RecvOutcome::ConnReset => confirm_kind = Some(ConfirmKind::PortUnreach),
+                RecvOutcome::Timeout => {}
+            }
+        }
+
+        let mut seq: u32 = 0;
+        let outcome = search_largest_fit(floor, ceil, header, |payload| {
+            let confirmed_mode = confirm_kind.is_some();
+            let wait_ms = if confirmed_mode {
+                probe_timeout_ms
+            } else {
+                probe_timeout_ms.min(super::PMTUD_ICMP_WAIT_CAP_MS)
+            };
+            let tries = if confirmed_mode { retries + 1 } else { 1 };
+            for _ in 0..tries {
+                seq = seq.wrapping_add(1);
+                stamp(&mut buf, seq);
+                probes_sent += 1;
+                match send_clearing(&socket, &buf[..payload as usize]) {
+                    SendOutcome::Sent => {}
+                    SendOutcome::Msgsize => {
+                        // WSAEMSGSIZE with DF set: the datagram exceeds the
+                        // local/route MTU. Winsock gives no next-hop MTU and
+                        // no origin — never counted as wire ICMP.
+                        return Ok(SizeClass::TooBig {
+                            mtu: None,
+                            wire_icmp: false,
+                        });
+                    }
+                    SendOutcome::Fatal(msg) => return Err(msg),
+                }
+                match recv_within(&socket, wait_ms) {
+                    RecvOutcome::Data => {
+                        confirm_kind.get_or_insert(ConfirmKind::UdpEcho);
+                        return Ok(SizeClass::Fit);
+                    }
+                    // ICMP port-unreachable delivered on the connected
+                    // socket: the datagram of this size REACHED the
+                    // destination unfragmented.
+                    RecvOutcome::ConnReset => {
+                        confirm_kind.get_or_insert(ConfirmKind::PortUnreach);
+                        return Ok(SizeClass::Fit);
+                    }
+                    RecvOutcome::Timeout => {}
+                }
+            }
+            if confirmed_mode {
+                // Confirmations flowed at other sizes but not this one after
+                // retries: with DF set, fragmentation drop is the by-far
+                // likeliest cause.
+                Ok(SizeClass::TooBig {
+                    mtu: None,
+                    wire_icmp: false,
+                })
+            } else {
+                Ok(SizeClass::Silent)
+            }
+        })?;
+
+        // Honest verdict: on Windows there is no wire-ICMP evidence class at
+        // all (frag-needed is not surfaced to UDP sockets), so a conclusion
+        // REQUIRES delivery confirmation.
+        let (path_mtu, method, lower_bound_only) = if let Some(kind) = confirm_kind {
+            let mtu = outcome.largest_fit.map(|p| p + header);
+            let lb =
+                outcome.largest_fit == Some(ceil) && !outcome.bound_found && outcome.confirmed_seen;
+            (mtu, format!("df-dontfragment/{}", kind.label()), lb)
+        } else {
+            // Only local send errors (or nothing at all): the interface
+            // constraint is already reported via local_mtu — no path claim.
+            (None, "df-no-feedback".to_string(), false)
+        };
+
+        Ok(DiscoverOutcome {
+            path_mtu,
+            probes_sent,
+            method,
+            // Never observable without an error queue — always None here.
+            icmp_mtu: outcome.icmp_mtu,
+            lower_bound_only,
+        })
+    }
+
+    fn stamp(buf: &mut [u8], seq: u32) {
+        if buf.len() >= 12 {
+            buf[0..4].copy_from_slice(&seq.to_be_bytes());
+            let now_us = chrono::Utc::now().timestamp_micros();
+            buf[4..12].copy_from_slice(&now_us.to_be_bytes());
+        }
+    }
+
+    enum SendOutcome {
+        Sent,
+        /// WSAEMSGSIZE: datagram larger than the local/route MTU with DF set.
+        Msgsize,
+        Fatal(String),
+    }
+
+    /// send() that retries through a pending async WSAECONNRESET (winsock
+    /// reports a delivered ICMP port-unreachable on the next socket op,
+    /// then clears it).
+    fn send_clearing(socket: &UdpSocket, payload: &[u8]) -> SendOutcome {
+        for _ in 0..4 {
+            match socket.send(payload) {
+                Ok(_) => return SendOutcome::Sent,
+                Err(e) if e.raw_os_error() == Some(WSAEMSGSIZE) => return SendOutcome::Msgsize,
+                Err(e) if e.raw_os_error() == Some(WSAECONNRESET) => continue,
+                Err(e) => return SendOutcome::Fatal(format!("UDP send failed: {e}")),
+            }
+        }
+        SendOutcome::Fatal("UDP send kept failing with pending async errors".to_string())
+    }
+
+    enum RecvOutcome {
+        /// An echo datagram came back.
+        Data,
+        /// WSAECONNRESET reported on recv — ICMP port-unreachable, i.e. the
+        /// probe datagram reached the destination.
+        ConnReset,
+        Timeout,
+    }
+
+    /// Wait up to `timeout_ms` for a readable echo or an async socket error.
+    fn recv_within(socket: &UdpSocket, timeout_ms: u64) -> RecvOutcome {
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms.max(1));
+        let mut rbuf = [0u8; 65_535];
+        loop {
+            let now = Instant::now();
+            if now >= deadline {
+                return RecvOutcome::Timeout;
+            }
+            if socket.set_read_timeout(Some(deadline - now)).is_err() {
+                return RecvOutcome::Timeout;
+            }
+            match socket.recv(&mut rbuf) {
+                Ok(_) => return RecvOutcome::Data,
+                Err(e) if e.raw_os_error() == Some(WSAECONNRESET) => {
+                    return RecvOutcome::ConnReset;
+                }
+                // WSAEMSGSIZE on recv means a datagram ARRIVED but was
+                // truncated (unlike unix, it is not ICMP feedback) — with a
+                // 65535-byte buffer this cannot trigger, but if it ever did,
+                // arrival is still delivery confirmation.
+                Err(e) if e.raw_os_error() == Some(WSAEMSGSIZE) => return RecvOutcome::Data,
+                Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {
+                    return RecvOutcome::Timeout;
+                }
+                // Other async errors are drained and the wait continues.
+                Err(_) => continue,
+            }
+        }
+    }
+
+    fn set_dontfragment(socket: &UdpSocket, addr: &IpAddr) -> Result<(), String> {
+        let one: u32 = 1;
+        let (level, opt) = match addr {
+            IpAddr::V4(_) => (IPPROTO_IP, IP_DONTFRAGMENT),
+            IpAddr::V6(_) => (IPPROTO_IPV6, IPV6_DONTFRAG),
+        };
+        // SAFETY: valid live socket; optval points at a 4-byte DWORD for the
+        // duration of the call.
+        let rc = unsafe {
+            setsockopt(
+                socket.as_raw_socket() as SOCKET,
+                level,
+                opt,
+                &one as *const u32 as *const u8,
+                std::mem::size_of::<u32>() as i32,
+            )
+        };
+        if rc != 0 {
+            Err(format!(
+                "IP_DONTFRAGMENT setsockopt failed: {}",
+                std::io::Error::last_os_error()
+            ))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -1169,13 +1397,11 @@ mod tests {
         let attempt = run_pmtud_probe(Uuid::new_v4(), 0, &cfg).await;
         assert!(!attempt.success);
         assert!(attempt.pmtud.is_none());
-        // Windows short-circuits with the unsupported-platform Config error
-        // BEFORE resolution; Unix reaches the resolver and reports Dns.
-        let expected = if cfg!(windows) {
-            ErrorCategory::Config
-        } else {
+        // Every platform (incl. Windows, since the IP_DONTFRAGMENT backend
+        // landed) reaches the resolver first and reports Dns.
+        assert_eq!(
+            attempt.error.expect("error must be set").category,
             ErrorCategory::Dns
-        };
-        assert_eq!(attempt.error.expect("error must be set").category, expected);
+        );
     }
 }

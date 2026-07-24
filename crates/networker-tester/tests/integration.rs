@@ -502,7 +502,8 @@ async fn rpm_probe_reports_latency_under_load() {
 /// ICMP echo (`ping`) against loopback: asserts the STRUCTURE of the result
 /// (per-probe RTTs recorded, aggregates consistent), not RTT magnitudes.
 /// SKIPs gracefully where the environment forbids unprivileged ICMP sockets
-/// (Linux with a restrictive `ping_group_range`, Windows).
+/// (Linux with a restrictive `ping_group_range`). Windows must run for real:
+/// IcmpSendEcho needs no privileges, so a Config error there is a probe bug.
 #[tokio::test]
 async fn ping_probe_loopback_structure() {
     let cfg = PingProbeConfig {
@@ -519,6 +520,12 @@ async fn ping_probe_loopback_structure() {
             .as_ref()
             .is_some_and(|e| e.category == ErrorCategory::Config)
     {
+        if cfg!(windows) {
+            panic!(
+                "Windows ping must not report a Config error: {:?}",
+                attempt.error
+            );
+        }
         eprintln!(
             "SKIP ping_probe_loopback_structure: unprivileged ICMP unavailable: {:?}",
             attempt.error
@@ -719,9 +726,11 @@ async fn websocket_probe_over_tls() {
 
 /// Path-MTU discovery against the in-process endpoint's UDP echo on
 /// loopback: DF datagrams are echo-confirmed, so the probe must conclude a
-/// path MTU. On loopback nothing fragments below the search ceiling, so the
-/// result is the ceiling flagged as a lower bound (never a fabricated exact
-/// value). Windows reports a clean unsupported Config error → SKIP.
+/// path MTU. On loopback nothing fragments below the search ceiling (unless
+/// the loopback MTU itself bounds it first, e.g. via WSAEMSGSIZE on
+/// Windows), so a ceiling verdict is flagged as a lower bound (never a
+/// fabricated exact value). Every platform (Linux, macOS, Windows) now has a
+/// real DF backend — a Config error would be a probe bug.
 #[tokio::test]
 async fn pmtud_probe_confirms_loopback_mtu() {
     let ep = Endpoint::start().await;
@@ -734,18 +743,14 @@ async fn pmtud_probe_confirms_loopback_mtu() {
 
     let attempt = run_pmtud_probe(Uuid::new_v4(), 0, &cfg).await;
 
-    if !attempt.success
-        && attempt
+    assert!(
+        !attempt
             .error
             .as_ref()
-            .is_some_and(|e| e.category == ErrorCategory::Config)
-    {
-        eprintln!(
-            "SKIP pmtud_probe_confirms_loopback_mtu: platform unsupported: {:?}",
-            attempt.error
-        );
-        return;
-    }
+            .is_some_and(|e| e.category == ErrorCategory::Config),
+        "pmtud has a DF backend on every supported platform; Config error is a bug: {:?}",
+        attempt.error
+    );
 
     assert_eq!(attempt.protocol, Protocol::Pmtud);
     assert_eq!(attempt.protocol.to_string(), "pmtud");

@@ -37,7 +37,8 @@ pub struct Cli {
     ///   --udp-probes / --udp-payload / --udp-timeout; requires a networker-endpoint target).
     /// pmtud: path-MTU discovery via DF-bit UDP probing at binary-searched sizes toward the
     ///   UDP echo port; Linux reads ICMP frag-needed (IP_RECVERR, next-hop MTU), macOS uses
-    ///   IP_DONTFRAG/EMSGSIZE, Windows reports a clean unsupported error.
+    ///   IP_DONTFRAG/EMSGSIZE, Windows uses IP_DONTFRAGMENT/WSAEMSGSIZE (needs delivery
+    ///   confirmation to conclude — path ICMP is not surfaced to UDP sockets there).
     /// pageload: shorthand that runs pageload1+pageload2+pageload3 (all three HTTP versions).
     /// pageload1: HTTP/1.1 page-load (same as the original pageload single-version mode).
     /// browser: shorthand that runs browser1+browser2+browser3 (all three HTTP versions).

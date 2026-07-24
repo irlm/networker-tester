@@ -237,12 +237,14 @@ loss/jitter control yet.
 > `/download` route plus the UDP echo server on port 9999).
 
 > `ping` sends ICMP echo probes (count/timeout follow `--udp-probes` /
-> `--udp-timeout`) via unprivileged ICMP datagram sockets — no raw sockets,
-> no root. Reports RTT min/avg/p95, jitter, loss, and the reply TTL when
-> observable. On Linux the process gid must be inside
-> `net.ipv4.ping_group_range` (denials are reported as a `config` error with
-> the sysctl fix hint); Windows is not supported yet and reports a clean
-> `config` error.
+> `--udp-timeout`) — no raw sockets, no root on any platform. Unix uses
+> unprivileged ICMP datagram sockets; Windows uses the iphlpapi echo API
+> (`IcmpSendEcho` for IPv4, `Icmp6SendEcho2` for IPv6). Reports RTT
+> min/avg/p95, jitter, loss, and the reply TTL when observable. On Linux the
+> process gid must be inside `net.ipv4.ping_group_range` (denials are
+> reported as a `config` error with the sysctl fix hint). On Windows the
+> reply TTL is reported for IPv4 targets only (the IPv6 echo reply structure
+> carries no hop limit).
 
 > `path` is a traceroute-style hop-discovery probe: UDP probes to high ports
 > (33434+) with rising TTL. On Linux, `IP_RECVERR` yields each hop's router
@@ -269,11 +271,16 @@ loss/jitter control yet.
 > fragmentation-needed errors (with the next-hop MTU) are read unprivileged
 > from the socket error queue (`IP_RECVERR`) — so it concludes even against
 > targets that never answer. On macOS it relies on `IP_DONTFRAG` + `EMSGSIZE`
-> delivery. When the target runs a networker-endpoint, its UDP echo (:9999)
-> positively confirms unfragmented delivery; with no echo, no ICMP, and no
-> send errors the probe reports an honest `path_mtu: null` (`method:
-> "df-no-feedback"`) — it never fabricates. Windows reports a clean
-> unsupported `config` error.
+> delivery. On Windows it sets `IP_DONTFRAGMENT`/`IPV6_DONTFRAG` (`method:
+> "df-dontfragment/..."`): oversized sends fail locally with `WSAEMSGSIZE`
+> and an ICMP port-unreachable surfaces as `WSAECONNRESET` (delivery
+> confirmation), but path ICMP fragmentation-needed is not surfaced to UDP
+> sockets — so Windows needs delivery confirmation (echo or
+> port-unreachable) to conclude, and without it a path MTU below the local
+> MTU is undetectable. When the target runs a networker-endpoint, its UDP
+> echo (:9999) positively confirms unfragmented delivery; with no echo, no
+> ICMP, and no send errors the probe reports an honest `path_mtu: null`
+> (`method: "df-no-feedback"`) — it never fabricates.
 
 **Pageload probes** (HTTP client, no real browser — fetches `/page` manifest + assets):
 

@@ -729,6 +729,89 @@ export interface LiveAttempt {
   error?: { category: string; message: string; detail?: string };
   page_load?: { total_ms: number; ttfb_ms?: number; asset_count: number; assets_fetched: number; total_bytes?: number; connections_opened?: number; tls_setup_ms?: number; tls_overhead_ratio?: number; cpu_time_ms?: number; connection_reused?: boolean };
   browser?: { load_ms: number; dom_content_loaded_ms?: number; ttfb_ms?: number; resource_count?: number; transferred_bytes?: number; protocol?: string };
+  // ── Measurement-depth result types (v0.28.78, live stream only — the REST
+  // /attempts endpoint reads the tester-owned phase tables, which do not carry
+  // these). Shapes mirror crates/networker-tester/src/metrics.rs.
+  /** Latency-under-load / bufferbloat (`rpm` mode). rpm = 60000 / loaded avg RTT; bufferbloat_factor = loaded/unloaded avg (1.0 ≈ none). */
+  rpm?: {
+    remote_addr: string;
+    unloaded_probe_count: number; unloaded_success_count: number; unloaded_loss_percent: number;
+    unloaded_rtt_min_ms: number; unloaded_rtt_avg_ms: number; unloaded_rtt_p95_ms: number; unloaded_jitter_ms: number;
+    loaded_probe_count: number; loaded_success_count: number; loaded_loss_percent: number;
+    loaded_rtt_min_ms: number; loaded_rtt_avg_ms: number; loaded_rtt_p95_ms: number; loaded_jitter_ms: number;
+    rpm?: number; bufferbloat_factor?: number;
+    load_duration_ms: number; load_bytes_transferred: number; load_downloads_completed: number; load_throughput_mbps?: number;
+  };
+  /** ICMP echo RTT (`ping` mode). reply_ttl is null when the platform can't observe it unprivileged. */
+  ping?: {
+    remote_addr: string; probe_count: number; success_count: number; loss_percent: number;
+    rtt_min_ms: number; rtt_avg_ms: number; rtt_p95_ms: number; jitter_ms: number;
+    probe_rtts_ms: (number | null)[]; reply_ttl?: number;
+  };
+  /** Hop discovery (`path` mode). hops is empty on platforms that can't observe hop addresses unprivileged (see method). */
+  path?: {
+    remote_addr: string;
+    hops: { index: number; addr?: string; rtt_ms?: number }[];
+    hop_count?: number; destination_reached: boolean; destination_rtt_ms?: number;
+    method: string; max_ttl: number;
+  };
+  /** IPv4-vs-IPv6 comparison (`dualstack` mode). faster_family/delta_ms only when both legs succeeded. */
+  dualstack?: {
+    ipv4: DualStackLeg; ipv6: DualStackLeg;
+    faster_family?: string; delta_ms?: number;
+    happy_eyeballs_verdict: string; happy_eyeballs_grace_ms: number;
+  };
+  /** WebSocket upgrade + echo message RTT (`websocket` mode). */
+  websocket?: {
+    url: string; upgrade_ms: number; upgrade_status?: number;
+    message_count: number; echo_count: number; loss_percent: number;
+    msg_rtt_min_ms: number; msg_rtt_avg_ms: number; msg_rtt_p95_ms: number; jitter_ms: number;
+    msg_rtts_ms: (number | null)[]; payload_size: number;
+  };
+  /** Path-MTU discovery (`pmtud` mode). path_mtu is null when no feedback allowed a verdict (see method). */
+  pmtud?: {
+    remote_addr: string; path_mtu?: number; max_unfragmented_payload?: number;
+    probes_sent: number; method: string; icmp_mtu?: number; local_mtu?: number;
+    header_bytes: number; lower_bound_only: boolean;
+  };
+}
+
+/** One address-family leg of the dualstack probe (mirrors Rust DualStackLeg). */
+export interface DualStackLeg {
+  /** False when the family had no DNS records — nothing was probed, nothing failed. */
+  attempted: boolean;
+  success: boolean;
+  addr?: string;
+  dns_ms?: number;
+  tcp_ms?: number;
+  tls_ms?: number;
+  ttfb_ms?: number;
+  total_ms?: number;
+  error?: string;
+}
+
+/** Geo / ISP / ASN enrichment for one IP (mirrors Rust GeoInfo; run envelope). */
+export interface RunGeoInfo {
+  country?: string;
+  city?: string;
+  asn?: number;
+  as_org?: string;
+  db_date?: string;
+}
+
+/** One-shot SNTP clock cross-check (mirrors Rust ClockSync; run envelope). */
+export interface RunClockSync {
+  ntp_server?: string;
+  /** Positive = local clock is behind the NTP server (ms). */
+  offset_ms?: number;
+  round_trip_ms?: number;
+}
+
+/** Tester system load sample (mirrors Rust LoadSample; run envelope). */
+export interface RunLoadSample {
+  load_avg_1m?: number;
+  cpu_busy_percent?: number;
+  mem_available_mb?: number;
 }
 
 // Cloud account types

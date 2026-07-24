@@ -11,6 +11,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.79] — 2026-07-24
+
+Deferred items from the measurement-depth waves, developed in parallel and
+integrated. All changes additive.
+
+### Added
+- **Dedicated HTML + Excel report sections for the six new probe modes.** New
+  data-gated cards (rpm unloaded-vs-loaded + bufferbloat warn ≥2x, ping, path
+  hop table, dualstack v4-vs-v6 comparison, websocket, pmtud) + a DNS-depth
+  card (A/AAAA split + CNAME chain), and a new "Probe Depth" Excel sheet.
+  Absent data leaves reports byte-identical (snapshot-proven).
+- **Windows backends for `ping` and `pmtud`.** ping via IcmpSendEcho /
+  Icmp6SendEcho2 (reply TTL on v4; honest None on v6); pmtud via
+  IP_DONTFRAGMENT with delivery-confirmation semantics and honest method
+  labels (Windows can't see path ICMP frag-needed on UDP sockets — a
+  sub-local-MTU path without confirmation reports null, never a guess). The
+  Windows "unsupported" Config errors are gone; platform tests flipped to
+  real-behavior expectations.
+- **C# contract mirrors for every new measurement type** (rpm/ping/path/
+  dualstack/websocket/pmtud phases + client_network/geo/load/clock_sync
+  envelope), guarded by extended ContractRoundTripTests (verified on net10
+  locally, 10/10).
+- **Dashboard rendering for the new attempt types** — six data-gated cards in
+  Run detail (bufferbloat warn color, traceroute-style silent hops, honest
+  pmtud "no verdict" state, per-family dualstack legs) + geo/clock/load lines
+  in the legacy run env block (dormant until a control-plane envelope
+  pass-through lands — documented).
+
+---
+
 ## [0.28.78] — 2026-07-24
 
 Measurement-depth wave 3 (gaps #10, #13, #12, #14, #15, #16) + two pipeline
