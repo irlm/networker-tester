@@ -78,6 +78,7 @@ const application = (pid: string, template: string) =>
 const URL_QUICK = ['dns', 'tcp', 'tls', 'http2'];
 const URL_STANDARD = ['dns', 'tcp', 'tls', 'tlsresume', 'native', 'http1', 'http2', 'http3', 'udp'];
 const URL_FULL = [...URL_STANDARD, 'curl', 'pageload', 'pageload2', 'pageload3', 'browser1', 'browser2', 'browser3'];
+const URL_ROUTE = ['ping', 'path', 'dualstack', 'pmtud'];
 
 export interface ScenarioGroup {
   id: string;
@@ -119,6 +120,19 @@ export const SCENARIO_GROUPS: ScenarioGroup[] = [
         href: (pid) => probe(pid, 'standard'),
       },
       {
+        id: 'url-route',
+        title: 'Reachability & route diagnosis',
+        summary: 'Where the path breaks — ICMP ping, per-hop traceroute, IPv4-vs-IPv6, path MTU.',
+        measures: ['Ping RTT & loss', 'Traceroute hops', 'v4 vs v6 verdict', 'Path MTU'],
+        flow: 'url',
+        badge: 'URL Probe',
+        needs: 'Any reachable host',
+        est: '~45s',
+        modes: URL_ROUTE,
+        presetId: 'route',
+        href: (pid) => probe(pid, 'route'),
+      },
+      {
         id: 'url-pageload',
         title: 'Real page-load experience',
         summary: 'What a browser actually experiences — parallel fetch + headless Chrome render.',
@@ -149,6 +163,30 @@ export const SCENARIO_GROUPS: ScenarioGroup[] = [
         est: '~30s',
         modes: ['download', 'upload'],
         href: (pid) => network(pid, ['download', 'upload']),
+      },
+      {
+        id: 'endpoint-bufferbloat',
+        title: 'Bufferbloat / responsiveness check',
+        summary: 'Latency while the link is saturated — the lag people actually feel on loaded connections.',
+        measures: ['Unloaded vs loaded RTT', 'RPM (round-trips/min)', 'Bufferbloat factor'],
+        flow: 'endpoint',
+        badge: 'Network',
+        needs: 'A deployed endpoint',
+        est: '~15s',
+        modes: ['rpm'],
+        href: (pid) => network(pid, ['rpm']),
+      },
+      {
+        id: 'endpoint-websocket',
+        title: 'WebSocket latency',
+        summary: 'Upgrade handshake + sustained message round-trips against the endpoint’s echo socket.',
+        measures: ['Upgrade (HTTP 101) ms', 'Msg RTT avg/p95', 'Jitter & loss'],
+        flow: 'endpoint',
+        badge: 'Network',
+        needs: 'A deployed endpoint',
+        est: '~20s',
+        modes: ['websocket'],
+        href: (pid) => network(pid, ['websocket']),
       },
       {
         id: 'endpoint-http-versions',
