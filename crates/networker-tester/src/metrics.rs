@@ -883,6 +883,68 @@ pub struct TcpResult {
     pub min_rtt_ms: Option<f64>,
 }
 
+/// TCP kernel statistics (TCP_INFO on Linux, TCP_CONNECTION_INFO on macOS)
+/// sampled on a `dup(2)` of the probe socket **after** the HTTP transfer
+/// completed — the point where cwnd, retransmission counts, and delivery rate
+/// are meaningful (measurement gap #5).
+///
+/// Contrast with the same-named fields on [`TcpResult`], which are sampled at
+/// connect time (fresh connection: initial cwnd, zero retransmissions).
+///
+/// Every field is optional and additive: absent on Windows and on kernels
+/// that do not report the field. `schema_version` stays 1.0.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SocketStats {
+    /// Maximum Segment Size in bytes (TCP_MAXSEG).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mss_bytes: Option<u32>,
+    /// Smoothed RTT in ms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rtt_estimate_ms: Option<f64>,
+    /// Segments currently queued for retransmit (tcpi_retransmits).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retransmits: Option<u32>,
+    /// Lifetime retransmission count over the connection (tcpi_total_retrans).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_retrans: Option<u32>,
+    /// Congestion window in segments (tcpi_snd_cwnd).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snd_cwnd: Option<u32>,
+    /// Slow-start threshold; None when set to the kernel sentinel (infinite).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snd_ssthresh: Option<u32>,
+    /// RTT variance in ms (tcpi_rttvar).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rtt_variance_ms: Option<f64>,
+    /// Receiver advertised window in bytes (tcpi_rcv_space). Linux only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rcv_space: Option<u32>,
+    /// Segments sent since connection start (Linux ≥ 4.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segs_out: Option<u32>,
+    /// Segments received since connection start (Linux ≥ 4.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segs_in: Option<u32>,
+    /// Congestion control algorithm name, e.g. "cubic", "bbr" (TCP_CONGESTION).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub congestion_algorithm: Option<String>,
+    /// Estimated TCP delivery rate in bytes/sec (Linux ≥ 4.9: tcpi_delivery_rate).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_rate_bps: Option<u64>,
+    /// Minimum RTT ever observed by the kernel in ms (Linux ≥ 4.9: tcpi_min_rtt).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_rtt_ms: Option<f64>,
+}
+
+impl SocketStats {
+    /// True when the kernel reported nothing (unsupported platform or failed
+    /// getsockopt) — callers use this to store `None` instead of an all-empty
+    /// object.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Server-side timing
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1039,6 +1101,23 @@ pub struct HttpResult {
     /// transfer, not connection setup. None for probes that don't measure it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_handshake_ms: Option<f64>,
+    /// TCP kernel stats sampled after the transfer completed (see
+    /// [`SocketStats`]). Present for http1/http2 and the TCP-based throughput
+    /// modes on Linux/macOS; None on Windows, for HTTP/3 (QUIC/UDP), and for
+    /// probes that do not own the socket (curl, browser). Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub socket_stats: Option<SocketStats>,
+    /// Response `Content-Encoding` header value (e.g. "gzip", "br", "zstd").
+    /// Reported as received — the probe does not change what Accept-Encoding
+    /// it sends. None when the header is absent. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_encoding: Option<String>,
+    /// Declared response `Content-Length` header value in bytes. None when
+    /// the header is absent (e.g. chunked transfer encoding). Compare with
+    /// `body_size_bytes` (bytes actually received) to spot truncation or
+    /// on-the-wire compression. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_length_header: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1662,6 +1741,60 @@ pub fn primary_metric_value(a: &RequestAttempt) -> Option<f64> {
 mod tests {
     use super::*;
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // SocketStats — post-transfer TCP kernel stats (gap #5), additive contract
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn socket_stats_default_is_empty_and_serializes_to_empty_object() {
+        let s = SocketStats::default();
+        assert!(s.is_empty());
+        // Every field is skip_serializing_if — an all-None struct is `{}`.
+        assert_eq!(serde_json::to_string(&s).unwrap(), "{}");
+    }
+
+    #[test]
+    fn socket_stats_serializes_only_present_fields() {
+        let s = SocketStats {
+            total_retrans: Some(7),
+            congestion_algorithm: Some("bbr".into()),
+            ..Default::default()
+        };
+        assert!(!s.is_empty());
+        let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(json["total_retrans"], 7);
+        assert_eq!(json["congestion_algorithm"], "bbr");
+        assert!(json.get("snd_cwnd").is_none(), "None fields must be absent");
+    }
+
+    #[test]
+    fn http_result_new_fields_are_additive() {
+        // Pre-gap-#5/#9 JSON (no socket_stats / content_* fields) must still
+        // deserialize — the fields are serde-defaulted to None.
+        let old_json = serde_json::json!({
+            "negotiated_version": "HTTP/1.1",
+            "status_code": 200,
+            "headers_size_bytes": 100,
+            "body_size_bytes": 5,
+            "ttfb_ms": 1.0,
+            "total_duration_ms": 2.0,
+            "redirect_count": 0,
+            "started_at": chrono::Utc::now(),
+            "response_headers": [],
+        });
+        let h: HttpResult = serde_json::from_value(old_json).unwrap();
+        assert!(h.socket_stats.is_none());
+        assert!(h.content_encoding.is_none());
+        assert!(h.content_length_header.is_none());
+
+        // And when None, the fields must be omitted on the wire (schema 1.0
+        // output for non-Unix platforms is byte-identical to before).
+        let out = serde_json::to_value(&h).unwrap();
+        assert!(out.get("socket_stats").is_none());
+        assert!(out.get("content_encoding").is_none());
+        assert!(out.get("content_length_header").is_none());
+    }
+
     #[test]
     fn test_rtt_stats_no_loss() {
         // Deliberately UNSORTED (arrival order). Percentile/min/avg must not
@@ -2249,6 +2382,9 @@ mod tests {
                 csw_voluntary: None,
                 csw_involuntary: None,
                 http_handshake_ms: None,
+                socket_stats: None,
+                content_encoding: None,
+                content_length_header: None,
             });
             assert!(
                 (primary_metric_value(&a).unwrap() - 25.0).abs() < 1e-9,
@@ -2366,6 +2502,9 @@ mod tests {
                 csw_voluntary: None,
                 csw_involuntary: None,
                 http_handshake_ms: None,
+                socket_stats: None,
+                content_encoding: None,
+                content_length_header: None,
             });
             assert!(
                 (primary_metric_value(&a).unwrap() - 100.0).abs() < 1e-9,
@@ -2534,6 +2673,9 @@ mod tests {
             csw_voluntary: None,
             csw_involuntary: None,
             http_handshake_ms: None,
+            socket_stats: None,
+            content_encoding: None,
+            content_length_header: None,
         });
         assert_eq!(attempt_payload_bytes(&a), Some(65536));
     }
@@ -2558,6 +2700,9 @@ mod tests {
             csw_voluntary: None,
             csw_involuntary: None,
             http_handshake_ms: None,
+            socket_stats: None,
+            content_encoding: None,
+            content_length_header: None,
         });
         assert!(attempt_payload_bytes(&a).is_none());
     }

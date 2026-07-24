@@ -405,6 +405,11 @@ async fn run_native_probe_impl(
                 csw_voluntary: None,
                 csw_involuntary: None,
                 http_handshake_ms: None,
+                // Native probe compares OS TLS stacks; post-transfer socket
+                // stats are wired for the hyper/rustls probes (gap #5).
+                socket_stats: None,
+                content_encoding: None,
+                content_length_header: None,
             }),
             udp: None,
             error: if http_ok {
@@ -693,6 +698,11 @@ async fn run_native_https(
             csw_voluntary: None,
             csw_involuntary: None,
             http_handshake_ms: None,
+            // Native probe compares OS TLS stacks; post-transfer socket
+            // stats are wired for the hyper/rustls probes (gap #5).
+            socket_stats: None,
+            content_encoding: None,
+            content_length_header: None,
         }),
         udp: None,
         error: if http_ok {

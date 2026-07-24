@@ -272,6 +272,28 @@ async fn http1_health_returns_200() {
     assert!(http.ttfb_ms >= 0.0);
     assert!(http.total_duration_ms >= http.ttfb_ms);
 
+    // Post-transfer TCP kernel stats (gap #5): on Linux/macOS the dup'd fd
+    // must report kernel stats for the socket the transfer actually used.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let stats = http
+            .socket_stats
+            .as_ref()
+            .expect("http1 attempt should carry post-transfer socket_stats on Unix");
+        assert!(
+            stats.mss_bytes.is_some() || stats.rtt_estimate_ms.is_some(),
+            "post-transfer stats should report at least MSS or smoothed RTT: {stats:?}"
+        );
+    }
+
+    // Declared Content-Length (gap #9) — the endpoint's /health response
+    // carries one; it must match the bytes actually received.
+    assert_eq!(
+        http.content_length_header,
+        Some(http.body_size_bytes as u64),
+        "declared Content-Length should match received body size"
+    );
+
     // TCP timing must be present
     assert!(attempt.tcp.is_some());
     let tcp = attempt.tcp.unwrap();

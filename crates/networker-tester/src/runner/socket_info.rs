@@ -62,16 +62,123 @@ pub struct SocketInfo {
 impl SocketInfo {
     #[allow(unused_variables)]
     pub fn from_stream(stream: &TcpStream) -> Self {
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
-            return linux_socket_info(stream);
-        }
-        #[cfg(target_os = "macos")]
-        {
-            return macos_socket_info(stream);
+            use std::os::unix::io::AsRawFd;
+            return Self::from_raw_fd(stream.as_raw_fd());
         }
         #[allow(unreachable_code)]
         Self::default()
+    }
+
+    /// Query kernel TCP stats for an arbitrary raw fd referring to a TCP
+    /// socket (used by [`SocketProbe`] to sample a `dup(2)` of the probe
+    /// socket after the transfer). Best-effort: returns all-None on failure.
+    #[cfg(unix)]
+    #[allow(unused_variables)]
+    pub fn from_raw_fd(fd: std::os::unix::io::RawFd) -> Self {
+        #[cfg(target_os = "linux")]
+        {
+            return linux_socket_info(fd);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            return macos_socket_info(fd);
+        }
+        #[allow(unreachable_code)]
+        Self::default()
+    }
+}
+
+impl From<SocketInfo> for crate::metrics::SocketStats {
+    fn from(i: SocketInfo) -> Self {
+        Self {
+            mss_bytes: i.mss_bytes,
+            rtt_estimate_ms: i.rtt_estimate_ms,
+            retransmits: i.retransmits,
+            total_retrans: i.total_retrans,
+            snd_cwnd: i.snd_cwnd,
+            snd_ssthresh: i.snd_ssthresh,
+            rtt_variance_ms: i.rtt_variance_ms,
+            rcv_space: i.rcv_space,
+            segs_out: i.segs_out,
+            segs_in: i.segs_in,
+            congestion_algorithm: i.congestion_algorithm,
+            delivery_rate_bps: i.delivery_rate_bps,
+            min_rtt_ms: i.min_rtt_ms,
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SocketProbe — post-transfer sampling handle
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A duplicated file descriptor onto a probe's TCP socket.
+///
+/// The HTTP-family probes hand their `TcpStream` to TLS/hyper, which owns it
+/// for the rest of the request — so the socket is no longer reachable when
+/// the transfer finishes, which is exactly when cwnd/retrans/delivery-rate
+/// become meaningful. `dup(2)`-ing the fd before the handover keeps an
+/// independent handle onto the *same* kernel socket (same file description),
+/// so `getsockopt(TCP_INFO)` on the dup after the transfer reports
+/// post-transfer state. Even if hyper closes its fd first, the dup keeps the
+/// socket object alive for querying.
+///
+/// Read-only: the dup is only ever passed to `getsockopt`; no I/O happens on
+/// it, so it cannot disturb the measurement.
+///
+/// On non-Unix platforms `new` returns `None` and stats stay absent.
+pub struct SocketProbe {
+    #[cfg(unix)]
+    fd: std::os::fd::OwnedFd,
+}
+
+impl SocketProbe {
+    /// Duplicate the stream's fd. Returns `None` on non-Unix platforms or if
+    /// `dup` fails (fd limit). Uses `F_DUPFD_CLOEXEC` so the dup never leaks
+    /// into child processes.
+    #[cfg(unix)]
+    pub fn new(stream: &TcpStream) -> Option<Self> {
+        use std::os::fd::{FromRawFd, OwnedFd};
+        use std::os::unix::io::AsRawFd;
+        let fd = unsafe { libc::fcntl(stream.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
+        if fd < 0 {
+            return None;
+        }
+        // SAFETY: fcntl(F_DUPFD_CLOEXEC) returned a fresh fd we now own; the
+        // OwnedFd closes it on drop.
+        Some(Self {
+            fd: unsafe { OwnedFd::from_raw_fd(fd) },
+        })
+    }
+
+    #[cfg(not(unix))]
+    pub fn new(_stream: &TcpStream) -> Option<Self> {
+        None
+    }
+
+    /// Sample the kernel's current TCP stats for the underlying socket.
+    #[cfg(unix)]
+    pub fn stats(&self) -> SocketInfo {
+        use std::os::fd::AsRawFd;
+        SocketInfo::from_raw_fd(self.fd.as_raw_fd())
+    }
+
+    #[cfg(not(unix))]
+    pub fn stats(&self) -> SocketInfo {
+        SocketInfo::default()
+    }
+
+    /// Post-transfer stats as the JSON-contract struct, or `None` when the
+    /// kernel reported nothing (so reports store `null`, not `{}`).
+    pub fn stats_for_result(&self) -> Option<crate::metrics::SocketStats> {
+        let stats: crate::metrics::SocketStats = self.stats().into();
+        if stats.is_empty() {
+            None
+        } else {
+            Some(stats)
+        }
     }
 }
 
@@ -80,9 +187,7 @@ impl SocketInfo {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(target_os = "linux")]
-fn linux_socket_info(stream: &TcpStream) -> SocketInfo {
-    use std::os::unix::io::AsRawFd;
-    let fd = stream.as_raw_fd();
+fn linux_socket_info(fd: std::os::unix::io::RawFd) -> SocketInfo {
     let mss = get_tcp_maxseg_linux(fd);
     let congestion_algorithm = get_congestion_algorithm_linux(fd);
 
@@ -254,10 +359,7 @@ const TCP_CONNECTION_INFO_OPT: libc::c_int = 0x24;
 const TCP_CONGESTION_MACOS: libc::c_int = 0x20;
 
 #[cfg(target_os = "macos")]
-fn macos_socket_info(stream: &TcpStream) -> SocketInfo {
-    use std::os::unix::io::AsRawFd;
-    let fd = stream.as_raw_fd();
-
+fn macos_socket_info(fd: std::os::unix::io::RawFd) -> SocketInfo {
     let mss = unsafe {
         let mut val: libc::c_int = 0;
         let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
@@ -376,5 +478,64 @@ mod tests {
         assert!(info.congestion_algorithm.is_none());
         assert!(info.delivery_rate_bps.is_none());
         assert!(info.min_rtt_ms.is_none());
+    }
+
+    #[test]
+    fn default_socket_info_converts_to_empty_socket_stats() {
+        let stats: crate::metrics::SocketStats = SocketInfo::default().into();
+        assert!(stats.is_empty());
+    }
+
+    #[test]
+    fn socket_info_conversion_preserves_fields() {
+        let info = SocketInfo {
+            mss_bytes: Some(1460),
+            rtt_estimate_ms: Some(1.5),
+            total_retrans: Some(3),
+            snd_cwnd: Some(40),
+            congestion_algorithm: Some("cubic".into()),
+            delivery_rate_bps: Some(12_000_000),
+            ..Default::default()
+        };
+        let stats: crate::metrics::SocketStats = info.into();
+        assert!(!stats.is_empty());
+        assert_eq!(stats.mss_bytes, Some(1460));
+        assert_eq!(stats.rtt_estimate_ms, Some(1.5));
+        assert_eq!(stats.total_retrans, Some(3));
+        assert_eq!(stats.snd_cwnd, Some(40));
+        assert_eq!(stats.congestion_algorithm.as_deref(), Some("cubic"));
+        assert_eq!(stats.delivery_rate_bps, Some(12_000_000));
+    }
+
+    /// The dup(2) handle must keep reporting kernel stats for the socket even
+    /// after the original stream is dropped — this is exactly the hyper
+    /// scenario, where the connection task owns (and may close) the original
+    /// fd before we sample post-transfer stats.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn socket_probe_dup_survives_stream_drop() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpStream::connect(addr).await.unwrap();
+        let (_server_side, _) = listener.accept().await.unwrap();
+
+        let probe = SocketProbe::new(&stream).expect("dup should succeed on Unix");
+        drop(stream);
+
+        // Linux and macOS both report at least MSS + smoothed RTT (or the
+        // congestion algorithm) on a live loopback socket.
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            let stats = probe.stats_for_result();
+            assert!(
+                stats.is_some(),
+                "dup'd fd should still report TCP kernel stats after the \
+                 original stream was dropped"
+            );
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = probe.stats();
+        }
     }
 }
