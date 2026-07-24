@@ -727,6 +727,97 @@ export function AttemptRow({ a }: { a: LiveAttempt }) {
             )}
           </SubResult>
         )}
+        {a.rpm && (
+          <SubResult label="RPM" color="cyan">
+            <p className="text-gray-300">
+              RTT {formatMs(a.rpm.unloaded_rtt_avg_ms)} &rarr; {formatMs(a.rpm.loaded_rtt_avg_ms)} under load
+              {a.rpm.rpm != null && ` · ${a.rpm.rpm.toFixed(0)} RPM`}
+            </p>
+            <p className="font-mono truncate">
+              {a.rpm.bufferbloat_factor != null && (
+                <span className={a.rpm.bufferbloat_factor >= 2 ? 'text-yellow-400' : 'text-gray-500'}>
+                  bufferbloat &times;{a.rpm.bufferbloat_factor.toFixed(2)}
+                </span>
+              )}
+              {a.rpm.load_throughput_mbps != null && (
+                <span className="text-gray-500">
+                  {a.rpm.bufferbloat_factor != null ? ' · ' : ''}load {a.rpm.load_throughput_mbps.toFixed(1)} MB/s
+                </span>
+              )}
+            </p>
+          </SubResult>
+        )}
+        {a.ping && (
+          <SubResult label="Ping" color="gray">
+            <p className="text-gray-300">
+              RTT avg {formatMs(a.ping.rtt_avg_ms)} · Jitter {formatMs(a.ping.jitter_ms)} · Loss {a.ping.loss_percent.toFixed(1)}%
+            </p>
+            <p className="text-gray-500">
+              {a.ping.probe_count} probes
+              {a.ping.reply_ttl != null && ` · ttl ${a.ping.reply_ttl}`}
+            </p>
+          </SubResult>
+        )}
+        {a.path && (
+          <SubResult label="Path" color="gray">
+            <p className="text-gray-300">
+              {a.path.hop_count != null ? `${a.path.hop_count} hops` : 'hops unknown'}
+              {' · '}
+              <span className={a.path.destination_reached ? 'text-green-400' : 'text-yellow-400'}>
+                {a.path.destination_reached ? 'reached' : 'not reached'}
+              </span>
+              {a.path.destination_rtt_ms != null && ` · ${formatMs(a.path.destination_rtt_ms)}`}
+            </p>
+            <p className="text-gray-500 font-mono truncate">{a.path.method}</p>
+            {a.path.hops.length > 0 && (
+              <p className="text-gray-500 font-mono truncate">
+                {a.path.hops.map((h) => h.addr ?? '*').join(' → ')}
+              </p>
+            )}
+          </SubResult>
+        )}
+        {a.dualstack && (
+          <SubResult label="Dual Stack" color="cyan">
+            <p className="text-gray-300">
+              v4 {a.dualstack.ipv4.success && a.dualstack.ipv4.total_ms != null
+                ? formatMs(a.dualstack.ipv4.total_ms)
+                : <span className={a.dualstack.ipv4.attempted ? 'text-red-400' : 'text-gray-600'}>{a.dualstack.ipv4.attempted ? 'fail' : 'n/a'}</span>}
+              {' · '}
+              v6 {a.dualstack.ipv6.success && a.dualstack.ipv6.total_ms != null
+                ? formatMs(a.dualstack.ipv6.total_ms)
+                : <span className={a.dualstack.ipv6.attempted ? 'text-red-400' : 'text-gray-600'}>{a.dualstack.ipv6.attempted ? 'fail' : 'n/a'}</span>}
+              {a.dualstack.faster_family != null && (
+                <span className="text-cyan-400">
+                  {' · '}{a.dualstack.faster_family} faster
+                  {a.dualstack.delta_ms != null && ` by ${formatMs(a.dualstack.delta_ms)}`}
+                </span>
+              )}
+            </p>
+            <p className="text-gray-500 font-mono truncate">{a.dualstack.happy_eyeballs_verdict}</p>
+          </SubResult>
+        )}
+        {a.websocket && (
+          <SubResult label="WebSocket" color="cyan">
+            <p className="text-gray-300">
+              Upgrade {formatMs(a.websocket.upgrade_ms)} · RTT avg {formatMs(a.websocket.msg_rtt_avg_ms)} · Loss {a.websocket.loss_percent.toFixed(1)}%
+            </p>
+            <p className="text-gray-500">
+              {a.websocket.echo_count}/{a.websocket.message_count} echoes
+              {` · p95 ${formatMs(a.websocket.msg_rtt_p95_ms)}`}
+            </p>
+          </SubResult>
+        )}
+        {a.pmtud && (
+          <SubResult label="PMTUD" color="gray">
+            <p className="text-gray-300">
+              {a.pmtud.path_mtu != null
+                ? <>Path MTU <span className="font-mono">{a.pmtud.path_mtu}</span>{a.pmtud.lower_bound_only && <span className="text-yellow-400"> (lower bound)</span>}</>
+                : <span className="text-yellow-400">no MTU verdict</span>}
+              {a.pmtud.local_mtu != null && ` · local ${a.pmtud.local_mtu}`}
+            </p>
+            <p className="text-gray-500 font-mono truncate">{a.pmtud.method}</p>
+          </SubResult>
+        )}
         {a.page_load && (
           <SubResult label="Page Load" color="blue">
             <p className="text-gray-300">Total {formatMs(a.page_load.total_ms)} · {a.page_load.assets_fetched}/{a.page_load.asset_count} assets</p>

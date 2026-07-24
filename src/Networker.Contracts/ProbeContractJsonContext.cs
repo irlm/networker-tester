@@ -20,6 +20,18 @@ namespace Networker.Contracts;
 [JsonSerializable(typeof(HttpPhase))]
 [JsonSerializable(typeof(UdpPhase))]
 [JsonSerializable(typeof(ServerTimingPhase))]
+[JsonSerializable(typeof(RpmPhase))]
+[JsonSerializable(typeof(PingPhase))]
+[JsonSerializable(typeof(PathPhase))]
+[JsonSerializable(typeof(PathHopEntry))]
+[JsonSerializable(typeof(DualStackPhase))]
+[JsonSerializable(typeof(DualStackLegPhase))]
+[JsonSerializable(typeof(WebSocketPhase))]
+[JsonSerializable(typeof(PmtudPhase))]
+[JsonSerializable(typeof(NetworkContextInfo))]
+[JsonSerializable(typeof(GeoInfo))]
+[JsonSerializable(typeof(LoadSample))]
+[JsonSerializable(typeof(ClockSync))]
 public partial class ProbeContractJsonContext : JsonSerializerContext
 {
 }

@@ -3,7 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { useParams, Link } from 'react-router';
 import { api, errorMessage, type Job } from '../api/client';
 import { stripAnsi } from '../lib/ansi';
-import type { LiveAttempt, PacketCaptureSummary } from '../api/types';
+import type { LiveAttempt, PacketCaptureSummary, RunGeoInfo, RunClockSync, RunLoadSample } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { Breadcrumb } from '../components/common/Breadcrumb';
 import { ShareDialog } from '../components/ShareDialog';
@@ -52,6 +52,30 @@ function jobSummary(job: Job | null) {
   if (job.config?.tls_profile_ip) bits.push(`IP ${job.config.tls_profile_ip}`);
   if (job.config?.tls_profile_sni) bits.push(`SNI ${job.config.tls_profile_sni}`);
   return bits.join(' · ');
+}
+
+/** Compact geo label mirroring Rust GeoInfo::label(): "US · Linköping · AS13335 Cloudflare".
+ *  Returns null when every field is absent so callers can data-gate the line. */
+function geoLabel(geo: RunGeoInfo | null | undefined): string | null {
+  if (!geo) return null;
+  const parts: string[] = [];
+  if (geo.country) parts.push(geo.country);
+  if (geo.city) parts.push(geo.city);
+  if (geo.asn != null && geo.as_org) parts.push(`AS${geo.asn} ${geo.as_org}`);
+  else if (geo.asn != null) parts.push(`AS${geo.asn}`);
+  else if (geo.as_org) parts.push(geo.as_org);
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+interface RunMeta {
+  client_version: string;
+  client_os: string;
+  endpoint_version: string | null;
+  client_geo?: RunGeoInfo | null;
+  target_geo?: RunGeoInfo | null;
+  clock_sync?: RunClockSync | null;
+  client_load_before?: RunLoadSample | null;
+  client_load_after?: RunLoadSample | null;
 }
 
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
@@ -185,7 +209,7 @@ export function JobDetailPage() {
   const { jobId } = useParams<{ jobId: string }>();
   const [job, setJob] = useState<Job | null>(null);
   const [dbAttempts, setDbAttempts] = useState<LiveAttempt[]>([]);
-  const [runMeta, setRunMeta] = useState<{ client_version: string; client_os: string; endpoint_version: string | null } | null>(null);
+  const [runMeta, setRunMeta] = useState<RunMeta | null>(null);
   const [packetCapture, setPacketCapture] = useState<PacketCaptureSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -229,6 +253,11 @@ export function JobDetailPage() {
         client_version: data.client_version,
         client_os: data.client_os,
         endpoint_version: data.endpoint_version,
+        client_geo: data.client_geo,
+        target_geo: data.target_geo,
+        clock_sync: data.clock_sync,
+        client_load_before: data.client_load_before,
+        client_load_after: data.client_load_after,
       });
       if (data.packet_capture) {
         setPacketCapture(data.packet_capture);
@@ -464,6 +493,34 @@ export function JobDetailPage() {
               )}
               {runMeta.endpoint_version === null && (
                 <span className="text-xs text-gray-700">Target: offline</span>
+              )}
+            </div>
+          )}
+          {runMeta && (geoLabel(runMeta.client_geo) || geoLabel(runMeta.target_geo) || runMeta.clock_sync?.offset_ms != null || runMeta.client_load_before?.load_avg_1m != null || runMeta.client_load_after?.load_avg_1m != null) && (
+            <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5">
+              {geoLabel(runMeta.client_geo) && (
+                <span className="text-xs text-gray-600">
+                  From: <span className="text-gray-400 font-mono">{geoLabel(runMeta.client_geo)}</span>
+                </span>
+              )}
+              {geoLabel(runMeta.target_geo) && (
+                <span className="text-xs text-gray-600">
+                  To: <span className="text-gray-400 font-mono">{geoLabel(runMeta.target_geo)}</span>
+                </span>
+              )}
+              {runMeta.clock_sync?.offset_ms != null && (
+                <span className="text-xs text-gray-600">
+                  Clock offset: <span className="text-gray-400 font-mono">{runMeta.clock_sync.offset_ms > 0 ? '+' : ''}{runMeta.clock_sync.offset_ms.toFixed(1)}ms</span>
+                </span>
+              )}
+              {(runMeta.client_load_before?.load_avg_1m != null || runMeta.client_load_after?.load_avg_1m != null) && (
+                <span className="text-xs text-gray-600">
+                  Tester load: <span className="text-gray-400 font-mono">
+                    {runMeta.client_load_before?.load_avg_1m?.toFixed(2) ?? '?'}
+                    {' → '}
+                    {runMeta.client_load_after?.load_avg_1m?.toFixed(2) ?? '?'}
+                  </span>
+                </span>
               )}
             </div>
           )}
