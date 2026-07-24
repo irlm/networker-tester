@@ -104,6 +104,7 @@ fn sample_run() -> TestRun {
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     };
 
     TestRun {

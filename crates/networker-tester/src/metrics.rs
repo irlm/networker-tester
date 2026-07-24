@@ -423,6 +423,9 @@ pub struct RequestAttempt {
     /// `None` means the default networker-endpoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_stack: Option<String>,
+    /// Latency-under-load / bufferbloat result (`rpm` mode only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpm: Option<RpmResult>,
 }
 
 impl RequestAttempt {
@@ -461,6 +464,12 @@ pub enum Protocol {
     UdpDownload,
     /// UDP bulk upload to the networker-endpoint UDP throughput server (port 9998).
     UdpUpload,
+    /// Latency-under-load / bufferbloat probe (Apple-RPM-style responsiveness):
+    /// samples unloaded UDP echo RTT, then saturates the link with a sustained
+    /// HTTP download from the networker-endpoint while probing UDP echo RTT at
+    /// a steady cadence. Reports RPM (60000 / loaded avg RTT — round-trips per
+    /// minute, higher is better) and the bufferbloat factor (loaded/unloaded).
+    Rpm,
     /// Standalone DNS resolution probe — resolves the target host and records timing without TCP.
     Dns,
     /// Standalone TLS probe — DNS + TCP + TLS handshake only, no HTTP request.
@@ -522,6 +531,7 @@ impl std::fmt::Display for Protocol {
             Protocol::WebUpload => write!(f, "webupload"),
             Protocol::UdpDownload => write!(f, "udpdownload"),
             Protocol::UdpUpload => write!(f, "udpupload"),
+            Protocol::Rpm => write!(f, "rpm"),
             Protocol::Dns => write!(f, "dns"),
             Protocol::Tls => write!(f, "tls"),
             Protocol::TlsResume => write!(f, "tlsresume"),
@@ -595,6 +605,13 @@ impl Protocol {
                 "UDP",
                 "Round-trip",
                 "UDP echo probe — measures RTT, jitter, and packet loss",
+                "Network",
+            ),
+            m(
+                "rpm",
+                "RPM",
+                "Latency under load",
+                "Bufferbloat probe — UDP echo RTT idle vs during a sustained download; reports RPM (round-trips per minute) and bufferbloat factor",
                 "Network",
             ),
             // HTTP
@@ -798,6 +815,7 @@ impl std::str::FromStr for Protocol {
             "webupload" => Ok(Protocol::WebUpload),
             "udpdownload" => Ok(Protocol::UdpDownload),
             "udpupload" => Ok(Protocol::UdpUpload),
+            "rpm" => Ok(Protocol::Rpm),
             "dns" => Ok(Protocol::Dns),
             "tls" => Ok(Protocol::Tls),
             "tlsresume" | "tls-resume" => Ok(Protocol::TlsResume),
@@ -1081,6 +1099,59 @@ pub struct UdpThroughputResult {
     pub transfer_ms: f64,
     /// Measured throughput in MB/s; None if transfer_ms = 0.
     pub throughput_mbps: Option<f64>,
+    pub started_at: DateTime<Utc>,
+}
+
+/// Latency-under-load / bufferbloat result (`rpm` mode).
+///
+/// Two phases against a networker-endpoint target:
+/// 1. **Unloaded** — a burst of UDP echo probes (port 9999) on an idle link.
+/// 2. **Loaded** — sustained HTTP downloads saturate the link while UDP echo
+///    probes fire at a steady cadence.
+///
+/// Headline numbers: `rpm` = 60000 / loaded avg RTT (round-trips per minute,
+/// Apple-RPM-style — higher is better) and `bufferbloat_factor` =
+/// loaded avg / unloaded avg (1.0 ≈ no bufferbloat).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RpmResult {
+    pub remote_addr: String,
+    // ── Phase 1: unloaded UDP echo RTT ─────────────────────────────────────
+    pub unloaded_probe_count: u32,
+    pub unloaded_success_count: u32,
+    pub unloaded_loss_percent: f64,
+    pub unloaded_rtt_min_ms: f64,
+    pub unloaded_rtt_avg_ms: f64,
+    pub unloaded_rtt_p95_ms: f64,
+    pub unloaded_jitter_ms: f64,
+    // ── Phase 2: UDP echo RTT while the link is saturated ──────────────────
+    pub loaded_probe_count: u32,
+    pub loaded_success_count: u32,
+    pub loaded_loss_percent: f64,
+    pub loaded_rtt_min_ms: f64,
+    pub loaded_rtt_avg_ms: f64,
+    pub loaded_rtt_p95_ms: f64,
+    pub loaded_jitter_ms: f64,
+    // ── Derived headline metrics ───────────────────────────────────────────
+    /// Round-trips per minute under load: 60000 / loaded_rtt_avg_ms.
+    /// `None` when every loaded probe was lost (no avg to derive from).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpm: Option<f64>,
+    /// loaded_rtt_avg_ms / unloaded_rtt_avg_ms. `None` when either phase has
+    /// no successful probes (a 0.0 sentinel avg is not a measurement).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bufferbloat_factor: Option<f64>,
+    // ── Load generator (sustained HTTP /download) ──────────────────────────
+    /// Wall-clock duration of the loaded phase (ms).
+    pub load_duration_ms: f64,
+    /// Bytes delivered by downloads that completed inside the load window.
+    /// A download still in flight when the window closed is not counted.
+    pub load_bytes_transferred: u64,
+    /// Number of downloads that completed inside the load window.
+    pub load_downloads_completed: u32,
+    /// Mean throughput across completed downloads (MB/s); `None` when no
+    /// download completed inside the window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_throughput_mbps: Option<f64>,
     pub started_at: DateTime<Utc>,
 }
 
@@ -1585,6 +1656,9 @@ pub fn primary_metric_label(proto: &Protocol) -> &'static str {
         | Protocol::WebUpload
         | Protocol::UdpDownload
         | Protocol::UdpUpload => "Throughput MB/s",
+        // Round-trips per minute under load — higher is better, like the
+        // throughput modes.
+        Protocol::Rpm => "RPM",
         Protocol::Dns => "Resolve ms",
         Protocol::Tls | Protocol::TlsResume => "Handshake ms",
         Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 => "Total ms",
@@ -1642,6 +1716,9 @@ pub fn primary_metric_value(a: &RequestAttempt) -> Option<f64> {
         Protocol::UdpDownload | Protocol::UdpUpload => {
             a.udp_throughput.as_ref().and_then(|ut| ut.throughput_mbps)
         }
+        // `rpm` is None when every loaded probe was lost — same "no samples is
+        // not a 0.0 measurement" rule as the UDP arm above (trust audit V11).
+        Protocol::Rpm => a.rpm.as_ref().and_then(|r| r.rpm),
         Protocol::Dns => a.dns.as_ref().map(|d| d.duration_ms),
         Protocol::Tls | Protocol::TlsResume => a.tls.as_ref().map(|t| t.handshake_duration_ms),
         Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 => {
@@ -1754,6 +1831,7 @@ mod tests {
             "webupload",
             "udpdownload",
             "udpupload",
+            "rpm",
             "dns",
             "tls",
             "tlsresume",
@@ -1779,7 +1857,7 @@ mod tests {
         // Verify we tested every variant (count must match enum variant count).
         assert_eq!(
             all.len(),
-            29,
+            30,
             "Update this test when adding Protocol variants"
         );
     }
@@ -1854,6 +1932,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         };
         let run = TestRun {
             schema_version: crate::metrics::SCHEMA_VERSION.to_string(),
@@ -2108,6 +2187,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         }
     }
 
@@ -2328,6 +2408,75 @@ mod tests {
             None,
             "100%-loss UDP attempt must not contribute a 0.0 ms sentinel RTT to stats"
         );
+    }
+
+    #[test]
+    fn primary_metric_label_rpm() {
+        assert_eq!(primary_metric_label(&Protocol::Rpm), "RPM");
+    }
+
+    #[test]
+    fn primary_metric_value_rpm() {
+        let mut a = bare_attempt(Protocol::Rpm);
+        assert!(primary_metric_value(&a).is_none(), "absent rpm → None");
+        a.rpm = Some(RpmResult {
+            remote_addr: "1.2.3.4:9999".into(),
+            unloaded_probe_count: 10,
+            unloaded_success_count: 10,
+            unloaded_loss_percent: 0.0,
+            unloaded_rtt_min_ms: 1.0,
+            unloaded_rtt_avg_ms: 2.0,
+            unloaded_rtt_p95_ms: 3.0,
+            unloaded_jitter_ms: 0.2,
+            loaded_probe_count: 40,
+            loaded_success_count: 40,
+            loaded_loss_percent: 0.0,
+            loaded_rtt_min_ms: 4.0,
+            loaded_rtt_avg_ms: 20.0,
+            loaded_rtt_p95_ms: 60.0,
+            loaded_jitter_ms: 5.0,
+            rpm: Some(3000.0),
+            bufferbloat_factor: Some(10.0),
+            load_duration_ms: 5000.0,
+            load_bytes_transferred: 32 * 1024 * 1024,
+            load_downloads_completed: 1,
+            load_throughput_mbps: Some(6.4),
+            started_at: Utc::now(),
+        });
+        assert!((primary_metric_value(&a).unwrap() - 3000.0).abs() < 1e-9);
+    }
+
+    /// A fully-lost loaded phase carries `rpm: None` — it must not contribute
+    /// a sentinel value to stats (same rule as UDP, trust audit V11).
+    #[test]
+    fn primary_metric_value_rpm_lost_loaded_phase_is_excluded() {
+        let mut a = bare_attempt(Protocol::Rpm);
+        a.success = false;
+        a.rpm = Some(RpmResult {
+            remote_addr: "1.2.3.4:9999".into(),
+            unloaded_probe_count: 10,
+            unloaded_success_count: 10,
+            unloaded_loss_percent: 0.0,
+            unloaded_rtt_min_ms: 1.0,
+            unloaded_rtt_avg_ms: 2.0,
+            unloaded_rtt_p95_ms: 3.0,
+            unloaded_jitter_ms: 0.2,
+            loaded_probe_count: 40,
+            loaded_success_count: 0,
+            loaded_loss_percent: 100.0,
+            loaded_rtt_min_ms: 0.0,
+            loaded_rtt_avg_ms: 0.0,
+            loaded_rtt_p95_ms: 0.0,
+            loaded_jitter_ms: 0.0,
+            rpm: None,
+            bufferbloat_factor: None,
+            load_duration_ms: 5000.0,
+            load_bytes_transferred: 0,
+            load_downloads_completed: 0,
+            load_throughput_mbps: None,
+            started_at: Utc::now(),
+        });
+        assert_eq!(primary_metric_value(&a), None);
     }
 
     #[test]

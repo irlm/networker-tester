@@ -21,6 +21,7 @@ use networker_tester::runner::native::run_native_probe;
 #[cfg(feature = "http3")]
 use networker_tester::runner::pageload::run_pageload3_probe;
 use networker_tester::runner::pageload::{run_pageload2_probe, run_pageload_probe, PageLoadConfig};
+use networker_tester::runner::rpm::{run_rpm_probe, RpmProbeConfig};
 use networker_tester::runner::throughput::{
     run_download_probe, run_upload_probe, run_webdownload_probe, run_webupload_probe,
     ThroughputConfig,
@@ -391,6 +392,82 @@ async fn udp_probe_measures_rtt() {
     assert!(udp.success_count > 0, "At least some probes should succeed");
     assert!(udp.rtt_avg_ms >= 0.0);
     assert!(udp.rtt_p95_ms >= udp.rtt_min_ms);
+}
+
+/// Latency-under-load (`rpm`): unloaded UDP echo baseline, then paced UDP
+/// echo probes while sustained /download transfers saturate the link.
+///
+/// On loopback there is no real queue to bloat, so this asserts the STRUCTURE
+/// of the result (both phases sampled, load actually transferred bytes, RPM
+/// and factor derivable) — not the magnitude of the bufferbloat factor.
+#[tokio::test]
+async fn rpm_probe_reports_latency_under_load() {
+    let ep = Endpoint::start().await;
+    let cfg = RpmProbeConfig {
+        udp: UdpProbeConfig {
+            target_host: "127.0.0.1".into(),
+            target_port: ep.udp_port,
+            probe_count: 5,
+            timeout_ms: 3000,
+            payload_size: 64,
+        },
+        throughput: ThroughputConfig {
+            run_cfg: RunConfig {
+                dns_enabled: false,
+                timeout_ms: 10_000,
+                insecure: false,
+                ..Default::default()
+            },
+            base_url: ep.http_url("/health"),
+        },
+        // Small + short: loopback moves 4 MiB in milliseconds, and the load
+        // loop repeats downloads back-to-back for the whole window.
+        download_bytes: 4 * 1024 * 1024,
+        load_duration_ms: 1_200,
+        probe_interval_ms: 100,
+    };
+
+    let attempt = run_rpm_probe(Uuid::new_v4(), 0, &cfg).await;
+
+    assert!(attempt.success, "rpm probe failed: {:?}", attempt.error);
+    assert_eq!(attempt.protocol, Protocol::Rpm);
+    assert_eq!(attempt.protocol.to_string(), "rpm");
+
+    let r = attempt.rpm.expect("rpm result missing");
+    // Phase 1: unloaded baseline sampled.
+    assert_eq!(r.unloaded_probe_count, 5);
+    assert!(r.unloaded_success_count > 0, "unloaded probes all lost");
+    assert!(r.unloaded_rtt_avg_ms > 0.0);
+    assert!(r.unloaded_rtt_p95_ms >= r.unloaded_rtt_min_ms);
+    // Phase 2: paced probes fired during the load window.
+    assert_eq!(r.loaded_probe_count, 12, "1200ms / 100ms cadence");
+    assert!(r.loaded_success_count > 0, "loaded probes all lost");
+    assert!(r.loaded_rtt_avg_ms > 0.0);
+    assert!(r.loaded_rtt_p95_ms >= r.loaded_rtt_min_ms);
+    // The load generator really saturated the link (≥1 completed download).
+    assert!(r.load_downloads_completed > 0, "no download completed");
+    assert!(
+        r.load_bytes_transferred >= 4 * 1024 * 1024,
+        "load moved only {} bytes",
+        r.load_bytes_transferred
+    );
+    assert!(r.load_duration_ms >= 1_000.0, "load window cut short");
+    assert!(
+        r.load_throughput_mbps.unwrap_or(0.0) > 0.0,
+        "load throughput should be measured"
+    );
+    // Derived headline metrics exist and are internally consistent.
+    let rpm = r.rpm.expect("rpm should be derivable");
+    assert!(
+        (rpm - 60_000.0 / r.loaded_rtt_avg_ms).abs() < 1e-6,
+        "rpm must equal 60000 / loaded avg RTT"
+    );
+    let factor = r.bufferbloat_factor.expect("factor should be derivable");
+    assert!(
+        (factor - r.loaded_rtt_avg_ms / r.unloaded_rtt_avg_ms).abs() < 1e-6,
+        "factor must equal loaded/unloaded avg"
+    );
+    assert!(factor > 0.0);
 }
 
 #[tokio::test]

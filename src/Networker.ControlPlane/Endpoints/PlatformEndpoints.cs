@@ -70,6 +70,7 @@ public static class PlatformEndpoints
         new("tlsresume", "TLS Resume", "Warm handshake", "Two fresh TLS handshakes with a real HTTP request; the second should resume", "Network", "any"),
         new("native", "Native TLS", "OS TLS stack", "Uses SChannel (Win), SecureTransport (macOS), or OpenSSL (Linux)", "Network", "any"),
         new("udp", "UDP", "Round-trip", "UDP echo probe — measures RTT, jitter, and packet loss", "Network", "any"),
+        new("rpm", "RPM", "Latency under load", "Bufferbloat probe — UDP echo RTT idle vs during a sustained download; reports RPM (round-trips per minute) and bufferbloat factor", "Network", "networker-endpoint"),
         // HTTP
         new("http1", "HTTP/1.1", "Single request", "Full HTTP/1.1 request: DNS + TCP + TLS + request/response", "HTTP", "any"),
         new("http2", "HTTP/2", "Multiplexed", "HTTP/2 over TLS with ALPN h2 negotiation", "HTTP", "any"),

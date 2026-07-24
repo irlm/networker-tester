@@ -63,6 +63,7 @@ fn manifest_id_of(p: &Protocol) -> &'static str {
         Protocol::WebUpload => "webupload",
         Protocol::UdpDownload => "udpdownload",
         Protocol::UdpUpload => "udpupload",
+        Protocol::Rpm => "rpm",
         Protocol::Dns => "dns",
         Protocol::Tls => "tls",
         Protocol::TlsResume => "tlsresume",

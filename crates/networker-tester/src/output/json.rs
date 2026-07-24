@@ -571,7 +571,7 @@ fn benchmark_case_for_attempt(attempt: &RequestAttempt) -> BenchmarkCase {
         http_stack,
         metric_name,
         metric_unit,
-        higher_is_better: protocol_is_throughput(&attempt.protocol),
+        higher_is_better: protocol_is_higher_better(&attempt.protocol),
     }
 }
 
@@ -1092,11 +1092,19 @@ fn benchmark_case_id(attempt: &RequestAttempt) -> String {
 }
 
 fn metric_unit_for_protocol(protocol: &Protocol) -> &'static str {
-    if protocol_is_throughput(protocol) {
+    if matches!(protocol, Protocol::Rpm) {
+        // Round-trips per minute under load (higher is better).
+        "RPM"
+    } else if protocol_is_throughput(protocol) {
         "MB/s"
     } else {
         "ms"
     }
+}
+
+/// Higher-is-better protocols: throughput (MB/s) and rpm (round-trips/min).
+fn protocol_is_higher_better(protocol: &Protocol) -> bool {
+    protocol_is_throughput(protocol) || matches!(protocol, Protocol::Rpm)
 }
 
 fn protocol_is_throughput(protocol: &Protocol) -> bool {
@@ -1311,6 +1319,7 @@ mod tests {
                 page_load: None,
                 browser: None,
                 http_stack: None,
+                rpm: None,
             }],
         }
     }
@@ -1559,6 +1568,7 @@ mod tests {
                 page_load: None,
                 browser: None,
                 http_stack: None,
+                rpm: None,
             })
             .collect();
         let run = TestRun {
@@ -1734,6 +1744,7 @@ mod tests {
                 page_load: None,
                 browser: None,
                 http_stack: None,
+                rpm: None,
             })
             .collect();
         let run = TestRun {

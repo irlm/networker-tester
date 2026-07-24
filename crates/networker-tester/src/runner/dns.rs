@@ -178,6 +178,7 @@ pub async fn run_dns_probe(
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         },
         Err(err) => RequestAttempt {
             attempt_id,
@@ -199,6 +200,7 @@ pub async fn run_dns_probe(
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         },
     }
 }

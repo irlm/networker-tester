@@ -265,6 +265,7 @@ pub async fn run_tls_probe(
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     }
 }
 
@@ -465,6 +466,7 @@ pub async fn run_tls_resumption_probe(
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     }
 }
 
@@ -1018,6 +1020,7 @@ fn make_failed_with_protocol(
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     }
 }
 

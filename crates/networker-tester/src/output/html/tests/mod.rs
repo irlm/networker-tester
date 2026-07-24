@@ -103,6 +103,7 @@ fn make_run() -> TestRun {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         }],
     }
 }
@@ -186,6 +187,7 @@ fn make_http_attempt(success: bool, ttfb: f64, total: f64) -> RequestAttempt {
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     }
 }
 // ─────────────────────────────────────────────────────────────────────────
@@ -273,6 +275,7 @@ fn make_attempt(proto: Protocol, success: bool) -> RequestAttempt {
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     }
 }
 
