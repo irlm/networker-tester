@@ -5,7 +5,7 @@
 
 import { renderHook } from '@testing-library/react';
 import { describe, it, expect, afterEach } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { useProject } from './useProject';
 import { setProjectRole, resetRoleStores, type ProjectRole } from '../test/rbac-helpers';
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams } from 'react-router';
 import { api, errorMessage } from '../api/client';
 import type { LiveAttempt } from '../api/types';
 import {

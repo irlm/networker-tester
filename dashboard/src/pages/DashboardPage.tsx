@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { api, errorMessage } from '../api/client';
 import type { Agent, Deployment, TestRun } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';

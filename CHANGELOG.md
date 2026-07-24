@@ -11,6 +11,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.78] — 2026-07-24
+
+Measurement-depth wave 3 (gaps #10, #13, #12, #14, #15, #16) + two pipeline
+unblocks. All JSON-contract changes additive (schema stays 1.0). Note:
+v0.28.76/77 tags never released (musl build, then the npm advisory below) —
+this release carries waves 2 and 3 to prod together.
+
+### Added
+- **New probe mode: `websocket` (gap #10, 66).** Endpoint gains a `/ws` echo
+  route; the probe measures the full ladder — DNS/TCP/TLS, HTTP 101
+  `upgrade_ms`, then N echo messages: msg RTT min/avg/p95, arrival-order
+  jitter, loss. Requires a networker-endpoint.
+- **New probe mode: `pmtud` (gap #13, 58).** Path-MTU discovery via DF-bit
+  binary search. Linux reads ICMP frag-needed (incl. next-hop MTU) from the
+  error queue; macOS uses IP_DONTFRAG with honest method labeling; ICMP
+  port-unreachable counts as delivery confirmation so it works against any
+  live host. Reports path_mtu, method, and local MTU for contrast.
+- **Offline GeoIP/ASN enrichment (gap #12, 60, MaxMind).** User-supplied
+  GeoLite2 databases via `--geoip-city-db`/`--geoip-asn-db`
+  (`NETWORKER_GEOIP_CITY_DB`/`_ASN_DB`) — reader-only, never downloaded or
+  bundled. `client_geo` (public egress IPs only, no what's-my-ip calls) +
+  `target_geo` (first resolved IP) with country/city/ASN/org + db build date;
+  summary line + HTML geo rows. Absent DBs → silently off.
+- **Security-header audit (gap #14, 56).** `http.security_headers` derived
+  from already-captured response headers: HSTS (+parsed max-age), CSP
+  presence, nosniff, X-Frame-Options, Referrer-Policy, Server — HTML card.
+- **System-load sampling (gap #15, 55).** `client_load_before/after` (loadavg,
+  MemAvailable where the platform provides it) + a summary warning when
+  load exceeds core count ("tester under load — measurements may be noisy").
+- **Clock-sync cross-check (gap #16, 52).** One-shot SNTP query per run
+  (`NETWORKER_NTP_SERVER`, opt-out `NETWORKER_NTP_DISABLE=1`) → `clock_sync`
+  offset/RTT alongside the existing per-attempt skew heuristic.
+
+### Fixed
+- `pmtud`'s msghdr had the same glibc-vs-musl type mismatch that broke the
+  v0.28.76 release in `path.rs` — cast applied; the new CI musl-check job now
+  guards both.
+- **Dashboard: react-router-dom → react-router 8.3.0.** A same-day npm
+  advisory (GHSA-qwww-vcr4-c8h2, RSC-mode CSRF, affects react-router
+  7.12.0–8.2.0 with no patched 7.x) failed the `npm audit` CI gate on every
+  push and blocked the release auto-tag. react-router-dom has no patched
+  release at all, so the dashboard now imports `react-router` v8 directly
+  (53 files, mechanical; the 10 symbols used are all core exports). Verified:
+  tsc clean, 226 tests, lint, build, `npm audit` → 0 vulnerabilities.
+
+---
+
 ## [0.28.77] — 2026-07-24
 
 ### Fixed

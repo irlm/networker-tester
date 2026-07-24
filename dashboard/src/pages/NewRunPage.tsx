@@ -1,4 +1,4 @@
-import { Navigate } from 'react-router-dom';
+import { Navigate } from 'react-router';
 import { useProject } from '../hooks/useProject';
 
 export function NewRunPage() {

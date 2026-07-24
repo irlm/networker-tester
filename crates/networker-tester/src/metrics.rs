@@ -88,6 +88,10 @@ impl NetworkContext {
             && self.vpn_detected.is_none()
             && self.vpn_interface.is_none()
             && self.ipv6_available.is_none()
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Offline GeoIP enrichment (user-supplied MaxMind GeoLite2 databases)
 // ─────────────────────────────────────────────────────────────────────────────
 

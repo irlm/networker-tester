@@ -12,8 +12,8 @@
 
 use chrono::Utc;
 use networker_tester::metrics::{
-    DnsResult, GeoInfo, HttpResult, Protocol, RequestAttempt, TcpResult, TestRun, TlsResult,
-    SCHEMA_VERSION,
+    ClockSync, DnsResult, GeoInfo, HttpResult, LoadSample, Protocol, RequestAttempt,
+    SecurityHeaders, TcpResult, TestRun, TlsResult, SCHEMA_VERSION,
 };
 use uuid::Uuid;
 
@@ -110,6 +110,7 @@ fn sample_run() -> TestRun {
             socket_stats: None,
             content_encoding: None,
             content_length_header: None,
+            security_headers: None,
         }),
         udp: None,
         error: None,
@@ -143,6 +144,9 @@ fn sample_run() -> TestRun {
         server_info: None,
         client_info: None,
         client_network: None,
+        client_load_before: None,
+        client_load_after: None,
+        clock_sync: None,
         baseline: None,
         packet_capture_summary: None,
         benchmark_environment_check: None,
@@ -421,6 +425,8 @@ fn client_network_field_is_additive_and_optional() {
     let empty: networker_tester::metrics::NetworkContext =
         serde_json::from_str("{}").expect("all-optional struct");
     assert!(empty.is_empty());
+}
+
 /// Additive contract check for the offline GeoIP enrichment fields
 /// (`client_geo` / `target_geo`): omitted when unset (old shape unchanged),
 /// old JSON without them still deserializes, populated values round-trip.

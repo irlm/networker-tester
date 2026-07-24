@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router';
 import { api } from '../api/client';
 import type { PendingProject } from '../api/client';
 import { useAuthStore } from '../stores/authStore';

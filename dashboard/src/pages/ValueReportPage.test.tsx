@@ -5,7 +5,7 @@
 import type { ReactNode } from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { ValueReportPage } from './ValueReportPage';
 import { resetRoleStores, setProjectRole } from '../test/rbac-helpers';
 import type { PerfPerCostReport } from '../api/types';

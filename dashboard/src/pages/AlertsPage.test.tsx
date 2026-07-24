@@ -5,7 +5,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { AlertsPage } from './AlertsPage';
 import { resetRoleStores, setProjectRole } from '../test/rbac-helpers';
 import { useToastStore } from '../hooks/useToast';

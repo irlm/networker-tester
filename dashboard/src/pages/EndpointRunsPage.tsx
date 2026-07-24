@@ -12,7 +12,7 @@
 // has a place to land later.
 
 import { useMemo, useEffect, useState, useCallback } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router';
 import { api } from '../api/client';
 import type { Deployment, TestRun } from '../api/types';
 import { useProject } from '../hooks/useProject';

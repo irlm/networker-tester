@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router';
 import { api, errorMessage } from '../api/client';
 import type { ComparisonReport, BenchmarkCaseComparison } from '../api/types';
 import { Breadcrumb } from '../components/common/Breadcrumb';

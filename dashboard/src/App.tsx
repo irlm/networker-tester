@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useCallback, type ComponentType } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router';
 import { useAuthStore } from './stores/authStore';
 import { useProjectStore } from './stores/projectStore';
 import { useDocsStore } from './stores/docsStore';

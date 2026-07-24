@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import type { CloudAccountSummary } from '../../api/types';
 
 // ── Provider dot ─────────────────────────────────────────────────────────

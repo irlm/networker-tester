@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { api } from '../api/client';
 import { useProjectStore, type ProjectSummary } from '../stores/projectStore';
 import { useAuthStore } from '../stores/authStore';

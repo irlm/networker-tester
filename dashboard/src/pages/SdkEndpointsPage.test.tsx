@@ -5,7 +5,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { SdkEndpointsPage } from './SdkEndpointsPage';
 import { resetRoleStores, setProjectRole, type ProjectRole } from '../test/rbac-helpers';
 import type { SdkEndpoint } from '../api/types';

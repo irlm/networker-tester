@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router';
 import { api } from '../api/client';
 import type { Workload, Methodology, TestConfigCreate, ComparisonCell, ComparisonGroupCreate, LanguageCapability } from '../api/types';
 import { Breadcrumb } from '../components/common/Breadcrumb';

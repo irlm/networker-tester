@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useRef } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router';
 import { api } from '../api/client';
 import { stableSet } from '../lib/stableUpdate';
 import { timeAgo } from '../lib/format';

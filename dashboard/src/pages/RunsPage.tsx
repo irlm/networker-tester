@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router';
 import { api, errorMessage } from '../api/client';
 import type { TestRun, RunStatus, EndpointKind, TestConfig, TestConfigListItem } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';

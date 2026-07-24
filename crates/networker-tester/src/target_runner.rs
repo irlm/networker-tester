@@ -86,6 +86,8 @@ pub(crate) async fn run_for_target(
                 .unwrap_or("?"),
         );
         (!ctx.is_empty()).then_some(ctx)
+    };
+
     // ── Offline GeoIP enrichment (client egress + first resolved target IP) ──
     // Absent/unreadable databases → both stay None; never an error.
     let (client_geo, target_geo) = if geoip.is_enabled() {

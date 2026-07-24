@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router';
 import { api, errorMessage } from '../api/client';
 import { stripAnsi } from '../lib/ansi';
 import type { TestRun, LiveAttempt, BenchmarkArtifact } from '../api/types';

@@ -6,7 +6,7 @@
 
 import { render, screen } from '@testing-library/react';
 import { describe, it, expect, afterEach } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { SettingsTabs } from './SettingsTabs';
 import { setProjectRole, resetRoleStores, type ProjectRole } from '../../test/rbac-helpers';
 

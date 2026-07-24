@@ -10,7 +10,7 @@
 
 import { render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { ProjectMembersPage } from './ProjectMembersPage';
 import { resetRoleStores, setProjectRole, type ProjectRole } from '../test/rbac-helpers';
 import type { ProjectMember } from '../api/types';

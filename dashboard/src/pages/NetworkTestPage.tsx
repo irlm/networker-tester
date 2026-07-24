@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router';
 import { api } from '../api/client';
 import { testersApi, type TesterRow } from '../api/testers';
 import type { Deployment, TestRun, TestConfigCreate, Workload } from '../api/types';

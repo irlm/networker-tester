@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router';
 import { api, ApiError } from '../api/client';
 import type { AlertChannel, AlertEvent, AlertRule, TestConfigListItem } from '../api/types';
 import { EmptyState } from '../components/common/EmptyState';

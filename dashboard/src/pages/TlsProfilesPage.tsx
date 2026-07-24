@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { api, errorMessage, type TlsProfileSummary } from '../api/client';
 import { CreateTlsProfileDialog } from '../components/CreateTlsProfileDialog';
 import { usePolling } from '../hooks/usePolling';
