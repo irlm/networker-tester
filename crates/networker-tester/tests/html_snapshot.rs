@@ -182,6 +182,7 @@ fn make_run(run_seed: u128, target: &str, attempts: Vec<RequestAttempt>) -> Test
         client_version: "0.0.0-snapshot".into(),
         server_info: None,
         client_info: None,
+        client_network: None,
         baseline: None,
         packet_capture_summary: None,
         benchmark_environment_check: None,

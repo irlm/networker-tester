@@ -36,6 +36,62 @@ pub struct HostInfo {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Source-network context (client side)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Best-effort description of the SOURCE network the client ran from: default
+/// route interface, interface kind (WiFi vs ethernet), MTU, egress IP, gateway
+/// and a conservative VPN heuristic. Every field is optional — collection
+/// failures leave fields `None` and never abort a run. Additive to the JSON
+/// contract; `schema_version` stays 1.0.
+///
+/// Collection lives in [`crate::network_context`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetworkContext {
+    /// Name of the interface owning the default route (e.g. `en0`, `eth0`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_interface: Option<String>,
+    /// Classification of the default interface: `ethernet` | `wifi` |
+    /// `virtual` | `unknown`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interface_kind: Option<String>,
+    /// MTU of the default interface.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mtu: Option<u32>,
+    /// Local source address of a UDP socket connect()ed to the target — the
+    /// egress address actually used for this run (no packets are sent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_ip: Option<String>,
+    /// Default gateway address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_ip: Option<String>,
+    /// Conservative VPN heuristic: `Some(true)` only when the default route
+    /// goes through a tunnel-like interface (utun/tun/wg/tap/ppp/...).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vpn_detected: Option<bool>,
+    /// Tunnel interface name when `vpn_detected` is `Some(true)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vpn_interface: Option<String>,
+    /// Whether an IPv6 default route is present on this host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ipv6_available: Option<bool>,
+}
+
+impl NetworkContext {
+    /// True when collection produced no data at all (render guards use this).
+    pub fn is_empty(&self) -> bool {
+        self.default_interface.is_none()
+            && self.interface_kind.is_none()
+            && self.mtu.is_none()
+            && self.local_ip.is_none()
+            && self.gateway_ip.is_none()
+            && self.vpn_detected.is_none()
+            && self.vpn_interface.is_none()
+            && self.ipv6_available.is_none()
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Network baseline (RTT measurement before probes)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -178,6 +234,10 @@ pub struct TestRun {
     /// Client system metadata collected locally.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_info: Option<HostInfo>,
+    /// Source-network context (default route, interface kind, VPN heuristic)
+    /// collected best-effort at run start. Additive; schema stays 1.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_network: Option<NetworkContext>,
     /// Network baseline RTT measured before probes start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline: Option<NetworkBaseline>,
@@ -2362,6 +2422,7 @@ mod tests {
             client_version: "0.1.0".into(),
             server_info: None,
             client_info: None,
+            client_network: None,
             baseline: None,
             packet_capture_summary: None,
             benchmark_environment_check: None,
@@ -3266,6 +3327,7 @@ mod tests {
             client_version: "0.1.0".into(),
             server_info: None,
             client_info: None,
+            client_network: None,
             baseline: None,
             packet_capture_summary: None,
             benchmark_environment_check: None,

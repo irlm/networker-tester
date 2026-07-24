@@ -25,6 +25,7 @@ pub(crate) fn make_run(run_id: Uuid, attempts: Vec<RequestAttempt>) -> TestRun {
         client_version: env!("CARGO_PKG_VERSION").into(),
         server_info: None,
         client_info: None,
+        client_network: None,
         baseline: None,
         packet_capture_summary: None,
         benchmark_environment_check: None,

@@ -638,3 +638,57 @@ pub(super) fn write_host_info_card(label: &str, info: &HostInfo, out: &mut Strin
     }
     let _ = write!(out, "  </dl>\n</section>\n");
 }
+
+/// Card describing the client's SOURCE network (default interface, MTU,
+/// egress IP, gateway, VPN heuristic). Rendered next to the host-info cards
+/// when a run carries `client_network`.
+pub(super) fn write_client_network_card(net: &NetworkContext, out: &mut String) {
+    let iface = match (
+        net.default_interface.as_deref(),
+        net.interface_kind.as_deref(),
+    ) {
+        (Some(name), Some(kind)) => format!("{} ({})", escape_html(name), escape_html(kind)),
+        (Some(name), None) => escape_html(name),
+        (None, Some(kind)) => escape_html(kind),
+        (None, None) => "—".into(),
+    };
+    let mtu = net.mtu.map(|m| m.to_string()).unwrap_or_else(|| "—".into());
+    let local_ip = net.local_ip.as_deref().unwrap_or("—");
+    let gateway = net.gateway_ip.as_deref().unwrap_or("—");
+    let vpn = match (net.vpn_detected, net.vpn_interface.as_deref()) {
+        (Some(true), Some(tunnel)) => {
+            format!(r#"<span class="warn">yes ({})</span>"#, escape_html(tunnel))
+        }
+        (Some(true), None) => r#"<span class="warn">yes</span>"#.into(),
+        (Some(false), _) => "no".into(),
+        (None, _) => "—".into(),
+    };
+    let ipv6 = match net.ipv6_available {
+        Some(true) => "yes",
+        Some(false) => "no",
+        None => "—",
+    };
+
+    let _ = write!(
+        out,
+        r##"
+<section class="card" style="flex:1;min-width:280px;margin:0">
+  <h2>Client Network</h2>
+  <dl class="summary-grid">
+    <dt>Interface</dt>   <dd>{iface}</dd>
+    <dt>MTU</dt>         <dd>{mtu}</dd>
+    <dt>Local IP</dt>    <dd>{local_ip}</dd>
+    <dt>Gateway</dt>     <dd>{gateway}</dd>
+    <dt>VPN</dt>         <dd>{vpn}</dd>
+    <dt>IPv6</dt>        <dd>{ipv6}</dd>
+  </dl>
+</section>
+"##,
+        iface = iface,
+        mtu = mtu,
+        local_ip = escape_html(local_ip),
+        gateway = escape_html(gateway),
+        vpn = vpn,
+        ipv6 = ipv6,
+    );
+}

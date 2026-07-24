@@ -139,6 +139,7 @@ fn sample_run() -> TestRun {
         client_version: "0.0.0-test".into(),
         server_info: None,
         client_info: None,
+        client_network: None,
         baseline: None,
         packet_capture_summary: None,
         benchmark_environment_check: None,
@@ -362,6 +363,55 @@ fn quic_zero_rtt_fields_are_additive_and_optional() {
             .and_then(|n| n.as_f64()),
         Some(1.25)
     );
+/// Additive extension (measurement gap #11): `client_network` carries the
+/// SOURCE network context (default interface, kind, MTU, egress IP, gateway,
+/// VPN heuristic). Optional and skip-serialized when `None`: old JSON without
+/// it must deserialize, and a run that doesn't set it serializes to the same
+/// shape as before. schema_version stays 1.0.
+#[test]
+fn client_network_field_is_additive_and_optional() {
+    let run = sample_run();
+    let mut v = serde_json::to_value(&run).expect("serialize");
+
+    // Unset → omitted entirely (frozen 1.0 shape unchanged).
+    assert!(
+        v.get("client_network").is_none(),
+        "client_network must be omitted when unset"
+    );
+
+    // Old-producer JSON (no client_network key) must deserialize to None.
+    let back: TestRun = serde_json::from_value(v.clone()).expect("deserialize old shape");
+    assert!(back.client_network.is_none());
+
+    // A populated client_network round-trips, including partially-collected
+    // (best-effort) shapes where most fields are absent.
+    v.as_object_mut().unwrap().insert(
+        "client_network".into(),
+        serde_json::json!({
+            "default_interface": "en0",
+            "interface_kind": "wifi",
+            "mtu": 1500,
+            "local_ip": "192.168.1.23",
+            "gateway_ip": "192.168.1.1",
+            "vpn_detected": false,
+            "ipv6_available": true
+        }),
+    );
+    let back: TestRun = serde_json::from_value(v).expect("deserialize with client_network");
+    let net = back.client_network.expect("client_network populated");
+    assert_eq!(net.default_interface.as_deref(), Some("en0"));
+    assert_eq!(net.interface_kind.as_deref(), Some("wifi"));
+    assert_eq!(net.mtu, Some(1500));
+    assert_eq!(net.local_ip.as_deref(), Some("192.168.1.23"));
+    assert_eq!(net.gateway_ip.as_deref(), Some("192.168.1.1"));
+    assert_eq!(net.vpn_detected, Some(false));
+    assert_eq!(net.vpn_interface, None, "absent field defaults to None");
+    assert_eq!(net.ipv6_available, Some(true));
+
+    // An empty object also deserializes — every field is optional.
+    let empty: networker_tester::metrics::NetworkContext =
+        serde_json::from_str("{}").expect("all-optional struct");
+    assert!(empty.is_empty());
 }
 
 /// A run serialized without `schema_version` (a pre-contract producer) must

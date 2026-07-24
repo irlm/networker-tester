@@ -19,8 +19,8 @@ use networker_tester::dispatch::{
     dispatch_once, log_attempt, published_logical_attempts, rewrite_url_for_stack,
 };
 use networker_tester::metrics::{
-    primary_metric_value, BenchmarkExecutionPlan, BenchmarkNoiseThresholds, HostInfo, Protocol,
-    RequestAttempt, TestRun,
+    primary_metric_value, BenchmarkExecutionPlan, BenchmarkNoiseThresholds, HostInfo,
+    NetworkContext, Protocol, RequestAttempt, TestRun,
 };
 use networker_tester::output;
 use networker_tester::output::db;

@@ -64,6 +64,29 @@ pub(crate) async fn run_for_target(
     };
     let client_info = Some(HostInfo::collect_local());
 
+    // ── Source-network context (best-effort; never aborts the run) ────────────
+    let client_network = {
+        let port = target
+            .port_or_known_default()
+            .unwrap_or(if target.scheme() == "http" { 80 } else { 443 });
+        let ctx = NetworkContext::collect(&target_host, port);
+        info!(
+            "Client network: iface={} ({}) | mtu={} | local_ip={} | gw={} | vpn={} | ipv6={}",
+            ctx.default_interface.as_deref().unwrap_or("?"),
+            ctx.interface_kind.as_deref().unwrap_or("unknown"),
+            ctx.mtu.map(|m| m.to_string()).as_deref().unwrap_or("?"),
+            ctx.local_ip.as_deref().unwrap_or("?"),
+            ctx.gateway_ip.as_deref().unwrap_or("?"),
+            ctx.vpn_detected
+                .map(|v| if v { "yes" } else { "no" })
+                .unwrap_or("?"),
+            ctx.ipv6_available
+                .map(|v| if v { "yes" } else { "no" })
+                .unwrap_or("?"),
+        );
+        (!ctx.is_empty()).then_some(ctx)
+    };
+
     let benchmark_environment_check = if cfg.benchmark_mode && cfg.benchmark_phase == "measured" {
         let samples = cfg
             .benchmark_environment_check_samples
@@ -830,6 +853,7 @@ pub(crate) async fn run_for_target(
         client_version: env!("CARGO_PKG_VERSION").to_string(),
         server_info,
         client_info,
+        client_network,
         baseline,
         packet_capture_summary: None,
         benchmark_environment_check,

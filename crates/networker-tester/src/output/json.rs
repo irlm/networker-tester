@@ -1,7 +1,7 @@
 use crate::metrics::{
     attempt_payload_bytes, primary_metric_label, primary_metric_value, BenchmarkEnvironmentCheck,
     BenchmarkExecutionPlan, BenchmarkNoiseThresholds, BenchmarkStabilityCheck, HostInfo,
-    NetworkBaseline, Protocol, RequestAttempt, TestRun, UrlTestRun,
+    NetworkBaseline, NetworkContext, Protocol, RequestAttempt, TestRun, UrlTestRun,
 };
 use crate::tls_profile::TlsEndpointProfile;
 use chrono::{DateTime, Utc};
@@ -72,6 +72,9 @@ pub struct BenchmarkMetadata {
 pub struct BenchmarkEnvironment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_info: Option<HostInfo>,
+    /// Source-network context of the client (additive, best-effort).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_network: Option<NetworkContext>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_info: Option<HostInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -522,6 +525,7 @@ pub fn to_benchmark_artifact(run: &TestRun) -> anyhow::Result<BenchmarkArtifact>
         },
         environment: BenchmarkEnvironment {
             client_info: run.client_info.clone(),
+            client_network: run.client_network.clone(),
             server_info: run.server_info.clone(),
             network_baseline: run.baseline.clone(),
             environment_check: run.benchmark_environment_check.clone(),
@@ -1289,6 +1293,7 @@ mod tests {
             client_version: "0.1.0".into(),
             server_info: None,
             client_info: None,
+            client_network: None,
             baseline: None,
             packet_capture_summary: None,
             benchmark_environment_check: None,
@@ -1598,6 +1603,7 @@ mod tests {
             client_version: "0.1.0".into(),
             server_info: None,
             client_info: None,
+            client_network: None,
             baseline: Some(NetworkBaseline {
                 samples: 10,
                 rtt_min_ms: 0.8,
@@ -1780,6 +1786,7 @@ mod tests {
             client_version: "0.1.0".into(),
             server_info: None,
             client_info: None,
+            client_network: None,
             baseline: Some(NetworkBaseline {
                 samples: 10,
                 rtt_min_ms: 0.8,
