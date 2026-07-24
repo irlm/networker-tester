@@ -18,6 +18,8 @@ namespace Networker.Contracts;
 [JsonSerializable(typeof(TcpPhase))]
 [JsonSerializable(typeof(TlsPhase))]
 [JsonSerializable(typeof(HttpPhase))]
+[JsonSerializable(typeof(UdpPhase))]
+[JsonSerializable(typeof(ServerTimingPhase))]
 public partial class ProbeContractJsonContext : JsonSerializerContext
 {
 }

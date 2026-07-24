@@ -23,6 +23,12 @@ describe('requirementOf', () => {
     }
   });
 
+  it('classifies rpm (latency under load) as needing a networker-endpoint', () => {
+    // rpm saturates the link via the endpoint /download route while probing
+    // its UDP echo server — an arbitrary URL runs neither.
+    expect(requirementOf('rpm')).toBe('networker-endpoint');
+  });
+
   it('classifies udp / page-load / browser as any-target (the URL Probe runs them against raw URLs)', () => {
     for (const m of ['udp', 'pageload', 'pageload3', 'browser1', 'browser2', 'browser3']) {
       expect(requirementOf(m)).toBe('any');

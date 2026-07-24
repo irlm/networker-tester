@@ -229,6 +229,7 @@ fn udp_statistics_section_appears_when_udp_attempts_present() {
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     });
     let html = render(&run, None, None);
     assert!(
@@ -275,6 +276,7 @@ fn udp_loss_shows_warn_class_when_nonzero() {
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     });
     let html = render(&run, None, None);
     assert!(html.contains("20.0%"), "loss percent should appear");
@@ -474,6 +476,7 @@ fn protocol_comparison_metric_label_correct_for_tcp() {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         }
     };
     r1.attempts.push(make_tcp(5.0));

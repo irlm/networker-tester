@@ -853,6 +853,9 @@ fn throughput_protocol_comparison_higher_is_better() {
                 csw_voluntary: None,
                 csw_involuntary: None,
                 http_handshake_ms: None,
+                socket_stats: None,
+                content_encoding: None,
+                content_length_header: None,
             }),
             udp: None,
             error: None,
@@ -862,6 +865,7 @@ fn throughput_protocol_comparison_higher_is_better() {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         }
     };
     // r1 has 200 MB/s (better), r2 has 100 MB/s (worse)

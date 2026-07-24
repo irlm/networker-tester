@@ -104,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
     let modes = cfg.parsed_modes();
     if modes.is_empty() {
         anyhow::bail!(
-            "No valid modes specified. Use: tcp,http1,http2,http3,udp,dns,tls,tlsresume,native,curl,\
+            "No valid modes specified. Use: tcp,http1,http2,http3,udp,rpm,dns,tls,tlsresume,native,curl,\
              download,download1,download2,download3,upload,upload1,upload2,upload3,webdownload,webupload,udpdownload,udpupload,\
              pageload(H1+H2+H3),pageload1,pageload2,pageload3,\
              browser(H1+H2+H3),browser1,browser2,browser3"

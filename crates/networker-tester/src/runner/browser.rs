@@ -777,6 +777,7 @@ mod real {
                 started_at,
             }),
             http_stack: None,
+            rpm: None,
         }
     }
 
@@ -890,6 +891,7 @@ mod real {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         }
     }
 
@@ -1135,6 +1137,7 @@ mod stub {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         }
     }
 }

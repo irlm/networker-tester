@@ -738,6 +738,9 @@ mod tests {
             csw_voluntary: None,
             csw_involuntary: None,
             http_handshake_ms: None,
+            socket_stats: None,
+            content_encoding: None,
+            content_length_header: None,
         }
     }
 
@@ -1251,6 +1254,9 @@ mod tests {
                 csw_voluntary: None,
                 csw_involuntary: None,
                 http_handshake_ms: None,
+                socket_stats: None,
+                content_encoding: None,
+                content_length_header: None,
             }),
             udp: None,
             error: None,
@@ -1260,6 +1266,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         }
     }
 
@@ -1294,6 +1301,9 @@ mod tests {
                 csw_voluntary: None,
                 csw_involuntary: None,
                 http_handshake_ms: None,
+                socket_stats: None,
+                content_encoding: None,
+                content_length_header: None,
             }),
             udp: None,
             error: None,
@@ -1303,6 +1313,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         }
     }
 
@@ -1392,6 +1403,9 @@ mod tests {
                 csw_voluntary: None,
                 csw_involuntary: None,
                 http_handshake_ms: None,
+                socket_stats: None,
+                content_encoding: None,
+                content_length_header: None,
             }),
             udp: None,
             error: None,
@@ -1401,6 +1415,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         };
         verify_upload(&mut attempt, 100);
         assert!(attempt.success);
@@ -1522,6 +1537,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         };
         assert_eq!(compute_overhead_ms(&attempt), 0.0);
     }
@@ -1564,6 +1580,9 @@ mod tests {
                 csw_voluntary: None,
                 csw_involuntary: None,
                 http_handshake_ms: None,
+                socket_stats: None,
+                content_encoding: None,
+                content_length_header: None,
             }),
             udp: None,
             error: None,
@@ -1573,6 +1592,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         };
         verify_upload(&mut attempt, 100);
         // Non-numeric treated as absent → skip verification, stay successful.
@@ -1610,6 +1630,9 @@ mod tests {
                 csw_voluntary: None,
                 csw_involuntary: None,
                 http_handshake_ms: None,
+                socket_stats: None,
+                content_encoding: None,
+                content_length_header: None,
             }),
             udp: None,
             error: None,
@@ -1619,6 +1642,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         };
         verify_upload(&mut attempt, 12);
         // "12.5" doesn't parse as usize → treated as absent → skip.
@@ -1655,6 +1679,9 @@ mod tests {
                 csw_voluntary: None,
                 csw_involuntary: None,
                 http_handshake_ms: None,
+                socket_stats: None,
+                content_encoding: None,
+                content_length_header: None,
             }),
             udp: None,
             error: None,
@@ -1664,6 +1691,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         };
         verify_upload(&mut attempt, 100);
         assert!(attempt.success);
@@ -1688,6 +1716,11 @@ mod tests {
                 started_at: now,
                 success: true,
                 resolver: None,
+                a_ms: None,
+                aaaa_ms: None,
+                a_record_count: None,
+                aaaa_record_count: None,
+                cname_chain: Vec::new(),
             }),
             tcp: Some(TcpResult {
                 local_addr: None,
@@ -1729,6 +1762,8 @@ mod tests {
                 previous_handshake_kind: None,
                 previous_http_status_code: None,
                 http_status_code: None,
+                ocsp_stapled: None,
+                ocsp_response_bytes: None,
             }),
             http: None,
             udp: None,
@@ -1739,6 +1774,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         };
         assert!((compute_overhead_ms(&attempt) - 30.0).abs() < 1e-12);
     }

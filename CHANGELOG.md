@@ -11,6 +11,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.75] — 2026-07-24
+
+Measurement-depth wave 1 — the four highest-scored items of
+`docs/analysis/measurement-gap-analysis-2026-07.md`, developed in parallel and
+integrated together. All JSON-contract changes are additive (schema stays 1.0).
+
+### Added
+- **New probe mode: `rpm` — latency under load / bufferbloat (gap #2, 88).**
+  Measures UDP echo RTT while saturating the link with sustained downloads from
+  a networker-endpoint: unloaded vs loaded RTT (min/avg/p95), loaded jitter +
+  loss, `rpm = 60000 / loaded_avg_ms`, and the bufferbloat factor
+  (loaded/unloaded). Full cross-stack wiring per the protocol checklist
+  (modes.json `requires: networker-endpoint`, C# catalog, mode-family,
+  capability gate, drift guards, integration test). Fail-loud: a dead load
+  generator or fully-lost probe phase fails the attempt rather than reporting a
+  fake ≈1.0 factor.
+- **Post-transfer TCP kernel stats for HTTP-family probes (gap #5, 76).**
+  `HttpResult.socket_stats` (cwnd, ssthresh, retransmits, total_retrans, MSS,
+  smoothed/min RTT, delivery rate, congestion algorithm, …) sampled AFTER the
+  transfer via a dup'd fd — http1/http2 and all six HTTP throughput modes.
+  Summary prints a retransmission warning when segments retransmitted; the HTML
+  TCP table prefers the post-transfer snapshot. (Connect-time `TcpResult` stats
+  unchanged.)
+- **DNS depth for the `dns` mode (gap #6, 75).** Separately-timed A and AAAA
+  lookups (`a_ms`/`aaaa_ms` + record counts) and the CNAME chain in order —
+  other modes' resolution path untouched. New "DNS detail" summary section.
+- **Certificate/OCSP depth (gap #7, 73).** `CertEntry` gains key algorithm,
+  key size, and signature algorithm (shared parser — the `native` probe gains
+  them too); `TlsResult` gains `ocsp_stapled`/`ocsp_response_bytes` via a
+  pass-through verifier that records the staple and delegates to the identical
+  rustls verification path. New "TLS certificate detail" summary section.
+- **Content-Encoding capture (gap #9, 70).** `HttpResult.content_encoding` +
+  `content_length_header` extracted from already-captured headers (the sent
+  Accept-Encoding is untouched, so measurements don't change).
+- **Persistence gap closed at the C# boundary (gap #1, 95).**
+  `ProbeRunResult` widened additively (TCP kernel stats, TLS depth incl.
+  resumption + backend, HTTP throughput/goodput/CPU/context-switches, new
+  `UdpPhase` + `ServerTimingPhase` with the network-vs-server split);
+  `GET /api/v2/test-runs/{id}/attempts` now emits nested phase objects from the
+  tester phase tables (old runs' wire shape unchanged); Run detail renders the
+  new depth (server/network split + anomaly flag, TLS resumed/handshake kind,
+  goodput, retransmits + congestion algorithm, UDP jitter/p95) — rows render
+  only when data is present.
+
+### Fixed
+- `lazyPage` module constraint loosened to `ComponentType<never>` so pages can
+  export prop-taking subcomponents for tests without breaking the lazy-route
+  typing (surfaced by the integrated build).
+
+---
+
 ## [0.28.74] — 2026-07-23
 
 ### Added

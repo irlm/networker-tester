@@ -71,6 +71,7 @@ pub(crate) fn bare_attempt(run_id: Uuid) -> RequestAttempt {
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     }
 }
 
@@ -92,6 +93,11 @@ pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
             started_at: Utc::now(),
             success: true,
             resolver: None,
+            a_ms: None,
+            aaaa_ms: None,
+            a_record_count: None,
+            aaaa_record_count: None,
+            cname_chain: Vec::new(),
         }),
         tcp: Some(TcpResult {
             local_addr: Some("127.0.0.1:12345".into()),
@@ -133,6 +139,8 @@ pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
             previous_handshake_kind: None,
             previous_http_status_code: None,
             http_status_code: None,
+            ocsp_stapled: None,
+            ocsp_response_bytes: None,
         }),
         http: Some(HttpResult {
             negotiated_version: "HTTP/1.1".into(),
@@ -151,6 +159,9 @@ pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
             csw_voluntary: Some(4),
             csw_involuntary: Some(1),
             http_handshake_ms: None,
+            socket_stats: None,
+            content_encoding: None,
+            content_length_header: None,
         }),
         udp: Some(UdpResult {
             remote_addr: "127.0.0.1:9999".into(),
@@ -187,6 +198,7 @@ pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     }
 }
 

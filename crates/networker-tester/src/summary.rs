@@ -59,6 +59,7 @@ pub fn print_summary(run: &TestRun) {
         Protocol::SdkProbe,
         Protocol::Tcp,
         Protocol::Udp,
+        Protocol::Rpm,
         Protocol::Dns,
         Protocol::Tls,
         Protocol::TlsResume,
@@ -191,9 +192,23 @@ pub fn print_summary(run: &TestRun) {
         }
     }
 
+    // Post-transfer TCP kernel stats note (gap #5): sampled after each
+    // HTTP-family transfer completes. Only printed when segments actually
+    // retransmitted — silence means clean transfers.
+    print_retransmission_note(run);
+
     // sdkprobe network-vs-server latency split — the core "find the main
     // issue" breakdown. Only rendered when a sdkprobe run produced a split.
     print_sdk_split(run);
+
+    // rpm latency-under-load breakdown — unloaded vs loaded RTT, bufferbloat
+    // factor, and RPM. Only rendered when an rpm attempt produced a result.
+    print_rpm_summary(run);
+
+    // Per-record-type DNS detail (dns mode) and certificate/OCSP detail
+    // (tls mode) — rendered only when the probes captured the extra depth.
+    print_dns_detail(run);
+    print_tls_detail(run);
 
     // Protocol comparison table when any pageload or browser variant is present
     let has_pageload = run.attempts.iter().any(|a| {
@@ -213,6 +228,43 @@ pub fn print_summary(run: &TestRun) {
     }
 
     println!("══════════════════════════════════════════════\n");
+}
+
+/// Warn when post-transfer TCP kernel stats (`http.socket_stats`, sampled on a
+/// dup of the probe socket after the transfer) show retransmitted segments —
+/// the single most common explanation for a throughput anomaly. Quiet when no
+/// attempt retransmitted or the platform reports no kernel stats (Windows).
+fn print_retransmission_note(run: &TestRun) {
+    let mut attempts_with_retrans = 0usize;
+    let mut total_retrans: u64 = 0;
+    let mut algos: BTreeSet<String> = BTreeSet::new();
+    for a in &run.attempts {
+        let Some(s) = a.http.as_ref().and_then(|h| h.socket_stats.as_ref()) else {
+            continue;
+        };
+        if let Some(algo) = &s.congestion_algorithm {
+            algos.insert(algo.clone());
+        }
+        let n = s.total_retrans.unwrap_or(0).max(s.retransmits.unwrap_or(0));
+        if n > 0 {
+            attempts_with_retrans += 1;
+            total_retrans += n as u64;
+        }
+    }
+    if attempts_with_retrans > 0 {
+        let algo_note = if algos.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " (congestion control: {})",
+                algos.into_iter().collect::<Vec<_>>().join(", ")
+            )
+        };
+        println!(
+            "\n ⚠ TCP retransmissions during transfer: {total_retrans} segment(s) across \
+             {attempts_with_retrans} attempt(s){algo_note} — throughput numbers may reflect loss recovery"
+        );
+    }
 }
 
 /// Render the sdkprobe NETWORK-vs-SERVER latency split: the LagHound report's
@@ -289,6 +341,169 @@ fn print_sdk_split(run: &TestRun) {
     }
     if anomalies > 0 {
         println!("   ⚠ {anomalies} probe(s) had server_ms > wall — network leg clamped to 0");
+    }
+}
+
+/// Render the rpm latency-under-load breakdown: unloaded vs loaded UDP echo
+/// RTT side by side, the bufferbloat factor, and the RPM headline number.
+/// Averages across all rpm attempts that carry a result (typically one per
+/// run iteration); loss/jitter come from the loaded phase — the user-felt
+/// numbers when the link is saturated.
+fn print_rpm_summary(run: &TestRun) {
+    let results: Vec<&crate::metrics::RpmResult> = run
+        .attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::Rpm)
+        .filter_map(|a| a.rpm.as_ref())
+        .collect();
+    if results.is_empty() {
+        return;
+    }
+
+    let avg = |f: &dyn Fn(&crate::metrics::RpmResult) -> f64| -> f64 {
+        results.iter().map(|r| f(r)).sum::<f64>() / results.len() as f64
+    };
+    let avg_opt = |f: &dyn Fn(&crate::metrics::RpmResult) -> Option<f64>| -> Option<f64> {
+        let vals: Vec<f64> = results.iter().filter_map(|r| f(r)).collect();
+        (!vals.is_empty()).then(|| vals.iter().sum::<f64>() / vals.len() as f64)
+    };
+
+    println!();
+    println!(
+        " Latency under load (rpm, avg over {n} attempt{s})",
+        n = results.len(),
+        s = if results.len() == 1 { "" } else { "s" },
+    );
+    println!("──────────────────────────────────────────────────────────");
+    println!("              │      Min │      Avg │      p95 │  Jitter │  Loss");
+    println!(
+        "   Unloaded   │ {min:>7.2}ms │ {a:>7.2}ms │ {p95:>7.2}ms │ {j:>6.2}ms │ {l:>4.1}%",
+        min = avg(&|r| r.unloaded_rtt_min_ms),
+        a = avg(&|r| r.unloaded_rtt_avg_ms),
+        p95 = avg(&|r| r.unloaded_rtt_p95_ms),
+        j = avg(&|r| r.unloaded_jitter_ms),
+        l = avg(&|r| r.unloaded_loss_percent),
+    );
+    println!(
+        "   Loaded     │ {min:>7.2}ms │ {a:>7.2}ms │ {p95:>7.2}ms │ {j:>6.2}ms │ {l:>4.1}%",
+        min = avg(&|r| r.loaded_rtt_min_ms),
+        a = avg(&|r| r.loaded_rtt_avg_ms),
+        p95 = avg(&|r| r.loaded_rtt_p95_ms),
+        j = avg(&|r| r.loaded_jitter_ms),
+        l = avg(&|r| r.loaded_loss_percent),
+    );
+    let fmt =
+        |v: Option<f64>, unit: &str| v.map_or_else(|| "—".to_string(), |x| format!("{x:.2}{unit}"));
+    println!(
+        "   → RPM: {rpm}  |  bufferbloat factor: {factor}  |  load: {mbps}",
+        rpm = avg_opt(&|r| r.rpm)
+            .map_or_else(|| "—".to_string(), |x| format!("{x:.0} round-trips/min")),
+        factor = fmt(avg_opt(&|r| r.bufferbloat_factor), "x"),
+        mbps = fmt(avg_opt(&|r| r.load_throughput_mbps), " MB/s"),
+    );
+}
+
+/// Render per-record-type DNS depth for the standalone `dns` probe mode:
+/// separately-timed A/AAAA lookups, record counts, and the CNAME chain.
+/// Silent unless a dns-mode attempt captured the detail (older probes and all
+/// other modes leave the fields unset).
+fn print_dns_detail(run: &TestRun) {
+    let dns: Vec<&crate::metrics::DnsResult> = run
+        .attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::Dns)
+        .filter_map(|a| a.dns.as_ref())
+        .collect();
+    let has_detail = dns
+        .iter()
+        .any(|d| d.a_ms.is_some() || d.aaaa_ms.is_some() || !d.cname_chain.is_empty());
+    if !has_detail {
+        return;
+    }
+
+    let avg = |f: &dyn Fn(&crate::metrics::DnsResult) -> Option<f64>| -> Option<f64> {
+        let vals: Vec<f64> = dns.iter().filter_map(|d| f(d)).collect();
+        (!vals.is_empty()).then(|| vals.iter().sum::<f64>() / vals.len() as f64)
+    };
+    let a_ms = avg(&|d| d.a_ms);
+    let aaaa_ms = avg(&|d| d.aaaa_ms);
+
+    // Record counts and the chain are stable across attempts — report the
+    // first observation rather than a meaningless average.
+    let a_count = dns.iter().find_map(|d| d.a_record_count);
+    let aaaa_count = dns.iter().find_map(|d| d.aaaa_record_count);
+    let chain = dns.iter().find(|d| !d.cname_chain.is_empty());
+
+    let records = |n: Option<u32>| match n {
+        Some(1) => "1 record".to_string(),
+        Some(n) => format!("{n} records"),
+        None => "skipped".to_string(),
+    };
+    let line = |label: &str, ms: Option<f64>, count: Option<u32>| match ms {
+        Some(v) => println!("   {label:<18} {v:>8.2}ms avg │ {}", records(count)),
+        None => println!("   {label:<18} {:>10} │ {}", "—", records(count)),
+    };
+
+    println!();
+    println!(
+        " DNS detail (over {n} probe{s})",
+        n = dns.len(),
+        s = if dns.len() == 1 { "" } else { "s" },
+    );
+    println!("──────────────────────────────────────────");
+    line("A lookup", a_ms, a_count);
+    line("AAAA lookup", aaaa_ms, aaaa_count);
+    if let Some(d) = chain {
+        println!(
+            "   {label:<18} {query} → {chain}",
+            label = "CNAME chain",
+            query = d.query_name,
+            chain = d.cname_chain.join(" → "),
+        );
+    }
+}
+
+/// Render certificate/OCSP depth for the standalone `tls` / `tlsresume`
+/// modes: leaf key algorithm + size, signature algorithm, and whether the
+/// server stapled an OCSP response. Silent when no attempt captured it.
+fn print_tls_detail(run: &TestRun) {
+    let Some(tls) = run
+        .attempts
+        .iter()
+        .filter(|a| matches!(a.protocol, Protocol::Tls | Protocol::TlsResume))
+        .filter_map(|a| a.tls.as_ref())
+        .find(|t| {
+            t.ocsp_stapled.is_some()
+                || t.cert_chain
+                    .first()
+                    .is_some_and(|c| c.key_algorithm.is_some() || c.signature_algorithm.is_some())
+        })
+    else {
+        return;
+    };
+
+    println!();
+    println!(" TLS certificate detail");
+    println!("──────────────────────────────────────────");
+    if let Some(leaf) = tls.cert_chain.first() {
+        if let Some(alg) = &leaf.key_algorithm {
+            match leaf.key_size_bits {
+                Some(bits) => println!("   {:<18} {alg} ({bits} bit)", "Leaf key"),
+                None => println!("   {:<18} {alg}", "Leaf key"),
+            }
+        }
+        if let Some(sig) = &leaf.signature_algorithm {
+            println!("   {:<18} {sig}", "Signature");
+        }
+    }
+    match tls.ocsp_stapled {
+        Some(true) => println!(
+            "   {:<18} stapled ({} bytes)",
+            "OCSP",
+            tls.ocsp_response_bytes.unwrap_or(0)
+        ),
+        Some(false) => println!("   {:<18} not stapled", "OCSP"),
+        None => println!("   {:<18} not observed (resumed handshake)", "OCSP"),
     }
 }
 

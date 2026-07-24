@@ -665,13 +665,34 @@ pub(super) fn write_run_sections(run: &TestRun, out: &mut String) {
         );
         for a in &tcp_rows {
             let t = a.tcp.as_ref().unwrap();
+            // Prefer the post-transfer kernel snapshot (http.socket_stats,
+            // gap #5) — cwnd/retrans/delivery-rate describe the transfer
+            // there, not a fresh connection. Fall back to the connect-time
+            // values on TcpResult (bare tcp probes, Windows, older JSON).
+            let post = a.http.as_ref().and_then(|h| h.socket_stats.as_ref());
+            let mss_bytes = post.and_then(|s| s.mss_bytes).or(t.mss_bytes);
+            let rtt_estimate_ms = post.and_then(|s| s.rtt_estimate_ms).or(t.rtt_estimate_ms);
+            let rtt_variance_ms = post.and_then(|s| s.rtt_variance_ms).or(t.rtt_variance_ms);
+            let min_rtt_ms = post.and_then(|s| s.min_rtt_ms).or(t.min_rtt_ms);
+            let snd_cwnd = post.and_then(|s| s.snd_cwnd).or(t.snd_cwnd);
+            let snd_ssthresh = post.and_then(|s| s.snd_ssthresh).or(t.snd_ssthresh);
+            let retransmits = post.and_then(|s| s.retransmits).or(t.retransmits);
+            let total_retrans = post.and_then(|s| s.total_retrans).or(t.total_retrans);
+            let rcv_space = post.and_then(|s| s.rcv_space).or(t.rcv_space);
+            let segs_out = post.and_then(|s| s.segs_out).or(t.segs_out);
+            let segs_in = post.and_then(|s| s.segs_in).or(t.segs_in);
+            let delivery_rate_bps = post
+                .and_then(|s| s.delivery_rate_bps)
+                .or(t.delivery_rate_bps);
+            let congestion_algorithm = post
+                .and_then(|s| s.congestion_algorithm.as_deref())
+                .or(t.congestion_algorithm.as_deref());
             let local_remote = format!(
                 "{} → {}",
                 t.local_addr.as_deref().unwrap_or("?"),
                 t.remote_addr
             );
-            let delivery_mbps = t
-                .delivery_rate_bps
+            let delivery_mbps = delivery_rate_bps
                 .map(|b| format!("{:.1}", b as f64 / 1_000_000.0))
                 .unwrap_or_else(|| "—".into());
             let tcp_stack_td = if has_stacks_for_tcp {
@@ -710,52 +731,50 @@ pub(super) fn write_run_sections(run: &TestRun, out: &mut String) {
                 tcp_stack_td = tcp_stack_td,
                 addrs = local_remote,
                 conn = t.connect_duration_ms,
-                mss = t
-                    .mss_bytes
+                mss = mss_bytes
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "—".into()),
-                rtt = t
-                    .rtt_estimate_ms
+                rtt = rtt_estimate_ms
                     .map(|v| format!("{v:.3}"))
                     .unwrap_or_else(|| "—".into()),
-                rttvar = t
-                    .rtt_variance_ms
+                rttvar = rtt_variance_ms
                     .map(|v| format!("{v:.3}"))
                     .unwrap_or_else(|| "—".into()),
-                minrtt = t
-                    .min_rtt_ms
+                minrtt = min_rtt_ms
                     .map(|v| format!("{v:.3}"))
                     .unwrap_or_else(|| "—".into()),
-                cwnd = t
-                    .snd_cwnd
+                cwnd = snd_cwnd
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "—".into()),
-                ssthresh = t
-                    .snd_ssthresh
+                ssthresh = snd_ssthresh
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "∞".into()),
-                retrans = t
-                    .retransmits
+                retrans = retransmits
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "0".into()),
-                total_retrans = t
-                    .total_retrans
+                total_retrans = total_retrans
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "0".into()),
-                rcvwin = t
-                    .rcv_space
+                rcvwin = rcv_space
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "—".into()),
-                segsout = t
-                    .segs_out
+                segsout = segs_out
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "—".into()),
-                segsin = t
-                    .segs_in
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "—".into()),
+                segsin = segs_in.map(|v| v.to_string()).unwrap_or_else(|| "—".into()),
                 delivery = delivery_mbps,
-                cong = t.congestion_algorithm.as_deref().unwrap_or("—"),
+                cong = congestion_algorithm.unwrap_or("—"),
+            );
+        }
+        // Note when any row carries post-transfer stats (gap #5): the same
+        // columns mean different things at connect time vs after the transfer.
+        let has_post = tcp_rows
+            .iter()
+            .any(|a| a.http.as_ref().is_some_and(|h| h.socket_stats.is_some()));
+        if has_post {
+            let _ = writeln!(
+                out,
+                r##"  <p class="note">HTTP-family rows show kernel stats sampled <em>after</em> the transfer completed (cwnd, retransmissions, and delivery rate describe the transfer); bare <code>tcp</code> rows are sampled at connect time.</p>"##
             );
         }
         // Note explaining why browser probes are absent from TCP Stats.

@@ -94,6 +94,9 @@ fn make_run() -> TestRun {
                 csw_voluntary: None,
                 csw_involuntary: None,
                 http_handshake_ms: None,
+                socket_stats: None,
+                content_encoding: None,
+                content_length_header: None,
             }),
             udp: None,
             error: None,
@@ -103,6 +106,7 @@ fn make_run() -> TestRun {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         }],
     }
 }
@@ -177,6 +181,9 @@ fn make_http_attempt(success: bool, ttfb: f64, total: f64) -> RequestAttempt {
             csw_voluntary: None,
             csw_involuntary: None,
             http_handshake_ms: None,
+            socket_stats: None,
+            content_encoding: None,
+            content_length_header: None,
         }),
         udp: None,
         error: None,
@@ -186,6 +193,7 @@ fn make_http_attempt(success: bool, ttfb: f64, total: f64) -> RequestAttempt {
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     }
 }
 // ─────────────────────────────────────────────────────────────────────────
@@ -261,6 +269,9 @@ fn make_attempt(proto: Protocol, success: bool) -> RequestAttempt {
                 csw_voluntary: None,
                 csw_involuntary: None,
                 http_handshake_ms: None,
+                socket_stats: None,
+                content_encoding: None,
+                content_length_header: None,
             })
         } else {
             None
@@ -273,6 +284,7 @@ fn make_attempt(proto: Protocol, success: bool) -> RequestAttempt {
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     }
 }
 

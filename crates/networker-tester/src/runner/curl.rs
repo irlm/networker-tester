@@ -151,6 +151,11 @@ pub async fn run_curl_probe(
             started_at,
             success: true,
             resolver: None, // curl resolves internally; identity not observable
+            a_ms: None,
+            aaaa_ms: None,
+            a_record_count: None,
+            aaaa_record_count: None,
+            cname_chain: Vec::new(),
         })
     } else {
         None
@@ -222,6 +227,8 @@ pub async fn run_curl_probe(
             previous_handshake_kind: None,
             previous_http_status_code: None,
             http_status_code: None,
+            ocsp_stapled: None,
+            ocsp_response_bytes: None,
         })
     } else {
         None
@@ -266,6 +273,11 @@ pub async fn run_curl_probe(
         csw_voluntary: None,
         csw_involuntary: None,
         http_handshake_ms: None,
+        // curl owns the socket and --write-out exposes no headers, so neither
+        // post-transfer kernel stats nor content metadata are available.
+        socket_stats: None,
+        content_encoding: None,
+        content_length_header: None,
     };
     let success = parsed.code > 0 && parsed.code < 400;
 
@@ -298,6 +310,7 @@ pub async fn run_curl_probe(
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     }
 }
 
@@ -408,6 +421,7 @@ fn make_failed(
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     }
 }
 

@@ -10,7 +10,10 @@ use crate::metrics::{
     DnsResult, ErrorCategory, ErrorRecord, HttpResult, Protocol, RequestAttempt,
     ServerTimingResult, TcpResult, TlsResult,
 };
-use crate::runner::{dns as dns_runner, socket_info::SocketInfo};
+use crate::runner::{
+    dns as dns_runner,
+    socket_info::{SocketInfo, SocketProbe},
+};
 use anyhow::Context as _;
 use bytes::Bytes;
 use chrono::Utc;
@@ -171,6 +174,7 @@ pub async fn run_probe(
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         },
     }
 }
@@ -319,6 +323,12 @@ async fn run_http_or_tcp(
     let local_addr = tcp_stream.local_addr().ok().map(|a| a.to_string());
 
     let sock_info = SocketInfo::from_stream(&tcp_stream);
+    // Post-transfer stats handle (gap #5): dup(2) the fd now, before the
+    // stream is moved into TLS/hyper, so the kernel's TCP stats can be
+    // sampled again once the transfer completes — the point where cwnd,
+    // retransmissions, and delivery rate describe the transfer rather than a
+    // fresh connection. None on non-Unix platforms.
+    let sock_probe = SocketProbe::new(&tcp_stream);
     let tcp_result = TcpResult {
         local_addr: local_addr.clone(),
         remote_addr: addr.to_string(),
@@ -409,6 +419,7 @@ async fn run_http_or_tcp(
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         };
     }
 
@@ -580,6 +591,10 @@ async fn run_http_or_tcp(
                 h.csw_voluntary = Some((csw_v1 - csw_v0) as u64);
                 h.csw_involuntary = Some((csw_i1 - csw_i0) as u64);
             }
+            // Post-transfer TCP kernel stats (gap #5): sample the dup'd fd
+            // now that the body is fully transferred. The connect-time
+            // snapshot stays on `tcp_result`; this one explains the transfer.
+            h.socket_stats = sock_probe.as_ref().and_then(|p| p.stats_for_result());
             // Unified HTTP success rule across probe modes (V6): 2xx/3xx = success.
             // Matches the native and curl probes so per-mode success rates are
             // directly comparable.
@@ -630,6 +645,7 @@ async fn run_http_or_tcp(
                 page_load: None,
                 browser: None,
                 http_stack: None,
+                rpm: None,
             }
         }
         Err(e) => {
@@ -918,6 +934,11 @@ async fn collect_response(
     // Parse server timing before consuming the body.
     let server_timing = parse_server_timing(&headers, client_send_at, ttfb_ms);
 
+    // Content negotiation metadata (gap #9): surface what the server sent.
+    // Accept-Encoding on the request is deliberately untouched — reporting
+    // must not change the measurement.
+    let (content_encoding, content_length_header) = extract_content_meta(&headers);
+
     let body = resp.collect().await?.to_bytes();
     let body_size_bytes = body.len();
     let total_duration_ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -939,9 +960,29 @@ async fn collect_response(
         csw_voluntary: None,
         csw_involuntary: None,
         http_handshake_ms: Some(http_handshake_ms),
+        // Filled in by `run_http_or_tcp` after the transfer completes.
+        socket_stats: None,
+        content_encoding,
+        content_length_header,
     };
 
     Ok((http, server_timing))
+}
+
+/// Extract the response `Content-Encoding` (normalized to lowercase) and the
+/// declared `Content-Length` in bytes from already-captured response headers
+/// (gap #9). Missing, empty, or unparseable headers yield `None`.
+pub(crate) fn extract_content_meta(headers: &hyper::HeaderMap) -> (Option<String>, Option<u64>) {
+    let content_encoding = headers
+        .get(hyper::header::CONTENT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty());
+    let content_length_header = headers
+        .get(hyper::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<u64>().ok());
+    (content_encoding, content_length_header)
 }
 
 /// One observed redirect response = a 3xx status carrying a `Location` header.
@@ -1268,6 +1309,8 @@ fn extract_tls_info(
         previous_handshake_kind: None,
         previous_http_status_code: None,
         http_status_code: None,
+        ocsp_stapled: None,
+        ocsp_response_bytes: None,
     }
 }
 
@@ -1386,6 +1429,7 @@ fn failed_attempt(
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     }
 }
 
@@ -1736,6 +1780,58 @@ mod tests {
         // Metrics with desc before dur should still parse correctly.
         let p = parse_server_timing_header("recv;desc=body;dur=7.5");
         assert!((p.recv_ms.unwrap() - 7.5).abs() < 1e-9);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // extract_content_meta — Content-Encoding / Content-Length (gap #9)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn extract_content_meta_both_present() {
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert("content-encoding", "gzip".parse().unwrap());
+        headers.insert("content-length", "1234".parse().unwrap());
+        let (enc, len) = extract_content_meta(&headers);
+        assert_eq!(enc.as_deref(), Some("gzip"));
+        assert_eq!(len, Some(1234));
+    }
+
+    #[test]
+    fn extract_content_meta_absent_headers_yield_none() {
+        let headers = hyper::HeaderMap::new();
+        let (enc, len) = extract_content_meta(&headers);
+        assert!(enc.is_none());
+        assert!(len.is_none());
+    }
+
+    #[test]
+    fn extract_content_meta_normalizes_case_and_whitespace() {
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert("content-encoding", " BR ".parse().unwrap());
+        headers.insert("content-length", " 42 ".parse().unwrap());
+        let (enc, len) = extract_content_meta(&headers);
+        assert_eq!(enc.as_deref(), Some("br"));
+        assert_eq!(len, Some(42));
+    }
+
+    #[test]
+    fn extract_content_meta_invalid_length_and_empty_encoding() {
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert("content-encoding", "".parse().unwrap());
+        headers.insert("content-length", "not-a-number".parse().unwrap());
+        let (enc, len) = extract_content_meta(&headers);
+        assert!(enc.is_none(), "empty Content-Encoding must be None");
+        assert!(len.is_none(), "unparseable Content-Length must be None");
+    }
+
+    #[test]
+    fn extract_content_meta_multi_coding_preserved() {
+        // Stacked codings are reported verbatim (lowercased) — the field
+        // reports what the server sent, it does not interpret it.
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert("content-encoding", "gzip, br".parse().unwrap());
+        let (enc, _) = extract_content_meta(&headers);
+        assert_eq!(enc.as_deref(), Some("gzip, br"));
     }
 
     // ─────────────────────────────────────────────────────────────────────────

@@ -423,6 +423,9 @@ pub struct RequestAttempt {
     /// `None` means the default networker-endpoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_stack: Option<String>,
+    /// Latency-under-load / bufferbloat result (`rpm` mode only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpm: Option<RpmResult>,
 }
 
 impl RequestAttempt {
@@ -461,6 +464,12 @@ pub enum Protocol {
     UdpDownload,
     /// UDP bulk upload to the networker-endpoint UDP throughput server (port 9998).
     UdpUpload,
+    /// Latency-under-load / bufferbloat probe (Apple-RPM-style responsiveness):
+    /// samples unloaded UDP echo RTT, then saturates the link with a sustained
+    /// HTTP download from the networker-endpoint while probing UDP echo RTT at
+    /// a steady cadence. Reports RPM (60000 / loaded avg RTT — round-trips per
+    /// minute, higher is better) and the bufferbloat factor (loaded/unloaded).
+    Rpm,
     /// Standalone DNS resolution probe — resolves the target host and records timing without TCP.
     Dns,
     /// Standalone TLS probe — DNS + TCP + TLS handshake only, no HTTP request.
@@ -522,6 +531,7 @@ impl std::fmt::Display for Protocol {
             Protocol::WebUpload => write!(f, "webupload"),
             Protocol::UdpDownload => write!(f, "udpdownload"),
             Protocol::UdpUpload => write!(f, "udpupload"),
+            Protocol::Rpm => write!(f, "rpm"),
             Protocol::Dns => write!(f, "dns"),
             Protocol::Tls => write!(f, "tls"),
             Protocol::TlsResume => write!(f, "tlsresume"),
@@ -595,6 +605,13 @@ impl Protocol {
                 "UDP",
                 "Round-trip",
                 "UDP echo probe — measures RTT, jitter, and packet loss",
+                "Network",
+            ),
+            m(
+                "rpm",
+                "RPM",
+                "Latency under load",
+                "Bufferbloat probe — UDP echo RTT idle vs during a sustained download; reports RPM (round-trips per minute) and bufferbloat factor",
                 "Network",
             ),
             // HTTP
@@ -798,6 +815,7 @@ impl std::str::FromStr for Protocol {
             "webupload" => Ok(Protocol::WebUpload),
             "udpdownload" => Ok(Protocol::UdpDownload),
             "udpupload" => Ok(Protocol::UdpUpload),
+            "rpm" => Ok(Protocol::Rpm),
             "dns" => Ok(Protocol::Dns),
             "tls" => Ok(Protocol::Tls),
             "tlsresume" | "tls-resume" => Ok(Protocol::TlsResume),
@@ -833,6 +851,27 @@ pub struct DnsResult {
     /// pre-0.28.19 JSON. (Trust audit V1.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolver: Option<String>,
+    /// Duration of the A-record lookup alone (ms). Populated by the standalone
+    /// `dns` probe mode only (measurement-gap #6); other modes resolve via a
+    /// single dual-stack lookup and leave this None. Additive, serde-defaulted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub a_ms: Option<f64>,
+    /// Duration of the AAAA-record lookup alone (ms). `dns` probe mode only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aaaa_ms: Option<f64>,
+    /// Number of A records in the answer. `dns` probe mode only; None when the
+    /// A lookup was skipped (`--ipv6-only`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub a_record_count: Option<u32>,
+    /// Number of AAAA records in the answer. `dns` probe mode only; None when
+    /// the AAAA lookup was skipped (`--ipv4-only`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aaaa_record_count: Option<u32>,
+    /// CNAME chain from the answer section, in resolution order (targets only:
+    /// `query_name → cname_chain[0] → cname_chain[1] → …`). Empty when the
+    /// name resolves directly. `dns` probe mode only. Additive, serde-defaulted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cname_chain: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -881,6 +920,68 @@ pub struct TcpResult {
     /// Minimum RTT ever observed by the kernel in ms (Linux ≥ 4.9: tcpi_min_rtt).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_rtt_ms: Option<f64>,
+}
+
+/// TCP kernel statistics (TCP_INFO on Linux, TCP_CONNECTION_INFO on macOS)
+/// sampled on a `dup(2)` of the probe socket **after** the HTTP transfer
+/// completed — the point where cwnd, retransmission counts, and delivery rate
+/// are meaningful (measurement gap #5).
+///
+/// Contrast with the same-named fields on [`TcpResult`], which are sampled at
+/// connect time (fresh connection: initial cwnd, zero retransmissions).
+///
+/// Every field is optional and additive: absent on Windows and on kernels
+/// that do not report the field. `schema_version` stays 1.0.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SocketStats {
+    /// Maximum Segment Size in bytes (TCP_MAXSEG).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mss_bytes: Option<u32>,
+    /// Smoothed RTT in ms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rtt_estimate_ms: Option<f64>,
+    /// Segments currently queued for retransmit (tcpi_retransmits).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retransmits: Option<u32>,
+    /// Lifetime retransmission count over the connection (tcpi_total_retrans).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_retrans: Option<u32>,
+    /// Congestion window in segments (tcpi_snd_cwnd).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snd_cwnd: Option<u32>,
+    /// Slow-start threshold; None when set to the kernel sentinel (infinite).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snd_ssthresh: Option<u32>,
+    /// RTT variance in ms (tcpi_rttvar).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rtt_variance_ms: Option<f64>,
+    /// Receiver advertised window in bytes (tcpi_rcv_space). Linux only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rcv_space: Option<u32>,
+    /// Segments sent since connection start (Linux ≥ 4.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segs_out: Option<u32>,
+    /// Segments received since connection start (Linux ≥ 4.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segs_in: Option<u32>,
+    /// Congestion control algorithm name, e.g. "cubic", "bbr" (TCP_CONGESTION).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub congestion_algorithm: Option<String>,
+    /// Estimated TCP delivery rate in bytes/sec (Linux ≥ 4.9: tcpi_delivery_rate).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_rate_bps: Option<u64>,
+    /// Minimum RTT ever observed by the kernel in ms (Linux ≥ 4.9: tcpi_min_rtt).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_rtt_ms: Option<f64>,
+}
+
+impl SocketStats {
+    /// True when the kernel reported nothing (unsupported platform or failed
+    /// getsockopt) — callers use this to store `None` instead of an all-empty
+    /// object.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -955,6 +1056,18 @@ pub struct CertEntry {
     /// Subject Alternative Names (DNS names and IP addresses).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sans: Vec<String>,
+    /// Public key algorithm, e.g. "RSA", "ECDSA P-256", "Ed25519". Parsed from
+    /// the certificate's SubjectPublicKeyInfo. Additive (measurement-gap #7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_algorithm: Option<String>,
+    /// Public key size in bits (modulus size for RSA, curve size for ECDSA).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_size_bits: Option<u32>,
+    /// Signature algorithm the certificate was signed with, e.g.
+    /// "SHA256 with RSA", "ECDSA with SHA256". Falls back to the raw OID string
+    /// for algorithms outside the common set. Additive (measurement-gap #7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature_algorithm: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -997,6 +1110,18 @@ pub struct TlsResult {
     /// HTTP status from this connection when a real request was sent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_status_code: Option<u16>,
+    /// Whether the server presented a stapled OCSP response for the leaf
+    /// certificate during the handshake. Observed via the rustls certificate
+    /// verifier, so it is None when verification did not run for this
+    /// connection (resumed handshakes) or the backend can't observe it
+    /// (native/curl paths). For `tlsresume`, reflects the cold connection.
+    /// Additive (measurement-gap #7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ocsp_stapled: Option<bool>,
+    /// Length of the stapled OCSP response in bytes; only set when
+    /// `ocsp_stapled` is `Some(true)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ocsp_response_bytes: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1039,6 +1164,23 @@ pub struct HttpResult {
     /// transfer, not connection setup. None for probes that don't measure it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_handshake_ms: Option<f64>,
+    /// TCP kernel stats sampled after the transfer completed (see
+    /// [`SocketStats`]). Present for http1/http2 and the TCP-based throughput
+    /// modes on Linux/macOS; None on Windows, for HTTP/3 (QUIC/UDP), and for
+    /// probes that do not own the socket (curl, browser). Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub socket_stats: Option<SocketStats>,
+    /// Response `Content-Encoding` header value (e.g. "gzip", "br", "zstd").
+    /// Reported as received — the probe does not change what Accept-Encoding
+    /// it sends. None when the header is absent. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_encoding: Option<String>,
+    /// Declared response `Content-Length` header value in bytes. None when
+    /// the header is absent (e.g. chunked transfer encoding). Compare with
+    /// `body_size_bytes` (bytes actually received) to spot truncation or
+    /// on-the-wire compression. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_length_header: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1081,6 +1223,59 @@ pub struct UdpThroughputResult {
     pub transfer_ms: f64,
     /// Measured throughput in MB/s; None if transfer_ms = 0.
     pub throughput_mbps: Option<f64>,
+    pub started_at: DateTime<Utc>,
+}
+
+/// Latency-under-load / bufferbloat result (`rpm` mode).
+///
+/// Two phases against a networker-endpoint target:
+/// 1. **Unloaded** — a burst of UDP echo probes (port 9999) on an idle link.
+/// 2. **Loaded** — sustained HTTP downloads saturate the link while UDP echo
+///    probes fire at a steady cadence.
+///
+/// Headline numbers: `rpm` = 60000 / loaded avg RTT (round-trips per minute,
+/// Apple-RPM-style — higher is better) and `bufferbloat_factor` =
+/// loaded avg / unloaded avg (1.0 ≈ no bufferbloat).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RpmResult {
+    pub remote_addr: String,
+    // ── Phase 1: unloaded UDP echo RTT ─────────────────────────────────────
+    pub unloaded_probe_count: u32,
+    pub unloaded_success_count: u32,
+    pub unloaded_loss_percent: f64,
+    pub unloaded_rtt_min_ms: f64,
+    pub unloaded_rtt_avg_ms: f64,
+    pub unloaded_rtt_p95_ms: f64,
+    pub unloaded_jitter_ms: f64,
+    // ── Phase 2: UDP echo RTT while the link is saturated ──────────────────
+    pub loaded_probe_count: u32,
+    pub loaded_success_count: u32,
+    pub loaded_loss_percent: f64,
+    pub loaded_rtt_min_ms: f64,
+    pub loaded_rtt_avg_ms: f64,
+    pub loaded_rtt_p95_ms: f64,
+    pub loaded_jitter_ms: f64,
+    // ── Derived headline metrics ───────────────────────────────────────────
+    /// Round-trips per minute under load: 60000 / loaded_rtt_avg_ms.
+    /// `None` when every loaded probe was lost (no avg to derive from).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpm: Option<f64>,
+    /// loaded_rtt_avg_ms / unloaded_rtt_avg_ms. `None` when either phase has
+    /// no successful probes (a 0.0 sentinel avg is not a measurement).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bufferbloat_factor: Option<f64>,
+    // ── Load generator (sustained HTTP /download) ──────────────────────────
+    /// Wall-clock duration of the loaded phase (ms).
+    pub load_duration_ms: f64,
+    /// Bytes delivered by downloads that completed inside the load window.
+    /// A download still in flight when the window closed is not counted.
+    pub load_bytes_transferred: u64,
+    /// Number of downloads that completed inside the load window.
+    pub load_downloads_completed: u32,
+    /// Mean throughput across completed downloads (MB/s); `None` when no
+    /// download completed inside the window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_throughput_mbps: Option<f64>,
     pub started_at: DateTime<Utc>,
 }
 
@@ -1585,6 +1780,9 @@ pub fn primary_metric_label(proto: &Protocol) -> &'static str {
         | Protocol::WebUpload
         | Protocol::UdpDownload
         | Protocol::UdpUpload => "Throughput MB/s",
+        // Round-trips per minute under load — higher is better, like the
+        // throughput modes.
+        Protocol::Rpm => "RPM",
         Protocol::Dns => "Resolve ms",
         Protocol::Tls | Protocol::TlsResume => "Handshake ms",
         Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 => "Total ms",
@@ -1642,6 +1840,9 @@ pub fn primary_metric_value(a: &RequestAttempt) -> Option<f64> {
         Protocol::UdpDownload | Protocol::UdpUpload => {
             a.udp_throughput.as_ref().and_then(|ut| ut.throughput_mbps)
         }
+        // `rpm` is None when every loaded probe was lost — same "no samples is
+        // not a 0.0 measurement" rule as the UDP arm above (trust audit V11).
+        Protocol::Rpm => a.rpm.as_ref().and_then(|r| r.rpm),
         Protocol::Dns => a.dns.as_ref().map(|d| d.duration_ms),
         Protocol::Tls | Protocol::TlsResume => a.tls.as_ref().map(|t| t.handshake_duration_ms),
         Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 => {
@@ -1661,6 +1862,60 @@ pub fn primary_metric_value(a: &RequestAttempt) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SocketStats — post-transfer TCP kernel stats (gap #5), additive contract
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn socket_stats_default_is_empty_and_serializes_to_empty_object() {
+        let s = SocketStats::default();
+        assert!(s.is_empty());
+        // Every field is skip_serializing_if — an all-None struct is `{}`.
+        assert_eq!(serde_json::to_string(&s).unwrap(), "{}");
+    }
+
+    #[test]
+    fn socket_stats_serializes_only_present_fields() {
+        let s = SocketStats {
+            total_retrans: Some(7),
+            congestion_algorithm: Some("bbr".into()),
+            ..Default::default()
+        };
+        assert!(!s.is_empty());
+        let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(json["total_retrans"], 7);
+        assert_eq!(json["congestion_algorithm"], "bbr");
+        assert!(json.get("snd_cwnd").is_none(), "None fields must be absent");
+    }
+
+    #[test]
+    fn http_result_new_fields_are_additive() {
+        // Pre-gap-#5/#9 JSON (no socket_stats / content_* fields) must still
+        // deserialize — the fields are serde-defaulted to None.
+        let old_json = serde_json::json!({
+            "negotiated_version": "HTTP/1.1",
+            "status_code": 200,
+            "headers_size_bytes": 100,
+            "body_size_bytes": 5,
+            "ttfb_ms": 1.0,
+            "total_duration_ms": 2.0,
+            "redirect_count": 0,
+            "started_at": chrono::Utc::now(),
+            "response_headers": [],
+        });
+        let h: HttpResult = serde_json::from_value(old_json).unwrap();
+        assert!(h.socket_stats.is_none());
+        assert!(h.content_encoding.is_none());
+        assert!(h.content_length_header.is_none());
+
+        // And when None, the fields must be omitted on the wire (schema 1.0
+        // output for non-Unix platforms is byte-identical to before).
+        let out = serde_json::to_value(&h).unwrap();
+        assert!(out.get("socket_stats").is_none());
+        assert!(out.get("content_encoding").is_none());
+        assert!(out.get("content_length_header").is_none());
+    }
 
     #[test]
     fn test_rtt_stats_no_loss() {
@@ -1754,6 +2009,7 @@ mod tests {
             "webupload",
             "udpdownload",
             "udpupload",
+            "rpm",
             "dns",
             "tls",
             "tlsresume",
@@ -1779,7 +2035,7 @@ mod tests {
         // Verify we tested every variant (count must match enum variant count).
         assert_eq!(
             all.len(),
-            29,
+            30,
             "Update this test when adding Protocol variants"
         );
     }
@@ -1854,6 +2110,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         };
         let run = TestRun {
             schema_version: crate::metrics::SCHEMA_VERSION.to_string(),
@@ -1898,6 +2155,11 @@ mod tests {
             started_at: Utc::now(),
             success: true,
             resolver: Some("system (192.168.1.1:53)".into()),
+            a_ms: None,
+            aaaa_ms: None,
+            a_record_count: None,
+            aaaa_record_count: None,
+            cname_chain: Vec::new(),
         };
         let json = serde_json::to_string(&r).unwrap();
         let de: DnsResult = serde_json::from_str(&json).unwrap();
@@ -1918,6 +2180,63 @@ mod tests {
         }"#;
         let de: DnsResult = serde_json::from_str(json).unwrap();
         assert_eq!(de.resolver, None);
+    }
+
+    /// Measurement-gap #6 additive fields: JSON produced before the per-record-
+    /// type DNS depth (a_ms/aaaa_ms/counts/cname_chain) must still deserialize,
+    /// defaulting every new field.
+    #[test]
+    fn test_dns_result_deserializes_without_per_type_fields() {
+        let json = r#"{
+            "query_name": "example.com",
+            "resolved_ips": ["93.184.216.34"],
+            "duration_ms": 3.5,
+            "started_at": "2026-01-01T00:00:00Z",
+            "success": true,
+            "resolver": "system (192.168.1.1:53)"
+        }"#;
+        let de: DnsResult = serde_json::from_str(json).unwrap();
+        assert_eq!(de.a_ms, None);
+        assert_eq!(de.aaaa_ms, None);
+        assert_eq!(de.a_record_count, None);
+        assert_eq!(de.aaaa_record_count, None);
+        assert!(de.cname_chain.is_empty());
+        // And the new fields are omitted on serialize when unset — the frozen
+        // 1.0 shape is unchanged for producers that don't populate them.
+        let v = serde_json::to_value(&de).unwrap();
+        assert!(v.get("a_ms").is_none());
+        assert!(v.get("cname_chain").is_none());
+    }
+
+    /// Measurement-gap #7 additive fields: old TlsResult/CertEntry JSON
+    /// (without key/signature/OCSP detail) must still deserialize.
+    #[test]
+    fn test_tls_result_deserializes_without_cert_depth_fields() {
+        let json = r#"{
+            "protocol_version": "TLSv1.3",
+            "cipher_suite": "TLS13_AES_128_GCM_SHA256",
+            "alpn_negotiated": null,
+            "cert_subject": null,
+            "cert_issuer": null,
+            "cert_expiry": null,
+            "handshake_duration_ms": 12.0,
+            "started_at": "2026-01-01T00:00:00Z",
+            "success": true,
+            "cert_chain": [
+                {"subject": "CN=x", "issuer": "CN=y"}
+            ]
+        }"#;
+        let de: TlsResult = serde_json::from_str(json).unwrap();
+        assert_eq!(de.ocsp_stapled, None);
+        assert_eq!(de.ocsp_response_bytes, None);
+        let leaf = &de.cert_chain[0];
+        assert_eq!(leaf.key_algorithm, None);
+        assert_eq!(leaf.key_size_bits, None);
+        assert_eq!(leaf.signature_algorithm, None);
+        // Unset new fields stay omitted on serialize.
+        let v = serde_json::to_value(&de).unwrap();
+        assert!(v.get("ocsp_stapled").is_none());
+        assert!(v.pointer("/cert_chain/0/key_algorithm").is_none());
     }
 
     #[test]
@@ -2108,6 +2427,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         }
     }
 
@@ -2154,6 +2474,11 @@ mod tests {
             started_at: Utc::now(),
             success: true,
             resolver: None,
+            a_ms: None,
+            aaaa_ms: None,
+            a_record_count: None,
+            aaaa_record_count: None,
+            cname_chain: Vec::new(),
         });
         assert!((primary_metric_value(&a).unwrap() - 42.0).abs() < 1e-9);
     }
@@ -2186,6 +2511,8 @@ mod tests {
             previous_handshake_kind: None,
             previous_http_status_code: None,
             http_status_code: None,
+            ocsp_stapled: None,
+            ocsp_response_bytes: None,
         });
         assert!((primary_metric_value(&a).unwrap() - 7.5).abs() < 1e-9);
     }
@@ -2249,6 +2576,9 @@ mod tests {
                 csw_voluntary: None,
                 csw_involuntary: None,
                 http_handshake_ms: None,
+                socket_stats: None,
+                content_encoding: None,
+                content_length_header: None,
             });
             assert!(
                 (primary_metric_value(&a).unwrap() - 25.0).abs() < 1e-9,
@@ -2331,6 +2661,75 @@ mod tests {
     }
 
     #[test]
+    fn primary_metric_label_rpm() {
+        assert_eq!(primary_metric_label(&Protocol::Rpm), "RPM");
+    }
+
+    #[test]
+    fn primary_metric_value_rpm() {
+        let mut a = bare_attempt(Protocol::Rpm);
+        assert!(primary_metric_value(&a).is_none(), "absent rpm → None");
+        a.rpm = Some(RpmResult {
+            remote_addr: "1.2.3.4:9999".into(),
+            unloaded_probe_count: 10,
+            unloaded_success_count: 10,
+            unloaded_loss_percent: 0.0,
+            unloaded_rtt_min_ms: 1.0,
+            unloaded_rtt_avg_ms: 2.0,
+            unloaded_rtt_p95_ms: 3.0,
+            unloaded_jitter_ms: 0.2,
+            loaded_probe_count: 40,
+            loaded_success_count: 40,
+            loaded_loss_percent: 0.0,
+            loaded_rtt_min_ms: 4.0,
+            loaded_rtt_avg_ms: 20.0,
+            loaded_rtt_p95_ms: 60.0,
+            loaded_jitter_ms: 5.0,
+            rpm: Some(3000.0),
+            bufferbloat_factor: Some(10.0),
+            load_duration_ms: 5000.0,
+            load_bytes_transferred: 32 * 1024 * 1024,
+            load_downloads_completed: 1,
+            load_throughput_mbps: Some(6.4),
+            started_at: Utc::now(),
+        });
+        assert!((primary_metric_value(&a).unwrap() - 3000.0).abs() < 1e-9);
+    }
+
+    /// A fully-lost loaded phase carries `rpm: None` — it must not contribute
+    /// a sentinel value to stats (same rule as UDP, trust audit V11).
+    #[test]
+    fn primary_metric_value_rpm_lost_loaded_phase_is_excluded() {
+        let mut a = bare_attempt(Protocol::Rpm);
+        a.success = false;
+        a.rpm = Some(RpmResult {
+            remote_addr: "1.2.3.4:9999".into(),
+            unloaded_probe_count: 10,
+            unloaded_success_count: 10,
+            unloaded_loss_percent: 0.0,
+            unloaded_rtt_min_ms: 1.0,
+            unloaded_rtt_avg_ms: 2.0,
+            unloaded_rtt_p95_ms: 3.0,
+            unloaded_jitter_ms: 0.2,
+            loaded_probe_count: 40,
+            loaded_success_count: 0,
+            loaded_loss_percent: 100.0,
+            loaded_rtt_min_ms: 0.0,
+            loaded_rtt_avg_ms: 0.0,
+            loaded_rtt_p95_ms: 0.0,
+            loaded_jitter_ms: 0.0,
+            rpm: None,
+            bufferbloat_factor: None,
+            load_duration_ms: 5000.0,
+            load_bytes_transferred: 0,
+            load_downloads_completed: 0,
+            load_throughput_mbps: None,
+            started_at: Utc::now(),
+        });
+        assert_eq!(primary_metric_value(&a), None);
+    }
+
+    #[test]
     fn primary_metric_value_throughput_protocols() {
         for proto in [
             Protocol::Download,
@@ -2366,6 +2765,9 @@ mod tests {
                 csw_voluntary: None,
                 csw_involuntary: None,
                 http_handshake_ms: None,
+                socket_stats: None,
+                content_encoding: None,
+                content_length_header: None,
             });
             assert!(
                 (primary_metric_value(&a).unwrap() - 100.0).abs() < 1e-9,
@@ -2465,6 +2867,8 @@ mod tests {
             previous_handshake_kind: None,
             previous_http_status_code: None,
             http_status_code: None,
+            ocsp_stapled: None,
+            ocsp_response_bytes: None,
         });
         assert!((primary_metric_value(&a).unwrap() - 3.0).abs() < 1e-9);
     }
@@ -2534,6 +2938,9 @@ mod tests {
             csw_voluntary: None,
             csw_involuntary: None,
             http_handshake_ms: None,
+            socket_stats: None,
+            content_encoding: None,
+            content_length_header: None,
         });
         assert_eq!(attempt_payload_bytes(&a), Some(65536));
     }
@@ -2558,6 +2965,9 @@ mod tests {
             csw_voluntary: None,
             csw_involuntary: None,
             http_handshake_ms: None,
+            socket_stats: None,
+            content_encoding: None,
+            content_length_header: None,
         });
         assert!(attempt_payload_bytes(&a).is_none());
     }

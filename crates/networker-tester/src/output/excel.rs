@@ -759,6 +759,11 @@ mod tests {
                 started_at: now,
                 success: true,
                 resolver: None,
+                a_ms: None,
+                aaaa_ms: None,
+                a_record_count: None,
+                aaaa_record_count: None,
+                cname_chain: Vec::new(),
             }),
             tcp: Some(TcpResult {
                 local_addr: Some("127.0.0.1:54321".into()),
@@ -796,6 +801,9 @@ mod tests {
                     issuer: "CN=Test CA".into(),
                     expiry: Some(now),
                     sans: vec!["localhost".into()],
+                    key_algorithm: None,
+                    key_size_bits: None,
+                    signature_algorithm: None,
                 }],
                 tls_backend: Some("rustls".into()),
                 resumed: None,
@@ -805,6 +813,8 @@ mod tests {
                 previous_handshake_kind: None,
                 previous_http_status_code: None,
                 http_status_code: None,
+                ocsp_stapled: None,
+                ocsp_response_bytes: None,
             }),
             http: Some(HttpResult {
                 negotiated_version: "HTTP/1.1".into(),
@@ -823,6 +833,9 @@ mod tests {
                 csw_voluntary: Some(3),
                 csw_involuntary: Some(0),
                 http_handshake_ms: None,
+                socket_stats: None,
+                content_encoding: None,
+                content_length_header: None,
             }),
             udp: None,
             error: None,
@@ -843,6 +856,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         };
 
         let udp_attempt = RequestAttempt {
@@ -876,6 +890,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         };
 
         let udp_throughput_attempt = RequestAttempt {
@@ -908,6 +923,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         };
 
         let pageload_attempt = RequestAttempt {
@@ -944,6 +960,7 @@ mod tests {
             }),
             browser: None,
             http_stack: None,
+            rpm: None,
         };
 
         let error_attempt = RequestAttempt {
@@ -971,6 +988,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         };
 
         TestRun {
@@ -1153,6 +1171,9 @@ mod tests {
                 csw_voluntary: Some(20),
                 csw_involuntary: Some(1),
                 http_handshake_ms: None,
+                socket_stats: None,
+                content_encoding: None,
+                content_length_header: None,
             }),
             udp: None,
             error: None,
@@ -1162,6 +1183,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         };
 
         let upload_attempt = RequestAttempt {
@@ -1192,6 +1214,9 @@ mod tests {
                 csw_voluntary: Some(25),
                 csw_involuntary: Some(0),
                 http_handshake_ms: None,
+                socket_stats: None,
+                content_encoding: None,
+                content_length_header: None,
             }),
             udp: None,
             error: None,
@@ -1201,6 +1226,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         };
 
         let run = TestRun {
