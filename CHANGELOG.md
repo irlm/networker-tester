@@ -11,6 +11,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.74] — 2026-07-23
+
+### Added
+- **Auto-provisioning scenarios (Phase 2).** The full-stack benchmark scenario in
+  the launcher now **auto-fills a default testbed** from the project's cloud
+  account (+ the scenario's proxies / OS) and jumps straight to the **review**
+  step — so the user reviews and launches instead of hand-building the testbed
+  matrix. Degrades gracefully to the manual testbed step when the project has no
+  cloud account. Rides a new `?autoprovision=1` (+ `?proxies=` / `?os=` / `?name=`)
+  param on `FullStackPage`.
+- **Provisioning cost + runner-readiness notice** on the full-stack review step
+  (`ProvisioningNotice`): states how many VMs will be provisioned, on which
+  cloud/region, that **cloud charges apply**, and whether a runner is online
+  (`N runners online — dispatches immediately` vs `no runner online — the target
+  provisions but the run queues`). Fills a real gap — there was no cost signal
+  anywhere before launch.
+- **Safety by design:** VM spend is **launch-only** (creating a `pending` config
+  costs nothing), so auto-fill + review incurs no spend — the user's explicit
+  Launch click remains the only trigger. Auto-provisioning the *runner* (extra
+  spend) and extending auto-fill to the Application Benchmark are the documented
+  next steps.
+- Guarded: `scenarios.test.ts` asserts auto-provision scenarios are only ever
+  provisioning flows and carry the proxies + `autoprovision=1` param;
+  `ProvisioningNotice.test.ts` covers the cost/runner text derivation.
+
+---
+
 ## [0.28.73] — 2026-07-23
 
 ### Added

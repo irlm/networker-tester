@@ -7,13 +7,18 @@ import { WizardStepper } from '../components/wizard/WizardStepper';
 import { TestbedMatrix } from '../components/wizard/TestbedMatrix';
 import { WorkloadPanel } from '../components/wizard/WorkloadPanel';
 import { MethodologyPanel } from '../components/wizard/MethodologyPanel';
+import { ProvisioningNotice } from '../components/wizard/ProvisioningNotice';
 import { unsupportedReason } from '../lib/mode-capabilities';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
 import { useToast } from '../hooks/useToast';
+import { testersApi } from '../api/testers';
+import type { CloudAccountSummary } from '../api/types';
 import type { TestbedState } from '../components/wizard/testbed-constants';
 import {
   methodologyForPreset,
+  makeTestbed,
+  REGIONS,
   PROXY_LABELS,
   TESTER_OS_OPTIONS,
   resolveVmSize,
@@ -96,11 +101,42 @@ export function FullStackPage() {
   const [cronExpr, setCronExpr] = useState('0 0 * * * *');
   const [submitting, setSubmitting] = useState(false);
 
+  // Infra for the auto-provisioning path + the review cost/runner notice.
+  const [cloudAccounts, setCloudAccounts] = useState<CloudAccountSummary[]>([]);
+  const [onlineRunners, setOnlineRunners] = useState(0);
+
   // ── Data loading ────────────────────────────────────────────────────
 
   useEffect(() => {
     api.getModes().then(r => setModeGroups(r.groups)).catch(() => {});
-  }, []);
+    api.getCloudAccounts(projectId).then(setCloudAccounts).catch(() => {});
+    testersApi.listTesters(projectId)
+      .then(rows => setOnlineRunners(rows.filter(t => t.power_state === 'running').length))
+      .catch(() => {});
+  }, [projectId]);
+
+  // Auto-provisioning scenario (?autoprovision=1): pre-fill a default testbed
+  // from the project's first cloud account (+ scenario ?proxies / ?os) and jump
+  // straight to Review — the user reviews the provisioning notice and launches.
+  // No-op (falls back to the manual testbed step) when no cloud account exists.
+  const autoProvisionedRef = useRef(false);
+  useEffect(() => {
+    if (autoProvisionedRef.current) return;
+    if (searchParams.get('autoprovision') !== '1') return;
+    if (cloudAccounts.length === 0) return; // wait for load / nothing to pick
+    autoProvisionedRef.current = true;
+
+    const acct = cloudAccounts[0];
+    const os = searchParams.get('os') === 'windows' ? 'windows' : 'linux';
+    const proxies = (searchParams.get('proxies') ?? '')
+      .split(',').map(p => p.trim()).filter(Boolean);
+    const tb = makeTestbed(Date.now(), acct.provider, os, proxies.length ? proxies : ['nginx']);
+    tb.cloudAccountId = acct.account_id;
+    tb.region = acct.region_default || REGIONS[acct.provider]?.[0] || tb.region;
+    setTestbeds([tb]);
+    setConfigName(prev => prev || searchParams.get('name') || 'Full-stack comparison');
+    setStep(3); // Review
+  }, [searchParams, cloudAccounts]);
 
   // ── Navigation ──────────────────────────────────────────────────────
 
@@ -384,6 +420,14 @@ export function FullStackPage() {
               Comparison group: {totalCells} cell{totalCells !== 1 ? 's' : ''} across {testbeds.length} testbed{testbeds.length !== 1 ? 's' : ''}
             </div>
           )}
+
+          {/* Provisioning cost + runner-readiness — the last check before spend */}
+          <ProvisioningNotice
+            vmCount={testbeds.length}
+            cloud={new Set(testbeds.map(t => t.cloud)).size === 1 ? testbeds[0].cloud : 'multiple'}
+            region={new Set(testbeds.map(t => t.region)).size === 1 ? testbeds[0].region : 'multiple'}
+            onlineRunners={onlineRunners}
+          />
 
           {/* Schedule */}
           <label className="flex items-center gap-3 cursor-pointer mb-4">

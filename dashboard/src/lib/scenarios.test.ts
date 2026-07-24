@@ -95,3 +95,27 @@ describe('scenario href routing', () => {
     }
   });
 });
+
+describe('auto-provisioning scenarios (Phase 2)', () => {
+  const pid = 'proj-123';
+  const autoProvision = ALL_SCENARIOS.filter(s => s.autoProvision);
+
+  it('exist', () => {
+    expect(autoProvision.length).toBeGreaterThan(0);
+  });
+
+  it('are only ever provisioning flows (never url/endpoint)', () => {
+    for (const s of autoProvision) {
+      expect(['provision-endpoint', 'provision-app'], s.id).toContain(s.flow);
+    }
+  });
+
+  it('full-stack auto-provision scenarios carry proxies and the autoprovision flag', () => {
+    for (const s of autoProvision.filter(s => s.flow === 'provision-endpoint')) {
+      expect(s.proxies?.length, `${s.id} proxies`).toBeGreaterThan(0);
+      const href = s.href(pid);
+      expect(href, s.id).toContain('autoprovision=1');
+      expect(href, s.id).toContain('proxies=');
+    }
+  });
+});
