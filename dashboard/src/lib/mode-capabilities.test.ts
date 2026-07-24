@@ -12,7 +12,9 @@ const sdk: TargetCapabilities = { kind: 'sdk' };
 
 describe('requirementOf', () => {
   it('classifies the network + HTTP primitives as any-target', () => {
-    for (const m of ['tcp', 'dns', 'tls', 'tlsresume', 'native', 'http1', 'http2', 'http3', 'curl']) {
+    // ping (ICMP echo), path (hop discovery), and dualstack (IPv4-vs-IPv6)
+    // probe any reachable host — no endpoint routes required.
+    for (const m of ['tcp', 'dns', 'tls', 'tlsresume', 'native', 'http1', 'http2', 'http3', 'curl', 'ping', 'path', 'dualstack']) {
       expect(requirementOf(m)).toBe('any');
     }
   });

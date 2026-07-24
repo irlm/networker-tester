@@ -229,6 +229,10 @@ pub async fn run_curl_probe(
             http_status_code: None,
             ocsp_stapled: None,
             ocsp_response_bytes: None,
+            quic_resumed: None,
+            zero_rtt_attempted: None,
+            zero_rtt_accepted: None,
+            quic_resumed_handshake_ms: None,
         })
     } else {
         None
@@ -311,6 +315,9 @@ pub async fn run_curl_probe(
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 
@@ -422,6 +429,9 @@ fn make_failed(
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 

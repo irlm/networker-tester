@@ -1,10 +1,13 @@
 pub mod browser;
 pub mod curl;
 pub mod dns;
+pub mod dualstack;
 pub mod http;
 pub mod http3;
 pub mod native;
 pub mod pageload;
+pub mod path;
+pub mod ping;
 pub mod rpm;
 pub mod socket_info;
 pub mod throughput;

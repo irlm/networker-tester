@@ -36,6 +36,62 @@ pub struct HostInfo {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Source-network context (client side)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Best-effort description of the SOURCE network the client ran from: default
+/// route interface, interface kind (WiFi vs ethernet), MTU, egress IP, gateway
+/// and a conservative VPN heuristic. Every field is optional — collection
+/// failures leave fields `None` and never abort a run. Additive to the JSON
+/// contract; `schema_version` stays 1.0.
+///
+/// Collection lives in [`crate::network_context`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetworkContext {
+    /// Name of the interface owning the default route (e.g. `en0`, `eth0`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_interface: Option<String>,
+    /// Classification of the default interface: `ethernet` | `wifi` |
+    /// `virtual` | `unknown`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interface_kind: Option<String>,
+    /// MTU of the default interface.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mtu: Option<u32>,
+    /// Local source address of a UDP socket connect()ed to the target — the
+    /// egress address actually used for this run (no packets are sent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_ip: Option<String>,
+    /// Default gateway address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_ip: Option<String>,
+    /// Conservative VPN heuristic: `Some(true)` only when the default route
+    /// goes through a tunnel-like interface (utun/tun/wg/tap/ppp/...).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vpn_detected: Option<bool>,
+    /// Tunnel interface name when `vpn_detected` is `Some(true)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vpn_interface: Option<String>,
+    /// Whether an IPv6 default route is present on this host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ipv6_available: Option<bool>,
+}
+
+impl NetworkContext {
+    /// True when collection produced no data at all (render guards use this).
+    pub fn is_empty(&self) -> bool {
+        self.default_interface.is_none()
+            && self.interface_kind.is_none()
+            && self.mtu.is_none()
+            && self.local_ip.is_none()
+            && self.gateway_ip.is_none()
+            && self.vpn_detected.is_none()
+            && self.vpn_interface.is_none()
+            && self.ipv6_available.is_none()
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Network baseline (RTT measurement before probes)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -178,6 +234,10 @@ pub struct TestRun {
     /// Client system metadata collected locally.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_info: Option<HostInfo>,
+    /// Source-network context (default route, interface kind, VPN heuristic)
+    /// collected best-effort at run start. Additive; schema stays 1.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_network: Option<NetworkContext>,
     /// Network baseline RTT measured before probes start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline: Option<NetworkBaseline>,
@@ -426,6 +486,15 @@ pub struct RequestAttempt {
     /// Latency-under-load / bufferbloat result (`rpm` mode only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rpm: Option<RpmResult>,
+    /// ICMP echo RTT result (`ping` mode only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ping: Option<PingResult>,
+    /// Hop-discovery / traceroute-style result (`path` mode only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathResult>,
+    /// IPv4-vs-IPv6 comparison result (`dualstack` mode only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dualstack: Option<DualStackResult>,
 }
 
 impl RequestAttempt {
@@ -470,6 +539,23 @@ pub enum Protocol {
     /// a steady cadence. Reports RPM (60000 / loaded avg RTT — round-trips per
     /// minute, higher is better) and the bufferbloat factor (loaded/unloaded).
     Rpm,
+    /// ICMP echo probe — measures raw network-layer RTT (min/avg/p95), jitter,
+    /// and packet loss to the target host without any TCP/UDP dependency.
+    /// Uses unprivileged ICMP datagram sockets (Linux `ping_group_range`,
+    /// macOS built-in); reports a clear Config error when the OS denies them.
+    Ping,
+    /// Hop-discovery probe (traceroute-style): UDP probes with incrementing
+    /// TTL map the routers between the tester and the target. On Linux the
+    /// per-hop addresses come from `IP_RECVERR` (no raw sockets needed); on
+    /// platforms without unprivileged ICMP-error access the probe degrades
+    /// honestly to a hop-count estimate + destination reachability and
+    /// reports `hops: []` — it never fabricates hop addresses.
+    Path,
+    /// IPv4-vs-IPv6 comparison: resolves A and AAAA separately, runs an
+    /// HTTP GET pinned to each family, and compares per-phase timing
+    /// (DNS/TCP/TLS/TTFB/total) with a happy-eyeballs (RFC 8305) verdict.
+    /// One working family is a success; the other is reported absent/failed.
+    DualStack,
     /// Standalone DNS resolution probe — resolves the target host and records timing without TCP.
     Dns,
     /// Standalone TLS probe — DNS + TCP + TLS handshake only, no HTTP request.
@@ -532,6 +618,9 @@ impl std::fmt::Display for Protocol {
             Protocol::UdpDownload => write!(f, "udpdownload"),
             Protocol::UdpUpload => write!(f, "udpupload"),
             Protocol::Rpm => write!(f, "rpm"),
+            Protocol::Ping => write!(f, "ping"),
+            Protocol::Path => write!(f, "path"),
+            Protocol::DualStack => write!(f, "dualstack"),
             Protocol::Dns => write!(f, "dns"),
             Protocol::Tls => write!(f, "tls"),
             Protocol::TlsResume => write!(f, "tlsresume"),
@@ -612,6 +701,27 @@ impl Protocol {
                 "RPM",
                 "Latency under load",
                 "Bufferbloat probe — UDP echo RTT idle vs during a sustained download; reports RPM (round-trips per minute) and bufferbloat factor",
+                "Network",
+            ),
+            m(
+                "ping",
+                "Ping",
+                "ICMP echo",
+                "ICMP echo RTT probe — measures network-layer RTT, jitter, and packet loss without TCP/UDP (unprivileged ICMP sockets)",
+                "Network",
+            ),
+            m(
+                "path",
+                "Path",
+                "Hop discovery",
+                "Traceroute-style probe — UDP probes with rising TTL map the hops toward the target; degrades to an honest hop-count estimate where ICMP errors are not readable unprivileged",
+                "Network",
+            ),
+            m(
+                "dualstack",
+                "Dual Stack",
+                "IPv4 vs IPv6",
+                "Resolves A and AAAA separately, runs an HTTP GET pinned to each family, and compares per-phase timing with a happy-eyeballs verdict",
                 "Network",
             ),
             // HTTP
@@ -816,6 +926,9 @@ impl std::str::FromStr for Protocol {
             "udpdownload" => Ok(Protocol::UdpDownload),
             "udpupload" => Ok(Protocol::UdpUpload),
             "rpm" => Ok(Protocol::Rpm),
+            "ping" => Ok(Protocol::Ping),
+            "path" => Ok(Protocol::Path),
+            "dualstack" => Ok(Protocol::DualStack),
             "dns" => Ok(Protocol::Dns),
             "tls" => Ok(Protocol::Tls),
             "tlsresume" | "tls-resume" => Ok(Protocol::TlsResume),
@@ -1122,6 +1235,29 @@ pub struct TlsResult {
     /// `ocsp_stapled` is `Some(true)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ocsp_response_bytes: Option<u32>,
+    /// HTTP/3 (QUIC) only: whether the follow-up connection provably resumed
+    /// the TLS 1.3 session. quinn does not expose rustls' handshake kind for
+    /// QUIC, so this is verified via early-data acceptance: `Some(true)` iff
+    /// the server accepted 0-RTT (which requires PSK resumption). `Some(false)`
+    /// when no session ticket was available or the server rejected early data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quic_resumed: Option<bool>,
+    /// HTTP/3 (QUIC) only: the follow-up connection had 0-RTT keys available
+    /// (a TLS 1.3 session ticket with an early-data allowance) and sent the
+    /// request in 0-RTT early data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zero_rtt_attempted: Option<bool>,
+    /// HTTP/3 (QUIC) only: the server accepted the 0-RTT early data
+    /// (quinn `ZeroRttAccepted` resolved true). Only present when
+    /// `zero_rtt_attempted` is `Some(true)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zero_rtt_accepted: Option<bool>,
+    /// HTTP/3 (QUIC) only: handshake-completion time of the follow-up
+    /// (resumption/0-RTT) connection, comparable against
+    /// `handshake_duration_ms` (the cold/full handshake of this attempt's
+    /// primary connection) to quantify the resumption latency win.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quic_resumed_handshake_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1276,6 +1412,130 @@ pub struct RpmResult {
     /// download completed inside the window.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub load_throughput_mbps: Option<f64>,
+    pub started_at: DateTime<Utc>,
+}
+
+/// ICMP echo result (`ping` mode).
+///
+/// Same aggregate shape as [`UdpResult`] (min/avg/p95, RFC-3550-style
+/// arrival-order jitter via [`aggregate_udp_rtts`], loss percent, per-probe
+/// RTTs) but measured at the network layer with ICMP echo — no TCP/UDP
+/// service on the target required.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PingResult {
+    /// IP actually pinged (first resolved address of the target host).
+    pub remote_addr: String,
+    pub probe_count: u32,
+    pub success_count: u32,
+    pub loss_percent: f64,
+    pub rtt_min_ms: f64,
+    pub rtt_avg_ms: f64,
+    pub rtt_p95_ms: f64,
+    pub jitter_ms: f64,
+    /// Per-probe RTT values (ms), None if the echo was lost.
+    pub probe_rtts_ms: Vec<Option<f64>>,
+    /// IP TTL / hop limit observed on echo replies, when the platform exposes
+    /// it to unprivileged sockets. `None` is "not observable", never a guess.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_ttl: Option<u32>,
+    pub started_at: DateTime<Utc>,
+}
+
+/// One hop discovered by the `path` probe.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PathHop {
+    /// TTL value that surfaced this hop (1-based).
+    pub index: u32,
+    /// Router address that answered, `None` when the hop did not respond
+    /// within the per-hop timeout (a traceroute `*`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub addr: Option<String>,
+    /// Probe-send → ICMP-error-arrival RTT (ms); `None` for silent hops.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rtt_ms: Option<f64>,
+}
+
+/// Hop-discovery result (`path` mode).
+///
+/// `method` records HOW the hops were (or were not) obtained, because the
+/// unprivileged capability differs per platform:
+/// - `"udp-ttl/ip-recverr"` (Linux): full per-hop addresses + RTTs from the
+///   UDP socket's error queue — no raw sockets, no privileges.
+/// - `"udp-ttl-estimate"` (macOS/Windows): ICMP time-exceeded errors are not
+///   readable unprivileged, so `hops` is empty and only the destination-
+///   reached TTL scan result is reported. Hops are NEVER fabricated.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PathResult {
+    /// Destination address the probes were aimed at.
+    pub remote_addr: String,
+    /// Discovered hops in TTL order. Empty when the platform cannot observe
+    /// hop addresses unprivileged (see `method`).
+    pub hops: Vec<PathHop>,
+    /// Number of hops to the destination. From the responding hop list when
+    /// the destination was reached, or the TTL-scan estimate in degraded
+    /// mode; `None` when the destination never answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hop_count: Option<u32>,
+    /// True when a destination-generated response (ICMP port-unreachable /
+    /// connection-refused) was observed.
+    pub destination_reached: bool,
+    /// RTT to the destination itself (ms), when it answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination_rtt_ms: Option<f64>,
+    /// How the path was measured — see the struct docs.
+    pub method: String,
+    /// Highest TTL probed.
+    pub max_ttl: u32,
+    pub started_at: DateTime<Utc>,
+}
+
+/// One address-family leg of the `dualstack` probe.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DualStackLeg {
+    /// False when the family had no DNS records (or the target is a literal
+    /// of the other family) — nothing was probed, nothing failed.
+    pub attempted: bool,
+    /// True when the HTTP GET over this family completed.
+    pub success: bool,
+    /// Address the leg connected to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub addr: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tcp_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttfb_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_ms: Option<f64>,
+    /// Why the leg failed / was not attempted, for the report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// IPv4-vs-IPv6 comparison result (`dualstack` mode).
+///
+/// The happy-eyeballs verdict follows RFC 8305's connection race: IPv6 is
+/// started first and IPv4 only after a grace period (250 ms), so IPv6 "wins"
+/// unless its TCP connect is more than the grace slower than IPv4's.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DualStackResult {
+    pub ipv4: DualStackLeg,
+    pub ipv6: DualStackLeg,
+    /// `"ipv4"` / `"ipv6"` — family with the lower total_ms among successful
+    /// legs; `None` unless both legs succeeded (nothing to compare).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub faster_family: Option<String>,
+    /// slower total_ms − faster total_ms (≥ 0); only when both legs succeeded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delta_ms: Option<f64>,
+    /// Which family a happy-eyeballs (RFC 8305) client would use, with the
+    /// reason — e.g. `"ipv6 (connect within 250ms grace of ipv4)"`.
+    pub happy_eyeballs_verdict: String,
+    /// Grace period used for the verdict (ms) — RFC 8305's recommended 250.
+    pub happy_eyeballs_grace_ms: f64,
     pub started_at: DateTime<Utc>,
 }
 
@@ -1783,6 +2043,16 @@ pub fn primary_metric_label(proto: &Protocol) -> &'static str {
         // Round-trips per minute under load — higher is better, like the
         // throughput modes.
         Protocol::Rpm => "RPM",
+        Protocol::Ping => "RTT avg ms",
+        // Path length is the probe's distinguishing measurement; destination
+        // RTT is already covered by ping/tcp and is reported separately in
+        // the summary. `None` in degraded mode when the destination never
+        // answered — an unknown path length is not a 0-hop path.
+        Protocol::Path => "Hops",
+        // Total request time of the family a happy-eyeballs client would not
+        // pick is diagnostic detail; the winning family's total is the number
+        // a user experiences.
+        Protocol::DualStack => "Total ms",
         Protocol::Dns => "Resolve ms",
         Protocol::Tls | Protocol::TlsResume => "Handshake ms",
         Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 => "Total ms",
@@ -1843,6 +2113,28 @@ pub fn primary_metric_value(a: &RequestAttempt) -> Option<f64> {
         // `rpm` is None when every loaded probe was lost — same "no samples is
         // not a 0.0 measurement" rule as the UDP arm above (trust audit V11).
         Protocol::Rpm => a.rpm.as_ref().and_then(|r| r.rpm),
+        // Fully-lost ping attempts carry a 0.0 sentinel avg, not a
+        // measurement — excluded exactly like the UDP arm (trust audit V11).
+        Protocol::Ping => a
+            .ping
+            .as_ref()
+            .filter(|p| p.success_count > 0)
+            .map(|p| p.rtt_avg_ms),
+        // Hop count; None when the destination never answered (unknown path
+        // length must not enter the distribution as a number).
+        Protocol::Path => a.path.as_ref().and_then(|p| p.hop_count).map(|h| h as f64),
+        // Winning family's total; falls back to whichever single family
+        // succeeded. None when neither leg completed.
+        Protocol::DualStack => a.dualstack.as_ref().and_then(|d| {
+            match (d.faster_family.as_deref(), d.ipv4.total_ms, d.ipv6.total_ms) {
+                (Some("ipv4"), v4, _) => v4,
+                (Some("ipv6"), _, v6) => v6,
+                (_, Some(v4), None) => Some(v4),
+                (_, None, Some(v6)) => Some(v6),
+                (_, Some(v4), Some(v6)) => Some(v4.min(v6)),
+                _ => None,
+            }
+        }),
         Protocol::Dns => a.dns.as_ref().map(|d| d.duration_ms),
         Protocol::Tls | Protocol::TlsResume => a.tls.as_ref().map(|t| t.handshake_duration_ms),
         Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 => {
@@ -2111,6 +2403,9 @@ mod tests {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         };
         let run = TestRun {
             schema_version: crate::metrics::SCHEMA_VERSION.to_string(),
@@ -2127,6 +2422,7 @@ mod tests {
             client_version: "0.1.0".into(),
             server_info: None,
             client_info: None,
+            client_network: None,
             baseline: None,
             packet_capture_summary: None,
             benchmark_environment_check: None,
@@ -2428,6 +2724,9 @@ mod tests {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         }
     }
 
@@ -2513,6 +2812,10 @@ mod tests {
             http_status_code: None,
             ocsp_stapled: None,
             ocsp_response_bytes: None,
+            quic_resumed: None,
+            zero_rtt_attempted: None,
+            zero_rtt_accepted: None,
+            quic_resumed_handshake_ms: None,
         });
         assert!((primary_metric_value(&a).unwrap() - 7.5).abs() < 1e-9);
     }
@@ -2869,6 +3172,10 @@ mod tests {
             http_status_code: None,
             ocsp_stapled: None,
             ocsp_response_bytes: None,
+            quic_resumed: None,
+            zero_rtt_attempted: None,
+            zero_rtt_accepted: None,
+            quic_resumed_handshake_ms: None,
         });
         assert!((primary_metric_value(&a).unwrap() - 3.0).abs() < 1e-9);
     }
@@ -3020,6 +3327,7 @@ mod tests {
             client_version: "0.1.0".into(),
             server_info: None,
             client_info: None,
+            client_network: None,
             baseline: None,
             packet_capture_summary: None,
             benchmark_environment_check: None,

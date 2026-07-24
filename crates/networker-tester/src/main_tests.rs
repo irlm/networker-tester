@@ -43,6 +43,9 @@ fn request_attempt(success: bool, retry_count: u32) -> RequestAttempt {
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 
@@ -95,6 +98,9 @@ fn measured_http_attempt(
         browser: None,
         http_stack: stack.map(str::to_string),
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 
@@ -126,6 +132,9 @@ fn failed_http_attempt(
         browser: None,
         http_stack: stack.map(str::to_string),
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 

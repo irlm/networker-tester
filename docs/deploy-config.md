@@ -224,8 +224,8 @@ loss/jitter control yet.
 > `pageload`, and `apibench` is runner-level (see note under Default modes).
 
 **Network probes:**
-`tcp`, `http1`, `http2`, `http3`, `udp`, `rpm`, `download`, `upload`,
-`webdownload`, `webupload`, `udpdownload`, `udpupload`
+`tcp`, `http1`, `http2`, `http3`, `udp`, `rpm`, `ping`, `path`, `dualstack`,
+`download`, `upload`, `webdownload`, `webupload`, `udpdownload`, `udpupload`
 
 > `rpm` is the latency-under-load / bufferbloat probe: it samples UDP echo RTT
 > on an idle link, then repeats the sampling at a steady cadence while the
@@ -234,6 +234,27 @@ loss/jitter control yet.
 > round-trips per minute, higher is better), and the bufferbloat factor
 > (loaded avg / unloaded avg). Requires a networker-endpoint target (the
 > `/download` route plus the UDP echo server on port 9999).
+
+> `ping` sends ICMP echo probes (count/timeout follow `--udp-probes` /
+> `--udp-timeout`) via unprivileged ICMP datagram sockets — no raw sockets,
+> no root. Reports RTT min/avg/p95, jitter, loss, and the reply TTL when
+> observable. On Linux the process gid must be inside
+> `net.ipv4.ping_group_range` (denials are reported as a `config` error with
+> the sysctl fix hint); Windows is not supported yet and reports a clean
+> `config` error.
+
+> `path` is a traceroute-style hop-discovery probe: UDP probes to high ports
+> (33434+) with rising TTL. On Linux, `IP_RECVERR` yields each hop's router
+> address and RTT unprivileged (`method: "udp-ttl/ip-recverr"`). On
+> macOS/Windows hop addresses are not observable without raw sockets, so the
+> probe degrades honestly to a hop-count estimate + destination reachability
+> with `hops: []` (`method: "udp-ttl-estimate"`) — it never fabricates hops.
+
+> `dualstack` resolves A and AAAA separately, runs one HTTP/1.1 GET pinned to
+> IPv4 and one pinned to IPv6, and compares per-phase timing (DNS, TCP, TLS,
+> TTFB, total) plus a happy-eyeballs (RFC 8305, 250 ms grace) verdict. One
+> working family counts as success; a family with no records or a failed leg
+> is reported as absent/failed rather than failing the attempt.
 
 **Pageload probes** (HTTP client, no real browser — fetches `/page` manifest + assets):
 

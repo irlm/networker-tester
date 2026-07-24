@@ -11,6 +11,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.76] — 2026-07-24
+
+Measurement-depth wave 2 — gaps #4, #8, #3, #11 of
+`docs/analysis/measurement-gap-analysis-2026-07.md`, developed in parallel and
+integrated. All JSON-contract changes additive (schema stays 1.0).
+
+### Added
+- **New probe mode: `ping` (gap #4, 80).** Unprivileged ICMP echo via datagram
+  sockets (no raw sockets, no new deps): RTT min/avg/p95, arrival-order jitter,
+  loss, per-probe RTTs, observed reply TTL. Linux needs `ping_group_range`
+  (denial → clear Config error with the sysctl hint); Windows backend deferred
+  (clean unsupported error).
+- **New probe mode: `path` (gap #4, 80).** Traceroute-style hop discovery via
+  UDP TTL probing. Linux reports full per-hop addresses + RTTs (`IP_RECVERR`/
+  `MSG_ERRQUEUE`); macOS/Windows degrade honestly to hop-count estimation +
+  destination reachability with an explicit `method` field — hops are never
+  fabricated. Primary metric "Hops".
+- **New probe mode: `dualstack` (gap #8, 72).** Resolves A and AAAA separately,
+  runs a pinned HTTP GET over each family, compares per-phase timings, reports
+  the faster family + delta and an RFC-8305 happy-eyeballs (250 ms) verdict.
+  One working family = success.
+- **QUIC/TLS 1.3 0-RTT measurement (gap #3, 85).** Each `http3` attempt now
+  opens a follow-up connection that resumes the session and sends the request
+  in real 0-RTT early data: `quic_resumed`, `zero_rtt_attempted`,
+  `zero_rtt_accepted`, `quic_resumed_handshake_ms` vs the full handshake, plus
+  a summary note (e.g. "full 2.2ms → resumed 1.8ms, saved 18%"). The endpoint
+  now processes early requests pre-handshake (0.5-RTT accept). The primary
+  connection's headline numbers are untouched.
+- **Source network context (gap #11, 64).** `TestRun.client_network`: default
+  interface + kind (wifi/ethernet/virtual), MTU, egress local IP (route-based),
+  gateway, conservative VPN detection (tunnel-named default routes), IPv6
+  availability. Collected best-effort per run beside `client_info`; rendered as
+  a "Client Network" card in the HTML report.
+
+### Fixed
+- `--ipv6-only` could never return AAAA records for dual-homed hosts (the
+  resolver's `Ipv4thenIpv6` strategy answered with A records and the filter
+  emptied the list) — family-pinned probes now do typed lookups. Long-broken
+  flag repaired for all HTTP/TCP/TLS probes.
+
+---
+
 ## [0.28.75] — 2026-07-24
 
 Measurement-depth wave 1 — the four highest-scored items of

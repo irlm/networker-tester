@@ -175,6 +175,9 @@ pub async fn run_probe(
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         },
     }
 }
@@ -420,6 +423,9 @@ async fn run_http_or_tcp(
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         };
     }
 
@@ -646,6 +652,9 @@ async fn run_http_or_tcp(
                 browser: None,
                 http_stack: None,
                 rpm: None,
+                ping: None,
+                path: None,
+                dualstack: None,
             }
         }
         Err(e) => {
@@ -1311,6 +1320,10 @@ fn extract_tls_info(
         http_status_code: None,
         ocsp_stapled: None,
         ocsp_response_bytes: None,
+        quic_resumed: None,
+        zero_rtt_attempted: None,
+        zero_rtt_accepted: None,
+        quic_resumed_handshake_ms: None,
     }
 }
 
@@ -1430,6 +1443,9 @@ fn failed_attempt(
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 

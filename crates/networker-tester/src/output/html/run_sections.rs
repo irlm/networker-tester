@@ -100,6 +100,11 @@ pub(super) fn write_run_sections(run: &TestRun, out: &mut String) {
     if let Some(ref info) = run.client_info {
         write_host_info_card("Client", info, out);
     }
+    if let Some(ref net) = run.client_network {
+        if !net.is_empty() {
+            write_client_network_card(net, out);
+        }
+    }
     if let Some(ref info) = run.server_info {
         write_host_info_card("Server", info, out);
     }

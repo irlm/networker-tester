@@ -7,6 +7,7 @@ pub mod dispatch;
 pub mod metrics;
 #[cfg(test)]
 mod modes_manifest_guard;
+pub mod network_context;
 pub mod output;
 pub mod progress;
 pub mod runner;

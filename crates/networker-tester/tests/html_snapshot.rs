@@ -80,6 +80,9 @@ fn http_attempt(run_id: Uuid, seq: u32, proto: Protocol, ms: f64) -> RequestAtte
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 
@@ -110,6 +113,9 @@ fn failed_attempt(run_id: Uuid, seq: u32) -> RequestAttempt {
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 
@@ -146,6 +152,9 @@ fn udp_attempt(run_id: Uuid, seq: u32) -> RequestAttempt {
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 
@@ -173,6 +182,7 @@ fn make_run(run_seed: u128, target: &str, attempts: Vec<RequestAttempt>) -> Test
         client_version: "0.0.0-snapshot".into(),
         server_info: None,
         client_info: None,
+        client_network: None,
         baseline: None,
         packet_capture_summary: None,
         benchmark_environment_check: None,

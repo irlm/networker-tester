@@ -33,6 +33,7 @@ fn make_run() -> TestRun {
         client_version: "0.1.0".into(),
         server_info: None,
         client_info: None,
+        client_network: None,
         baseline: None,
         packet_capture_summary: None,
         benchmark_environment_check: None,
@@ -107,6 +108,9 @@ fn make_run() -> TestRun {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         }],
     }
 }
@@ -194,6 +198,9 @@ fn make_http_attempt(success: bool, ttfb: f64, total: f64) -> RequestAttempt {
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 // ─────────────────────────────────────────────────────────────────────────
@@ -217,6 +224,7 @@ fn make_run_with_url(url: &str) -> TestRun {
         client_version: "0.1.0".into(),
         server_info: None,
         client_info: None,
+        client_network: None,
         baseline: None,
         packet_capture_summary: None,
         benchmark_environment_check: None,
@@ -285,6 +293,9 @@ fn make_attempt(proto: Protocol, success: bool) -> RequestAttempt {
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 

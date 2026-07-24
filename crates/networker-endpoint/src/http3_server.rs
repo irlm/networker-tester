@@ -68,12 +68,32 @@ pub mod server {
             };
             tokio::spawn(async move {
                 let _permit = permit;
-                let conn = match incoming.await {
+                let connecting = match incoming.accept() {
                     Ok(c) => c,
                     Err(e) => {
                         warn!("QUIC accept error: {e}");
                         return;
                     }
+                };
+                // Process 0-RTT early data instead of waiting for the
+                // handshake to complete: rustls already *accepts* early data
+                // at the TLS layer (`max_early_data_size = u32::MAX` below),
+                // but without `into_0rtt` the request would only be served
+                // after the full handshake — negating the latency win the
+                // tester measures. Server-side `into_0rtt` always succeeds
+                // (0.5-RTT). Replay-safety: every route here is a diagnostic
+                // (health/download/page/asset are idempotent; a replayed
+                // /upload merely re-drains a probe body), so early dispatch
+                // is safe.
+                let conn = match connecting.into_0rtt() {
+                    Ok((c, _accepted)) => c,
+                    Err(connecting) => match connecting.await {
+                        Ok(c) => c,
+                        Err(e) => {
+                            warn!("QUIC handshake error: {e}");
+                            return;
+                        }
+                    },
                 };
                 let h3_conn = match h3::server::Connection::new(H3QuinnConn::new(conn)).await {
                     Ok(c) => c,

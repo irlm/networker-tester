@@ -815,6 +815,10 @@ mod tests {
                 http_status_code: None,
                 ocsp_stapled: None,
                 ocsp_response_bytes: None,
+                quic_resumed: None,
+                zero_rtt_attempted: None,
+                zero_rtt_accepted: None,
+                quic_resumed_handshake_ms: None,
             }),
             http: Some(HttpResult {
                 negotiated_version: "HTTP/1.1".into(),
@@ -857,6 +861,9 @@ mod tests {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         };
 
         let udp_attempt = RequestAttempt {
@@ -891,6 +898,9 @@ mod tests {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         };
 
         let udp_throughput_attempt = RequestAttempt {
@@ -924,6 +934,9 @@ mod tests {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         };
 
         let pageload_attempt = RequestAttempt {
@@ -961,6 +974,9 @@ mod tests {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         };
 
         let error_attempt = RequestAttempt {
@@ -989,6 +1005,9 @@ mod tests {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         };
 
         TestRun {
@@ -1011,6 +1030,7 @@ mod tests {
             client_version: "0.11.3".into(),
             server_info: None,
             client_info: None,
+            client_network: None,
             baseline: None,
             packet_capture_summary: None,
             benchmark_environment_check: None,
@@ -1067,6 +1087,7 @@ mod tests {
             client_version: "0.0.0".into(),
             server_info: None,
             client_info: None,
+            client_network: None,
             baseline: None,
             packet_capture_summary: None,
             benchmark_environment_check: None,
@@ -1184,6 +1205,9 @@ mod tests {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         };
 
         let upload_attempt = RequestAttempt {
@@ -1227,6 +1251,9 @@ mod tests {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         };
 
         let run = TestRun {
@@ -1244,6 +1271,7 @@ mod tests {
             client_version: "0.0.0".into(),
             server_info: None,
             client_info: None,
+            client_network: None,
             baseline: None,
             packet_capture_summary: None,
             benchmark_environment_check: None,

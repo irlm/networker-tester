@@ -7,10 +7,13 @@ use crate::runner::{
     browser::run_browser_probe,
     curl::run_curl_probe,
     dns::run_dns_probe,
+    dualstack::run_dualstack_probe,
     http::{run_probe, RunConfig},
     http3::run_http3_probe,
     native::run_native_probe,
     pageload::{run_pageload2_probe, run_pageload3_probe, run_pageload_probe, PageLoadConfig},
+    path::{run_path_probe, PathProbeConfig},
+    ping::{run_ping_probe, PingProbeConfig},
     rpm::{run_rpm_probe, RpmProbeConfig},
     throughput::{
         run_download1_probe, run_download2_probe, run_download3_probe, run_download_probe,
@@ -128,6 +131,25 @@ pub async fn dispatch_once(
             let rpm_cfg = RpmProbeConfig::from_parts(udp_cfg.clone(), throughput_cfg.clone());
             run_rpm_probe(run_id, seq, &rpm_cfg).await
         }
+        (Protocol::Ping, _) => {
+            // ICMP echo to the target host; probe count/timeout reuse the
+            // resolved UDP echo settings (--udp-probes / --udp-timeout).
+            let ping_cfg = PingProbeConfig {
+                target_host: target.host_str().unwrap_or("").to_string(),
+                probe_count: udp_cfg.probe_count,
+                timeout_ms: udp_cfg.timeout_ms,
+                payload_size: udp_cfg.payload_size,
+            };
+            run_ping_probe(run_id, seq, &ping_cfg).await
+        }
+        (Protocol::Path, _) => {
+            let path_cfg = PathProbeConfig {
+                target_host: target.host_str().unwrap_or("").to_string(),
+                ..PathProbeConfig::default()
+            };
+            run_path_probe(run_id, seq, &path_cfg).await
+        }
+        (Protocol::DualStack, _) => run_dualstack_probe(run_id, seq, target, cfg).await,
         (Protocol::Dns, _) => {
             let host = target.host_str().unwrap_or("");
             run_dns_probe(run_id, seq, host, cfg.ipv4_only, cfg.ipv6_only).await
@@ -371,6 +393,71 @@ pub fn log_attempt(a: &RequestAttempt) {
                     load_p95 = r.loaded_rtt_p95_ms,
                     jitter = r.loaded_jitter_ms,
                     loss = r.loaded_loss_percent,
+                    retry = retry_suffix,
+                );
+            }
+        }
+        Ping => {
+            if let Some(p) = &a.ping {
+                let ttl = p.reply_ttl.map(|t| format!(" ttl={t}")).unwrap_or_default();
+                info!(
+                    "{status} #{seq} [ping] {addr} RTT avg={avg:.1}ms p95={p95:.1}ms \
+                     jitter={jitter:.1}ms loss={loss:.1}%{ttl}{retry}",
+                    seq = a.sequence_num,
+                    addr = p.remote_addr,
+                    avg = p.rtt_avg_ms,
+                    p95 = p.rtt_p95_ms,
+                    jitter = p.jitter_ms,
+                    loss = p.loss_percent,
+                    retry = retry_suffix,
+                );
+            }
+        }
+        Path => {
+            if let Some(p) = &a.path {
+                let hops_str = p
+                    .hop_count
+                    .map(|h| h.to_string())
+                    .unwrap_or_else(|| "?".into());
+                let dest_rtt = p
+                    .destination_rtt_ms
+                    .map(|r| format!(" dest_rtt={r:.1}ms"))
+                    .unwrap_or_default();
+                info!(
+                    "{status} #{seq} [path] {addr} hops={hops} reached={reached} \
+                     responding={responding}/{probed} method={method}{dest_rtt}{retry}",
+                    seq = a.sequence_num,
+                    addr = p.remote_addr,
+                    hops = hops_str,
+                    reached = p.destination_reached,
+                    responding = p.hops.iter().filter(|h| h.addr.is_some()).count(),
+                    probed = p.hops.len(),
+                    method = p.method,
+                    retry = retry_suffix,
+                );
+            }
+        }
+        DualStack => {
+            if let Some(d) = &a.dualstack {
+                let leg = |l: &crate::metrics::DualStackLeg| -> String {
+                    if !l.attempted {
+                        "absent".to_string()
+                    } else if let Some(total) = l.total_ms {
+                        format!("{total:.1}ms")
+                    } else {
+                        "failed".to_string()
+                    }
+                };
+                let delta = d
+                    .delta_ms
+                    .map(|v| format!(" Δ={v:.1}ms"))
+                    .unwrap_or_default();
+                info!(
+                    "{status} #{seq} [dualstack] v4={v4} v6={v6}{delta} HE→{verdict}{retry}",
+                    seq = a.sequence_num,
+                    v4 = leg(&d.ipv4),
+                    v6 = leg(&d.ipv6),
+                    verdict = d.happy_eyeballs_verdict,
                     retry = retry_suffix,
                 );
             }

@@ -125,6 +125,45 @@ fn render_shows_client_info_card_when_present() {
 }
 
 #[test]
+fn render_shows_client_network_card_when_present() {
+    let mut run = make_run();
+    run.client_network = Some(crate::metrics::NetworkContext {
+        default_interface: Some("en0".into()),
+        interface_kind: Some("wifi".into()),
+        mtu: Some(1500),
+        local_ip: Some("192.168.1.23".into()),
+        gateway_ip: Some("192.168.1.1".into()),
+        vpn_detected: Some(true),
+        vpn_interface: Some("utun4".into()),
+        ipv6_available: Some(false),
+    });
+    let html = render(&run, None, None);
+    assert!(
+        html.contains("Client Network"),
+        "should have Client Network card"
+    );
+    assert!(html.contains("en0 (wifi)"), "should show interface + kind");
+    assert!(html.contains("1500"), "should show MTU");
+    assert!(html.contains("192.168.1.23"), "should show egress local IP");
+    assert!(html.contains("192.168.1.1"), "should show gateway");
+    assert!(
+        html.contains(r#"<span class="warn">yes (utun4)</span>"#),
+        "VPN detection should render as a warn badge with the tunnel name"
+    );
+}
+
+#[test]
+fn render_omits_client_network_card_when_empty() {
+    let mut run = make_run();
+    run.client_network = Some(crate::metrics::NetworkContext::default());
+    let html = render(&run, None, None);
+    assert!(
+        !html.contains("Client Network"),
+        "an all-None context should not render an empty card"
+    );
+}
+
+#[test]
 fn render_shows_server_info_card_when_present() {
     let mut run = make_run();
     run.server_info = Some(make_host_info(
@@ -866,6 +905,9 @@ fn throughput_protocol_comparison_higher_is_better() {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         }
     };
     // r1 has 200 MB/s (better), r2 has 100 MB/s (worse)

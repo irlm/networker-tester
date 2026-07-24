@@ -25,6 +25,7 @@ pub(crate) fn make_run(run_id: Uuid, attempts: Vec<RequestAttempt>) -> TestRun {
         client_version: env!("CARGO_PKG_VERSION").into(),
         server_info: None,
         client_info: None,
+        client_network: None,
         baseline: None,
         packet_capture_summary: None,
         benchmark_environment_check: None,
@@ -72,6 +73,9 @@ pub(crate) fn bare_attempt(run_id: Uuid) -> RequestAttempt {
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 
@@ -141,6 +145,10 @@ pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
             http_status_code: None,
             ocsp_stapled: None,
             ocsp_response_bytes: None,
+            quic_resumed: None,
+            zero_rtt_attempted: None,
+            zero_rtt_accepted: None,
+            quic_resumed_handshake_ms: None,
         }),
         http: Some(HttpResult {
             negotiated_version: "HTTP/1.1".into(),
@@ -199,6 +207,9 @@ pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 

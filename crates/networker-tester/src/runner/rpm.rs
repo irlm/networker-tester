@@ -281,6 +281,9 @@ pub async fn run_rpm_probe(
         browser: None,
         http_stack: None,
         rpm: Some(result),
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 
@@ -460,6 +463,9 @@ fn rpm_failed(
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     }
 }
 

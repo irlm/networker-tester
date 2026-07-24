@@ -144,6 +144,7 @@ fn html_contains_error_section_for_failed_attempt() {
         client_version: "0.1.0".into(),
         server_info: None,
         client_info: None,
+        client_network: None,
         baseline: None,
         packet_capture_summary: None,
         benchmark_environment_check: None,
@@ -183,6 +184,9 @@ fn html_contains_error_section_for_failed_attempt() {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         }],
     };
     let html = render(&run, None, None);
@@ -209,6 +213,7 @@ fn html_contains_throughput_section_for_download_attempt() {
         client_version: "0.1.0".into(),
         server_info: None,
         client_info: None,
+        client_network: None,
         baseline: None,
         packet_capture_summary: None,
         benchmark_environment_check: None,
@@ -263,6 +268,9 @@ fn html_contains_throughput_section_for_download_attempt() {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         }],
     };
     let html = render(&run, None, None);
@@ -292,6 +300,7 @@ fn html_contains_tls_section_for_tls_attempt() {
         client_version: "0.1.0".into(),
         server_info: None,
         client_info: None,
+        client_network: None,
         baseline: None,
         packet_capture_summary: None,
         benchmark_environment_check: None,
@@ -336,6 +345,10 @@ fn html_contains_tls_section_for_tls_attempt() {
                 http_status_code: None,
                 ocsp_stapled: None,
                 ocsp_response_bytes: None,
+                quic_resumed: None,
+                zero_rtt_attempted: None,
+                zero_rtt_accepted: None,
+                quic_resumed_handshake_ms: None,
             }),
             http: None,
             udp: None,
@@ -347,6 +360,9 @@ fn html_contains_tls_section_for_tls_attempt() {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         }],
     };
     let html = render(&run, None, None);
@@ -376,6 +392,7 @@ fn html_contains_page_load_section() {
         client_version: "0.1.0".into(),
         server_info: None,
         client_info: None,
+        client_network: None,
         baseline: None,
         packet_capture_summary: None,
         benchmark_environment_check: None,
@@ -424,6 +441,9 @@ fn html_contains_page_load_section() {
             browser: None,
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         }],
     };
     let html = render(&run, None, None);
@@ -502,6 +522,9 @@ fn append_proto_row_no_http_shows_dashes() {
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     };
     let rows: Vec<&RequestAttempt> = vec![&a];
     let mut out = String::new();
@@ -586,6 +609,9 @@ fn append_attempt_row_udp_echo_shows_rtt() {
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     };
     let mut out = String::new();
     append_attempt_row(&mut out, &a, false);
@@ -626,6 +652,9 @@ fn append_attempt_row_udp_throughput_shows_transfer_ms() {
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     };
     let mut out = String::new();
     append_attempt_row(&mut out, &a, false);
@@ -656,6 +685,9 @@ fn append_attempt_row_no_results_shows_dashes() {
         browser: None,
         http_stack: None,
         rpm: None,
+        ping: None,
+        path: None,
+        dualstack: None,
     };
     let mut out = String::new();
     append_attempt_row(&mut out, &a, false);
@@ -734,6 +766,7 @@ fn html_contains_browser_section() {
         client_version: "0.1.0".into(),
         server_info: None,
         client_info: None,
+        client_network: None,
         baseline: None,
         packet_capture_summary: None,
         benchmark_environment_check: None,
@@ -777,6 +810,9 @@ fn html_contains_browser_section() {
             }),
             http_stack: None,
             rpm: None,
+            ping: None,
+            path: None,
+            dualstack: None,
         }],
     };
     let html = render(&run, None, None);
