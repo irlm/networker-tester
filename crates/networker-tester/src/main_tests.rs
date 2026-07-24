@@ -532,6 +532,8 @@ fn sample_resolved_config(delay_ms: u64) -> ResolvedConfig {
             profile: ImpairmentProfile::None,
             delay_ms,
         },
+        geoip_city_db: None,
+        geoip_asn_db: None,
         json_stdout: false,
         progress_url: None,
         progress_token: None,

@@ -574,7 +574,12 @@ pub(super) fn write_html_footer(timestamp: DateTime<chrono::Utc>, out: &mut Stri
 ///
 /// This is used by both `render()` (directly) and `render_multi()` (wrapped
 /// in a per-target `<details>` block).
-pub(super) fn write_host_info_card(label: &str, info: &HostInfo, out: &mut String) {
+pub(super) fn write_host_info_card(
+    label: &str,
+    info: &HostInfo,
+    geo: Option<&GeoInfo>,
+    out: &mut String,
+) {
     let mem = info
         .total_memory_mb
         .map(|mb| {
@@ -635,6 +640,19 @@ pub(super) fn write_host_info_card(label: &str, info: &HostInfo, out: &mut Strin
                 escape_html(region),
             );
         }
+    }
+    if let Some(geo) = geo {
+        let db_note = geo
+            .db_date
+            .as_deref()
+            .map(|d| format!(" <small>(GeoIP db {})</small>", escape_html(d)))
+            .unwrap_or_default();
+        let _ = writeln!(
+            out,
+            "    <dt>Geo</dt>          <dd>{}{}</dd>",
+            escape_html(&geo.label()),
+            db_note,
+        );
     }
     let _ = write!(out, "  </dl>\n</section>\n");
 }

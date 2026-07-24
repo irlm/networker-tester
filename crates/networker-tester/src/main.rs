@@ -18,6 +18,7 @@ use networker_tester::cli::ResolvedConfig;
 use networker_tester::dispatch::{
     dispatch_once, log_attempt, published_logical_attempts, rewrite_url_for_stack,
 };
+use networker_tester::geoip::GeoIpResolver;
 use networker_tester::metrics::{
     primary_metric_value, BenchmarkExecutionPlan, BenchmarkNoiseThresholds, HostInfo,
     NetworkContext, Protocol, RequestAttempt, TestRun,
@@ -205,6 +206,9 @@ async fn main() -> anyhow::Result<()> {
             ))
         });
 
+    // ── Offline GeoIP enrichment (user-supplied MaxMind .mmdb files) ────────
+    let geoip = GeoIpResolver::open(cfg.geoip_city_db.as_deref(), cfg.geoip_asn_db.as_deref());
+
     // ── Run probes for every target ───────────────────────────────────────────
     let mut all_runs: Vec<TestRun> = Vec::new();
     for target_url_str in &cfg.targets {
@@ -215,6 +219,7 @@ async fn main() -> anyhow::Result<()> {
             &modes,
             &payload_sizes,
             progress_reporter.clone(),
+            &geoip,
         )
         .await?;
         all_runs.push(run);

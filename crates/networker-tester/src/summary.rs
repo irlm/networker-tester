@@ -44,6 +44,24 @@ pub fn print_summary(run: &TestRun) {
     println!(" Client version : {}", run.client_version);
     println!(" Server version : {server_version}");
 
+    // Offline GeoIP enrichment (one line max; only when a MaxMind DB matched).
+    if run.client_geo.is_some() || run.target_geo.is_some() {
+        let side = |geo: &Option<crate::metrics::GeoInfo>| {
+            geo.as_ref().map_or_else(|| "—".to_string(), |g| g.label())
+        };
+        let db_date = run
+            .client_geo
+            .as_ref()
+            .or(run.target_geo.as_ref())
+            .and_then(|g| g.db_date.as_deref())
+            .unwrap_or("?");
+        println!(
+            " Geo            : client {} → target {} (GeoIP db {db_date})",
+            side(&run.client_geo),
+            side(&run.target_geo),
+        );
+    }
+
     if let Some(fin) = run.finished_at {
         let dur = (fin - run.started_at).num_milliseconds();
         println!(" Duration       : {dur}ms total");

@@ -12,7 +12,8 @@
 
 use chrono::Utc;
 use networker_tester::metrics::{
-    DnsResult, HttpResult, Protocol, RequestAttempt, TcpResult, TestRun, TlsResult, SCHEMA_VERSION,
+    DnsResult, GeoInfo, HttpResult, Protocol, RequestAttempt, TcpResult, TestRun, TlsResult,
+    SCHEMA_VERSION,
 };
 use uuid::Uuid;
 
@@ -155,6 +156,8 @@ fn sample_run() -> TestRun {
         benchmark_cooldown_attempt_count: 0,
         benchmark_execution_plan: None,
         benchmark_noise_thresholds: None,
+        client_geo: None,
+        target_geo: None,
         attempts: vec![attempt],
     }
 }
@@ -418,6 +421,58 @@ fn client_network_field_is_additive_and_optional() {
     let empty: networker_tester::metrics::NetworkContext =
         serde_json::from_str("{}").expect("all-optional struct");
     assert!(empty.is_empty());
+/// Additive contract check for the offline GeoIP enrichment fields
+/// (`client_geo` / `target_geo`): omitted when unset (old shape unchanged),
+/// old JSON without them still deserializes, populated values round-trip.
+/// schema_version stays 1.0.
+#[test]
+fn geo_enrichment_fields_are_additive_and_optional() {
+    // 1. A run without enrichment serializes to the exact pre-existing shape.
+    let run = sample_run();
+    let v: serde_json::Value = serde_json::to_value(&run).expect("serialize");
+    for absent in ["client_geo", "target_geo"] {
+        assert!(
+            v.get(absent).is_none(),
+            "{absent} must be omitted when unset (shape unchanged)"
+        );
+    }
+
+    // 2. Old JSON (no geo keys) deserializes with None.
+    let back: TestRun = serde_json::from_value(v).expect("deserialize old shape");
+    assert!(back.client_geo.is_none() && back.target_geo.is_none());
+
+    // 3. Populated enrichment round-trips, including partial (ASN-only) data.
+    let mut run = sample_run();
+    run.client_geo = Some(GeoInfo {
+        country: Some("US".into()),
+        city: None,
+        asn: Some(13335),
+        as_org: Some("Cloudflare, Inc.".into()),
+        db_date: Some("2026-01-05".into()),
+    });
+    run.target_geo = Some(GeoInfo {
+        country: Some("SE".into()),
+        city: Some("Linköping".into()),
+        asn: None,
+        as_org: None,
+        db_date: Some("2026-01-05".into()),
+    });
+    let v = serde_json::to_value(&run).expect("serialize enriched");
+    assert_eq!(
+        v.pointer("/client_geo/asn").and_then(|x| x.as_u64()),
+        Some(13335)
+    );
+    assert!(
+        v.pointer("/client_geo/city").is_none(),
+        "unset geo sub-fields must be omitted too"
+    );
+    assert_eq!(
+        v.pointer("/target_geo/country").and_then(|x| x.as_str()),
+        Some("SE")
+    );
+    let back: TestRun = serde_json::from_value(v).expect("round-trip enriched");
+    assert_eq!(back.client_geo, run.client_geo);
+    assert_eq!(back.target_geo, run.target_geo);
 }
 
 /// A run serialized without `schema_version` (a pre-contract producer) must

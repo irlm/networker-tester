@@ -202,6 +202,8 @@ fn make_run(run_seed: u128, target: &str, attempts: Vec<RequestAttempt>) -> Test
         benchmark_cooldown_attempt_count: 0,
         benchmark_execution_plan: None,
         benchmark_noise_thresholds: None,
+        client_geo: None,
+        target_geo: None,
         attempts,
     }
 }

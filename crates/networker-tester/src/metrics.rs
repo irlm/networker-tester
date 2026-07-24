@@ -88,6 +88,54 @@ impl NetworkContext {
             && self.vpn_detected.is_none()
             && self.vpn_interface.is_none()
             && self.ipv6_available.is_none()
+// Offline GeoIP enrichment (user-supplied MaxMind GeoLite2 databases)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Geo / ISP / ASN enrichment for one IP address, resolved from local MaxMind
+/// `.mmdb` databases (never a runtime API call). All fields are best-effort:
+/// each is `None` when the corresponding database is absent or has no record.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GeoInfo {
+    /// ISO 3166-1 alpha-2 country code, e.g. "US".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
+    /// City name (English), e.g. "Linköping".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub city: Option<String>,
+    /// Autonomous system number, e.g. 13335.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asn: Option<u32>,
+    /// Autonomous system organization, e.g. "Cloudflare, Inc.".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub as_org: Option<String>,
+    /// Build date (`YYYY-MM-DD`) of the .mmdb the lookup came from, so
+    /// consumers can judge staleness of the enrichment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db_date: Option<String>,
+}
+
+impl GeoInfo {
+    /// Compact human-readable label, e.g. "US · Linköping · AS1221 Telstra Pty Ltd".
+    /// Returns "—" when every field is `None`.
+    pub fn label(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(ref country) = self.country {
+            parts.push(country.clone());
+        }
+        if let Some(ref city) = self.city {
+            parts.push(city.clone());
+        }
+        match (self.asn, self.as_org.as_deref()) {
+            (Some(asn), Some(org)) => parts.push(format!("AS{asn} {org}")),
+            (Some(asn), None) => parts.push(format!("AS{asn}")),
+            (None, Some(org)) => parts.push(org.to_string()),
+            (None, None) => {}
+        }
+        if parts.is_empty() {
+            "—".into()
+        } else {
+            parts.join(" · ")
+        }
     }
 }
 
@@ -277,6 +325,15 @@ pub struct TestRun {
     /// Configured publication thresholds used to assess benchmark noise quality.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub benchmark_noise_thresholds: Option<BenchmarkNoiseThresholds>,
+    /// Offline GeoIP enrichment of the client's egress IP. Only present when a
+    /// local MaxMind database is configured AND the egress interface address is
+    /// a public IP (RFC1918/CGNAT/loopback egress is never enriched — we do not
+    /// call external "what's my IP" services).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_geo: Option<GeoInfo>,
+    /// Offline GeoIP enrichment of the first resolved target IP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_geo: Option<GeoInfo>,
     pub attempts: Vec<RequestAttempt>,
 }
 
@@ -2579,6 +2636,8 @@ mod tests {
             benchmark_cooldown_attempt_count: 0,
             benchmark_execution_plan: None,
             benchmark_noise_thresholds: None,
+            client_geo: None,
+            target_geo: None,
             attempts: vec![mk(true), mk(false), mk(true)],
         };
         assert_eq!(run.success_count(), 2);
@@ -3599,6 +3658,8 @@ mod tests {
             benchmark_cooldown_attempt_count: 0,
             benchmark_execution_plan: None,
             benchmark_noise_thresholds: None,
+            client_geo: None,
+            target_geo: None,
             attempts: vec![
                 mk(Protocol::Http1),
                 mk(Protocol::Http2),

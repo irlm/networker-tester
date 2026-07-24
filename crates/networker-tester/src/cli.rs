@@ -441,6 +441,17 @@ pub struct Cli {
     #[arg(long, value_delimiter = ',')]
     pub http_stacks: Option<Vec<String>>,
 
+    // ── GeoIP enrichment (offline MaxMind databases) ─────────────────────────
+    /// Path to a local MaxMind GeoLite2/GeoIP2 City .mmdb for offline geo
+    /// enrichment (never downloaded; absent/unreadable → no enrichment)
+    #[arg(long, env = "NETWORKER_GEOIP_CITY_DB")]
+    pub geoip_city_db: Option<String>,
+
+    /// Path to a local MaxMind GeoLite2 ASN .mmdb for offline ASN enrichment
+    /// (never downloaded; absent/unreadable → no enrichment)
+    #[arg(long, env = "NETWORKER_GEOIP_ASN_DB")]
+    pub geoip_asn_db: Option<String>,
+
     // ── Misc ──────────────────────────────────────────────────────────────────
     /// Enable verbose output (equivalent to --log-level debug)
     #[arg(long, short)]
@@ -599,6 +610,8 @@ pub struct ConfigFile {
     pub packet_capture: Option<PacketCaptureConfig>,
     pub capture_mode: Option<String>,
     pub impairment: Option<ImpairmentConfig>,
+    pub geoip_city_db: Option<String>,
+    pub geoip_asn_db: Option<String>,
 }
 
 /// Fully resolved configuration with all defaults applied.
@@ -693,6 +706,10 @@ pub struct ResolvedConfig {
     pub http_stacks: Vec<HttpStack>,
     pub packet_capture: ResolvedPacketCaptureConfig,
     pub impairment: ResolvedImpairmentConfig,
+    /// Path to a local MaxMind City .mmdb (offline geo enrichment), if any.
+    pub geoip_city_db: Option<String>,
+    /// Path to a local MaxMind ASN .mmdb (offline ASN enrichment), if any.
+    pub geoip_asn_db: Option<String>,
 }
 
 /// An HTTP stack to probe alongside the default networker-endpoint.
@@ -967,6 +984,8 @@ impl Cli {
             },
             packet_capture,
             impairment,
+            geoip_city_db: self.geoip_city_db.or(f.geoip_city_db),
+            geoip_asn_db: self.geoip_asn_db.or(f.geoip_asn_db),
         }
     }
 }

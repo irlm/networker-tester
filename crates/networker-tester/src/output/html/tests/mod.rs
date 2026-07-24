@@ -47,6 +47,8 @@ fn make_run() -> TestRun {
         benchmark_cooldown_attempt_count: 0,
         benchmark_execution_plan: None,
         benchmark_noise_thresholds: None,
+        client_geo: None,
+        target_geo: None,
         attempts: vec![RequestAttempt {
             attempt_id: Uuid::new_v4(),
             run_id,
@@ -242,6 +244,8 @@ fn make_run_with_url(url: &str) -> TestRun {
         benchmark_cooldown_attempt_count: 0,
         benchmark_execution_plan: None,
         benchmark_noise_thresholds: None,
+        client_geo: None,
+        target_geo: None,
         attempts: vec![],
     }
 }

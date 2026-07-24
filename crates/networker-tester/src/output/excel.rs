@@ -1054,6 +1054,8 @@ mod tests {
             benchmark_cooldown_attempt_count: 0,
             benchmark_execution_plan: None,
             benchmark_noise_thresholds: None,
+            client_geo: None,
+            target_geo: None,
             attempts: vec![
                 http_attempt,
                 udp_attempt,
@@ -1111,6 +1113,8 @@ mod tests {
             benchmark_cooldown_attempt_count: 0,
             benchmark_execution_plan: None,
             benchmark_noise_thresholds: None,
+            client_geo: None,
+            target_geo: None,
             attempts: vec![],
         };
         save(&run, tmp.path(), None).unwrap();
@@ -1299,6 +1303,8 @@ mod tests {
             benchmark_cooldown_attempt_count: 0,
             benchmark_execution_plan: None,
             benchmark_noise_thresholds: None,
+            client_geo: None,
+            target_geo: None,
             attempts: vec![download_attempt, upload_attempt],
         };
 

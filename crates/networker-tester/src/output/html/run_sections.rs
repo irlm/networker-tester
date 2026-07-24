@@ -98,7 +98,7 @@ pub(super) fn write_run_sections(run: &TestRun, out: &mut String) {
         r##"<div style="display:flex;flex-wrap:wrap;gap:1.5rem;margin:0 2rem">"##
     );
     if let Some(ref info) = run.client_info {
-        write_host_info_card("Client", info, out);
+        write_host_info_card("Client", info, run.client_geo.as_ref(), out);
     }
     if let Some(ref net) = run.client_network {
         if !net.is_empty() {
@@ -106,7 +106,28 @@ pub(super) fn write_run_sections(run: &TestRun, out: &mut String) {
         }
     }
     if let Some(ref info) = run.server_info {
-        write_host_info_card("Server", info, out);
+        write_host_info_card("Server", info, run.target_geo.as_ref(), out);
+    } else if let Some(ref geo) = run.target_geo {
+        // No /info metadata (target is not a networker-endpoint) but offline
+        // GeoIP still resolved the target IP — show the enrichment on its own.
+        let db_note = geo
+            .db_date
+            .as_deref()
+            .map(|d| format!(" <small>(GeoIP db {})</small>", escape_html(d)))
+            .unwrap_or_default();
+        let _ = write!(
+            out,
+            r##"
+<section class="card" style="flex:1;min-width:280px;margin:0">
+  <h2>Target Geo</h2>
+  <dl class="summary-grid">
+    <dt>Geo</dt>          <dd>{}{}</dd>
+  </dl>
+</section>
+"##,
+            escape_html(&geo.label()),
+            db_note,
+        );
     }
     if let Some(ref bl) = run.baseline {
         let net_cls = match bl.network_type {

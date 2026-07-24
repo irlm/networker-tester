@@ -158,6 +158,8 @@ fn html_contains_error_section_for_failed_attempt() {
         benchmark_cooldown_attempt_count: 0,
         benchmark_execution_plan: None,
         benchmark_noise_thresholds: None,
+        client_geo: None,
+        target_geo: None,
         attempts: vec![RequestAttempt {
             attempt_id: Uuid::new_v4(),
             run_id,
@@ -229,6 +231,8 @@ fn html_contains_throughput_section_for_download_attempt() {
         benchmark_cooldown_attempt_count: 0,
         benchmark_execution_plan: None,
         benchmark_noise_thresholds: None,
+        client_geo: None,
+        target_geo: None,
         attempts: vec![RequestAttempt {
             attempt_id: Uuid::new_v4(),
             run_id,
@@ -318,6 +322,8 @@ fn html_contains_tls_section_for_tls_attempt() {
         benchmark_cooldown_attempt_count: 0,
         benchmark_execution_plan: None,
         benchmark_noise_thresholds: None,
+        client_geo: None,
+        target_geo: None,
         attempts: vec![RequestAttempt {
             attempt_id: Uuid::new_v4(),
             run_id,
@@ -412,6 +418,8 @@ fn html_contains_page_load_section() {
         benchmark_cooldown_attempt_count: 0,
         benchmark_execution_plan: None,
         benchmark_noise_thresholds: None,
+        client_geo: None,
+        target_geo: None,
         attempts: vec![RequestAttempt {
             attempt_id: Uuid::new_v4(),
             run_id,
@@ -796,6 +804,8 @@ fn html_contains_browser_section() {
         benchmark_cooldown_attempt_count: 0,
         benchmark_execution_plan: None,
         benchmark_noise_thresholds: None,
+        client_geo: None,
+        target_geo: None,
         attempts: vec![RequestAttempt {
             attempt_id: Uuid::new_v4(),
             run_id,

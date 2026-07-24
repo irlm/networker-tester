@@ -13,6 +13,7 @@ pub(crate) async fn run_for_target(
     modes: &[Protocol],
     payload_sizes: &[usize],
     progress_reporter: Option<std::sync::Arc<ProgressReporter>>,
+    geoip: &GeoIpResolver,
 ) -> anyhow::Result<TestRun> {
     let target = url::Url::parse(target_url_str)
         .with_context(|| format!("Invalid --target URL: {target_url_str}"))?;
@@ -85,6 +86,26 @@ pub(crate) async fn run_for_target(
                 .unwrap_or("?"),
         );
         (!ctx.is_empty()).then_some(ctx)
+    // ── Offline GeoIP enrichment (client egress + first resolved target IP) ──
+    // Absent/unreadable databases → both stay None; never an error.
+    let (client_geo, target_geo) = if geoip.is_enabled() {
+        let target_ip = networker_tester::geoip::resolve_first_ip(
+            &target_host,
+            target.port_or_known_default().unwrap_or(443),
+            cfg.ipv4_only,
+            cfg.ipv6_only,
+        );
+        let target_geo = target_ip.and_then(|ip| geoip.lookup(ip));
+        let client_geo = target_ip.and_then(|ip| geoip.lookup_client_egress(ip));
+        if let Some(ref geo) = target_geo {
+            info!(target_geo = %geo.label(), "Target geo enrichment");
+        }
+        if let Some(ref geo) = client_geo {
+            info!(client_geo = %geo.label(), "Client geo enrichment");
+        }
+        (client_geo, target_geo)
+    } else {
+        (None, None)
     };
 
     let benchmark_environment_check = if cfg.benchmark_mode && cfg.benchmark_phase == "measured" {
@@ -886,6 +907,8 @@ pub(crate) async fn run_for_target(
             .then_some(benchmark_execution_plan)
             .flatten(),
         benchmark_noise_thresholds,
+        client_geo,
+        target_geo,
         attempts: all_attempts,
     };
 

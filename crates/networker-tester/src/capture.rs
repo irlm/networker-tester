@@ -831,6 +831,8 @@ mod tests {
                 profile: crate::cli::ImpairmentProfile::None,
                 delay_ms: 0,
             },
+            geoip_city_db: None,
+            geoip_asn_db: None,
             json_stdout: false,
         }
     }

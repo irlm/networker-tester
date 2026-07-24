@@ -314,6 +314,62 @@ fn host_info_card_no_memory_shows_dash() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// write_host_info_card — GeoIP enrichment rows
+// ─────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn host_info_card_shows_geo_when_present() {
+    let mut run = make_run();
+    run.server_info = Some(make_host_info(Some("srv"), "Linux", None, None));
+    run.target_geo = Some(crate::metrics::GeoInfo {
+        country: Some("SE".into()),
+        city: Some("Linköping".into()),
+        asn: Some(29518),
+        as_org: Some("Bredband2 AB".into()),
+        db_date: Some("2026-02-04".into()),
+    });
+    let html = render(&run, None, None);
+    assert!(
+        html.contains("SE · Linköping · AS29518 Bredband2 AB"),
+        "server card must show the target geo label"
+    );
+    assert!(
+        html.contains("GeoIP db 2026-02-04"),
+        "geo row must disclose the database build date"
+    );
+}
+
+#[test]
+fn target_geo_renders_standalone_card_without_server_info() {
+    let mut run = make_run();
+    run.server_info = None;
+    run.target_geo = Some(crate::metrics::GeoInfo {
+        country: Some("US".into()),
+        city: None,
+        asn: Some(13335),
+        as_org: Some("Cloudflare, Inc.".into()),
+        db_date: None,
+    });
+    let html = render(&run, None, None);
+    assert!(
+        html.contains("Target Geo"),
+        "geo must still surface when the target is not a networker-endpoint"
+    );
+    assert!(html.contains("US · AS13335 Cloudflare, Inc."));
+}
+
+#[test]
+fn no_geo_rows_when_enrichment_absent() {
+    let mut run = make_run();
+    run.server_info = Some(make_host_info(Some("srv"), "Linux", None, None));
+    let html = render(&run, None, None);
+    assert!(
+        !html.contains("<dt>Geo</dt>") && !html.contains("Target Geo"),
+        "unset geo must leave the report unchanged"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // render_multi() — multi-target output structure
 // ─────────────────────────────────────────────────────────────────────────
 
