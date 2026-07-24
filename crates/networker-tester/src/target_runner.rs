@@ -107,6 +107,19 @@ pub(crate) async fn run_for_target(
     } else {
         (None, None)
     };
+    // ── Run-level tester load sample + one-shot clock-sync cross-check ───────
+    // Both best-effort (measurement gaps #15/#16): None is stored when the
+    // platform exposes nothing / NTP is unreachable or disabled.
+    let client_load_before = networker_tester::metrics::LoadSample::collect_local();
+    let clock_sync = networker_tester::clock_sync::query_clock_sync().await;
+    if let Some(ref cs) = clock_sync {
+        info!(
+            "Clock sync: NTP offset {:+.1}ms (rtt {:.1}ms) via {}",
+            cs.offset_ms.unwrap_or(0.0),
+            cs.round_trip_ms.unwrap_or(0.0),
+            cs.ntp_server.as_deref().unwrap_or("?"),
+        );
+    }
 
     let benchmark_environment_check = if cfg.benchmark_mode && cfg.benchmark_phase == "measured" {
         let samples = cfg
@@ -847,6 +860,22 @@ pub(crate) async fn run_for_target(
 
     let finished_at = Utc::now();
 
+    // ── End-of-run tester load sample (pairs with client_load_before) ────────
+    let client_load_after = networker_tester::metrics::LoadSample::collect_local();
+
+    // ── Security-header audit: derive from already-captured response headers ─
+    // Pure parsing at result-build time (measurement gap #14) — no network.
+    for attempt in &mut all_attempts {
+        if let Some(http) = attempt.http.as_mut() {
+            if http.security_headers.is_none() {
+                http.security_headers =
+                    networker_tester::metrics::SecurityHeaders::from_response_headers(
+                        &http.response_headers,
+                    );
+            }
+        }
+    }
+
     let benchmark_noise_thresholds = cfg.benchmark_mode.then(|| BenchmarkNoiseThresholds {
         max_packet_loss_percent: cfg
             .benchmark_max_packet_loss_percent
@@ -875,6 +904,9 @@ pub(crate) async fn run_for_target(
         server_info,
         client_info,
         client_network,
+        client_load_before,
+        client_load_after,
+        clock_sync,
         baseline,
         packet_capture_summary: None,
         benchmark_environment_check,

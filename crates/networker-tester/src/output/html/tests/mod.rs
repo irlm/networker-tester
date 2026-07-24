@@ -34,6 +34,9 @@ fn make_run() -> TestRun {
         server_info: None,
         client_info: None,
         client_network: None,
+        client_load_before: None,
+        client_load_after: None,
+        clock_sync: None,
         baseline: None,
         packet_capture_summary: None,
         benchmark_environment_check: None,
@@ -100,6 +103,7 @@ fn make_run() -> TestRun {
                 socket_stats: None,
                 content_encoding: None,
                 content_length_header: None,
+                security_headers: None,
             }),
             udp: None,
             error: None,
@@ -192,6 +196,7 @@ fn make_http_attempt(success: bool, ttfb: f64, total: f64) -> RequestAttempt {
             socket_stats: None,
             content_encoding: None,
             content_length_header: None,
+            security_headers: None,
         }),
         udp: None,
         error: None,
@@ -231,6 +236,9 @@ fn make_run_with_url(url: &str) -> TestRun {
         server_info: None,
         client_info: None,
         client_network: None,
+        client_load_before: None,
+        client_load_after: None,
+        clock_sync: None,
         baseline: None,
         packet_capture_summary: None,
         benchmark_environment_check: None,
@@ -288,6 +296,7 @@ fn make_attempt(proto: Protocol, success: bool) -> RequestAttempt {
                 socket_stats: None,
                 content_encoding: None,
                 content_length_header: None,
+                security_headers: None,
             })
         } else {
             None

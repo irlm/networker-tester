@@ -90,6 +90,7 @@ fn measured_http_attempt(
             socket_stats: None,
             content_encoding: None,
             content_length_header: None,
+            security_headers: None,
         }),
         udp: None,
         error: None,

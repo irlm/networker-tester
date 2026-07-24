@@ -286,6 +286,18 @@ pub struct TestRun {
     /// collected best-effort at run start. Additive; schema stays 1.0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_network: Option<NetworkContext>,
+    /// System load sampled on the tester at run start (measurement-gap #15).
+    /// Best-effort per platform; None when the platform exposes nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_load_before: Option<LoadSample>,
+    /// System load sampled on the tester at run end (measurement-gap #15).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_load_after: Option<LoadSample>,
+    /// One-shot SNTP cross-check of the client clock (measurement-gap #16).
+    /// Independent of the per-attempt `clock_skew_ms` heuristic; best-effort,
+    /// None when NTP is unreachable or disabled (`NETWORKER_NTP_DISABLE=1`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_sync: Option<ClockSync>,
     /// Network baseline RTT measured before probes start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline: Option<NetworkBaseline>,
@@ -474,6 +486,128 @@ fn detect_os_version() -> Option<String> {
     {
         None
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Run-level system load sampling (measurement-gap #15)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A point-in-time system load sample taken on the tester host. All fields are
+/// best-effort per platform — a field is `None` when the platform does not
+/// expose it, never fabricated:
+///
+/// * Linux: `load_avg_1m` from `/proc/loadavg`, `mem_available_mb` from
+///   `/proc/meminfo` (`MemAvailable`), `cpu_busy_percent` stays `None`
+///   (a two-sample `/proc/stat` delta is not worth the run-time cost).
+/// * macOS: `load_avg_1m` from `sysctl -n vm.loadavg`; memory availability
+///   has no cheap equivalent so `mem_available_mb` stays `None`.
+/// * Windows / other: everything `None` (the whole sample is omitted).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct LoadSample {
+    /// 1-minute load average. Compare against `HostInfo::cpu_cores` — a value
+    /// above the core count means the tester itself was contended and the
+    /// measurements may be noisy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_avg_1m: Option<f64>,
+    /// CPU busy percentage over a sampling window. Currently always `None`
+    /// (reserved; honesty over fabrication — no platform collector yet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_busy_percent: Option<f64>,
+    /// Available (reclaimable) memory in MB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mem_available_mb: Option<u64>,
+}
+
+impl LoadSample {
+    /// True when no field was collected — callers store `None` instead.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Best-effort local sample; returns `None` when nothing was collected.
+    pub fn collect_local() -> Option<Self> {
+        let sample = Self {
+            load_avg_1m: detect_load_avg_1m(),
+            cpu_busy_percent: None,
+            mem_available_mb: detect_mem_available_mb(),
+        };
+        if sample.is_empty() {
+            None
+        } else {
+            Some(sample)
+        }
+    }
+}
+
+/// Parse the leading 1-minute load average from a `/proc/loadavg`-style line
+/// ("0.52 0.58 0.59 1/467 1234") or a macOS `sysctl -n vm.loadavg` line
+/// ("{ 1.86 1.99 2.06 }").
+fn parse_load_avg_1m(text: &str) -> Option<f64> {
+    text.split_whitespace()
+        .find(|tok| !tok.starts_with('{'))
+        .and_then(|tok| tok.parse::<f64>().ok())
+        .filter(|v| v.is_finite() && *v >= 0.0)
+}
+
+fn detect_load_avg_1m() -> Option<f64> {
+    #[cfg(target_os = "linux")]
+    {
+        parse_load_avg_1m(&std::fs::read_to_string("/proc/loadavg").ok()?)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let out = std::process::Command::new("sysctl")
+            .args(["-n", "vm.loadavg"])
+            .output()
+            .ok()?;
+        parse_load_avg_1m(&String::from_utf8_lossy(&out.stdout))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        None
+    }
+}
+
+fn detect_mem_available_mb() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+        for line in meminfo.lines() {
+            if let Some(rest) = line.strip_prefix("MemAvailable:") {
+                let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
+                return Some(kb / 1024);
+            }
+        }
+        None
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // macOS has no cheap MemAvailable equivalent; Windows/other likewise.
+        // Honesty over fabrication — stays None.
+        None
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Clock-sync validation (measurement-gap #16)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Result of a one-shot SNTP (RFC 4330) query performed once per run as an
+/// independent cross-check of the per-attempt `clock_skew_ms` heuristic.
+/// Best-effort: all fields `None`-able, and the whole struct is omitted when
+/// the query failed or was disabled.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ClockSync {
+    /// NTP server queried (`NETWORKER_NTP_SERVER`, default `pool.ntp.org:123`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ntp_server: Option<String>,
+    /// Estimated client clock offset vs the NTP server in ms
+    /// (positive = local clock is behind the server).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset_ms: Option<f64>,
+    /// SNTP round-trip delay in ms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub round_trip_ms: Option<f64>,
 }
 
 fn detect_hostname() -> Option<String> {
@@ -1357,6 +1491,82 @@ pub struct TlsResult {
     pub quic_resumed_handshake_ms: Option<f64>,
 }
 
+/// Security-relevant response headers derived from the already-captured
+/// `HttpResult::response_headers` at result-build time (measurement-gap #14).
+/// Pure parsing — no additional network work. `None` fields mean the header
+/// was absent (or, for parsed values, unparseable).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct SecurityHeaders {
+    /// Raw `Strict-Transport-Security` header value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hsts: Option<String>,
+    /// `max-age` directive parsed out of the HSTS value, in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hsts_max_age_secs: Option<u64>,
+    /// Whether a `Content-Security-Policy` header was present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub csp_present: Option<bool>,
+    /// Whether `X-Content-Type-Options: nosniff` was present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x_content_type_options_nosniff: Option<bool>,
+    /// Raw `X-Frame-Options` header value (e.g. "DENY", "SAMEORIGIN").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x_frame_options: Option<String>,
+    /// Raw `Referrer-Policy` header value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub referrer_policy: Option<String>,
+    /// Raw `Server` header value (software disclosure signal).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_header: Option<String>,
+}
+
+impl SecurityHeaders {
+    /// Derive the audit from captured response headers. Returns `None` when
+    /// the header list is empty (nothing was captured — e.g. curl probes),
+    /// so absence of data is never presented as "no security headers".
+    pub fn from_response_headers(headers: &[(String, String)]) -> Option<Self> {
+        if headers.is_empty() {
+            return None;
+        }
+        let find = |name: &str| -> Option<String> {
+            headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.trim().to_string())
+        };
+        let hsts = find("strict-transport-security");
+        let hsts_max_age_secs = hsts.as_deref().and_then(parse_hsts_max_age);
+        let x_content_type_options_nosniff =
+            Some(find("x-content-type-options").is_some_and(|v| {
+                v.split(',')
+                    .any(|t| t.trim().eq_ignore_ascii_case("nosniff"))
+            }));
+        Some(Self {
+            hsts,
+            hsts_max_age_secs,
+            csp_present: Some(find("content-security-policy").is_some()),
+            x_content_type_options_nosniff,
+            x_frame_options: find("x-frame-options"),
+            referrer_policy: find("referrer-policy"),
+            server_header: find("server"),
+        })
+    }
+}
+
+/// Parse the `max-age` directive (seconds) out of a raw
+/// `Strict-Transport-Security` value. Case-insensitive, tolerates whitespace
+/// and quoted values; returns `None` for malformed or missing max-age.
+fn parse_hsts_max_age(value: &str) -> Option<u64> {
+    for directive in value.split(';') {
+        if let Some((key, val)) = directive.split_once('=') {
+            if key.trim().eq_ignore_ascii_case("max-age") {
+                return val.trim().trim_matches('"').parse().ok();
+            }
+        }
+    }
+    None
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpResult {
     pub negotiated_version: String,
@@ -1414,6 +1624,11 @@ pub struct HttpResult {
     /// on-the-wire compression. Additive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_length_header: Option<u64>,
+    /// Security-header audit derived from `response_headers` at result-build
+    /// time (see [`SecurityHeaders`]). `None` when no headers were captured.
+    /// Additive (measurement-gap #14).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security_headers: Option<SecurityHeaders>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2623,6 +2838,9 @@ mod tests {
             server_info: None,
             client_info: None,
             client_network: None,
+            client_load_before: None,
+            client_load_after: None,
+            clock_sync: None,
             baseline: None,
             packet_capture_summary: None,
             benchmark_environment_check: None,
@@ -3086,6 +3304,7 @@ mod tests {
                 socket_stats: None,
                 content_encoding: None,
                 content_length_header: None,
+                security_headers: None,
             });
             assert!(
                 (primary_metric_value(&a).unwrap() - 25.0).abs() < 1e-9,
@@ -3275,6 +3494,7 @@ mod tests {
                 socket_stats: None,
                 content_encoding: None,
                 content_length_header: None,
+                security_headers: None,
             });
             assert!(
                 (primary_metric_value(&a).unwrap() - 100.0).abs() < 1e-9,
@@ -3565,6 +3785,7 @@ mod tests {
             socket_stats: None,
             content_encoding: None,
             content_length_header: None,
+            security_headers: None,
         });
         assert_eq!(attempt_payload_bytes(&a), Some(65536));
     }
@@ -3592,6 +3813,7 @@ mod tests {
             socket_stats: None,
             content_encoding: None,
             content_length_header: None,
+            security_headers: None,
         });
         assert!(attempt_payload_bytes(&a).is_none());
     }
@@ -3645,6 +3867,9 @@ mod tests {
             server_info: None,
             client_info: None,
             client_network: None,
+            client_load_before: None,
+            client_load_after: None,
+            clock_sync: None,
             baseline: None,
             packet_capture_summary: None,
             benchmark_environment_check: None,
@@ -3691,5 +3916,115 @@ mod tests {
         let mut a = bare_attempt(Protocol::Http1);
         a.finished_at = None;
         assert!(a.total_duration_ms().is_none());
+    }
+
+    // ── SecurityHeaders derivation (measurement gap #14) ─────────────────────
+
+    fn hdrs(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn security_headers_none_when_no_headers_captured() {
+        assert_eq!(SecurityHeaders::from_response_headers(&[]), None);
+    }
+
+    #[test]
+    fn security_headers_full_extraction_is_case_insensitive() {
+        let sec = SecurityHeaders::from_response_headers(&hdrs(&[
+            (
+                "STRICT-TRANSPORT-SECURITY",
+                "max-age=31536000; includeSubDomains; preload",
+            ),
+            ("Content-Security-Policy", "default-src 'self'"),
+            ("X-CONTENT-TYPE-OPTIONS", "NOSNIFF"),
+            ("x-frame-options", "SAMEORIGIN"),
+            ("Referrer-Policy", "strict-origin-when-cross-origin"),
+            ("Server", "nginx/1.24.0"),
+        ]))
+        .expect("headers present");
+        assert_eq!(
+            sec.hsts.as_deref(),
+            Some("max-age=31536000; includeSubDomains; preload")
+        );
+        assert_eq!(sec.hsts_max_age_secs, Some(31_536_000));
+        assert_eq!(sec.csp_present, Some(true));
+        assert_eq!(sec.x_content_type_options_nosniff, Some(true));
+        assert_eq!(sec.x_frame_options.as_deref(), Some("SAMEORIGIN"));
+        assert_eq!(
+            sec.referrer_policy.as_deref(),
+            Some("strict-origin-when-cross-origin")
+        );
+        assert_eq!(sec.server_header.as_deref(), Some("nginx/1.24.0"));
+    }
+
+    #[test]
+    fn security_headers_absent_headers_reported_honestly() {
+        // Headers were captured, but none of the audited ones are present:
+        // booleans are Some(false) (checked and absent), strings stay None.
+        let sec =
+            SecurityHeaders::from_response_headers(&hdrs(&[("content-type", "application/json")]))
+                .expect("headers present");
+        assert_eq!(sec.hsts, None);
+        assert_eq!(sec.hsts_max_age_secs, None);
+        assert_eq!(sec.csp_present, Some(false));
+        assert_eq!(sec.x_content_type_options_nosniff, Some(false));
+        assert_eq!(sec.x_frame_options, None);
+        assert_eq!(sec.referrer_policy, None);
+        assert_eq!(sec.server_header, None);
+    }
+
+    #[test]
+    fn hsts_max_age_parses_directive_variants() {
+        // Directive order, spacing, casing, quoting.
+        assert_eq!(parse_hsts_max_age("max-age=600"), Some(600));
+        assert_eq!(
+            parse_hsts_max_age("includeSubDomains; MAX-AGE = 31536000"),
+            Some(31_536_000)
+        );
+        assert_eq!(
+            parse_hsts_max_age("max-age=\"86400\"; preload"),
+            Some(86_400)
+        );
+        // Malformed max-age values → None, never a fabricated number.
+        assert_eq!(parse_hsts_max_age("max-age=abc"), None);
+        assert_eq!(parse_hsts_max_age("max-age=-1"), None);
+        assert_eq!(parse_hsts_max_age("max-age="), None);
+        assert_eq!(parse_hsts_max_age("includeSubDomains"), None);
+        assert_eq!(parse_hsts_max_age(""), None);
+    }
+
+    #[test]
+    fn nosniff_requires_the_nosniff_token() {
+        let sec =
+            SecurityHeaders::from_response_headers(&hdrs(&[("x-content-type-options", "sniff")]))
+                .unwrap();
+        assert_eq!(sec.x_content_type_options_nosniff, Some(false));
+    }
+
+    // ── LoadSample (measurement gap #15) ─────────────────────────────────────
+
+    #[test]
+    fn load_avg_parses_linux_and_macos_formats() {
+        // Linux /proc/loadavg
+        assert_eq!(parse_load_avg_1m("0.52 0.58 0.59 1/467 12034"), Some(0.52));
+        // macOS `sysctl -n vm.loadavg`
+        assert_eq!(parse_load_avg_1m("{ 1.86 1.99 2.06 }"), Some(1.86));
+        // Garbage / empty → None
+        assert_eq!(parse_load_avg_1m(""), None);
+        assert_eq!(parse_load_avg_1m("not-a-number"), None);
+    }
+
+    #[test]
+    fn empty_load_sample_collapses_to_none_semantics() {
+        assert!(LoadSample::default().is_empty());
+        let sample = LoadSample {
+            load_avg_1m: Some(0.5),
+            ..Default::default()
+        };
+        assert!(!sample.is_empty());
     }
 }

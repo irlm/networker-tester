@@ -67,6 +67,18 @@ pub fn print_summary(run: &TestRun) {
         println!(" Duration       : {dur}ms total");
     }
 
+    // Noisy-tester flag (measurement gap #15): warn when the 1-minute load
+    // average exceeded the core count at either run-level load sample.
+    if let Some(cores) = run.client_info.as_ref().map(|i| i.cpu_cores as f64) {
+        let overloaded = [&run.client_load_before, &run.client_load_after]
+            .iter()
+            .filter_map(|s| s.as_ref().and_then(|s| s.load_avg_1m))
+            .any(|load| load > cores);
+        if overloaded {
+            println!(" ⚠ tester under load — measurements may be noisy");
+        }
+    }
+
     // Build (proto, Option<payload_bytes>) groups in canonical protocol order.
     let ordered_protos = [
         Protocol::Http1,

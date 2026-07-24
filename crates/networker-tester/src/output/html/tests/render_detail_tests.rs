@@ -951,6 +951,7 @@ fn throughput_protocol_comparison_higher_is_better() {
                 socket_stats: None,
                 content_encoding: None,
                 content_length_header: None,
+                security_headers: None,
             }),
             udp: None,
             error: None,

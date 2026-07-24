@@ -979,6 +979,7 @@ async fn collect_response(
         socket_stats: None,
         content_encoding,
         content_length_header,
+        security_headers: None,
     };
 
     Ok((http, server_timing))

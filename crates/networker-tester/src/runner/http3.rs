@@ -720,6 +720,7 @@ mod real {
                 socket_stats: None,
                 content_encoding,
                 content_length_header,
+                security_headers: None,
             }),
             udp: None,
             error: None,

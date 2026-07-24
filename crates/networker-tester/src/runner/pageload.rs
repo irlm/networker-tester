@@ -691,6 +691,7 @@ async fn run_h1_keepalive_connection(
                     socket_stats: None,
                     content_encoding: crate::runner::http::extract_content_meta(&headers).0,
                     content_length_header: crate::runner::http::extract_content_meta(&headers).1,
+                    security_headers: None,
                 };
                 (Some(http), st, ttfb_ms)
             }
@@ -1087,6 +1088,7 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         socket_stats: None,
         content_encoding: crate::runner::http::extract_content_meta(&manifest_headers).0,
         content_length_header: crate::runner::http::extract_content_meta(&manifest_headers).1,
+        security_headers: None,
     };
 
     // ── Asset requests (all in-flight simultaneously over the H2 connection) ──
@@ -1634,6 +1636,7 @@ pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         socket_stats: None,
         content_encoding: crate::runner::http::extract_content_meta(&manifest_headers).0,
         content_length_header: crate::runner::http::extract_content_meta(&manifest_headers).1,
+        security_headers: None,
     };
 
     // ── Asset requests: send + receive all concurrently (like a real browser) ──
@@ -2236,6 +2239,7 @@ async fn fetch_h2_pageload(
         socket_stats: None,
         content_encoding: crate::runner::http::extract_content_meta(&manifest_headers).0,
         content_length_header: crate::runner::http::extract_content_meta(&manifest_headers).1,
+        security_headers: None,
     };
 
     // ── Asset requests ──
@@ -2794,6 +2798,7 @@ async fn fetch_h3_pageload(
         socket_stats: None,
         content_encoding: crate::runner::http::extract_content_meta(&manifest_headers).0,
         content_length_header: crate::runner::http::extract_content_meta(&manifest_headers).1,
+        security_headers: None,
     };
 
     // ── Asset requests ──

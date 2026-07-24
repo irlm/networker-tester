@@ -26,6 +26,9 @@ pub(crate) fn make_run(run_id: Uuid, attempts: Vec<RequestAttempt>) -> TestRun {
         server_info: None,
         client_info: None,
         client_network: None,
+        client_load_before: None,
+        client_load_after: None,
+        clock_sync: None,
         baseline: None,
         packet_capture_summary: None,
         benchmark_environment_check: None,
@@ -174,6 +177,7 @@ pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
             socket_stats: None,
             content_encoding: None,
             content_length_header: None,
+            security_headers: None,
         }),
         udp: Some(UdpResult {
             remote_addr: "127.0.0.1:9999".into(),
