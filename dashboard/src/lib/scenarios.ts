@@ -43,6 +43,15 @@ export interface Scenario {
    * the RUNTIME_TEMPLATES id. Undefined for the `?modes`-driven flows.
    */
   presetId?: string;
+  /**
+   * When true, the destination benchmark wizard auto-fills a default testbed
+   * from the project's cloud account and jumps to the review step (Phase 2) —
+   * the user doesn't hand-build infrastructure, only reviews + launches. The
+   * flow degrades to the manual testbed step when no cloud account exists.
+   */
+  autoProvision?: boolean;
+  /** Proxy stacks the auto-provisioned full-stack testbed installs. */
+  proxies?: string[];
   /** Destination path + query for the given project. */
   href: (projectId: string) => string;
 }
@@ -51,8 +60,16 @@ const probe = (pid: string, preset: string) =>
   `/projects/${pid}/probe?preset=${preset}`;
 const network = (pid: string, modes: string[]) =>
   `/projects/${pid}/tests/new?modes=${modes.join(',')}`;
-const fullStack = (pid: string, modes: string[]) =>
-  `/projects/${pid}/benchmarks/full-stack/new?modes=${modes.join(',')}`;
+const fullStack = (pid: string, modes: string[], opts?: { proxies?: string[]; os?: string; name?: string }) => {
+  const q = new URLSearchParams({ modes: modes.join(',') });
+  if (opts?.proxies?.length) q.set('proxies', opts.proxies.join(','));
+  if (opts?.os) q.set('os', opts.os);
+  if (opts) {
+    q.set('autoprovision', '1');
+    if (opts.name) q.set('name', opts.name);
+  }
+  return `/projects/${pid}/benchmarks/full-stack/new?${q.toString()}`;
+};
 const application = (pid: string, template: string) =>
   `/projects/${pid}/benchmarks/application/new?template=${template}`;
 
@@ -162,7 +179,13 @@ export const SCENARIO_GROUPS: ScenarioGroup[] = [
         needs: 'A cloud account (auto-provisioned)',
         est: 'minutes',
         modes: ['http1', 'http2', 'http3', 'download', 'upload'],
-        href: (pid) => fullStack(pid, ['http1', 'http2', 'http3', 'download', 'upload']),
+        autoProvision: true,
+        proxies: ['nginx', 'caddy'],
+        href: (pid) => fullStack(pid, ['http1', 'http2', 'http3', 'download', 'upload'], {
+          proxies: ['nginx', 'caddy'],
+          os: 'linux',
+          name: 'Full-stack proxy comparison',
+        }),
       },
       {
         id: 'app-language-stack',
