@@ -96,6 +96,23 @@ describe('scenario href routing', () => {
   });
 });
 
+describe('new-mode coverage (v0.28.78 measurement modes)', () => {
+  it('every new probe mode is reachable from at least one scenario card', () => {
+    const covered = new Set(ALL_SCENARIOS.flatMap(s => s.modes));
+    for (const m of ['rpm', 'ping', 'path', 'dualstack', 'websocket', 'pmtud']) {
+      expect(covered.has(m), `mode ${m} has no scenario card`).toBe(true);
+    }
+  });
+
+  it('rpm and websocket ride the endpoint flow (they require a networker-endpoint)', () => {
+    for (const id of ['endpoint-bufferbloat', 'endpoint-websocket']) {
+      const s = ALL_SCENARIOS.find(x => x.id === id);
+      expect(s, id).toBeDefined();
+      expect(s!.flow, id).toBe('endpoint');
+    }
+  });
+});
+
 describe('auto-provisioning scenarios (Phase 2)', () => {
   const pid = 'proj-123';
   const autoProvision = ALL_SCENARIOS.filter(s => s.autoProvision);

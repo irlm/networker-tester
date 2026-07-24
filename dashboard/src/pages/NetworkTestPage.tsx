@@ -31,7 +31,10 @@ const MODE_FAMILIES: ModeFamilyDef[] = [
   {
     id: 'net',
     label: 'NETWORK',
-    modes: ['tcp', 'dns', 'tls', 'tlsresume', 'native', 'udp'],
+    // ping/path/dualstack/pmtud are any-target; rpm/websocket need exactly
+    // this page's target (a deployed networker-endpoint). All family `net`
+    // in shared/modes.json.
+    modes: ['tcp', 'dns', 'tls', 'tlsresume', 'native', 'udp', 'ping', 'path', 'dualstack', 'pmtud', 'rpm', 'websocket'],
     activeClass: CHIP_ACTIVE_CLASS,
     labelClass: 'text-gray-500',
   },

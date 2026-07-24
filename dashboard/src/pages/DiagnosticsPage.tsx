@@ -15,7 +15,7 @@ import { stripAnsi } from '../lib/ansi';
 
 // ── Types ───────────────────────────────────────────────────────────────
 
-type DiagPreset = 'quick' | 'standard' | 'full';
+type DiagPreset = 'quick' | 'standard' | 'full' | 'route';
 type FilterMode = 'all' | 'healthy' | 'partial' | 'failed' | 'pending' | 'stale';
 type SortMode = 'last-checked' | 'name' | 'slowest' | 'most-runs';
 
@@ -34,12 +34,17 @@ const DIAG_PRESETS: Record<DiagPreset, string[]> = {
   quick: ['dns', 'tcp', 'tls', 'http2'],
   standard: ['dns', 'tcp', 'tls', 'tlsresume', 'native', 'http1', 'http2', 'http3', 'udp'],
   full: ['dns', 'tcp', 'tls', 'tlsresume', 'native', 'http1', 'http2', 'http3', 'udp', 'curl', 'pageload', 'pageload2', 'pageload3', 'browser1', 'browser2', 'browser3'],
+  // Reachability & route diagnostics (v0.28.78 modes — all `any`-target).
+  // ping may need ICMP privileges on the runner (Linux ping_group_range);
+  // a denial surfaces as an honest per-attempt Config error, not a hang.
+  route: ['ping', 'path', 'dualstack', 'pmtud'],
 };
 
 const DIAG_PRESET_LABELS: Record<DiagPreset, { time: string; desc: string }> = {
   quick: { time: '~3s', desc: 'dns, tcp, tls, http2' },
   standard: { time: '~15s', desc: '+ http1, http3, tls-resume, native-tls, udp' },
   full: { time: '~60s', desc: '+ pageload, browser' },
+  route: { time: '~45s', desc: 'ping, traceroute, v4-vs-v6, path MTU' },
 };
 
 const PAGE_SIZE = 20;
@@ -458,7 +463,7 @@ export function DiagnosticsPage() {
   // Prefill the preset from ?preset= (scenario launcher); fall back to 'quick'.
   const [preset, setPreset] = useState<DiagPreset>(() => {
     const p = searchParams.get('preset');
-    return p === 'standard' || p === 'full' ? p : 'quick';
+    return p === 'standard' || p === 'full' || p === 'route' ? p : 'quick';
   });
   const [submitting, setSubmitting] = useState(false);
 
@@ -837,7 +842,7 @@ export function DiagnosticsPage() {
               backgroundPosition: 'right 10px center',
             }}
           >
-            {(['quick', 'standard', 'full'] as DiagPreset[]).map(p => (
+            {(['quick', 'standard', 'full', 'route'] as DiagPreset[]).map(p => (
               <option key={p} value={p}>
                 {p.charAt(0).toUpperCase() + p.slice(1)} ({DIAG_PRESET_LABELS[p].time})
               </option>

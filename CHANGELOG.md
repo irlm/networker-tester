@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.80] — 2026-07-24
+
+### Added
+- **Scenario cards for the new measurement modes.** The ★ New Test launcher
+  gains three cards: *Reachability & route diagnosis* (ping · traceroute ·
+  IPv4-vs-IPv6 · path MTU → URL Probe), *Bufferbloat / responsiveness check*
+  (`rpm` → Network flow), and *WebSocket latency* (`websocket` → Network flow).
+  A guard test pins that every v0.28.78 mode is reachable from at least one
+  card.
+- **URL Probe gains a fourth preset, `Route`** (`?preset=route`): ping, path,
+  dualstack, pmtud against any host (~45s). ping may need ICMP privileges on
+  the runner — a denial surfaces as an honest per-attempt Config error.
+- **Network Test now offers the new modes** in its NETWORK family (ping, path,
+  dualstack, pmtud, plus the endpoint-requiring rpm and websocket, which fit
+  this flow's deployed-endpoint target exactly). Note: the page's "★ Full
+  sweep" preset therefore now includes them.
+
+---
+
 ## [0.28.79] — 2026-07-24
 
 Deferred items from the measurement-depth waves, developed in parallel and
