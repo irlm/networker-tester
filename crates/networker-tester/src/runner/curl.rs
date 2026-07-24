@@ -298,6 +298,7 @@ pub async fn run_curl_probe(
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     }
 }
 
@@ -408,6 +409,7 @@ fn make_failed(
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     }
 }
 

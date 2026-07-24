@@ -37,6 +37,7 @@ public static class PerfPerCostLogic
             ["tlsresume"] = FamilyNet,
             ["native"] = FamilyNet,
             ["udp"] = FamilyNet,
+            ["rpm"] = FamilyNet,
             ["http1"] = FamilyHttp,
             ["http2"] = FamilyHttp,
             ["http3"] = FamilyHttp,

@@ -224,8 +224,16 @@ loss/jitter control yet.
 > `pageload`, and `apibench` is runner-level (see note under Default modes).
 
 **Network probes:**
-`tcp`, `http1`, `http2`, `http3`, `udp`, `download`, `upload`,
+`tcp`, `http1`, `http2`, `http3`, `udp`, `rpm`, `download`, `upload`,
 `webdownload`, `webupload`, `udpdownload`, `udpupload`
+
+> `rpm` is the latency-under-load / bufferbloat probe: it samples UDP echo RTT
+> on an idle link, then repeats the sampling at a steady cadence while the
+> endpoint's `/download` route saturates the link. Reports unloaded vs loaded
+> RTT (min/avg/p95), loaded jitter + loss, RPM (60000 / loaded avg RTT —
+> round-trips per minute, higher is better), and the bufferbloat factor
+> (loaded avg / unloaded avg). Requires a networker-endpoint target (the
+> `/download` route plus the UDP echo server on port 9999).
 
 **Pageload probes** (HTTP client, no real browser — fetches `/page` manifest + assets):
 

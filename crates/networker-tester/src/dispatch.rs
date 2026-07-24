@@ -11,6 +11,7 @@ use crate::runner::{
     http3::run_http3_probe,
     native::run_native_probe,
     pageload::{run_pageload2_probe, run_pageload3_probe, run_pageload_probe, PageLoadConfig},
+    rpm::{run_rpm_probe, RpmProbeConfig},
     throughput::{
         run_download1_probe, run_download2_probe, run_download3_probe, run_download_probe,
         run_upload1_probe, run_upload2_probe, run_upload3_probe, run_upload_probe,
@@ -121,6 +122,12 @@ pub async fn dispatch_once(
             .await
         }
         (Protocol::Udp, _) => run_udp_probe(run_id, seq, udp_cfg).await,
+        (Protocol::Rpm, _) => {
+            // Latency-under-load: reuses the resolved UDP echo settings for
+            // both phases and the throughput config for the load generator.
+            let rpm_cfg = RpmProbeConfig::from_parts(udp_cfg.clone(), throughput_cfg.clone());
+            run_rpm_probe(run_id, seq, &rpm_cfg).await
+        }
         (Protocol::Dns, _) => {
             let host = target.host_str().unwrap_or("");
             run_dns_probe(run_id, seq, host, cfg.ipv4_only, cfg.ipv6_only).await
@@ -336,6 +343,34 @@ pub fn log_attempt(a: &RequestAttempt) {
                     avg = u.rtt_avg_ms,
                     p95 = u.rtt_p95_ms,
                     loss = u.loss_percent,
+                    retry = retry_suffix,
+                );
+            }
+        }
+        Rpm => {
+            if let Some(r) = &a.rpm {
+                let rpm_str = r
+                    .rpm
+                    .map(|v| format!("{v:.0}"))
+                    .unwrap_or_else(|| "—".into());
+                let factor_str = r
+                    .bufferbloat_factor
+                    .map(|f| format!("{f:.2}x"))
+                    .unwrap_or_else(|| "—".into());
+                info!(
+                    "{status} #{seq} [rpm] RPM={rpm} factor={factor} \
+                     idle avg={idle_avg:.1}ms p95={idle_p95:.1}ms | \
+                     loaded avg={load_avg:.1}ms p95={load_p95:.1}ms \
+                     jitter={jitter:.1}ms loss={loss:.1}%{retry}",
+                    seq = a.sequence_num,
+                    rpm = rpm_str,
+                    factor = factor_str,
+                    idle_avg = r.unloaded_rtt_avg_ms,
+                    idle_p95 = r.unloaded_rtt_p95_ms,
+                    load_avg = r.loaded_rtt_avg_ms,
+                    load_p95 = r.loaded_rtt_p95_ms,
+                    jitter = r.loaded_jitter_ms,
+                    loss = r.loaded_loss_percent,
                     retry = retry_suffix,
                 );
             }

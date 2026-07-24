@@ -76,6 +76,7 @@ fn http_attempt(run_id: Uuid, seq: u32, proto: Protocol, ms: f64) -> RequestAtte
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     }
 }
 
@@ -105,6 +106,7 @@ fn failed_attempt(run_id: Uuid, seq: u32) -> RequestAttempt {
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     }
 }
 
@@ -140,6 +142,7 @@ fn udp_attempt(run_id: Uuid, seq: u32) -> RequestAttempt {
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     }
 }
 

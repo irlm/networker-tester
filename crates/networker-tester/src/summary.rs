@@ -59,6 +59,7 @@ pub fn print_summary(run: &TestRun) {
         Protocol::SdkProbe,
         Protocol::Tcp,
         Protocol::Udp,
+        Protocol::Rpm,
         Protocol::Dns,
         Protocol::Tls,
         Protocol::TlsResume,
@@ -195,6 +196,10 @@ pub fn print_summary(run: &TestRun) {
     // issue" breakdown. Only rendered when a sdkprobe run produced a split.
     print_sdk_split(run);
 
+    // rpm latency-under-load breakdown — unloaded vs loaded RTT, bufferbloat
+    // factor, and RPM. Only rendered when an rpm attempt produced a result.
+    print_rpm_summary(run);
+
     // Protocol comparison table when any pageload or browser variant is present
     let has_pageload = run.attempts.iter().any(|a| {
         matches!(
@@ -290,6 +295,65 @@ fn print_sdk_split(run: &TestRun) {
     if anomalies > 0 {
         println!("   ⚠ {anomalies} probe(s) had server_ms > wall — network leg clamped to 0");
     }
+}
+
+/// Render the rpm latency-under-load breakdown: unloaded vs loaded UDP echo
+/// RTT side by side, the bufferbloat factor, and the RPM headline number.
+/// Averages across all rpm attempts that carry a result (typically one per
+/// run iteration); loss/jitter come from the loaded phase — the user-felt
+/// numbers when the link is saturated.
+fn print_rpm_summary(run: &TestRun) {
+    let results: Vec<&crate::metrics::RpmResult> = run
+        .attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::Rpm)
+        .filter_map(|a| a.rpm.as_ref())
+        .collect();
+    if results.is_empty() {
+        return;
+    }
+
+    let avg = |f: &dyn Fn(&crate::metrics::RpmResult) -> f64| -> f64 {
+        results.iter().map(|r| f(r)).sum::<f64>() / results.len() as f64
+    };
+    let avg_opt = |f: &dyn Fn(&crate::metrics::RpmResult) -> Option<f64>| -> Option<f64> {
+        let vals: Vec<f64> = results.iter().filter_map(|r| f(r)).collect();
+        (!vals.is_empty()).then(|| vals.iter().sum::<f64>() / vals.len() as f64)
+    };
+
+    println!();
+    println!(
+        " Latency under load (rpm, avg over {n} attempt{s})",
+        n = results.len(),
+        s = if results.len() == 1 { "" } else { "s" },
+    );
+    println!("──────────────────────────────────────────────────────────");
+    println!("              │      Min │      Avg │      p95 │  Jitter │  Loss");
+    println!(
+        "   Unloaded   │ {min:>7.2}ms │ {a:>7.2}ms │ {p95:>7.2}ms │ {j:>6.2}ms │ {l:>4.1}%",
+        min = avg(&|r| r.unloaded_rtt_min_ms),
+        a = avg(&|r| r.unloaded_rtt_avg_ms),
+        p95 = avg(&|r| r.unloaded_rtt_p95_ms),
+        j = avg(&|r| r.unloaded_jitter_ms),
+        l = avg(&|r| r.unloaded_loss_percent),
+    );
+    println!(
+        "   Loaded     │ {min:>7.2}ms │ {a:>7.2}ms │ {p95:>7.2}ms │ {j:>6.2}ms │ {l:>4.1}%",
+        min = avg(&|r| r.loaded_rtt_min_ms),
+        a = avg(&|r| r.loaded_rtt_avg_ms),
+        p95 = avg(&|r| r.loaded_rtt_p95_ms),
+        j = avg(&|r| r.loaded_jitter_ms),
+        l = avg(&|r| r.loaded_loss_percent),
+    );
+    let fmt =
+        |v: Option<f64>, unit: &str| v.map_or_else(|| "—".to_string(), |x| format!("{x:.2}{unit}"));
+    println!(
+        "   → RPM: {rpm}  |  bufferbloat factor: {factor}  |  load: {mbps}",
+        rpm = avg_opt(&|r| r.rpm)
+            .map_or_else(|| "—".to_string(), |x| format!("{x:.0} round-trips/min")),
+        factor = fmt(avg_opt(&|r| r.bufferbloat_factor), "x"),
+        mbps = fmt(avg_opt(&|r| r.load_throughput_mbps), " MB/s"),
+    );
 }
 
 pub fn print_comparison(run: &TestRun) {

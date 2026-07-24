@@ -182,6 +182,7 @@ fn html_contains_error_section_for_failed_attempt() {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         }],
     };
     let html = render(&run, None, None);
@@ -258,6 +259,7 @@ fn html_contains_throughput_section_for_download_attempt() {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         }],
     };
     let html = render(&run, None, None);
@@ -339,6 +341,7 @@ fn html_contains_tls_section_for_tls_attempt() {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         }],
     };
     let html = render(&run, None, None);
@@ -415,6 +418,7 @@ fn html_contains_page_load_section() {
             }),
             browser: None,
             http_stack: None,
+            rpm: None,
         }],
     };
     let html = render(&run, None, None);
@@ -492,6 +496,7 @@ fn append_proto_row_no_http_shows_dashes() {
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     };
     let rows: Vec<&RequestAttempt> = vec![&a];
     let mut out = String::new();
@@ -575,6 +580,7 @@ fn append_attempt_row_udp_echo_shows_rtt() {
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     };
     let mut out = String::new();
     append_attempt_row(&mut out, &a, false);
@@ -614,6 +620,7 @@ fn append_attempt_row_udp_throughput_shows_transfer_ms() {
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     };
     let mut out = String::new();
     append_attempt_row(&mut out, &a, false);
@@ -643,6 +650,7 @@ fn append_attempt_row_no_results_shows_dashes() {
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     };
     let mut out = String::new();
     append_attempt_row(&mut out, &a, false);
@@ -763,6 +771,7 @@ fn html_contains_browser_section() {
                 started_at: now,
             }),
             http_stack: None,
+            rpm: None,
         }],
     };
     let html = render(&run, None, None);

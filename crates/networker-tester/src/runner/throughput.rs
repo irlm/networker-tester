@@ -1260,6 +1260,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         }
     }
 
@@ -1303,6 +1304,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         }
     }
 
@@ -1401,6 +1403,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         };
         verify_upload(&mut attempt, 100);
         assert!(attempt.success);
@@ -1522,6 +1525,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         };
         assert_eq!(compute_overhead_ms(&attempt), 0.0);
     }
@@ -1573,6 +1577,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         };
         verify_upload(&mut attempt, 100);
         // Non-numeric treated as absent → skip verification, stay successful.
@@ -1619,6 +1624,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         };
         verify_upload(&mut attempt, 12);
         // "12.5" doesn't parse as usize → treated as absent → skip.
@@ -1664,6 +1670,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         };
         verify_upload(&mut attempt, 100);
         assert!(attempt.success);
@@ -1739,6 +1746,7 @@ mod tests {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         };
         assert!((compute_overhead_ms(&attempt) - 30.0).abs() < 1e-12);
     }

@@ -83,6 +83,7 @@ mod stub {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         }
     }
 }
@@ -569,6 +570,7 @@ mod real {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         }
     }
 
@@ -611,6 +613,7 @@ mod real {
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         }
     }
 

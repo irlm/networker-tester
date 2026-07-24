@@ -71,6 +71,7 @@ pub async fn run_native_probe(
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         }
     }
 
@@ -423,6 +424,7 @@ async fn run_native_probe_impl(
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         }
     }
 }
@@ -711,6 +713,7 @@ async fn run_native_https(
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     }
 }
 
@@ -872,6 +875,7 @@ fn make_failed(
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     }
 }
 

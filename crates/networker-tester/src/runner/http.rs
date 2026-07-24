@@ -171,6 +171,7 @@ pub async fn run_probe(
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         },
     }
 }
@@ -409,6 +410,7 @@ async fn run_http_or_tcp(
             page_load: None,
             browser: None,
             http_stack: None,
+            rpm: None,
         };
     }
 
@@ -630,6 +632,7 @@ async fn run_http_or_tcp(
                 page_load: None,
                 browser: None,
                 http_stack: None,
+                rpm: None,
             }
         }
         Err(e) => {
@@ -1386,6 +1389,7 @@ fn failed_attempt(
         page_load: None,
         browser: None,
         http_stack: None,
+        rpm: None,
     }
 }
 

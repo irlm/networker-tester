@@ -43,6 +43,10 @@ export const MODE_REQUIREMENT: Readonly<Record<string, ModeRequirement>> = {
   udpdownload: 'networker-endpoint',
   udpupload: 'networker-endpoint',
 
+  // Latency-under-load (bufferbloat / RPM) — needs the endpoint's /download
+  // route to saturate the link AND its UDP echo server (:9999).
+  rpm: 'networker-endpoint',
+
   // NOTE: `udp` (echo RTT), `pageload*` (native page fetch), and `browser*`
   // (Chrome) are 'any' — the URL Probe runs all of them against arbitrary URLs
   // (they load a real page / probe a real host), so they must NOT be gated as
