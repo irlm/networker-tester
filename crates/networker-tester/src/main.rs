@@ -18,6 +18,7 @@ use networker_tester::cli::ResolvedConfig;
 use networker_tester::dispatch::{
     dispatch_once, log_attempt, published_logical_attempts, rewrite_url_for_stack,
 };
+use networker_tester::geoip::GeoIpResolver;
 use networker_tester::metrics::{
     primary_metric_value, BenchmarkExecutionPlan, BenchmarkNoiseThresholds, HostInfo,
     NetworkContext, Protocol, RequestAttempt, TestRun,
@@ -104,7 +105,7 @@ async fn main() -> anyhow::Result<()> {
     let modes = cfg.parsed_modes();
     if modes.is_empty() {
         anyhow::bail!(
-            "No valid modes specified. Use: tcp,http1,http2,http3,udp,rpm,ping,path,dualstack,dns,tls,tlsresume,native,curl,\
+            "No valid modes specified. Use: tcp,http1,http2,http3,udp,rpm,ping,path,dualstack,websocket,pmtud,dns,tls,tlsresume,native,curl,\
              download,download1,download2,download3,upload,upload1,upload2,upload3,webdownload,webupload,udpdownload,udpupload,\
              pageload(H1+H2+H3),pageload1,pageload2,pageload3,\
              browser(H1+H2+H3),browser1,browser2,browser3"
@@ -205,6 +206,9 @@ async fn main() -> anyhow::Result<()> {
             ))
         });
 
+    // ── Offline GeoIP enrichment (user-supplied MaxMind .mmdb files) ────────
+    let geoip = GeoIpResolver::open(cfg.geoip_city_db.as_deref(), cfg.geoip_asn_db.as_deref());
+
     // ── Run probes for every target ───────────────────────────────────────────
     let mut all_runs: Vec<TestRun> = Vec::new();
     for target_url_str in &cfg.targets {
@@ -215,6 +219,7 @@ async fn main() -> anyhow::Result<()> {
             &modes,
             &payload_sizes,
             progress_reporter.clone(),
+            &geoip,
         )
         .await?;
         all_runs.push(run);

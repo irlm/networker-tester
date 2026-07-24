@@ -98,7 +98,7 @@ pub(super) fn write_run_sections(run: &TestRun, out: &mut String) {
         r##"<div style="display:flex;flex-wrap:wrap;gap:1.5rem;margin:0 2rem">"##
     );
     if let Some(ref info) = run.client_info {
-        write_host_info_card("Client", info, out);
+        write_host_info_card("Client", info, run.client_geo.as_ref(), out);
     }
     if let Some(ref net) = run.client_network {
         if !net.is_empty() {
@@ -106,7 +106,28 @@ pub(super) fn write_run_sections(run: &TestRun, out: &mut String) {
         }
     }
     if let Some(ref info) = run.server_info {
-        write_host_info_card("Server", info, out);
+        write_host_info_card("Server", info, run.target_geo.as_ref(), out);
+    } else if let Some(ref geo) = run.target_geo {
+        // No /info metadata (target is not a networker-endpoint) but offline
+        // GeoIP still resolved the target IP — show the enrichment on its own.
+        let db_note = geo
+            .db_date
+            .as_deref()
+            .map(|d| format!(" <small>(GeoIP db {})</small>", escape_html(d)))
+            .unwrap_or_default();
+        let _ = write!(
+            out,
+            r##"
+<section class="card" style="flex:1;min-width:280px;margin:0">
+  <h2>Target Geo</h2>
+  <dl class="summary-grid">
+    <dt>Geo</dt>          <dd>{}{}</dd>
+  </dl>
+</section>
+"##,
+            escape_html(&geo.label()),
+            db_note,
+        );
     }
     if let Some(ref bl) = run.baseline {
         let net_cls = match bl.network_type {
@@ -138,6 +159,36 @@ pub(super) fn write_run_sections(run: &TestRun, out: &mut String) {
             p50 = bl.rtt_p50_ms,
             p95 = bl.rtt_p95_ms,
             samples = bl.samples,
+        );
+    }
+    // ── Clock sync card (measurement gap #16): one-shot SNTP cross-check of
+    // the per-attempt clock_skew_ms heuristic. Only rendered when the query
+    // succeeded — absence of data is not presented as "in sync".
+    if let Some(ref cs) = run.clock_sync {
+        let fmt_ms = |v: Option<f64>| {
+            v.map(|m| format!("{m:+.1} ms"))
+                .unwrap_or_else(|| "—".into())
+        };
+        let rtt = cs
+            .round_trip_ms
+            .map(|m| format!("{m:.1} ms"))
+            .unwrap_or_else(|| "—".into());
+        let _ = write!(
+            out,
+            r##"
+<section class="card" style="flex:1;min-width:280px;margin:0">
+  <h2>Clock Sync (SNTP)</h2>
+  <dl class="summary-grid">
+    <dt>NTP Server</dt>   <dd><code>{server}</code></dd>
+    <dt>Clock Offset</dt> <dd>{offset}</dd>
+    <dt>Query RTT</dt>    <dd>{rtt}</dd>
+  </dl>
+  <p class="note">Independent cross-check of the per-attempt <code>clock_skew_ms</code> heuristic.</p>
+</section>
+"##,
+            server = escape_html(cs.ntp_server.as_deref().unwrap_or("—")),
+            offset = fmt_ms(cs.offset_ms),
+            rtt = rtt,
         );
     }
     let _ = writeln!(out, "</div>");
@@ -858,6 +909,76 @@ pub(super) fn write_run_sections(run: &TestRun, out: &mut String) {
         let _ = writeln!(
             out,
             "      </tbody>\n    </table>\n  </details>\n</section>"
+        );
+    }
+
+    // ── Security headers (measurement gap #14) ───────────────────────────────
+    // Derived from already-captured response headers at result-build time.
+    // Shown once per run (headers are a per-origin property, not per-attempt);
+    // endpoint attempts take precedence over HTTP-stack comparison probes.
+    let security = run
+        .attempts
+        .iter()
+        .filter(|a| a.http_stack.is_none())
+        .find_map(|a| a.http.as_ref().and_then(|h| h.security_headers.as_ref()))
+        .or_else(|| {
+            run.attempts
+                .iter()
+                .find_map(|a| a.http.as_ref().and_then(|h| h.security_headers.as_ref()))
+        });
+    if let Some(sec) = security {
+        let hsts = match (&sec.hsts, sec.hsts_max_age_secs) {
+            (Some(raw), Some(max_age)) => format!(
+                r#"<span class="ok">present</span> <code>{}</code> (max-age {}s)"#,
+                escape_html(raw),
+                max_age
+            ),
+            (Some(raw), None) => format!(
+                r#"<span class="warn">present, unparsed max-age</span> <code>{}</code>"#,
+                escape_html(raw)
+            ),
+            (None, _) => r#"<span class="warn">absent</span>"#.into(),
+        };
+        let present_or_absent = |present: Option<bool>| match present {
+            Some(true) => r#"<span class="ok">present</span>"#.to_string(),
+            Some(false) => r#"<span class="warn">absent</span>"#.to_string(),
+            None => "—".to_string(),
+        };
+        let raw_or_absent = |value: &Option<String>| match value {
+            Some(v) => format!("<code>{}</code>", escape_html(v)),
+            None => r#"<span class="warn">absent</span>"#.to_string(),
+        };
+        let nosniff = match sec.x_content_type_options_nosniff {
+            Some(true) => r#"<span class="ok">nosniff</span>"#.to_string(),
+            Some(false) => r#"<span class="warn">absent</span>"#.to_string(),
+            None => "—".to_string(),
+        };
+        let server_hdr = match &sec.server_header {
+            Some(v) => format!("<code>{}</code>", escape_html(v)),
+            None => "not disclosed".to_string(),
+        };
+        let _ = write!(
+            out,
+            r#"
+<section class="card">
+  <h2>Security Headers</h2>
+  <dl class="summary-grid">
+    <dt>Strict-Transport-Security</dt> <dd>{hsts}</dd>
+    <dt>Content-Security-Policy</dt>   <dd>{csp}</dd>
+    <dt>X-Content-Type-Options</dt>    <dd>{nosniff}</dd>
+    <dt>X-Frame-Options</dt>           <dd>{xfo}</dd>
+    <dt>Referrer-Policy</dt>           <dd>{referrer}</dd>
+    <dt>Server</dt>                    <dd>{server}</dd>
+  </dl>
+  <p class="note">Derived from captured response headers — no extra requests were made.</p>
+</section>
+"#,
+            hsts = hsts,
+            csp = present_or_absent(sec.csp_present),
+            nosniff = nosniff,
+            xfo = raw_or_absent(&sec.x_frame_options),
+            referrer = raw_or_absent(&sec.referrer_policy),
+            server = server_hdr,
         );
     }
 

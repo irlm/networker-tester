@@ -371,6 +371,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/", get(landing_page))
         .route("/health", get(health))
         .route("/echo", post(echo).get(echo_get))
+        .route("/ws", get(ws_echo))
         .route("/download", get(download))
         .route("/download/{size}", get(download_path))
         .route("/upload", post(upload))
@@ -701,6 +702,7 @@ async fn landing_page(State(state): State<AppState>) -> impl IntoResponse {
                <tr><td>/health</td><td class=\"method\">GET</td><td class=\"desc\">Health check — 200 + JSON</td></tr>\n\
                <tr><td>/info</td><td class=\"method\">GET</td><td class=\"desc\">Server capabilities as JSON</td></tr>\n\
                <tr><td>/echo</td><td class=\"method\">GET / POST</td><td class=\"desc\">Echo request body and headers</td></tr>\n\
+               <tr><td>/ws</td><td class=\"method\">GET</td><td class=\"desc\">WebSocket echo — upgrades and echoes frames back</td></tr>\n\
                <tr><td>/download</td><td class=\"method\">GET</td><td class=\"desc\">Stream N zero bytes — ?bytes=N</td></tr>\n\
                <tr><td>/upload</td><td class=\"method\">POST</td><td class=\"desc\">Drain request body, return byte count</td></tr>\n\
                <tr><td>/delay</td><td class=\"method\">GET</td><td class=\"desc\">Delay response by N ms — ?ms=N (max 30 s)</td></tr>\n\
@@ -795,6 +797,33 @@ async fn echo(headers: HeaderMap, body: Bytes) -> impl IntoResponse {
             .status(413)
             .body(Body::from("Payload too large (> 1 MiB)"))
             .unwrap()
+    }
+}
+
+/// GET /ws → WebSocket upgrade → echo every Text/Binary frame back unchanged.
+///
+/// Serves the tester's `websocket` probe mode: after the HTTP 101 upgrade the
+/// probe sends N messages and measures per-message round-trip time, so the
+/// handler must echo frames verbatim (payload bytes carry the probe's sequence
+/// id + send timestamp). Ping frames are answered with Pong automatically by
+/// axum/tungstenite; Close ends the session.
+async fn ws_echo(ws: axum::extract::ws::WebSocketUpgrade) -> Response {
+    ws.on_upgrade(handle_ws_echo)
+}
+
+async fn handle_ws_echo(mut socket: axum::extract::ws::WebSocket) {
+    use axum::extract::ws::Message;
+    while let Some(Ok(msg)) = socket.recv().await {
+        match msg {
+            Message::Text(_) | Message::Binary(_) => {
+                if socket.send(msg).await.is_err() {
+                    break;
+                }
+            }
+            // Ping is auto-ponged by the WS stack; Pong needs no reply.
+            Message::Ping(_) | Message::Pong(_) => {}
+            Message::Close(_) => break,
+        }
     }
 }
 
@@ -1809,6 +1838,23 @@ mod tests {
         assert_eq!(resp.status(), 200);
         let body = to_bytes(resp.into_body(), 1024).await.unwrap();
         assert_eq!(&body[..], payload);
+    }
+
+    /// The /ws route exists and rejects a plain (non-upgrade) GET with a
+    /// client error instead of 404 — the full upgrade + echo path is covered
+    /// end-to-end by the tester's websocket integration test.
+    #[tokio::test]
+    async fn ws_route_rejects_non_upgrade_request() {
+        let resp = app()
+            .oneshot(Request::builder().uri("/ws").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_ne!(resp.status(), 404, "/ws route must be registered");
+        assert!(
+            resp.status().is_client_error(),
+            "plain GET /ws should be a 4xx (missing upgrade headers), got {}",
+            resp.status()
+        );
     }
 
     #[tokio::test]

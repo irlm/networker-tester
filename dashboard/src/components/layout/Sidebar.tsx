@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation } from 'react-router';
 import { useAuthStore } from '../../stores/authStore';
 import { useProject } from '../../hooks/useProject';
 import { ProjectSwitcher } from '../ProjectSwitcher';

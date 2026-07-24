@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { api, errorMessage, type SdkEndpoint } from '../api/client';
 import { CreateSdkEndpointDialog } from '../components/CreateSdkEndpointDialog';
 import { PageHeader } from '../components/common/PageHeader';

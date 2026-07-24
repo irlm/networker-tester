@@ -284,6 +284,8 @@ pub async fn run_rpm_probe(
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 
@@ -466,6 +468,8 @@ fn rpm_failed(
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 

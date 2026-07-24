@@ -12,7 +12,8 @@
 
 use chrono::Utc;
 use networker_tester::metrics::{
-    DnsResult, HttpResult, Protocol, RequestAttempt, TcpResult, TestRun, TlsResult, SCHEMA_VERSION,
+    ClockSync, DnsResult, GeoInfo, HttpResult, LoadSample, Protocol, RequestAttempt,
+    SecurityHeaders, TcpResult, TestRun, TlsResult, SCHEMA_VERSION,
 };
 use uuid::Uuid;
 
@@ -109,6 +110,7 @@ fn sample_run() -> TestRun {
             socket_stats: None,
             content_encoding: None,
             content_length_header: None,
+            security_headers: None,
         }),
         udp: None,
         error: None,
@@ -122,6 +124,8 @@ fn sample_run() -> TestRun {
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     };
 
     TestRun {
@@ -140,6 +144,9 @@ fn sample_run() -> TestRun {
         server_info: None,
         client_info: None,
         client_network: None,
+        client_load_before: None,
+        client_load_after: None,
+        clock_sync: None,
         baseline: None,
         packet_capture_summary: None,
         benchmark_environment_check: None,
@@ -153,6 +160,8 @@ fn sample_run() -> TestRun {
         benchmark_cooldown_attempt_count: 0,
         benchmark_execution_plan: None,
         benchmark_noise_thresholds: None,
+        client_geo: None,
+        target_geo: None,
         attempts: vec![attempt],
     }
 }
@@ -418,6 +427,60 @@ fn client_network_field_is_additive_and_optional() {
     assert!(empty.is_empty());
 }
 
+/// Additive contract check for the offline GeoIP enrichment fields
+/// (`client_geo` / `target_geo`): omitted when unset (old shape unchanged),
+/// old JSON without them still deserializes, populated values round-trip.
+/// schema_version stays 1.0.
+#[test]
+fn geo_enrichment_fields_are_additive_and_optional() {
+    // 1. A run without enrichment serializes to the exact pre-existing shape.
+    let run = sample_run();
+    let v: serde_json::Value = serde_json::to_value(&run).expect("serialize");
+    for absent in ["client_geo", "target_geo"] {
+        assert!(
+            v.get(absent).is_none(),
+            "{absent} must be omitted when unset (shape unchanged)"
+        );
+    }
+
+    // 2. Old JSON (no geo keys) deserializes with None.
+    let back: TestRun = serde_json::from_value(v).expect("deserialize old shape");
+    assert!(back.client_geo.is_none() && back.target_geo.is_none());
+
+    // 3. Populated enrichment round-trips, including partial (ASN-only) data.
+    let mut run = sample_run();
+    run.client_geo = Some(GeoInfo {
+        country: Some("US".into()),
+        city: None,
+        asn: Some(13335),
+        as_org: Some("Cloudflare, Inc.".into()),
+        db_date: Some("2026-01-05".into()),
+    });
+    run.target_geo = Some(GeoInfo {
+        country: Some("SE".into()),
+        city: Some("Linköping".into()),
+        asn: None,
+        as_org: None,
+        db_date: Some("2026-01-05".into()),
+    });
+    let v = serde_json::to_value(&run).expect("serialize enriched");
+    assert_eq!(
+        v.pointer("/client_geo/asn").and_then(|x| x.as_u64()),
+        Some(13335)
+    );
+    assert!(
+        v.pointer("/client_geo/city").is_none(),
+        "unset geo sub-fields must be omitted too"
+    );
+    assert_eq!(
+        v.pointer("/target_geo/country").and_then(|x| x.as_str()),
+        Some("SE")
+    );
+    let back: TestRun = serde_json::from_value(v).expect("round-trip enriched");
+    assert_eq!(back.client_geo, run.client_geo);
+    assert_eq!(back.target_geo, run.target_geo);
+}
+
 /// A run serialized without `schema_version` (a pre-contract producer) must
 /// still deserialize, defaulting the field — this proves the additive change is
 /// backward compatible.
@@ -429,4 +492,128 @@ fn schema_version_defaults_when_absent() {
 
     let back: TestRun = serde_json::from_value(v).expect("deserialize without schema_version");
     assert_eq!(back.schema_version, SCHEMA_VERSION);
+}
+
+/// Measurement-gap #14 additive field `http.security_headers`: serde-defaulted
+/// and skip-serialized when unset, so an unpopulated run keeps the exact
+/// pre-existing shape, old JSON still deserializes, and a populated audit
+/// round-trips. schema_version stays 1.0.
+#[test]
+fn security_headers_field_is_additive_and_optional() {
+    // Unset → omitted (shape unchanged) and absent-field JSON deserializes.
+    let run = sample_run();
+    let v: serde_json::Value = serde_json::to_value(&run).expect("serialize");
+    assert!(
+        v.pointer("/attempts/0/http")
+            .expect("http block")
+            .get("security_headers")
+            .is_none(),
+        "http.security_headers must be omitted when unset (shape unchanged)"
+    );
+    let back: TestRun = serde_json::from_value(v).expect("deserialize");
+    assert!(back.attempts[0]
+        .http
+        .as_ref()
+        .expect("http")
+        .security_headers
+        .is_none());
+
+    // Populated → round-trips.
+    let mut run = sample_run();
+    let headers = vec![
+        (
+            "Strict-Transport-Security".to_string(),
+            "max-age=63072000; includeSubDomains".to_string(),
+        ),
+        ("X-Content-Type-Options".to_string(), "nosniff".to_string()),
+    ];
+    run.attempts[0].http.as_mut().unwrap().security_headers =
+        SecurityHeaders::from_response_headers(&headers);
+    let v = serde_json::to_value(&run).expect("serialize populated");
+    assert_eq!(
+        v.pointer("/attempts/0/http/security_headers/hsts_max_age_secs")
+            .and_then(|n| n.as_u64()),
+        Some(63_072_000)
+    );
+    let back: TestRun = serde_json::from_value(v).expect("deserialize populated");
+    let sec = back.attempts[0]
+        .http
+        .as_ref()
+        .unwrap()
+        .security_headers
+        .as_ref()
+        .expect("security_headers round-trips");
+    assert_eq!(sec.x_content_type_options_nosniff, Some(true));
+    assert_eq!(sec.csp_present, Some(false));
+}
+
+/// Measurement-gap #15 additive fields `client_load_before` /
+/// `client_load_after`: serde-defaulted, skip-serialized when unset, and
+/// round-trip when populated. schema_version stays 1.0.
+#[test]
+fn client_load_fields_are_additive_and_optional() {
+    let run = sample_run();
+    let v: serde_json::Value = serde_json::to_value(&run).expect("serialize");
+    for absent in ["client_load_before", "client_load_after"] {
+        assert!(
+            v.get(absent).is_none(),
+            "{absent} must be omitted when unset (shape unchanged)"
+        );
+    }
+    let back: TestRun = serde_json::from_value(v).expect("deserialize");
+    assert!(back.client_load_before.is_none() && back.client_load_after.is_none());
+
+    let mut run = sample_run();
+    run.client_load_before = Some(LoadSample {
+        load_avg_1m: Some(0.75),
+        cpu_busy_percent: None,
+        mem_available_mb: Some(12_288),
+    });
+    run.client_load_after = Some(LoadSample {
+        load_avg_1m: Some(9.5),
+        cpu_busy_percent: None,
+        mem_available_mb: None,
+    });
+    let v = serde_json::to_value(&run).expect("serialize populated");
+    assert_eq!(
+        v.pointer("/client_load_before/mem_available_mb")
+            .and_then(|n| n.as_u64()),
+        Some(12_288)
+    );
+    // Never-collected sub-fields stay omitted, not fabricated.
+    assert!(v.pointer("/client_load_before/cpu_busy_percent").is_none());
+    let back: TestRun = serde_json::from_value(v).expect("deserialize populated");
+    assert_eq!(back.client_load_after.unwrap().load_avg_1m, Some(9.5));
+}
+
+/// Measurement-gap #16 additive field `clock_sync`: serde-defaulted,
+/// skip-serialized when unset (or when the SNTP query failed / was disabled),
+/// and round-trips when populated. The per-attempt `clock_skew_ms` heuristic
+/// is untouched. schema_version stays 1.0.
+#[test]
+fn clock_sync_field_is_additive_and_optional() {
+    let run = sample_run();
+    let v: serde_json::Value = serde_json::to_value(&run).expect("serialize");
+    assert!(
+        v.get("clock_sync").is_none(),
+        "clock_sync must be omitted when unset (shape unchanged)"
+    );
+    let back: TestRun = serde_json::from_value(v).expect("deserialize");
+    assert!(back.clock_sync.is_none());
+
+    let mut run = sample_run();
+    run.clock_sync = Some(ClockSync {
+        ntp_server: Some("pool.ntp.org:123".into()),
+        offset_ms: Some(-12.4),
+        round_trip_ms: Some(28.9),
+    });
+    let v = serde_json::to_value(&run).expect("serialize populated");
+    assert_eq!(
+        v.pointer("/clock_sync/offset_ms").and_then(|n| n.as_f64()),
+        Some(-12.4)
+    );
+    let back: TestRun = serde_json::from_value(v).expect("deserialize populated");
+    let cs = back.clock_sync.expect("clock_sync round-trips");
+    assert_eq!(cs.ntp_server.as_deref(), Some("pool.ntp.org:123"));
+    assert_eq!(cs.round_trip_ms, Some(28.9));
 }

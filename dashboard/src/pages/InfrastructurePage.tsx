@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router';
 import { api } from '../api/client';
 import type { Deployment } from '../api/types';
 import { testersApi, type TesterRow } from '../api/testers';

@@ -6,8 +6,8 @@
 use crate::{
     capture::PacketCaptureSummary,
     metrics::{
-        attempt_payload_bytes, compute_stats, primary_metric_label, primary_metric_value, HostInfo,
-        NetworkContext, NetworkType, Protocol, RequestAttempt, TestRun,
+        attempt_payload_bytes, compute_stats, primary_metric_label, primary_metric_value, GeoInfo,
+        HostInfo, NetworkContext, NetworkType, Protocol, RequestAttempt, TestRun,
     },
 };
 use chrono::DateTime;

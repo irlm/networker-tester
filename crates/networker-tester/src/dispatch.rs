@@ -14,6 +14,7 @@ use crate::runner::{
     pageload::{run_pageload2_probe, run_pageload3_probe, run_pageload_probe, PageLoadConfig},
     path::{run_path_probe, PathProbeConfig},
     ping::{run_ping_probe, PingProbeConfig},
+    pmtud::{run_pmtud_probe, PmtudProbeConfig},
     rpm::{run_rpm_probe, RpmProbeConfig},
     throughput::{
         run_download1_probe, run_download2_probe, run_download3_probe, run_download_probe,
@@ -23,6 +24,7 @@ use crate::runner::{
     tls::{run_tls_probe, run_tls_resumption_probe},
     udp::{run_udp_probe, UdpProbeConfig},
     udp_throughput::{run_udpdownload_probe, run_udpupload_probe, UdpThroughputConfig},
+    websocket::{run_websocket_probe, WebSocketProbeConfig},
 };
 
 /// Rewrite a target URL to use a different port for an HTTP stack.
@@ -150,6 +152,28 @@ pub async fn dispatch_once(
             run_path_probe(run_id, seq, &path_cfg).await
         }
         (Protocol::DualStack, _) => run_dualstack_probe(run_id, seq, target, cfg).await,
+        (Protocol::WebSocket, _) => {
+            // Message count/size/timeout reuse the resolved UDP echo settings
+            // (--udp-probes / --udp-payload / --udp-timeout); the connection
+            // ladder (timeout, TLS trust, family pins) comes from RunConfig.
+            let ws_cfg = WebSocketProbeConfig {
+                message_count: udp_cfg.probe_count,
+                payload_size: udp_cfg.payload_size,
+                msg_timeout_ms: udp_cfg.timeout_ms,
+            };
+            run_websocket_probe(run_id, seq, target, cfg, &ws_cfg).await
+        }
+        (Protocol::Pmtud, _) => {
+            // DF probes aim at the resolved UDP echo host/port so a
+            // networker-endpoint target positively confirms delivery; the
+            // probe still concludes from ICMP alone against anything else.
+            let pmtud_cfg = PmtudProbeConfig {
+                target_host: udp_cfg.target_host.clone(),
+                target_port: udp_cfg.target_port,
+                ..PmtudProbeConfig::default()
+            };
+            run_pmtud_probe(run_id, seq, &pmtud_cfg).await
+        }
         (Protocol::Dns, _) => {
             let host = target.host_str().unwrap_or("");
             run_dns_probe(run_id, seq, host, cfg.ipv4_only, cfg.ipv6_only).await
@@ -458,6 +482,58 @@ pub fn log_attempt(a: &RequestAttempt) {
                     v4 = leg(&d.ipv4),
                     v6 = leg(&d.ipv6),
                     verdict = d.happy_eyeballs_verdict,
+                    retry = retry_suffix,
+                );
+            }
+        }
+        WebSocket => {
+            if let Some(w) = &a.websocket {
+                let tls_part = a
+                    .tls
+                    .as_ref()
+                    .map(|t| format!(" TLS:{:.1}ms", t.handshake_duration_ms))
+                    .unwrap_or_default();
+                info!(
+                    "{status} #{seq} [websocket] {url}{tls} upgrade={upgrade:.1}ms \
+                     msg RTT avg={avg:.1}ms p95={p95:.1}ms jitter={jitter:.1}ms \
+                     echoes={echoes}/{sent} loss={loss:.1}%{retry}",
+                    seq = a.sequence_num,
+                    url = w.url,
+                    tls = tls_part,
+                    upgrade = w.upgrade_ms,
+                    avg = w.msg_rtt_avg_ms,
+                    p95 = w.msg_rtt_p95_ms,
+                    jitter = w.jitter_ms,
+                    echoes = w.echo_count,
+                    sent = w.message_count,
+                    loss = w.loss_percent,
+                    retry = retry_suffix,
+                );
+            }
+        }
+        Pmtud => {
+            if let Some(p) = &a.pmtud {
+                let mtu_str = match (p.path_mtu, p.lower_bound_only) {
+                    (Some(m), true) => format!("≥{m}"),
+                    (Some(m), false) => m.to_string(),
+                    (None, _) => "unknown".into(),
+                };
+                let icmp = p
+                    .icmp_mtu
+                    .map(|m| format!(" icmp_mtu={m}"))
+                    .unwrap_or_default();
+                let local = p
+                    .local_mtu
+                    .map(|m| format!(" local_mtu={m}"))
+                    .unwrap_or_default();
+                info!(
+                    "{status} #{seq} [pmtud] {addr} path_mtu={mtu}{icmp}{local} \
+                     probes={probes} method={method}{retry}",
+                    seq = a.sequence_num,
+                    addr = p.remote_addr,
+                    mtu = mtu_str,
+                    probes = p.probes_sent,
+                    method = p.method,
                     retry = retry_suffix,
                 );
             }

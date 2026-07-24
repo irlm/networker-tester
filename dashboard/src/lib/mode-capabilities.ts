@@ -47,6 +47,14 @@ export const MODE_REQUIREMENT: Readonly<Record<string, ModeRequirement>> = {
   // route to saturate the link AND its UDP echo server (:9999).
   rpm: 'networker-endpoint',
 
+  // WebSocket probe — needs the endpoint's /ws echo route for the
+  // message-RTT phase; an arbitrary URL has no frame-echoing WS server.
+  websocket: 'networker-endpoint',
+
+  // NOTE: `pmtud` is 'any' — DF-bit path-MTU discovery concludes from ICMP
+  // fragmentation-needed errors alone; the endpoint's UDP echo (:9999) only
+  // upgrades the evidence when present.
+
   // NOTE: `udp` (echo RTT), `pageload*` (native page fetch), and `browser*`
   // (Chrome) are 'any' — the URL Probe runs all of them against arbitrary URLs
   // (they load a real page / probe a real host), so they must NOT be gated as

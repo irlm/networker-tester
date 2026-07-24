@@ -26,6 +26,7 @@ use networker_tester::runner::pageload::run_pageload3_probe;
 use networker_tester::runner::pageload::{run_pageload2_probe, run_pageload_probe, PageLoadConfig};
 use networker_tester::runner::path::{run_path_probe, PathProbeConfig};
 use networker_tester::runner::ping::{run_ping_probe, PingProbeConfig};
+use networker_tester::runner::pmtud::{run_pmtud_probe, PmtudProbeConfig};
 use networker_tester::runner::rpm::{run_rpm_probe, RpmProbeConfig};
 use networker_tester::runner::throughput::{
     run_download_probe, run_upload_probe, run_webdownload_probe, run_webupload_probe,
@@ -36,6 +37,7 @@ use networker_tester::runner::udp::{run_udp_probe, UdpProbeConfig};
 use networker_tester::runner::udp_throughput::{
     run_udpdownload_probe, run_udpupload_probe, UdpThroughputConfig,
 };
+use networker_tester::runner::websocket::{run_websocket_probe, WebSocketProbeConfig};
 use uuid::Uuid;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -646,6 +648,144 @@ async fn dualstack_probe_compares_families() {
     }
     assert!(!d.happy_eyeballs_verdict.is_empty());
     assert!((d.happy_eyeballs_grace_ms - 250.0).abs() < f64::EPSILON);
+}
+
+/// WebSocket probe (plain ws://) against the in-process endpoint's /ws echo
+/// route: the full ladder must be recorded (DNS skipped for the IP literal,
+/// TCP present), the 101 upgrade timed, and every echo message credited.
+#[tokio::test]
+async fn websocket_probe_upgrades_and_echoes_messages() {
+    let ep = Endpoint::start().await;
+    let target = url::Url::parse(&format!("http://127.0.0.1:{}/health", ep.http_port)).unwrap();
+    let cfg = RunConfig {
+        dns_enabled: false,
+        timeout_ms: 10_000,
+        ..Default::default()
+    };
+    let ws_cfg = WebSocketProbeConfig {
+        message_count: 5,
+        payload_size: 64,
+        msg_timeout_ms: 5_000,
+    };
+
+    let attempt = run_websocket_probe(Uuid::new_v4(), 0, &target, &cfg, &ws_cfg).await;
+
+    assert!(attempt.success, "websocket failed: {:?}", attempt.error);
+    assert_eq!(attempt.protocol, Protocol::WebSocket);
+    assert_eq!(attempt.protocol.to_string(), "websocket");
+    assert!(attempt.tcp.is_some(), "TCP phase must be recorded");
+    assert!(attempt.tls.is_none(), "plain ws:// must not report TLS");
+    let w = attempt.websocket.expect("websocket result missing");
+    assert_eq!(w.url, format!("ws://127.0.0.1:{}/ws", ep.http_port));
+    assert_eq!(w.upgrade_status, Some(101));
+    assert!(w.upgrade_ms > 0.0);
+    assert_eq!(w.message_count, 5);
+    assert_eq!(w.echo_count, 5, "all echoes must come back on loopback");
+    assert_eq!(w.msg_rtts_ms.len(), 5);
+    assert!(w.msg_rtts_ms.iter().all(|r| r.is_some()));
+    assert!(w.msg_rtt_avg_ms > 0.0);
+    assert!(w.msg_rtt_p95_ms >= w.msg_rtt_min_ms);
+    assert!((w.loss_percent - 0.0).abs() < f64::EPSILON);
+}
+
+/// WebSocket probe over TLS (wss:// via the endpoint's self-signed HTTPS
+/// port): the TLS phase must be recorded and the echo loop must still work.
+#[tokio::test]
+async fn websocket_probe_over_tls() {
+    let ep = Endpoint::start().await;
+    let target = url::Url::parse(&format!("https://127.0.0.1:{}/health", ep.https_port)).unwrap();
+    let cfg = RunConfig {
+        dns_enabled: false,
+        timeout_ms: 10_000,
+        insecure: true, // self-signed endpoint cert
+        ..Default::default()
+    };
+    let ws_cfg = WebSocketProbeConfig {
+        message_count: 3,
+        payload_size: 64,
+        msg_timeout_ms: 5_000,
+    };
+
+    let attempt = run_websocket_probe(Uuid::new_v4(), 0, &target, &cfg, &ws_cfg).await;
+
+    assert!(attempt.success, "wss failed: {:?}", attempt.error);
+    let tls = attempt.tls.as_ref().expect("wss must record the TLS phase");
+    assert!(tls.handshake_duration_ms > 0.0);
+    let w = attempt.websocket.expect("websocket result missing");
+    assert_eq!(w.url, format!("wss://127.0.0.1:{}/ws", ep.https_port));
+    assert_eq!(w.upgrade_status, Some(101));
+    assert_eq!(w.echo_count, 3);
+}
+
+/// Path-MTU discovery against the in-process endpoint's UDP echo on
+/// loopback: DF datagrams are echo-confirmed, so the probe must conclude a
+/// path MTU. On loopback nothing fragments below the search ceiling, so the
+/// result is the ceiling flagged as a lower bound (never a fabricated exact
+/// value). Windows reports a clean unsupported Config error → SKIP.
+#[tokio::test]
+async fn pmtud_probe_confirms_loopback_mtu() {
+    let ep = Endpoint::start().await;
+    let cfg = PmtudProbeConfig {
+        target_host: "127.0.0.1".into(),
+        target_port: ep.udp_port,
+        probe_timeout_ms: 2_000,
+        ..Default::default()
+    };
+
+    let attempt = run_pmtud_probe(Uuid::new_v4(), 0, &cfg).await;
+
+    if !attempt.success
+        && attempt
+            .error
+            .as_ref()
+            .is_some_and(|e| e.category == ErrorCategory::Config)
+    {
+        eprintln!(
+            "SKIP pmtud_probe_confirms_loopback_mtu: platform unsupported: {:?}",
+            attempt.error
+        );
+        return;
+    }
+
+    assert_eq!(attempt.protocol, Protocol::Pmtud);
+    assert_eq!(attempt.protocol.to_string(), "pmtud");
+    let p = attempt.pmtud.as_ref().expect("pmtud result missing");
+
+    // Confirmation must have come from the echo server (or the loopback
+    // port-unreachable fast path) — a no-feedback verdict on loopback with a
+    // live echo server would be a probe bug, but a heavily-firewalled CI
+    // environment can still swallow everything: SKIP honestly in that case.
+    if p.method == "df-no-feedback" {
+        eprintln!(
+            "SKIP pmtud_probe_confirms_loopback_mtu: no UDP feedback even on loopback \
+             (environment filters datagrams): {p:?}"
+        );
+        return;
+    }
+
+    assert!(attempt.success, "pmtud failed: {:?}", attempt.error);
+    assert!(
+        p.method.contains("udp-echo") || p.method.contains("port-unreach"),
+        "loopback verdict must be delivery-confirmed, got method {}",
+        p.method
+    );
+    let mtu = p.path_mtu.expect("confirmed run must conclude a path MTU");
+    assert!(
+        mtu >= 576,
+        "IPv4 path MTU can never be below 576, got {mtu}"
+    );
+    assert_eq!(
+        p.max_unfragmented_payload,
+        Some(mtu - p.header_bytes),
+        "payload/MTU arithmetic must be consistent"
+    );
+    assert_eq!(p.header_bytes, 28, "IPv4 + UDP header assumption");
+    assert!(p.probes_sent > 0);
+    // Loopback never fragments below the 9216 ceiling: expect the honest
+    // lower-bound flag rather than a fabricated exact MTU.
+    if p.lower_bound_only {
+        assert_eq!(mtu, 9216, "lower-bound verdict must sit at the ceiling");
+    }
 }
 
 #[tokio::test]

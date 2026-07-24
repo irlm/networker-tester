@@ -7,7 +7,7 @@
 
 import { render, screen } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { Sidebar } from './Sidebar';
 import { setProjectRole, setAuthRole, resetRoleStores } from '../../test/rbac-helpers';
 

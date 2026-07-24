@@ -46,6 +46,8 @@ fn request_attempt(success: bool, retry_count: u32) -> RequestAttempt {
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 
@@ -88,6 +90,7 @@ fn measured_http_attempt(
             socket_stats: None,
             content_encoding: None,
             content_length_header: None,
+            security_headers: None,
         }),
         udp: None,
         error: None,
@@ -101,6 +104,8 @@ fn measured_http_attempt(
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 
@@ -135,6 +140,8 @@ fn failed_http_attempt(
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 
@@ -526,6 +533,8 @@ fn sample_resolved_config(delay_ms: u64) -> ResolvedConfig {
             profile: ImpairmentProfile::None,
             delay_ms,
         },
+        geoip_city_db: None,
+        geoip_asn_db: None,
         json_stdout: false,
         progress_url: None,
         progress_token: None,

@@ -145,6 +145,9 @@ fn html_contains_error_section_for_failed_attempt() {
         server_info: None,
         client_info: None,
         client_network: None,
+        client_load_before: None,
+        client_load_after: None,
+        clock_sync: None,
         baseline: None,
         packet_capture_summary: None,
         benchmark_environment_check: None,
@@ -158,6 +161,8 @@ fn html_contains_error_section_for_failed_attempt() {
         benchmark_cooldown_attempt_count: 0,
         benchmark_execution_plan: None,
         benchmark_noise_thresholds: None,
+        client_geo: None,
+        target_geo: None,
         attempts: vec![RequestAttempt {
             attempt_id: Uuid::new_v4(),
             run_id,
@@ -187,6 +192,8 @@ fn html_contains_error_section_for_failed_attempt() {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         }],
     };
     let html = render(&run, None, None);
@@ -214,6 +221,9 @@ fn html_contains_throughput_section_for_download_attempt() {
         server_info: None,
         client_info: None,
         client_network: None,
+        client_load_before: None,
+        client_load_after: None,
+        clock_sync: None,
         baseline: None,
         packet_capture_summary: None,
         benchmark_environment_check: None,
@@ -227,6 +237,8 @@ fn html_contains_throughput_section_for_download_attempt() {
         benchmark_cooldown_attempt_count: 0,
         benchmark_execution_plan: None,
         benchmark_noise_thresholds: None,
+        client_geo: None,
+        target_geo: None,
         attempts: vec![RequestAttempt {
             attempt_id: Uuid::new_v4(),
             run_id,
@@ -258,6 +270,7 @@ fn html_contains_throughput_section_for_download_attempt() {
                 socket_stats: None,
                 content_encoding: None,
                 content_length_header: None,
+                security_headers: None,
             }),
             udp: None,
             error: None,
@@ -271,6 +284,8 @@ fn html_contains_throughput_section_for_download_attempt() {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         }],
     };
     let html = render(&run, None, None);
@@ -301,6 +316,9 @@ fn html_contains_tls_section_for_tls_attempt() {
         server_info: None,
         client_info: None,
         client_network: None,
+        client_load_before: None,
+        client_load_after: None,
+        clock_sync: None,
         baseline: None,
         packet_capture_summary: None,
         benchmark_environment_check: None,
@@ -314,6 +332,8 @@ fn html_contains_tls_section_for_tls_attempt() {
         benchmark_cooldown_attempt_count: 0,
         benchmark_execution_plan: None,
         benchmark_noise_thresholds: None,
+        client_geo: None,
+        target_geo: None,
         attempts: vec![RequestAttempt {
             attempt_id: Uuid::new_v4(),
             run_id,
@@ -363,6 +383,8 @@ fn html_contains_tls_section_for_tls_attempt() {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         }],
     };
     let html = render(&run, None, None);
@@ -393,6 +415,9 @@ fn html_contains_page_load_section() {
         server_info: None,
         client_info: None,
         client_network: None,
+        client_load_before: None,
+        client_load_after: None,
+        clock_sync: None,
         baseline: None,
         packet_capture_summary: None,
         benchmark_environment_check: None,
@@ -406,6 +431,8 @@ fn html_contains_page_load_section() {
         benchmark_cooldown_attempt_count: 0,
         benchmark_execution_plan: None,
         benchmark_noise_thresholds: None,
+        client_geo: None,
+        target_geo: None,
         attempts: vec![RequestAttempt {
             attempt_id: Uuid::new_v4(),
             run_id,
@@ -444,6 +471,8 @@ fn html_contains_page_load_section() {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         }],
     };
     let html = render(&run, None, None);
@@ -525,6 +554,8 @@ fn append_proto_row_no_http_shows_dashes() {
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     };
     let rows: Vec<&RequestAttempt> = vec![&a];
     let mut out = String::new();
@@ -612,6 +643,8 @@ fn append_attempt_row_udp_echo_shows_rtt() {
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     };
     let mut out = String::new();
     append_attempt_row(&mut out, &a, false);
@@ -655,6 +688,8 @@ fn append_attempt_row_udp_throughput_shows_transfer_ms() {
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     };
     let mut out = String::new();
     append_attempt_row(&mut out, &a, false);
@@ -688,6 +723,8 @@ fn append_attempt_row_no_results_shows_dashes() {
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     };
     let mut out = String::new();
     append_attempt_row(&mut out, &a, false);
@@ -767,6 +804,9 @@ fn html_contains_browser_section() {
         server_info: None,
         client_info: None,
         client_network: None,
+        client_load_before: None,
+        client_load_after: None,
+        clock_sync: None,
         baseline: None,
         packet_capture_summary: None,
         benchmark_environment_check: None,
@@ -780,6 +820,8 @@ fn html_contains_browser_section() {
         benchmark_cooldown_attempt_count: 0,
         benchmark_execution_plan: None,
         benchmark_noise_thresholds: None,
+        client_geo: None,
+        target_geo: None,
         attempts: vec![RequestAttempt {
             attempt_id: Uuid::new_v4(),
             run_id,
@@ -813,6 +855,8 @@ fn html_contains_browser_section() {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         }],
     };
     let html = render(&run, None, None);

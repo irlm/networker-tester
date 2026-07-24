@@ -3,7 +3,9 @@ pub mod baseline;
 pub mod benchmark;
 pub mod capture;
 pub mod cli;
+pub mod clock_sync;
 pub mod dispatch;
+pub mod geoip;
 pub mod metrics;
 #[cfg(test)]
 mod modes_manifest_guard;

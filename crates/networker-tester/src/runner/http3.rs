@@ -87,6 +87,8 @@ mod stub {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         }
     }
 }
@@ -718,6 +720,7 @@ mod real {
                 socket_stats: None,
                 content_encoding,
                 content_length_header,
+                security_headers: None,
             }),
             udp: None,
             error: None,
@@ -731,6 +734,8 @@ mod real {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         }
     }
 
@@ -777,6 +782,8 @@ mod real {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         }
     }
 

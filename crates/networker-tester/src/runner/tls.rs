@@ -273,6 +273,8 @@ pub async fn run_tls_probe(
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 
@@ -481,6 +483,8 @@ pub async fn run_tls_resumption_probe(
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 
@@ -699,7 +703,9 @@ fn handshake_kind_label(kind: rustls::HandshakeKind) -> &'static str {
 // TLS config for probe (advertises both h2 + http/1.1)
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn build_tls_config_for_http1_probe(
+/// TLS config advertising only `http/1.1` in ALPN — also used by the
+/// `websocket` probe, whose HTTP 101 upgrade requires HTTP/1.1.
+pub(crate) fn build_tls_config_for_http1_probe(
     insecure: bool,
     ca_bundle: Option<&str>,
 ) -> anyhow::Result<(rustls::ClientConfig, Arc<OcspCapture>)> {
@@ -888,7 +894,7 @@ pub(crate) fn load_ca_bundle(
 // TLS info extraction with full cert chain
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn extract_tls_probe_info(
+pub(crate) fn extract_tls_probe_info(
     stream: &tokio_rustls::client::TlsStream<TcpStream>,
     started_at: chrono::DateTime<Utc>,
     duration_ms: f64,
@@ -1219,6 +1225,8 @@ fn make_failed_with_protocol(
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 

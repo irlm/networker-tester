@@ -1102,6 +1102,9 @@ fn metric_unit_for_protocol(protocol: &Protocol) -> &'static str {
     } else if matches!(protocol, Protocol::Path) {
         // Path length, not a duration.
         "hops"
+    } else if matches!(protocol, Protocol::Pmtud) {
+        // Discovered path MTU, not a duration.
+        "bytes"
     } else if protocol_is_throughput(protocol) {
         "MB/s"
     } else {
@@ -1294,6 +1297,9 @@ mod tests {
             server_info: None,
             client_info: None,
             client_network: None,
+            client_load_before: None,
+            client_load_after: None,
+            clock_sync: None,
             baseline: None,
             packet_capture_summary: None,
             benchmark_environment_check: None,
@@ -1307,6 +1313,8 @@ mod tests {
             benchmark_cooldown_attempt_count: 0,
             benchmark_execution_plan: None,
             benchmark_noise_thresholds: None,
+            client_geo: None,
+            target_geo: None,
             attempts: vec![RequestAttempt {
                 attempt_id: Uuid::new_v4(),
                 run_id,
@@ -1331,6 +1339,8 @@ mod tests {
                 ping: None,
                 path: None,
                 dualstack: None,
+                websocket: None,
+                pmtud: None,
             }],
         }
     }
@@ -1573,6 +1583,7 @@ mod tests {
                     socket_stats: None,
                     content_encoding: None,
                     content_length_header: None,
+                    security_headers: None,
                 }),
                 udp: None,
                 error: None,
@@ -1586,6 +1597,8 @@ mod tests {
                 ping: None,
                 path: None,
                 dualstack: None,
+                websocket: None,
+                pmtud: None,
             })
             .collect();
         let run = TestRun {
@@ -1604,6 +1617,9 @@ mod tests {
             server_info: None,
             client_info: None,
             client_network: None,
+            client_load_before: None,
+            client_load_after: None,
+            clock_sync: None,
             baseline: Some(NetworkBaseline {
                 samples: 10,
                 rtt_min_ms: 0.8,
@@ -1638,6 +1654,8 @@ mod tests {
             benchmark_cooldown_attempt_count: 0,
             benchmark_execution_plan: None,
             benchmark_noise_thresholds: None,
+            client_geo: None,
+            target_geo: None,
             attempts,
         };
 
@@ -1756,6 +1774,7 @@ mod tests {
                     socket_stats: None,
                     content_encoding: None,
                     content_length_header: None,
+                    security_headers: None,
                 }),
                 udp: None,
                 error: None,
@@ -1769,6 +1788,8 @@ mod tests {
                 ping: None,
                 path: None,
                 dualstack: None,
+                websocket: None,
+                pmtud: None,
             })
             .collect();
         let run = TestRun {
@@ -1787,6 +1808,9 @@ mod tests {
             server_info: None,
             client_info: None,
             client_network: None,
+            client_load_before: None,
+            client_load_after: None,
+            clock_sync: None,
             baseline: Some(NetworkBaseline {
                 samples: 10,
                 rtt_min_ms: 0.8,
@@ -1808,6 +1832,8 @@ mod tests {
             benchmark_cooldown_attempt_count: 0,
             benchmark_execution_plan: None,
             benchmark_noise_thresholds: None,
+            client_geo: None,
+            target_geo: None,
             attempts,
         };
 

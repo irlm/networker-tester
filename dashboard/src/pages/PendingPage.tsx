@@ -1,5 +1,5 @@
 import { useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { api } from '../api/client';
 import { useAuthStore } from '../stores/authStore';
 import { PRODUCT_NAME } from '../lib/brand';

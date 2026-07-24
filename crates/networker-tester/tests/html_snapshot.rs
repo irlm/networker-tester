@@ -70,6 +70,7 @@ fn http_attempt(run_id: Uuid, seq: u32, proto: Protocol, ms: f64) -> RequestAtte
             socket_stats: None,
             content_encoding: None,
             content_length_header: None,
+            security_headers: None,
         }),
         udp: None,
         error: None,
@@ -83,6 +84,8 @@ fn http_attempt(run_id: Uuid, seq: u32, proto: Protocol, ms: f64) -> RequestAtte
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 
@@ -116,6 +119,8 @@ fn failed_attempt(run_id: Uuid, seq: u32) -> RequestAttempt {
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 
@@ -155,6 +160,8 @@ fn udp_attempt(run_id: Uuid, seq: u32) -> RequestAttempt {
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 
@@ -183,6 +190,9 @@ fn make_run(run_seed: u128, target: &str, attempts: Vec<RequestAttempt>) -> Test
         server_info: None,
         client_info: None,
         client_network: None,
+        client_load_before: None,
+        client_load_after: None,
+        clock_sync: None,
         baseline: None,
         packet_capture_summary: None,
         benchmark_environment_check: None,
@@ -196,6 +206,8 @@ fn make_run(run_seed: u128, target: &str, attempts: Vec<RequestAttempt>) -> Test
         benchmark_cooldown_attempt_count: 0,
         benchmark_execution_plan: None,
         benchmark_noise_thresholds: None,
+        client_geo: None,
+        target_geo: None,
         attempts,
     }
 }

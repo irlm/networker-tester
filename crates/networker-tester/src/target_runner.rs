@@ -13,6 +13,7 @@ pub(crate) async fn run_for_target(
     modes: &[Protocol],
     payload_sizes: &[usize],
     progress_reporter: Option<std::sync::Arc<ProgressReporter>>,
+    geoip: &GeoIpResolver,
 ) -> anyhow::Result<TestRun> {
     let target = url::Url::parse(target_url_str)
         .with_context(|| format!("Invalid --target URL: {target_url_str}"))?;
@@ -86,6 +87,41 @@ pub(crate) async fn run_for_target(
         );
         (!ctx.is_empty()).then_some(ctx)
     };
+
+    // ── Offline GeoIP enrichment (client egress + first resolved target IP) ──
+    // Absent/unreadable databases → both stay None; never an error.
+    let (client_geo, target_geo) = if geoip.is_enabled() {
+        let target_ip = networker_tester::geoip::resolve_first_ip(
+            &target_host,
+            target.port_or_known_default().unwrap_or(443),
+            cfg.ipv4_only,
+            cfg.ipv6_only,
+        );
+        let target_geo = target_ip.and_then(|ip| geoip.lookup(ip));
+        let client_geo = target_ip.and_then(|ip| geoip.lookup_client_egress(ip));
+        if let Some(ref geo) = target_geo {
+            info!(target_geo = %geo.label(), "Target geo enrichment");
+        }
+        if let Some(ref geo) = client_geo {
+            info!(client_geo = %geo.label(), "Client geo enrichment");
+        }
+        (client_geo, target_geo)
+    } else {
+        (None, None)
+    };
+    // ── Run-level tester load sample + one-shot clock-sync cross-check ───────
+    // Both best-effort (measurement gaps #15/#16): None is stored when the
+    // platform exposes nothing / NTP is unreachable or disabled.
+    let client_load_before = networker_tester::metrics::LoadSample::collect_local();
+    let clock_sync = networker_tester::clock_sync::query_clock_sync().await;
+    if let Some(ref cs) = clock_sync {
+        info!(
+            "Clock sync: NTP offset {:+.1}ms (rtt {:.1}ms) via {}",
+            cs.offset_ms.unwrap_or(0.0),
+            cs.round_trip_ms.unwrap_or(0.0),
+            cs.ntp_server.as_deref().unwrap_or("?"),
+        );
+    }
 
     let benchmark_environment_check = if cfg.benchmark_mode && cfg.benchmark_phase == "measured" {
         let samples = cfg
@@ -826,6 +862,22 @@ pub(crate) async fn run_for_target(
 
     let finished_at = Utc::now();
 
+    // ── End-of-run tester load sample (pairs with client_load_before) ────────
+    let client_load_after = networker_tester::metrics::LoadSample::collect_local();
+
+    // ── Security-header audit: derive from already-captured response headers ─
+    // Pure parsing at result-build time (measurement gap #14) — no network.
+    for attempt in &mut all_attempts {
+        if let Some(http) = attempt.http.as_mut() {
+            if http.security_headers.is_none() {
+                http.security_headers =
+                    networker_tester::metrics::SecurityHeaders::from_response_headers(
+                        &http.response_headers,
+                    );
+            }
+        }
+    }
+
     let benchmark_noise_thresholds = cfg.benchmark_mode.then(|| BenchmarkNoiseThresholds {
         max_packet_loss_percent: cfg
             .benchmark_max_packet_loss_percent
@@ -854,6 +906,9 @@ pub(crate) async fn run_for_target(
         server_info,
         client_info,
         client_network,
+        client_load_before,
+        client_load_after,
+        clock_sync,
         baseline,
         packet_capture_summary: None,
         benchmark_environment_check,
@@ -886,6 +941,8 @@ pub(crate) async fn run_for_target(
             .then_some(benchmark_execution_plan)
             .flatten(),
         benchmark_noise_thresholds,
+        client_geo,
+        target_geo,
         attempts: all_attempts,
     };
 

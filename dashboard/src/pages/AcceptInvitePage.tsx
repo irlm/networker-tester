@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router';
 import { api } from '../api/client';
 import { useAuthStore } from '../stores/authStore';
 import { useProjectStore } from '../stores/projectStore';

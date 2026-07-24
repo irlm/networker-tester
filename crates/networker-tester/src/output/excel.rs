@@ -840,6 +840,7 @@ mod tests {
                 socket_stats: None,
                 content_encoding: None,
                 content_length_header: None,
+                security_headers: None,
             }),
             udp: None,
             error: None,
@@ -864,6 +865,8 @@ mod tests {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         };
 
         let udp_attempt = RequestAttempt {
@@ -901,6 +904,8 @@ mod tests {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         };
 
         let udp_throughput_attempt = RequestAttempt {
@@ -937,6 +942,8 @@ mod tests {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         };
 
         let pageload_attempt = RequestAttempt {
@@ -977,6 +984,8 @@ mod tests {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         };
 
         let error_attempt = RequestAttempt {
@@ -1008,6 +1017,8 @@ mod tests {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         };
 
         TestRun {
@@ -1031,6 +1042,9 @@ mod tests {
             server_info: None,
             client_info: None,
             client_network: None,
+            client_load_before: None,
+            client_load_after: None,
+            clock_sync: None,
             baseline: None,
             packet_capture_summary: None,
             benchmark_environment_check: None,
@@ -1044,6 +1058,8 @@ mod tests {
             benchmark_cooldown_attempt_count: 0,
             benchmark_execution_plan: None,
             benchmark_noise_thresholds: None,
+            client_geo: None,
+            target_geo: None,
             attempts: vec![
                 http_attempt,
                 udp_attempt,
@@ -1088,6 +1104,9 @@ mod tests {
             server_info: None,
             client_info: None,
             client_network: None,
+            client_load_before: None,
+            client_load_after: None,
+            clock_sync: None,
             baseline: None,
             packet_capture_summary: None,
             benchmark_environment_check: None,
@@ -1101,6 +1120,8 @@ mod tests {
             benchmark_cooldown_attempt_count: 0,
             benchmark_execution_plan: None,
             benchmark_noise_thresholds: None,
+            client_geo: None,
+            target_geo: None,
             attempts: vec![],
         };
         save(&run, tmp.path(), None).unwrap();
@@ -1195,6 +1216,7 @@ mod tests {
                 socket_stats: None,
                 content_encoding: None,
                 content_length_header: None,
+                security_headers: None,
             }),
             udp: None,
             error: None,
@@ -1208,6 +1230,8 @@ mod tests {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         };
 
         let upload_attempt = RequestAttempt {
@@ -1241,6 +1265,7 @@ mod tests {
                 socket_stats: None,
                 content_encoding: None,
                 content_length_header: None,
+                security_headers: None,
             }),
             udp: None,
             error: None,
@@ -1254,6 +1279,8 @@ mod tests {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         };
 
         let run = TestRun {
@@ -1272,6 +1299,9 @@ mod tests {
             server_info: None,
             client_info: None,
             client_network: None,
+            client_load_before: None,
+            client_load_after: None,
+            clock_sync: None,
             baseline: None,
             packet_capture_summary: None,
             benchmark_environment_check: None,
@@ -1285,6 +1315,8 @@ mod tests {
             benchmark_cooldown_attempt_count: 0,
             benchmark_execution_plan: None,
             benchmark_noise_thresholds: None,
+            client_geo: None,
+            target_geo: None,
             attempts: vec![download_attempt, upload_attempt],
         };
 

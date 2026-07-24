@@ -7,7 +7,7 @@
 
 import { render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { AlertsPage } from './AlertsPage';
 import { resetRoleStores, setProjectRole, type ProjectRole } from '../test/rbac-helpers';
 import type { AlertChannel, AlertRule } from '../api/types';

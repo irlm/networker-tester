@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router';
 import { api } from '../api/client';
 import { stripAnsi } from '../lib/ansi';
 import type { Deployment } from '../api/types';

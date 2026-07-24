@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link } from 'react-router';
 import { api, errorMessage, type Job } from '../api/client';
 import { stripAnsi } from '../lib/ansi';
 import type { LiveAttempt, PacketCaptureSummary } from '../api/types';

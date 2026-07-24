@@ -442,3 +442,48 @@ networker-tester \
 
 **Outputs:** JSON artifact always, plus optional HAR/PCAP artifacts when supported.
 **Dashboard API:** `GET /api/projects/{projectId}/url-tests`, `GET /api/projects/{projectId}/url-tests/{run_id}`, `GET /api/projects/{projectId}/url-tests/{run_id}/sections`
+
+---
+
+## GeoIP / ASN Enrichment (optional, offline)
+
+The tester can annotate each run with geo/ISP/ASN context for both sides of the
+path — `client_geo` (the client's egress IP) and `target_geo` (the first
+resolved target IP) in the run JSON, plus a line in the summary and the HTML
+host cards. Enrichment is **strictly offline**: lookups run against local
+MaxMind `.mmdb` files that you supply. The tester never downloads databases and
+never calls a runtime geolocation or "what's my IP" API.
+
+```bash
+# Get the free GeoLite2 databases (requires a free MaxMind account):
+#   https://www.maxmind.com/en/geolite2/signup
+# Download GeoLite2-City.mmdb and/or GeoLite2-ASN.mmdb, then:
+
+export NETWORKER_GEOIP_CITY_DB=/var/lib/geoip/GeoLite2-City.mmdb
+export NETWORKER_GEOIP_ASN_DB=/var/lib/geoip/GeoLite2-ASN.mmdb
+networker-tester --target https://example.com/health --modes http1 --runs 3
+
+# Or as flags:
+networker-tester --target https://example.com/health --modes http1 \
+  --geoip-city-db /var/lib/geoip/GeoLite2-City.mmdb \
+  --geoip-asn-db  /var/lib/geoip/GeoLite2-ASN.mmdb
+```
+
+Behavior:
+
+- **Absent or unreadable database → no enrichment.** The fields are simply
+  omitted from the JSON; it is never an error (one debug log line).
+- `client_geo` is only emitted when the local egress interface toward the
+  target carries a **public** IP (typical for cloud VMs). Behind NAT the
+  egress address is private/CGNAT and the client side stays unenriched —
+  by design, since discovering the NAT'd public IP would require an external
+  service call.
+- `target_geo` uses the first resolved target IP (honoring
+  `--ipv4-only`/`--ipv6-only`).
+- Each `GeoInfo` carries `db_date` (the build date of the `.mmdb` used) so
+  consumers can judge staleness. Keep your databases fresh — MaxMind updates
+  GeoLite2 twice weekly.
+
+**Populated:** `client_geo.{country,city,asn,as_org,db_date}`,
+`target_geo.{country,city,asn,as_org,db_date}` (all optional, additive —
+schema stays 1.0).

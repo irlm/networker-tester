@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams } from 'react-router';
 import { api, errorMessage, type TlsProfileDetail } from '../api/client';
 import { Breadcrumb } from '../components/common/Breadcrumb';
 import { usePageTitle } from '../hooks/usePageTitle';

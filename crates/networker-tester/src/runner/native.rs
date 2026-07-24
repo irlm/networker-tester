@@ -75,6 +75,8 @@ pub async fn run_native_probe(
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         }
     }
 
@@ -414,6 +416,7 @@ async fn run_native_probe_impl(
                 socket_stats: None,
                 content_encoding: None,
                 content_length_header: None,
+                security_headers: None,
             }),
             udp: None,
             error: if http_ok {
@@ -436,6 +439,8 @@ async fn run_native_probe_impl(
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         }
     }
 }
@@ -711,6 +716,7 @@ async fn run_native_https(
             socket_stats: None,
             content_encoding: None,
             content_length_header: None,
+            security_headers: None,
         }),
         udp: None,
         error: if http_ok {
@@ -733,6 +739,8 @@ async fn run_native_https(
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 
@@ -864,6 +872,8 @@ fn make_failed(
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 

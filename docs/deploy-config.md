@@ -225,7 +225,8 @@ loss/jitter control yet.
 
 **Network probes:**
 `tcp`, `http1`, `http2`, `http3`, `udp`, `rpm`, `ping`, `path`, `dualstack`,
-`download`, `upload`, `webdownload`, `webupload`, `udpdownload`, `udpupload`
+`websocket`, `pmtud`, `download`, `upload`, `webdownload`, `webupload`,
+`udpdownload`, `udpupload`
 
 > `rpm` is the latency-under-load / bufferbloat probe: it samples UDP echo RTT
 > on an idle link, then repeats the sampling at a steady cadence while the
@@ -255,6 +256,24 @@ loss/jitter control yet.
 > TTFB, total) plus a happy-eyeballs (RFC 8305, 250 ms grace) verdict. One
 > working family counts as success; a family with no records or a failed leg
 > is reported as absent/failed rather than failing the attempt.
+
+> `websocket` runs the full DNS + TCP + TLS ladder, measures the HTTP 101
+> upgrade round-trip (`upgrade_ms`), then sends echo messages over the open
+> socket against the endpoint's `/ws` route — message RTT min/avg/p95,
+> arrival-order jitter, and loss. Message count/size/timeout follow
+> `--udp-probes` / `--udp-payload` / `--udp-timeout`. Requires a
+> networker-endpoint target (the `/ws` echo route).
+
+> `pmtud` discovers the path MTU by binary-searching DF-flagged UDP datagram
+> sizes toward the target's UDP echo port. On Linux, ICMP
+> fragmentation-needed errors (with the next-hop MTU) are read unprivileged
+> from the socket error queue (`IP_RECVERR`) — so it concludes even against
+> targets that never answer. On macOS it relies on `IP_DONTFRAG` + `EMSGSIZE`
+> delivery. When the target runs a networker-endpoint, its UDP echo (:9999)
+> positively confirms unfragmented delivery; with no echo, no ICMP, and no
+> send errors the probe reports an honest `path_mtu: null` (`method:
+> "df-no-feedback"`) — it never fabricates. Windows reports a clean
+> unsupported `config` error.
 
 **Pageload probes** (HTTP client, no real browser — fetches `/page` manifest + assets):
 

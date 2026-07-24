@@ -6,7 +6,7 @@
 
 import { render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { CommandApprovalsPage } from './CommandApprovalsPage';
 import { resetRoleStores, setProjectRole, type ProjectRole } from '../test/rbac-helpers';
 import type { CommandApproval } from '../api/types';

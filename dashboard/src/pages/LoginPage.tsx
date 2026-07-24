@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { api } from '../api/client';
 import type { SsoProviderInfo, PendingProject } from '../api/client';
 import { PRODUCT_NAME } from '../lib/brand';

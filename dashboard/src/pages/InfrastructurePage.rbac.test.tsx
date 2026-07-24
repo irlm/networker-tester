@@ -8,7 +8,7 @@
 
 import { render, screen, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { InfrastructurePage } from './InfrastructurePage';
 import { setProjectRole, resetRoleStores, type ProjectRole } from '../test/rbac-helpers';
 

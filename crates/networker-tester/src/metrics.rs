@@ -92,6 +92,58 @@ impl NetworkContext {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Offline GeoIP enrichment (user-supplied MaxMind GeoLite2 databases)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Geo / ISP / ASN enrichment for one IP address, resolved from local MaxMind
+/// `.mmdb` databases (never a runtime API call). All fields are best-effort:
+/// each is `None` when the corresponding database is absent or has no record.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GeoInfo {
+    /// ISO 3166-1 alpha-2 country code, e.g. "US".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
+    /// City name (English), e.g. "Linköping".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub city: Option<String>,
+    /// Autonomous system number, e.g. 13335.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asn: Option<u32>,
+    /// Autonomous system organization, e.g. "Cloudflare, Inc.".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub as_org: Option<String>,
+    /// Build date (`YYYY-MM-DD`) of the .mmdb the lookup came from, so
+    /// consumers can judge staleness of the enrichment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db_date: Option<String>,
+}
+
+impl GeoInfo {
+    /// Compact human-readable label, e.g. "US · Linköping · AS1221 Telstra Pty Ltd".
+    /// Returns "—" when every field is `None`.
+    pub fn label(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(ref country) = self.country {
+            parts.push(country.clone());
+        }
+        if let Some(ref city) = self.city {
+            parts.push(city.clone());
+        }
+        match (self.asn, self.as_org.as_deref()) {
+            (Some(asn), Some(org)) => parts.push(format!("AS{asn} {org}")),
+            (Some(asn), None) => parts.push(format!("AS{asn}")),
+            (None, Some(org)) => parts.push(org.to_string()),
+            (None, None) => {}
+        }
+        if parts.is_empty() {
+            "—".into()
+        } else {
+            parts.join(" · ")
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Network baseline (RTT measurement before probes)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -238,6 +290,18 @@ pub struct TestRun {
     /// collected best-effort at run start. Additive; schema stays 1.0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_network: Option<NetworkContext>,
+    /// System load sampled on the tester at run start (measurement-gap #15).
+    /// Best-effort per platform; None when the platform exposes nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_load_before: Option<LoadSample>,
+    /// System load sampled on the tester at run end (measurement-gap #15).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_load_after: Option<LoadSample>,
+    /// One-shot SNTP cross-check of the client clock (measurement-gap #16).
+    /// Independent of the per-attempt `clock_skew_ms` heuristic; best-effort,
+    /// None when NTP is unreachable or disabled (`NETWORKER_NTP_DISABLE=1`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_sync: Option<ClockSync>,
     /// Network baseline RTT measured before probes start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baseline: Option<NetworkBaseline>,
@@ -277,6 +341,15 @@ pub struct TestRun {
     /// Configured publication thresholds used to assess benchmark noise quality.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub benchmark_noise_thresholds: Option<BenchmarkNoiseThresholds>,
+    /// Offline GeoIP enrichment of the client's egress IP. Only present when a
+    /// local MaxMind database is configured AND the egress interface address is
+    /// a public IP (RFC1918/CGNAT/loopback egress is never enriched — we do not
+    /// call external "what's my IP" services).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_geo: Option<GeoInfo>,
+    /// Offline GeoIP enrichment of the first resolved target IP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_geo: Option<GeoInfo>,
     pub attempts: Vec<RequestAttempt>,
 }
 
@@ -419,6 +492,128 @@ fn detect_os_version() -> Option<String> {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Run-level system load sampling (measurement-gap #15)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A point-in-time system load sample taken on the tester host. All fields are
+/// best-effort per platform — a field is `None` when the platform does not
+/// expose it, never fabricated:
+///
+/// * Linux: `load_avg_1m` from `/proc/loadavg`, `mem_available_mb` from
+///   `/proc/meminfo` (`MemAvailable`), `cpu_busy_percent` stays `None`
+///   (a two-sample `/proc/stat` delta is not worth the run-time cost).
+/// * macOS: `load_avg_1m` from `sysctl -n vm.loadavg`; memory availability
+///   has no cheap equivalent so `mem_available_mb` stays `None`.
+/// * Windows / other: everything `None` (the whole sample is omitted).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct LoadSample {
+    /// 1-minute load average. Compare against `HostInfo::cpu_cores` — a value
+    /// above the core count means the tester itself was contended and the
+    /// measurements may be noisy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_avg_1m: Option<f64>,
+    /// CPU busy percentage over a sampling window. Currently always `None`
+    /// (reserved; honesty over fabrication — no platform collector yet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_busy_percent: Option<f64>,
+    /// Available (reclaimable) memory in MB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mem_available_mb: Option<u64>,
+}
+
+impl LoadSample {
+    /// True when no field was collected — callers store `None` instead.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Best-effort local sample; returns `None` when nothing was collected.
+    pub fn collect_local() -> Option<Self> {
+        let sample = Self {
+            load_avg_1m: detect_load_avg_1m(),
+            cpu_busy_percent: None,
+            mem_available_mb: detect_mem_available_mb(),
+        };
+        if sample.is_empty() {
+            None
+        } else {
+            Some(sample)
+        }
+    }
+}
+
+/// Parse the leading 1-minute load average from a `/proc/loadavg`-style line
+/// ("0.52 0.58 0.59 1/467 1234") or a macOS `sysctl -n vm.loadavg` line
+/// ("{ 1.86 1.99 2.06 }").
+fn parse_load_avg_1m(text: &str) -> Option<f64> {
+    text.split_whitespace()
+        .find(|tok| !tok.starts_with('{'))
+        .and_then(|tok| tok.parse::<f64>().ok())
+        .filter(|v| v.is_finite() && *v >= 0.0)
+}
+
+fn detect_load_avg_1m() -> Option<f64> {
+    #[cfg(target_os = "linux")]
+    {
+        parse_load_avg_1m(&std::fs::read_to_string("/proc/loadavg").ok()?)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let out = std::process::Command::new("sysctl")
+            .args(["-n", "vm.loadavg"])
+            .output()
+            .ok()?;
+        parse_load_avg_1m(&String::from_utf8_lossy(&out.stdout))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        None
+    }
+}
+
+fn detect_mem_available_mb() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+        for line in meminfo.lines() {
+            if let Some(rest) = line.strip_prefix("MemAvailable:") {
+                let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
+                return Some(kb / 1024);
+            }
+        }
+        None
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // macOS has no cheap MemAvailable equivalent; Windows/other likewise.
+        // Honesty over fabrication — stays None.
+        None
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Clock-sync validation (measurement-gap #16)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Result of a one-shot SNTP (RFC 4330) query performed once per run as an
+/// independent cross-check of the per-attempt `clock_skew_ms` heuristic.
+/// Best-effort: all fields `None`-able, and the whole struct is omitted when
+/// the query failed or was disabled.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ClockSync {
+    /// NTP server queried (`NETWORKER_NTP_SERVER`, default `pool.ntp.org:123`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ntp_server: Option<String>,
+    /// Estimated client clock offset vs the NTP server in ms
+    /// (positive = local clock is behind the server).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset_ms: Option<f64>,
+    /// SNTP round-trip delay in ms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub round_trip_ms: Option<f64>,
+}
+
 fn detect_hostname() -> Option<String> {
     if let Ok(h) = std::env::var("HOSTNAME") {
         if !h.is_empty() {
@@ -495,6 +690,12 @@ pub struct RequestAttempt {
     /// IPv4-vs-IPv6 comparison result (`dualstack` mode only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dualstack: Option<DualStackResult>,
+    /// WebSocket upgrade + message-RTT result (`websocket` mode only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub websocket: Option<WebSocketResult>,
+    /// Path-MTU discovery result (`pmtud` mode only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pmtud: Option<PmtudResult>,
 }
 
 impl RequestAttempt {
@@ -556,6 +757,22 @@ pub enum Protocol {
     /// (DNS/TCP/TLS/TTFB/total) with a happy-eyeballs (RFC 8305) verdict.
     /// One working family is a success; the other is reported absent/failed.
     DualStack,
+    /// WebSocket probe: full DNS + TCP + TLS timing ladder, then the HTTP 101
+    /// upgrade round-trip (`upgrade_ms`), then N echo messages against the
+    /// networker-endpoint's `/ws` route — per-message RTT min/avg/p95,
+    /// arrival-order jitter, and loss. Uses ws:// or wss:// derived from the
+    /// target scheme.
+    WebSocket,
+    /// Path-MTU discovery probe: UDP datagrams with the DF bit set at
+    /// binary-searched sizes toward the target. On Linux, ICMP
+    /// fragmentation-needed errors (with the next-hop MTU) are read from the
+    /// socket error queue unprivileged (`IP_RECVERR`); on macOS `IP_DONTFRAG`
+    /// relies on EMSGSIZE surfacing on the connected socket. Pairs with the
+    /// endpoint's UDP echo (port 9999) when available so unfragmented delivery
+    /// is positively confirmed; without any feedback the probe reports an
+    /// honest `path_mtu: None` — it never fabricates. Windows is reported as a
+    /// clean unsupported Config error.
+    Pmtud,
     /// Standalone DNS resolution probe — resolves the target host and records timing without TCP.
     Dns,
     /// Standalone TLS probe — DNS + TCP + TLS handshake only, no HTTP request.
@@ -621,6 +838,8 @@ impl std::fmt::Display for Protocol {
             Protocol::Ping => write!(f, "ping"),
             Protocol::Path => write!(f, "path"),
             Protocol::DualStack => write!(f, "dualstack"),
+            Protocol::WebSocket => write!(f, "websocket"),
+            Protocol::Pmtud => write!(f, "pmtud"),
             Protocol::Dns => write!(f, "dns"),
             Protocol::Tls => write!(f, "tls"),
             Protocol::TlsResume => write!(f, "tlsresume"),
@@ -722,6 +941,20 @@ impl Protocol {
                 "Dual Stack",
                 "IPv4 vs IPv6",
                 "Resolves A and AAAA separately, runs an HTTP GET pinned to each family, and compares per-phase timing with a happy-eyeballs verdict",
+                "Network",
+            ),
+            m(
+                "websocket",
+                "WebSocket",
+                "Msg round-trip",
+                "WebSocket probe — DNS/TCP/TLS ladder, HTTP 101 upgrade time, then echo-message RTT, jitter, and loss over the open socket",
+                "Network",
+            ),
+            m(
+                "pmtud",
+                "Path MTU",
+                "DF-bit discovery",
+                "Path-MTU discovery — binary-searches DF-flagged UDP datagram sizes toward the target; reads ICMP fragmentation-needed where the platform allows and never fabricates an MTU",
                 "Network",
             ),
             // HTTP
@@ -929,6 +1162,8 @@ impl std::str::FromStr for Protocol {
             "ping" => Ok(Protocol::Ping),
             "path" => Ok(Protocol::Path),
             "dualstack" => Ok(Protocol::DualStack),
+            "websocket" => Ok(Protocol::WebSocket),
+            "pmtud" => Ok(Protocol::Pmtud),
             "dns" => Ok(Protocol::Dns),
             "tls" => Ok(Protocol::Tls),
             "tlsresume" | "tls-resume" => Ok(Protocol::TlsResume),
@@ -1260,6 +1495,82 @@ pub struct TlsResult {
     pub quic_resumed_handshake_ms: Option<f64>,
 }
 
+/// Security-relevant response headers derived from the already-captured
+/// `HttpResult::response_headers` at result-build time (measurement-gap #14).
+/// Pure parsing — no additional network work. `None` fields mean the header
+/// was absent (or, for parsed values, unparseable).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct SecurityHeaders {
+    /// Raw `Strict-Transport-Security` header value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hsts: Option<String>,
+    /// `max-age` directive parsed out of the HSTS value, in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hsts_max_age_secs: Option<u64>,
+    /// Whether a `Content-Security-Policy` header was present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub csp_present: Option<bool>,
+    /// Whether `X-Content-Type-Options: nosniff` was present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x_content_type_options_nosniff: Option<bool>,
+    /// Raw `X-Frame-Options` header value (e.g. "DENY", "SAMEORIGIN").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x_frame_options: Option<String>,
+    /// Raw `Referrer-Policy` header value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub referrer_policy: Option<String>,
+    /// Raw `Server` header value (software disclosure signal).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_header: Option<String>,
+}
+
+impl SecurityHeaders {
+    /// Derive the audit from captured response headers. Returns `None` when
+    /// the header list is empty (nothing was captured — e.g. curl probes),
+    /// so absence of data is never presented as "no security headers".
+    pub fn from_response_headers(headers: &[(String, String)]) -> Option<Self> {
+        if headers.is_empty() {
+            return None;
+        }
+        let find = |name: &str| -> Option<String> {
+            headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.trim().to_string())
+        };
+        let hsts = find("strict-transport-security");
+        let hsts_max_age_secs = hsts.as_deref().and_then(parse_hsts_max_age);
+        let x_content_type_options_nosniff =
+            Some(find("x-content-type-options").is_some_and(|v| {
+                v.split(',')
+                    .any(|t| t.trim().eq_ignore_ascii_case("nosniff"))
+            }));
+        Some(Self {
+            hsts,
+            hsts_max_age_secs,
+            csp_present: Some(find("content-security-policy").is_some()),
+            x_content_type_options_nosniff,
+            x_frame_options: find("x-frame-options"),
+            referrer_policy: find("referrer-policy"),
+            server_header: find("server"),
+        })
+    }
+}
+
+/// Parse the `max-age` directive (seconds) out of a raw
+/// `Strict-Transport-Security` value. Case-insensitive, tolerates whitespace
+/// and quoted values; returns `None` for malformed or missing max-age.
+fn parse_hsts_max_age(value: &str) -> Option<u64> {
+    for directive in value.split(';') {
+        if let Some((key, val)) = directive.split_once('=') {
+            if key.trim().eq_ignore_ascii_case("max-age") {
+                return val.trim().trim_matches('"').parse().ok();
+            }
+        }
+    }
+    None
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpResult {
     pub negotiated_version: String,
@@ -1317,6 +1628,11 @@ pub struct HttpResult {
     /// on-the-wire compression. Additive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_length_header: Option<u64>,
+    /// Security-header audit derived from `response_headers` at result-build
+    /// time (see [`SecurityHeaders`]). `None` when no headers were captured.
+    /// Additive (measurement-gap #14).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security_headers: Option<SecurityHeaders>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1536,6 +1852,90 @@ pub struct DualStackResult {
     pub happy_eyeballs_verdict: String,
     /// Grace period used for the verdict (ms) — RFC 8305's recommended 250.
     pub happy_eyeballs_grace_ms: f64,
+    pub started_at: DateTime<Utc>,
+}
+
+/// WebSocket probe result (`websocket` mode).
+///
+/// The connection phases (DNS/TCP/TLS) live in the attempt's `dns`/`tcp`/`tls`
+/// sub-results exactly like the `tls` probe; this struct carries what happens
+/// after the socket is up: the HTTP 101 upgrade round-trip and the echo
+/// message RTT distribution. Message RTTs share [`UdpResult`]'s aggregate
+/// semantics (min/avg/p95 via [`aggregate_udp_rtts`], RFC-3550-style
+/// arrival-order jitter, per-message RTTs with `None` for lost echoes).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebSocketResult {
+    /// ws:// or wss:// URL the probe connected to.
+    pub url: String,
+    /// HTTP 101 upgrade round-trip: client handshake request sent → server
+    /// 101 response processed (ms). Excludes DNS/TCP/TLS (reported separately).
+    pub upgrade_ms: f64,
+    /// Status code of the upgrade response (101 on success).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upgrade_status: Option<u16>,
+    /// Echo messages sent after the upgrade.
+    pub message_count: u32,
+    /// Echoes received (matched by embedded sequence id).
+    pub echo_count: u32,
+    /// 100 × (message_count − echo_count) / message_count.
+    pub loss_percent: f64,
+    pub msg_rtt_min_ms: f64,
+    pub msg_rtt_avg_ms: f64,
+    pub msg_rtt_p95_ms: f64,
+    /// Arrival-order jitter over received echoes (mean |Δ| of consecutive RTTs).
+    pub jitter_ms: f64,
+    /// Per-message RTT values (ms), `None` if the echo never arrived.
+    pub msg_rtts_ms: Vec<Option<f64>>,
+    /// Bytes per echo message payload.
+    pub payload_size: usize,
+    pub started_at: DateTime<Utc>,
+}
+
+/// Path-MTU discovery result (`pmtud` mode).
+///
+/// `method` records HOW the verdict was reached, because unprivileged
+/// capability differs per platform (same honesty contract as [`PathResult`]):
+/// - `"df-udp-echo/ip-recverr"` (Linux, echo replies observed): DF-flagged
+///   probes binary-searched with positive delivery confirmation from the
+///   endpoint's UDP echo; ICMP frag-needed (with next-hop MTU) read from the
+///   error queue tightens the bound.
+/// - `"df-icmp/ip-recverr"` (Linux, no echo service): verdict from ICMP
+///   fragmentation-needed errors alone — the classic PMTUD signal; works
+///   against targets that never answer.
+/// - `"df-dontfrag/udp-echo"` (macOS, echo replies observed): `IP_DONTFRAG`
+///   probes confirmed by echo; ICMP surfaces only as EMSGSIZE on the
+///   connected socket (no next-hop MTU value available).
+/// - `"df-dontfrag/emsgsize"` (macOS, no echo): EMSGSIZE-only evidence.
+/// - `"df-no-feedback"`: no echo, no ICMP, no send errors — `path_mtu` is
+///   `None` because nothing was measured (ICMP black hole or silent path).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PmtudResult {
+    /// Destination address the DF probes were aimed at.
+    pub remote_addr: String,
+    /// Discovered path MTU in bytes at the IP layer (largest unfragmented
+    /// payload + IP/UDP headers). `None` when no feedback allowed a verdict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_mtu: Option<u32>,
+    /// Largest UDP payload that traversed unfragmented (path_mtu − headers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_unfragmented_payload: Option<u32>,
+    /// DF-flagged datagrams sent during the search.
+    pub probes_sent: u32,
+    /// How the MTU was (or was not) determined — see the struct docs.
+    pub method: String,
+    /// Next-hop MTU reported by an ICMP fragmentation-needed message, when
+    /// one was observed (Linux error queue only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icmp_mtu: Option<u32>,
+    /// MTU of the default-route interface, for contrast with the path value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_mtu: Option<u32>,
+    /// IP + UDP header bytes assumed when converting payload ⇄ MTU
+    /// (28 for IPv4, 48 for IPv6).
+    pub header_bytes: u32,
+    /// True when the search confirmed its ceiling size without ever finding a
+    /// "too big" bound — the true path MTU may be larger than `path_mtu`.
+    pub lower_bound_only: bool,
     pub started_at: DateTime<Utc>,
 }
 
@@ -2053,6 +2453,12 @@ pub fn primary_metric_label(proto: &Protocol) -> &'static str {
         // pick is diagnostic detail; the winning family's total is the number
         // a user experiences.
         Protocol::DualStack => "Total ms",
+        // Steady-state message round-trip is the probe's distinguishing
+        // number; the one-time upgrade cost is reported separately in the
+        // summary section.
+        Protocol::WebSocket => "Msg RTT avg ms",
+        // Bytes, not milliseconds — the discovered path MTU itself.
+        Protocol::Pmtud => "Path MTU",
         Protocol::Dns => "Resolve ms",
         Protocol::Tls | Protocol::TlsResume => "Handshake ms",
         Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 => "Total ms",
@@ -2135,6 +2541,17 @@ pub fn primary_metric_value(a: &RequestAttempt) -> Option<f64> {
                 _ => None,
             }
         }),
+        // An attempt whose every echo was lost carries a 0.0 sentinel avg,
+        // not a measurement — excluded exactly like the UDP arm above
+        // (trust audit V11).
+        Protocol::WebSocket => a
+            .websocket
+            .as_ref()
+            .filter(|w| w.echo_count > 0)
+            .map(|w| w.msg_rtt_avg_ms),
+        // Discovered path MTU in bytes; None when no feedback allowed a
+        // verdict (an unknown MTU must not enter the distribution as 0).
+        Protocol::Pmtud => a.pmtud.as_ref().and_then(|p| p.path_mtu).map(|m| m as f64),
         Protocol::Dns => a.dns.as_ref().map(|d| d.duration_ms),
         Protocol::Tls | Protocol::TlsResume => a.tls.as_ref().map(|t| t.handshake_duration_ms),
         Protocol::PageLoad | Protocol::PageLoad2 | Protocol::PageLoad3 => {
@@ -2406,6 +2823,8 @@ mod tests {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         };
         let run = TestRun {
             schema_version: crate::metrics::SCHEMA_VERSION.to_string(),
@@ -2423,6 +2842,9 @@ mod tests {
             server_info: None,
             client_info: None,
             client_network: None,
+            client_load_before: None,
+            client_load_after: None,
+            clock_sync: None,
             baseline: None,
             packet_capture_summary: None,
             benchmark_environment_check: None,
@@ -2436,6 +2858,8 @@ mod tests {
             benchmark_cooldown_attempt_count: 0,
             benchmark_execution_plan: None,
             benchmark_noise_thresholds: None,
+            client_geo: None,
+            target_geo: None,
             attempts: vec![mk(true), mk(false), mk(true)],
         };
         assert_eq!(run.success_count(), 2);
@@ -2727,6 +3151,8 @@ mod tests {
             ping: None,
             path: None,
             dualstack: None,
+            websocket: None,
+            pmtud: None,
         }
     }
 
@@ -2882,6 +3308,7 @@ mod tests {
                 socket_stats: None,
                 content_encoding: None,
                 content_length_header: None,
+                security_headers: None,
             });
             assert!(
                 (primary_metric_value(&a).unwrap() - 25.0).abs() < 1e-9,
@@ -3071,6 +3498,7 @@ mod tests {
                 socket_stats: None,
                 content_encoding: None,
                 content_length_header: None,
+                security_headers: None,
             });
             assert!(
                 (primary_metric_value(&a).unwrap() - 100.0).abs() < 1e-9,
@@ -3216,11 +3644,124 @@ mod tests {
             Protocol::Browser2,
             Protocol::Browser3,
             Protocol::SdkProbe,
+            Protocol::Rpm,
+            Protocol::Ping,
+            Protocol::Path,
+            Protocol::DualStack,
+            Protocol::WebSocket,
+            Protocol::Pmtud,
         ];
         for proto in &all {
             let label = primary_metric_label(proto);
             assert!(!label.is_empty(), "{proto}: label must not be empty");
         }
+    }
+
+    // ── websocket / pmtud (measurement gaps #10, #13) ────────────────────────
+
+    fn sample_websocket_result() -> WebSocketResult {
+        WebSocketResult {
+            url: "ws://127.0.0.1:8080/ws".into(),
+            upgrade_ms: 3.2,
+            upgrade_status: Some(101),
+            message_count: 10,
+            echo_count: 10,
+            loss_percent: 0.0,
+            msg_rtt_min_ms: 0.4,
+            msg_rtt_avg_ms: 0.9,
+            msg_rtt_p95_ms: 1.8,
+            jitter_ms: 0.2,
+            msg_rtts_ms: vec![Some(0.9); 10],
+            payload_size: 64,
+            started_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn primary_metric_label_websocket_and_pmtud() {
+        assert_eq!(primary_metric_label(&Protocol::WebSocket), "Msg RTT avg ms");
+        assert_eq!(primary_metric_label(&Protocol::Pmtud), "Path MTU");
+    }
+
+    #[test]
+    fn primary_metric_value_websocket_present() {
+        let mut a = bare_attempt(Protocol::WebSocket);
+        a.websocket = Some(sample_websocket_result());
+        assert_eq!(primary_metric_value(&a), Some(0.9));
+    }
+
+    #[test]
+    fn primary_metric_value_websocket_all_echoes_lost_is_excluded() {
+        // A 0.0 sentinel avg with zero echoes is not a measurement (V11).
+        let mut a = bare_attempt(Protocol::WebSocket);
+        a.success = false;
+        a.websocket = Some(WebSocketResult {
+            echo_count: 0,
+            loss_percent: 100.0,
+            msg_rtt_min_ms: 0.0,
+            msg_rtt_avg_ms: 0.0,
+            msg_rtt_p95_ms: 0.0,
+            jitter_ms: 0.0,
+            msg_rtts_ms: vec![None; 10],
+            ..sample_websocket_result()
+        });
+        assert_eq!(primary_metric_value(&a), None);
+    }
+
+    #[test]
+    fn primary_metric_value_pmtud_is_the_discovered_mtu() {
+        let mut a = bare_attempt(Protocol::Pmtud);
+        a.pmtud = Some(PmtudResult {
+            remote_addr: "1.2.3.4".into(),
+            path_mtu: Some(1500),
+            max_unfragmented_payload: Some(1472),
+            probes_sent: 12,
+            method: "df-udp-echo/ip-recverr".into(),
+            icmp_mtu: None,
+            local_mtu: Some(1500),
+            header_bytes: 28,
+            lower_bound_only: false,
+            started_at: Utc::now(),
+        });
+        assert_eq!(primary_metric_value(&a), Some(1500.0));
+    }
+
+    #[test]
+    fn primary_metric_value_pmtud_unknown_mtu_is_excluded() {
+        // No feedback → path_mtu None → an unknown MTU must not enter the
+        // distribution as a number.
+        let mut a = bare_attempt(Protocol::Pmtud);
+        a.success = false;
+        a.pmtud = Some(PmtudResult {
+            remote_addr: "1.2.3.4".into(),
+            path_mtu: None,
+            max_unfragmented_payload: None,
+            probes_sent: 12,
+            method: "df-no-feedback".into(),
+            icmp_mtu: None,
+            local_mtu: Some(1500),
+            header_bytes: 28,
+            lower_bound_only: false,
+            started_at: Utc::now(),
+        });
+        assert_eq!(primary_metric_value(&a), None);
+    }
+
+    #[test]
+    fn websocket_and_pmtud_attempt_fields_are_additive() {
+        // Pre-0.28.77 JSON (no websocket/pmtud fields) must still deserialize,
+        // and None fields must be omitted on the wire (schema stays 1.0).
+        let a = bare_attempt(Protocol::Tcp);
+        let json = serde_json::to_value(&a).unwrap();
+        assert!(json.get("websocket").is_none());
+        assert!(json.get("pmtud").is_none());
+
+        let mut old = serde_json::to_value(&a).unwrap();
+        old.as_object_mut().unwrap().remove("websocket");
+        old.as_object_mut().unwrap().remove("pmtud");
+        let back: RequestAttempt = serde_json::from_value(old).unwrap();
+        assert!(back.websocket.is_none());
+        assert!(back.pmtud.is_none());
     }
 
     // ── attempt_payload_bytes ─────────────────────────────────────────────────
@@ -3248,6 +3789,7 @@ mod tests {
             socket_stats: None,
             content_encoding: None,
             content_length_header: None,
+            security_headers: None,
         });
         assert_eq!(attempt_payload_bytes(&a), Some(65536));
     }
@@ -3275,6 +3817,7 @@ mod tests {
             socket_stats: None,
             content_encoding: None,
             content_length_header: None,
+            security_headers: None,
         });
         assert!(attempt_payload_bytes(&a).is_none());
     }
@@ -3328,6 +3871,9 @@ mod tests {
             server_info: None,
             client_info: None,
             client_network: None,
+            client_load_before: None,
+            client_load_after: None,
+            clock_sync: None,
             baseline: None,
             packet_capture_summary: None,
             benchmark_environment_check: None,
@@ -3341,6 +3887,8 @@ mod tests {
             benchmark_cooldown_attempt_count: 0,
             benchmark_execution_plan: None,
             benchmark_noise_thresholds: None,
+            client_geo: None,
+            target_geo: None,
             attempts: vec![
                 mk(Protocol::Http1),
                 mk(Protocol::Http2),
@@ -3372,5 +3920,115 @@ mod tests {
         let mut a = bare_attempt(Protocol::Http1);
         a.finished_at = None;
         assert!(a.total_duration_ms().is_none());
+    }
+
+    // ── SecurityHeaders derivation (measurement gap #14) ─────────────────────
+
+    fn hdrs(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn security_headers_none_when_no_headers_captured() {
+        assert_eq!(SecurityHeaders::from_response_headers(&[]), None);
+    }
+
+    #[test]
+    fn security_headers_full_extraction_is_case_insensitive() {
+        let sec = SecurityHeaders::from_response_headers(&hdrs(&[
+            (
+                "STRICT-TRANSPORT-SECURITY",
+                "max-age=31536000; includeSubDomains; preload",
+            ),
+            ("Content-Security-Policy", "default-src 'self'"),
+            ("X-CONTENT-TYPE-OPTIONS", "NOSNIFF"),
+            ("x-frame-options", "SAMEORIGIN"),
+            ("Referrer-Policy", "strict-origin-when-cross-origin"),
+            ("Server", "nginx/1.24.0"),
+        ]))
+        .expect("headers present");
+        assert_eq!(
+            sec.hsts.as_deref(),
+            Some("max-age=31536000; includeSubDomains; preload")
+        );
+        assert_eq!(sec.hsts_max_age_secs, Some(31_536_000));
+        assert_eq!(sec.csp_present, Some(true));
+        assert_eq!(sec.x_content_type_options_nosniff, Some(true));
+        assert_eq!(sec.x_frame_options.as_deref(), Some("SAMEORIGIN"));
+        assert_eq!(
+            sec.referrer_policy.as_deref(),
+            Some("strict-origin-when-cross-origin")
+        );
+        assert_eq!(sec.server_header.as_deref(), Some("nginx/1.24.0"));
+    }
+
+    #[test]
+    fn security_headers_absent_headers_reported_honestly() {
+        // Headers were captured, but none of the audited ones are present:
+        // booleans are Some(false) (checked and absent), strings stay None.
+        let sec =
+            SecurityHeaders::from_response_headers(&hdrs(&[("content-type", "application/json")]))
+                .expect("headers present");
+        assert_eq!(sec.hsts, None);
+        assert_eq!(sec.hsts_max_age_secs, None);
+        assert_eq!(sec.csp_present, Some(false));
+        assert_eq!(sec.x_content_type_options_nosniff, Some(false));
+        assert_eq!(sec.x_frame_options, None);
+        assert_eq!(sec.referrer_policy, None);
+        assert_eq!(sec.server_header, None);
+    }
+
+    #[test]
+    fn hsts_max_age_parses_directive_variants() {
+        // Directive order, spacing, casing, quoting.
+        assert_eq!(parse_hsts_max_age("max-age=600"), Some(600));
+        assert_eq!(
+            parse_hsts_max_age("includeSubDomains; MAX-AGE = 31536000"),
+            Some(31_536_000)
+        );
+        assert_eq!(
+            parse_hsts_max_age("max-age=\"86400\"; preload"),
+            Some(86_400)
+        );
+        // Malformed max-age values → None, never a fabricated number.
+        assert_eq!(parse_hsts_max_age("max-age=abc"), None);
+        assert_eq!(parse_hsts_max_age("max-age=-1"), None);
+        assert_eq!(parse_hsts_max_age("max-age="), None);
+        assert_eq!(parse_hsts_max_age("includeSubDomains"), None);
+        assert_eq!(parse_hsts_max_age(""), None);
+    }
+
+    #[test]
+    fn nosniff_requires_the_nosniff_token() {
+        let sec =
+            SecurityHeaders::from_response_headers(&hdrs(&[("x-content-type-options", "sniff")]))
+                .unwrap();
+        assert_eq!(sec.x_content_type_options_nosniff, Some(false));
+    }
+
+    // ── LoadSample (measurement gap #15) ─────────────────────────────────────
+
+    #[test]
+    fn load_avg_parses_linux_and_macos_formats() {
+        // Linux /proc/loadavg
+        assert_eq!(parse_load_avg_1m("0.52 0.58 0.59 1/467 12034"), Some(0.52));
+        // macOS `sysctl -n vm.loadavg`
+        assert_eq!(parse_load_avg_1m("{ 1.86 1.99 2.06 }"), Some(1.86));
+        // Garbage / empty → None
+        assert_eq!(parse_load_avg_1m(""), None);
+        assert_eq!(parse_load_avg_1m("not-a-number"), None);
+    }
+
+    #[test]
+    fn empty_load_sample_collapses_to_none_semantics() {
+        assert!(LoadSample::default().is_empty());
+        let sample = LoadSample {
+            load_avg_1m: Some(0.5),
+            ..Default::default()
+        };
+        assert!(!sample.is_empty());
     }
 }

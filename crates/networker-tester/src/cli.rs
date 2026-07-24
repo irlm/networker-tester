@@ -22,7 +22,7 @@ pub struct Cli {
 
     // ── Modes ─────────────────────────────────────────────────────────────────
     /// Comma-separated probe modes:
-    /// tcp,http1,http2,http3,udp,rpm,ping,path,dualstack,download,download1,download2,download3,upload,upload1,upload2,upload3,webdownload,webupload,udpdownload,udpupload,
+    /// tcp,http1,http2,http3,udp,rpm,ping,path,dualstack,websocket,pmtud,download,download1,download2,download3,upload,upload1,upload2,upload3,webdownload,webupload,udpdownload,udpupload,
     /// dns,tls,tlsresume,native,curl,pageload,pageload1,pageload2,pageload3,browser,browser1,browser2,browser3.
     /// rpm: latency-under-load / bufferbloat probe (UDP echo RTT idle vs during a sustained
     ///   /download transfer; requires a networker-endpoint target).
@@ -32,6 +32,12 @@ pub struct Cli {
     ///   (IP_RECVERR), honest hop-count estimate elsewhere.
     /// dualstack: resolves A and AAAA separately, runs an HTTP GET pinned to IPv4 and to
     ///   IPv6, and compares per-phase timing with a happy-eyeballs (RFC 8305) verdict.
+    /// websocket: DNS + TCP + TLS ladder, HTTP 101 upgrade time, then echo-message RTT/
+    ///   jitter/loss against the endpoint's /ws route (message count/size/timeout follow
+    ///   --udp-probes / --udp-payload / --udp-timeout; requires a networker-endpoint target).
+    /// pmtud: path-MTU discovery via DF-bit UDP probing at binary-searched sizes toward the
+    ///   UDP echo port; Linux reads ICMP frag-needed (IP_RECVERR, next-hop MTU), macOS uses
+    ///   IP_DONTFRAG/EMSGSIZE, Windows reports a clean unsupported error.
     /// pageload: shorthand that runs pageload1+pageload2+pageload3 (all three HTTP versions).
     /// pageload1: HTTP/1.1 page-load (same as the original pageload single-version mode).
     /// browser: shorthand that runs browser1+browser2+browser3 (all three HTTP versions).
@@ -435,6 +441,17 @@ pub struct Cli {
     #[arg(long, value_delimiter = ',')]
     pub http_stacks: Option<Vec<String>>,
 
+    // ── GeoIP enrichment (offline MaxMind databases) ─────────────────────────
+    /// Path to a local MaxMind GeoLite2/GeoIP2 City .mmdb for offline geo
+    /// enrichment (never downloaded; absent/unreadable → no enrichment)
+    #[arg(long, env = "NETWORKER_GEOIP_CITY_DB")]
+    pub geoip_city_db: Option<String>,
+
+    /// Path to a local MaxMind GeoLite2 ASN .mmdb for offline ASN enrichment
+    /// (never downloaded; absent/unreadable → no enrichment)
+    #[arg(long, env = "NETWORKER_GEOIP_ASN_DB")]
+    pub geoip_asn_db: Option<String>,
+
     // ── Misc ──────────────────────────────────────────────────────────────────
     /// Enable verbose output (equivalent to --log-level debug)
     #[arg(long, short)]
@@ -593,6 +610,8 @@ pub struct ConfigFile {
     pub packet_capture: Option<PacketCaptureConfig>,
     pub capture_mode: Option<String>,
     pub impairment: Option<ImpairmentConfig>,
+    pub geoip_city_db: Option<String>,
+    pub geoip_asn_db: Option<String>,
 }
 
 /// Fully resolved configuration with all defaults applied.
@@ -687,6 +706,10 @@ pub struct ResolvedConfig {
     pub http_stacks: Vec<HttpStack>,
     pub packet_capture: ResolvedPacketCaptureConfig,
     pub impairment: ResolvedImpairmentConfig,
+    /// Path to a local MaxMind City .mmdb (offline geo enrichment), if any.
+    pub geoip_city_db: Option<String>,
+    /// Path to a local MaxMind ASN .mmdb (offline ASN enrichment), if any.
+    pub geoip_asn_db: Option<String>,
 }
 
 /// An HTTP stack to probe alongside the default networker-endpoint.
@@ -961,6 +984,8 @@ impl Cli {
             },
             packet_capture,
             impairment,
+            geoip_city_db: self.geoip_city_db.or(f.geoip_city_db),
+            geoip_asn_db: self.geoip_asn_db.or(f.geoip_asn_db),
         }
     }
 }

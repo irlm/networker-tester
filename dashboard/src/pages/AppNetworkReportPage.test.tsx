@@ -5,7 +5,7 @@
 
 import { render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { AppNetworkReportPage } from './AppNetworkReportPage';
 import { resetRoleStores, setProjectRole } from '../test/rbac-helpers';
 import type { AppNetworkReport, AppNetworkVerdict } from '../api/types';

@@ -282,6 +282,7 @@ pub async fn run_curl_probe(
         socket_stats: None,
         content_encoding: None,
         content_length_header: None,
+        security_headers: None,
     };
     let success = parsed.code > 0 && parsed.code < 400;
 
@@ -318,6 +319,8 @@ pub async fn run_curl_probe(
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 
@@ -432,6 +435,8 @@ fn make_failed(
         ping: None,
         path: None,
         dualstack: None,
+        websocket: None,
+        pmtud: None,
     }
 }
 

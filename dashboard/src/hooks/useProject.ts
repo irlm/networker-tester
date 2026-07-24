@@ -1,4 +1,4 @@
-import { useParams } from 'react-router-dom';
+import { useParams } from 'react-router';
 import { useProjectStore } from '../stores/projectStore';
 import { useEffect } from 'react';
 

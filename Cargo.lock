@@ -1855,6 +1855,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipnetwork"
+version = "0.21.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf370abdafd54d13e54a620e8c3e1145f28e46cc9d704bc6d94414559df41763"
+
+[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2039,6 +2045,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
+name = "maxminddb"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7bd67e2f5d65937ff283e418fcad53c8e2eeda0719e455508b62dad8ffe6180"
+dependencies = [
+ "ipnetwork",
+ "memchr",
+ "serde",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "md-5"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2156,7 +2174,7 @@ checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
 
 [[package]]
 name = "networker-agent"
-version = "0.28.77"
+version = "0.28.78"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2176,7 +2194,7 @@ dependencies = [
 
 [[package]]
 name = "networker-common"
-version = "0.28.77"
+version = "0.28.78"
 dependencies = [
  "chrono",
  "networker-tester",
@@ -2187,7 +2205,7 @@ dependencies = [
 
 [[package]]
 name = "networker-dashboard"
-version = "0.28.77"
+version = "0.28.78"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2231,7 +2249,7 @@ dependencies = [
 
 [[package]]
 name = "networker-endpoint"
-version = "0.28.77"
+version = "0.28.78"
 dependencies = [
  "anyhow",
  "axum",
@@ -2267,7 +2285,7 @@ dependencies = [
 
 [[package]]
 name = "networker-log"
-version = "0.28.77"
+version = "0.28.78"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2283,7 +2301,7 @@ dependencies = [
 
 [[package]]
 name = "networker-tester"
-version = "0.28.77"
+version = "0.28.78"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2302,6 +2320,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
+ "maxminddb",
  "native-tls",
  "networker-endpoint",
  "networker-log",
@@ -2322,6 +2341,7 @@ dependencies = [
  "tokio-native-tls",
  "tokio-postgres",
  "tokio-rustls 0.26.4",
+ "tokio-tungstenite 0.29.0",
  "tokio-util",
  "tracing",
  "url",
