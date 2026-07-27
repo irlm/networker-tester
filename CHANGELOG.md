@@ -11,6 +11,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.82] — 2026-07-27
+
+**Measurement-trust wave (Wave T): reported numbers CHANGE in this release
+because the old numbers were wrong.** Ten defects found by the deep
+professional audit (`docs/analysis/deep-measurement/`) are fixed; the JSON
+contract stays additive (schema 1.0), but several VALUES shift to the truth:
+
+### Fixed — numbers that change
+- **Bootstrap confidence intervals were vacuous** (P0): a broken RNG made
+  every "resample" a permutation at power-of-two sample counts → CI width 0 →
+  adaptive stops fired instantly and the publication-quality gate passed on
+  noise. Fixed (splitmix64 + Lemire bounded index, deduped, regression-pinned
+  at n=8). Consequence: margins are now nonzero (~3% at n=4-12 on typical
+  data), benchmark runs with a target error run LONGER, noisy short runs now
+  correctly FAIL the publication gate, and some prior "faster/slower"
+  comparison verdicts become "same".
+- **macOS TCP kernel stats were dead code since they shipped** (P0): wrong
+  sockopt constant (0x24 vs xnu 0x106, verified live) — every macOS
+  rtt/cwnd/retrans field was silently None. Fixed together with the latent
+  unit traps behind it (xnu srtt is ms not µs; cwnd/ssthresh bytes→segments
+  via MSS; correct 112-byte struct offsets; bogus congestion-name read
+  removed). macOS runs now carry real kernel stats for the first time
+  (live-verified: srtt ≈ ping RTT).
+- **`dns_ms` was cache-contaminated** (P0): the in-process resolver cache made
+  attempts 2..N measure a hashmap (~µs) labeled "system (…:53)". The
+  measurement resolver now has cache_size 0 — repeat-attempt `dns_ms` rises to
+  real wire latency in every resolving mode. Also: http3 now resolves through
+  the same instrument as h1/h2 (was OS getaddrinfo — two different DNS
+  instruments in the flagship comparison).
+- **`rpm` flattered the worst links**: loaded echoes slower than 1s were
+  censored as loss, biasing loaded RTT/bufferbloat factor optimistic exactly
+  on badly bufferbloated links. Late echoes now count (full per-probe timeout
+  bound); new `loaded_probes_censored` + a bias warning. Loaded avg/p95 and
+  the factor get WORSE on bad links — correctly.
+- **`path` no longer varies its port per TTL** (classic pre-Paris ECMP
+  artifact — hops could ride different network paths): constant 5-tuple.
+- **Pageload counted 404s as "fetched"** (status<500): 2xx-only now, with
+  additive `assets_failed`; 404 bodies excluded from `total_bytes`;
+  `asset_timings_ms` index-aligned on failure in pageload2/3. `assets_fetched`
+  may DROP on targets with broken assets.
+- **Benchmark stats phase contamination**: console/HTML/Excel computed stats
+  over ALL attempts (incl. warmup/cooldown) while the artifact excluded them.
+  Additive `attempt.phase` + one shared filter — every surface now agrees
+  with the artifact ("N warmup… excluded" note shown).
+- **Regression detection existed only as UI copy**: the promised policy
+  (p50 +10%, success <99%) had no implementation, no table (dropped in V036),
+  and no API route. Fully built: analyzer (direction-aware, n≥10 guard),
+  detector on run completion (pinned-baseline-else-previous), V047 table,
+  `GET /api/projects/{id}/benchmark-regressions`, live event, honest UI copy.
+
+### Changed — labels made honest
+- `jitter_ms` documented as what it is (mean |IPDV|, RFC 3393-style — not
+  RFC 3550); additive `ipdv_p95_ms`/`ipdv_p99_ms` (sample-size gated).
+- rpm docs no longer claim "Apple-RPM-style" (draft-ippm-responsiveness
+  conformance is a planned program, not a label).
+- Browser `transferred_bytes` labeled as declared content-length sum
+  ("Decl. Bytes"); the three TTFB semantics documented and cross-referenced.
+- `ocsp_stapled: false` now renders neutrally (most CAs dropped OCSP in
+  2025) instead of implying a defect.
+
+### Added
+- Opt-in `--accept-encoding` (env `NETWORKER_ACCEPT_ENCODING`): sends
+  `Accept-Encoding: gzip, br, zstd` on HTTP probes so `content_encoding`
+  populates (default unchanged — identity; ignored with a warning on
+  throughput modes where payload size is the contract).
+
+---
+
 ## [0.28.81] — 2026-07-27
 
 The last parked measurement-tail items, developed in parallel and integrated.
