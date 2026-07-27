@@ -163,6 +163,8 @@ pub async fn run_curl_probe(
             a_record_count: None,
             aaaa_record_count: None,
             cname_chain: Vec::new(),
+            a_ttl_secs: None,
+            aaaa_ttl_secs: None,
         })
     } else {
         None

@@ -185,6 +185,8 @@ fn make_dns_depth_attempt() -> RequestAttempt {
         a_record_count: Some(2),
         aaaa_record_count: Some(1),
         cname_chain: vec!["cdn.example.net".into(), "edge.example.org".into()],
+        a_ttl_secs: None,
+        aaaa_ttl_secs: None,
     });
     a
 }
@@ -205,6 +207,8 @@ fn make_plain_dns_attempt() -> RequestAttempt {
         a_record_count: None,
         aaaa_record_count: None,
         cname_chain: Vec::new(),
+        a_ttl_secs: None,
+        aaaa_ttl_secs: None,
     });
     a
 }

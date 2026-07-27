@@ -1731,6 +1731,14 @@ pub struct DnsResult {
     /// name resolves directly. `dns` probe mode only. Additive, serde-defaulted.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cname_chain: Vec<String>,
+    /// Minimum TTL (seconds) of the A answer — the cacheability window a
+    /// resolver/client honors before re-querying. `dns` probe mode only; None
+    /// when the A lookup was skipped or returned no records (M2 D4). Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub a_ttl_secs: Option<u32>,
+    /// Minimum TTL (seconds) of the AAAA answer. `dns` probe mode only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aaaa_ttl_secs: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4557,6 +4565,8 @@ mod tests {
             a_record_count: None,
             aaaa_record_count: None,
             cname_chain: Vec::new(),
+            a_ttl_secs: None,
+            aaaa_ttl_secs: None,
         };
         let json = serde_json::to_string(&r).unwrap();
         let de: DnsResult = serde_json::from_str(&json).unwrap();
@@ -4886,6 +4896,8 @@ mod tests {
             a_record_count: None,
             aaaa_record_count: None,
             cname_chain: Vec::new(),
+            a_ttl_secs: None,
+            aaaa_ttl_secs: None,
         });
         assert!((primary_metric_value(&a).unwrap() - 42.0).abs() < 1e-9);
     }

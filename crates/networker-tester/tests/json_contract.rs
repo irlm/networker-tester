@@ -45,6 +45,8 @@ fn sample_run() -> TestRun {
             a_record_count: None,
             aaaa_record_count: None,
             cname_chain: Vec::new(),
+            a_ttl_secs: None,
+            aaaa_ttl_secs: None,
         }),
         tcp: Some(TcpResult {
             local_addr: Some("10.0.0.2:51000".into()),
