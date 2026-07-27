@@ -5,8 +5,8 @@
 //! - `section_tests` — statistics/page-load/browser/udp/tcp/error sections,
 //!   SVG charts, footer, and helper functions
 //! - `probe_section_tests` — depth-probe cards (rpm/ping/path/dualstack/
-//!   websocket/pmtud) and the DNS depth card: populated render + absent-data
-//!   no-render for each
+//!   websocket/pmtud), the DNS depth card, and their cross-target comparison
+//!   tables: populated render + absent-data no-render for each
 
 mod probe_section_tests;
 mod render_detail_tests;
@@ -40,6 +40,7 @@ fn make_run() -> TestRun {
         client_network: None,
         client_load_before: None,
         client_load_after: None,
+        cpu_usage: None,
         clock_sync: None,
         baseline: None,
         packet_capture_summary: None,
@@ -242,6 +243,7 @@ fn make_run_with_url(url: &str) -> TestRun {
         client_network: None,
         client_load_before: None,
         client_load_after: None,
+        cpu_usage: None,
         clock_sync: None,
         baseline: None,
         packet_capture_summary: None,
@@ -343,6 +345,7 @@ fn make_page_load_attempt(
         per_connection_tls_ms: vec![5.0],
         cpu_time_ms: None,
         connection_reused,
+        per_connection_socket_stats: vec![],
     });
     a
 }
@@ -391,5 +394,7 @@ fn make_host_info(
         server_version: server_version.map(|v| v.to_string()),
         uptime_secs: None,
         region: region.map(|r| r.to_string()),
+        load_avg_1m: None,
+        mem_available_mb: None,
     }
 }

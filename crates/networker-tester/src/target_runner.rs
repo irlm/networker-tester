@@ -45,7 +45,7 @@ pub(crate) async fn run_for_target(
     let server_info = match fetch_server_info(&target, cfg.insecure).await {
         Some(info) => {
             info!(
-                "Server: {} {} | {} cores | {} MB RAM | {} | v{} | region: {}",
+                "Server: {} {} | {} cores | {} MB RAM | {} | v{} | region: {} | load: {}",
                 info.os,
                 info.arch,
                 info.cpu_cores,
@@ -53,6 +53,10 @@ pub(crate) async fn run_for_target(
                 info.os_version.as_deref().unwrap_or("?"),
                 info.server_version.as_deref().unwrap_or("?"),
                 info.region.as_deref().unwrap_or("unknown"),
+                info.load_avg_1m
+                    .map(|l| format!("{l:.2}"))
+                    .as_deref()
+                    .unwrap_or("?"),
             );
             Some(info)
         }
@@ -113,6 +117,17 @@ pub(crate) async fn run_for_target(
     // Both best-effort (measurement gaps #15/#16): None is stored when the
     // platform exposes nothing / NTP is unreachable or disabled.
     let client_load_before = networker_tester::metrics::LoadSample::collect_local();
+    // CPU tick snapshot bracketing the whole run: paired with a second
+    // snapshot at run end to derive the whole-run mean busy% (mirrored into
+    // `client_load_after.cpu_busy_percent` for compat and into
+    // `cpu_usage.mean_busy_percent`). Linux /proc/stat, macOS
+    // host_statistics, Windows GetSystemTimes, elsewhere None.
+    let cpu_ticks_before = networker_tester::metrics::CpuTicks::snapshot();
+    let cpu_window_started = std::time::Instant::now();
+    // Periodic 1 s CPU sampler for max/p95 busy + steal — a whole-run mean
+    // cannot see a contention burst inside an otherwise-quiet run. Bounded,
+    // aborted at run end, never delays completion.
+    let cpu_sampler = CpuSampler::start();
     let clock_sync = networker_tester::clock_sync::query_clock_sync().await;
     if let Some(ref cs) = clock_sync {
         info!(
@@ -863,7 +878,29 @@ pub(crate) async fn run_for_target(
     let finished_at = Utc::now();
 
     // ── End-of-run tester load sample (pairs with client_load_before) ────────
-    let client_load_after = networker_tester::metrics::LoadSample::collect_local();
+    let mut client_load_after = networker_tester::metrics::LoadSample::collect_local();
+    // Whole-run CPU window from the paired tick snapshots, min-window guarded
+    // (a sub-500 ms run yields None, never fake precision). The mean is
+    // mirrored into `client_load_after.cpu_busy_percent` for compat; the
+    // sampled max/p95/steal land on the additive `cpu_usage` envelope field.
+    let cpu_whole_run = cpu_ticks_before
+        .zip(networker_tester::metrics::CpuTicks::snapshot())
+        .and_then(|(before, after)| {
+            networker_tester::metrics::cpu_window_sample(
+                &before,
+                &after,
+                cpu_window_started
+                    .elapsed()
+                    .as_millis()
+                    .min(u64::MAX as u128) as u64,
+            )
+        });
+    if let Some(window) = cpu_whole_run {
+        client_load_after
+            .get_or_insert_with(Default::default)
+            .cpu_busy_percent = Some(window.busy_percent);
+    }
+    let cpu_usage = cpu_sampler.stop(cpu_whole_run);
 
     // ── Security-header audit: derive from already-captured response headers ─
     // Pure parsing at result-build time (measurement gap #14) — no network.
@@ -888,6 +925,12 @@ pub(crate) async fn run_for_target(
         max_rtt_spread_ratio: cfg
             .benchmark_max_rtt_spread_ratio
             .unwrap_or(BenchmarkNoiseThresholds::default().max_rtt_spread_ratio),
+        max_cpu_busy_percent: cfg
+            .benchmark_max_cpu_busy_percent
+            .unwrap_or(BenchmarkNoiseThresholds::default().max_cpu_busy_percent),
+        max_cpu_steal_percent: cfg
+            .benchmark_max_cpu_steal_percent
+            .unwrap_or(BenchmarkNoiseThresholds::default().max_cpu_steal_percent),
     });
 
     let run = TestRun {
@@ -908,6 +951,7 @@ pub(crate) async fn run_for_target(
         client_network,
         client_load_before,
         client_load_after,
+        cpu_usage,
         clock_sync,
         baseline,
         packet_capture_summary: None,
@@ -954,4 +998,76 @@ pub(crate) async fn run_for_target(
     );
 
     Ok(run)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Periodic tester CPU sampler (run-scoped)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Cadence of the run-scoped CPU sampler.
+const CPU_SAMPLE_INTERVAL_MS: u64 = 1000;
+/// Hard cap on retained samples (4 h at 1 s cadence) so a very long run can
+/// never grow the buffer unboundedly; sampling simply stops at the cap.
+const CPU_SAMPLE_MAX: usize = 4 * 3600;
+
+/// Background 1 s CPU tick sampler running for the lifetime of one run.
+/// Each interval it takes a [`metrics::CpuTicks`] snapshot and reduces the
+/// delta since the previous one into a guarded [`metrics::CpuWindowSample`]
+/// (min-window + tick-granularity guards apply per sample). `stop()` aborts
+/// the task immediately — the sampler can delay run completion only by the
+/// microseconds a mutex push takes, never by a full interval.
+struct CpuSampler {
+    handle: tokio::task::JoinHandle<()>,
+    samples: std::sync::Arc<std::sync::Mutex<Vec<networker_tester::metrics::CpuWindowSample>>>,
+}
+
+impl CpuSampler {
+    fn start() -> Self {
+        let samples: std::sync::Arc<
+            std::sync::Mutex<Vec<networker_tester::metrics::CpuWindowSample>>,
+        > = std::sync::Arc::default();
+        let sink = std::sync::Arc::clone(&samples);
+        let handle = tokio::spawn(async move {
+            let mut prev = (
+                networker_tester::metrics::CpuTicks::snapshot(),
+                std::time::Instant::now(),
+            );
+            let mut tick =
+                tokio::time::interval(std::time::Duration::from_millis(CPU_SAMPLE_INTERVAL_MS));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            tick.tick().await; // first tick completes immediately
+            loop {
+                tick.tick().await;
+                let now = std::time::Instant::now();
+                let cur = networker_tester::metrics::CpuTicks::snapshot();
+                if let (Some(before), Some(after)) = (prev.0, cur) {
+                    let window_ms = now.duration_since(prev.1).as_millis().min(u64::MAX as u128);
+                    if let Some(sample) = networker_tester::metrics::cpu_window_sample(
+                        &before,
+                        &after,
+                        window_ms as u64,
+                    ) {
+                        let mut guard = sink.lock().expect("cpu sampler mutex");
+                        if guard.len() >= CPU_SAMPLE_MAX {
+                            break; // bounded: stop sampling, keep what we have
+                        }
+                        guard.push(sample);
+                    }
+                }
+                prev = (cur, now);
+            }
+        });
+        Self { handle, samples }
+    }
+
+    /// Abort the sampler and fold its samples plus the whole-run window into
+    /// the additive `cpu_usage` envelope value.
+    fn stop(
+        self,
+        whole_run: Option<networker_tester::metrics::CpuWindowSample>,
+    ) -> Option<networker_tester::metrics::CpuUsage> {
+        self.handle.abort();
+        let samples = self.samples.lock().expect("cpu sampler mutex");
+        networker_tester::metrics::CpuUsage::aggregate(whole_run, &samples, CPU_SAMPLE_INTERVAL_MS)
+    }
 }

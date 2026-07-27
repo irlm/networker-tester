@@ -12,8 +12,10 @@
 
 use chrono::Utc;
 use networker_tester::metrics::{
-    ClockSync, DnsResult, GeoInfo, HttpResult, LoadSample, Protocol, RequestAttempt,
-    SecurityHeaders, TcpResult, TestRun, TlsResult, SCHEMA_VERSION,
+    BenchmarkEnvironmentCheck, BenchmarkNoiseThresholds, ClockSync, CpuUsage, DnsResult, GeoInfo,
+    HostInfo, HttpResult, LoadSample, PageLoadResult, Protocol, RequestAttempt, SecurityHeaders,
+    SocketStats, TcpResult, TestRun, TlsResult, UrlDiagnosticStatus, UrlPageLoadStrategy,
+    UrlTestRun, SCHEMA_VERSION,
 };
 use uuid::Uuid;
 
@@ -146,6 +148,7 @@ fn sample_run() -> TestRun {
         client_network: None,
         client_load_before: None,
         client_load_after: None,
+        cpu_usage: None,
         clock_sync: None,
         baseline: None,
         packet_capture_summary: None,
@@ -616,4 +619,309 @@ fn clock_sync_field_is_additive_and_optional() {
     let cs = back.clock_sync.expect("clock_sync round-trips");
     assert_eq!(cs.ntp_server.as_deref(), Some("pool.ntp.org:123"));
     assert_eq!(cs.round_trip_ms, Some(28.9));
+}
+
+/// cpu_busy_percent (reserved in gap #15, collector now implemented): the
+/// two-snapshot run-window busy%% lands on the *after* load sample only,
+/// serde-defaulted + skip-serialized. schema_version stays 1.0.
+#[test]
+fn cpu_busy_percent_round_trips_on_after_sample() {
+    let mut run = sample_run();
+    run.client_load_after = Some(LoadSample {
+        load_avg_1m: Some(1.2),
+        cpu_busy_percent: Some(37.5),
+        mem_available_mb: None,
+    });
+    let v = serde_json::to_value(&run).expect("serialize");
+    assert_eq!(
+        v.pointer("/client_load_after/cpu_busy_percent")
+            .and_then(|n| n.as_f64()),
+        Some(37.5)
+    );
+    let back: TestRun = serde_json::from_value(v).expect("deserialize");
+    assert_eq!(back.client_load_after.unwrap().cpu_busy_percent, Some(37.5));
+}
+
+/// Additive envelope field `cpu_usage` (sampled tester CPU trust upgrade):
+/// omitted when unset, tolerated when absent in old JSON, and round-trips
+/// when populated — including honest `None` sub-fields on platforms without
+/// steal or below the p95 sample-size gate. schema_version stays 1.0.
+#[test]
+fn cpu_usage_field_is_additive_and_optional() {
+    let run = sample_run();
+    let v: serde_json::Value = serde_json::to_value(&run).expect("serialize");
+    assert!(
+        v.get("cpu_usage").is_none(),
+        "cpu_usage must be omitted when unset (shape unchanged)"
+    );
+    let back: TestRun = serde_json::from_value(v).expect("deserialize");
+    assert!(back.cpu_usage.is_none());
+
+    let mut run = sample_run();
+    run.cpu_usage = Some(CpuUsage {
+        mean_busy_percent: Some(23.4),
+        max_busy_percent: Some(91.0),
+        p95_busy_percent: None, // below the MIN_SAMPLES_P95 gate
+        mean_steal_percent: Some(2.1),
+        max_steal_percent: Some(6.5),
+        sample_count: 12,
+        sample_interval_ms: 1000,
+    });
+    let v = serde_json::to_value(&run).expect("serialize populated");
+    assert_eq!(
+        v.pointer("/cpu_usage/max_busy_percent")
+            .and_then(|n| n.as_f64()),
+        Some(91.0)
+    );
+    assert_eq!(
+        v.pointer("/cpu_usage/mean_steal_percent")
+            .and_then(|n| n.as_f64()),
+        Some(2.1)
+    );
+    // Gated / unmeasured sub-fields stay omitted, never fabricated.
+    assert!(v.pointer("/cpu_usage/p95_busy_percent").is_none());
+    assert_eq!(
+        v.pointer("/cpu_usage/sample_count")
+            .and_then(|n| n.as_u64()),
+        Some(12)
+    );
+    assert_eq!(v["schema_version"], "1.0");
+    let back: TestRun = serde_json::from_value(v).expect("deserialize populated");
+    let cpu = back.cpu_usage.expect("cpu_usage round-trips");
+    assert_eq!(cpu.max_steal_percent, Some(6.5));
+    assert_eq!(cpu.sample_interval_ms, 1000);
+
+    // Old envelopes that predate the sampled struct (or contain only the
+    // struct without steal) still deserialize — sub-fields serde-default.
+    let minimal: CpuUsage = serde_json::from_str(
+        r#"{"mean_busy_percent": 40.0, "sample_count": 0, "sample_interval_ms": 1000}"#,
+    )
+    .expect("minimal cpu_usage deserializes");
+    assert_eq!(minimal.mean_busy_percent, Some(40.0));
+    assert_eq!(minimal.max_steal_percent, None);
+}
+
+/// Additive environment-check fields `cpu_busy_percent`/`cpu_steal_percent`
+/// and the `max_cpu_busy_percent`/`max_cpu_steal_percent` thresholds:
+/// serde-defaulted so pre-existing benchmark JSON still deserializes.
+#[test]
+fn benchmark_cpu_fields_are_additive_and_optional() {
+    let check: BenchmarkEnvironmentCheck = serde_json::from_str(
+        r#"{
+            "attempted_samples": 5, "successful_samples": 5, "failed_samples": 0,
+            "duration_ms": 250.0, "rtt_min_ms": 0.5, "rtt_avg_ms": 0.7,
+            "rtt_max_ms": 1.0, "rtt_p50_ms": 0.6, "rtt_p95_ms": 0.9,
+            "packet_loss_percent": 0.0, "network_type": "Loopback"
+        }"#,
+    )
+    .expect("pre-CPU environment-check JSON deserializes");
+    assert_eq!(check.cpu_busy_percent, None);
+    assert_eq!(check.cpu_steal_percent, None);
+    // Unmeasured CPU fields are omitted on the wire.
+    let v = serde_json::to_value(&check).expect("serialize");
+    assert!(v.get("cpu_busy_percent").is_none());
+
+    let thresholds: BenchmarkNoiseThresholds = serde_json::from_str(
+        r#"{"max_packet_loss_percent": 5.0, "max_jitter_ratio": 0.25, "max_rtt_spread_ratio": 2.0}"#,
+    )
+    .expect("pre-CPU thresholds JSON deserializes");
+    assert_eq!(thresholds.max_cpu_busy_percent, 85.0);
+    assert_eq!(thresholds.max_cpu_steal_percent, 5.0);
+}
+
+/// Additive field `page_load.per_connection_socket_stats`: omitted when empty
+/// (non-Unix / QUIC / warm reuse), tolerated when absent in old JSON, and
+/// round-trips when populated. schema_version stays 1.0.
+#[test]
+fn pageload_per_connection_socket_stats_is_additive_and_optional() {
+    let make_page_load = |stats: Vec<SocketStats>| PageLoadResult {
+        asset_count: 2,
+        assets_fetched: 2,
+        total_bytes: 20_480,
+        total_ms: 120.0,
+        ttfb_ms: 15.0,
+        connections_opened: 2,
+        asset_timings_ms: vec![50.0, 60.0],
+        started_at: Utc::now(),
+        tls_setup_ms: 0.0,
+        tls_overhead_ratio: 0.0,
+        per_connection_tls_ms: vec![0.0, 0.0],
+        cpu_time_ms: None,
+        connection_reused: false,
+        per_connection_socket_stats: stats,
+    };
+
+    // Empty → omitted (shape unchanged) and absent-field JSON deserializes.
+    let mut run = sample_run();
+    run.attempts[0].page_load = Some(make_page_load(vec![]));
+    let v = serde_json::to_value(&run).expect("serialize");
+    assert!(
+        v.pointer("/attempts/0/page_load")
+            .expect("page_load block")
+            .get("per_connection_socket_stats")
+            .is_none(),
+        "per_connection_socket_stats must be omitted when empty (shape unchanged)"
+    );
+    let back: TestRun = serde_json::from_value(v).expect("deserialize");
+    assert!(back.attempts[0]
+        .page_load
+        .as_ref()
+        .expect("page_load")
+        .per_connection_socket_stats
+        .is_empty());
+
+    // Populated → round-trips with per-connection granularity.
+    let mut run = sample_run();
+    run.attempts[0].page_load = Some(make_page_load(vec![
+        SocketStats {
+            total_retrans: Some(3),
+            snd_cwnd: Some(40),
+            congestion_algorithm: Some("cubic".into()),
+            ..Default::default()
+        },
+        SocketStats {
+            total_retrans: Some(0),
+            ..Default::default()
+        },
+    ]));
+    let v = serde_json::to_value(&run).expect("serialize populated");
+    assert_eq!(
+        v.pointer("/attempts/0/page_load/per_connection_socket_stats/0/total_retrans")
+            .and_then(|n| n.as_u64()),
+        Some(3)
+    );
+    let back: TestRun = serde_json::from_value(v).expect("deserialize populated");
+    let stats = &back.attempts[0]
+        .page_load
+        .as_ref()
+        .unwrap()
+        .per_connection_socket_stats;
+    assert_eq!(stats.len(), 2);
+    assert_eq!(stats[0].congestion_algorithm.as_deref(), Some("cubic"));
+}
+
+/// Additive `server_info.load_avg_1m` / `server_info.mem_available_mb`
+/// (endpoint-side live load sampled when GET /info was served): omitted when
+/// unset — old endpoints without the fields deserialize to None (additive
+/// tolerance both directions). schema_version stays 1.0.
+#[test]
+fn host_info_server_load_fields_are_additive_and_optional() {
+    let host_info = |load: Option<f64>, mem: Option<u64>| HostInfo {
+        os: "linux".into(),
+        arch: "x86_64".into(),
+        cpu_cores: 2,
+        total_memory_mb: Some(4096),
+        os_version: None,
+        hostname: None,
+        server_version: Some("0.28.80".into()),
+        uptime_secs: Some(3600),
+        region: None,
+        load_avg_1m: load,
+        mem_available_mb: mem,
+    };
+
+    // Unset → omitted (shape unchanged) and absent-field JSON deserializes.
+    let mut run = sample_run();
+    run.server_info = Some(host_info(None, None));
+    let v = serde_json::to_value(&run).expect("serialize");
+    let info = v.pointer("/server_info").expect("server_info block");
+    assert!(
+        info.get("load_avg_1m").is_none() && info.get("mem_available_mb").is_none(),
+        "server load fields must be omitted when unset (shape unchanged)"
+    );
+    let back: TestRun = serde_json::from_value(v).expect("deserialize");
+    let info = back.server_info.expect("server_info");
+    assert!(info.load_avg_1m.is_none() && info.mem_available_mb.is_none());
+
+    // Populated → round-trips.
+    let mut run = sample_run();
+    run.server_info = Some(host_info(Some(0.42), Some(1536)));
+    let v = serde_json::to_value(&run).expect("serialize populated");
+    assert_eq!(
+        v.pointer("/server_info/load_avg_1m")
+            .and_then(|n| n.as_f64()),
+        Some(0.42)
+    );
+    let back: TestRun = serde_json::from_value(v).expect("deserialize populated");
+    let info = back.server_info.expect("server_info round-trips");
+    assert_eq!(info.mem_available_mb, Some(1536));
+}
+
+/// Additive `UrlTestRun.security_headers` (wave-3 derivation wired into the
+/// URL-diagnostics path): omitted when unset, tolerated when absent in old
+/// JSON, and round-trips when populated.
+#[test]
+fn url_test_run_security_headers_is_additive_and_optional() {
+    let sample_url_run = || UrlTestRun {
+        id: Uuid::new_v4(),
+        started_at: Utc::now(),
+        completed_at: None,
+        requested_url: "https://example.com/".into(),
+        final_url: None,
+        status: UrlDiagnosticStatus::Completed,
+        page_load_strategy: UrlPageLoadStrategy::Browser,
+        browser_engine: None,
+        browser_version: None,
+        user_agent: None,
+        primary_origin: None,
+        observed_protocol_primary_load: None,
+        advertised_alt_svc: None,
+        validated_http_versions: vec![],
+        security_headers: None,
+        tls_version: None,
+        cipher_suite: None,
+        alpn: None,
+        dns_ms: None,
+        connect_ms: None,
+        handshake_ms: None,
+        ttfb_ms: None,
+        dom_content_loaded_ms: None,
+        load_event_ms: None,
+        network_idle_ms: None,
+        capture_end_ms: None,
+        total_requests: 0,
+        total_transfer_bytes: 0,
+        peak_concurrent_connections: None,
+        redirect_count: 0,
+        failure_count: 0,
+        har_path: None,
+        pcap_path: None,
+        pcap_summary: None,
+        capture_errors: vec![],
+        environment_notes: None,
+        origin_summaries: vec![],
+        connection_summary: None,
+        resources: vec![],
+        protocol_runs: vec![],
+    };
+
+    // Unset → omitted (shape unchanged) and absent-field JSON deserializes.
+    let run = sample_url_run();
+    let v = serde_json::to_value(&run).expect("serialize");
+    assert!(
+        v.get("security_headers").is_none(),
+        "security_headers must be omitted when unset (shape unchanged)"
+    );
+    let back: UrlTestRun = serde_json::from_value(v).expect("deserialize");
+    assert!(back.security_headers.is_none());
+
+    // Populated → round-trips with the same derivation as TestRun http results.
+    let mut run = sample_url_run();
+    run.security_headers = SecurityHeaders::from_response_headers(&[
+        (
+            "strict-transport-security".to_string(),
+            "max-age=31536000".to_string(),
+        ),
+        ("x-frame-options".to_string(), "DENY".to_string()),
+    ]);
+    let v = serde_json::to_value(&run).expect("serialize populated");
+    assert_eq!(
+        v.pointer("/security_headers/hsts_max_age_secs")
+            .and_then(|n| n.as_u64()),
+        Some(31_536_000)
+    );
+    let back: UrlTestRun = serde_json::from_value(v).expect("deserialize populated");
+    let sec = back.security_headers.expect("security_headers round-trips");
+    assert_eq!(sec.x_frame_options.as_deref(), Some("DENY"));
+    assert_eq!(sec.csp_present, Some(false));
 }

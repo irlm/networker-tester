@@ -509,6 +509,11 @@ pub fn render_multi(
         write_multi_target_charts(runs, &short_names, &mut out);
     }
 
+    // ── Cross-target depth-probe comparisons (rpm/ping/path/dualstack/ws/pmtud)
+    // Data-gated per mode; independent of the classic protocol table above so
+    // a run that only used the new modes still gets a comparison.
+    write_multi_probe_comparisons(runs, &short_names, &mut out);
+
     // ── Per-target collapsible sections ───────────────────────────────────────
     for (i, run) in runs.iter().enumerate() {
         let open = if runs.len() <= 2 { " open" } else { "" };

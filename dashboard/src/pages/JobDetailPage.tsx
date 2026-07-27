@@ -7,6 +7,7 @@ import type { LiveAttempt, PacketCaptureSummary, RunGeoInfo, RunClockSync, RunLo
 import { StatusBadge } from '../components/common/StatusBadge';
 import { Breadcrumb } from '../components/common/Breadcrumb';
 import { ShareDialog } from '../components/ShareDialog';
+import { RunEnvelopeBlock } from '../components/RunEnvelopeBlock';
 import { useLiveStore } from '../stores/liveStore';
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
@@ -52,19 +53,6 @@ function jobSummary(job: Job | null) {
   if (job.config?.tls_profile_ip) bits.push(`IP ${job.config.tls_profile_ip}`);
   if (job.config?.tls_profile_sni) bits.push(`SNI ${job.config.tls_profile_sni}`);
   return bits.join(' · ');
-}
-
-/** Compact geo label mirroring Rust GeoInfo::label(): "US · Linköping · AS13335 Cloudflare".
- *  Returns null when every field is absent so callers can data-gate the line. */
-function geoLabel(geo: RunGeoInfo | null | undefined): string | null {
-  if (!geo) return null;
-  const parts: string[] = [];
-  if (geo.country) parts.push(geo.country);
-  if (geo.city) parts.push(geo.city);
-  if (geo.asn != null && geo.as_org) parts.push(`AS${geo.asn} ${geo.as_org}`);
-  else if (geo.asn != null) parts.push(`AS${geo.asn}`);
-  else if (geo.as_org) parts.push(geo.as_org);
-  return parts.length > 0 ? parts.join(' · ') : null;
 }
 
 interface RunMeta {
@@ -496,33 +484,16 @@ export function JobDetailPage() {
               )}
             </div>
           )}
-          {runMeta && (geoLabel(runMeta.client_geo) || geoLabel(runMeta.target_geo) || runMeta.clock_sync?.offset_ms != null || runMeta.client_load_before?.load_avg_1m != null || runMeta.client_load_after?.load_avg_1m != null) && (
-            <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5">
-              {geoLabel(runMeta.client_geo) && (
-                <span className="text-xs text-gray-600">
-                  From: <span className="text-gray-400 font-mono">{geoLabel(runMeta.client_geo)}</span>
-                </span>
-              )}
-              {geoLabel(runMeta.target_geo) && (
-                <span className="text-xs text-gray-600">
-                  To: <span className="text-gray-400 font-mono">{geoLabel(runMeta.target_geo)}</span>
-                </span>
-              )}
-              {runMeta.clock_sync?.offset_ms != null && (
-                <span className="text-xs text-gray-600">
-                  Clock offset: <span className="text-gray-400 font-mono">{runMeta.clock_sync.offset_ms > 0 ? '+' : ''}{runMeta.clock_sync.offset_ms.toFixed(1)}ms</span>
-                </span>
-              )}
-              {(runMeta.client_load_before?.load_avg_1m != null || runMeta.client_load_after?.load_avg_1m != null) && (
-                <span className="text-xs text-gray-600">
-                  Tester load: <span className="text-gray-400 font-mono">
-                    {runMeta.client_load_before?.load_avg_1m?.toFixed(2) ?? '?'}
-                    {' → '}
-                    {runMeta.client_load_after?.load_avg_1m?.toFixed(2) ?? '?'}
-                  </span>
-                </span>
-              )}
-            </div>
+          {runMeta && (
+            <RunEnvelopeBlock
+              envelope={{
+                client_geo: runMeta.client_geo,
+                target_geo: runMeta.target_geo,
+                clock_sync: runMeta.clock_sync,
+                client_load_before: runMeta.client_load_before,
+                client_load_after: runMeta.client_load_after,
+              }}
+            />
           )}
         </div>
         <div className="flex items-center gap-2">

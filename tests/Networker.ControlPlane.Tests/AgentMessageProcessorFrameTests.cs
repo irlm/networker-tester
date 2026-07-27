@@ -89,6 +89,69 @@ public sealed class AgentMessageProcessorFrameTests
     }
 
     [Fact]
+    public void Run_finished_frame_without_envelope_decodes_with_null_envelope()
+    {
+        // Old agents never send `envelope` — version-skew safety: the frame
+        // still decodes, and the processor persists NULL for the column.
+        var msg = AgentMessageProcessor.Decode(
+            """{"type":"run_finished","run_id":"00000000-0000-0000-0000-000000000001","status":"completed","artifact":null}""");
+
+        var rf = Assert.IsType<RunFinishedMessage>(msg);
+        Assert.Null(rf.Envelope);
+        Assert.Null(AgentMessageProcessor.ExtractEnvelopeJson(rf.Envelope));
+    }
+
+    [Fact]
+    public void Run_finished_frame_with_envelope_decodes_and_filters_to_the_allowlist()
+    {
+        var msg = AgentMessageProcessor.Decode(
+            """
+            {"type":"run_finished","run_id":"00000000-0000-0000-0000-000000000001","status":"completed","artifact":null,
+             "envelope":{
+                "client_geo":{"country":"US","asn":13335,"as_org":"Cloudflare"},
+                "target_geo":{"country":"DE"},
+                "clock_sync":{"offset_ms":1.5},
+                "client_load_before":{"load_avg_1m":0.1},
+                "client_load_after":{"load_avg_1m":0.9},
+                "client_info":{"os":"linux","cpu_cores":8},
+                "not_allowed":{"huge":"payload"},
+                "attempts":[{"smuggled":true}]
+             }}
+            """);
+
+        var rf = Assert.IsType<RunFinishedMessage>(msg);
+        Assert.NotNull(rf.Envelope);
+
+        var stored = AgentMessageProcessor.ExtractEnvelopeJson(rf.Envelope);
+        Assert.NotNull(stored);
+        using var doc = JsonDocument.Parse(stored!);
+        var root = doc.RootElement;
+
+        // Allowed members pass through verbatim (snake_case preserved) ...
+        Assert.Equal("US", root.GetProperty("client_geo").GetProperty("country").GetString());
+        Assert.Equal(13335, root.GetProperty("client_geo").GetProperty("asn").GetInt32());
+        Assert.Equal("DE", root.GetProperty("target_geo").GetProperty("country").GetString());
+        Assert.Equal(1.5, root.GetProperty("clock_sync").GetProperty("offset_ms").GetDouble());
+        Assert.Equal(8, root.GetProperty("client_info").GetProperty("cpu_cores").GetInt32());
+
+        // ... anything outside the allowlist is dropped on ingest.
+        Assert.False(root.TryGetProperty("not_allowed", out _));
+        Assert.False(root.TryGetProperty("attempts", out _));
+    }
+
+    [Theory]
+    [InlineData("""{}""")]                       // empty object → nothing allowed
+    [InlineData("""{"junk":1}""")]               // only disallowed members
+    [InlineData("""{"client_geo":null}""")]      // allowed key but null value
+    [InlineData("""[1,2,3]""")]                  // not an object
+    [InlineData(""" "a string" """)]             // not an object
+    public void Envelope_with_no_allowed_content_extracts_to_null(string envelopeJson)
+    {
+        using var doc = JsonDocument.Parse(envelopeJson);
+        Assert.Null(AgentMessageProcessor.ExtractEnvelopeJson(doc.RootElement.Clone()));
+    }
+
+    [Fact]
     public void Error_frame_with_run_id_decodes()
     {
         var runId = Guid.NewGuid();

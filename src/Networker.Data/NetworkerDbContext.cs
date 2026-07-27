@@ -422,6 +422,9 @@ public partial class NetworkerDbContext : DbContext
                 .HasDefaultValueSql("gen_random_uuid()")
                 .HasColumnName("id");
             entity.Property(e => e.ArtifactId).HasColumnName("artifact_id");
+            entity.Property(e => e.ClientEnvelope)
+                .HasColumnType("jsonb")
+                .HasColumnName("client_envelope");
             entity.Property(e => e.ComparisonGroupId).HasColumnName("comparison_group_id");
             entity.Property(e => e.CreatedAt)
                 .HasDefaultValueSql("now()")

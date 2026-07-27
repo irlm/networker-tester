@@ -15,6 +15,47 @@ fn html_contains_http11() {
 }
 
 #[test]
+fn html_tester_cpu_card_is_data_gated() {
+    // No cpu_usage → the card must not render (snapshot stays byte-identical).
+    let run = make_run();
+    let html = render(&run, None, None);
+    assert!(!html.contains("Tester CPU"));
+
+    // Populated → card renders; unmeasured sub-fields show as "—", never 0.
+    let mut run = make_run();
+    run.cpu_usage = Some(crate::metrics::CpuUsage {
+        mean_busy_percent: Some(23.4),
+        max_busy_percent: Some(91.2),
+        p95_busy_percent: None,
+        mean_steal_percent: Some(2.1),
+        max_steal_percent: Some(6.5),
+        sample_count: 12,
+        sample_interval_ms: 1000,
+    });
+    let html = render(&run, None, None);
+    assert!(html.contains("Tester CPU"));
+    assert!(html.contains("23.4%"));
+    assert!(html.contains("91.2% / —")); // p95 gated out at n=12
+    assert!(html.contains("2.1% / 6.5%"));
+    assert!(html.contains("12 @ 1000ms"));
+
+    // No steal measured (macOS/Windows) → the steal row is absent entirely.
+    let mut run = make_run();
+    run.cpu_usage = Some(crate::metrics::CpuUsage {
+        mean_busy_percent: Some(10.0),
+        max_busy_percent: Some(20.0),
+        p95_busy_percent: None,
+        mean_steal_percent: None,
+        max_steal_percent: None,
+        sample_count: 3,
+        sample_interval_ms: 1000,
+    });
+    let html = render(&run, None, None);
+    assert!(html.contains("Tester CPU"));
+    assert!(!html.contains("Steal mean / max"));
+}
+
+#[test]
 fn html_escapes_special_chars() {
     assert_eq!(
         escape_html("<script>alert(1)</script>"),
@@ -147,6 +188,7 @@ fn html_contains_error_section_for_failed_attempt() {
         client_network: None,
         client_load_before: None,
         client_load_after: None,
+        cpu_usage: None,
         clock_sync: None,
         baseline: None,
         packet_capture_summary: None,
@@ -223,6 +265,7 @@ fn html_contains_throughput_section_for_download_attempt() {
         client_network: None,
         client_load_before: None,
         client_load_after: None,
+        cpu_usage: None,
         clock_sync: None,
         baseline: None,
         packet_capture_summary: None,
@@ -318,6 +361,7 @@ fn html_contains_tls_section_for_tls_attempt() {
         client_network: None,
         client_load_before: None,
         client_load_after: None,
+        cpu_usage: None,
         clock_sync: None,
         baseline: None,
         packet_capture_summary: None,
@@ -417,6 +461,7 @@ fn html_contains_page_load_section() {
         client_network: None,
         client_load_before: None,
         client_load_after: None,
+        cpu_usage: None,
         clock_sync: None,
         baseline: None,
         packet_capture_summary: None,
@@ -464,6 +509,7 @@ fn html_contains_page_load_section() {
                 per_connection_tls_ms: vec![4.0; 6],
                 cpu_time_ms: Some(8.3),
                 connection_reused: false,
+                per_connection_socket_stats: vec![],
             }),
             browser: None,
             http_stack: None,
@@ -806,6 +852,7 @@ fn html_contains_browser_section() {
         client_network: None,
         client_load_before: None,
         client_load_after: None,
+        cpu_usage: None,
         clock_sync: None,
         baseline: None,
         packet_capture_summary: None,

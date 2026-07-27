@@ -96,15 +96,21 @@ public sealed record AttemptEventMessage(
 ) : AgentMessage;
 
 /// <summary>
-/// <c>{"type":"run_finished", "run_id":..., "status":..., "artifact":{...}?}</c>
+/// <c>{"type":"run_finished", "run_id":..., "status":..., "artifact":{...}?, "envelope":{...}?}</c>
 /// — run terminated. <c>artifact</c> is present iff the config carried a
 /// methodology block (benchmark mode). Mirrors Rust
 /// <c>AgentMessage::RunFinished { run_id, status, artifact }</c>.
+/// <c>envelope</c> (additive, v0.28.80+) is the run-envelope object the C#
+/// agent extracts from the tester's final TestRun JSON (geo / network /
+/// clock-sync / load / host info); absent from old agents' frames — the
+/// default keeps them decoding, and <see cref="AgentMessageProcessor"/>
+/// persists null for them.
 /// </summary>
 public sealed record RunFinishedMessage(
     [property: JsonPropertyName("run_id")] Guid RunId,
     [property: JsonPropertyName("status")] string Status,
-    [property: JsonPropertyName("artifact")] BenchmarkArtifactPayload? Artifact
+    [property: JsonPropertyName("artifact")] BenchmarkArtifactPayload? Artifact,
+    [property: JsonPropertyName("envelope")] JsonElement? Envelope = null
 ) : AgentMessage;
 
 /// <summary>

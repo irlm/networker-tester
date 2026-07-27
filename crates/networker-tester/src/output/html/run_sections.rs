@@ -191,6 +191,41 @@ pub(super) fn write_run_sections(run: &TestRun, out: &mut String) {
             rtt = rtt,
         );
     }
+    // ── Tester CPU card: whole-run mean + 1 s-sampled max/p95 busy and steal.
+    // Data-gated — rendered only when the collector produced something, and
+    // each row only when that value was actually measured (None ≠ 0).
+    if let Some(ref cpu) = run.cpu_usage {
+        let pct = |v: Option<f64>| v.map(|p| format!("{p:.1}%")).unwrap_or_else(|| "—".into());
+        let steal_row = if cpu.mean_steal_percent.is_some() || cpu.max_steal_percent.is_some() {
+            format!(
+                "    <dt>Steal mean / max</dt> <dd>{} / {}</dd>\n",
+                pct(cpu.mean_steal_percent),
+                pct(cpu.max_steal_percent),
+            )
+        } else {
+            String::new()
+        };
+        let _ = write!(
+            out,
+            r##"
+<section class="card" style="flex:1;min-width:280px;margin:0">
+  <h2>Tester CPU</h2>
+  <dl class="summary-grid">
+    <dt>Busy mean</dt>     <dd>{mean}</dd>
+    <dt>Busy max / p95</dt> <dd>{max} / {p95}</dd>
+{steal_row}    <dt>Samples</dt>       <dd>{count} @ {interval}ms</dd>
+  </dl>
+  <p class="note">Sampled on the tester during the run; peaks above ~80% busy (or any steal) mean the measurements may be noisy.</p>
+</section>
+"##,
+            mean = pct(cpu.mean_busy_percent),
+            max = pct(cpu.max_busy_percent),
+            p95 = pct(cpu.p95_busy_percent),
+            steal_row = steal_row,
+            count = cpu.sample_count,
+            interval = cpu.sample_interval_ms,
+        );
+    }
     let _ = writeln!(out, "</div>");
 
     // ── Protocol sections for endpoint (default) ─────────────────────────────

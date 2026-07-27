@@ -79,6 +79,23 @@ pub fn print_summary(run: &TestRun) {
         }
     }
 
+    // CPU-contention flag: the sampled peaks (max/p95 busy) catch bursts the
+    // whole-run mean hides; any hypervisor steal means the vCPU was preempted
+    // mid-measurement (cloud testers).
+    if let Some(cpu) = run.cpu_usage.as_ref() {
+        let busy_hot = [cpu.max_busy_percent, cpu.p95_busy_percent]
+            .iter()
+            .flatten()
+            .any(|v| *v > 80.0);
+        let steal_hot = [cpu.mean_steal_percent, cpu.max_steal_percent]
+            .iter()
+            .flatten()
+            .any(|v| *v > 1.5);
+        if busy_hot || steal_hot {
+            println!(" ⚠ tester CPU-contended — measurements may be noisy");
+        }
+    }
+
     // Build (proto, Option<payload_bytes>) groups in canonical protocol order.
     let ordered_protos = [
         Protocol::Http1,
@@ -285,21 +302,47 @@ pub fn print_summary(run: &TestRun) {
 fn print_retransmission_note(run: &TestRun) {
     let mut attempts_with_retrans = 0usize;
     let mut total_retrans: u64 = 0;
+    let mut pageload_conns_with_retrans = 0usize;
     let mut algos: BTreeSet<String> = BTreeSet::new();
+    let retrans_of = |s: &crate::metrics::SocketStats| -> u64 {
+        s.total_retrans.unwrap_or(0).max(s.retransmits.unwrap_or(0)) as u64
+    };
     for a in &run.attempts {
-        let Some(s) = a.http.as_ref().and_then(|h| h.socket_stats.as_ref()) else {
-            continue;
-        };
-        if let Some(algo) = &s.congestion_algorithm {
-            algos.insert(algo.clone());
+        if let Some(s) = a.http.as_ref().and_then(|h| h.socket_stats.as_ref()) {
+            if let Some(algo) = &s.congestion_algorithm {
+                algos.insert(algo.clone());
+            }
+            let n = retrans_of(s);
+            if n > 0 {
+                attempts_with_retrans += 1;
+                total_retrans += n;
+            }
         }
-        let n = s.total_retrans.unwrap_or(0).max(s.retransmits.unwrap_or(0));
-        if n > 0 {
-            attempts_with_retrans += 1;
-            total_retrans += n as u64;
+        // Pageload probes additionally sample every pooled connection; the
+        // manifest connection's stats are already counted via http above.
+        if let Some(pl) = a.page_load.as_ref() {
+            for (idx, s) in pl.per_connection_socket_stats.iter().enumerate() {
+                if let Some(algo) = &s.congestion_algorithm {
+                    algos.insert(algo.clone());
+                }
+                let n = retrans_of(s);
+                if n > 0 {
+                    pageload_conns_with_retrans += 1;
+                    // Connection 0 duplicates http.socket_stats — don't
+                    // double-count its segments in the total.
+                    let already_counted = idx == 0
+                        && a.http
+                            .as_ref()
+                            .and_then(|h| h.socket_stats.as_ref())
+                            .is_some_and(|hs| retrans_of(hs) > 0);
+                    if !already_counted {
+                        total_retrans += n;
+                    }
+                }
+            }
         }
     }
-    if attempts_with_retrans > 0 {
+    if attempts_with_retrans > 0 || pageload_conns_with_retrans > 0 {
         let algo_note = if algos.is_empty() {
             String::new()
         } else {
@@ -308,9 +351,14 @@ fn print_retransmission_note(run: &TestRun) {
                 algos.into_iter().collect::<Vec<_>>().join(", ")
             )
         };
+        let pageload_note = if pageload_conns_with_retrans > 0 {
+            format!("; incl. {pageload_conns_with_retrans} pageload connection(s)")
+        } else {
+            String::new()
+        };
         println!(
             "\n ⚠ TCP retransmissions during transfer: {total_retrans} segment(s) across \
-             {attempts_with_retrans} attempt(s){algo_note} — throughput numbers may reflect loss recovery"
+             {attempts_with_retrans} attempt(s){pageload_note}{algo_note} — throughput numbers may reflect loss recovery"
         );
     }
 }
@@ -916,6 +964,40 @@ pub fn print_url_test_summary(run: &UrlTestRun, json_path: &Path) {
     println!("- Transfer Size: {} bytes", run.total_transfer_bytes);
     println!("- Failures: {}", run.failure_count);
     println!();
+    // Security-header audit (derived from the protocol probes' captured
+    // response headers; omitted entirely when no probe captured headers).
+    if let Some(sec) = &run.security_headers {
+        println!("Security Headers");
+        println!(
+            "- HSTS: {}",
+            sec.hsts.as_deref().map_or_else(
+                || "absent".to_string(),
+                |v| match sec.hsts_max_age_secs {
+                    Some(age) => format!("{v} (max-age {age}s)"),
+                    None => v.to_string(),
+                }
+            )
+        );
+        let yes_no = |v: Option<bool>| match v {
+            Some(true) => "yes",
+            Some(false) => "no",
+            None => "-",
+        };
+        println!("- CSP present: {}", yes_no(sec.csp_present));
+        println!(
+            "- X-Content-Type-Options nosniff: {}",
+            yes_no(sec.x_content_type_options_nosniff)
+        );
+        println!(
+            "- X-Frame-Options: {}",
+            sec.x_frame_options.as_deref().unwrap_or("absent")
+        );
+        println!(
+            "- Referrer-Policy: {}",
+            sec.referrer_policy.as_deref().unwrap_or("absent")
+        );
+        println!();
+    }
     if !run.capture_errors.is_empty() {
         println!("Warnings");
         for err in &run.capture_errors {

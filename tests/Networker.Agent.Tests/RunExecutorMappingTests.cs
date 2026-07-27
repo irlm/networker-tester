@@ -214,4 +214,87 @@ public class RunExecutorMappingTests : IDisposable
         var finished = Assert.IsType<RunFinishedMessage>(sink.Messages[^1]);
         Assert.Equal("failed", finished.Status);
     }
+
+    // ── Run envelope extraction (v0.28.80) ──────────────────────────────────
+
+    [Fact]
+    public void ExtractRunEnvelope_picks_only_the_envelope_fields()
+    {
+        using var doc = JsonDocument.Parse("""
+            {"schema_version":"1.0","run_id":"r1","target_url":"https://x",
+             "client_network":{"default_interface":"en0","vpn_detected":false},
+             "client_geo":{"country":"US","asn":13335,"as_org":"Cloudflare"},
+             "target_geo":{"country":"DE"},
+             "client_load_before":{"load_avg_1m":0.5},
+             "client_load_after":{"load_avg_1m":1.1},
+             "clock_sync":{"ntp_server":"pool.ntp.org:123","offset_ms":-3.2},
+             "client_info":{"os":"linux","arch":"x86_64","cpu_cores":4},
+             "server_info":{"os":"linux","arch":"x86_64","cpu_cores":2},
+             "attempts":[{"attempt_id":"a1","success":true}]}
+            """);
+
+        var envelope = RunExecutor.ExtractRunEnvelope(doc.RootElement);
+
+        Assert.NotNull(envelope);
+        var env = envelope!.Value;
+        Assert.Equal(
+            RunExecutor.RunEnvelopeFields,
+            env.EnumerateObject().Select(p => p.Name).ToArray());
+        Assert.Equal("US", env.GetProperty("client_geo").GetProperty("country").GetString());
+        Assert.Equal(4, env.GetProperty("client_info").GetProperty("cpu_cores").GetInt32());
+        // Measurement data never rides along.
+        Assert.False(env.TryGetProperty("attempts", out _));
+        Assert.False(env.TryGetProperty("run_id", out _));
+    }
+
+    [Theory]
+    [InlineData("""{"schema_version":"1.0","attempts":[]}""")] // old tester: no envelope fields
+    [InlineData("""{"client_geo":null,"clock_sync":null}""")]  // present but null
+    [InlineData("""[1,2,3]""")]                                // not an object
+    public void ExtractRunEnvelope_returns_null_when_nothing_is_present(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        Assert.Null(RunExecutor.ExtractRunEnvelope(doc.RootElement));
+    }
+
+    [Fact]
+    public async Task Completed_run_finished_carries_the_tester_envelope()
+    {
+        var testerJson = """
+            {"schema_version":"1.0",
+             "client_geo":{"country":"US","asn":13335,"as_org":"Cloudflare"},
+             "clock_sync":{"offset_ms":1.25},
+             "client_load_before":{"load_avg_1m":0.42},
+             "client_info":{"os":"linux","arch":"x86_64","cpu_cores":8},
+             "attempts":[{"attempt_id":"a1","protocol":"http1","success":true}]}
+            """.ReplaceLineEndings(" ");
+        var exec = MakeExecutor(WriteFakeTester(testerJson));
+        var sink = new CollectingSink();
+
+        await exec.ExecuteAsync(Guid.NewGuid(), NetworkConfig(), sink, CancellationToken.None);
+
+        var finished = Assert.IsType<RunFinishedMessage>(sink.Messages[^1]);
+        Assert.Equal("completed", finished.Status);
+        Assert.NotNull(finished.Envelope);
+        var env = finished.Envelope!.Value;
+        Assert.Equal("US", env.GetProperty("client_geo").GetProperty("country").GetString());
+        Assert.Equal(1.25, env.GetProperty("clock_sync").GetProperty("offset_ms").GetDouble());
+        Assert.Equal(8, env.GetProperty("client_info").GetProperty("cpu_cores").GetInt32());
+    }
+
+    [Fact]
+    public async Task Run_without_envelope_fields_finishes_with_null_envelope()
+    {
+        // Old-tester output → no envelope member on the wire at all (the
+        // control-plane column stays NULL; the API keeps the old shape).
+        var testerJson = """{"schema_version":"1.0","attempts":[{"attempt_id":"a1","protocol":"http1","success":true}]}""";
+        var exec = MakeExecutor(WriteFakeTester(testerJson));
+        var sink = new CollectingSink();
+
+        await exec.ExecuteAsync(Guid.NewGuid(), NetworkConfig(), sink, CancellationToken.None);
+
+        var finished = Assert.IsType<RunFinishedMessage>(sink.Messages[^1]);
+        Assert.Equal("completed", finished.Status);
+        Assert.Null(finished.Envelope);
+    }
 }

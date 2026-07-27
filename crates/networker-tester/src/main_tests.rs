@@ -511,6 +511,8 @@ fn sample_resolved_config(delay_ms: u64) -> ResolvedConfig {
         benchmark_max_packet_loss_percent: None,
         benchmark_max_jitter_ratio: None,
         benchmark_max_rtt_spread_ratio: None,
+        benchmark_max_cpu_busy_percent: None,
+        benchmark_max_cpu_steal_percent: None,
         benchmark_overhead_samples: None,
         benchmark_cooldown_samples: None,
         save_to_db: false,
@@ -913,6 +915,8 @@ fn baseline_from_environment_check_reuses_rtt_distribution() {
         rtt_p95_ms: 1.1,
         packet_loss_percent: 20.0,
         network_type: NetworkType::Loopback,
+        cpu_busy_percent: None,
+        cpu_steal_percent: None,
     };
 
     let baseline = baseline_from_environment_check(&environment_check);

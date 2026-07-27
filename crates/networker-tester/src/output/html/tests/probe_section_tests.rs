@@ -583,3 +583,215 @@ fn dns_depth_section_absent_without_dns_data() {
         "dns depth card must not render without dns attempts"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Cross-target comparisons (render_multi)
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Two-target fixture: target 1 runs all six depth-probe modes, target 2
+/// runs only rpm + ping (with different values) — every other mode must
+/// render em-dash cells for it, never invented numbers.
+fn make_multi_probe_runs() -> (TestRun, TestRun) {
+    let mut r1 = make_run_with_url("https://a.example.com/");
+    r1.attempts.push(make_rpm_attempt(Some(4.0)));
+    r1.attempts.push(make_ping_attempt(9, Some(64)));
+    r1.attempts.push(make_path_attempt(true));
+    r1.attempts.push(make_dualstack_attempt());
+    r1.attempts.push(make_websocket_attempt(19));
+    r1.attempts.push(make_pmtud_attempt(Some(1492), false));
+
+    let mut r2 = make_run_with_url("https://b.example.com/");
+    let mut rpm2 = make_rpm_attempt(Some(1.2));
+    if let Some(ref mut r) = rpm2.rpm {
+        r.unloaded_rtt_avg_ms = 3.0;
+        r.loaded_rtt_avg_ms = 3.6;
+        r.rpm = Some(16667.0);
+    }
+    r2.attempts.push(rpm2);
+    let mut ping2 = make_ping_attempt(10, Some(58));
+    if let Some(ref mut p) = ping2.ping {
+        p.rtt_avg_ms = 5.5;
+        p.rtt_p95_ms = 7.7;
+    }
+    r2.attempts.push(ping2);
+    (r1, r2)
+}
+
+#[test]
+fn multi_rpm_comparison_shows_both_targets_with_factor_styling() {
+    let (r1, r2) = make_multi_probe_runs();
+    let html = render_multi(&[r1, r2], None, None);
+    assert!(
+        html.contains("Cross-Target Latency Under Load (RPM)"),
+        "rpm comparison table must appear"
+    );
+    // Target 1: unloaded 2.00ms / loaded 8.00ms / RPM 7500 / factor 4x warn.
+    assert!(
+        html.contains("<td>2.00ms</td><td>8.00ms</td><td><strong>7500</strong></td>"),
+        "target 1 rpm row values must appear"
+    );
+    assert!(
+        html.contains(r#"<td><span class="warn">4.00x</span></td>"#),
+        "factor > 2 must use warn styling in the comparison"
+    );
+    // Target 2: unloaded 3.00ms / loaded 3.60ms / RPM 16667 / factor 1.2x ok.
+    assert!(
+        html.contains("<td>3.00ms</td><td>3.60ms</td><td><strong>16667</strong></td>"),
+        "target 2 rpm row values must appear"
+    );
+    assert!(
+        html.contains(r#"<td><span class="ok">1.20x</span></td>"#),
+        "factor <= 2 must use ok styling in the comparison"
+    );
+}
+
+#[test]
+fn multi_ping_comparison_shows_rtt_and_loss_per_target() {
+    let (r1, r2) = make_multi_probe_runs();
+    let html = render_multi(&[r1, r2], None, None);
+    assert!(
+        html.contains("Cross-Target ICMP Ping"),
+        "ping comparison table must appear"
+    );
+    // Target 1: avg 2.20 / p95 3.30 / 10% loss (warn).
+    assert!(
+        html.contains(r#"<td>2.20ms</td><td>3.30ms</td><td><span class="warn">10.0%</span></td>"#),
+        "target 1 ping row must appear with warn loss"
+    );
+    // Target 2: avg 5.50 / p95 7.70 / 0% loss (ok).
+    assert!(
+        html.contains(r#"<td>5.50ms</td><td>7.70ms</td><td><span class="ok">0.0%</span></td>"#),
+        "target 2 ping row must appear with ok loss"
+    );
+}
+
+#[test]
+fn multi_ping_comparison_all_lost_target_shows_dash_rtts() {
+    let mut r1 = make_run_with_url("https://a.example.com/");
+    r1.attempts.push(make_ping_attempt(9, Some(64)));
+    let mut r2 = make_run_with_url("https://b.example.com/");
+    r2.attempts.push(make_ping_attempt(0, None)); // 100% loss → sentinel RTTs
+    let html = render_multi(&[r1, r2], None, None);
+    assert!(
+        html.contains(r#"<td>—</td><td>—</td><td><span class="warn">100.0%</span></td>"#),
+        "fully-lost target must show dashes for RTTs, never the 0.0 sentinel"
+    );
+}
+
+#[test]
+fn multi_path_comparison_dashes_for_target_without_path_data() {
+    let (r1, r2) = make_multi_probe_runs();
+    let html = render_multi(&[r1, r2], None, None);
+    assert!(
+        html.contains("Cross-Target Network Path"),
+        "path comparison table must appear"
+    );
+    // Target 1: 3 hops, reached, method shown.
+    assert!(
+        html.contains(
+            r#"<td>3</td><td><span class="ok">reached</span> (12.50ms RTT)</td><td><code>udp-ttl/ip-recverr</code></td>"#
+        ),
+        "target 1 path row must show hop count + verdict + method"
+    );
+    // Target 2 ran no path mode → full dash row.
+    assert!(
+        html.contains("<tr><td>Target 2</td><td>—</td><td>—</td><td>—</td></tr>"),
+        "target without path data must be a dash row"
+    );
+    // Per-hop detail stays single-run: the comparison has no Hop/Address cols.
+    assert!(
+        !html.contains(
+            "Cross-Target Network Path</h2>\n  <table>\n    <thead>\n      <tr><th>Hop</th>"
+        ),
+        "comparison must not include per-hop columns"
+    );
+}
+
+#[test]
+fn multi_dualstack_comparison_compact_faster_family() {
+    let (r1, r2) = make_multi_probe_runs();
+    let html = render_multi(&[r1, r2], None, None);
+    assert!(
+        html.contains("Cross-Target Dual-Stack (IPv4 vs IPv6)"),
+        "dualstack comparison table must appear"
+    );
+    assert!(
+        html.contains("<td><strong>ipv4</strong> by 3.00ms avg</td>"),
+        "target 1 faster-family cell must appear"
+    );
+    assert!(
+        html.contains("<tr><td>Target 2</td><td>—</td></tr>"),
+        "target without dualstack data must be a dash row"
+    );
+}
+
+#[test]
+fn multi_websocket_comparison_upgrade_rtt_loss() {
+    let (r1, r2) = make_multi_probe_runs();
+    let html = render_multi(&[r1, r2], None, None);
+    assert!(
+        html.contains("Cross-Target WebSocket"),
+        "websocket comparison table must appear"
+    );
+    // Target 1: upgrade 4.25 / msg RTT 1.80 / 5% loss warn.
+    assert!(
+        html.contains(r#"<td>4.25</td><td>1.80ms</td><td><span class="warn">5.0%</span></td>"#),
+        "target 1 websocket row must appear"
+    );
+    assert!(
+        html.contains("<tr><td>Target 2</td><td>—</td><td>—</td><td>—</td></tr>"),
+        "target without websocket data must be a dash row"
+    );
+}
+
+#[test]
+fn multi_pmtud_comparison_mtu_and_lower_bound_flag() {
+    let (r1, mut r2) = make_multi_probe_runs();
+    // Give target 2 a lower-bound-only pmtud verdict.
+    r2.attempts.push(make_pmtud_attempt(Some(1500), true));
+    let html = render_multi(&[r1, r2], None, None);
+    assert!(
+        html.contains("Cross-Target Path MTU"),
+        "pmtud comparison table must appear"
+    );
+    assert!(
+        html.contains("<td><strong>1492 bytes</strong></td>"),
+        "target 1 resolved MTU must appear"
+    );
+    assert!(
+        html.contains(r#"<strong>&ge;1500 bytes</strong> <span class="warn">(lower bound)</span>"#),
+        "lower-bound verdict must be flagged, not shown as exact"
+    );
+}
+
+#[test]
+fn multi_pmtud_comparison_dash_row_for_missing_target() {
+    let (r1, r2) = make_multi_probe_runs(); // r2 has no pmtud
+    let html = render_multi(&[r1, r2], None, None);
+    assert!(
+        html.contains("<tr><td>Target 2</td><td>—</td><td>—</td></tr>"),
+        "target without pmtud data must be a dash row"
+    );
+}
+
+#[test]
+fn multi_probe_comparisons_absent_without_probe_data() {
+    let mut r1 = make_run_with_url("https://a.example.com/");
+    r1.attempts.push(make_attempt(Protocol::Http1, true));
+    let mut r2 = make_run_with_url("https://b.example.com/");
+    r2.attempts.push(make_attempt(Protocol::Http1, true));
+    let html = render_multi(&[r1, r2], None, None);
+    for title in [
+        "Cross-Target Latency Under Load",
+        "Cross-Target ICMP Ping",
+        "Cross-Target Network Path",
+        "Cross-Target Dual-Stack",
+        "Cross-Target WebSocket",
+        "Cross-Target Path MTU",
+    ] {
+        assert!(
+            !html.contains(title),
+            "{title} must not render when no target has that mode's data"
+        );
+    }
+}

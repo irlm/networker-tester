@@ -55,9 +55,9 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
     // ── Migration chain ─────────────────────────────────────────────────
 
     [Fact]
-    public void Fresh_database_applies_the_full_chain_v002_to_v045()
+    public void Fresh_database_applies_the_full_chain_v002_to_v046()
     {
-        Assert.Equal(Enumerable.Range(2, 44), _fx.FreshRun.Applied);
+        Assert.Equal(Enumerable.Range(2, 45), _fx.FreshRun.Applied);
         Assert.Empty(_fx.FreshRun.AlreadyApplied);
     }
 
@@ -70,7 +70,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
 
         Assert.True(second.WasUpToDate);
         Assert.Empty(second.Applied);
-        Assert.Equal(Enumerable.Range(2, 44), second.AlreadyApplied);
+        Assert.Equal(Enumerable.Range(2, 45), second.AlreadyApplied);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
             }
         }
 
-        Assert.Equal(Enumerable.Range(2, 44), recorded);
+        Assert.Equal(Enumerable.Range(2, 45), recorded);
     }
 
     // ── EF-model equivalence ────────────────────────────────────────────
@@ -524,6 +524,29 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
             Assert.Equal(1, reader.GetInt64(1)); // agent_api_key_hash_key kept
         }
     }
+
+    [Fact]
+    public async Task V046_added_the_nullable_client_envelope_jsonb_column()
+    {
+        await using var conn = new NpgsqlConnection(_fx.ConnectionString);
+        await conn.OpenAsync();
+
+        await using var cols = new NpgsqlCommand(
+            """
+            SELECT data_type, is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'test_run'
+              AND column_name = 'client_envelope'
+            """, conn);
+        await using var reader = await cols.ExecuteReaderAsync();
+
+        // Exists, is jsonb, and is nullable (NULL = pre-envelope agent/tester;
+        // never backfilled — old runs must keep serving their old wire shape).
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal("jsonb", reader.GetString(0));
+        Assert.Equal("YES", reader.GetString(1));
+        Assert.False(await reader.ReadAsync());
+    }
 }
 
 /// <summary>
@@ -582,6 +605,7 @@ public sealed class MigrationScriptFreezeTests
         ["V043_sdk_endpoint_token.sql"] = "4ab8a521c29976867e78ba5fca479420353abca143571b0493506382e8524a1e",
         ["V044_agent_api_key_lifecycle.sql"] = "02ed690dac68e6aca9790d6dbdcd0d2ac38bf1d7412ec7d00a9b430a9b3ede81",
         ["V045_drop_agent_api_key_plaintext.sql"] = "4c1e010d1195ca489d73a331c0659e77c31ffb35f721fb99f285189ab006066b",
+        ["V046_run_envelope.sql"] = "4f74ac99fabbece4d3106c9baab080d72496a639a7d3ebc57125e6486428ea55",
     };
 
     [Fact]
@@ -601,7 +625,7 @@ public sealed class MigrationScriptFreezeTests
             Assert.Contains(version, scripted);
         }
 
-        Assert.Equal(43, scripted.Count);
+        Assert.Equal(44, scripted.Count);
     }
 
     [Fact]

@@ -802,6 +802,8 @@ mod tests {
             benchmark_max_packet_loss_percent: None,
             benchmark_max_jitter_ratio: None,
             benchmark_max_rtt_spread_ratio: None,
+            benchmark_max_cpu_busy_percent: None,
+            benchmark_max_cpu_steal_percent: None,
             benchmark_overhead_samples: None,
             benchmark_cooldown_samples: None,
             progress_url: None,

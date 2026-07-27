@@ -149,52 +149,21 @@ public static class TestRunsEndpoints
             var run = await db.TestRuns
                 .AsNoTracking()
                 .Where(r => r.Id == id)
-                .Select(r => new
-                {
-                    id = r.Id,
-                    test_config_id = r.TestConfigId,
-                    project_id = r.ProjectId,
-                    status = r.Status,
-                    started_at = r.StartedAt,
-                    finished_at = r.FinishedAt,
-                    success_count = r.SuccessCount,
-                    failure_count = r.FailureCount,
-                    error_message = r.ErrorMessage,
-                    artifact_id = r.ArtifactId,
-                    tester_id = r.TesterId,
-                    worker_id = r.WorkerId,
-                    last_heartbeat = r.LastHeartbeat,
-                    created_at = r.CreatedAt,
-                    comparison_group_id = r.ComparisonGroupId,
-                })
+                .Select(r => new RunDetailRow(
+                    r.Id, r.TestConfigId, r.ProjectId, r.Status,
+                    r.StartedAt, r.FinishedAt, r.SuccessCount, r.FailureCount,
+                    r.ErrorMessage, r.ArtifactId, r.TesterId, r.WorkerId,
+                    r.LastHeartbeat, r.CreatedAt, r.ComparisonGroupId,
+                    r.ClientEnvelope))
                 .FirstOrDefaultAsync(ct);
 
             if (run is null ||
-                !await access.HasRoleAsync(ctx, run.project_id, ProjectRole.Viewer, ct))
+                !await access.HasRoleAsync(ctx, run.ProjectId, ProjectRole.Viewer, ct))
             {
                 return Results.NotFound();
             }
 
-            return Results.Ok(new
-            {
-                run.id,
-                run.test_config_id,
-                run.project_id,
-                run.status,
-                result_status = RunVerdict.ResultStatus(
-                    run.status, run.success_count, run.failure_count),
-                run.started_at,
-                run.finished_at,
-                run.success_count,
-                run.failure_count,
-                run.error_message,
-                run.artifact_id,
-                run.tester_id,
-                run.worker_id,
-                run.last_heartbeat,
-                run.created_at,
-                run.comparison_group_id,
-            });
+            return Results.Ok(BuildRunDetail(run));
         }).RequireAuthorization();
 
         // GET /api/v2/test-runs/{id}/attempts — per-attempt rows for a run.
@@ -287,6 +256,77 @@ public static class TestRunsEndpoints
         }).RequireAuthorization();
 
         return app;
+    }
+
+    /// <summary>
+    /// One <c>test_run</c> row as read for the detail route — the projection
+    /// seam <see cref="BuildRunDetail"/> shapes into the wire payload
+    /// (extracted so the wire shape is unit-testable without a database).
+    /// </summary>
+    internal sealed record RunDetailRow(
+        Guid Id, Guid TestConfigId, string ProjectId, string Status,
+        DateTime? StartedAt, DateTime? FinishedAt, int SuccessCount, int FailureCount,
+        string? ErrorMessage, Guid? ArtifactId, Guid? TesterId, string? WorkerId,
+        DateTime? LastHeartbeat, DateTime CreatedAt, Guid? ComparisonGroupId,
+        string? ClientEnvelope);
+
+    /// <summary>
+    /// Shape the run-detail wire payload. <c>envelope</c> is ADDITIVE and
+    /// null-OMITTED: a run without a stored envelope (every pre-V046 run, and
+    /// any run finished by an old agent) serializes the exact pre-envelope
+    /// field set — old consumers' wire shape is byte-identical. When present,
+    /// the stored JSON is re-emitted as raw JSON (snake_case preserved, values
+    /// verbatim). Pinned by <c>TestRunsContractTests</c>.
+    /// </summary>
+    internal static object BuildRunDetail(RunDetailRow run)
+    {
+        var envelope = RawJsonOrNull(run.ClientEnvelope);
+
+        if (envelope is null)
+        {
+            return new
+            {
+                id = run.Id,
+                test_config_id = run.TestConfigId,
+                project_id = run.ProjectId,
+                status = run.Status,
+                result_status = RunVerdict.ResultStatus(
+                    run.Status, run.SuccessCount, run.FailureCount),
+                started_at = run.StartedAt,
+                finished_at = run.FinishedAt,
+                success_count = run.SuccessCount,
+                failure_count = run.FailureCount,
+                error_message = run.ErrorMessage,
+                artifact_id = run.ArtifactId,
+                tester_id = run.TesterId,
+                worker_id = run.WorkerId,
+                last_heartbeat = run.LastHeartbeat,
+                created_at = run.CreatedAt,
+                comparison_group_id = run.ComparisonGroupId,
+            };
+        }
+
+        return new
+        {
+            id = run.Id,
+            test_config_id = run.TestConfigId,
+            project_id = run.ProjectId,
+            status = run.Status,
+            result_status = RunVerdict.ResultStatus(
+                run.Status, run.SuccessCount, run.FailureCount),
+            started_at = run.StartedAt,
+            finished_at = run.FinishedAt,
+            success_count = run.SuccessCount,
+            failure_count = run.FailureCount,
+            error_message = run.ErrorMessage,
+            artifact_id = run.ArtifactId,
+            tester_id = run.TesterId,
+            worker_id = run.WorkerId,
+            last_heartbeat = run.LastHeartbeat,
+            created_at = run.CreatedAt,
+            comparison_group_id = run.ComparisonGroupId,
+            envelope,
+        };
     }
 
     // Parse a JSONB-as-text column into a JsonElement so it serializes as raw
