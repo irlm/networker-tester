@@ -184,6 +184,8 @@ pub async fn resolve(
         a_record_count: None,
         aaaa_record_count: None,
         cname_chain: Vec::new(),
+        a_ttl_secs: None,
+        aaaa_ttl_secs: None,
     };
 
     if ips.is_empty() {
@@ -204,6 +206,10 @@ struct TypedLookup {
     record_count: u32,
     ips: Vec<IpAddr>,
     cname_chain: Vec<String>,
+    /// Minimum TTL (seconds) across the matching answer records — the interval
+    /// a client may cache before it must re-query. `None` when no matching
+    /// record was returned (NODATA/error).
+    ttl_secs: Option<u32>,
     error: Option<String>,
 }
 
@@ -222,15 +228,18 @@ async fn timed_typed_lookup(
             let answers = lookup.answers();
             let mut ips = Vec::new();
             let mut record_count = 0u32;
+            let mut ttl_secs: Option<u32> = None;
             for record in answers {
                 match &record.data {
                     RData::A(a) if record_type == RecordType::A => {
                         record_count += 1;
                         ips.push(IpAddr::V4(a.0));
+                        ttl_secs = Some(ttl_secs.map_or(record.ttl, |t| t.min(record.ttl)));
                     }
                     RData::AAAA(aaaa) if record_type == RecordType::AAAA => {
                         record_count += 1;
                         ips.push(IpAddr::V6(aaaa.0));
+                        ttl_secs = Some(ttl_secs.map_or(record.ttl, |t| t.min(record.ttl)));
                     }
                     _ => {}
                 }
@@ -241,6 +250,7 @@ async fn timed_typed_lookup(
                 record_count,
                 ips,
                 cname_chain,
+                ttl_secs,
                 error: None,
             }
         }
@@ -249,6 +259,7 @@ async fn timed_typed_lookup(
             record_count: 0,
             ips: Vec::new(),
             cname_chain: Vec::new(),
+            ttl_secs: None,
             error: Some(e.to_string()),
         },
     }
@@ -370,6 +381,8 @@ pub async fn resolve_detailed(
         a_record_count: a.as_ref().map(|l| l.record_count),
         aaaa_record_count: aaaa.as_ref().map(|l| l.record_count),
         cname_chain,
+        a_ttl_secs: a.as_ref().and_then(|l| l.ttl_secs),
+        aaaa_ttl_secs: aaaa.as_ref().and_then(|l| l.ttl_secs),
     };
 
     if ips.is_empty() {
@@ -644,6 +657,63 @@ mod tests {
             "second lookup was served from an in-process cache \
              (queries: {after_first} → {after_second}) — dns_ms would be a \
              hashmap lookup, not a resolver measurement"
+        );
+    }
+
+    /// `timed_typed_lookup` captures the answer's minimum TTL (M2 D4).
+    #[tokio::test]
+    async fn typed_lookup_captures_record_ttl() {
+        use hickory_resolver::config::{ConnectionConfig, NameServerConfig, ResolverConfig};
+        use hickory_resolver::proto::op::{Message, OpCode};
+
+        let server = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let addr = server.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 1500];
+            while let Ok((n, from)) = server.recv_from(&mut buf).await {
+                let Ok(req) = Message::from_vec(&buf[..n]) else {
+                    continue;
+                };
+                let mut resp = Message::response(req.id, OpCode::Query);
+                resp.metadata.recursion_available = true;
+                if let Some(q) = req.queries.first() {
+                    resp.add_query(q.clone());
+                    // Two A records with differing TTLs; capture must take the min.
+                    resp.add_answer(Record::from_rdata(
+                        q.name().clone(),
+                        123,
+                        RData::A(rdata::A(std::net::Ipv4Addr::new(192, 0, 2, 1))),
+                    ));
+                    resp.add_answer(Record::from_rdata(
+                        q.name().clone(),
+                        456,
+                        RData::A(rdata::A(std::net::Ipv4Addr::new(192, 0, 2, 2))),
+                    ));
+                }
+                if let Ok(bytes) = resp.to_vec() {
+                    let _ = server.send_to(&bytes, from).await;
+                }
+            }
+        });
+
+        let mut conn = ConnectionConfig::udp();
+        conn.port = addr.port();
+        let config = ResolverConfig::from_parts(
+            None,
+            Vec::new(),
+            vec![NameServerConfig::new(addr.ip(), true, vec![conn])],
+        );
+        let mut builder =
+            TokioResolver::builder_with_config(config, TokioRuntimeProvider::default());
+        apply_measurement_opts(builder.options_mut());
+        let resolver = builder.build().expect("mock-backed resolver");
+
+        let r = timed_typed_lookup(&resolver, "ttl-check.example.", RecordType::A).await;
+        assert_eq!(r.record_count, 2);
+        assert_eq!(
+            r.ttl_secs,
+            Some(123),
+            "TTL must be the minimum across answers"
         );
     }
 

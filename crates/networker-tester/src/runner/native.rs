@@ -961,6 +961,8 @@ mod tests {
             a_record_count: None,
             aaaa_record_count: None,
             cname_chain: Vec::new(),
+            a_ttl_secs: None,
+            aaaa_ttl_secs: None,
         };
         let tcp = TcpResult {
             local_addr: None,

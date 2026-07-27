@@ -1065,8 +1065,19 @@ fn print_dns_detail(run: &TestRun) {
         Some(n) => format!("{n} records"),
         None => "skipped".to_string(),
     };
-    let line = |label: &str, ms: Option<f64>, count: Option<u32>| match ms {
-        Some(v) => println!("   {label:<18} {v:>8.2}ms avg │ {}", records(count)),
+    // TTLs are stable across probes of the same name — report the first seen.
+    let a_ttl = dns.iter().find_map(|d| d.a_ttl_secs);
+    let aaaa_ttl = dns.iter().find_map(|d| d.aaaa_ttl_secs);
+    let ttl = |t: Option<u32>| match t {
+        Some(s) => format!(" │ TTL {s}s"),
+        None => String::new(),
+    };
+    let line = |label: &str, ms: Option<f64>, count: Option<u32>, tl: Option<u32>| match ms {
+        Some(v) => println!(
+            "   {label:<18} {v:>8.2}ms avg │ {}{}",
+            records(count),
+            ttl(tl)
+        ),
         None => println!("   {label:<18} {:>10} │ {}", "—", records(count)),
     };
 
@@ -1077,8 +1088,8 @@ fn print_dns_detail(run: &TestRun) {
         s = if dns.len() == 1 { "" } else { "s" },
     );
     println!("──────────────────────────────────────────");
-    line("A lookup", a_ms, a_count);
-    line("AAAA lookup", aaaa_ms, aaaa_count);
+    line("A lookup", a_ms, a_count, a_ttl);
+    line("AAAA lookup", aaaa_ms, aaaa_count, aaaa_ttl);
     if let Some(d) = chain {
         println!(
             "   {label:<18} {query} → {chain}",

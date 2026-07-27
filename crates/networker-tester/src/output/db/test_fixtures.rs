@@ -115,6 +115,8 @@ pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
             a_record_count: None,
             aaaa_record_count: None,
             cname_chain: Vec::new(),
+            a_ttl_secs: None,
+            aaaa_ttl_secs: None,
         }),
         tcp: Some(TcpResult {
             local_addr: Some("127.0.0.1:12345".into()),

@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.88] — 2026-07-27
+
+### Added
+- **DNS record TTLs** — `DnsResult.a_ttl_secs` / `aaaa_ttl_secs` (M2 D4): the
+  minimum TTL of the A / AAAA answer, captured from records the `dns`-mode
+  detailed lookup already parsed (`Record::ttl`) and shown in the DNS-detail
+  summary. The cacheability window every DNS tool users compare us against
+  reports. `dns` probe mode only; additive (schema 1.0). Third Tier-2/3 item.
+
+---
+
 ## [0.28.87] — 2026-07-27
 
 ### Added
