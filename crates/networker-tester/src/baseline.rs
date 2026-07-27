@@ -193,8 +193,22 @@ pub async fn measure_environment_check(
     let host = target.host_str()?;
     let port = target.port_or_known_default()?;
     let network_type = classify_target(host);
+    // Bracket the RTT sampling with CPU tick snapshots so a contended tester
+    // is visible in the publication verdict alongside jitter/loss. Guarded by
+    // MIN_CPU_WINDOW_MS: with default settings (5 × 50 ms on loopback) the
+    // window is too short and both fields stay None — honesty over fake
+    // precision. Raise --benchmark-environment-check-samples/interval-ms to
+    // widen the window when a CPU verdict is wanted.
+    let cpu_before = crate::metrics::CpuTicks::snapshot();
     let (ordered_rtts, attempted_samples, duration_ms) =
         measure_rtt_samples(host, port, samples, interval_ms).await;
+    let cpu_window = cpu_before
+        .zip(crate::metrics::CpuTicks::snapshot())
+        .and_then(|(before, after)| {
+            crate::metrics::cpu_window_sample(&before, &after, duration_ms as u64)
+        });
+    let cpu_busy_percent = cpu_window.map(|w| w.busy_percent);
+    let cpu_steal_percent = cpu_window.and_then(|w| w.steal_percent);
     let successful_samples = ordered_rtts.len() as u32;
     let failed_samples = attempted_samples.saturating_sub(successful_samples);
     let packet_loss_percent = if attempted_samples > 0 {
@@ -218,6 +232,8 @@ pub async fn measure_environment_check(
             rtt_p95_ms: 0.0,
             packet_loss_percent,
             network_type,
+            cpu_busy_percent,
+            cpu_steal_percent,
         });
     }
 
@@ -234,6 +250,8 @@ pub async fn measure_environment_check(
         rtt_p95_ms: percentile(&sorted_rtts, 95.0),
         packet_loss_percent,
         network_type,
+        cpu_busy_percent,
+        cpu_steal_percent,
     })
 }
 

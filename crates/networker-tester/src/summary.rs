@@ -79,6 +79,23 @@ pub fn print_summary(run: &TestRun) {
         }
     }
 
+    // CPU-contention flag: the sampled peaks (max/p95 busy) catch bursts the
+    // whole-run mean hides; any hypervisor steal means the vCPU was preempted
+    // mid-measurement (cloud testers).
+    if let Some(cpu) = run.cpu_usage.as_ref() {
+        let busy_hot = [cpu.max_busy_percent, cpu.p95_busy_percent]
+            .iter()
+            .flatten()
+            .any(|v| *v > 80.0);
+        let steal_hot = [cpu.mean_steal_percent, cpu.max_steal_percent]
+            .iter()
+            .flatten()
+            .any(|v| *v > 1.5);
+        if busy_hot || steal_hot {
+            println!(" ⚠ tester CPU-contended — measurements may be noisy");
+        }
+    }
+
     // Build (proto, Option<payload_bytes>) groups in canonical protocol order.
     let ordered_protos = [
         Protocol::Http1,

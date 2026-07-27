@@ -487,3 +487,58 @@ Behavior:
 **Populated:** `client_geo.{country,city,asn,as_org,db_date}`,
 `target_geo.{country,city,asn,as_org,db_date}` (all optional, additive —
 schema stays 1.0).
+
+## Tester CPU Trust Envelope (`cpu_usage`)
+
+Every run reports the tester's own CPU usage so consumers can judge whether
+the measurements were taken on a quiet host. A whole-run mean alone can hide
+a contention burst, so the tester also samples the CPU counters once per
+second for the duration of the run:
+
+```json
+"cpu_usage": {
+  "mean_busy_percent": 12.4,     // whole-run two-snapshot delta
+  "max_busy_percent": 96.0,      // highest 1 s sample
+  "p95_busy_percent": 41.2,      // only when sample_count >= 20 (20 s+ run)
+  "mean_steal_percent": 0.3,     // Linux only — /proc/stat field 8
+  "max_steal_percent": 2.1,      // Linux only
+  "sample_count": 34,
+  "sample_interval_ms": 1000
+}
+```
+
+Sources and per-platform honesty (a field is `None`/omitted when the platform
+cannot measure it — never fabricated):
+
+| Platform | Busy source | Steal |
+|----------|-------------|-------|
+| Linux    | `/proc/stat` aggregate `cpu` line (idle incl. iowait) | field 8 (`steal`) — counted as **busy**, never idle |
+| macOS    | `host_statistics(HOST_CPU_LOAD_INFO)` | none (no mach concept/API) |
+| Windows  | `GetSystemTimes` (kernel time includes idle; `busy = 1 - idle/(kernel+user)`) | none (no API) |
+
+Trust guards:
+
+- **Min window**: any delta window under 500 ms (or under 20 elapsed ticks
+  where 10 ms tick granularity applies) yields `None`, never fake precision.
+- **p95 gating**: `p95_busy_percent` follows the same sample-size philosophy
+  as attempt statistics (`MIN_SAMPLES_P95 = 20`) — at 1 s cadence a run
+  shorter than ~20 s reports no p95.
+- `client_load_after.cpu_busy_percent` is kept for compatibility and equals
+  `cpu_usage.mean_busy_percent` (the whole-run mean).
+
+The run summary prints `⚠ tester CPU-contended — measurements may be noisy`
+when max/p95 busy exceeds 80% or any steal exceeds 1.5%.
+
+### Benchmark publication gates
+
+In benchmark mode the environment-check phase also brackets its RTT probes
+with CPU snapshots (`benchmark_environment_check.cpu_busy_percent` /
+`cpu_steal_percent`; subject to the same 500 ms min-window guard — widen
+`--benchmark-environment-check-samples` / `--benchmark-environment-check-interval-ms`
+if the default 5 × 50 ms window is too short on your path). A contended
+tester then blocks publication-ready claims exactly like jitter/loss:
+
+| Flag | Default | Blocks publication when |
+|------|---------|-------------------------|
+| `--benchmark-max-cpu-busy-percent`  | 85 | environment-check tester CPU busy ≥ threshold |
+| `--benchmark-max-cpu-steal-percent` | 5  | environment-check tester CPU steal ≥ threshold (Linux only) |

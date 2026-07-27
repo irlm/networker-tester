@@ -300,6 +300,14 @@ pub struct Cli {
     #[arg(long)]
     pub benchmark_max_rtt_spread_ratio: Option<f64>,
 
+    /// Maximum environment-check tester CPU busy percentage allowed for publication-ready claims (default 85).
+    #[arg(long)]
+    pub benchmark_max_cpu_busy_percent: Option<f64>,
+
+    /// Maximum environment-check tester CPU steal percentage allowed for publication-ready claims (default 5; Linux only).
+    #[arg(long)]
+    pub benchmark_max_cpu_steal_percent: Option<f64>,
+
     /// Number of excluded overhead iterations to collect before the measured phase.
     #[arg(long)]
     pub benchmark_overhead_samples: Option<u32>,
@@ -594,6 +602,8 @@ pub struct ConfigFile {
     pub benchmark_max_packet_loss_percent: Option<f64>,
     pub benchmark_max_jitter_ratio: Option<f64>,
     pub benchmark_max_rtt_spread_ratio: Option<f64>,
+    pub benchmark_max_cpu_busy_percent: Option<f64>,
+    pub benchmark_max_cpu_steal_percent: Option<f64>,
     pub benchmark_overhead_samples: Option<u32>,
     pub benchmark_cooldown_samples: Option<u32>,
     pub save_to_db: Option<bool>,
@@ -684,6 +694,8 @@ pub struct ResolvedConfig {
     pub benchmark_max_packet_loss_percent: Option<f64>,
     pub benchmark_max_jitter_ratio: Option<f64>,
     pub benchmark_max_rtt_spread_ratio: Option<f64>,
+    pub benchmark_max_cpu_busy_percent: Option<f64>,
+    pub benchmark_max_cpu_steal_percent: Option<f64>,
     pub benchmark_overhead_samples: Option<u32>,
     pub benchmark_cooldown_samples: Option<u32>,
     pub progress_url: Option<String>,
@@ -946,6 +958,12 @@ impl Cli {
             benchmark_max_rtt_spread_ratio: self
                 .benchmark_max_rtt_spread_ratio
                 .or(f.benchmark_max_rtt_spread_ratio),
+            benchmark_max_cpu_busy_percent: self
+                .benchmark_max_cpu_busy_percent
+                .or(f.benchmark_max_cpu_busy_percent),
+            benchmark_max_cpu_steal_percent: self
+                .benchmark_max_cpu_steal_percent
+                .or(f.benchmark_max_cpu_steal_percent),
             benchmark_overhead_samples: self
                 .benchmark_overhead_samples
                 .or(f.benchmark_overhead_samples),
@@ -1088,6 +1106,21 @@ impl ResolvedConfig {
                 anyhow::bail!("--benchmark-max-rtt-spread-ratio must be a positive finite number");
             }
         }
+        if let Some(max_cpu_busy_percent) = self.benchmark_max_cpu_busy_percent {
+            if !max_cpu_busy_percent.is_finite() || !(0.0..=100.0).contains(&max_cpu_busy_percent) {
+                anyhow::bail!(
+                    "--benchmark-max-cpu-busy-percent must be a finite number between 0 and 100"
+                );
+            }
+        }
+        if let Some(max_cpu_steal_percent) = self.benchmark_max_cpu_steal_percent {
+            if !max_cpu_steal_percent.is_finite() || !(0.0..=100.0).contains(&max_cpu_steal_percent)
+            {
+                anyhow::bail!(
+                    "--benchmark-max-cpu-steal-percent must be a finite number between 0 and 100"
+                );
+            }
+        }
         let adaptive_benchmark_controls = self.benchmark_min_samples.is_some()
             || self.benchmark_max_samples.is_some()
             || self.benchmark_min_duration_ms.is_some()
@@ -1102,7 +1135,9 @@ impl ResolvedConfig {
             || self.benchmark_stability_check_interval_ms.is_some();
         let noise_threshold_controls = self.benchmark_max_packet_loss_percent.is_some()
             || self.benchmark_max_jitter_ratio.is_some()
-            || self.benchmark_max_rtt_spread_ratio.is_some();
+            || self.benchmark_max_rtt_spread_ratio.is_some()
+            || self.benchmark_max_cpu_busy_percent.is_some()
+            || self.benchmark_max_cpu_steal_percent.is_some();
         if adaptive_benchmark_controls
             && self.benchmark_mode
             && self.benchmark_phase == "measured"

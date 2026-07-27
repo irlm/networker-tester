@@ -1011,6 +1011,36 @@ fn benchmark_data_quality(run: &TestRun, summary: &BenchmarkSummary) -> Benchmar
         }
     };
 
+    // Tester CPU contention gates publication the same way jitter/loss do:
+    // a contended (or hypervisor-stolen) tester distorts every timing it
+    // reports. Fields are None when the environment-check window was shorter
+    // than the min-window trust guard or the platform has no collector —
+    // absence of data never blocks, only measured contention does.
+    if let Some(environment_check) = run.benchmark_environment_check.as_ref() {
+        if let Some(cpu_busy) = environment_check.cpu_busy_percent {
+            if cpu_busy >= noise_thresholds.max_cpu_busy_percent {
+                warnings.push(format!(
+                    "Environment-check observed {cpu_busy:.1}% tester CPU busy"
+                ));
+                publication_blockers.push(format!(
+                    "Environment-check tester CPU busy {:.1}% exceeds the configured publication threshold {:.1}%",
+                    cpu_busy, noise_thresholds.max_cpu_busy_percent
+                ));
+            }
+        }
+        if let Some(cpu_steal) = environment_check.cpu_steal_percent {
+            if cpu_steal >= noise_thresholds.max_cpu_steal_percent {
+                warnings.push(format!(
+                    "Environment-check observed {cpu_steal:.1}% tester CPU steal"
+                ));
+                publication_blockers.push(format!(
+                    "Environment-check tester CPU steal {:.1}% exceeds the configured publication threshold {:.1}%",
+                    cpu_steal, noise_thresholds.max_cpu_steal_percent
+                ));
+            }
+        }
+    }
+
     let sample_stability_cv = summary.cv;
 
     if summary.failure_count > 0 {
@@ -1299,6 +1329,7 @@ mod tests {
             client_network: None,
             client_load_before: None,
             client_load_after: None,
+            cpu_usage: None,
             clock_sync: None,
             baseline: None,
             packet_capture_summary: None,
@@ -1487,6 +1518,8 @@ mod tests {
             rtt_p95_ms: 1.0,
             packet_loss_percent: 0.0,
             network_type: NetworkType::Loopback,
+            cpu_busy_percent: None,
+            cpu_steal_percent: None,
         });
 
         let artifact = to_benchmark_artifact(&run).unwrap();
@@ -1619,6 +1652,7 @@ mod tests {
             client_network: None,
             client_load_before: None,
             client_load_after: None,
+            cpu_usage: None,
             clock_sync: None,
             baseline: Some(NetworkBaseline {
                 samples: 10,
@@ -1701,6 +1735,7 @@ mod tests {
             max_packet_loss_percent: 3.0,
             max_jitter_ratio: 0.40,
             max_rtt_spread_ratio: 1.5,
+            ..BenchmarkNoiseThresholds::default()
         });
         run.benchmark_environment_check = Some(BenchmarkEnvironmentCheck {
             attempted_samples: 8,
@@ -1714,6 +1749,8 @@ mod tests {
             rtt_p95_ms: 1.6,
             packet_loss_percent: 4.0,
             network_type: NetworkType::Loopback,
+            cpu_busy_percent: None,
+            cpu_steal_percent: None,
         });
 
         let artifact = to_benchmark_artifact(&run).unwrap();
@@ -1734,6 +1771,79 @@ mod tests {
             .publication_blockers
             .iter()
             .any(|blocker| blocker.contains("configured publication threshold 3.0%")));
+    }
+
+    /// A CPU-contended (or hypervisor-stolen) tester blocks publication the
+    /// same way jitter/loss do — and unmeasured CPU (None fields, e.g. a
+    /// sub-min-window environment check or macOS steal) never blocks.
+    #[test]
+    fn benchmark_contract_blocks_publication_on_tester_cpu_contention() {
+        let quiet_check = BenchmarkEnvironmentCheck {
+            attempted_samples: 8,
+            successful_samples: 8,
+            failed_samples: 0,
+            duration_ms: 800.0,
+            rtt_min_ms: 0.8,
+            rtt_avg_ms: 0.9,
+            rtt_max_ms: 1.0,
+            rtt_p50_ms: 0.9,
+            rtt_p95_ms: 1.0,
+            packet_loss_percent: 0.0,
+            network_type: NetworkType::Loopback,
+            cpu_busy_percent: None,
+            cpu_steal_percent: None,
+        };
+
+        // Unmeasured CPU → no CPU blockers (absence of data never blocks).
+        let mut run = benchmark_dummy_run();
+        run.benchmark_environment_check = Some(quiet_check.clone());
+        let artifact = to_benchmark_artifact(&run).unwrap();
+        assert!(!artifact
+            .data_quality
+            .publication_blockers
+            .iter()
+            .any(|blocker| blocker.contains("CPU")));
+
+        // Busy above the default 85% threshold → blocker.
+        let mut run = benchmark_dummy_run();
+        run.benchmark_environment_check = Some(BenchmarkEnvironmentCheck {
+            cpu_busy_percent: Some(92.5),
+            ..quiet_check.clone()
+        });
+        let artifact = to_benchmark_artifact(&run).unwrap();
+        assert!(!artifact.data_quality.publication_ready);
+        assert!(artifact
+            .data_quality
+            .publication_blockers
+            .iter()
+            .any(|blocker| blocker.contains(
+                "tester CPU busy 92.5% exceeds the configured publication threshold 85.0%"
+            )));
+
+        // Steal above a configured threshold → blocker; busy under → not.
+        let mut run = benchmark_dummy_run();
+        run.benchmark_noise_thresholds = Some(BenchmarkNoiseThresholds {
+            max_cpu_steal_percent: 1.5,
+            ..BenchmarkNoiseThresholds::default()
+        });
+        run.benchmark_environment_check = Some(BenchmarkEnvironmentCheck {
+            cpu_busy_percent: Some(40.0),
+            cpu_steal_percent: Some(2.0),
+            ..quiet_check
+        });
+        let artifact = to_benchmark_artifact(&run).unwrap();
+        assert!(artifact
+            .data_quality
+            .publication_blockers
+            .iter()
+            .any(|blocker| blocker.contains(
+                "tester CPU steal 2.0% exceeds the configured publication threshold 1.5%"
+            )));
+        assert!(!artifact
+            .data_quality
+            .publication_blockers
+            .iter()
+            .any(|blocker| blocker.contains("CPU busy")));
     }
 
     #[test]
@@ -1810,6 +1920,7 @@ mod tests {
             client_network: None,
             client_load_before: None,
             client_load_after: None,
+            cpu_usage: None,
             clock_sync: None,
             baseline: Some(NetworkBaseline {
                 samples: 10,

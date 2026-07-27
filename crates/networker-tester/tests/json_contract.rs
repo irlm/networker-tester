@@ -12,9 +12,10 @@
 
 use chrono::Utc;
 use networker_tester::metrics::{
-    ClockSync, DnsResult, GeoInfo, HostInfo, HttpResult, LoadSample, PageLoadResult, Protocol,
-    RequestAttempt, SecurityHeaders, SocketStats, TcpResult, TestRun, TlsResult,
-    UrlDiagnosticStatus, UrlPageLoadStrategy, UrlTestRun, SCHEMA_VERSION,
+    BenchmarkEnvironmentCheck, BenchmarkNoiseThresholds, ClockSync, CpuUsage, DnsResult, GeoInfo,
+    HostInfo, HttpResult, LoadSample, PageLoadResult, Protocol, RequestAttempt, SecurityHeaders,
+    SocketStats, TcpResult, TestRun, TlsResult, UrlDiagnosticStatus, UrlPageLoadStrategy,
+    UrlTestRun, SCHEMA_VERSION,
 };
 use uuid::Uuid;
 
@@ -147,6 +148,7 @@ fn sample_run() -> TestRun {
         client_network: None,
         client_load_before: None,
         client_load_after: None,
+        cpu_usage: None,
         clock_sync: None,
         baseline: None,
         packet_capture_summary: None,
@@ -638,6 +640,93 @@ fn cpu_busy_percent_round_trips_on_after_sample() {
     );
     let back: TestRun = serde_json::from_value(v).expect("deserialize");
     assert_eq!(back.client_load_after.unwrap().cpu_busy_percent, Some(37.5));
+}
+
+/// Additive envelope field `cpu_usage` (sampled tester CPU trust upgrade):
+/// omitted when unset, tolerated when absent in old JSON, and round-trips
+/// when populated — including honest `None` sub-fields on platforms without
+/// steal or below the p95 sample-size gate. schema_version stays 1.0.
+#[test]
+fn cpu_usage_field_is_additive_and_optional() {
+    let run = sample_run();
+    let v: serde_json::Value = serde_json::to_value(&run).expect("serialize");
+    assert!(
+        v.get("cpu_usage").is_none(),
+        "cpu_usage must be omitted when unset (shape unchanged)"
+    );
+    let back: TestRun = serde_json::from_value(v).expect("deserialize");
+    assert!(back.cpu_usage.is_none());
+
+    let mut run = sample_run();
+    run.cpu_usage = Some(CpuUsage {
+        mean_busy_percent: Some(23.4),
+        max_busy_percent: Some(91.0),
+        p95_busy_percent: None, // below the MIN_SAMPLES_P95 gate
+        mean_steal_percent: Some(2.1),
+        max_steal_percent: Some(6.5),
+        sample_count: 12,
+        sample_interval_ms: 1000,
+    });
+    let v = serde_json::to_value(&run).expect("serialize populated");
+    assert_eq!(
+        v.pointer("/cpu_usage/max_busy_percent")
+            .and_then(|n| n.as_f64()),
+        Some(91.0)
+    );
+    assert_eq!(
+        v.pointer("/cpu_usage/mean_steal_percent")
+            .and_then(|n| n.as_f64()),
+        Some(2.1)
+    );
+    // Gated / unmeasured sub-fields stay omitted, never fabricated.
+    assert!(v.pointer("/cpu_usage/p95_busy_percent").is_none());
+    assert_eq!(
+        v.pointer("/cpu_usage/sample_count")
+            .and_then(|n| n.as_u64()),
+        Some(12)
+    );
+    assert_eq!(v["schema_version"], "1.0");
+    let back: TestRun = serde_json::from_value(v).expect("deserialize populated");
+    let cpu = back.cpu_usage.expect("cpu_usage round-trips");
+    assert_eq!(cpu.max_steal_percent, Some(6.5));
+    assert_eq!(cpu.sample_interval_ms, 1000);
+
+    // Old envelopes that predate the sampled struct (or contain only the
+    // struct without steal) still deserialize — sub-fields serde-default.
+    let minimal: CpuUsage = serde_json::from_str(
+        r#"{"mean_busy_percent": 40.0, "sample_count": 0, "sample_interval_ms": 1000}"#,
+    )
+    .expect("minimal cpu_usage deserializes");
+    assert_eq!(minimal.mean_busy_percent, Some(40.0));
+    assert_eq!(minimal.max_steal_percent, None);
+}
+
+/// Additive environment-check fields `cpu_busy_percent`/`cpu_steal_percent`
+/// and the `max_cpu_busy_percent`/`max_cpu_steal_percent` thresholds:
+/// serde-defaulted so pre-existing benchmark JSON still deserializes.
+#[test]
+fn benchmark_cpu_fields_are_additive_and_optional() {
+    let check: BenchmarkEnvironmentCheck = serde_json::from_str(
+        r#"{
+            "attempted_samples": 5, "successful_samples": 5, "failed_samples": 0,
+            "duration_ms": 250.0, "rtt_min_ms": 0.5, "rtt_avg_ms": 0.7,
+            "rtt_max_ms": 1.0, "rtt_p50_ms": 0.6, "rtt_p95_ms": 0.9,
+            "packet_loss_percent": 0.0, "network_type": "Loopback"
+        }"#,
+    )
+    .expect("pre-CPU environment-check JSON deserializes");
+    assert_eq!(check.cpu_busy_percent, None);
+    assert_eq!(check.cpu_steal_percent, None);
+    // Unmeasured CPU fields are omitted on the wire.
+    let v = serde_json::to_value(&check).expect("serialize");
+    assert!(v.get("cpu_busy_percent").is_none());
+
+    let thresholds: BenchmarkNoiseThresholds = serde_json::from_str(
+        r#"{"max_packet_loss_percent": 5.0, "max_jitter_ratio": 0.25, "max_rtt_spread_ratio": 2.0}"#,
+    )
+    .expect("pre-CPU thresholds JSON deserializes");
+    assert_eq!(thresholds.max_cpu_busy_percent, 85.0);
+    assert_eq!(thresholds.max_cpu_steal_percent, 5.0);
 }
 
 /// Additive field `page_load.per_connection_socket_stats`: omitted when empty

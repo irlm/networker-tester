@@ -192,6 +192,7 @@ fn make_run(run_seed: u128, target: &str, attempts: Vec<RequestAttempt>) -> Test
         client_network: None,
         client_load_before: None,
         client_load_after: None,
+        cpu_usage: None,
         clock_sync: None,
         baseline: None,
         packet_capture_summary: None,
