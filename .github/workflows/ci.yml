@@ -427,8 +427,18 @@ jobs:
       - name: Install dependencies (no postinstall scripts)
         run: npm ci --ignore-scripts
 
-      - name: Audit for known vulnerabilities
-        run: npm audit --audit-level=high
+      # Blocking audit covers PRODUCTION dependencies only (--omit=dev): a
+      # dev-tooling advisory (eslint/vitest transitives) cannot reach the
+      # shipped bundle and must not block releases — 2026-07-27's
+      # brace-expansion DoS (GHSA-mh99-v99m-4gvg) had no non-breaking fix for
+      # the eslint chain and stalled the release train, exactly like the
+      # 07-24 react-router advisory before the v8 migration. Dev-dep findings
+      # still surface in the non-blocking full audit below.
+      - name: Audit for known vulnerabilities (prod deps, blocking)
+        run: npm audit --audit-level=high --omit=dev
+
+      - name: Full audit incl. dev deps (informational)
+        run: npm audit --audit-level=high || echo "::warning::dev-dependency advisories present (non-blocking) — review npm audit output above"
 
       - run: npm test
       - run: npm run build

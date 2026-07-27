@@ -55,9 +55,9 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
     // ── Migration chain ─────────────────────────────────────────────────
 
     [Fact]
-    public void Fresh_database_applies_the_full_chain_v002_to_v045()
+    public void Fresh_database_applies_the_full_chain_v002_to_v046()
     {
-        Assert.Equal(Enumerable.Range(2, 44), _fx.FreshRun.Applied);
+        Assert.Equal(Enumerable.Range(2, 45), _fx.FreshRun.Applied);
         Assert.Empty(_fx.FreshRun.AlreadyApplied);
     }
 
@@ -70,7 +70,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
 
         Assert.True(second.WasUpToDate);
         Assert.Empty(second.Applied);
-        Assert.Equal(Enumerable.Range(2, 44), second.AlreadyApplied);
+        Assert.Equal(Enumerable.Range(2, 45), second.AlreadyApplied);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
             }
         }
 
-        Assert.Equal(Enumerable.Range(2, 44), recorded);
+        Assert.Equal(Enumerable.Range(2, 45), recorded);
     }
 
     // ── EF-model equivalence ────────────────────────────────────────────
