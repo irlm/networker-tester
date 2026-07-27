@@ -2,11 +2,24 @@
 ///
 /// # What we can obtain without root / CAP_NET_ADMIN
 ///
-/// | Platform | TCP_MAXSEG | TCP_INFO / TCP_CONNECTION_INFO | TCP_CONGESTION |
-/// |----------|------------|-------------------------------|----------------|
-/// | Linux    | ✓          | ✓ (all fields, no root)        | ✓              |
-/// | macOS    | ✓          | ✓ (RTT, cwnd, retrans)         | ✓              |
-/// | Windows  | ✗          | ✗                              | ✗              |
+/// | Platform | TCP_MAXSEG | TCP_INFO / TCP_CONNECTION_INFO           | TCP_CONGESTION |
+/// |----------|------------|------------------------------------------|----------------|
+/// | Linux    | ✓          | ✓ (all fields, no root)                  | ✓              |
+/// | macOS    | ✓          | ✓ (srtt/rttvar, cwnd/ssthresh, retrans)  | ✗ (no such option in xnu) |
+/// | Windows  | ✗          | ✗                                        | ✗              |
+///
+/// # macOS unit semantics (xnu `struct tcp_connection_info`)
+///
+/// xnu reports `tcpi_srtt`/`tcpi_rttvar` in **milliseconds** (Linux: µs) and
+/// `tcpi_snd_cwnd`/`tcpi_snd_ssthresh` in **bytes** (Linux: segments). To keep
+/// [`SocketInfo`] cross-platform comparable we keep the ms values as-is
+/// (so macOS RTTs have whole-ms resolution) and convert cwnd/ssthresh
+/// bytes → segments by dividing by the socket's MSS (`TCP_MAXSEG`), reporting
+/// `None` when the MSS is unknown rather than publishing bytes in a
+/// segments-typed field. `tcpi_txretransmitpackets` (a lifetime counter) maps
+/// to `total_retrans`, matching the Linux `tcpi_total_retrans` semantics.
+/// Verified live on Darwin 25.5 (2026-07-27): option 0x106 returns optlen 112;
+/// srtt to example.com read 57 ms with cwnd 13899 B / MSS 1388 = initcwnd 10.
 ///
 /// # Linux tcp_info byte offsets used for version-guarded fields
 ///
@@ -33,17 +46,22 @@ use tokio::net::TcpStream;
 pub struct SocketInfo {
     /// Maximum Segment Size in bytes (TCP_MAXSEG). Best-effort.
     pub mss_bytes: Option<u32>,
-    /// Smoothed RTT in ms (TCP_INFO on Linux, TCP_CONNECTION_INFO on macOS).
+    /// Smoothed RTT in ms (TCP_INFO on Linux, µs-derived; TCP_CONNECTION_INFO
+    /// on macOS, whole-ms resolution — xnu reports srtt in ms).
     pub rtt_estimate_ms: Option<f64>,
-    /// Segments currently queued for retransmit (tcpi_retransmits / txretransmitpackets).
+    /// Segments currently queued for retransmit (Linux tcpi_retransmits).
+    /// macOS has no equivalent field — always `None` there.
     pub retransmits: Option<u32>,
-    /// Lifetime retransmission count (Linux: tcpi_total_retrans).
+    /// Lifetime retransmission count (Linux: tcpi_total_retrans; macOS:
+    /// tcpi_txretransmitpackets).
     pub total_retrans: Option<u32>,
-    /// Congestion window in segments (tcpi_snd_cwnd).
+    /// Congestion window in segments (Linux tcpi_snd_cwnd is segments; macOS
+    /// reports bytes and is converted via MSS, `None` when MSS is unknown).
     pub snd_cwnd: Option<u32>,
-    /// Slow-start threshold; None when the kernel sentinel (infinite) is set.
+    /// Slow-start threshold in segments (same per-platform conversion as
+    /// `snd_cwnd`); None when the kernel "not yet set" sentinel is present.
     pub snd_ssthresh: Option<u32>,
-    /// RTT variance in ms (tcpi_rttvar).
+    /// RTT variance in ms (tcpi_rttvar; whole-ms resolution on macOS).
     pub rtt_variance_ms: Option<f64>,
     /// Receiver advertised window in bytes (tcpi_rcv_space). Linux only.
     pub rcv_space: Option<u32>,
@@ -327,36 +345,58 @@ fn get_congestion_algorithm_linux(fd: libc::c_int) -> Option<String> {
 // macOS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Manual layout for the macOS `tcp_connection_info` struct.
-/// We only need the first 17 × 4-byte words (68 bytes).
+/// Full layout of xnu's `struct tcp_connection_info` (112 bytes), mirrored
+/// field-for-field from the macOS SDK `netinet/tcp.h` (verified against
+/// /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk on Darwin 25.5).
+///
+/// Units per the xnu header comments:
+/// - `tcpi_rttcur`/`tcpi_srtt`/`tcpi_rttvar` — **milliseconds**
+/// - `tcpi_snd_ssthresh`/`tcpi_snd_cwnd`/`tcpi_snd_wnd`/`tcpi_rcv_wnd` — **bytes**
+/// - the `u32` at offset 52 is the TFO **bitfield**, NOT a retransmit count
+///   (the pre-v0.28.82 struct misread it as `tcpi_txretransmitpackets`);
+///   the real `tcpi_txretransmitpackets` is the `u64` at offset 104.
 #[cfg(target_os = "macos")]
 #[repr(C)]
-struct TcpConnectionInfoPartial {
+struct TcpConnectionInfo {
     tcpi_state: u8,
     tcpi_snd_wscale: u8,
     tcpi_rcv_wscale: u8,
     _pad1: u8,
     tcpi_options: u32,
     tcpi_flags: u32,
-    tcpi_rto: u32,
-    tcpi_maxseg: u32,
-    tcpi_snd_ssthresh: u32,
-    tcpi_snd_cwnd: u32,
-    tcpi_snd_wnd: u32,
-    tcpi_snd_nxt: u32,
-    tcpi_rcv_wnd: u32,
-    tcpi_rttcur: u32,
-    tcpi_srtt: u32,                // smoothed RTT, microseconds
-    tcpi_rttvar: u32,              // RTT variance, microseconds
-    tcpi_txretransmitpackets: u32, // retransmit packet count
+    tcpi_rto: u32,          // retransmit timeout, ms
+    tcpi_maxseg: u32,       // MSS, bytes
+    tcpi_snd_ssthresh: u32, // slow-start threshold, BYTES
+    tcpi_snd_cwnd: u32,     // congestion window, BYTES
+    tcpi_snd_wnd: u32,      // send window, bytes
+    tcpi_snd_sbbytes: u32,  // bytes in send socket buffer
+    tcpi_rcv_wnd: u32,      // receive window, bytes
+    tcpi_rttcur: u32,       // most recent RTT, MILLISECONDS
+    tcpi_srtt: u32,         // smoothed RTT, MILLISECONDS
+    tcpi_rttvar: u32,       // RTT variance, MILLISECONDS
+    tcpi_tfo_bits: u32,     // TCP Fast Open bitfield (15 flags + padding)
+    tcpi_txpackets: u64,    // 8-aligned lifetime counters follow
+    tcpi_txbytes: u64,
+    tcpi_txretransmitbytes: u64,
+    tcpi_rxpackets: u64,
+    tcpi_rxbytes: u64,
+    tcpi_rxoutoforderbytes: u64,
+    tcpi_txretransmitpackets: u64, // lifetime retransmitted packets (offset 104)
 }
 
+/// `TCP_CONNECTION_INFO` per xnu `netinet/tcp.h`. The previous value (0x24)
+/// is not a valid xnu TCP option — every `getsockopt` with it failed
+/// `ENOPROTOOPT` and macOS TCP stats were silently absent since they shipped
+/// (verified live on this Darwin 25.5 machine: 0x24 → "Protocol not
+/// available", 0x106 → optlen 112 with plausible srtt/cwnd).
 #[cfg(target_os = "macos")]
-const TCP_CONNECTION_INFO_OPT: libc::c_int = 0x24;
+const TCP_CONNECTION_INFO_OPT: libc::c_int = 0x106;
 
-/// TCP_CONGESTION on macOS (IPPROTO_TCP option 0x20).
+/// xnu's "slow-start threshold not yet set" sentinel:
+/// `TCP_MAXWIN << TCP_MAX_WINSHIFT` = 65535 << 14 = 1_073_725_440 bytes,
+/// observed verbatim on idle connections during the live verification.
 #[cfg(target_os = "macos")]
-const TCP_CONGESTION_MACOS: libc::c_int = 0x20;
+const MACOS_SSTHRESH_UNSET: u32 = 65_535 << 14;
 
 #[cfg(target_os = "macos")]
 fn macos_socket_info(fd: std::os::unix::io::RawFd) -> SocketInfo {
@@ -377,33 +417,15 @@ fn macos_socket_info(fd: std::os::unix::io::RawFd) -> SocketInfo {
         }
     };
 
-    let congestion_algorithm = unsafe {
-        let mut buf = [0u8; 32];
-        let mut len = 32u32;
-        let ret = libc::getsockopt(
-            fd,
-            libc::IPPROTO_TCP,
-            TCP_CONGESTION_MACOS,
-            buf.as_mut_ptr() as *mut libc::c_void,
-            &mut len,
-        );
-        if ret == 0 && len > 0 {
-            let s = std::str::from_utf8(&buf[..len as usize])
-                .unwrap_or("")
-                .trim_end_matches('\0');
-            if s.is_empty() {
-                None
-            } else {
-                Some(s.to_string())
-            }
-        } else {
-            None
-        }
-    };
+    // xnu has NO `TCP_CONGESTION` getsockopt (option 0x20 is
+    // `TCP_CONNECTIONTIMEOUT` — an int; the previous code read it and
+    // interpreted the raw bytes as a UTF-8 algorithm name). The congestion
+    // algorithm is simply not observable per-socket on macOS: honest `None`.
+    let congestion_algorithm = None;
 
-    let (rtt_ms, rtt_var_ms, snd_cwnd, snd_ssthresh, retransmits) = unsafe {
-        let mut info: TcpConnectionInfoPartial = std::mem::zeroed();
-        let mut len = std::mem::size_of::<TcpConnectionInfoPartial>() as libc::socklen_t;
+    let (rtt_ms, rtt_var_ms, snd_cwnd, snd_ssthresh, total_retrans) = unsafe {
+        let mut info: TcpConnectionInfo = std::mem::zeroed();
+        let mut len = std::mem::size_of::<TcpConnectionInfo>() as libc::socklen_t;
         let ret = libc::getsockopt(
             fd,
             libc::IPPROTO_TCP,
@@ -411,35 +433,33 @@ fn macos_socket_info(fd: std::os::unix::io::RawFd) -> SocketInfo {
             &mut info as *mut _ as *mut libc::c_void,
             &mut len,
         );
-        if ret == 0 {
-            let rtt = if info.tcpi_srtt > 0 {
-                Some(info.tcpi_srtt as f64 / 1000.0)
-            } else {
-                None
-            };
-            let rttvar = if info.tcpi_rttvar > 0 {
-                Some(info.tcpi_rttvar as f64 / 1000.0)
-            } else {
-                None
-            };
-            let cwnd = if info.tcpi_snd_cwnd > 0 {
-                Some(info.tcpi_snd_cwnd)
-            } else {
-                None
-            };
-            let ssthresh = {
-                let s = info.tcpi_snd_ssthresh;
-                if s > 0 && s < 0x7fff_ffff {
-                    Some(s)
-                } else {
-                    None
+        // Gate on the length the kernel actually filled: the u32 core needs
+        // 56 bytes, the u64 lifetime counters need the full 112.
+        if ret == 0 && (len as usize) >= 56 {
+            // srtt/rttvar are already in milliseconds (whole-ms resolution;
+            // xnu floors sub-ms loopback RTTs to 1 ms). Dividing by 1000 as
+            // the pre-fix code did would under-report macOS RTT 1000×.
+            let rtt = (info.tcpi_srtt > 0).then_some(info.tcpi_srtt as f64);
+            let rttvar = (info.tcpi_rttvar > 0).then_some(info.tcpi_rttvar as f64);
+            // cwnd/ssthresh are bytes on macOS; convert to segments via MSS
+            // so the field means the same thing on Linux and macOS. Without a
+            // usable MSS the honest answer is None, not bytes-as-segments.
+            let to_segments = |bytes: u32| -> Option<u32> {
+                match mss {
+                    Some(m) if m > 0 && bytes > 0 => {
+                        Some(((bytes as f64 / m as f64).round() as u32).max(1))
+                    }
+                    _ => None,
                 }
             };
-            let retrans = if info.tcpi_txretransmitpackets > 0 {
-                Some(info.tcpi_txretransmitpackets)
-            } else {
+            let cwnd = to_segments(info.tcpi_snd_cwnd);
+            let ssthresh = if info.tcpi_snd_ssthresh >= MACOS_SSTHRESH_UNSET {
                 None
+            } else {
+                to_segments(info.tcpi_snd_ssthresh)
             };
+            let retrans = ((len as usize) >= std::mem::size_of::<TcpConnectionInfo>())
+                .then(|| u32::try_from(info.tcpi_txretransmitpackets).unwrap_or(u32::MAX));
             (rtt, rttvar, cwnd, ssthresh, retrans)
         } else {
             (None, None, None, None, None)
@@ -449,8 +469,11 @@ fn macos_socket_info(fd: std::os::unix::io::RawFd) -> SocketInfo {
     SocketInfo {
         mss_bytes: mss,
         rtt_estimate_ms: rtt_ms,
-        retransmits,
-        total_retrans: None,
+        // xnu exposes no "currently queued for retransmit" count; the lifetime
+        // tcpi_txretransmitpackets counter maps to total_retrans instead
+        // (Linux tcpi_total_retrans semantics).
+        retransmits: None,
+        total_retrans,
         snd_cwnd,
         snd_ssthresh,
         rtt_variance_ms: rtt_var_ms,
@@ -526,16 +549,55 @@ mod tests {
         // congestion algorithm) on a live loopback socket.
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
-            let stats = probe.stats_for_result();
-            assert!(
-                stats.is_some(),
-                "dup'd fd should still report TCP kernel stats after the \
-                 original stream was dropped"
-            );
+            let stats = probe
+                .stats_for_result()
+                .expect("dup'd fd should still report TCP kernel stats");
+            // Regression guard for the broken TCP_CONNECTION_INFO constant
+            // (0x24 instead of xnu's 0x106): the old test passed on MSS
+            // alone, masking that EVERY macOS TCP_CONNECTION_INFO field was
+            // silently None since ship. Require the fields the option call
+            // actually provides. xnu reports srtt in whole ms and floors
+            // loopback RTT to 1 ms, so it is reliably present here; cwnd
+            // (bytes ÷ MSS) is always nonzero on an established connection.
+            #[cfg(target_os = "macos")]
+            {
+                assert!(
+                    stats.rtt_estimate_ms.is_some(),
+                    "macOS TCP_CONNECTION_INFO must yield a smoothed RTT \
+                     (broken getsockopt constant?): {stats:?}"
+                );
+                assert!(
+                    stats.snd_cwnd.is_some(),
+                    "macOS TCP_CONNECTION_INFO must yield cwnd segments: {stats:?}"
+                );
+            }
+            let _ = &stats;
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             let _ = probe.stats();
         }
+    }
+
+    /// xnu's `struct tcp_connection_info` is exactly 112 bytes; the u64
+    /// lifetime counters start at offset 56 and `tcpi_txretransmitpackets`
+    /// sits at offset 104 (NOT 52, which is the TFO bitfield). A drifted
+    /// layout would silently read garbage — pin size and key offsets.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_tcp_connection_info_layout_matches_xnu() {
+        assert_eq!(std::mem::size_of::<TcpConnectionInfo>(), 112);
+        let probe: TcpConnectionInfo = unsafe { std::mem::zeroed() };
+        let base = &probe as *const _ as usize;
+        assert_eq!(&probe.tcpi_snd_ssthresh as *const _ as usize - base, 20);
+        assert_eq!(&probe.tcpi_snd_cwnd as *const _ as usize - base, 24);
+        assert_eq!(&probe.tcpi_srtt as *const _ as usize - base, 44);
+        assert_eq!(&probe.tcpi_rttvar as *const _ as usize - base, 48);
+        assert_eq!(&probe.tcpi_tfo_bits as *const _ as usize - base, 52);
+        assert_eq!(&probe.tcpi_txpackets as *const _ as usize - base, 56);
+        assert_eq!(
+            &probe.tcpi_txretransmitpackets as *const _ as usize - base,
+            104
+        );
     }
 }

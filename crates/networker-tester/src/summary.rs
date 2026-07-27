@@ -457,7 +457,11 @@ fn print_sdk_split(run: &TestRun) {
 /// RTT side by side, the bufferbloat factor, and the RPM headline number.
 /// Averages across all rpm attempts that carry a result (typically one per
 /// run iteration); loss/jitter come from the loaded phase — the user-felt
-/// numbers when the link is saturated.
+/// numbers when the link is loaded. "Jitter" here is the mean inter-probe
+/// delay variation (IPDV), and "RPM" is our UDP-echo-under-load figure — NOT
+/// a draft-ietf-ippm-responsiveness RPM (see `runner/rpm.rs` module docs).
+/// When any loaded probe's echo wait was truncated before its full timeout
+/// (`loaded_probes_censored`), a warning line flags the optimistic bias.
 fn print_rpm_summary(run: &TestRun) {
     let results: Vec<&crate::metrics::RpmResult> = run
         .attempts
@@ -510,6 +514,16 @@ fn print_rpm_summary(run: &TestRun) {
         factor = fmt(avg_opt(&|r| r.bufferbloat_factor), "x"),
         mbps = fmt(avg_opt(&|r| r.load_throughput_mbps), " MB/s"),
     );
+    let censored: u32 = results
+        .iter()
+        .filter_map(|r| r.loaded_probes_censored)
+        .sum();
+    if censored > 0 {
+        println!(
+            "   ⚠ {censored} loaded probe(s) censored (echo wait truncated before \
+             the full timeout) — loaded RTT/factor may be optimistically biased"
+        );
+    }
 }
 
 /// Render the `path` hop table: per-hop router address + RTT on platforms

@@ -1,15 +1,40 @@
-//! Latency-under-load / bufferbloat probe (`rpm` mode, Apple-RPM-style).
+//! Latency-under-load / bufferbloat probe (`rpm` mode).
 //!
 //! Phase 1 samples UDP echo RTT (endpoint port 9999) on an idle link — the
-//! unloaded baseline. Phase 2 saturates the link with back-to-back HTTP
+//! unloaded baseline. Phase 2 loads the link with back-to-back HTTP
 //! `/download` transfers from the networker-endpoint and, DURING the load,
 //! fires UDP echo probes at a steady cadence (default every 100 ms).
 //!
 //! Reported metrics:
 //! - unloaded RTT min/avg/p95 + jitter + loss
-//! - loaded RTT min/avg/p95 + jitter + loss
+//! - loaded RTT min/avg/p95 + jitter + loss (+ censored-probe count)
 //! - `rpm` = 60000 / loaded avg RTT ms (round-trips per minute, higher better)
 //! - `bufferbloat_factor` = loaded avg / unloaded avg (1.0 ≈ no bufferbloat)
+//!
+//! # Methodology honesty — this is NOT draft-ietf-ippm-responsiveness
+//!
+//! The summary label says "RPM", but the method is a UDP-echo-under-load
+//! diagnostic, not the IETF/Apple responsiveness methodology: the load is a
+//! single sequential HTTP flow (no multi-connection ramp to verified
+//! saturation, no upload direction) and latency is probed on a separate UDP
+//! socket (no HTTP probes on new connections, none multiplexed on the loaded
+//! connection — so flow-isolating AQMs like fq_codel/CAKE can queue-jump our
+//! sparse echo stream past the bulk flow's standing queue). Numbers from this
+//! mode are typically far higher than an Apple `networkQuality`/Cloudflare
+//! RPM for the same link and MUST NOT be compared across tools. The
+//! spec-conformant responsiveness program is Wave R.
+//!
+//! # Loaded-tail accounting (no optimistic censoring)
+//!
+//! After the last paced probe, the receive drain stays open until every
+//! outstanding probe has had its full per-probe `--udp-timeout` (Tmax,
+//! default 5 s) — the same loss threshold as the plain `udp` probe — so an
+//! echo delayed seconds by a deep queue is credited as a (large) RTT rather
+//! than silently converted into loss. Only probes unanswered after their
+//! full Tmax count toward `loaded_loss_percent`; probes whose wait was
+//! truncated early are reported in `loaded_probes_censored`. (Previously the
+//! drain was capped at ≤1 s, so on exactly the worst links the slowest
+//! samples were dropped and the loaded average was biased optimistic.)
 //!
 //! The same wire format as the plain `udp` probe is used (big-endian
 //! `[seq u32][timestamp_us i64]` + padding), and echoes are matched by their
@@ -102,7 +127,7 @@ pub async fn run_rpm_probe(
     )
     .await
     {
-        Ok(rtts) => rtts,
+        Ok(train) => train.rtts,
         Err(msg) => return rpm_failed(run_id, attempt_id, sequence_num, started_at, msg),
     };
     let unloaded_stats = aggregate_udp_rtts(&unloaded);
@@ -172,19 +197,22 @@ pub async fn run_rpm_probe(
         cfg.udp.payload_size,
         Pacing::Paced {
             interval_ms: cfg.probe_interval_ms.max(1),
-            grace_ms: cfg.udp.timeout_ms.min(1_000),
+            // Full per-probe loss threshold — see the module docs on
+            // loaded-tail accounting. The drain only runs this long when
+            // echoes are actually outstanding.
+            tmax_ms: cfg.udp.timeout_ms,
         },
     )
     .await;
     let load_duration_ms = load_started.elapsed().as_secs_f64() * 1000.0;
 
-    // The load window and the paced probe window are the same length; abort
+    // The load task stops generating on its own when the window closes; abort
     // whatever transfer is still in flight so the probe returns promptly.
     load_handle.abort();
     let _ = load_handle.await;
 
-    let loaded = match loaded {
-        Ok(rtts) => rtts,
+    let (loaded, loaded_censored) = match loaded {
+        Ok(train) => (train.rtts, train.censored),
         Err(msg) => return rpm_failed(run_id, attempt_id, sequence_num, started_at, msg),
     };
     let loaded_stats = aggregate_udp_rtts(&loaded);
@@ -229,6 +257,7 @@ pub async fn run_rpm_probe(
         loaded_rtt_avg_ms: loaded_stats.avg,
         loaded_rtt_p95_ms: loaded_stats.p95,
         loaded_jitter_ms: loaded_stats.jitter,
+        loaded_probes_censored: Some(loaded_censored),
         rpm,
         bufferbloat_factor,
         load_duration_ms,
@@ -324,8 +353,20 @@ enum Pacing {
     BackToBack { timeout_ms: u64 },
     /// Send probes on a fixed cadence regardless of echo arrival; used during
     /// the loaded phase so samples track queue growth over the whole window.
-    /// After the last send, wait up to `grace_ms` for outstanding echoes.
-    Paced { interval_ms: u64, grace_ms: u64 },
+    /// After the last send, keep draining until every outstanding probe has
+    /// had its full per-probe `tmax_ms` (the `--udp-timeout` loss threshold),
+    /// so late echoes from deep queues count as high RTTs, not loss.
+    Paced { interval_ms: u64, tmax_ms: u64 },
+}
+
+/// Per-probe RTTs plus tail-accounting evidence from one echo train.
+struct EchoTrain {
+    /// Per-probe RTTs (None = unanswered after its full loss threshold).
+    rtts: Vec<Option<f64>>,
+    /// Probes whose echo wait was truncated before their full Tmax elapsed
+    /// (drain ended early, e.g. socket error) — counted as lost in `rtts`
+    /// but possibly just very late (censored observations).
+    censored: u32,
 }
 
 /// Send `count` seq-stamped echo probes and return per-probe RTTs
@@ -335,7 +376,7 @@ async fn echo_rtts(
     count: u32,
     payload_size: usize,
     pacing: Pacing,
-) -> Result<Vec<Option<f64>>, String> {
+) -> Result<EchoTrain, String> {
     let bind_addr: SocketAddr = if target_addr.is_ipv6() {
         "[::]:0".parse().unwrap()
     } else {
@@ -379,16 +420,45 @@ async fn echo_rtts(
         }
     }
 
-    // Grace drain: paced probes near the window's end may still have echoes in
-    // flight (loaded RTTs can exceed the cadence interval).
-    if let Pacing::Paced { grace_ms, .. } = pacing {
+    // Tail drain: paced probes near the window's end may still have echoes in
+    // flight (loaded RTTs under bufferbloat routinely exceed the cadence
+    // interval). Wait until every outstanding probe has had its FULL per-probe
+    // Tmax since its own send — the same loss threshold the plain `udp` probe
+    // applies — so slow echoes are credited as high RTTs instead of loss.
+    // (The previous ≤1 s cap censored exactly the worst samples, biasing the
+    // loaded average optimistic on the worst links — m4 audit §2.3.)
+    let mut censored = 0u32;
+    if let Pacing::Paced { tmax_ms, .. } = pacing {
+        let tmax = Duration::from_millis(tmax_ms);
         if probe_rtts.iter().any(|r| r.is_none()) {
-            let deadline = Instant::now() + Duration::from_millis(grace_ms);
-            recv_echoes(&socket, deadline, None, &send_times, &mut probe_rtts).await;
+            let last_send = send_times.iter().flatten().max().copied();
+            if let Some(last_send) = last_send {
+                // The last probe is the youngest: when its Tmax expires, every
+                // earlier probe's Tmax has expired too.
+                recv_echoes(
+                    &socket,
+                    last_send + tmax,
+                    None,
+                    &send_times,
+                    &mut probe_rtts,
+                )
+                .await;
+            }
         }
+        // Anything still unanswered whose full Tmax has NOT yet elapsed had
+        // its observation window truncated (early drain exit): censored, not
+        // proven lost.
+        censored = send_times
+            .iter()
+            .zip(probe_rtts.iter())
+            .filter(|(sent, rtt)| rtt.is_none() && matches!(sent, Some(at) if at.elapsed() < tmax))
+            .count() as u32;
     }
 
-    Ok(probe_rtts)
+    Ok(EchoTrain {
+        rtts: probe_rtts,
+        censored,
+    })
 }
 
 /// Receive echoes until `deadline` (or, when `until_seq` is set, until that
@@ -500,50 +570,116 @@ mod tests {
     #[tokio::test]
     async fn paced_echo_rtts_credits_all_probes() {
         let (addr, server) = spawn_echo_server();
-        let rtts = echo_rtts(
+        let train = echo_rtts(
             addr,
             5,
             64,
             Pacing::Paced {
                 interval_ms: 20,
-                grace_ms: 500,
+                tmax_ms: 500,
             },
         )
         .await
         .expect("echo_rtts should not error");
         server.abort();
-        assert_eq!(rtts.len(), 5);
+        assert_eq!(train.rtts.len(), 5);
         assert!(
-            rtts.iter().all(|r| r.is_some()),
-            "loopback paced probes must all be credited: {rtts:?}"
+            train.rtts.iter().all(|r| r.is_some()),
+            "loopback paced probes must all be credited: {:?}",
+            train.rtts
         );
+        assert_eq!(train.censored, 0);
     }
 
     #[tokio::test]
     async fn back_to_back_echo_rtts_credits_all_probes() {
         let (addr, server) = spawn_echo_server();
-        let rtts = echo_rtts(addr, 5, 64, Pacing::BackToBack { timeout_ms: 2000 })
+        let train = echo_rtts(addr, 5, 64, Pacing::BackToBack { timeout_ms: 2000 })
             .await
             .expect("echo_rtts should not error");
         server.abort();
-        assert!(rtts.iter().all(|r| r.is_some()), "got {rtts:?}");
+        assert!(
+            train.rtts.iter().all(|r| r.is_some()),
+            "got {:?}",
+            train.rtts
+        );
     }
 
     #[tokio::test]
     async fn paced_echo_rtts_no_server_all_lost() {
         let addr: SocketAddr = "127.0.0.1:19877".parse().unwrap(); // nothing listening
-        let rtts = echo_rtts(
+        let train = echo_rtts(
             addr,
             3,
             64,
             Pacing::Paced {
                 interval_ms: 20,
-                grace_ms: 100,
+                tmax_ms: 100,
             },
         )
         .await
         .expect("echo_rtts should not error");
-        assert!(rtts.iter().all(|r| r.is_none()), "got {rtts:?}");
+        assert!(
+            train.rtts.iter().all(|r| r.is_none()),
+            "got {:?}",
+            train.rtts
+        );
+        // Every probe had its full Tmax elapse — genuinely lost, not censored.
+        assert_eq!(train.censored, 0);
+    }
+
+    /// Regression test for the loaded-tail censoring fix (m4 audit §2.3):
+    /// an echo delayed well past the cadence interval — the bufferbloat
+    /// signature — must be credited as a HIGH RTT by the extended Tmax drain,
+    /// not converted into loss by a short grace cap.
+    #[tokio::test]
+    async fn paced_echo_rtts_credits_late_echo_within_tmax() {
+        let server = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr = server.local_addr().unwrap();
+        server.set_nonblocking(true).unwrap();
+        let server = Arc::new(UdpSocket::from_std(server).unwrap());
+        let handle = {
+            let server = server.clone();
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 4096];
+                while let Ok((n, from)) = server.recv_from(&mut buf).await {
+                    let held = buf[..n].to_vec();
+                    let sock = server.clone();
+                    tokio::spawn(async move {
+                        // Simulate a ~600 ms standing queue: echo far later
+                        // than the 20 ms cadence, so crediting depends on the
+                        // post-window Tmax drain.
+                        tokio::time::sleep(Duration::from_millis(600)).await;
+                        let _ = sock.send_to(&held, from).await;
+                    });
+                }
+            })
+        };
+
+        let train = echo_rtts(
+            addr,
+            3,
+            64,
+            Pacing::Paced {
+                interval_ms: 20,
+                tmax_ms: 5_000,
+            },
+        )
+        .await
+        .expect("echo_rtts should not error");
+        handle.abort();
+        assert!(
+            train.rtts.iter().all(|r| r.is_some()),
+            "late echoes within Tmax must be credited, not counted lost: {:?}",
+            train.rtts
+        );
+        for rtt in train.rtts.iter().flatten() {
+            assert!(
+                *rtt >= 500.0,
+                "credited RTT must reflect the real queue delay, got {rtt:.1} ms"
+            );
+        }
+        assert_eq!(train.censored, 0);
     }
 
     #[tokio::test]

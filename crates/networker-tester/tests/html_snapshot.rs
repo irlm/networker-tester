@@ -149,6 +149,8 @@ fn udp_attempt(run_id: Uuid, seq: u32) -> RequestAttempt {
             rtt_avg_ms: 0.9,
             rtt_p95_ms: 1.7,
             jitter_ms: 0.2,
+            ipdv_p95_ms: None,
+            ipdv_p99_ms: None,
             started_at: fixed_time(seq as i64),
             probe_rtts_ms: vec![Some(0.4), Some(0.9), None, Some(1.7)],
         }),

@@ -681,6 +681,8 @@ fn append_attempt_row_udp_echo_shows_rtt() {
             rtt_avg_ms: 2.5,
             rtt_p95_ms: 3.0,
             jitter_ms: 0.5,
+            ipdv_p95_ms: None,
+            ipdv_p99_ms: None,
             started_at: Utc::now(),
             probe_rtts_ms: vec![Some(2.5); 5],
         }),
