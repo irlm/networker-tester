@@ -120,6 +120,14 @@ pub async fn run_udpdownload_probe(
     let loss = loss_percent(datagrams_sent, datagrams_received);
     let throughput_mbps = mbps(received_bytes, transfer_ms);
 
+    // Local-drop vs path-loss split (B.6): missing seqs above include
+    // datagrams the kernel dropped because OUR receive buffer overflowed —
+    // at bulk rates a scheduling hiccup fills the default ~208 KiB rcvbuf
+    // and the resulting LOCAL drops would otherwise read as path loss. One
+    // getsockopt at transfer end (fresh socket → cumulative = per-transfer);
+    // zero hot-path cost. Reported alongside loss_percent, never subtracted.
+    let diag = crate::runner::socket_info::UdpSocketDiag::from_socket(&sock);
+
     let result = UdpThroughputResult {
         remote_addr: remote_addr.to_string(),
         payload_bytes,
@@ -130,6 +138,8 @@ pub async fn run_udpdownload_probe(
         transfer_ms,
         throughput_mbps,
         started_at,
+        local_drops: diag.local_drops,
+        so_rcvbuf_bytes: diag.so_rcvbuf_bytes,
     };
 
     RequestAttempt {
@@ -246,6 +256,11 @@ pub async fn run_udpupload_probe(
     // Throughput numerator = bytes the server actually received.
     let throughput_mbps = mbps(acked, transfer_ms);
 
+    // Upload loss happens at the SERVER's socket, which we cannot observe —
+    // the client-side diag is still sampled (drops ~0; rcvbuf for context)
+    // rather than fabricating an attribution we don't have.
+    let diag = crate::runner::socket_info::UdpSocketDiag::from_socket(&sock);
+
     let result = UdpThroughputResult {
         remote_addr: remote_addr.to_string(),
         payload_bytes,
@@ -257,6 +272,8 @@ pub async fn run_udpupload_probe(
         transfer_ms,
         throughput_mbps,
         started_at,
+        local_drops: diag.local_drops,
+        so_rcvbuf_bytes: diag.so_rcvbuf_bytes,
     };
 
     RequestAttempt {

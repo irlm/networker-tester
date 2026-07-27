@@ -290,6 +290,8 @@ pub async fn run_curl_probe(
         content_encoding: None,
         content_length_header: None,
         security_headers: None,
+        quic_stats: None,
+        quic_resumption_stats: None,
     };
     let success = parsed.code > 0 && parsed.code < 400;
 

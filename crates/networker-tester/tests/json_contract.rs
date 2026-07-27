@@ -13,9 +13,9 @@
 use chrono::Utc;
 use networker_tester::metrics::{
     BenchmarkEnvironmentCheck, BenchmarkNoiseThresholds, ClockSync, CpuUsage, DnsResult, GeoInfo,
-    HostInfo, HttpResult, LoadSample, PageLoadResult, Protocol, RequestAttempt, SecurityHeaders,
-    SocketStats, TcpResult, TestRun, TlsResult, UrlDiagnosticStatus, UrlPageLoadStrategy,
-    UrlTestRun, SCHEMA_VERSION,
+    HostInfo, HttpResult, LoadSample, PageLoadResult, Protocol, QuicStats, RequestAttempt,
+    SecurityHeaders, SocketStats, TcpResult, TestRun, TlsResult, UrlDiagnosticStatus,
+    UrlPageLoadStrategy, UrlTestRun, SCHEMA_VERSION,
 };
 use uuid::Uuid;
 
@@ -114,6 +114,8 @@ fn sample_run() -> TestRun {
             content_encoding: None,
             content_length_header: None,
             security_headers: None,
+            quic_stats: None,
+            quic_resumption_stats: None,
         }),
         udp: None,
         error: None,
@@ -549,6 +551,89 @@ fn security_headers_field_is_additive_and_optional() {
         .expect("security_headers round-trips");
     assert_eq!(sec.x_content_type_options_nosniff, Some(true));
     assert_eq!(sec.csp_present, Some(false));
+}
+
+/// Deep-measurement M1 B.1 / M3 G1 additive fields `http.quic_stats` and
+/// `http.quic_resumption_stats` (post-transfer `quinn::Connection::stats()`
+/// snapshots): serde-defaulted, skip-serialized when unset — an unpopulated
+/// run keeps the exact pre-existing shape, old JSON still deserializes, and a
+/// populated snapshot round-trips. schema_version stays 1.0.
+#[test]
+fn quic_stats_fields_are_additive_and_optional() {
+    // Unset → omitted (shape unchanged) and absent-field JSON deserializes.
+    let run = sample_run();
+    let v: serde_json::Value = serde_json::to_value(&run).expect("serialize");
+    let http = v.pointer("/attempts/0/http").expect("http block");
+    for field in ["quic_stats", "quic_resumption_stats"] {
+        assert!(
+            http.get(field).is_none(),
+            "http.{field} must be omitted when unset (frozen 1.0 shape unchanged)"
+        );
+    }
+    let back: TestRun = serde_json::from_value(v).expect("deserialize");
+    let http = back.attempts[0].http.as_ref().expect("http");
+    assert!(http.quic_stats.is_none());
+    assert!(http.quic_resumption_stats.is_none());
+
+    // Populated → round-trips, and every field inside QuicStats is itself
+    // optional (a partially-populated snapshot serializes only what it has).
+    let mut run = sample_run();
+    run.attempts[0].http.as_mut().unwrap().quic_stats = Some(QuicStats {
+        rtt_ms: Some(12.34),
+        cwnd_bytes: Some(98_765),
+        current_mtu: Some(1_452),
+        lost_packets: Some(3),
+        lost_bytes: Some(3_600),
+        sent_packets: Some(210),
+        congestion_events: Some(2),
+        sent_plpmtud_probes: Some(5),
+        lost_plpmtud_probes: Some(1),
+        black_holes_detected: Some(0),
+        udp_tx_datagrams: Some(180),
+        udp_tx_bytes: Some(42_000),
+        udp_rx_datagrams: Some(150),
+        udp_rx_bytes: Some(1_048_576),
+        congestion_algorithm: Some("cubic (client-config)".into()),
+    });
+    run.attempts[0].http.as_mut().unwrap().quic_resumption_stats = Some(QuicStats {
+        sent_packets: Some(9),
+        ..Default::default()
+    });
+    let v = serde_json::to_value(&run).expect("serialize populated");
+    assert_eq!(
+        v.pointer("/attempts/0/http/quic_stats/cwnd_bytes")
+            .and_then(|n| n.as_u64()),
+        Some(98_765),
+        "QUIC cwnd is bytes — must serialize under the explicit _bytes name"
+    );
+    assert_eq!(
+        v.pointer("/attempts/0/http/quic_stats/lost_packets")
+            .and_then(|n| n.as_u64()),
+        Some(3)
+    );
+    assert_eq!(
+        v.pointer("/attempts/0/http/quic_resumption_stats/sent_packets")
+            .and_then(|n| n.as_u64()),
+        Some(9)
+    );
+    // Unset optional fields inside the struct are skipped, not nulled.
+    assert!(v
+        .pointer("/attempts/0/http/quic_resumption_stats/rtt_ms")
+        .is_none());
+    let back: TestRun = serde_json::from_value(v).expect("deserialize populated");
+    let q = back.attempts[0]
+        .http
+        .as_ref()
+        .unwrap()
+        .quic_stats
+        .as_ref()
+        .expect("quic_stats round-trips");
+    assert_eq!(q.rtt_ms, Some(12.34));
+    assert_eq!(q.current_mtu, Some(1_452));
+    assert_eq!(
+        q.congestion_algorithm.as_deref(),
+        Some("cubic (client-config)")
+    );
 }
 
 /// Measurement-gap #15 additive fields `client_load_before` /
@@ -1018,5 +1103,113 @@ fn attempt_phase_field_is_additive_and_optional() {
     assert_eq!(back.attempts[0].phase.as_deref(), Some("warmup"));
 
     // Schema version stays frozen at 1.0 — the field is additive.
+    assert_eq!(SCHEMA_VERSION, "1.0");
+}
+
+/// Additive B.2 tcp_info fields on `socket_stats` (busy/rwnd/sndbuf triad,
+/// bytes_retrans, delivered_ce, ECN/TFO/app-limited flags, pacing rate…):
+/// omitted when unobserved (non-Linux, old kernels, pre-fix JSON) and
+/// round-trip when populated. schema_version stays 1.0.
+#[test]
+fn socket_stats_b2_tcp_info_fields_are_additive_and_optional() {
+    // Pre-B.2 JSON (no new keys) must deserialize to all-None.
+    let old: SocketStats = serde_json::from_str(r#"{"mss_bytes": 1460, "rtt_estimate_ms": 1.5}"#)
+        .expect("pre-B.2 socket_stats JSON deserializes");
+    assert_eq!(old.busy_time_us, None);
+    assert_eq!(old.rwnd_limited_us, None);
+    assert_eq!(old.sndbuf_limited_us, None);
+    assert_eq!(old.bytes_retrans, None);
+    assert_eq!(old.delivered_ce, None);
+    assert_eq!(old.ecn_negotiated, None);
+    assert_eq!(old.tfo_used, None);
+    assert_eq!(old.app_limited, None);
+    assert_eq!(old.pacing_rate_bps, None);
+    assert_eq!(old.rcv_rtt_ms, None);
+
+    // Unobserved fields are omitted on the wire (shape unchanged for
+    // non-Linux testers and old kernels).
+    let v = serde_json::to_value(&old).expect("serialize");
+    for key in [
+        "busy_time_us",
+        "rwnd_limited_us",
+        "sndbuf_limited_us",
+        "bytes_acked",
+        "bytes_sent",
+        "bytes_retrans",
+        "delivered",
+        "delivered_ce",
+        "ecn_negotiated",
+        "tfo_used",
+        "app_limited",
+        "pacing_rate_bps",
+        "notsent_bytes",
+        "reord_seen",
+        "dsack_dups",
+        "rcv_rtt_ms",
+    ] {
+        assert!(v.get(key).is_none(), "{key} must be omitted when None");
+    }
+
+    // Populated triad + flags round-trip.
+    let populated = SocketStats {
+        busy_time_us: Some(1_000_000),
+        rwnd_limited_us: Some(840_000),
+        sndbuf_limited_us: Some(0),
+        bytes_retrans: Some(2_896),
+        bytes_sent: Some(1_050_000),
+        delivered_ce: Some(3),
+        ecn_negotiated: Some(true),
+        tfo_used: Some(false),
+        app_limited: Some(true),
+        ..Default::default()
+    };
+    let v = serde_json::to_value(&populated).expect("serialize populated");
+    let back: SocketStats = serde_json::from_value(v).expect("deserialize populated");
+    assert_eq!(back, populated);
+    assert_eq!(SCHEMA_VERSION, "1.0");
+}
+
+/// Additive B.6 UDP local-drop split fields (`local_drops`,
+/// `so_rcvbuf_bytes` on udp/udp_throughput; `loaded_local_drops` on rpm):
+/// absent in pre-fix JSON, omitted when unobservable (None ≠ 0), and
+/// round-trip when populated — loss_percent stays untouched (the split is
+/// surfaced, never subtracted).
+#[test]
+fn udp_local_drop_fields_are_additive_and_optional() {
+    use networker_tester::metrics::UdpThroughputResult;
+
+    // Pre-B.6 JSON must deserialize with honest None (not zero).
+    let old: UdpThroughputResult = serde_json::from_str(
+        r#"{
+            "remote_addr": "127.0.0.1:9998", "payload_bytes": 262144,
+            "datagrams_sent": 188, "datagrams_received": 180,
+            "loss_percent": 4.2, "transfer_ms": 10.0,
+            "throughput_mbps": 25.0, "started_at": "2026-07-27T00:00:00Z"
+        }"#,
+    )
+    .expect("pre-B.6 udp_throughput JSON deserializes");
+    assert_eq!(old.local_drops, None);
+    assert_eq!(old.so_rcvbuf_bytes, None);
+    // loss_percent untouched by the split.
+    assert!((old.loss_percent - 4.2).abs() < 1e-9);
+
+    // None → omitted on the wire.
+    let v = serde_json::to_value(&old).expect("serialize");
+    assert!(v.get("local_drops").is_none());
+    assert!(v.get("so_rcvbuf_bytes").is_none());
+
+    // Populated → round-trips; both figures visible side by side.
+    let mut populated = old.clone();
+    populated.local_drops = Some(8);
+    populated.so_rcvbuf_bytes = Some(212_992);
+    let v = serde_json::to_value(&populated).expect("serialize populated");
+    assert_eq!(v.get("local_drops").and_then(|n| n.as_u64()), Some(8));
+    assert_eq!(
+        v.get("so_rcvbuf_bytes").and_then(|n| n.as_u64()),
+        Some(212_992)
+    );
+    let back: UdpThroughputResult = serde_json::from_value(v).expect("deserialize populated");
+    assert_eq!(back.local_drops, Some(8));
+    assert!((back.loss_percent - 4.2).abs() < 1e-9);
     assert_eq!(SCHEMA_VERSION, "1.0");
 }

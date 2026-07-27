@@ -11,6 +11,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.83] — 2026-07-27
+
+Wave S — transport symmetry: the deep audit's top-scored capability gaps.
+All JSON changes additive (schema 1.0).
+
+### Added
+- **QUIC transport stats** (audit items M1 B.1 / M3 G1, scored 90/88): h3
+  attempts finally carry transport facts — `http.quic_stats` from quinn's
+  post-transfer `Connection::stats()` (RTT, cwnd-in-bytes per RFC 9002, live
+  DPLPMTUD MTU, lost packets/bytes, congestion events, PLPMTUD probes, black
+  holes, UDP datagram/byte counters both directions) for http3, download3,
+  upload3, and pageload3; the 0-RTT follow-up connection gets its own
+  snapshot (`quic_resumption_stats`). Honest absences: quinn exposes no
+  ECN/PTO counters (fields absent, not faked); congestion algorithm is
+  recorded as "cubic (client-config)" — config-known, not kernel-queried.
+  Summary warns on QUIC loss like the TCP retransmission note.
+- **Full Linux `tcp_info` depth** (M1 B.2, 88): 16 new `socket_stats` fields
+  from the same syscall — the **throughput-attribution triad**
+  (`busy/rwnd/sndbuf_limited_us`: the summary now states "receiver-window-
+  limited 84% of the transfer" instead of letting the number blame the path),
+  `bytes_retrans`/`bytes_acked`/`bytes_sent` (RFC 6349 ratio inputs),
+  `delivered`/`delivered_ce` (ECN/L4S), decoded `ecn_negotiated`/`tfo_used`,
+  `app_limited` (pre-4.9 padding trap handled), `pacing_rate_bps`,
+  `notsent_bytes`, `reord_seen`, `dsack_dups`, `rcv_rtt_us`. Offsets pinned
+  per kernel version; macOS/Windows honestly None.
+- **UDP local-drop vs path-loss split** (M1 B.6, 80): `local_drops` (via
+  `SO_MEMINFO`, zero hot-path syscalls) + `so_rcvbuf_bytes` on
+  UDP/UDP-throughput results (+ rpm's loaded phase) — receive-buffer overflow
+  is no longer silently reported as path loss; both are surfaced separately
+  with a summary warning, never subtracted.
+
+---
+
 ## [0.28.82] — 2026-07-27
 
 **Measurement-trust wave (Wave T): reported numbers CHANGE in this release

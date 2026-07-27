@@ -1761,6 +1761,62 @@ pub struct SocketStats {
     /// Minimum RTT ever observed by the kernel in ms (Linux ≥ 4.9: tcpi_min_rtt).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_rtt_ms: Option<f64>,
+    // ── B.2 full Linux tcp_info (all additive, Linux-only, None elsewhere) ──
+    /// µs the connection was busy sending data (Linux ≥ 4.10: tcpi_busy_time).
+    /// Denominator of the throughput-attribution triad below.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub busy_time_us: Option<u64>,
+    /// µs of busy time limited by the peer's receive window (Linux ≥ 4.10:
+    /// tcpi_rwnd_limited) — throughput bottleneck was the receiver.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rwnd_limited_us: Option<u64>,
+    /// µs of busy time limited by the local send buffer (Linux ≥ 4.10:
+    /// tcpi_sndbuf_limited) — throughput bottleneck was local, not the path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sndbuf_limited_us: Option<u64>,
+    /// Bytes acked by the peer (Linux ≥ 4.1: tcpi_bytes_acked, RFC 4898).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_acked: Option<u64>,
+    /// Bytes sent incl. retransmissions (Linux ≥ 4.19: tcpi_bytes_sent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_sent: Option<u64>,
+    /// Bytes retransmitted (Linux ≥ 4.19: tcpi_bytes_retrans) — RFC 6349
+    /// retransmitted-bytes-ratio numerator over `bytes_sent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_retrans: Option<u64>,
+    /// Data packets delivered to the peer (Linux ≥ 4.18: tcpi_delivered).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivered: Option<u32>,
+    /// Delivered packets that carried an ECN CE mark (Linux ≥ 4.18:
+    /// tcpi_delivered_ce) — real ECN/L4S congestion signal (RFC 3168/9330).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivered_ce: Option<u32>,
+    /// ECN was negotiated at session init (tcpi_options TCPI_OPT_ECN).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ecn_negotiated: Option<bool>,
+    /// TCP Fast Open data rode the SYN (tcpi_options TCPI_OPT_SYN_DATA).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tfo_used: Option<bool>,
+    /// `delivery_rate_bps` was application-limited (Linux ≥ 4.9 bitfield) —
+    /// when true the delivery rate is NOT a path-capacity signal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_limited: Option<bool>,
+    /// Kernel pacing rate in bytes/sec (Linux ≥ 3.15: tcpi_pacing_rate).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pacing_rate_bps: Option<u64>,
+    /// Bytes queued but unsent at sample time (Linux ≥ 4.6: tcpi_notsent_bytes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notsent_bytes: Option<u32>,
+    /// Reordering events observed (Linux ≥ 4.19: tcpi_reord_seen).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reord_seen: Option<u32>,
+    /// DSACK-reported duplicates (Linux ≥ 4.19: tcpi_dsack_dups) — with
+    /// `reord_seen`, separates spurious retransmission from genuine loss.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dsack_dups: Option<u32>,
+    /// Receiver-side RTT estimate in ms (tcpi_rcv_rtt).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rcv_rtt_ms: Option<f64>,
 }
 
 impl SocketStats {
@@ -1770,6 +1826,90 @@ impl SocketStats {
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
     }
+}
+
+/// QUIC transport statistics sampled from `quinn::Connection::stats()`
+/// **after** the response body completed, before the connection is closed —
+/// the QUIC analogue of the post-transfer TCP kernel snapshot
+/// ([`SocketStats`], sampled on a dup of the probe socket). Deep-measurement
+/// audit M1 §B.1 / M3 §G1: h3 probes previously reported zero transport facts
+/// while TCP modes carried full kernel stats.
+///
+/// QUIC is userspace, so unlike `TCP_INFO` this is identical on
+/// Linux/macOS/Windows and needs no privileges. Sources (quinn-proto 0.11
+/// `ConnectionStats`): `PathStats` (rtt, cwnd, loss, congestion, DPLPMTUD)
+/// and `UdpStats` (datagram/byte counts per direction).
+///
+/// NOT exposed by quinn 0.11 and therefore honestly absent (not faked):
+/// ECN counters, PTO/loss-timer episode counts, and per-ACK delivery rate.
+///
+/// Every field is optional and additive (serde-defaulted, skipped when
+/// `None`); `schema_version` stays 1.0.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct QuicStats {
+    /// Current smoothed path RTT estimate in ms (`PathStats::rtt`) — the QUIC
+    /// analogue of `tcpi_rtt`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rtt_ms: Option<f64>,
+    /// Congestion window in **bytes** (`PathStats::cwnd`). QUIC congestion
+    /// control is byte-based (RFC 9002) — deliberately NOT converted to
+    /// segments, so this is not directly comparable to
+    /// [`SocketStats::snd_cwnd`] (segments) without multiplying by MSS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwnd_bytes: Option<u64>,
+    /// Largest UDP payload the path currently supports in bytes
+    /// (`PathStats::current_mtu`) — the connection's live DPLPMTUD (RFC 8899)
+    /// verdict; cross-checks the `pmtud` probe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_mtu: Option<u16>,
+    /// Packets declared lost on this path (`PathStats::lost_packets`) — with
+    /// `congestion_events`, the QUIC analogue of `total_retrans`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lost_packets: Option<u64>,
+    /// Bytes declared lost on this path (`PathStats::lost_bytes`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lost_bytes: Option<u64>,
+    /// Packets sent on this path (`PathStats::sent_packets`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent_packets: Option<u64>,
+    /// Congestion events (loss/ECN-triggered cwnd reductions,
+    /// `PathStats::congestion_events`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub congestion_events: Option<u64>,
+    /// DPLPMTUD probe packets sent (`PathStats::sent_plpmtud_probes`; also
+    /// counted by `sent_packets`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent_plpmtud_probes: Option<u64>,
+    /// DPLPMTUD probe packets lost (`PathStats::lost_plpmtud_probes`; ignored
+    /// by `lost_packets`/`lost_bytes`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lost_plpmtud_probes: Option<u64>,
+    /// Times a path MTU black hole was detected
+    /// (`PathStats::black_holes_detected`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub black_holes_detected: Option<u64>,
+    /// UDP datagrams transmitted on the connection (`udp_tx.datagrams`).
+    /// May differ from `sent_packets`: QUIC can coalesce packets into one
+    /// datagram and uses GSO batching.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_tx_datagrams: Option<u64>,
+    /// UDP payload bytes transmitted on the connection (`udp_tx.bytes`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_tx_bytes: Option<u64>,
+    /// UDP datagrams received on the connection (`udp_rx.datagrams`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_rx_datagrams: Option<u64>,
+    /// UDP payload bytes received on the connection (`udp_rx.bytes`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_rx_bytes: Option<u64>,
+    /// Congestion control algorithm of OUR client configuration — quinn's
+    /// `TransportConfig` default (Cubic) since the probes never override it.
+    /// Honestly labeled `"cubic (client-config)"`: unlike
+    /// [`SocketStats::congestion_algorithm`] (queried live from the kernel
+    /// via `TCP_CONGESTION`), quinn exposes no runtime controller query, so
+    /// this records configuration, not an observed kernel fact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub congestion_algorithm: Option<String>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2090,6 +2230,22 @@ pub struct HttpResult {
     /// Additive (measurement-gap #14).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub security_headers: Option<SecurityHeaders>,
+    /// QUIC transport stats for the PRIMARY connection, sampled from
+    /// `quinn::Connection::stats()` after the response body completed (see
+    /// [`QuicStats`]). Present for http3/download3/upload3 and pageload3's
+    /// cold connection; None for TCP-based protocols (which carry
+    /// `socket_stats` instead) and for probes that don't own the QUIC
+    /// connection (browser3). Additive (deep-measurement M1 B.1 / M3 G1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quic_stats: Option<QuicStats>,
+    /// QUIC transport stats for the resumption FOLLOW-UP connection (the
+    /// second connection the plain `http3` probe opens to measure TLS 1.3
+    /// session resumption / 0-RTT — see [`TlsResult::quic_resumed`]).
+    /// Sampled after that connection's early-data exchange completes; None
+    /// when no follow-up connection ran (download3/upload3/pageload3) or it
+    /// failed before completing. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quic_resumption_stats: Option<QuicStats>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2119,6 +2275,19 @@ pub struct UdpResult {
     pub started_at: DateTime<Utc>,
     /// Per-probe RTT values (ms), None if probe was lost.
     pub probe_rtts_ms: Vec<Option<f64>>,
+    /// Echo datagrams the kernel dropped on OUR socket because its receive
+    /// buffer was full (Linux ≥ 4.14 SO_MEMINFO `sk_drops`; measurement gap
+    /// B.6). These arrived over the path and are still counted inside
+    /// `loss_percent` — reported separately, never subtracted, so path loss
+    /// and local overflow stay distinguishable. `None` = unobservable
+    /// (macOS/Windows/old kernels/pre-fix results), NOT zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_drops: Option<u64>,
+    /// Effective `SO_RCVBUF` of the probe socket in bytes at transfer end
+    /// (context for `local_drops`; Linux reports the kernel-doubled
+    /// bookkeeping value, as `ss -m` shows). Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub so_rcvbuf_bytes: Option<u32>,
 }
 
 /// UDP bulk throughput transfer result (udpdownload / udpupload modes).
@@ -2139,6 +2308,14 @@ pub struct UdpThroughputResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bytes_acked: Option<usize>,
     /// Datagram loss percentage (based on unique seq_num gaps).
+    ///
+    /// **Includes local drops.** For downloads, datagrams the kernel dropped
+    /// because OUR socket's receive buffer overflowed count as missing seqs
+    /// here — indistinguishable from path loss without `local_drops`. When
+    /// `local_drops` is `None` (non-Linux, kernels < 4.14, pre-fix results)
+    /// the split is unobservable and this figure may over-attribute loss to
+    /// the path (measurement gap B.6). The split is surfaced, never silently
+    /// subtracted.
     pub loss_percent: f64,
     /// Total transfer window in ms. Download: first data packet to CMD_DONE
     /// received. Upload: send start to CMD_DONE sent — the CMD_REPORT
@@ -2147,6 +2324,18 @@ pub struct UdpThroughputResult {
     /// Measured throughput in MB/s; None if transfer_ms = 0.
     pub throughput_mbps: Option<f64>,
     pub started_at: DateTime<Utc>,
+    /// Datagrams the kernel dropped on OUR socket (receive-buffer overflow;
+    /// Linux ≥ 4.14 SO_MEMINFO `sk_drops`). Meaningful for downloads (client
+    /// receives the stream); ~0 for uploads (drops happen server-side).
+    /// Counted inside `loss_percent` — reported separately for attribution.
+    /// `None` = unobservable, NOT zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_drops: Option<u64>,
+    /// Effective `SO_RCVBUF` of the probe socket in bytes at transfer end —
+    /// the buffer whose overflow `local_drops` counts (Linux reports the
+    /// kernel-doubled bookkeeping value). Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub so_rcvbuf_bytes: Option<u32>,
 }
 
 /// Latency-under-load / bufferbloat result (`rpm` mode).
@@ -2205,6 +2394,15 @@ pub struct RpmResult {
     /// biased. Additive; absent in pre-v0.28.82 results.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loaded_probes_censored: Option<u32>,
+    /// Loaded-phase echo datagrams the kernel dropped on OUR socket
+    /// (receive-buffer overflow; Linux ≥ 4.14 SO_MEMINFO `sk_drops`). The
+    /// loaded phase is exactly when the probe process is busiest, so a
+    /// scheduling hiccup can overflow the echo socket and masquerade as
+    /// under-load loss — these drops are counted inside
+    /// `loaded_loss_percent` and reported separately here (B.6). `None` =
+    /// unobservable, NOT zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loaded_local_drops: Option<u64>,
     // ── Derived headline metrics ───────────────────────────────────────────
     /// Round-trips per minute under load: 60000 / loaded_rtt_avg_ms.
     /// `None` when every loaded probe was lost (no avg to derive from).
@@ -3935,6 +4133,8 @@ mod tests {
                 content_encoding: None,
                 content_length_header: None,
                 security_headers: None,
+                quic_stats: None,
+                quic_resumption_stats: None,
             });
             assert!(
                 (primary_metric_value(&a).unwrap() - 25.0).abs() < 1e-9,
@@ -3974,6 +4174,8 @@ mod tests {
     fn primary_metric_value_udp() {
         let mut a = bare_attempt(Protocol::Udp);
         a.udp = Some(UdpResult {
+            local_drops: None,
+            so_rcvbuf_bytes: None,
             remote_addr: "1.2.3.4:9999".into(),
             probe_count: 10,
             success_count: 10,
@@ -4000,6 +4202,8 @@ mod tests {
         let mut a = bare_attempt(Protocol::Udp);
         a.success = false;
         a.udp = Some(UdpResult {
+            local_drops: None,
+            so_rcvbuf_bytes: None,
             remote_addr: "1.2.3.4:9999".into(),
             probe_count: 10,
             success_count: 0,
@@ -4030,6 +4234,7 @@ mod tests {
         let mut a = bare_attempt(Protocol::Rpm);
         assert!(primary_metric_value(&a).is_none(), "absent rpm → None");
         a.rpm = Some(RpmResult {
+            loaded_local_drops: None,
             remote_addr: "1.2.3.4:9999".into(),
             unloaded_probe_count: 10,
             unloaded_success_count: 10,
@@ -4064,6 +4269,7 @@ mod tests {
         let mut a = bare_attempt(Protocol::Rpm);
         a.success = false;
         a.rpm = Some(RpmResult {
+            loaded_local_drops: None,
             remote_addr: "1.2.3.4:9999".into(),
             unloaded_probe_count: 10,
             unloaded_success_count: 10,
@@ -4131,6 +4337,8 @@ mod tests {
                 content_encoding: None,
                 content_length_header: None,
                 security_headers: None,
+                quic_stats: None,
+                quic_resumption_stats: None,
             });
             assert!(
                 (primary_metric_value(&a).unwrap() - 100.0).abs() < 1e-9,
@@ -4144,6 +4352,8 @@ mod tests {
         for proto in [Protocol::UdpDownload, Protocol::UdpUpload] {
             let mut a = bare_attempt(proto.clone());
             a.udp_throughput = Some(UdpThroughputResult {
+                local_drops: None,
+                so_rcvbuf_bytes: None,
                 remote_addr: "127.0.0.1:9998".into(),
                 payload_bytes: 1_048_576,
                 datagrams_sent: 100,
@@ -4424,6 +4634,8 @@ mod tests {
             content_encoding: None,
             content_length_header: None,
             security_headers: None,
+            quic_stats: None,
+            quic_resumption_stats: None,
         });
         assert_eq!(attempt_payload_bytes(&a), Some(65536));
     }
@@ -4452,6 +4664,8 @@ mod tests {
             content_encoding: None,
             content_length_header: None,
             security_headers: None,
+            quic_stats: None,
+            quic_resumption_stats: None,
         });
         assert!(attempt_payload_bytes(&a).is_none());
     }
@@ -4460,6 +4674,8 @@ mod tests {
     fn attempt_payload_bytes_from_udp_throughput() {
         let mut a = bare_attempt(Protocol::UdpDownload);
         a.udp_throughput = Some(UdpThroughputResult {
+            local_drops: None,
+            so_rcvbuf_bytes: None,
             remote_addr: "127.0.0.1:9998".into(),
             payload_bytes: 1_048_576,
             datagrams_sent: 100,

@@ -895,6 +895,98 @@ pub(super) fn write_run_sections(run: &TestRun, out: &mut String) {
         );
     }
 
+    // ── QUIC transport stats (deep-measurement M1 B.1 / M3 G1) ───────────────
+    // Post-transfer `quinn::Connection::stats()` snapshot for h3 attempts —
+    // the QUIC mirror of the TCP Stats card above. Data-gated: rendered only
+    // when an attempt carries `http.quic_stats`, so runs without it (all TCP
+    // modes, older JSON) produce byte-identical reports.
+    let quic_rows: Vec<&RequestAttempt> = run
+        .attempts
+        .iter()
+        .filter(|a| a.http.as_ref().is_some_and(|h| h.quic_stats.is_some()))
+        .collect();
+    if !quic_rows.is_empty() {
+        let open_attr = if quic_rows.len() <= 20 { " open" } else { "" };
+        let _ = write!(
+            out,
+            r#"
+<section class="card">
+  <h2>QUIC Stats</h2>
+  <details{open}>
+    <summary><span class="grp-lbl">{n} connections</span></summary>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th><th>Protocol</th>
+          <th>RTT (ms)</th><th>Cwnd (B)</th><th>MTU (B)</th>
+          <th>Sent Pkts</th><th>Lost Pkts</th><th>Lost Bytes</th>
+          <th>Congestion Events</th><th>Black Holes</th>
+          <th>UDP Tx/Rx (datagrams)</th><th>Congestion</th>
+        </tr>
+      </thead>
+      <tbody>
+"#,
+            open = open_attr,
+            n = quic_rows.len(),
+        );
+        let dash = || "—".to_string();
+        for a in &quic_rows {
+            let q = a.http.as_ref().and_then(|h| h.quic_stats.as_ref()).unwrap();
+            let udp = match (q.udp_tx_datagrams, q.udp_rx_datagrams) {
+                (Some(tx), Some(rx)) => format!("{tx} / {rx}"),
+                _ => dash(),
+            };
+            let _ = write!(
+                out,
+                r#"        <tr>
+          <td>{seq}</td>
+          <td>{proto}</td>
+          <td>{rtt}</td>
+          <td>{cwnd}</td>
+          <td>{mtu}</td>
+          <td>{sent}</td>
+          <td>{lost}</td>
+          <td>{lost_bytes}</td>
+          <td>{cong_events}</td>
+          <td>{black_holes}</td>
+          <td>{udp}</td>
+          <td>{cong}</td>
+        </tr>
+"#,
+                seq = a.sequence_num,
+                proto = a.protocol,
+                rtt = q.rtt_ms.map(|v| format!("{v:.3}")).unwrap_or_else(dash),
+                cwnd = q.cwnd_bytes.map(|v| v.to_string()).unwrap_or_else(dash),
+                mtu = q.current_mtu.map(|v| v.to_string()).unwrap_or_else(dash),
+                sent = q.sent_packets.map(|v| v.to_string()).unwrap_or_else(dash),
+                lost = q.lost_packets.map(|v| v.to_string()).unwrap_or_else(dash),
+                lost_bytes = q.lost_bytes.map(|v| v.to_string()).unwrap_or_else(dash),
+                cong_events = q
+                    .congestion_events
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(dash),
+                black_holes = q
+                    .black_holes_detected
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(dash),
+                udp = udp,
+                cong = q
+                    .congestion_algorithm
+                    .as_ref()
+                    .map(|s| escape_html(s))
+                    .unwrap_or_else(dash),
+            );
+        }
+        let _ = writeln!(
+            out,
+            r##"  <p class="note">Sampled from userspace QUIC (<code>quinn::Connection::stats()</code>) after the transfer completed. Cwnd is in <em>bytes</em> (RFC 9002), not segments; the congestion algorithm is the client's quinn configuration, not a kernel-queried value.</p>"##
+        );
+        let _ = writeln!(
+            out,
+            "      </tbody>\n    </table>\n  </details>\n</section>"
+        );
+    }
+
     // ── DNS depth (dns mode: A/AAAA split timing, record counts, CNAME) ──────
     // Data-gated on the wave-1 depth fields; plain resolves render nothing new.
     write_dns_depth_section(run, out);

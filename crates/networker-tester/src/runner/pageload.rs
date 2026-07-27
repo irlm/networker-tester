@@ -713,6 +713,8 @@ async fn run_h1_keepalive_connection(
                     content_encoding: crate::runner::http::extract_content_meta(&headers).0,
                     content_length_header: crate::runner::http::extract_content_meta(&headers).1,
                     security_headers: None,
+                    quic_stats: None,
+                    quic_resumption_stats: None,
                 };
                 (Some(http), st, ttfb_ms)
             }
@@ -1121,6 +1123,8 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         content_encoding: crate::runner::http::extract_content_meta(&manifest_headers).0,
         content_length_header: crate::runner::http::extract_content_meta(&manifest_headers).1,
         security_headers: None,
+        quic_stats: None,
+        quic_resumption_stats: None,
     };
 
     // ── Asset requests (all in-flight simultaneously over the H2 connection) ──
@@ -1577,6 +1581,11 @@ pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
     };
     let handshake_ms = t_handshake.elapsed().as_secs_f64() * 1000.0;
 
+    // Cheap handle clone: `conn` is consumed by the h3 client below; the
+    // clone samples `Connection::stats()` after all assets complete — the
+    // QUIC analogue of pageload2's per-connection TCP dup-fd snapshot.
+    let conn_handle = conn.clone();
+
     // ── H3 client ─────────────────────────────────────────────────────────────
     let (mut driver, mut send_req) = match h3::client::new(QuinnH3Connection::new(conn)).await {
         Ok(pair) => pair,
@@ -1676,7 +1685,7 @@ pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         zero_rtt_accepted: None,
         quic_resumed_handshake_ms: None,
     };
-    let manifest_http = crate::metrics::HttpResult {
+    let mut manifest_http = crate::metrics::HttpResult {
         negotiated_version: "HTTP/3".into(),
         status_code: manifest_status,
         headers_size_bytes: manifest_headers
@@ -1703,6 +1712,8 @@ pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         content_encoding: crate::runner::http::extract_content_meta(&manifest_headers).0,
         content_length_header: crate::runner::http::extract_content_meta(&manifest_headers).1,
         security_headers: None,
+        quic_stats: None,
+        quic_resumption_stats: None,
     };
 
     // ── Asset requests: send + receive all concurrently (like a real browser) ──
@@ -1750,6 +1761,14 @@ pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
     // Index-aligned aggregation (join_all preserves order → index == asset id).
     let (assets_fetched, assets_failed, total_bytes, asset_timings) =
         aggregate_ordered_asset_results(&asset_results);
+
+    // Post-transfer QUIC snapshot: every multiplexed asset stream is done and
+    // the connection is still open — the whole page load ran on this one
+    // connection, so these stats describe the entire transfer (M1 B.1).
+    // (The --connection-reuse warmup/warm pageload3 path is NOT instrumented:
+    // its shared connection accumulates stats across attempts, so a truthful
+    // per-attempt record needs a delta scheme — deferred.)
+    manifest_http.quic_stats = Some(crate::runner::http3::quic_stats_from(&conn_handle.stats()));
 
     let cpu_time_ms = Some(cpu_start.elapsed().as_secs_f64() * 1000.0);
     let total_ms = t_wall.elapsed().as_secs_f64() * 1000.0;
@@ -2302,6 +2321,8 @@ async fn fetch_h2_pageload(
         content_encoding: crate::runner::http::extract_content_meta(&manifest_headers).0,
         content_length_header: crate::runner::http::extract_content_meta(&manifest_headers).1,
         security_headers: None,
+        quic_stats: None,
+        quic_resumption_stats: None,
     };
 
     // ── Asset requests ──
@@ -2859,6 +2880,8 @@ async fn fetch_h3_pageload(
         content_encoding: crate::runner::http::extract_content_meta(&manifest_headers).0,
         content_length_header: crate::runner::http::extract_content_meta(&manifest_headers).1,
         security_headers: None,
+        quic_stats: None,
+        quic_resumption_stats: None,
     };
 
     // ── Asset requests ──

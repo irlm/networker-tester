@@ -419,6 +419,8 @@ async fn run_native_probe_impl(
                 content_encoding: None,
                 content_length_header: None,
                 security_headers: None,
+                quic_stats: None,
+                quic_resumption_stats: None,
             }),
             udp: None,
             error: if http_ok {
@@ -720,6 +722,8 @@ async fn run_native_https(
             content_encoding: None,
             content_length_header: None,
             security_headers: None,
+            quic_stats: None,
+            quic_resumption_stats: None,
         }),
         udp: None,
         error: if http_ok {

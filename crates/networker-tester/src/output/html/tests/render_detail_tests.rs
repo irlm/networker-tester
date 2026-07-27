@@ -953,6 +953,8 @@ fn throughput_protocol_comparison_higher_is_better() {
                 content_encoding: None,
                 content_length_header: None,
                 security_headers: None,
+                quic_stats: None,
+                quic_resumption_stats: None,
             }),
             udp: None,
             error: None,

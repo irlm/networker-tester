@@ -72,6 +72,8 @@ fn http_attempt(run_id: Uuid, seq: u32, proto: Protocol, ms: f64) -> RequestAtte
             content_encoding: None,
             content_length_header: None,
             security_headers: None,
+            quic_stats: None,
+            quic_resumption_stats: None,
         }),
         udp: None,
         error: None,
@@ -141,6 +143,8 @@ fn udp_attempt(run_id: Uuid, seq: u32) -> RequestAttempt {
         tls: None,
         http: None,
         udp: Some(UdpResult {
+            local_drops: None,
+            so_rcvbuf_bytes: None,
             remote_addr: "127.0.0.1:9999".into(),
             probe_count: 20,
             success_count: 19,

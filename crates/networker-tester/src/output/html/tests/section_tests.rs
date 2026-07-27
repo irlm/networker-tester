@@ -212,6 +212,8 @@ fn udp_statistics_section_appears_when_udp_attempts_present() {
         tls: None,
         http: None,
         udp: Some(UdpResult {
+            local_drops: None,
+            so_rcvbuf_bytes: None,
             remote_addr: "10.0.0.1:9000".into(),
             probe_count: 10,
             success_count: 10,
@@ -267,6 +269,8 @@ fn udp_loss_shows_warn_class_when_nonzero() {
         tls: None,
         http: None,
         udp: Some(UdpResult {
+            local_drops: None,
+            so_rcvbuf_bytes: None,
             remote_addr: "10.0.0.1:9000".into(),
             probe_count: 10,
             success_count: 8,

@@ -1184,6 +1184,20 @@ async fn pageload_h3_multiplexes_assets() {
     assert_eq!(pl.asset_count, 5);
     assert!(pl.assets_fetched > 0);
     assert_eq!(pl.connections_opened, 1, "H3 uses a single QUIC connection");
+
+    // Deep-measurement M1 B.1: the single QUIC connection's post-transfer
+    // stats must be attached (the analogue of pageload2's per-connection
+    // TCP dup-fd snapshot).
+    let q = attempt
+        .http
+        .as_ref()
+        .and_then(|h| h.quic_stats.as_ref())
+        .expect("pageload3 must carry the connection's quic_stats");
+    assert!(q.sent_packets.unwrap() > 0);
+    assert!(
+        q.udp_rx_bytes.unwrap() as usize >= pl.total_bytes,
+        "all asset bytes arrived over this one connection"
+    );
 }
 
 /// HTTP/3 latency probe: the follow-up connection measures QUIC session
@@ -1230,6 +1244,51 @@ async fn http3_probe_measures_quic_resumption() {
             .expect("resumed handshake must be timed when 0-RTT was attempted");
         assert!(warm > 0.0);
     }
+}
+
+/// HTTP/3 latency probe: the primary connection must carry the additive
+/// post-transfer QUIC transport snapshot (`http.quic_stats`, deep-measurement
+/// M1 B.1 / M3 G1) — the QUIC analogue of the TCP dup-fd `socket_stats`.
+#[cfg(feature = "http3")]
+#[tokio::test]
+async fn http3_probe_carries_quic_transport_stats() {
+    init_crypto();
+    let ep = Endpoint::start().await;
+    ep.wait_for_quic().await;
+
+    let a = run_http3_probe(
+        Uuid::new_v4(),
+        0,
+        &ep.https_url("/health"),
+        10_000,
+        true,
+        None,
+    )
+    .await;
+
+    assert!(a.success, "H3 probe failed: {:?}", a.error);
+    let http = a.http.expect("http result missing");
+    let q = http
+        .quic_stats
+        .as_ref()
+        .expect("h3 attempts must carry quic_stats");
+    assert!(
+        q.sent_packets.unwrap() > 0,
+        "a completed h3 exchange sent QUIC packets"
+    );
+    assert!(q.udp_tx_datagrams.unwrap() > 0);
+    assert!(q.udp_rx_bytes.unwrap() > 0, "response arrived over UDP");
+    assert!(q.cwnd_bytes.unwrap() > 0, "cwnd (bytes) is live state");
+    assert!(
+        q.current_mtu.unwrap() >= 1200,
+        "RFC 9000 guarantees a 1200-byte minimum UDP payload"
+    );
+    assert_eq!(q.lost_packets, Some(0), "loopback loses nothing");
+    assert_eq!(
+        q.congestion_algorithm.as_deref(),
+        Some("cubic (client-config)"),
+        "controller label records OUR config, marked as such"
+    );
 }
 
 /// POST /upload with a 64 KiB body → endpoint reads and acknowledges it.

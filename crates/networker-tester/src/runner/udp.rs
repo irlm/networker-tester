@@ -143,6 +143,11 @@ pub async fn run_udp_probe(
     let stats = aggregate_udp_rtts(&probe_rtts);
     let success_count = probe_rtts.iter().filter(|r| r.is_some()).count() as u32;
 
+    // Local-drop vs path-loss split (B.6): one getsockopt at train end — the
+    // socket is fresh, so the cumulative kernel drop counter is per-train.
+    // No per-datagram syscalls are added to the echo hot path.
+    let diag = crate::runner::socket_info::UdpSocketDiag::from_socket(&socket);
+
     let result = UdpResult {
         remote_addr: target_addr.to_string(),
         probe_count: cfg.probe_count,
@@ -156,6 +161,8 @@ pub async fn run_udp_probe(
         ipdv_p99_ms: stats.ipdv_p99,
         started_at,
         probe_rtts_ms: probe_rtts,
+        local_drops: diag.local_drops,
+        so_rcvbuf_bytes: diag.so_rcvbuf_bytes,
     };
 
     RequestAttempt {
