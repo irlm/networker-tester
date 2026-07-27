@@ -2359,6 +2359,100 @@ pub struct UdpResult {
     /// bookkeeping value, as `ss -m` shows). Additive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub so_rcvbuf_bytes: Option<u32>,
+    /// Loss-pattern characterization (RFC 3357) derived from `probe_rtts_ms`.
+    /// `None` below [`MIN_LOSS_PATTERN_PROBES`] — too few probes to say anything
+    /// about pattern. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loss_pattern: Option<LossPattern>,
+}
+
+/// Minimum probe train length before a loss *pattern* is characterized. Below
+/// this the burst-vs-random distinction is statistically meaningless (a handful
+/// of losses can't distinguish a bursty path from an unlucky independent one),
+/// so [`compute_loss_pattern`] returns `None` rather than guess.
+pub const MIN_LOSS_PATTERN_PROBES: usize = 20;
+
+/// Loss-pattern characterization for a probe train, per RFC 3357 (Loss
+/// Distance / Loss Period metrics). Derived purely from the seq-indexed
+/// per-probe timeline (`None` = lost), so it costs no extra measurement.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LossPattern {
+    /// Total lost probes.
+    pub lost_count: u32,
+    /// Number of loss *periods* (maximal runs of consecutive losses) — RFC 3357
+    /// §5. One long outage is one period; scattered single losses are many.
+    pub loss_burst_count: u32,
+    /// Longest run of consecutive losses (max loss-period length).
+    pub loss_max_burst: u32,
+    /// Mean *loss distance* (RFC 3357 §4): mean gap, in sequence numbers,
+    /// between consecutive loss-period start indices. `None` with fewer than two
+    /// loss periods (no distance to measure).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loss_mean_distance: Option<f64>,
+    /// Heuristic label over the RFC-3357 raw metrics above:
+    /// `"no-loss"` · `"random-like"` (isolated single losses) ·
+    /// `"single-burst"` (one contiguous outage) · `"bursty"` (a run of ≥3
+    /// consecutive losses — the congestion/buffer-event signature). The raw
+    /// counts are authoritative; this is a convenience classification.
+    pub classification: String,
+}
+
+/// Characterize the loss pattern of a seq-indexed probe timeline (`None` =
+/// lost). Returns `None` below [`MIN_LOSS_PATTERN_PROBES`]. Pure/deterministic.
+pub fn compute_loss_pattern(rtts: &[Option<f64>]) -> Option<LossPattern> {
+    let total = rtts.len();
+    if total < MIN_LOSS_PATTERN_PROBES {
+        return None;
+    }
+
+    // Walk the timeline collecting maximal loss runs and their start indices.
+    let mut burst_lengths: Vec<usize> = Vec::new();
+    let mut loss_starts: Vec<usize> = Vec::new();
+    let mut i = 0;
+    while i < total {
+        if rtts[i].is_none() {
+            let start = i;
+            let mut len = 0;
+            while i < total && rtts[i].is_none() {
+                len += 1;
+                i += 1;
+            }
+            burst_lengths.push(len);
+            loss_starts.push(start);
+        } else {
+            i += 1;
+        }
+    }
+
+    let lost_count: usize = burst_lengths.iter().sum();
+    let burst_count = burst_lengths.len();
+    let max_burst = burst_lengths.iter().copied().max().unwrap_or(0);
+
+    // RFC 3357 §4 loss distance: gaps between consecutive loss-period starts.
+    let loss_mean_distance = if loss_starts.len() >= 2 {
+        let gaps: Vec<usize> = loss_starts.windows(2).map(|w| w[1] - w[0]).collect();
+        Some(gaps.iter().sum::<usize>() as f64 / gaps.len() as f64)
+    } else {
+        None
+    };
+
+    let classification = if lost_count == 0 {
+        "no-loss"
+    } else if max_burst >= 3 {
+        "bursty"
+    } else if burst_count == 1 && max_burst >= 2 {
+        "single-burst"
+    } else {
+        "random-like"
+    };
+
+    Some(LossPattern {
+        lost_count: lost_count as u32,
+        loss_burst_count: burst_count as u32,
+        loss_max_burst: max_burst as u32,
+        loss_mean_distance,
+        classification: classification.to_string(),
+    })
 }
 
 /// UDP bulk throughput transfer result (udpdownload / udpupload modes).
@@ -3882,6 +3976,80 @@ mod tests {
     use super::*;
 
     // ─────────────────────────────────────────────────────────────────────────
+    // compute_loss_pattern — RFC 3357 loss-pattern classification
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Build a timeline: `Some(1.0)` for received, `None` for the given
+    /// zero-based loss indices, over `n` probes.
+    fn timeline(n: usize, lost: &[usize]) -> Vec<Option<f64>> {
+        (0..n)
+            .map(|i| if lost.contains(&i) { None } else { Some(1.0) })
+            .collect()
+    }
+
+    #[test]
+    fn loss_pattern_none_below_min_probes() {
+        // Fewer than MIN_LOSS_PATTERN_PROBES → refuse to characterize.
+        assert!(compute_loss_pattern(&timeline(MIN_LOSS_PATTERN_PROBES - 1, &[3])).is_none());
+    }
+
+    #[test]
+    fn loss_pattern_no_loss() {
+        let p = compute_loss_pattern(&timeline(25, &[])).expect("enough probes");
+        assert_eq!(p.classification, "no-loss");
+        assert_eq!(p.lost_count, 0);
+        assert_eq!(p.loss_burst_count, 0);
+        assert_eq!(p.loss_max_burst, 0);
+        assert!(p.loss_mean_distance.is_none());
+    }
+
+    #[test]
+    fn loss_pattern_random_like_scattered_singles() {
+        // Isolated single losses spread out → random-like.
+        let p = compute_loss_pattern(&timeline(30, &[3, 12, 21])).expect("some");
+        assert_eq!(p.classification, "random-like");
+        assert_eq!(p.lost_count, 3);
+        assert_eq!(p.loss_burst_count, 3);
+        assert_eq!(p.loss_max_burst, 1);
+        // Loss distances 12-3=9, 21-12=9 → mean 9.
+        assert_eq!(p.loss_mean_distance, Some(9.0));
+    }
+
+    #[test]
+    fn loss_pattern_single_burst() {
+        // One contiguous outage of length 2 → single-burst.
+        let p = compute_loss_pattern(&timeline(25, &[10, 11])).expect("some");
+        assert_eq!(p.classification, "single-burst");
+        assert_eq!(p.lost_count, 2);
+        assert_eq!(p.loss_burst_count, 1);
+        assert_eq!(p.loss_max_burst, 2);
+        assert!(p.loss_mean_distance.is_none()); // one period → no distance
+    }
+
+    #[test]
+    fn loss_pattern_bursty_run_of_three() {
+        // A run of ≥3 consecutive losses is the congestion/buffer signature.
+        let p = compute_loss_pattern(&timeline(25, &[8, 9, 10, 18])).expect("some");
+        assert_eq!(p.classification, "bursty");
+        assert_eq!(p.lost_count, 4);
+        assert_eq!(p.loss_burst_count, 2); // {8,9,10} and {18}
+        assert_eq!(p.loss_max_burst, 3);
+        assert_eq!(p.loss_mean_distance, Some(10.0)); // 18-8
+    }
+
+    #[test]
+    fn loss_pattern_field_is_additive_and_optional() {
+        // Serializes away when None; a legacy UdpResult JSON without the key
+        // still deserializes (schema stays 1.0).
+        let json = r#"{"remote_addr":"1.2.3.4:9","probe_count":1,"success_count":1,
+            "loss_percent":0.0,"rtt_min_ms":1.0,"rtt_avg_ms":1.0,"rtt_p95_ms":1.0,
+            "jitter_ms":0.0,"started_at":"2026-01-01T00:00:00Z","probe_rtts_ms":[1.0]}"#;
+        let r: UdpResult = serde_json::from_str(json).expect("legacy deserialize");
+        assert!(r.loss_pattern.is_none());
+        assert!(!serde_json::to_string(&r).unwrap().contains("loss_pattern"));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // SocketStats — post-transfer TCP kernel stats (gap #5), additive contract
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -4728,6 +4896,7 @@ mod tests {
         a.udp = Some(UdpResult {
             local_drops: None,
             so_rcvbuf_bytes: None,
+            loss_pattern: None,
             remote_addr: "1.2.3.4:9999".into(),
             probe_count: 10,
             success_count: 10,
@@ -4756,6 +4925,7 @@ mod tests {
         a.udp = Some(UdpResult {
             local_drops: None,
             so_rcvbuf_bytes: None,
+            loss_pattern: None,
             remote_addr: "1.2.3.4:9999".into(),
             probe_count: 10,
             success_count: 0,

@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.86] — 2026-07-27
+
+### Added
+- **UDP loss-pattern analysis (RFC 3357)** — `UdpResult.loss_pattern`: the
+  seq-indexed per-probe timeline we already persist is now characterized into
+  loss-period count, longest consecutive-loss run, mean loss distance (RFC 3357
+  §4), and a `bursty` / `single-burst` / `random-like` / `no-loss`
+  classification — the burst-vs-random discriminator (congestion/buffer event
+  vs path noise). Pure derivation, no extra measurement; gated to trains of
+  ≥20 probes (below that the distinction is meaningless → `None`, never a
+  guess). Summary warns on patterned loss. First item of the deep-audit
+  Tier-2/3 depth batch (m4 §2.4, scored 76).
+
+---
+
 ## [0.28.85] — 2026-07-27
 
 Wave W — web vitals + real capacity measurement (deep audit m3 G2/G3/G4).
