@@ -11,6 +11,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.81] — 2026-07-27
+
+The last parked measurement-tail items, developed in parallel and integrated.
+All wire/JSON changes additive.
+
+### Added
+- **Run-envelope pass-through (the dormant geo/clock/load UI is now live).**
+  The agent's `run_finished` message carries the tester's run envelope
+  (network context, client/target geo, load samples, clock sync, host info) —
+  it previously died inside the agent after attempt streaming. The control
+  plane allowlist-filters and persists it (`client_envelope` JSONB, migration
+  V046), `GET /api/v2/test-runs/{id}` serves it null-omitted (old runs' wire
+  shape unchanged, pinned by test), and Run detail renders a data-gated env
+  block (geo "US · AS13335 Cloudflare" style, ± clock offset, load
+  before→after with a noisy-tester warning). Version-skew-safe both ways.
+- **`cpu_busy_percent` is real** — run-window CPU busy% on the after
+  load-sample: Linux `/proc/stat` two-snapshot delta, macOS
+  `host_statistics`, Windows honestly absent.
+- **Pageload per-connection TCP stats** — all six H1 connections + the H2
+  connection sample post-transfer `TCP_INFO` (`per_connection_socket_stats`);
+  pageload retransmissions fold into the summary warning.
+- **URL-diagnostics security headers** — the same HSTS/CSP/nosniff derivation
+  now runs on the URL Probe's captured headers and renders in its summary.
+- **Endpoint-side load** — `GET /info` reports live `load_avg_1m` (+
+  `mem_available_mb` on Linux); the tester maps them into `server_info`
+  additively (old endpoints → absent).
+- **Cross-target comparison tables for the six new modes** in the multi-target
+  HTML report (rpm/ping/path/dualstack/websocket/pmtud) — targets as rows,
+  missing modes as em-dashes, single-run output byte-identical.
+
+---
+
 ## [0.28.80] — 2026-07-24
 
 ### Added
