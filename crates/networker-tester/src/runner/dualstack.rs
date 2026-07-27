@@ -163,6 +163,7 @@ pub async fn run_dualstack_probe(
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 
@@ -301,6 +302,7 @@ fn dualstack_failed(
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 

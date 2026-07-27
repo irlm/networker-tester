@@ -183,6 +183,7 @@ fn write_statistics(
         Protocol::WebUpload,
         Protocol::UdpDownload,
         Protocol::UdpUpload,
+        Protocol::Mthroughput,
         Protocol::Rpm,
         Protocol::Responsiveness,
         Protocol::Stamp,
@@ -1311,6 +1312,7 @@ mod tests {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         };
 
         let udp_attempt = RequestAttempt {
@@ -1357,6 +1359,7 @@ mod tests {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         };
 
         let udp_throughput_attempt = RequestAttempt {
@@ -1400,6 +1403,7 @@ mod tests {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         };
 
         let pageload_attempt = RequestAttempt {
@@ -1447,6 +1451,7 @@ mod tests {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         };
 
         let error_attempt = RequestAttempt {
@@ -1483,6 +1488,7 @@ mod tests {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         };
 
         TestRun {
@@ -1667,6 +1673,7 @@ mod tests {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         }
     }
 
@@ -1951,6 +1958,7 @@ mod tests {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         };
 
         let upload_attempt = RequestAttempt {
@@ -2005,6 +2013,7 @@ mod tests {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         };
 
         let run = TestRun {

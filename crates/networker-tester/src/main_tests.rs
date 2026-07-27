@@ -51,6 +51,7 @@ fn request_attempt(success: bool, retry_count: u32) -> RequestAttempt {
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 
@@ -114,6 +115,7 @@ fn measured_http_attempt(
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 
@@ -153,6 +155,7 @@ fn failed_http_attempt(
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 

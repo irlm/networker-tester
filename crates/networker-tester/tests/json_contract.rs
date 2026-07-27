@@ -133,6 +133,7 @@ fn sample_run() -> TestRun {
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     };
 
     TestRun {
@@ -1220,6 +1221,108 @@ fn responsiveness_and_stamp_fields_are_additive_and_optional() {
     assert_eq!(s.probe_rtts_ms.len(), 50);
 
     // Schema version stays frozen at 1.0 — the fields are additive.
+    assert_eq!(SCHEMA_VERSION, "1.0");
+}
+
+/// Wave W additive attempt field: `mthroughput` (multi-connection link
+/// capacity). Old JSON without it deserializes to None, None is
+/// skip-serialized, populated results round-trip. schema_version stays 1.0.
+#[test]
+fn mthroughput_field_is_additive_and_optional() {
+    use networker_tester::metrics::{MthroughputConn, MthroughputDirection, MthroughputResult};
+
+    // Absent from every attempt of a run that never ran the mode.
+    let run = sample_run();
+    let v = serde_json::to_value(&run).expect("serialize");
+    assert!(
+        v.pointer("/attempts/0/mthroughput").is_none(),
+        "mthroughput must be skip-serialized when None"
+    );
+
+    // Old JSON (no field) deserializes to None.
+    let back: TestRun = serde_json::from_value(v).expect("deserialize pre-Wave-W attempt");
+    assert!(back.attempts[0].mthroughput.is_none());
+
+    // Populated results round-trip.
+    let now = Utc::now();
+    let direction = MthroughputDirection {
+        saturation_reached: true,
+        connections: 3,
+        intervals: 9,
+        ramp_duration_ms: 5_000.0,
+        measure_duration_ms: 4_000.0,
+        load_duration_ms: 9_000.0,
+        bytes_transferred: 1_200_000_000,
+        capacity_mbps: Some(120.0),
+        per_conn_min_mbps: Some(20.0),
+        per_conn_max_mbps: Some(60.0),
+        per_conn_mean_mbps: Some(40.0),
+        fair_share_spread_pct: Some(100.0),
+        rwnd_limited_conns: 1,
+        sndbuf_limited_conns: 0,
+        path_limited_conns: 2,
+        unobserved_conns: 0,
+        per_conn: vec![
+            MthroughputConn {
+                conn: 0,
+                mbps: 60.0,
+                verdict: "path-limited".into(),
+                retrans: Some(0),
+            },
+            MthroughputConn {
+                conn: 1,
+                mbps: 40.0,
+                verdict: "path-limited".into(),
+                retrans: Some(12),
+            },
+            MthroughputConn {
+                conn: 2,
+                mbps: 20.0,
+                verdict: "rwnd-limited 84%".into(),
+                retrans: None, // kernel exposed no counter — omitted, not 0
+            },
+        ],
+    };
+    let mut run = sample_run();
+    run.attempts[0].mthroughput = Some(MthroughputResult {
+        remote_addr: "http://127.0.0.1:8080/".into(),
+        capacity_down_mbps: Some(120.0),
+        capacity_up_mbps: Some(45.0),
+        conns_down: 3,
+        conns_up: Some(3),
+        fair_share_spread_down_pct: Some(100.0),
+        fair_share_spread_up_pct: Some(10.0),
+        download: direction.clone(),
+        upload: Some(direction),
+        upload_error: None,
+        started_at: now,
+    });
+
+    let v = serde_json::to_value(&run).expect("serialize populated");
+    assert_eq!(
+        v.pointer("/attempts/0/mthroughput/capacity_down_mbps")
+            .and_then(|n| n.as_f64()),
+        Some(120.0)
+    );
+    assert_eq!(
+        v.pointer("/attempts/0/mthroughput/download/per_conn/2/verdict")
+            .and_then(|n| n.as_str()),
+        Some("rwnd-limited 84%")
+    );
+    assert!(
+        v.pointer("/attempts/0/mthroughput/download/per_conn/2/retrans")
+            .is_none(),
+        "None retrans must be omitted"
+    );
+    let back: TestRun = serde_json::from_value(v).expect("deserialize populated");
+    let m = back.attempts[0].mthroughput.as_ref().unwrap();
+    assert_eq!(m.capacity_down_mbps, Some(120.0));
+    assert!(m.download.saturation_reached);
+    assert_eq!(m.download.per_conn.len(), 3);
+    assert_eq!(m.download.per_conn[1].retrans, Some(12));
+    assert_eq!(m.conns_up, Some(3));
+
+    // Schema version stays frozen at 1.0 — the field is additive.
     assert_eq!(SCHEMA_VERSION, "1.0");
 }
 

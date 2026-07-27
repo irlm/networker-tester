@@ -239,6 +239,7 @@ fn html_contains_error_section_for_failed_attempt() {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         }],
     };
     let html = render(&run, None, None);
@@ -337,6 +338,7 @@ fn html_contains_throughput_section_for_download_attempt() {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         }],
     };
     let html = render(&run, None, None);
@@ -440,6 +442,7 @@ fn html_contains_tls_section_for_tls_attempt() {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         }],
     };
     let html = render(&run, None, None);
@@ -534,6 +537,7 @@ fn html_contains_page_load_section() {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         }],
     };
     let html = render(&run, None, None);
@@ -620,6 +624,7 @@ fn append_proto_row_no_http_shows_dashes() {
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     };
     let rows: Vec<&RequestAttempt> = vec![&a];
     let mut out = String::new();
@@ -716,6 +721,7 @@ fn append_attempt_row_udp_echo_shows_rtt() {
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     };
     let mut out = String::new();
     append_attempt_row(&mut out, &a, false);
@@ -766,6 +772,7 @@ fn append_attempt_row_udp_throughput_shows_transfer_ms() {
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     };
     let mut out = String::new();
     append_attempt_row(&mut out, &a, false);
@@ -804,6 +811,7 @@ fn append_attempt_row_no_results_shows_dashes() {
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     };
     let mut out = String::new();
     append_attempt_row(&mut out, &a, false);
@@ -947,6 +955,7 @@ fn html_contains_browser_section() {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         }],
     };
     let html = render(&run, None, None);

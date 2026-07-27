@@ -91,6 +91,7 @@ fn http_attempt(run_id: Uuid, seq: u32, proto: Protocol, ms: f64) -> RequestAtte
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 
@@ -129,6 +130,7 @@ fn failed_attempt(run_id: Uuid, seq: u32) -> RequestAttempt {
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 
@@ -177,6 +179,7 @@ fn udp_attempt(run_id: Uuid, seq: u32) -> RequestAttempt {
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 

@@ -10,6 +10,7 @@ use crate::runner::{
     dualstack::run_dualstack_probe,
     http::{run_probe, RunConfig},
     http3::run_http3_probe,
+    mthroughput::{run_mthroughput_probe, MthroughputConfig},
     native::run_native_probe,
     pageload::{run_pageload2_probe, run_pageload3_probe, run_pageload_probe, PageLoadConfig},
     path::{run_path_probe, PathProbeConfig},
@@ -141,6 +142,14 @@ pub async fn dispatch_once(
             // the draft-08 defaults.
             let resp_cfg = ResponsivenessConfig::from_parts(throughput_cfg);
             run_responsiveness_probe(run_id, seq, &resp_cfg).await
+        }
+        (Protocol::Mthroughput, _) => {
+            // Multi-connection capacity: base URL + TLS trust settings come
+            // from the throughput config; ramp/measure parameters are the
+            // mode's time-boxed defaults (no payload size — stages are
+            // time-boxed, see runner docs).
+            let m_cfg = MthroughputConfig::from_parts(throughput_cfg);
+            run_mthroughput_probe(run_id, seq, &m_cfg).await
         }
         (Protocol::Stamp, _) => {
             // STAMP Session-Sender: reflector host follows the UDP echo
@@ -471,6 +480,42 @@ pub fn log_attempt(a: &RequestAttempt) {
                     rpm = fmt_rpm(d.rpm),
                     cap = fmt_cap(d.capacity_mbps),
                     conns = d.saturated_connections,
+                    sat = d.saturation_reached,
+                    retry = retry_suffix,
+                );
+            }
+        }
+        Mthroughput => {
+            if let Some(m) = &a.mthroughput {
+                let fmt_cap = |v: Option<f64>| {
+                    v.map(|x| format!("{x:.1} MB/s"))
+                        .unwrap_or_else(|| "\u{2014}".into())
+                };
+                let fmt_spread = |v: Option<f64>| {
+                    v.map(|x| format!("{x:.0}%"))
+                        .unwrap_or_else(|| "\u{2014}".into())
+                };
+                let d = &m.download;
+                let up = m
+                    .upload
+                    .as_ref()
+                    .map(|u| {
+                        format!(
+                            "up cap={cap} conns={c} spread={sp} sat={s}",
+                            cap = fmt_cap(u.capacity_mbps),
+                            c = u.connections,
+                            sp = fmt_spread(u.fair_share_spread_pct),
+                            s = u.saturation_reached,
+                        )
+                    })
+                    .unwrap_or_else(|| "up \u{2014}".into());
+                info!(
+                    "{status} #{seq} [mthroughput] down cap={cap} conns={conns} \
+                     spread={spread} sat={sat} | {up}{retry}",
+                    seq = a.sequence_num,
+                    cap = fmt_cap(d.capacity_mbps),
+                    conns = d.connections,
+                    spread = fmt_spread(d.fair_share_spread_pct),
                     sat = d.saturation_reached,
                     retry = retry_suffix,
                 );

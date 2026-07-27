@@ -223,6 +223,7 @@ pub async fn run_pmtud_probe(
         pmtud: Some(result),
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 
@@ -283,6 +284,7 @@ fn pmtud_failed(
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 

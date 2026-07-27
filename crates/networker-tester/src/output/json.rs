@@ -1076,6 +1076,11 @@ fn metric_unit_for_protocol(protocol: &Protocol) -> &'static str {
     if matches!(protocol, Protocol::Rpm | Protocol::Responsiveness) {
         // Round-trips per minute under load (higher is better).
         "RPM"
+    } else if matches!(protocol, Protocol::Mthroughput) {
+        // Multi-connection aggregate capacity (MB/s decimal, higher is
+        // better) — kept out of protocol_is_throughput because it is
+        // time-boxed, not payload-sized.
+        "MB/s"
     } else if matches!(protocol, Protocol::Path) {
         // Path length, not a duration.
         "hops"
@@ -1093,7 +1098,11 @@ fn metric_unit_for_protocol(protocol: &Protocol) -> &'static str {
 /// (round-trips/min — both the UDP-echo `rpm` and the draft-conformant
 /// `responsiveness`).
 fn protocol_is_higher_better(protocol: &Protocol) -> bool {
-    protocol_is_throughput(protocol) || matches!(protocol, Protocol::Rpm | Protocol::Responsiveness)
+    protocol_is_throughput(protocol)
+        || matches!(
+            protocol,
+            Protocol::Rpm | Protocol::Responsiveness | Protocol::Mthroughput
+        )
 }
 
 fn protocol_is_throughput(protocol: &Protocol) -> bool {
@@ -1324,6 +1333,7 @@ mod tests {
                 pmtud: None,
                 responsiveness: None,
                 stamp: None,
+                mthroughput: None,
             }],
         }
     }
@@ -1623,6 +1633,7 @@ mod tests {
                 pmtud: None,
                 responsiveness: None,
                 stamp: None,
+                mthroughput: None,
             })
             .collect();
         let run = TestRun {
@@ -1896,6 +1907,7 @@ mod tests {
                 pmtud: None,
                 responsiveness: None,
                 stamp: None,
+                mthroughput: None,
             })
             .collect();
         let run = TestRun {

@@ -1229,6 +1229,7 @@ mod real {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         }
     }
 
@@ -1351,6 +1352,7 @@ mod real {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         }
     }
 
@@ -1605,6 +1607,7 @@ mod stub {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         }
     }
 }

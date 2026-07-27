@@ -1261,6 +1261,7 @@ mod tests {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         };
         let probe = protocol_probe_from_attempt(Uuid::new_v4(), "h1", 1, attempt);
         assert!(!probe.succeeded);

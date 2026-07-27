@@ -55,6 +55,10 @@ export const MODE_REQUIREMENT: Readonly<Record<string, ModeRequirement>> = {
   // arbitrary hosts run no STAMP reflector.
   stamp: 'networker-endpoint',
 
+  // Multi-connection capacity — needs the endpoint's /download and /upload
+  // routes for the parallel H2 load ramp (time-boxed stages).
+  mthroughput: 'networker-endpoint',
+
   // WebSocket probe — needs the endpoint's /ws echo route for the
   // message-RTT phase; an arbitrary URL has no frame-echoing WS server.
   websocket: 'networker-endpoint',

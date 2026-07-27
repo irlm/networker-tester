@@ -87,6 +87,7 @@ pub(crate) fn bare_attempt(run_id: Uuid) -> RequestAttempt {
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 
@@ -233,6 +234,7 @@ pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 

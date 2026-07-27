@@ -80,6 +80,7 @@ pub async fn run_native_probe(
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         }
     }
 
@@ -449,6 +450,7 @@ async fn run_native_probe_impl(
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         }
     }
 }
@@ -754,6 +756,7 @@ async fn run_native_https(
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 
@@ -890,6 +893,7 @@ fn make_failed(
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 

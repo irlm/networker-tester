@@ -30,6 +30,8 @@ export const FAMILY_BY_MODE: Record<string, ModeFamily> = {
   upload1: 'thru', upload2: 'thru', upload3: 'thru',
   webdownload: 'thru', webupload: 'thru',
   udpdownload: 'thru', udpupload: 'thru',
+  // mthroughput = multi-connection link capacity (Ookla-style aggregate)
+  mthroughput: 'thru',
   // Page load (native + browser); pageload1 is the CLI alias for pageload.
   pageload: 'page', pageload1: 'page', pageload2: 'page', pageload3: 'page',
   browser: 'page', browser1: 'page', browser2: 'page', browser3: 'page',

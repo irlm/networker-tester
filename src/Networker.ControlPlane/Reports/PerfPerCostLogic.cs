@@ -69,6 +69,7 @@ public static class PerfPerCostLogic
             ["webupload"] = FamilyThru,
             ["udpdownload"] = FamilyThru,
             ["udpupload"] = FamilyThru,
+            ["mthroughput"] = FamilyThru,
         };
 
     /// <summary>

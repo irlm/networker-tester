@@ -105,6 +105,7 @@ public static class PlatformEndpoints
         new("webupload", "Web Upload", "HTTP POST", "Upload via /upload endpoint route", "Throughput", "networker-endpoint"),
         new("udpdownload", "UDP Download", "UDP bulk DL", "Bulk download via UDP throughput server (port 9998)", "Throughput", "networker-endpoint"),
         new("udpupload", "UDP Upload", "UDP bulk UL", "Bulk upload via UDP throughput server (port 9998)", "Throughput", "networker-endpoint"),
+        new("mthroughput", "Multi-Conn", "Link capacity", "Multi-connection capacity probe — ramps parallel HTTP/2 connections against /download then /upload until aggregate goodput stabilizes (Ookla-style link capacity vs the single-connection fair share of download/upload); reports per-connection spread and TCP-attribution verdicts", "Throughput", "networker-endpoint"),
         // API Workloads — orchestrator-level mode, NOT a tester Protocol
         // variant: the orchestrator expands it into one tester run per
         // workload in benchmarks/configs/apibench.json (API-SPEC.md §4).

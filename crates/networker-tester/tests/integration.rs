@@ -20,6 +20,7 @@ use networker_tester::runner::dualstack::run_dualstack_probe;
 use networker_tester::runner::http::{run_probe, RunConfig};
 #[cfg(feature = "http3")]
 use networker_tester::runner::http3::run_http3_probe;
+use networker_tester::runner::mthroughput::{run_mthroughput_probe, MthroughputConfig};
 use networker_tester::runner::native::run_native_probe;
 #[cfg(feature = "http3")]
 use networker_tester::runner::pageload::run_pageload3_probe;
@@ -598,6 +599,113 @@ async fn responsiveness_probe_reports_working_conditions_rpm() {
     assert!(u.saturation_reached, "upload goodput must stabilize: {u:?}");
     assert!(u.rpm.unwrap_or(0.0) > 0.0);
     assert_eq!(r.rpm_upload, u.rpm);
+}
+
+/// Multi-connection capacity (`mthroughput`) against the in-process endpoint
+/// over cleartext h2c.
+///
+/// Loopback saturates essentially instantly (memory-speed transfers), so this
+/// asserts the STRUCTURE of the result — both directions ran, aggregate
+/// saturation was declared by the moving-average criterion, the per-connection
+/// list is exactly `connections` long, the attribution buckets partition the
+/// connections, headline copies match the direction detail — not capacity or
+/// spread magnitudes. Shortened intervals keep the test fast; the ramp,
+/// stability, measure-window, and attribution logic is exactly the production
+/// path.
+#[tokio::test]
+async fn mthroughput_probe_reports_multi_connection_capacity() {
+    init_crypto();
+    let ep = Endpoint::start().await;
+    let mut cfg = MthroughputConfig::from_parts(&ThroughputConfig {
+        run_cfg: RunConfig {
+            dns_enabled: false,
+            timeout_ms: 5_000,
+            ..Default::default()
+        },
+        base_url: ep.http_url("/"),
+    });
+    // Shorten for test speed: 250 ms intervals, 4 MiB load requests, 8 s cap,
+    // 4-connection cap. Stability ratios (MAD=4, SDT=5%) unchanged.
+    cfg.interval_ms = 250;
+    cfg.max_duration_ms = 8_000;
+    cfg.load_request_bytes = 4 * 1024 * 1024;
+    cfg.max_connections = 4;
+
+    let attempt = run_mthroughput_probe(Uuid::new_v4(), 0, &cfg).await;
+    assert!(attempt.success, "{:?}", attempt.error);
+    assert_eq!(attempt.protocol, Protocol::Mthroughput);
+    assert_eq!(attempt.protocol.to_string(), "mthroughput");
+
+    let m = attempt.mthroughput.expect("mthroughput result");
+
+    let check_direction = |label: &str, d: &networker_tester::metrics::MthroughputDirection| {
+        assert!(d.bytes_transferred > 0, "{label}: load moved no bytes");
+        assert!(
+            d.saturation_reached,
+            "{label}: loopback goodput must stabilize within the cap: {d:?}"
+        );
+        assert!(d.connections >= 1, "{label}: {d:?}");
+        assert!(d.intervals >= 4, "{label}: at least MAD intervals must run");
+        assert!(
+            d.capacity_mbps.unwrap_or(0.0) > 0.0,
+            "{label}: capacity must be measured: {d:?}"
+        );
+        // The compact per-connection list has exactly one entry per
+        // connection, indexed in spawn order.
+        assert_eq!(
+            d.per_conn.len(),
+            d.connections as usize,
+            "{label}: per-conn list length"
+        );
+        for (i, c) in d.per_conn.iter().enumerate() {
+            assert_eq!(c.conn, i as u32, "{label}: conn index");
+            assert!(c.mbps.is_finite() && c.mbps >= 0.0, "{label}: {c:?}");
+            assert!(!c.verdict.is_empty(), "{label}: verdict string present");
+        }
+        // The attribution buckets partition the connections.
+        assert_eq!(
+            d.rwnd_limited_conns
+                + d.sndbuf_limited_conns
+                + d.path_limited_conns
+                + d.unobserved_conns,
+            d.connections,
+            "{label}: attribution buckets must partition the connections"
+        );
+        // Fair-share stats come from the same window as the capacity.
+        assert!(d.per_conn_min_mbps.is_some(), "{label}");
+        assert!(d.per_conn_max_mbps.is_some(), "{label}");
+        assert!(d.per_conn_mean_mbps.is_some(), "{label}");
+        assert!(
+            d.fair_share_spread_pct.unwrap_or(-1.0) >= 0.0,
+            "{label}: spread must be derivable on a saturated run: {d:?}"
+        );
+        assert!(d.per_conn_max_mbps >= d.per_conn_min_mbps, "{label}");
+        // Time-boxing: the direction respected its cap (+ one interval grace).
+        assert!(
+            d.load_duration_ms <= (cfg.max_duration_ms + cfg.interval_ms) as f64,
+            "{label}: {d:?}"
+        );
+        assert!(d.measure_duration_ms > 0.0, "{label}");
+    };
+
+    check_direction("download", &m.download);
+    // Headline copies match the direction detail.
+    assert_eq!(m.capacity_down_mbps, m.download.capacity_mbps);
+    assert_eq!(m.conns_down, m.download.connections);
+    assert_eq!(
+        m.fair_share_spread_down_pct,
+        m.download.fair_share_spread_pct
+    );
+
+    // Upload stage ran too.
+    let u = m
+        .upload
+        .as_ref()
+        .unwrap_or_else(|| panic!("upload stage must run: {:?}", m.upload_error));
+    check_direction("upload", u);
+    assert_eq!(m.capacity_up_mbps, u.capacity_mbps);
+    assert_eq!(m.conns_up, Some(u.connections));
+    assert_eq!(m.fair_share_spread_up_pct, u.fair_share_spread_pct);
 }
 
 /// STAMP (RFC 8762) against the in-process endpoint's Session-Reflector:

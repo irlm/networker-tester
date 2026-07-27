@@ -972,6 +972,7 @@ fn throughput_protocol_comparison_higher_is_better() {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         }
     };
     // r1 has 200 MB/s (better), r2 has 100 MB/s (worse)
