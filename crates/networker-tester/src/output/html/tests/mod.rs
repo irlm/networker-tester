@@ -349,6 +349,7 @@ fn make_page_load_attempt(
         cpu_time_ms: None,
         connection_reused,
         per_connection_socket_stats: vec![],
+        assets_failed: None,
     });
     a
 }

@@ -376,13 +376,14 @@ pub(super) fn write_protocol_sections(run: &TestRun, out: &mut String, stack_fil
                 r#"
 <section class="card">
   <h2>Protocol Comparison – Browser</h2>
+  <p><small>TTFB here is the browser definition (navigationStart → responseStart; includes DNS/connect/TLS and redirects) — not comparable with probe TTFB elsewhere in this report (request sent → first byte on an established connection). Bytes are Σ declared Content-Length headers, not wire bytes.</small></p>
   <table>
     <thead>
       <tr>
         <th>Protocol</th><th>N</th>
         <th>Avg TTFB (ms)</th><th>Avg DCL (ms)</th><th>Avg Load (ms)</th>
         <th>p50 (ms)</th><th>Min (ms)</th><th>Max (ms)</th>
-        <th>Avg Resources</th><th>Avg Bytes</th>
+        <th>Avg Resources</th><th>Avg Decl. Bytes</th>
       </tr>
     </thead>
     <tbody>
@@ -475,6 +476,7 @@ pub(super) fn write_protocol_sections(run: &TestRun, out: &mut String, stack_fil
                 r#"
 <section class="card">
   <h2>Browser Results</h2>
+  <p><small>TTFB = navigationStart → responseStart (browser definition). Decl. Bytes = Σ declared Content-Length headers (not wire bytes).</small></p>
   <details{open}>
     <summary><span class="grp-lbl">{n} attempts</span></summary>
     <table>
@@ -487,7 +489,7 @@ pub(super) fn write_protocol_sections(run: &TestRun, out: &mut String, stack_fil
           <th>DCL (ms)</th>
           <th>Load (ms)</th>
           <th>Resources</th>
-          <th>Bytes</th>
+          <th>Decl. Bytes</th>
           <th>Protocols</th>
         </tr>
       </thead>
@@ -734,8 +736,12 @@ pub(super) fn write_protocol_sections(run: &TestRun, out: &mut String, stack_fil
 
             // Chart 3b: TTFB Distribution (box-and-whisker) — Browser + PageLoad
             // TTFB is the first-byte latency; shows network RTT + server processing variance.
+            // NOTE: the two families use different TTFB definitions (see the
+            // caveat emitted below the chart) — compare within a family only.
             {
                 let mut groups: Vec<(String, Vec<f64>, &'static str)> = Vec::new();
+                let mut has_browser_ttfb = false;
+                let mut has_pageload_ttfb = false;
                 for (proto, color) in [
                     (Protocol::Browser1, "#e07b39"),
                     (Protocol::Browser2, "#4e79a7"),
@@ -748,6 +754,7 @@ pub(super) fn write_protocol_sections(run: &TestRun, out: &mut String, stack_fil
                         .filter_map(|a| a.browser.as_ref().map(|b| b.ttfb_ms))
                         .collect();
                     if data.len() >= 4 {
+                        has_browser_ttfb = true;
                         groups.push((format!("{proto}{}", label_suffix), data, color));
                     }
                 }
@@ -762,6 +769,7 @@ pub(super) fn write_protocol_sections(run: &TestRun, out: &mut String, stack_fil
                         .filter_map(|a| a.page_load.as_ref().map(|p| p.ttfb_ms))
                         .collect();
                     if data.len() >= 4 {
+                        has_pageload_ttfb = true;
                         groups.push((format!("{proto}{}", label_suffix), data, color));
                     }
                 }
@@ -776,6 +784,12 @@ pub(super) fn write_protocol_sections(run: &TestRun, out: &mut String, stack_fil
                         "ms",
                     );
                     let _ = writeln!(out, "<div>{}</div>", svg);
+                    if has_browser_ttfb && has_pageload_ttfb {
+                        let _ = writeln!(
+                            out,
+                            "<p><small>Caveat: browser* TTFB = navigationStart \u{2192} responseStart (includes DNS/connect/TLS); pageload* TTFB = manifest request sent \u{2192} first byte on an established connection. The two definitions are not directly comparable.</small></p>"
+                        );
+                    }
                 }
             }
 

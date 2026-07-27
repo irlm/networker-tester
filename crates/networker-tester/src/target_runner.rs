@@ -280,6 +280,7 @@ pub(crate) async fn run_for_target(
             .laghound_route
             .clone()
             .unwrap_or_else(|| "/laghound/echo".to_string()),
+        accept_encoding: cfg.accept_encoding,
     };
 
     let throughput_cfg = ThroughputConfig {

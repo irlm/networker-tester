@@ -1421,6 +1421,7 @@ mod tests {
                 cpu_time_ms: Some(8.3),
                 connection_reused: false,
                 per_connection_socket_stats: vec![],
+                assets_failed: None,
             }),
             browser: None,
             http_stack: None,

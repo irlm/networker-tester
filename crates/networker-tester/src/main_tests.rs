@@ -490,6 +490,7 @@ fn sample_resolved_config(delay_ms: u64) -> ResolvedConfig {
         proxy: None,
         ca_bundle: None,
         insecure: true,
+        accept_encoding: false,
         retries: 0,
         output_dir: ".".into(),
         html_report: "report.html".into(),

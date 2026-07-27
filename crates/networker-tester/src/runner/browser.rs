@@ -596,9 +596,11 @@ mod real {
 
         // 9c. Subscribe to ResponseReceived events.
         // Subscribed AFTER the warmup so only the main navigation's resources are counted.
-        // Used for: protocol detection per resource + total resource count.
-        // Bytes are measured via JS performance.getEntriesByType('resource') after navigation
-        // (more reliable than CDP encodedDataLength which is protocol-dependent for HTTP/1.1).
+        // Used for: protocol detection per resource + total resource count +
+        // summing declared `content-length` headers into `transferred_bytes`
+        // (declared body sizes, NOT wire bytes — see the drain loop below and
+        // the `BrowserResult::transferred_bytes` doc). True wire bytes need
+        // CDP `Network.loadingFinished.encodedDataLength` (planned).
         let mut response_events = match page.event_listener::<EventResponseReceived>().await {
             Ok(e) => e,
             Err(e) => {
@@ -681,15 +683,17 @@ mod real {
 
         // 12. Drain ResponseReceived events (500 ms after navigation).
         //
-        // Collects resource count, per-protocol breakdown, and transferred bytes.
-        //
-        // Bytes are measured by summing `content-length` response headers.
-        // This is more reliable than Chrome's Performance Resource Timing API
-        // (encodedBodySize) or CDP encodedDataLength, both of which under-report
-        // for HTTP/1.1 due to how Chrome tracks socket-level bytes vs body bytes
-        // for connection-reuse scenarios.  The server always sets content-length
-        // explicitly for all asset responses, so summing it is accurate for all
-        // protocols (H1.1, H2, H3).
+        // Collects resource count, per-protocol breakdown, and *declared*
+        // bytes: `transferred_bytes` is the sum of `content-length` response
+        // headers. That is a declared-body-size figure, NOT wire bytes — it
+        // excludes response headers, counts 0 for responses without a
+        // Content-Length (e.g. chunked), and reflects the (possibly
+        // compressed) declared size. Chosen over Chrome's Resource Timing
+        // encodedBodySize / CDP encodedDataLength because both under-report
+        // for HTTP/1.1 connection reuse; our endpoint always sets an explicit
+        // content-length on asset responses, so the sum is stable across
+        // H1.1/H2/H3 there. Real wire-byte accounting (CDP
+        // `Network.loadingFinished.encodedDataLength`) is planned.
         //
         // All events should already be queued when we reach this point because the
         // page load event guarantees all resources are complete before

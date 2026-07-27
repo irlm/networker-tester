@@ -2016,7 +2016,18 @@ pub struct HttpResult {
     pub negotiated_version: String,
     pub status_code: u16,
     pub headers_size_bytes: usize,
+    /// Response body bytes actually received, as delivered by the HTTP layer.
+    /// hyper performs no transparent decompression, so when the server
+    /// compresses (see `content_encoding` / `--accept-encoding`) this is the
+    /// compressed on-the-wire body size, not the decoded size.
     pub body_size_bytes: usize,
+    /// Probe TTFB (ms): request write start → response headers received, on
+    /// an already-established connection. Excludes DNS/TCP/TLS and the HTTP
+    /// connection handshake, which are reported as their own phases. For
+    /// upload probes this window deliberately spans the request-body write
+    /// plus the server draining it (see `runner/throughput.rs`). NOT
+    /// comparable with [`BrowserResult::ttfb_ms`], which uses the browser
+    /// navigation-relative definition.
     pub ttfb_ms: f64,
     pub total_duration_ms: f64,
     pub redirect_count: u32,
@@ -2058,8 +2069,14 @@ pub struct HttpResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub socket_stats: Option<SocketStats>,
     /// Response `Content-Encoding` header value (e.g. "gzip", "br", "zstd").
-    /// Reported as received — the probe does not change what Accept-Encoding
-    /// it sends. None when the header is absent. Additive.
+    /// By default probes send **no** `Accept-Encoding` header, so
+    /// well-behaved origins answer identity and this stays `None`. Opt in
+    /// with `--accept-encoding` (env `NETWORKER_ACCEPT_ENCODING=true`), which
+    /// sends `Accept-Encoding: gzip, br, zstd` on http1/http2/curl probe
+    /// requests; the probe never decompresses, so `body_size_bytes` remains
+    /// the wire size. Throughput modes always negotiate identity (payload
+    /// sizes are the measurement contract). None when the header is absent.
+    /// Additive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_encoding: Option<String>,
     /// Declared response `Content-Length` header value in bytes. None when
@@ -2427,17 +2444,32 @@ pub struct PmtudResult {
 pub struct PageLoadResult {
     /// Number of assets listed in the manifest.
     pub asset_count: usize,
-    /// Number of assets successfully retrieved.
+    /// Number of assets successfully retrieved — a 2xx response with the body
+    /// fully drained. Asset requests never follow redirects, so a 3xx asset
+    /// response yields no asset body and counts as *failed*, as do 4xx/5xx and
+    /// transport errors. (Before v0.28.82 any status < 500 — including 404 —
+    /// counted as "fetched"; the number may drop on re-measurement of targets
+    /// that error on assets because the old number was wrong.)
     pub assets_fetched: usize,
-    /// Sum of all asset response body bytes.
+    /// Sum of all fetched (2xx) asset response body bytes.
     pub total_bytes: usize,
     /// Wall-clock time from probe start to last asset byte received (ms).
     pub total_ms: f64,
-    /// Time to first asset's first byte (ms).
+    /// TTFB of the `/page` manifest request (ms): request write → first
+    /// response byte, measured on an already-established connection
+    /// (probe-style TTFB — excludes DNS/TCP/TLS setup, which are reported in
+    /// their own phases). NOT the browser TTFB definition; see
+    /// [`BrowserResult::ttfb_ms`].
     pub ttfb_ms: f64,
     /// Number of distinct TCP connections opened (6 for H1.1, 1 for H2).
     pub connections_opened: u32,
-    /// Per-asset total durations in ms.
+    /// Per-asset total durations in ms, index-aligned with asset ids
+    /// (`asset_timings_ms[i]` is asset `i`; length == `asset_count`). Assets
+    /// that were not fetched successfully carry the `0.0` sentinel — use
+    /// `assets_failed`/`assets_fetched` to tell "failed" apart from "instant".
+    /// Caveat: pageload2/pageload3 results recorded before v0.28.82 pushed
+    /// only *successful* fetches, so on any failure the old vector was shorter
+    /// than `asset_count` and not index-aligned.
     pub asset_timings_ms: Vec<f64>,
     pub started_at: DateTime<Utc>,
     /// Sum of all TLS handshake durations during this page load (ms).
@@ -2468,6 +2500,13 @@ pub struct PageLoadResult {
     /// pre-established connection. Additive; `schema_version` stays 1.0.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub per_connection_socket_stats: Vec<SocketStats>,
+    /// Number of assets that did NOT come back as a fully drained 2xx
+    /// response (non-2xx status — including unfollowed 3xx — or a transport
+    /// error/timeout). Always `Some(asset_count - assets_fetched)` on new
+    /// runs; `None` on pre-v0.28.82 data. Additive; `schema_version` stays
+    /// 1.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assets_failed: Option<u32>,
 }
 
 /// Real-browser page-load result (browser mode, requires `--features browser`).
@@ -2477,11 +2516,22 @@ pub struct BrowserResult {
     pub load_ms: f64,
     /// DOMContentLoaded event timing (ms from navigation start).
     pub dom_content_loaded_ms: f64,
-    /// Time to first byte of the main document (ms).
+    /// Browser TTFB (ms): `responseStart − navigationStart` from
+    /// `window.performance.timing`. This is the *browser* definition — it
+    /// includes DNS, TCP connect, TLS, and any redirects before the main
+    /// document's first byte. NOT comparable with [`HttpResult::ttfb_ms`] or
+    /// [`PageLoadResult::ttfb_ms`], which measure request-send → first byte
+    /// on an already-established connection.
     pub ttfb_ms: f64,
     /// Total resources loaded (main doc + all sub-resources).
     pub resource_count: u32,
-    /// Total bytes transferred across all resources.
+    /// Sum of *declared* `Content-Length` response headers across all
+    /// resources — NOT wire bytes. It excludes response headers, counts 0 for
+    /// responses without a Content-Length (e.g. chunked), and reflects the
+    /// declared (possibly compressed) body size. Field name kept for wire
+    /// compat; true wire-byte accounting (CDP
+    /// `Network.loadingFinished.encodedDataLength`) is planned for a later
+    /// wave.
     pub transferred_bytes: usize,
     /// HTTP protocol negotiated for the main document ("h2", "h3", "http/1.1" …).
     pub protocol: String,
@@ -4130,6 +4180,7 @@ mod tests {
                 cpu_time_ms: None,
                 connection_reused: false,
                 per_connection_socket_stats: vec![],
+                assets_failed: Some(0),
             });
             assert!(
                 (primary_metric_value(&a).unwrap() - 500.0).abs() < 1e-9,
