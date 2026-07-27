@@ -287,6 +287,7 @@ pub async fn run_curl_probe(
     let success = parsed.code > 0 && parsed.code < 400;
 
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::Curl,
@@ -407,6 +408,7 @@ fn make_failed(
     detail: Option<String>,
 ) -> RequestAttempt {
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::Curl,

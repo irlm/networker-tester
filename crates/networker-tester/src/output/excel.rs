@@ -191,11 +191,17 @@ fn write_statistics(
         Protocol::Pmtud,
     ];
 
+    // Stats compute over measured-phase attempts only, matching the
+    // benchmark JSON artifact (warmup/overhead/pilot/cooldown excluded).
+    // Non-benchmark runs are unaffected: `measured` is then all attempts.
+    let measured = run.measured_attempts();
+    let excluded_from_stats = run.attempts.len() - measured.len();
+
     let mut row = 1u32;
     for proto in &all_protos {
-        let attempts: Vec<_> = run
-            .attempts
+        let attempts: Vec<_> = measured
             .iter()
+            .copied()
             .filter(|a| &a.protocol == proto)
             .collect();
         if attempts.is_empty() {
@@ -233,6 +239,16 @@ fn write_statistics(
         ws.write_with_format(row, 9, s.stddev, num2)?;
         ws.write_with_format(row, 10, success_pct, num2)?;
         row += 1;
+    }
+
+    if excluded_from_stats > 0 {
+        ws.write(
+            row + 1,
+            0,
+            format!(
+                "Note: {excluded_from_stats} warmup/overhead/pilot/cooldown attempt(s) excluded from stats (benchmark phase filter)"
+            ),
+        )?;
     }
 
     Ok(())
@@ -1166,6 +1182,7 @@ mod tests {
         let now = Utc::now();
 
         let http_attempt = RequestAttempt {
+            phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
             protocol: Protocol::Http1,
@@ -1291,6 +1308,7 @@ mod tests {
         };
 
         let udp_attempt = RequestAttempt {
+            phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
             protocol: Protocol::Udp,
@@ -1330,6 +1348,7 @@ mod tests {
         };
 
         let udp_throughput_attempt = RequestAttempt {
+            phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
             protocol: Protocol::UdpDownload,
@@ -1368,6 +1387,7 @@ mod tests {
         };
 
         let pageload_attempt = RequestAttempt {
+            phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
             protocol: Protocol::PageLoad,
@@ -1411,6 +1431,7 @@ mod tests {
         };
 
         let error_attempt = RequestAttempt {
+            phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
             protocol: Protocol::Http1,
@@ -1597,6 +1618,7 @@ mod tests {
     /// Base attempt with every sub-result unset, for probe-depth fixtures.
     fn empty_attempt(proto: Protocol, seq: u32, run_id: Uuid) -> RequestAttempt {
         RequestAttempt {
+            phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
             protocol: proto,
@@ -1853,6 +1875,7 @@ mod tests {
         let now = Utc::now();
 
         let download_attempt = RequestAttempt {
+            phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
             protocol: Protocol::Download,
@@ -1902,6 +1925,7 @@ mod tests {
         };
 
         let upload_attempt = RequestAttempt {
+            phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
             protocol: Protocol::Upload,

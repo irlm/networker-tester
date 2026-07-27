@@ -57,6 +57,7 @@ mod stub {
         _cfg: &crate::runner::http::RunConfig,
     ) -> RequestAttempt {
         RequestAttempt {
+            phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
             protocol,
@@ -687,6 +688,7 @@ mod real {
             .and_then(|(_, v)| v.trim().parse::<u64>().ok());
 
         RequestAttempt {
+            phase: None,
             attempt_id,
             run_id,
             protocol,
@@ -754,6 +756,7 @@ mod real {
         message: &str,
     ) -> RequestAttempt {
         RequestAttempt {
+            phase: None,
             attempt_id,
             run_id,
             protocol,

@@ -372,6 +372,7 @@ pub async fn run_websocket_probe(
     };
 
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::WebSocket,
@@ -541,6 +542,7 @@ fn ws_failed(
     tls: Option<crate::metrics::TlsResult>,
 ) -> RequestAttempt {
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::WebSocket,

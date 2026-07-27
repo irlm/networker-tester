@@ -25,6 +25,7 @@ fn sample_run() -> TestRun {
     let run_id = Uuid::new_v4();
 
     let attempt = RequestAttempt {
+        phase: None,
         attempt_id: Uuid::new_v4(),
         run_id,
         protocol: Protocol::Http1,
@@ -924,4 +925,38 @@ fn url_test_run_security_headers_is_additive_and_optional() {
     let sec = back.security_headers.expect("security_headers round-trips");
     assert_eq!(sec.x_frame_options.as_deref(), Some("DENY"));
     assert_eq!(sec.csp_present, Some(false));
+}
+
+/// The v0.28.81 additive field `attempt.phase` (structural benchmark phase
+/// attribution, m5 G3) is optional and skip-serialized when `None`:
+/// pre-existing JSON without the field deserializes to `None`, a phase-less
+/// run serializes to the exact same shape as before (frozen 1.0 contract
+/// untouched), and a populated phase round-trips.
+#[test]
+fn attempt_phase_field_is_additive_and_optional() {
+    // Phase-less run (non-benchmark): field must be absent from the wire.
+    let run = sample_run();
+    let v = serde_json::to_value(&run).expect("serialize");
+    assert!(
+        v.pointer("/attempts/0/phase").is_none(),
+        "phase must be skip-serialized when None"
+    );
+
+    // Old JSON without the field must deserialize to None.
+    let back: TestRun = serde_json::from_value(v).expect("deserialize without phase");
+    assert_eq!(back.attempts[0].phase, None);
+
+    // Populated phase round-trips.
+    let mut run = sample_run();
+    run.attempts[0].phase = Some("warmup".to_string());
+    let v = serde_json::to_value(&run).expect("serialize populated");
+    assert_eq!(
+        v.pointer("/attempts/0/phase").and_then(|s| s.as_str()),
+        Some("warmup")
+    );
+    let back: TestRun = serde_json::from_value(v).expect("deserialize populated");
+    assert_eq!(back.attempts[0].phase.as_deref(), Some("warmup"));
+
+    // Schema version stays frozen at 1.0 — the field is additive.
+    assert_eq!(SCHEMA_VERSION, "1.0");
 }

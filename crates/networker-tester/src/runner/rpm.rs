@@ -261,6 +261,7 @@ pub async fn run_rpm_probe(
     let success = error.is_none();
 
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::Rpm,
@@ -440,6 +441,7 @@ fn rpm_failed(
     message: String,
 ) -> RequestAttempt {
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::Rpm,

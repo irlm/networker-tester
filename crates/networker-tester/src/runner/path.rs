@@ -127,6 +127,7 @@ pub async fn run_path_probe(
     };
 
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::Path,
@@ -195,6 +196,7 @@ fn path_failed(
     message: String,
 ) -> RequestAttempt {
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::Path,

@@ -286,36 +286,9 @@ struct BenchmarkAttemptRecord<'a> {
     launch_index: u32,
 }
 
-#[derive(Debug, Clone)]
-struct DeterministicRng {
-    state: u64,
-}
-
-impl DeterministicRng {
-    fn from_values(values: &[f64]) -> Self {
-        let mut state = 0x9e37_79b9_7f4a_7c15_u64 ^ values.len() as u64;
-        for value in values {
-            state ^= value.to_bits().wrapping_mul(0xbf58_476d_1ce4_e5b9);
-            state = state.rotate_left(13);
-        }
-        if state == 0 {
-            state = 0x94d0_49bb_1331_11eb;
-        }
-        Self { state }
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        self.state = self
-            .state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        self.state
-    }
-
-    fn next_index(&mut self, upper: usize) -> usize {
-        (self.next_u64() as usize) % upper
-    }
-}
+// Canonical deterministic bootstrap RNG — shared with `crate::benchmark` via
+// `crate::stats_rng` (single implementation for the tester crate).
+use crate::stats_rng::DeterministicRng;
 
 /// Serialize a `TestRun` to pretty-printed JSON and write to `path`.
 pub fn save(run: &TestRun, path: &Path) -> anyhow::Result<()> {
@@ -407,45 +380,19 @@ pub fn to_benchmark_artifact(run: &TestRun) -> anyhow::Result<BenchmarkArtifact>
         .to_string();
     let launch_index = run.benchmark_launch_index.unwrap_or(0);
 
+    // Phase attribution is structural when the attempt carries a `phase`
+    // (set at creation by the benchmark runner), with positional
+    // reconstruction as fallback for pre-field runs — shared with the
+    // console/HTML/Excel surfaces via `TestRun::resolved_attempt_phases`.
     let attempt_records: Vec<_> = run
-        .attempts
-        .iter()
-        .enumerate()
-        .map(|(idx, attempt)| {
-            let case_id = benchmark_case_id(attempt);
-            let warmup_end = run.benchmark_warmup_attempt_count as usize;
-            let overhead_end = warmup_end + run.benchmark_overhead_attempt_count as usize;
-            let pilot_end = overhead_end + run.benchmark_pilot_attempt_count as usize;
-            let cooldown_start = run
-                .attempts
-                .len()
-                .saturating_sub(run.benchmark_cooldown_attempt_count as usize);
-            let phase = if primary_phase == "warmup" {
-                "warmup".to_string()
-            } else if primary_phase == "overhead" {
-                "overhead".to_string()
-            } else if primary_phase == "pilot" {
-                "pilot".to_string()
-            } else if primary_phase == "cooldown" {
-                "cooldown".to_string()
-            } else if idx < warmup_end {
-                "warmup".to_string()
-            } else if idx < overhead_end {
-                "overhead".to_string()
-            } else if idx < pilot_end {
-                "pilot".to_string()
-            } else if run.benchmark_cooldown_attempt_count > 0 && idx >= cooldown_start {
-                "cooldown".to_string()
-            } else {
-                primary_phase.clone()
-            };
-
-            BenchmarkAttemptRecord {
-                attempt,
-                case_id,
-                phase,
-                launch_index,
-            }
+        .resolved_attempt_phases()
+        .into_iter()
+        .zip(run.attempts.iter())
+        .map(|(phase, attempt)| BenchmarkAttemptRecord {
+            attempt,
+            case_id: benchmark_case_id(attempt),
+            phase,
+            launch_index,
         })
         .collect();
 
@@ -1347,6 +1294,7 @@ mod tests {
             client_geo: None,
             target_geo: None,
             attempts: vec![RequestAttempt {
+                phase: None,
                 attempt_id: Uuid::new_v4(),
                 run_id,
                 protocol: Protocol::Http1,
@@ -1503,6 +1451,40 @@ mod tests {
         assert_eq!(artifact.summary.sample_count, 1);
     }
 
+    /// Structural phase (set at attempt creation) wins over positional
+    /// reconstruction: even when the phase counts are zero (which the
+    /// positional fallback would read as "everything measured"), an attempt
+    /// carrying `phase: Some("warmup")` is excluded from summaries — and the
+    /// human-surface helper `measured_attempts()` agrees with the artifact.
+    #[test]
+    fn benchmark_contract_structural_phase_overrides_positional() {
+        let mut run = benchmark_dummy_run();
+        let measured = run.attempts[0].clone();
+        let mut warmup = measured.clone();
+        warmup.phase = Some("warmup".into());
+        run.attempts = vec![warmup, measured];
+        // Deliberately NOT setting benchmark_warmup_attempt_count.
+
+        let artifact = to_benchmark_artifact(&run).unwrap();
+        assert_eq!(artifact.samples[0].phase, "warmup");
+        assert_eq!(
+            artifact.samples[0].inclusion_status,
+            "excluded_phase_warmup"
+        );
+        assert_eq!(artifact.samples[1].phase, "measured");
+        assert_eq!(artifact.summary.sample_count, 1);
+
+        // Console/HTML/Excel filter must match the artifact's measured set.
+        let human_surface = run.measured_attempts();
+        assert_eq!(human_surface.len(), 1);
+        assert_eq!(
+            human_surface[0].attempt_id, run.attempts[1].attempt_id,
+            "measured_attempts must exclude the structural warmup attempt"
+        );
+        assert_eq!(run.excluded_attempt_count(), 1);
+        assert_eq!(run.resolved_attempt_phases(), vec!["warmup", "measured"]);
+    }
+
     #[test]
     fn benchmark_contract_includes_environment_check_in_environment_and_launches() {
         let mut run = benchmark_dummy_run();
@@ -1586,6 +1568,7 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(sequence_num, total_duration_ms)| RequestAttempt {
+                phase: None,
                 attempt_id: Uuid::new_v4(),
                 run_id,
                 protocol: Protocol::Http1,
@@ -1854,6 +1837,7 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(sequence_num, total_duration_ms)| RequestAttempt {
+                phase: None,
                 attempt_id: Uuid::new_v4(),
                 run_id,
                 protocol: Protocol::Http1,

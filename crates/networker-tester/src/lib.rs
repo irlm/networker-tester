@@ -13,6 +13,7 @@ pub mod network_context;
 pub mod output;
 pub mod progress;
 pub mod runner;
+pub mod stats_rng;
 pub mod summary;
 pub mod tls_profile;
 pub mod url_diagnostic;

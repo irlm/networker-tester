@@ -20,6 +20,7 @@ fn fixed_time(offset_secs: i64) -> DateTime<Utc> {
 
 fn http_attempt(run_id: Uuid, seq: u32, proto: Protocol, ms: f64) -> RequestAttempt {
     RequestAttempt {
+        phase: None,
         attempt_id: Uuid::from_u128(0xA000 + seq as u128),
         run_id,
         protocol: proto,
@@ -91,6 +92,7 @@ fn http_attempt(run_id: Uuid, seq: u32, proto: Protocol, ms: f64) -> RequestAtte
 
 fn failed_attempt(run_id: Uuid, seq: u32) -> RequestAttempt {
     RequestAttempt {
+        phase: None,
         attempt_id: Uuid::from_u128(0xB000 + seq as u128),
         run_id,
         protocol: Protocol::Http2,
@@ -126,6 +128,7 @@ fn failed_attempt(run_id: Uuid, seq: u32) -> RequestAttempt {
 
 fn udp_attempt(run_id: Uuid, seq: u32) -> RequestAttempt {
     RequestAttempt {
+        phase: None,
         attempt_id: Uuid::from_u128(0xC000 + seq as u128),
         run_id,
         protocol: Protocol::Udp,

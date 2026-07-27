@@ -431,6 +431,7 @@ pub async fn run_pageload_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) ->
     };
 
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::PageLoad,
@@ -1207,6 +1208,7 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
     };
 
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::PageLoad2,
@@ -1316,6 +1318,7 @@ fn error_attempt_proto(
     message: String,
 ) -> RequestAttempt {
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol,
@@ -1754,6 +1757,7 @@ pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
     };
 
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::PageLoad3,
@@ -2365,6 +2369,7 @@ async fn fetch_h2_pageload(
     };
 
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::PageLoad2,
@@ -2928,6 +2933,7 @@ async fn fetch_h3_pageload(
     };
 
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::PageLoad3,

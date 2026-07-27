@@ -421,6 +421,80 @@ impl TestRun {
             })
             .collect()
     }
+
+    /// The phase whose samples count as measured for this run
+    /// ("measured" for non-benchmark runs).
+    pub fn primary_phase(&self) -> &str {
+        self.benchmark_phase.as_deref().unwrap_or("measured")
+    }
+
+    /// Phase label for each attempt, index-aligned with `self.attempts`.
+    ///
+    /// Prefers the structural `RequestAttempt.phase` (set at attempt creation
+    /// by the benchmark runner since v0.28.81); falls back to positional
+    /// reconstruction from the recorded phase counts for runs captured before
+    /// the field existed. This is the single source of phase attribution —
+    /// the benchmark JSON artifact and every human-facing stats surface
+    /// (console summary, HTML, Excel) derive from it.
+    pub fn resolved_attempt_phases(&self) -> Vec<String> {
+        let primary_phase = self.primary_phase();
+        let warmup_end = self.benchmark_warmup_attempt_count as usize;
+        let overhead_end = warmup_end + self.benchmark_overhead_attempt_count as usize;
+        let pilot_end = overhead_end + self.benchmark_pilot_attempt_count as usize;
+        let cooldown_start = self
+            .attempts
+            .len()
+            .saturating_sub(self.benchmark_cooldown_attempt_count as usize);
+        let primary_is_special =
+            matches!(primary_phase, "warmup" | "overhead" | "pilot" | "cooldown");
+
+        self.attempts
+            .iter()
+            .enumerate()
+            .map(|(idx, attempt)| {
+                if let Some(phase) = attempt.phase.as_deref() {
+                    phase.to_string()
+                } else if primary_is_special {
+                    primary_phase.to_string()
+                } else if idx < warmup_end {
+                    "warmup".to_string()
+                } else if idx < overhead_end {
+                    "overhead".to_string()
+                } else if idx < pilot_end {
+                    "pilot".to_string()
+                } else if self.benchmark_cooldown_attempt_count > 0 && idx >= cooldown_start {
+                    "cooldown".to_string()
+                } else {
+                    primary_phase.to_string()
+                }
+            })
+            .collect()
+    }
+
+    /// Attempts belonging to this run's primary (measured) phase — the same
+    /// set the benchmark JSON artifact computes its summaries over. For
+    /// non-benchmark runs this is all attempts. Every stats surface (console
+    /// summary, HTML report, Excel workbook) must compute over this set so
+    /// human-facing numbers agree with the artifact.
+    pub fn measured_attempts(&self) -> Vec<&RequestAttempt> {
+        let primary_phase = self.primary_phase();
+        self.resolved_attempt_phases()
+            .iter()
+            .zip(self.attempts.iter())
+            .filter(|(phase, _)| phase.as_str() == primary_phase)
+            .map(|(_, attempt)| attempt)
+            .collect()
+    }
+
+    /// Number of attempts excluded from stats because they belong to a
+    /// non-primary benchmark phase (warmup/overhead/pilot/cooldown).
+    pub fn excluded_attempt_count(&self) -> usize {
+        let primary_phase = self.primary_phase();
+        self.resolved_attempt_phases()
+            .iter()
+            .filter(|phase| phase.as_str() != primary_phase)
+            .count()
+    }
 }
 
 impl HostInfo {
@@ -1050,6 +1124,14 @@ pub struct RequestAttempt {
     /// Path-MTU discovery result (`pmtud` mode only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pmtud: Option<PmtudResult>,
+    /// Benchmark phase this attempt executed in ("warmup", "overhead",
+    /// "pilot", "measured", "cooldown"), set at attempt creation by the
+    /// benchmark runner. `None` means the attempt was not produced by a
+    /// benchmark phase loop and is treated as measured. Additive — schema
+    /// stays 1.0; older artifacts without the field fall back to positional
+    /// phase reconstruction (see `TestRun::resolved_attempt_phases`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
 }
 
 impl RequestAttempt {
@@ -3167,6 +3249,7 @@ mod tests {
     fn test_test_run_counts() {
         let run_id = Uuid::new_v4();
         let mk = |success: bool| RequestAttempt {
+            phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
             protocol: Protocol::Http1,
@@ -3497,6 +3580,7 @@ mod tests {
     // Helper to build a minimal RequestAttempt with no sub-results.
     fn bare_attempt(proto: Protocol) -> RequestAttempt {
         RequestAttempt {
+            phase: None,
             attempt_id: Uuid::new_v4(),
             run_id: Uuid::new_v4(),
             protocol: proto,

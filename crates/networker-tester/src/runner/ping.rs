@@ -164,6 +164,7 @@ pub async fn run_ping_probe(
     };
 
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::Ping,
@@ -220,6 +221,7 @@ fn ping_failed(
     detail: Option<String>,
 ) -> RequestAttempt {
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::Ping,

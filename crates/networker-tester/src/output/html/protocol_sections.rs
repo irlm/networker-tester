@@ -6,6 +6,13 @@ use super::*;
 pub(super) fn write_protocol_sections(run: &TestRun, out: &mut String, stack_filter: Option<&str>) {
     use crate::metrics::compute_stats;
 
+    // Stats tables, comparisons and charts compute over measured-phase
+    // attempts only, so the HTML report agrees with the benchmark JSON
+    // artifact (warmup/overhead/pilot/cooldown excluded). Non-benchmark
+    // runs are unaffected: `measured` is then all attempts.
+    let measured = run.measured_attempts();
+    let excluded_from_stats = run.attempts.len() - measured.len();
+
     // Label suffix for chart data points (e.g. " endpoint", " iis", " nginx")
     let label_suffix = match stack_filter {
         None => " endpoint".to_string(),
@@ -55,9 +62,9 @@ pub(super) fn write_protocol_sections(run: &TestRun, out: &mut String, stack_fil
         Protocol::PageLoad3,
         Protocol::Browser,
     ] {
-        let rows: Vec<&RequestAttempt> = run
-            .attempts
+        let rows: Vec<&RequestAttempt> = measured
             .iter()
+            .copied()
             .filter(|a| &a.protocol == proto && a.http_stack.as_deref() == stack_filter)
             .collect();
         if rows.is_empty() {
@@ -95,11 +102,10 @@ pub(super) fn write_protocol_sections(run: &TestRun, out: &mut String, stack_fil
         let stat_groups: Vec<(Protocol, Option<usize>)> = all_protos
             .iter()
             .flat_map(|proto| {
-                let payloads: BTreeSet<Option<usize>> = run
-                    .attempts
+                let payloads: BTreeSet<Option<usize>> = measured
                     .iter()
                     .filter(|a| a.protocol == *proto && a.http_stack.as_deref() == stack_filter)
-                    .map(attempt_payload_bytes)
+                    .map(|a| attempt_payload_bytes(a))
                     .collect();
                 payloads.into_iter().map(move |p| ((*proto).clone(), p))
             })
@@ -109,9 +115,9 @@ pub(super) fn write_protocol_sections(run: &TestRun, out: &mut String, stack_fil
         let stat_rows: Vec<_> = stat_groups
             .iter()
             .filter_map(|(proto, payload)| {
-                let attempts: Vec<&RequestAttempt> = run
-                    .attempts
+                let attempts: Vec<&RequestAttempt> = measured
                     .iter()
+                    .copied()
                     .filter(|a| {
                         &a.protocol == proto
                             && attempt_payload_bytes(a) == *payload
@@ -192,16 +198,24 @@ pub(super) fn write_protocol_sections(run: &TestRun, out: &mut String, stack_fil
                     pct = success_pct,
                 );
             }
-            let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
+            let _ = writeln!(out, "    </tbody>\n  </table>");
+            if excluded_from_stats > 0 {
+                let _ = writeln!(
+                    out,
+                    "  <p class=\"note\">{excluded_from_stats} warmup/overhead/pilot/cooldown attempt{s} excluded from stats (benchmark phase filter)</p>",
+                    s = if excluded_from_stats == 1 { "" } else { "s" },
+                );
+            }
+            let _ = writeln!(out, "</section>");
         }
     }
 
     // ── Protocol Comparison (Page Load) ──────────────────────────────────────
     {
         use crate::metrics::compute_stats;
-        let pl_attempts: Vec<&RequestAttempt> = run
-            .attempts
+        let pl_attempts: Vec<&RequestAttempt> = measured
             .iter()
+            .copied()
             .filter(|a| {
                 matches!(
                     a.protocol,
@@ -342,9 +356,9 @@ pub(super) fn write_protocol_sections(run: &TestRun, out: &mut String, stack_fil
 
     // ── Protocol Comparison (Browser) ─────────────────────────────────────────
     {
-        let br_cmp_attempts: Vec<&RequestAttempt> = run
-            .attempts
+        let br_cmp_attempts: Vec<&RequestAttempt> = measured
             .iter()
+            .copied()
             .filter(|a| {
                 matches!(
                     a.protocol,
@@ -528,9 +542,9 @@ pub(super) fn write_protocol_sections(run: &TestRun, out: &mut String, stack_fil
 
     // ── Charts + Analysis ─────────────────────────────────────────────────────
     {
-        let chart_browser: Vec<&RequestAttempt> = run
-            .attempts
+        let chart_browser: Vec<&RequestAttempt> = measured
             .iter()
+            .copied()
             .filter(|a| {
                 matches!(
                     a.protocol,
@@ -542,9 +556,9 @@ pub(super) fn write_protocol_sections(run: &TestRun, out: &mut String, stack_fil
                     && a.http_stack.as_deref() == stack_filter
             })
             .collect();
-        let chart_pl: Vec<&RequestAttempt> = run
-            .attempts
+        let chart_pl: Vec<&RequestAttempt> = measured
             .iter()
+            .copied()
             .filter(|a| {
                 matches!(
                     a.protocol,
@@ -553,7 +567,7 @@ pub(super) fn write_protocol_sections(run: &TestRun, out: &mut String, stack_fil
                     && a.http_stack.as_deref() == stack_filter
             })
             .collect();
-        let has_throughput = run.attempts.iter().any(|a| {
+        let has_throughput = measured.iter().any(|a| {
             matches!(
                 a.protocol,
                 Protocol::Download | Protocol::Upload | Protocol::WebDownload | Protocol::WebUpload
@@ -846,9 +860,9 @@ pub(super) fn write_protocol_sections(run: &TestRun, out: &mut String, stack_fil
             // Chart 5: Throughput by Protocol (MB/s)
             if has_throughput {
                 use std::collections::BTreeSet;
-                let tp_attempts: Vec<&RequestAttempt> = run
-                    .attempts
+                let tp_attempts: Vec<&RequestAttempt> = measured
                     .iter()
+                    .copied()
                     .filter(|a| {
                         matches!(
                             a.protocol,

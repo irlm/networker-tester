@@ -749,6 +749,7 @@ mod real {
         let finished_at = Utc::now();
 
         RequestAttempt {
+            phase: None,
             attempt_id,
             run_id,
             protocol,
@@ -872,6 +873,7 @@ mod real {
         category: ErrorCategory,
     ) -> RequestAttempt {
         RequestAttempt {
+            phase: None,
             attempt_id,
             run_id,
             protocol,
@@ -1122,6 +1124,7 @@ mod stub {
         let attempt_id = Uuid::new_v4();
         let started_at = Utc::now();
         RequestAttempt {
+            phase: None,
             attempt_id,
             run_id,
             protocol,

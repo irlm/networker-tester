@@ -23,6 +23,13 @@ pub fn print_summary(run: &TestRun) {
     let fail = run.failure_count();
     let total = run.attempts.len();
 
+    // Stats tables below compute over measured-phase attempts only, so the
+    // console agrees with the benchmark JSON artifact (warmup/overhead/
+    // pilot/cooldown samples are excluded). Non-benchmark runs are
+    // unaffected: `measured` is then all attempts.
+    let measured = run.measured_attempts();
+    let excluded_from_stats = run.attempts.len() - measured.len();
+
     // Extract server version from the first attempt that reported it.
     let server_version: String = run
         .attempts
@@ -138,11 +145,10 @@ pub fn print_summary(run: &TestRun) {
     let stat_groups: Vec<(Protocol, Option<usize>)> = ordered_protos
         .iter()
         .flat_map(|proto| {
-            let payloads: BTreeSet<Option<usize>> = run
-                .attempts
+            let payloads: BTreeSet<Option<usize>> = measured
                 .iter()
                 .filter(|a| &a.protocol == proto)
-                .map(attempt_payload_bytes)
+                .map(|a| attempt_payload_bytes(a))
                 .collect();
             payloads.into_iter().map(move |p| (proto.clone(), p))
         })
@@ -161,8 +167,7 @@ pub fn print_summary(run: &TestRun) {
     println!("──────────────────┼─────┼─────────┼─────────┼─────────┼──────────┼───────────");
 
     for (proto, payload) in &stat_groups {
-        let rows: Vec<_> = run
-            .attempts
+        let rows: Vec<_> = measured
             .iter()
             .filter(|a| &a.protocol == proto && attempt_payload_bytes(a) == *payload)
             .collect();
@@ -199,7 +204,7 @@ pub fn print_summary(run: &TestRun) {
 
     // Per-group statistics (primary metric: ms for latency, MB/s for throughput)
     let has_stats = stat_groups.iter().any(|(proto, payload)| {
-        run.attempts
+        measured
             .iter()
             .filter(|a| &a.protocol == proto && attempt_payload_bytes(a) == *payload)
             .any(|a| primary_metric_value(a).is_some())
@@ -214,11 +219,10 @@ pub fn print_summary(run: &TestRun) {
             "──────────────────┼──────────────────┼─────┼──────────┼──────────┼──────────┼──────────┼──────────┼──────────┼─────────"
         );
         for (proto, payload) in &stat_groups {
-            let vals: Vec<f64> = run
-                .attempts
+            let vals: Vec<f64> = measured
                 .iter()
                 .filter(|a| &a.protocol == proto && attempt_payload_bytes(a) == *payload)
-                .filter_map(primary_metric_value)
+                .filter_map(|a| primary_metric_value(a))
                 .collect();
             if let Some(s) = compute_stats(&vals) {
                 let label = primary_metric_label(proto);
@@ -242,6 +246,15 @@ pub fn print_summary(run: &TestRun) {
                 );
             }
         }
+    }
+
+    // Human surfaces must agree with the benchmark artifact: state what the
+    // phase filter dropped from the tables above.
+    if excluded_from_stats > 0 {
+        println!(
+            "\n Note: {excluded_from_stats} warmup/overhead/pilot/cooldown attempt{s} excluded from stats (benchmark phase filter)",
+            s = if excluded_from_stats == 1 { "" } else { "s" },
+        );
     }
 
     // Post-transfer TCP kernel stats note (gap #5): sampled after each
@@ -784,10 +797,12 @@ fn print_h3_zero_rtt(run: &TestRun) {
 }
 
 pub fn print_comparison(run: &TestRun) {
+    // Measured-phase attempts only, matching the benchmark JSON artifact.
+    let measured = run.measured_attempts();
     let row = |proto: &Protocol| -> Option<String> {
-        let attempts: Vec<&RequestAttempt> = run
-            .attempts
+        let attempts: Vec<&RequestAttempt> = measured
             .iter()
+            .copied()
             .filter(|a| &a.protocol == proto)
             .collect();
         if attempts.is_empty() {
@@ -847,9 +862,9 @@ pub fn print_comparison(run: &TestRun) {
 
     // Browser row (uses BrowserResult, not PageLoadResult)
     let browser_row = |proto: &Protocol| -> Option<String> {
-        let attempts: Vec<&RequestAttempt> = run
-            .attempts
+        let attempts: Vec<&RequestAttempt> = measured
             .iter()
+            .copied()
             .filter(|a| &a.protocol == proto)
             .collect();
         if attempts.is_empty() {
