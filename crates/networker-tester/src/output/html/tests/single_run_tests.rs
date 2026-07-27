@@ -407,6 +407,7 @@ fn html_contains_tls_section_for_tls_attempt() {
                 cert_issuer: Some("CN=Test CA".into()),
                 cert_expiry: Some(now),
                 handshake_duration_ms: 7.5,
+                chain_diagnosis: None,
                 started_at: now,
                 success: true,
                 cert_chain: vec![],

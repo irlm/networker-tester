@@ -925,6 +925,7 @@ pub(crate) fn extract_tls_probe_info(
         .map(String::from);
 
     let cert_chain = extract_full_cert_chain(conn);
+    let chain_diagnosis = crate::metrics::diagnose_chain(&cert_chain);
 
     let (cert_subject, cert_issuer, cert_expiry) = cert_chain
         .first()
@@ -946,6 +947,7 @@ pub(crate) fn extract_tls_probe_info(
         cert_issuer,
         cert_expiry,
         handshake_duration_ms: duration_ms,
+        chain_diagnosis,
         started_at,
         success: true,
         cert_chain,

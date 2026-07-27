@@ -726,6 +726,7 @@ mod real {
             cert_issuer: None,
             cert_expiry: None,
             handshake_duration_ms: handshake_ms,
+            chain_diagnosis: None,
             started_at: http_started_at,
             success: true,
             cert_chain: vec![],

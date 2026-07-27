@@ -2069,6 +2069,70 @@ pub struct CertEntry {
     pub signature_algorithm: Option<String>,
 }
 
+/// Trust-path diagnosis of the certificate chain the server actually presented,
+/// derived purely from the captured [`CertEntry`] chain (deep-measurement M2
+/// D5/D9). It does not validate against a trust store — it reports structural
+/// facts a CLI reveals that a browser hides (browsers cache intermediates, so
+/// a server that forgets to send one still "works" for them but breaks
+/// non-browser clients). DN comparison is exact-string over the same extractor,
+/// so the checks are heuristic by design.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChainDiagnosis {
+    /// Number of certificates the server sent (leaf-first).
+    pub chain_length: u32,
+    /// Whether each cert's issuer DN equals the next cert's subject DN (the
+    /// chain links cleanly). `None` when fewer than two certs were sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub links_consistent: Option<bool>,
+    /// The leaf is not self-signed AND its issuer DN is not the subject of any
+    /// cert the server sent — a client without the intermediate cached will
+    /// fail to build a path. The classic "works in my browser" misconfig.
+    pub missing_intermediate_suspected: bool,
+    /// The leaf's subject DN equals its issuer DN (self-signed).
+    pub self_signed_leaf: bool,
+    /// Some subject DN appears more than once with differing issuers — a
+    /// cross-sign shape (e.g. a root cross-signed by an older root).
+    pub cross_signed_subjects: bool,
+}
+
+/// Derive [`ChainDiagnosis`] from a leaf-first cert chain. `None` for an empty
+/// chain (nothing to diagnose). Pure/deterministic.
+pub fn diagnose_chain(chain: &[CertEntry]) -> Option<ChainDiagnosis> {
+    let leaf = chain.first()?;
+    let len = chain.len();
+
+    let self_signed_leaf = leaf.subject == leaf.issuer;
+
+    let links_consistent = if len >= 2 {
+        Some(chain.windows(2).all(|w| w[0].issuer == w[1].subject))
+    } else {
+        None
+    };
+
+    // Missing intermediate: leaf isn't self-signed, and its issuer isn't the
+    // subject of any cert the server bothered to send.
+    let issuer_present = chain.iter().any(|c| c.subject == leaf.issuer);
+    let missing_intermediate_suspected = !self_signed_leaf && !issuer_present;
+
+    // Cross-sign: a subject DN repeated with two different issuers.
+    let mut cross_signed_subjects = false;
+    for (i, a) in chain.iter().enumerate() {
+        for b in &chain[i + 1..] {
+            if a.subject == b.subject && a.issuer != b.issuer {
+                cross_signed_subjects = true;
+            }
+        }
+    }
+
+    Some(ChainDiagnosis {
+        chain_length: len as u32,
+        links_consistent,
+        missing_intermediate_suspected,
+        self_signed_leaf,
+        cross_signed_subjects,
+    })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TlsResult {
     pub protocol_version: String,
@@ -2083,6 +2147,11 @@ pub struct TlsResult {
     /// Full certificate chain returned by the server (leaf cert first).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cert_chain: Vec<CertEntry>,
+    /// Structural trust-path diagnosis of `cert_chain` (M2 D5/D9). Populated by
+    /// the cert-focused probes (tls / tlsresume / native); `None` on incidental
+    /// transfer handshakes and when no chain was captured. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain_diagnosis: Option<ChainDiagnosis>,
     /// TLS backend that performed the handshake.
     /// "rustls" for the default backend; "native/schannel", "native/secure-transport",
     /// or "native/openssl" for the `native` probe mode.
@@ -4050,6 +4119,82 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // diagnose_chain — certificate trust-path structure (M2 D5/D9)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    fn cert(subject: &str, issuer: &str) -> CertEntry {
+        CertEntry {
+            subject: subject.into(),
+            issuer: issuer.into(),
+            expiry: None,
+            sans: vec![],
+            key_algorithm: None,
+            key_size_bits: None,
+            signature_algorithm: None,
+        }
+    }
+
+    #[test]
+    fn diagnose_chain_empty_is_none() {
+        assert!(diagnose_chain(&[]).is_none());
+    }
+
+    #[test]
+    fn diagnose_chain_complete_leaf_intermediate_root() {
+        let chain = [
+            cert("CN=example.com", "CN=Intermediate CA"),
+            cert("CN=Intermediate CA", "CN=Root CA"),
+            cert("CN=Root CA", "CN=Root CA"),
+        ];
+        let d = diagnose_chain(&chain).unwrap();
+        assert_eq!(d.chain_length, 3);
+        assert_eq!(d.links_consistent, Some(true));
+        assert!(!d.missing_intermediate_suspected);
+        assert!(!d.self_signed_leaf);
+        assert!(!d.cross_signed_subjects);
+    }
+
+    #[test]
+    fn diagnose_chain_missing_intermediate() {
+        let chain = [cert("CN=example.com", "CN=Intermediate CA")];
+        let d = diagnose_chain(&chain).unwrap();
+        assert_eq!(d.chain_length, 1);
+        assert_eq!(d.links_consistent, None);
+        assert!(d.missing_intermediate_suspected);
+        assert!(!d.self_signed_leaf);
+    }
+
+    #[test]
+    fn diagnose_chain_self_signed_leaf() {
+        let chain = [cert("CN=localhost", "CN=localhost")];
+        let d = diagnose_chain(&chain).unwrap();
+        assert!(d.self_signed_leaf);
+        assert!(!d.missing_intermediate_suspected);
+    }
+
+    #[test]
+    fn diagnose_chain_broken_link_is_inconsistent() {
+        let chain = [
+            cert("CN=example.com", "CN=Intermediate CA"),
+            cert("CN=Some Other CA", "CN=Root CA"),
+        ];
+        let d = diagnose_chain(&chain).unwrap();
+        assert_eq!(d.links_consistent, Some(false));
+        assert!(d.missing_intermediate_suspected);
+    }
+
+    #[test]
+    fn diagnose_chain_cross_signed_subjects() {
+        let chain = [
+            cert("CN=example.com", "CN=Intermediate CA"),
+            cert("CN=Intermediate CA", "CN=Root CA"),
+            cert("CN=Intermediate CA", "CN=Legacy Root"),
+        ];
+        let d = diagnose_chain(&chain).unwrap();
+        assert!(d.cross_signed_subjects);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // SocketStats — post-transfer TCP kernel stats (gap #5), additive contract
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -4762,6 +4907,7 @@ mod tests {
             cert_issuer: None,
             cert_expiry: None,
             handshake_duration_ms: 7.5,
+            chain_diagnosis: None,
             started_at: Utc::now(),
             success: true,
             cert_chain: vec![],
@@ -5160,6 +5306,7 @@ mod tests {
             cert_issuer: None,
             cert_expiry: None,
             handshake_duration_ms: 3.0,
+            chain_diagnosis: None,
             started_at: Utc::now(),
             success: true,
             cert_chain: vec![],

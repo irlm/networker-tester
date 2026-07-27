@@ -1131,6 +1131,34 @@ fn print_tls_detail(run: &TestRun) {
         Some(false) => println!("   {:<18} not stapled", "OCSP"),
         None => println!("   {:<18} not observed (resumed handshake)", "OCSP"),
     }
+    // Chain trust-path structure (M2 D5/D9): the diagnostic value is the
+    // missing-intermediate case — invisible in browsers (they cache
+    // intermediates), fatal for non-browser clients.
+    if let Some(cd) = &tls.chain_diagnosis {
+        if cd.missing_intermediate_suspected {
+            println!(
+                "   {:<18} ⚠ leaf only, intermediate not sent — non-browser clients may fail to build a path",
+                "Chain"
+            );
+        } else if cd.self_signed_leaf {
+            println!("   {:<18} self-signed leaf", "Chain");
+        } else {
+            let links = match cd.links_consistent {
+                Some(true) => "links consistent",
+                Some(false) => "⚠ broken link",
+                None => "single cert",
+            };
+            let cross = if cd.cross_signed_subjects {
+                ", cross-signed"
+            } else {
+                ""
+            };
+            println!(
+                "   {:<18} {} cert(s), {links}{cross}",
+                "Chain", cd.chain_length
+            );
+        }
+    }
 }
 
 /// Render the HTTP/3 QUIC session-resumption / 0-RTT note: for each http3

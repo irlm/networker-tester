@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.87] — 2026-07-27
+
+### Added
+- **Certificate chain trust-path diagnosis** — `TlsResult.chain_diagnosis`
+  (M2 D5/D9): structural facts derived purely from the captured chain —
+  length, whether each issuer links to the next subject, self-signed leaf, a
+  cross-sign heuristic, and the headline **missing-intermediate** detection
+  (leaf not self-signed and its issuer absent from the presented chain). That
+  case is invisible in browsers (they cache intermediates) but breaks
+  non-browser clients — exactly the server misconfig a CLI should surface.
+  Populated by the full-chain rustls probes (`tls`/`tlsresume`); left `None`
+  where only the leaf is captured (`native`) or the handshake is incidental.
+  Summary warns on missing intermediates. Second Tier-2/3 depth item.
+
+  NOTE: the audit's key-exchange-group item (D6) was found to require a rustls
+  0.21→0.23 major upgrade (`negotiated_key_exchange_group()` is 0.23-only) —
+  deferred as a dependency change, not the one-call add the audit assumed.
+
+---
+
 ## [0.28.86] — 2026-07-27
 
 ### Added

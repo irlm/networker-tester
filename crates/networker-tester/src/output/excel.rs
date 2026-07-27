@@ -1235,6 +1235,7 @@ mod tests {
                 cert_issuer: Some("CN=Test CA".into()),
                 cert_expiry: Some(now),
                 handshake_duration_ms: 4.2,
+                chain_diagnosis: None,
                 started_at: now,
                 success: true,
                 cert_chain: vec![CertEntry {
