@@ -378,6 +378,13 @@ fn make_browser_attempt(proto: Protocol, load_ms: f64, ttfb_ms: f64) -> RequestA
         protocol: "h2".into(),
         resource_protocols: vec![("h2".into(), 15)],
         started_at: Utc::now(),
+        lcp_ms: None,
+        cls: None,
+        fcp_ms: None,
+        tbt_ms: None,
+        wire_bytes_total: None,
+        waterfall: Vec::new(),
+        waterfall_truncated: false,
     });
     a
 }

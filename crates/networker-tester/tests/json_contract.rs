@@ -1330,3 +1330,103 @@ fn udp_local_drop_fields_are_additive_and_optional() {
     assert!((back.loss_percent - 4.2).abs() < 1e-9);
     assert_eq!(SCHEMA_VERSION, "1.0");
 }
+
+/// Wave W additive browser fields: Core Web Vitals (`lcp_ms`, `cls`,
+/// `fcp_ms`, `tbt_ms`), the CDP request waterfall (`waterfall`,
+/// `waterfall_truncated`) and real wire bytes (`wire_bytes_total`).
+/// Pre-Wave-W browser JSON deserializes with all of them None/empty/false,
+/// None/empty are skip-serialized, populated results round-trip.
+/// schema_version stays 1.0.
+#[test]
+fn browser_cwv_and_waterfall_fields_are_additive_and_optional() {
+    use networker_tester::metrics::{BrowserRequest, BrowserRequestTiming, BrowserResult};
+
+    // Pre-Wave-W browser JSON (no new keys) must deserialize.
+    let old: BrowserResult = serde_json::from_str(
+        r#"{
+            "load_ms": 350.0, "dom_content_loaded_ms": 200.0, "ttfb_ms": 50.0,
+            "resource_count": 21, "transferred_bytes": 204800,
+            "protocol": "h2", "resource_protocols": [["h2", 21]],
+            "started_at": "2026-07-27T00:00:00Z"
+        }"#,
+    )
+    .expect("pre-Wave-W browser JSON deserializes");
+    assert_eq!(old.lcp_ms, None);
+    assert_eq!(old.cls, None);
+    assert_eq!(old.fcp_ms, None);
+    assert_eq!(old.tbt_ms, None);
+    assert_eq!(old.wire_bytes_total, None);
+    assert!(old.waterfall.is_empty());
+    assert!(!old.waterfall_truncated);
+
+    // None/empty → omitted on the wire (0-as-missing is banned; absence is).
+    let v = serde_json::to_value(&old).expect("serialize");
+    assert!(v.get("lcp_ms").is_none());
+    assert!(v.get("cls").is_none());
+    assert!(v.get("fcp_ms").is_none());
+    assert!(v.get("tbt_ms").is_none());
+    assert!(v.get("wire_bytes_total").is_none());
+    assert!(v.get("waterfall").is_none());
+    assert!(v.get("waterfall_truncated").is_none());
+
+    // Populated → round-trips. CLS 0.0 is a real value, distinct from None.
+    let mut populated = old.clone();
+    populated.lcp_ms = Some(321.5);
+    populated.cls = Some(0.0);
+    populated.fcp_ms = Some(120.25);
+    populated.tbt_ms = Some(0.0);
+    populated.wire_bytes_total = Some(212_345);
+    populated.waterfall_truncated = true;
+    populated.waterfall = vec![BrowserRequest {
+        url: "https://localhost:8443/browser-page".into(),
+        method: "GET".into(),
+        status: Some(200),
+        mime_type: Some("text/html".into()),
+        protocol: Some("h2".into()),
+        wire_bytes: Some(1_234),
+        start_ms: Some(0.0),
+        end_ms: Some(48.7),
+        from_disk_cache: false,
+        from_service_worker: false,
+        timing: Some(BrowserRequestTiming {
+            dns_ms: Some(0.1),
+            connect_ms: Some(1.2),
+            ssl_ms: Some(0.9),
+            send_ms: Some(0.05),
+            wait_ms: Some(12.0),
+            receive_ms: Some(30.0),
+        }),
+    }];
+    let v = serde_json::to_value(&populated).expect("serialize populated");
+    assert_eq!(
+        v.pointer("/cls").and_then(|n| n.as_f64()),
+        Some(0.0),
+        "CLS 0.0 must serialize (a value, not missing)"
+    );
+    assert_eq!(
+        v.pointer("/wire_bytes_total").and_then(|n| n.as_u64()),
+        Some(212_345)
+    );
+    assert_eq!(
+        v.pointer("/waterfall/0/timing/wait_ms")
+            .and_then(|n| n.as_f64()),
+        Some(12.0)
+    );
+    assert_eq!(
+        v.pointer("/waterfall/0/status").and_then(|n| n.as_u64()),
+        Some(200)
+    );
+    assert_eq!(
+        v.pointer("/waterfall_truncated").and_then(|b| b.as_bool()),
+        Some(true)
+    );
+    let back: BrowserResult = serde_json::from_value(v).expect("deserialize populated");
+    assert_eq!(back.lcp_ms, Some(321.5));
+    assert_eq!(back.cls, Some(0.0));
+    assert_eq!(back.waterfall.len(), 1);
+    assert_eq!(back.waterfall[0].wire_bytes, Some(1_234));
+    assert!(back.waterfall_truncated);
+    // Legacy fields untouched.
+    assert_eq!(back.transferred_bytes, 204_800);
+    assert_eq!(SCHEMA_VERSION, "1.0");
+}

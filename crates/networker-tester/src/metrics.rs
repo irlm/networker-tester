@@ -2964,6 +2964,141 @@ pub struct BrowserResult {
     /// Per-protocol resource counts sorted by count desc: [("h2", 18), ("h3", 2)].
     pub resource_protocols: Vec<(String, u32)>,
     pub started_at: DateTime<Utc>,
+    /// Largest Contentful Paint (ms from navigation start), from a buffered
+    /// `PerformanceObserver` injected before navigation. The reported value is
+    /// the *last* LCP candidate entry observed by collection time. `None` when
+    /// the page produced no LCP entry or the observer failed — never
+    /// 0-as-missing. Additive; `schema_version` stays 1.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lcp_ms: Option<f64>,
+    /// Cumulative Layout Shift (unitless), computed with the web.dev
+    /// session-window rule: layout-shift entries (excluding
+    /// `hadRecentInput`) are grouped into sessions — a new session starts
+    /// when the gap since the previous entry exceeds 1 s or the session span
+    /// exceeds 5 s — and CLS is the *maximum* session value, not the naive
+    /// sum. `Some(0.0)` is a real measurement (observer registered, zero
+    /// shifts); `None` means the observer failed / entry type unsupported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cls: Option<f64>,
+    /// First Contentful Paint (ms from navigation start), from the buffered
+    /// `paint` observer. `None` when no FCP entry was produced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fcp_ms: Option<f64>,
+    /// Total Blocking Time (ms): Σ max(0, duration − 50 ms) over `longtask`
+    /// entries whose start falls at/after FCP (when FCP is known; otherwise
+    /// over the whole window), within the lab collection window = navigation
+    /// start → load event + settle delay (a TTI proxy — headless lab pages
+    /// have no user input, so the classic FCP→TTI window is approximated by
+    /// the load window). `Some(0.0)` = observer worked, no blocking tasks;
+    /// `None` = longtask observation unavailable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tbt_ms: Option<f64>,
+    /// Real wire bytes across all requests: per request,
+    /// max(`Network.loadingFinished.encodedDataLength`, Σ `dataReceived`
+    /// chunk `encodedDataLength`) — headers + bodies as transferred
+    /// (compressed size when the server compresses). The honest replacement
+    /// for the declared-length sum in `transferred_bytes` (kept as-is for
+    /// wire compat). Caveat (measured 2026-07): Chrome's CDP byte
+    /// attribution under-reports on very fast (loopback) transfers — some
+    /// requests get body-only or partial counts, so on loopback this is a
+    /// *lower bound*; attribution is reliable on real-RTT paths. (The
+    /// JS-side `ResourceTiming.transferSize` is NOT an alternative: the
+    /// spec pegs it to `encodedBodySize + 300` as a fingerprinting
+    /// mitigation.) `None` on pre-Wave-W data or when the event streams
+    /// carried no byte accounting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wire_bytes_total: Option<u64>,
+    /// Per-request CDP waterfall (capped at [`BROWSER_WATERFALL_CAP`]
+    /// entries; see `waterfall_truncated`). Empty on pre-Wave-W data.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waterfall: Vec<BrowserRequest>,
+    /// True when the page issued more requests than the waterfall cap and
+    /// the vector was truncated (aggregates such as `wire_bytes_total` still
+    /// cover ALL requests).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub waterfall_truncated: bool,
+}
+
+/// Maximum number of per-request entries kept in [`BrowserResult::waterfall`].
+/// Third-party pages can fire thousands of requests; aggregates still count
+/// everything, only the per-request detail vector is capped.
+pub const BROWSER_WATERFALL_CAP: usize = 200;
+
+/// One network request captured from the CDP event stream during a browser
+/// probe (Network.requestWillBeSent / responseReceived / dataReceived /
+/// loadingFinished, correlated by requestId). Additive; `schema_version`
+/// stays 1.0.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrowserRequest {
+    /// Request URL, truncated to 160 chars (with `…`) for report sanity.
+    pub url: String,
+    /// HTTP method ("GET", "POST", …).
+    pub method: String,
+    /// HTTP status code. `None` when no response was received (failed /
+    /// still in flight at collection time).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+    /// Coarse MIME type from the response ("text/html", "image/png", …) —
+    /// parameters after `;` stripped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    /// Protocol this resource was fetched over ("h2", "h3", "http/1.1", …).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
+    /// Wire bytes for this request:
+    /// max(`Network.loadingFinished.encodedDataLength`, Σ `dataReceived`
+    /// chunk `encodedDataLength`) — includes headers and reflects
+    /// on-the-wire (possibly compressed) size. Disk-cache hits report
+    /// `Some(0)` honestly (nothing crossed the wire). `None` when no event
+    /// carried byte accounting for this request. See
+    /// [`BrowserResult::wire_bytes_total`] for the loopback
+    /// under-attribution caveat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wire_bytes: Option<u64>,
+    /// Request start (ms relative to the main document request's
+    /// `requestWillBeSent` timestamp — the navigation origin of this capture).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_ms: Option<f64>,
+    /// Loading finished (same time base as `start_ms`). `None` when the
+    /// request did not finish before collection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_ms: Option<f64>,
+    /// Served from disk cache (no network fetch for the body).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub from_disk_cache: bool,
+    /// Served by a service worker.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub from_service_worker: bool,
+    /// Per-phase ResourceTiming breakdown (absent for cache hits / data URLs
+    /// and whenever Chrome reports no timing for the fetch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing: Option<BrowserRequestTiming>,
+}
+
+/// DevTools-waterfall phase breakdown for one request, mapped from CDP
+/// `ResourceTiming` (all ms; a phase is `None` when Chrome reports −1, i.e.
+/// the phase did not occur — e.g. no DNS on a reused connection).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrowserRequestTiming {
+    /// DNS resolve (dnsStart → dnsEnd).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns_ms: Option<f64>,
+    /// TCP/QUIC connect (connectStart → connectEnd; includes SSL time on
+    /// Chrome's clock — see `ssl_ms` for the TLS share).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connect_ms: Option<f64>,
+    /// TLS handshake (sslStart → sslEnd).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssl_ms: Option<f64>,
+    /// Request send (sendStart → sendEnd).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send_ms: Option<f64>,
+    /// Server wait / TTFB (sendEnd → receiveHeadersEnd).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_ms: Option<f64>,
+    /// Content download (receiveHeadersEnd → loadingFinished).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receive_ms: Option<f64>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4337,6 +4472,13 @@ mod tests {
             protocol: "h2".into(),
             resource_protocols: vec![("h2".into(), 10)],
             started_at: Utc::now(),
+            lcp_ms: None,
+            cls: None,
+            fcp_ms: None,
+            tbt_ms: None,
+            wire_bytes_total: None,
+            waterfall: Vec::new(),
+            waterfall_truncated: false,
         });
         assert!((primary_metric_value(&a).unwrap() - 350.0).abs() < 1e-9);
     }
@@ -4661,6 +4803,13 @@ mod tests {
                 protocol: "h2".into(),
                 resource_protocols: vec![],
                 started_at: Utc::now(),
+                lcp_ms: None,
+                cls: None,
+                fcp_ms: None,
+                tbt_ms: None,
+                wire_bytes_total: None,
+                waterfall: Vec::new(),
+                waterfall_truncated: false,
             });
             assert!(
                 (primary_metric_value(&a).unwrap() - 700.0).abs() < 1e-9,

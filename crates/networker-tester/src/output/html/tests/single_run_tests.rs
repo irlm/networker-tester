@@ -930,6 +930,13 @@ fn html_contains_browser_section() {
                 protocol: "h2".into(),
                 resource_protocols: vec![("h2".into(), 21)],
                 started_at: now,
+                lcp_ms: None,
+                cls: None,
+                fcp_ms: None,
+                tbt_ms: None,
+                wire_bytes_total: None,
+                waterfall: Vec::new(),
+                waterfall_truncated: false,
             }),
             http_stack: None,
             rpm: None,
@@ -946,5 +953,68 @@ fn html_contains_browser_section() {
     assert!(
         html.contains("Browser Results"),
         "should have Browser Results section"
+    );
+    // Pre-Wave-W shape (no CWV, no waterfall) must NOT grow new sections —
+    // keeps existing reports/snapshots unchanged.
+    assert!(
+        !html.contains("Core Web Vitals"),
+        "CWV section must be data-gated"
+    );
+    assert!(
+        !html.contains("Request Waterfall"),
+        "waterfall section must be data-gated"
+    );
+}
+
+#[test]
+fn html_browser_cwv_and_waterfall_sections_render_when_data_present() {
+    use crate::metrics::{BrowserRequest, BrowserRequestTiming};
+
+    let mut run = make_run();
+    let mut a = make_browser_attempt(Protocol::Browser2, 350.0, 50.0);
+    let b = a.browser.as_mut().unwrap();
+    b.lcp_ms = Some(321.5);
+    b.cls = Some(0.0);
+    b.fcp_ms = Some(120.2);
+    b.tbt_ms = Some(0.0);
+    b.wire_bytes_total = Some(212_345);
+    b.waterfall = vec![BrowserRequest {
+        url: "https://localhost:8443/browser-page".into(),
+        method: "GET".into(),
+        status: Some(200),
+        mime_type: Some("text/html".into()),
+        protocol: Some("h2".into()),
+        wire_bytes: Some(1_234),
+        start_ms: Some(0.0),
+        end_ms: Some(48.7),
+        from_disk_cache: false,
+        from_service_worker: false,
+        timing: Some(BrowserRequestTiming {
+            dns_ms: None,
+            connect_ms: Some(1.2),
+            ssl_ms: Some(0.9),
+            send_ms: Some(0.1),
+            wait_ms: Some(12.0),
+            receive_ms: Some(30.0),
+        }),
+    }];
+    run.attempts = vec![a];
+    let html = render(&run, None, None);
+    assert!(
+        html.contains("Core Web Vitals"),
+        "CWV section should render when vitals present"
+    );
+    assert!(html.contains("321.5"), "LCP value should appear");
+    assert!(
+        html.contains("0.0000"),
+        "CLS 0.0 is a value and must render (not —)"
+    );
+    assert!(
+        html.contains("Request Waterfall"),
+        "waterfall section should render when entries present"
+    );
+    assert!(
+        html.contains("/browser-page"),
+        "waterfall row URL should appear"
     );
 }

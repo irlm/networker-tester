@@ -698,11 +698,31 @@ pub fn log_attempt(a: &RequestAttempt) {
                     .collect::<Vec<_>>()
                     .join(" ");
                 // TTFB here is the *browser* definition (navigationStart →
-                // responseStart, includes DNS/connect/TLS); cl_bytes is the
-                // sum of declared Content-Length headers, not wire bytes.
+                // responseStart, includes DNS/connect/TLS). Bytes: prefer
+                // wire_bytes (Σ CDP encodedDataLength — real wire bytes incl.
+                // headers); fall back to cl_bytes (Σ declared Content-Length
+                // headers, NOT wire bytes) on pre-Wave-W data.
+                let bytes_str = match b.wire_bytes_total {
+                    Some(w) => format!("wire_bytes={w}"),
+                    None => format!("cl_bytes={}", b.transferred_bytes),
+                };
+                // Core Web Vitals — only what was actually observed.
+                let mut cwv = String::new();
+                if let Some(v) = b.fcp_ms {
+                    cwv.push_str(&format!(" FCP:{v:.1}ms"));
+                }
+                if let Some(v) = b.lcp_ms {
+                    cwv.push_str(&format!(" LCP:{v:.1}ms"));
+                }
+                if let Some(v) = b.cls {
+                    cwv.push_str(&format!(" CLS:{v:.3}"));
+                }
+                if let Some(v) = b.tbt_ms {
+                    cwv.push_str(&format!(" TBT:{v:.1}ms"));
+                }
                 info!(
                     "{status} #{seq} [{mode}] proto={proto} TTFB(nav):{ttfb:.1}ms \
-                     DCL:{dcl:.1}ms Load:{load:.1}ms res={res} cl_bytes={bytes} [{protos}]{retry}",
+                     DCL:{dcl:.1}ms Load:{load:.1}ms{cwv} res={res} {bytes_str} [{protos}]{retry}",
                     mode = a.protocol,
                     seq = a.sequence_num,
                     proto = b.protocol,
@@ -710,7 +730,6 @@ pub fn log_attempt(a: &RequestAttempt) {
                     dcl = b.dom_content_loaded_ms,
                     load = b.load_ms,
                     res = b.resource_count,
-                    bytes = b.transferred_bytes,
                     retry = retry_suffix,
                 );
             }
