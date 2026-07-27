@@ -72,6 +72,8 @@ fn http_attempt(run_id: Uuid, seq: u32, proto: Protocol, ms: f64) -> RequestAtte
             content_encoding: None,
             content_length_header: None,
             security_headers: None,
+            quic_stats: None,
+            quic_resumption_stats: None,
         }),
         udp: None,
         error: None,

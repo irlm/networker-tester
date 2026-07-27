@@ -316,6 +316,8 @@ fn html_contains_throughput_section_for_download_attempt() {
                 content_encoding: None,
                 content_length_header: None,
                 security_headers: None,
+                quic_stats: None,
+                quic_resumption_stats: None,
             }),
             udp: None,
             error: None,

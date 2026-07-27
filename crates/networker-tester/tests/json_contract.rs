@@ -13,9 +13,9 @@
 use chrono::Utc;
 use networker_tester::metrics::{
     BenchmarkEnvironmentCheck, BenchmarkNoiseThresholds, ClockSync, CpuUsage, DnsResult, GeoInfo,
-    HostInfo, HttpResult, LoadSample, PageLoadResult, Protocol, RequestAttempt, SecurityHeaders,
-    SocketStats, TcpResult, TestRun, TlsResult, UrlDiagnosticStatus, UrlPageLoadStrategy,
-    UrlTestRun, SCHEMA_VERSION,
+    HostInfo, HttpResult, LoadSample, PageLoadResult, Protocol, QuicStats, RequestAttempt,
+    SecurityHeaders, SocketStats, TcpResult, TestRun, TlsResult, UrlDiagnosticStatus,
+    UrlPageLoadStrategy, UrlTestRun, SCHEMA_VERSION,
 };
 use uuid::Uuid;
 
@@ -114,6 +114,8 @@ fn sample_run() -> TestRun {
             content_encoding: None,
             content_length_header: None,
             security_headers: None,
+            quic_stats: None,
+            quic_resumption_stats: None,
         }),
         udp: None,
         error: None,
@@ -549,6 +551,89 @@ fn security_headers_field_is_additive_and_optional() {
         .expect("security_headers round-trips");
     assert_eq!(sec.x_content_type_options_nosniff, Some(true));
     assert_eq!(sec.csp_present, Some(false));
+}
+
+/// Deep-measurement M1 B.1 / M3 G1 additive fields `http.quic_stats` and
+/// `http.quic_resumption_stats` (post-transfer `quinn::Connection::stats()`
+/// snapshots): serde-defaulted, skip-serialized when unset — an unpopulated
+/// run keeps the exact pre-existing shape, old JSON still deserializes, and a
+/// populated snapshot round-trips. schema_version stays 1.0.
+#[test]
+fn quic_stats_fields_are_additive_and_optional() {
+    // Unset → omitted (shape unchanged) and absent-field JSON deserializes.
+    let run = sample_run();
+    let v: serde_json::Value = serde_json::to_value(&run).expect("serialize");
+    let http = v.pointer("/attempts/0/http").expect("http block");
+    for field in ["quic_stats", "quic_resumption_stats"] {
+        assert!(
+            http.get(field).is_none(),
+            "http.{field} must be omitted when unset (frozen 1.0 shape unchanged)"
+        );
+    }
+    let back: TestRun = serde_json::from_value(v).expect("deserialize");
+    let http = back.attempts[0].http.as_ref().expect("http");
+    assert!(http.quic_stats.is_none());
+    assert!(http.quic_resumption_stats.is_none());
+
+    // Populated → round-trips, and every field inside QuicStats is itself
+    // optional (a partially-populated snapshot serializes only what it has).
+    let mut run = sample_run();
+    run.attempts[0].http.as_mut().unwrap().quic_stats = Some(QuicStats {
+        rtt_ms: Some(12.34),
+        cwnd_bytes: Some(98_765),
+        current_mtu: Some(1_452),
+        lost_packets: Some(3),
+        lost_bytes: Some(3_600),
+        sent_packets: Some(210),
+        congestion_events: Some(2),
+        sent_plpmtud_probes: Some(5),
+        lost_plpmtud_probes: Some(1),
+        black_holes_detected: Some(0),
+        udp_tx_datagrams: Some(180),
+        udp_tx_bytes: Some(42_000),
+        udp_rx_datagrams: Some(150),
+        udp_rx_bytes: Some(1_048_576),
+        congestion_algorithm: Some("cubic (client-config)".into()),
+    });
+    run.attempts[0].http.as_mut().unwrap().quic_resumption_stats = Some(QuicStats {
+        sent_packets: Some(9),
+        ..Default::default()
+    });
+    let v = serde_json::to_value(&run).expect("serialize populated");
+    assert_eq!(
+        v.pointer("/attempts/0/http/quic_stats/cwnd_bytes")
+            .and_then(|n| n.as_u64()),
+        Some(98_765),
+        "QUIC cwnd is bytes — must serialize under the explicit _bytes name"
+    );
+    assert_eq!(
+        v.pointer("/attempts/0/http/quic_stats/lost_packets")
+            .and_then(|n| n.as_u64()),
+        Some(3)
+    );
+    assert_eq!(
+        v.pointer("/attempts/0/http/quic_resumption_stats/sent_packets")
+            .and_then(|n| n.as_u64()),
+        Some(9)
+    );
+    // Unset optional fields inside the struct are skipped, not nulled.
+    assert!(v
+        .pointer("/attempts/0/http/quic_resumption_stats/rtt_ms")
+        .is_none());
+    let back: TestRun = serde_json::from_value(v).expect("deserialize populated");
+    let q = back.attempts[0]
+        .http
+        .as_ref()
+        .unwrap()
+        .quic_stats
+        .as_ref()
+        .expect("quic_stats round-trips");
+    assert_eq!(q.rtt_ms, Some(12.34));
+    assert_eq!(q.current_mtu, Some(1_452));
+    assert_eq!(
+        q.congestion_algorithm.as_deref(),
+        Some("cubic (client-config)")
+    );
 }
 
 /// Measurement-gap #15 additive fields `client_load_before` /

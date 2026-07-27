@@ -181,6 +181,8 @@ pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
             content_encoding: None,
             content_length_header: None,
             security_headers: None,
+            quic_stats: None,
+            quic_resumption_stats: None,
         }),
         udp: Some(UdpResult {
             remote_addr: "127.0.0.1:9999".into(),

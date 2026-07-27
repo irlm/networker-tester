@@ -101,6 +101,12 @@ mod stub {
 #[cfg(feature = "http3")]
 pub use real::{run_http3_probe, run_http3_request_probe};
 
+// QUIC stats mapping shared with the pageload3 runner. Feature-gated only —
+// it takes a `quinn` type, so it cannot exist (and needs no stub mirror) in
+// `--no-default-features` builds, whose h3 paths all return the stub error.
+#[cfg(feature = "http3")]
+pub(crate) use real::quic_stats_from;
+
 #[cfg(feature = "http3")]
 mod real {
     use crate::metrics::{
@@ -119,6 +125,47 @@ mod real {
         let mut u: libc::rusage = unsafe { std::mem::zeroed() };
         unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut u) };
         (u.ru_nvcsw, u.ru_nivcsw)
+    }
+
+    /// Congestion controller of OUR quinn client configuration. The probes
+    /// never override `TransportConfig::congestion_controller_factory`, whose
+    /// quinn 0.11 default is Cubic. quinn exposes no runtime query for the
+    /// active controller, so this label records configuration — hence the
+    /// explicit "(client-config)" suffix distinguishing it from the
+    /// kernel-queried `TCP_CONGESTION` value on the TCP side.
+    pub(crate) const QUIC_CONGESTION_ALGORITHM: &str = "cubic (client-config)";
+
+    /// Map `quinn::Connection::stats()` output into the serializable additive
+    /// [`QuicStats`](crate::metrics::QuicStats) record (deep-measurement M1
+    /// B.1 / M3 G1).
+    ///
+    /// Sampled by callers AFTER the response body completes and before the
+    /// connection closes — the point where cwnd, loss counts, and the
+    /// DPLPMTUD `current_mtu` describe the transfer (same moment as the TCP
+    /// dup-fd `SocketStats` snapshot).
+    ///
+    /// quinn 0.11 does not expose ECN counters or PTO episode counts, so
+    /// those are honestly absent from `QuicStats` rather than faked.
+    pub(crate) fn quic_stats_from(stats: &quinn::ConnectionStats) -> crate::metrics::QuicStats {
+        let p = &stats.path;
+        crate::metrics::QuicStats {
+            rtt_ms: Some(p.rtt.as_secs_f64() * 1000.0),
+            // QUIC cwnd is bytes (RFC 9002) — never converted to segments.
+            cwnd_bytes: Some(p.cwnd),
+            current_mtu: Some(p.current_mtu),
+            lost_packets: Some(p.lost_packets),
+            lost_bytes: Some(p.lost_bytes),
+            sent_packets: Some(p.sent_packets),
+            congestion_events: Some(p.congestion_events),
+            sent_plpmtud_probes: Some(p.sent_plpmtud_probes),
+            lost_plpmtud_probes: Some(p.lost_plpmtud_probes),
+            black_holes_detected: Some(p.black_holes_detected),
+            udp_tx_datagrams: Some(stats.udp_tx.datagrams),
+            udp_tx_bytes: Some(stats.udp_tx.bytes),
+            udp_rx_datagrams: Some(stats.udp_rx.datagrams),
+            udp_rx_bytes: Some(stats.udp_rx.bytes),
+            congestion_algorithm: Some(QUIC_CONGESTION_ALGORITHM.to_string()),
+        }
     }
 
     /// Build a QUIC endpoint configured for HTTP/3 with the given TLS settings.
@@ -245,6 +292,10 @@ mod real {
         zero_rtt_attempted: Option<bool>,
         zero_rtt_accepted: Option<bool>,
         resumed_handshake_ms: Option<f64>,
+        /// Transport stats of the follow-up connection itself, sampled after
+        /// its early-data exchange completed (`HttpResult::quic_resumption_stats`).
+        /// None when the 0-RTT attempt never got a live connection.
+        quic_stats: Option<crate::metrics::QuicStats>,
     }
 
     /// Open a follow-up QUIC connection through the same endpoint (and
@@ -293,6 +344,10 @@ mod real {
             }
         };
         facts.zero_rtt_attempted = Some(true);
+        // Cheap handle clone: `conn` itself is consumed by the h3 client
+        // below; the clone lets us sample `Connection::stats()` after the
+        // early-data exchange completes.
+        let conn_handle = conn.clone();
 
         // Best-effort: put a real request on the wire in 0-RTT early data
         // before the handshake completes. Bounded by the probe's remaining
@@ -345,6 +400,9 @@ mod real {
                 {}
             }
         }
+        // Post-exchange transport snapshot of the follow-up connection —
+        // same capture moment as the primary connection's `quic_stats`.
+        facts.quic_stats = Some(quic_stats_from(&conn_handle.stats()));
         facts
     }
 
@@ -475,6 +533,12 @@ mod real {
             }
         };
         let handshake_ms = t_handshake.elapsed().as_secs_f64() * 1000.0;
+
+        // Cheap handle clone (quinn::Connection is an Arc-backed handle):
+        // `conn` is consumed by the h3 client below; the clone samples
+        // `Connection::stats()` after the body drain, before close — the QUIC
+        // analogue of the TCP dup-fd post-transfer snapshot.
+        let conn_handle = conn.clone();
 
         // Build h3 connection
         let h3_conn = match h3::client::new(QuinnH3Connection::new(conn)).await {
@@ -624,6 +688,11 @@ mod real {
             }
         }
 
+        // Post-transfer QUIC transport snapshot (deep-measurement M1 B.1 /
+        // M3 G1): body fully drained, connection still open — cwnd, loss
+        // counts, and the DPLPMTUD MTU verdict describe THIS transfer.
+        let quic_stats = Some(quic_stats_from(&conn_handle.stats()));
+
         let total_ms = t0.elapsed().as_secs_f64() * 1000.0;
         let cpu_time_ms = Some(cpu_start.elapsed().as_secs_f64() * 1000.0);
         #[cfg(unix)]
@@ -720,6 +789,8 @@ mod real {
                 content_encoding,
                 content_length_header,
                 security_headers: None,
+                quic_stats,
+                quic_resumption_stats: resumption.as_ref().and_then(|r| r.quic_stats.clone()),
             }),
             udp: None,
             error: None,
@@ -1259,6 +1330,136 @@ mod real {
             let (v, i) = get_rusage_csw();
             assert!(v >= 0);
             assert!(i >= 0);
+        }
+
+        // ── QuicStats mapping (deep-measurement M1 B.1 / M3 G1) ──────────────
+
+        /// The mapping must carry every PathStats/UdpStats field through
+        /// verbatim — no unit conversion beyond rtt→ms, and cwnd stays in
+        /// BYTES (RFC 9002), never faked into segments.
+        #[test]
+        fn quic_stats_from_maps_all_fields_verbatim() {
+            let mut stats = quinn::ConnectionStats::default();
+            stats.path.rtt = std::time::Duration::from_micros(12_340);
+            stats.path.cwnd = 98_765;
+            stats.path.current_mtu = 1_452;
+            stats.path.lost_packets = 3;
+            stats.path.lost_bytes = 3_600;
+            stats.path.sent_packets = 210;
+            stats.path.congestion_events = 2;
+            stats.path.sent_plpmtud_probes = 5;
+            stats.path.lost_plpmtud_probes = 1;
+            stats.path.black_holes_detected = 1;
+            stats.udp_tx.datagrams = 180;
+            stats.udp_tx.bytes = 42_000;
+            stats.udp_rx.datagrams = 150;
+            stats.udp_rx.bytes = 1_048_576;
+
+            let q = quic_stats_from(&stats);
+            assert_eq!(q.rtt_ms, Some(12.34));
+            assert_eq!(q.cwnd_bytes, Some(98_765));
+            assert_eq!(q.current_mtu, Some(1_452));
+            assert_eq!(q.lost_packets, Some(3));
+            assert_eq!(q.lost_bytes, Some(3_600));
+            assert_eq!(q.sent_packets, Some(210));
+            assert_eq!(q.congestion_events, Some(2));
+            assert_eq!(q.sent_plpmtud_probes, Some(5));
+            assert_eq!(q.lost_plpmtud_probes, Some(1));
+            assert_eq!(q.black_holes_detected, Some(1));
+            assert_eq!(q.udp_tx_datagrams, Some(180));
+            assert_eq!(q.udp_tx_bytes, Some(42_000));
+            assert_eq!(q.udp_rx_datagrams, Some(150));
+            assert_eq!(q.udp_rx_bytes, Some(1_048_576));
+        }
+
+        /// The congestion-algorithm label must be honestly marked as client
+        /// configuration (quinn exposes no runtime controller query), so it
+        /// can never be mistaken for a kernel-queried `TCP_CONGESTION` fact.
+        #[test]
+        fn quic_stats_congestion_algorithm_is_config_labeled() {
+            let q = quic_stats_from(&quinn::ConnectionStats::default());
+            let algo = q.congestion_algorithm.expect("always recorded");
+            assert_eq!(algo, QUIC_CONGESTION_ALGORITHM);
+            assert!(
+                algo.contains("(client-config)"),
+                "label must mark the value as config-not-kernel: {algo}"
+            );
+        }
+
+        /// A live h3 probe must attach the post-transfer QUIC snapshot to the
+        /// PRIMARY connection: packets were actually exchanged, so sent
+        /// packets / UDP datagram counts must be non-zero, and the DPLPMTUD
+        /// MTU must be at least QUIC's 1200-byte minimum (RFC 9000 §8.1).
+        #[cfg(not(target_os = "windows"))]
+        #[tokio::test]
+        async fn h3_probe_carries_primary_quic_stats() {
+            let ep = TestEndpoint::start().await;
+            ep.wait_for_quic().await;
+            let target = ep.https_url("/health");
+            let a = run_http3_probe(Uuid::new_v4(), 0, &target, 10_000, true, None).await;
+            assert!(a.success, "H3 probe failed: {:?}", a.error);
+            let http = a.http.expect("http result");
+            let q = http
+                .quic_stats
+                .expect("h3 attempts must carry the primary connection's quic_stats");
+            assert!(q.sent_packets.unwrap() > 0, "packets were exchanged");
+            assert!(q.udp_tx_datagrams.unwrap() > 0);
+            assert!(q.udp_rx_datagrams.unwrap() > 0);
+            assert!(q.udp_rx_bytes.unwrap() > 0, "response body was received");
+            assert!(q.cwnd_bytes.unwrap() > 0);
+            assert!(
+                q.current_mtu.unwrap() >= 1200,
+                "QUIC guarantees a 1200-byte minimum UDP payload"
+            );
+            assert!(q.rtt_ms.unwrap() > 0.0);
+            // Loopback: nothing should be declared lost.
+            assert_eq!(q.lost_packets, Some(0));
+
+            // The plain http3 probe also runs the resumption follow-up
+            // connection; when 0-RTT was attempted a live connection existed
+            // and its own snapshot must be recorded separately.
+            let tls = a.tls.expect("tls facts");
+            if tls.zero_rtt_attempted == Some(true) {
+                let rq = http
+                    .quic_resumption_stats
+                    .expect("attempted 0-RTT must record the follow-up connection's stats");
+                assert!(rq.sent_packets.unwrap() > 0);
+            } else {
+                assert!(http.quic_resumption_stats.is_none());
+            }
+        }
+
+        /// Throughput variants (download3/upload3) reuse the request runner:
+        /// they must carry primary quic_stats but never the resumption
+        /// follow-up's (they skip that extra connection).
+        #[cfg(not(target_os = "windows"))]
+        #[tokio::test]
+        async fn h3_download_carries_quic_stats_without_resumption_stats() {
+            let ep = TestEndpoint::start().await;
+            ep.wait_for_quic().await;
+            let target = ep.https_url("/download?bytes=65536");
+            let a = run_http3_request_probe(
+                Uuid::new_v4(),
+                0,
+                Protocol::Download3,
+                &target,
+                0,
+                &crate::runner::http::RunConfig {
+                    timeout_ms: 10_000,
+                    insecure: true,
+                    ..Default::default()
+                },
+            )
+            .await;
+            assert!(a.success, "H3 download failed: {:?}", a.error);
+            let http = a.http.expect("http result");
+            let q = http.quic_stats.expect("download3 must carry quic_stats");
+            assert!(q.sent_packets.unwrap() > 0);
+            assert!(
+                q.udp_rx_bytes.unwrap() >= 65_536,
+                "at least the payload must have arrived over UDP"
+            );
+            assert!(http.quic_resumption_stats.is_none());
         }
     }
 }

@@ -1772,6 +1772,90 @@ impl SocketStats {
     }
 }
 
+/// QUIC transport statistics sampled from `quinn::Connection::stats()`
+/// **after** the response body completed, before the connection is closed —
+/// the QUIC analogue of the post-transfer TCP kernel snapshot
+/// ([`SocketStats`], sampled on a dup of the probe socket). Deep-measurement
+/// audit M1 §B.1 / M3 §G1: h3 probes previously reported zero transport facts
+/// while TCP modes carried full kernel stats.
+///
+/// QUIC is userspace, so unlike `TCP_INFO` this is identical on
+/// Linux/macOS/Windows and needs no privileges. Sources (quinn-proto 0.11
+/// `ConnectionStats`): `PathStats` (rtt, cwnd, loss, congestion, DPLPMTUD)
+/// and `UdpStats` (datagram/byte counts per direction).
+///
+/// NOT exposed by quinn 0.11 and therefore honestly absent (not faked):
+/// ECN counters, PTO/loss-timer episode counts, and per-ACK delivery rate.
+///
+/// Every field is optional and additive (serde-defaulted, skipped when
+/// `None`); `schema_version` stays 1.0.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct QuicStats {
+    /// Current smoothed path RTT estimate in ms (`PathStats::rtt`) — the QUIC
+    /// analogue of `tcpi_rtt`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rtt_ms: Option<f64>,
+    /// Congestion window in **bytes** (`PathStats::cwnd`). QUIC congestion
+    /// control is byte-based (RFC 9002) — deliberately NOT converted to
+    /// segments, so this is not directly comparable to
+    /// [`SocketStats::snd_cwnd`] (segments) without multiplying by MSS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwnd_bytes: Option<u64>,
+    /// Largest UDP payload the path currently supports in bytes
+    /// (`PathStats::current_mtu`) — the connection's live DPLPMTUD (RFC 8899)
+    /// verdict; cross-checks the `pmtud` probe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_mtu: Option<u16>,
+    /// Packets declared lost on this path (`PathStats::lost_packets`) — with
+    /// `congestion_events`, the QUIC analogue of `total_retrans`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lost_packets: Option<u64>,
+    /// Bytes declared lost on this path (`PathStats::lost_bytes`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lost_bytes: Option<u64>,
+    /// Packets sent on this path (`PathStats::sent_packets`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent_packets: Option<u64>,
+    /// Congestion events (loss/ECN-triggered cwnd reductions,
+    /// `PathStats::congestion_events`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub congestion_events: Option<u64>,
+    /// DPLPMTUD probe packets sent (`PathStats::sent_plpmtud_probes`; also
+    /// counted by `sent_packets`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent_plpmtud_probes: Option<u64>,
+    /// DPLPMTUD probe packets lost (`PathStats::lost_plpmtud_probes`; ignored
+    /// by `lost_packets`/`lost_bytes`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lost_plpmtud_probes: Option<u64>,
+    /// Times a path MTU black hole was detected
+    /// (`PathStats::black_holes_detected`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub black_holes_detected: Option<u64>,
+    /// UDP datagrams transmitted on the connection (`udp_tx.datagrams`).
+    /// May differ from `sent_packets`: QUIC can coalesce packets into one
+    /// datagram and uses GSO batching.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_tx_datagrams: Option<u64>,
+    /// UDP payload bytes transmitted on the connection (`udp_tx.bytes`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_tx_bytes: Option<u64>,
+    /// UDP datagrams received on the connection (`udp_rx.datagrams`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_rx_datagrams: Option<u64>,
+    /// UDP payload bytes received on the connection (`udp_rx.bytes`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub udp_rx_bytes: Option<u64>,
+    /// Congestion control algorithm of OUR client configuration — quinn's
+    /// `TransportConfig` default (Cubic) since the probes never override it.
+    /// Honestly labeled `"cubic (client-config)"`: unlike
+    /// [`SocketStats::congestion_algorithm`] (queried live from the kernel
+    /// via `TCP_CONGESTION`), quinn exposes no runtime controller query, so
+    /// this records configuration, not an observed kernel fact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub congestion_algorithm: Option<String>,
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Server-side timing
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2090,6 +2174,22 @@ pub struct HttpResult {
     /// Additive (measurement-gap #14).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub security_headers: Option<SecurityHeaders>,
+    /// QUIC transport stats for the PRIMARY connection, sampled from
+    /// `quinn::Connection::stats()` after the response body completed (see
+    /// [`QuicStats`]). Present for http3/download3/upload3 and pageload3's
+    /// cold connection; None for TCP-based protocols (which carry
+    /// `socket_stats` instead) and for probes that don't own the QUIC
+    /// connection (browser3). Additive (deep-measurement M1 B.1 / M3 G1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quic_stats: Option<QuicStats>,
+    /// QUIC transport stats for the resumption FOLLOW-UP connection (the
+    /// second connection the plain `http3` probe opens to measure TLS 1.3
+    /// session resumption / 0-RTT — see [`TlsResult::quic_resumed`]).
+    /// Sampled after that connection's early-data exchange completes; None
+    /// when no follow-up connection ran (download3/upload3/pageload3) or it
+    /// failed before completing. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quic_resumption_stats: Option<QuicStats>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3935,6 +4035,8 @@ mod tests {
                 content_encoding: None,
                 content_length_header: None,
                 security_headers: None,
+                quic_stats: None,
+                quic_resumption_stats: None,
             });
             assert!(
                 (primary_metric_value(&a).unwrap() - 25.0).abs() < 1e-9,
@@ -4131,6 +4233,8 @@ mod tests {
                 content_encoding: None,
                 content_length_header: None,
                 security_headers: None,
+                quic_stats: None,
+                quic_resumption_stats: None,
             });
             assert!(
                 (primary_metric_value(&a).unwrap() - 100.0).abs() < 1e-9,
@@ -4424,6 +4528,8 @@ mod tests {
             content_encoding: None,
             content_length_header: None,
             security_headers: None,
+            quic_stats: None,
+            quic_resumption_stats: None,
         });
         assert_eq!(attempt_payload_bytes(&a), Some(65536));
     }
@@ -4452,6 +4558,8 @@ mod tests {
             content_encoding: None,
             content_length_header: None,
             security_headers: None,
+            quic_stats: None,
+            quic_resumption_stats: None,
         });
         assert!(attempt_payload_bytes(&a).is_none());
     }

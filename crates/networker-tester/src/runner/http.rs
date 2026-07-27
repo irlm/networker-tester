@@ -1031,6 +1031,8 @@ async fn collect_response(
         content_encoding,
         content_length_header,
         security_headers: None,
+        quic_stats: None,
+        quic_resumption_stats: None,
     };
 
     Ok((http, server_timing))

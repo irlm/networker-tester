@@ -110,6 +110,8 @@ fn make_run() -> TestRun {
                 content_encoding: None,
                 content_length_header: None,
                 security_headers: None,
+                quic_stats: None,
+                quic_resumption_stats: None,
             }),
             udp: None,
             error: None,
@@ -204,6 +206,8 @@ fn make_http_attempt(success: bool, ttfb: f64, total: f64) -> RequestAttempt {
             content_encoding: None,
             content_length_header: None,
             security_headers: None,
+            quic_stats: None,
+            quic_resumption_stats: None,
         }),
         udp: None,
         error: None,
@@ -306,6 +310,8 @@ fn make_attempt(proto: Protocol, success: bool) -> RequestAttempt {
                 content_encoding: None,
                 content_length_header: None,
                 security_headers: None,
+                quic_stats: None,
+                quic_resumption_stats: None,
             })
         } else {
             None

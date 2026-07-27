@@ -262,6 +262,10 @@ pub fn print_summary(run: &TestRun) {
     // retransmitted — silence means clean transfers.
     print_retransmission_note(run);
 
+    // QUIC analogue (deep-measurement M1 B.1): post-transfer quinn stats.
+    // Only printed when packets were actually declared lost.
+    print_quic_loss_note(run);
+
     // sdkprobe network-vs-server latency split — the core "find the main
     // issue" breakdown. Only rendered when a sdkprobe run produced a split.
     print_sdk_split(run);
@@ -372,6 +376,34 @@ fn print_retransmission_note(run: &TestRun) {
         println!(
             "\n ⚠ TCP retransmissions during transfer: {total_retrans} segment(s) across \
              {attempts_with_retrans} attempt(s){pageload_note}{algo_note} — throughput numbers may reflect loss recovery"
+        );
+    }
+}
+
+/// QUIC analogue of [`print_retransmission_note`]: warn when the post-transfer
+/// `quinn::Connection::stats()` snapshot (`http.quic_stats`, deep-measurement
+/// M1 B.1) shows packets declared lost — the h3-side explanation for a
+/// throughput anomaly. Counts the primary connection only (the resumption
+/// follow-up's tiny exchange is not part of the measured transfer). Quiet when
+/// no h3 attempt lost packets.
+fn print_quic_loss_note(run: &TestRun) {
+    let mut attempts_with_loss = 0usize;
+    let mut total_lost: u64 = 0;
+    let mut total_lost_bytes: u64 = 0;
+    for a in &run.attempts {
+        if let Some(q) = a.http.as_ref().and_then(|h| h.quic_stats.as_ref()) {
+            let n = q.lost_packets.unwrap_or(0);
+            if n > 0 {
+                attempts_with_loss += 1;
+                total_lost += n;
+                total_lost_bytes += q.lost_bytes.unwrap_or(0);
+            }
+        }
+    }
+    if attempts_with_loss > 0 {
+        println!(
+            "\n ⚠ QUIC packet loss during transfer: {total_lost} packet(s) / {total_lost_bytes} byte(s) \
+             across {attempts_with_loss} attempt(s) — h3 throughput numbers may reflect loss recovery"
         );
     }
 }
