@@ -40,6 +40,17 @@ All wire/JSON changes additive.
 - **Cross-target comparison tables for the six new modes** in the multi-target
   HTML report (rpm/ping/path/dualstack/websocket/pmtud) — targets as rows,
   missing modes as em-dashes, single-run output byte-identical.
+- **Trustworthy tester-CPU measurement** (`TestRun.cpu_usage`). The whole-run
+  busy%% average hid exactly the bursts that corrupt measurements — now a 1s
+  sampler reports mean/**max**/p95 busy (p95 gated at ≥20 samples), plus
+  first-class **steal time** on Linux (cloud testers' invisible enemy; counted
+  as busy, never idle — pinned by test), a Windows `GetSystemTimes` backend
+  (msvc cross-checked), and a 500ms/20-tick minimum-window guard (None over
+  fake precision). Wired into verdicts: a "tester CPU-contended" summary
+  warning (>80%% busy or >1.5%% steal) and benchmark publication gating via
+  `--benchmark-max-cpu-busy-percent` / `--benchmark-max-cpu-steal-percent`
+  (measured contention blocks publication; unmeasured never does). Self-
+  validation burn test included. New "Tester CPU Trust Envelope" doc section.
 
 ---
 
