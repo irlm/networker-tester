@@ -85,6 +85,15 @@ pub struct RunConfig {
     /// (default `/laghound/echo` — the cheapest route that still carries an
     /// `app;dur` server-timing metric).
     pub laghound_route: String,
+    /// Opt-in compression negotiation (`--accept-encoding`): send
+    /// `Accept-Encoding: gzip, br, zstd` on http1/http2/curl probe requests.
+    /// Default `false` — by default probes send NO Accept-Encoding header so
+    /// servers answer identity and measured byte counts stay comparable with
+    /// historical runs. The probe never decompresses (hyper has no transparent
+    /// decompression), so `body_size_bytes` is always the wire body size.
+    /// Ignored (with a one-time warning) for throughput modes, where the
+    /// payload size is the measurement contract.
+    pub accept_encoding: bool,
 }
 
 impl Default for RunConfig {
@@ -105,6 +114,7 @@ impl Default for RunConfig {
             bearer_token: None,
             laghound_token: None,
             laghound_route: "/laghound/echo".to_string(),
+            accept_encoding: false,
         }
     }
 }
@@ -150,6 +160,7 @@ pub async fn run_probe(
             .await
         }
         other => RequestAttempt {
+            phase: None,
             attempt_id,
             run_id,
             protocol: other,
@@ -197,6 +208,33 @@ async fn run_http_or_tcp(
     cfg: &RunConfig,
     started_at: chrono::DateTime<Utc>,
 ) -> RequestAttempt {
+    // --accept-encoding applies to plain probe modes only. Throughput modes
+    // exchange fixed-size payloads — the payload size IS the measurement
+    // contract — so negotiating compression there would change the measured
+    // numbers. Ignore the flag for them with a one-time warning.
+    let cfg_identity;
+    let cfg = if cfg.accept_encoding
+        && !matches!(
+            protocol,
+            Protocol::Http1 | Protocol::Http2 | Protocol::Tcp | Protocol::SdkProbe
+        ) {
+        static ACCEPT_ENCODING_IGNORED_WARN: std::sync::Once = std::sync::Once::new();
+        ACCEPT_ENCODING_IGNORED_WARN.call_once(|| {
+            warn!(
+                "--accept-encoding is ignored for throughput modes \
+                 (download*/upload*/web*): payload sizes are the measurement \
+                 contract and compression would change the numbers"
+            );
+        });
+        cfg_identity = RunConfig {
+            accept_encoding: false,
+            ..cfg.clone()
+        };
+        &cfg_identity
+    } else {
+        cfg
+    };
+
     // CPU and context-switch measurement starts here (before DNS).
     let cpu_start = cpu_time::ProcessTime::now();
     #[cfg(unix)]
@@ -405,6 +443,7 @@ async fn run_http_or_tcp(
     if protocol == Protocol::Tcp {
         drop(tcp_stream);
         return RequestAttempt {
+            phase: None,
             attempt_id,
             run_id,
             protocol,
@@ -616,6 +655,7 @@ async fn run_http_or_tcp(
             // problem with an actionable message rather than a generic HTTP 404.
             let is_sdk_auth_404 = protocol == Protocol::SdkProbe && status_code == 404;
             RequestAttempt {
+                phase: None,
                 attempt_id,
                 run_id,
                 protocol,
@@ -885,6 +925,15 @@ fn build_request(
         .header("accept", "*/*")
         .header("x-networker-request-id", attempt_id.to_string());
 
+    // Opt-in compression negotiation (--accept-encoding). Default sends NO
+    // Accept-Encoding header at all (identity), so historical byte counts
+    // stay comparable. hyper performs no transparent decompression, so even
+    // when the server compresses, `body_size_bytes` remains the wire size and
+    // `content_encoding` reports what was negotiated.
+    if cfg.accept_encoding {
+        builder = builder.header("accept-encoding", "gzip, br, zstd");
+    }
+
     if let Some(token) = &cfg.bearer_token {
         builder = builder.header("authorization", format!("Bearer {token}"));
     }
@@ -950,8 +999,10 @@ async fn collect_response(
     let server_timing = parse_server_timing(&headers, client_send_at, ttfb_ms);
 
     // Content negotiation metadata (gap #9): surface what the server sent.
-    // Accept-Encoding on the request is deliberately untouched — reporting
-    // must not change the measurement.
+    // Accept-Encoding is identity by default (reporting must not change the
+    // measurement); --accept-encoding opts in via build_request. hyper never
+    // transparently decompresses, so body_size_bytes below is the wire byte
+    // count either way.
     let (content_encoding, content_length_header) = extract_content_meta(&headers);
 
     let body = resp.collect().await?.to_bytes();
@@ -1425,6 +1476,7 @@ fn failed_attempt(
     tcp: Option<TcpResult>,
 ) -> RequestAttempt {
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol,
@@ -2067,6 +2119,39 @@ mod tests {
         let req = build_request("example.com", "/health", &cfg, "HTTP/1.1", Uuid::new_v4())
             .expect("build_request should succeed");
         assert_eq!(req.method(), hyper::Method::GET);
+    }
+
+    #[test]
+    fn build_request_no_accept_encoding_by_default() {
+        // Default behavior MUST NOT change: no Accept-Encoding header at all,
+        // so servers answer identity and measured numbers stay comparable.
+        let cfg = RunConfig::default();
+        assert!(
+            !cfg.accept_encoding,
+            "accept_encoding must default to false"
+        );
+        let req = build_request("example.com", "/health", &cfg, "HTTP/1.1", Uuid::new_v4())
+            .expect("build_request should succeed");
+        assert!(
+            req.headers().get("accept-encoding").is_none(),
+            "no Accept-Encoding header unless --accept-encoding is set"
+        );
+    }
+
+    #[test]
+    fn build_request_accept_encoding_opt_in() {
+        let cfg = RunConfig {
+            accept_encoding: true,
+            ..Default::default()
+        };
+        let req = build_request("example.com", "/health", &cfg, "HTTP/1.1", Uuid::new_v4())
+            .expect("build_request should succeed");
+        assert_eq!(
+            req.headers()
+                .get("accept-encoding")
+                .expect("accept-encoding header"),
+            "gzip, br, zstd"
+        );
     }
 
     #[test]

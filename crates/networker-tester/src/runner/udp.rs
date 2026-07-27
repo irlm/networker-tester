@@ -152,11 +152,14 @@ pub async fn run_udp_probe(
         rtt_avg_ms: stats.avg,
         rtt_p95_ms: stats.p95,
         jitter_ms: stats.jitter,
+        ipdv_p95_ms: stats.ipdv_p95,
+        ipdv_p99_ms: stats.ipdv_p99,
         started_at,
         probe_rtts_ms: probe_rtts,
     };
 
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::Udp,
@@ -242,6 +245,7 @@ fn udp_failed(
     message: String,
 ) -> RequestAttempt {
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::Udp,

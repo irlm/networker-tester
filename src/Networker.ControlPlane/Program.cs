@@ -97,6 +97,11 @@ builder.Services.AddVmLifecycleRecorder();
 // hooks run_finished in AgentMessageProcessor (both transports) and delivers
 // via webhook (HMAC-signed) or the email sender registered above.
 builder.Services.AddNetworkerAlerting();
+// Regression detection (M5/A12/G2): compares each completed benchmark run's
+// per-case p50 + success rate against its baseline run, persists breaches
+// (benchmark_regression) and broadcasts the benchmark_regression event. Hooks
+// run_finished in AgentMessageProcessor next to the alert evaluator.
+builder.Services.AddScoped<BenchmarkRegressionDetector>();
 // Floor = the real assembly version (Directory.Build.props, single-sourced
 // with Cargo.toml) — never a hardcoded string.
 builder.Services.AddVersionRefresh(VersionEndpoints.DashboardVersion);
@@ -218,6 +223,7 @@ app.MapVisibilityRulesEndpoints();
 app.MapApprovalsEndpoints();
 app.MapAgentCommandsEndpoints();
 app.MapBenchmarkCatalogEndpoints();
+app.MapBenchmarkRegressionsEndpoints();
 app.MapAccountEndpoints();
 app.MapSsoEndpoints();
 app.MapSsoAdminEndpoints();

@@ -384,7 +384,8 @@ pub async fn run_pageload_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) ->
     for cr in &conn_results {
         for (orig_idx, result) in &cr.asset_results {
             if let Some((status, bytes, elapsed)) = result {
-                if *status < 500 {
+                // 2xx-only success rule; see asset_fetch_ok.
+                if asset_fetch_ok(*status) {
                     assets_fetched += 1;
                     total_bytes += bytes;
                     if *orig_idx < asset_timings_ms.len() {
@@ -428,9 +429,11 @@ pub async fn run_pageload_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) ->
         cpu_time_ms,
         connection_reused: false,
         per_connection_socket_stats,
+        assets_failed: Some(n.saturating_sub(assets_fetched) as u32),
     };
 
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::PageLoad,
@@ -1165,17 +1168,9 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
 
     let asset_results = futures::future::join_all(asset_futures).await;
 
-    let mut assets_fetched = 0usize;
-    let mut total_bytes = 0usize;
-    let mut asset_timings: Vec<f64> = Vec::with_capacity(n);
-
-    for (status, body_bytes, elapsed) in asset_results.into_iter().flatten() {
-        if status < 500 {
-            assets_fetched += 1;
-            total_bytes += body_bytes;
-            asset_timings.push(elapsed);
-        }
-    }
+    // Index-aligned aggregation (join_all preserves order → index == asset id).
+    let (assets_fetched, assets_failed, total_bytes, asset_timings) =
+        aggregate_ordered_asset_results(&asset_results);
 
     let cpu_time_ms = Some(cpu_start.elapsed().as_secs_f64() * 1000.0);
     let total_ms = t_wall.elapsed().as_secs_f64() * 1000.0;
@@ -1204,9 +1199,11 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         cpu_time_ms,
         connection_reused: false,
         per_connection_socket_stats: socket_stats.into_iter().collect(),
+        assets_failed: Some(assets_failed),
     };
 
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::PageLoad2,
@@ -1276,6 +1273,40 @@ fn build_asset_urls(base: &url::Url, sizes: &[usize]) -> Vec<url::Url> {
         .collect()
 }
 
+/// Unified asset success rule: only a fully drained **2xx** response counts
+/// as "fetched". Asset requests never follow redirects, so an unfollowed 3xx
+/// yields no asset body and counts as failed — as do 4xx/5xx and transport
+/// errors. (Until v0.28.81 any status < 500, including 404, was counted as
+/// fetched; that number was wrong.)
+fn asset_fetch_ok(status: u16) -> bool {
+    (200..300).contains(&status)
+}
+
+/// Aggregate ordered per-asset results (pageload2/pageload3: index `i` == asset
+/// id `i`; `join_all` preserves input order).
+///
+/// Returns `(assets_fetched, assets_failed, total_bytes, asset_timings_ms)`
+/// with the timings vector index-aligned to asset ids (length == asset count,
+/// `0.0` sentinel for failed assets — matching pageload1's aggregation).
+fn aggregate_ordered_asset_results(
+    results: &[Option<(u16, usize, f64)>],
+) -> (usize, u32, usize, Vec<f64>) {
+    let n = results.len();
+    let mut fetched = 0usize;
+    let mut total_bytes = 0usize;
+    let mut timings = vec![0.0f64; n];
+    for (i, r) in results.iter().enumerate() {
+        if let Some((status, bytes, elapsed)) = r {
+            if asset_fetch_ok(*status) {
+                fetched += 1;
+                total_bytes += bytes;
+                timings[i] = *elapsed;
+            }
+        }
+    }
+    (fetched, (n - fetched) as u32, total_bytes, timings)
+}
+
 fn pick_ip(ips: &[std::net::IpAddr], ipv4_only: bool) -> std::net::IpAddr {
     if ipv4_only {
         ips.iter()
@@ -1316,6 +1347,7 @@ fn error_attempt_proto(
     message: String,
 ) -> RequestAttempt {
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol,
@@ -1715,17 +1747,9 @@ pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
 
     let asset_results = futures::future::join_all(asset_futures).await;
 
-    let mut assets_fetched = 0usize;
-    let mut total_bytes = 0usize;
-    let mut asset_timings: Vec<f64> = Vec::with_capacity(n);
-
-    for (status, body_bytes, elapsed) in asset_results.into_iter().flatten() {
-        if status < 500 {
-            assets_fetched += 1;
-            total_bytes += body_bytes;
-            asset_timings.push(elapsed);
-        }
-    }
+    // Index-aligned aggregation (join_all preserves order → index == asset id).
+    let (assets_fetched, assets_failed, total_bytes, asset_timings) =
+        aggregate_ordered_asset_results(&asset_results);
 
     let cpu_time_ms = Some(cpu_start.elapsed().as_secs_f64() * 1000.0);
     let total_ms = t_wall.elapsed().as_secs_f64() * 1000.0;
@@ -1751,9 +1775,11 @@ pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         connection_reused: false,
         // QUIC runs over UDP — no TCP socket, so no TCP_INFO to sample.
         per_connection_socket_stats: vec![],
+        assets_failed: Some(assets_failed),
     };
 
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::PageLoad3,
@@ -2322,16 +2348,9 @@ async fn fetch_h2_pageload(
         .collect();
 
     let asset_results = futures::future::join_all(asset_futures).await;
-    let mut assets_fetched = 0usize;
-    let mut total_bytes = 0usize;
-    let mut asset_timings: Vec<f64> = Vec::with_capacity(n);
-    for (status, body_bytes, elapsed) in asset_results.into_iter().flatten() {
-        if status < 500 {
-            assets_fetched += 1;
-            total_bytes += body_bytes;
-            asset_timings.push(elapsed);
-        }
-    }
+    // Index-aligned aggregation (join_all preserves order → index == asset id).
+    let (assets_fetched, assets_failed, total_bytes, asset_timings) =
+        aggregate_ordered_asset_results(&asset_results);
 
     let cpu_time_ms = Some(cpu_start.elapsed().as_secs_f64() * 1000.0);
     let total_ms = t_wall.elapsed().as_secs_f64() * 1000.0;
@@ -2362,9 +2381,11 @@ async fn fetch_h2_pageload(
         // Warm path: the connection is owned by the shared warmup handle, so
         // no dup-fd probe is threaded through — stats stay absent (honest).
         per_connection_socket_stats: vec![],
+        assets_failed: Some(assets_failed),
     };
 
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::PageLoad2,
@@ -2886,16 +2907,9 @@ async fn fetch_h3_pageload(
         .collect();
 
     let asset_results = futures::future::join_all(asset_futures).await;
-    let mut assets_fetched = 0usize;
-    let mut total_bytes = 0usize;
-    let mut asset_timings: Vec<f64> = Vec::with_capacity(n);
-    for (status, body_bytes, elapsed) in asset_results.into_iter().flatten() {
-        if status < 500 {
-            assets_fetched += 1;
-            total_bytes += body_bytes;
-            asset_timings.push(elapsed);
-        }
-    }
+    // Index-aligned aggregation (join_all preserves order → index == asset id).
+    let (assets_fetched, assets_failed, total_bytes, asset_timings) =
+        aggregate_ordered_asset_results(&asset_results);
 
     let cpu_time_ms = Some(cpu_start.elapsed().as_secs_f64() * 1000.0);
     let total_ms = t_wall.elapsed().as_secs_f64() * 1000.0;
@@ -2925,9 +2939,11 @@ async fn fetch_h3_pageload(
         connection_reused,
         // QUIC runs over UDP — no TCP socket, so no TCP_INFO to sample.
         per_connection_socket_stats: vec![],
+        assets_failed: Some(assets_failed),
     };
 
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::PageLoad3,
@@ -3868,6 +3884,159 @@ mod tests {
         );
         assert_eq!(a.protocol, Protocol::PageLoad2);
         assert!(!a.success);
+    }
+
+    // ── asset_fetch_ok / aggregate_ordered_asset_results ─────────────────────
+
+    #[test]
+    fn asset_fetch_ok_is_2xx_only() {
+        assert!(asset_fetch_ok(200));
+        assert!(asset_fetch_ok(204));
+        assert!(asset_fetch_ok(299));
+        // Redirects are never followed for assets → no body → not fetched.
+        assert!(!asset_fetch_ok(301));
+        assert!(!asset_fetch_ok(302));
+        // 404 was wrongly counted as "fetched" before v0.28.82.
+        assert!(!asset_fetch_ok(404));
+        assert!(!asset_fetch_ok(500));
+        assert!(!asset_fetch_ok(199));
+    }
+
+    #[test]
+    fn aggregate_ordered_all_success() {
+        let results = vec![
+            Some((200u16, 100usize, 10.0f64)),
+            Some((200, 200, 20.0)),
+            Some((204, 0, 5.0)),
+        ];
+        let (fetched, failed, bytes, timings) = aggregate_ordered_asset_results(&results);
+        assert_eq!(fetched, 3);
+        assert_eq!(failed, 0);
+        assert_eq!(bytes, 300);
+        assert_eq!(timings, vec![10.0, 20.0, 5.0]);
+    }
+
+    #[test]
+    fn aggregate_ordered_404_keeps_index_alignment() {
+        // Regression: a mid-vector failure must NOT shift later timings —
+        // pageload2/3 used to push only successes, so asset 2's timing would
+        // land at index 1.
+        let results = vec![
+            Some((200u16, 100usize, 10.0f64)),
+            Some((404, 55, 7.0)), // 404 body bytes must not count either
+            Some((200, 300, 30.0)),
+        ];
+        let (fetched, failed, bytes, timings) = aggregate_ordered_asset_results(&results);
+        assert_eq!(fetched, 2);
+        assert_eq!(failed, 1);
+        assert_eq!(bytes, 400, "404 body bytes must not count as fetched bytes");
+        assert_eq!(timings.len(), 3, "one entry per asset, always");
+        assert_eq!(timings[0], 10.0);
+        assert_eq!(timings[1], 0.0, "failed asset carries the 0.0 sentinel");
+        assert_eq!(timings[2], 30.0, "timing stays at its own asset's index");
+    }
+
+    #[test]
+    fn aggregate_ordered_transport_error_and_redirect_count_as_failed() {
+        let results = vec![
+            None, // timeout / transport error
+            Some((302u16, 0usize, 3.0f64)),
+            Some((200, 50, 12.0)),
+        ];
+        let (fetched, failed, bytes, timings) = aggregate_ordered_asset_results(&results);
+        assert_eq!(fetched, 1);
+        assert_eq!(failed, 2);
+        assert_eq!(bytes, 50);
+        assert_eq!(timings, vec![0.0, 0.0, 12.0]);
+    }
+
+    #[test]
+    fn aggregate_ordered_empty() {
+        let (fetched, failed, bytes, timings) = aggregate_ordered_asset_results(&[]);
+        assert_eq!((fetched, failed, bytes), (0, 0, 0));
+        assert!(timings.is_empty());
+    }
+
+    // ── Integration: 404 asset must not count as fetched (H1) ───────────────
+
+    /// Minimal keep-alive HTTP/1.1 server: 200 for `/page` and `/asset` except
+    /// `/asset?id=1…`, which answers 404 (the endpoint's real `/asset` handler
+    /// never 404s, so this stands in for a broken origin).
+    async fn spawn_h1_404_server() -> (u16, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = match listener.accept().await {
+                    Ok(p) => p,
+                    Err(_) => break,
+                };
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut chunk = [0u8; 4096];
+                    loop {
+                        let n = match sock.read(&mut chunk).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => n,
+                        };
+                        buf.extend_from_slice(&chunk[..n]);
+                        // Serve every complete request in the buffer (keep-alive).
+                        while let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                            let head = String::from_utf8_lossy(&buf[..pos]).to_string();
+                            buf.drain(..pos + 4);
+                            let path = head.split_whitespace().nth(1).unwrap_or("/").to_string();
+                            let (status, body): (&str, &[u8]) =
+                                if path.starts_with("/asset") && path.contains("id=1&") {
+                                    ("404 Not Found", b"nope")
+                                } else {
+                                    ("200 OK", b"0123456789abcdef0123456789abcdef")
+                                };
+                            let resp = format!(
+                                "HTTP/1.1 {status}\r\ncontent-length: {}\r\n\r\n",
+                                body.len()
+                            );
+                            if sock.write_all(resp.as_bytes()).await.is_err() {
+                                return;
+                            }
+                            if sock.write_all(body).await.is_err() {
+                                return;
+                            }
+                        }
+                    }
+                });
+            }
+        });
+        (port, handle)
+    }
+
+    #[tokio::test]
+    async fn pageload_h1_404_asset_counts_as_failed() {
+        let (port, server) = spawn_h1_404_server().await;
+        let cfg = PageLoadConfig {
+            run_cfg: RunConfig {
+                insecure: false,
+                ..default_run_cfg()
+            },
+            base_url: format!("http://127.0.0.1:{port}/health").parse().unwrap(),
+            asset_sizes: vec![32; 3], // asset id=1 will 404
+            preset_name: None,
+        };
+        let a = run_pageload_probe(Uuid::new_v4(), 0, &cfg).await;
+        let pl = a.page_load.expect("page_load present");
+        assert_eq!(pl.asset_count, 3);
+        assert_eq!(pl.assets_fetched, 2, "404 asset must NOT count as fetched");
+        assert_eq!(pl.assets_failed, Some(1));
+        assert!(!a.success, "a page with a failed asset is not a success");
+        assert_eq!(pl.asset_timings_ms.len(), 3, "one timing entry per asset");
+        assert_eq!(pl.asset_timings_ms[1], 0.0, "failed asset = 0.0 sentinel");
+        assert!(pl.asset_timings_ms[0] > 0.0);
+        assert!(pl.asset_timings_ms[2] > 0.0);
+        assert_eq!(
+            pl.total_bytes, 64,
+            "404 body bytes must not count toward total_bytes"
+        );
+        server.abort();
     }
 
     // ── parse_server_timing_simple ────────────────────────────────────────────

@@ -180,6 +180,17 @@ pub struct Cli {
     #[arg(long)]
     pub insecure: bool,
 
+    /// Send `Accept-Encoding: gzip, br, zstd` on http1/http2/curl probe
+    /// requests (opt-in; env NETWORKER_ACCEPT_ENCODING=true). By default
+    /// probes send no Accept-Encoding at all, so servers answer identity and
+    /// measured byte counts stay comparable across runs. When the server
+    /// compresses, `content_encoding` populates and `body_size_bytes` is the
+    /// compressed wire size — the probe never decompresses. Ignored with a
+    /// warning for throughput modes (download*/upload*/web*), where payload
+    /// sizes are the measurement contract.
+    #[arg(long, env = "NETWORKER_ACCEPT_ENCODING")]
+    pub accept_encoding: bool,
+
     // ── Retry ─────────────────────────────────────────────────────────────────
     /// Retry failed probes up to N times. Each retry increments retry_count on the attempt.
     #[arg(long)]
@@ -577,6 +588,7 @@ pub struct ConfigFile {
     pub proxy: Option<String>,
     pub ca_bundle: Option<String>,
     pub insecure: Option<bool>,
+    pub accept_encoding: Option<bool>,
     pub retries: Option<u32>,
     pub output_dir: Option<String>,
     pub html_report: Option<String>,
@@ -669,6 +681,7 @@ pub struct ResolvedConfig {
     pub proxy: Option<String>,
     pub ca_bundle: Option<String>,
     pub insecure: bool,
+    pub accept_encoding: bool,
     pub retries: u32,
     pub output_dir: String,
     pub html_report: String,
@@ -896,6 +909,7 @@ impl Cli {
             proxy: self.proxy.or(f.proxy),
             ca_bundle: self.ca_bundle.or(f.ca_bundle),
             insecure: flag!(insecure),
+            accept_encoding: flag!(accept_encoding),
             retries: pick!(retries, 0),
             output_dir: pick!(output_dir, "./output".into()),
             html_report: pick!(html_report, "report.html".into()),
@@ -1504,12 +1518,27 @@ mod tests {
     }
 
     #[test]
+    fn accept_encoding_flag_and_config_key() {
+        // Default: off — probes must send no Accept-Encoding header.
+        let cfg = Cli::parse_from(["networker-tester"]).resolve(None);
+        assert!(!cfg.accept_encoding);
+        // CLI flag turns it on.
+        let cfg = Cli::parse_from(["networker-tester", "--accept-encoding"]).resolve(None);
+        assert!(cfg.accept_encoding);
+        // Config-file key turns it on too.
+        let file: ConfigFile = serde_json::from_str(r#"{"accept_encoding": true}"#).unwrap();
+        let cfg = Cli::parse_from(["networker-tester"]).resolve(Some(file));
+        assert!(cfg.accept_encoding);
+    }
+
+    #[test]
     fn resolved_defaults() {
         let cfg = Cli::parse_from(["networker-tester"]).resolve(None);
         assert_eq!(cfg.runs, 3);
         assert_eq!(cfg.targets, vec!["http://localhost:8080/health"]);
         assert_eq!(cfg.udp_port, 9999);
         assert!(!cfg.insecure);
+        assert!(!cfg.accept_encoding);
         assert_eq!(cfg.retries, 0);
         assert!(!cfg.excel);
         assert!(!cfg.benchmark_mode);

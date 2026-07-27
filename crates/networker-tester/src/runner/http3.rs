@@ -57,6 +57,7 @@ mod stub {
         _cfg: &crate::runner::http::RunConfig,
     ) -> RequestAttempt {
         RequestAttempt {
+            phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
             protocol,
@@ -200,43 +201,39 @@ mod real {
     /// the same DNS phase timing as HTTP/1.1 and HTTP/2 — previously `dns`
     /// was always absent and H3 goodput/overhead omitted DNS while H1/H2
     /// included it. (Trust audit V10.)
+    ///
+    /// Resolution goes through the SAME hickory instrument as HTTP/1.1/2
+    /// (`dns_runner::resolve`), honoring the `--ipv4-only`/`--ipv6-only`
+    /// flags. It previously used `tokio::net::lookup_host` (OS getaddrinfo) —
+    /// a different resolver path with a different cache and search-list
+    /// behavior, so the flagship h1/h2/h3 head-to-head compared `dns_ms`
+    /// columns measured by two different instruments and could not honor
+    /// family pinning. (Deep-measurement audit M2 finding D2.)
     async fn resolve_addr(
         host: &str,
         port: u16,
+        ipv4_only: bool,
+        ipv6_only: bool,
     ) -> Result<(std::net::SocketAddr, Option<DnsResult>), String> {
-        // Parse the bare host as an IP literal first — formatting "{host}:{port}"
-        // misses IPv6 (needs brackets: [::1]:443) and would fall through to a
-        // spurious DNS lookup for it.
+        // Parse the bare host as an IP literal first — no DNS phase to
+        // measure, matching the pre-existing h3 contract (`dns: None`).
         if let Ok(ip) = host.parse::<std::net::IpAddr>() {
             return Ok((std::net::SocketAddr::new(ip, port), None));
         }
-        let addr_str = format!("{host}:{port}");
-        let started_at = Utc::now();
-        let t0 = Instant::now();
-        let addrs: Vec<std::net::SocketAddr> = match tokio::net::lookup_host(&addr_str).await {
-            Ok(a) => a.collect(),
-            Err(e) => return Err(format!("DNS error: {e}")),
+        let (ips, dns) = crate::runner::dns::resolve(host, ipv4_only, ipv6_only)
+            .await
+            .map_err(|e| format!("DNS error: {}", e.message))?;
+        // Same connect-address selection as the h1/h2 path (`pick_ip`):
+        // hickory's pinned Ipv4thenIpv6 strategy already orders A first.
+        let ip = if ipv4_only {
+            ips.iter()
+                .find(|ip| ip.is_ipv4())
+                .copied()
+                .unwrap_or(ips[0])
+        } else {
+            ips[0]
         };
-        let duration_ms = t0.elapsed().as_secs_f64() * 1000.0;
-        let addr = *addrs
-            .first()
-            .ok_or_else(|| format!("No addresses resolved for {host}"))?;
-        let dns = DnsResult {
-            query_name: host.to_string(),
-            resolved_ips: addrs.iter().map(|a| a.ip().to_string()).collect(),
-            duration_ms,
-            started_at,
-            success: true,
-            // lookup_host goes through the OS (getaddrinfo); the concrete
-            // nameserver is not observable from here.
-            resolver: Some("system (OS getaddrinfo)".to_string()),
-            a_ms: None,
-            aaaa_ms: None,
-            a_record_count: None,
-            aaaa_record_count: None,
-            cname_chain: Vec::new(),
-        };
-        Ok((addr, Some(dns)))
+        Ok((std::net::SocketAddr::new(ip, port), Some(dns)))
     }
 
     /// Facts from the follow-up (second) QUIC connection that measures TLS 1.3
@@ -412,20 +409,21 @@ mod real {
                 }
             };
 
-        let (server_addr, dns_result) = match resolve_addr(&host, port).await {
-            Ok(v) => v,
-            Err(msg) => {
-                return h3_failed(
-                    run_id,
-                    attempt_id,
-                    sequence_num,
-                    protocol.clone(),
-                    started_at,
-                    ErrorCategory::Dns,
-                    &msg,
-                );
-            }
-        };
+        let (server_addr, dns_result) =
+            match resolve_addr(&host, port, cfg.ipv4_only, cfg.ipv6_only).await {
+                Ok(v) => v,
+                Err(msg) => {
+                    return h3_failed(
+                        run_id,
+                        attempt_id,
+                        sequence_num,
+                        protocol.clone(),
+                        started_at,
+                        ErrorCategory::Dns,
+                        &msg,
+                    );
+                }
+            };
 
         // QUIC handshake — pass the Connecting future to timeout directly;
         // do NOT .await it inline or it resolves before timeout can race it.
@@ -687,6 +685,7 @@ mod real {
             .and_then(|(_, v)| v.trim().parse::<u64>().ok());
 
         RequestAttempt {
+            phase: None,
             attempt_id,
             run_id,
             protocol,
@@ -754,6 +753,7 @@ mod real {
         message: &str,
     ) -> RequestAttempt {
         RequestAttempt {
+            phase: None,
             attempt_id,
             run_id,
             protocol,
@@ -939,21 +939,25 @@ mod real {
 
         #[tokio::test]
         async fn resolve_addr_ip_literal() {
-            let (addr, dns) = resolve_addr("127.0.0.1", 8443).await.unwrap();
+            let (addr, dns) = resolve_addr("127.0.0.1", 8443, false, false).await.unwrap();
             assert_eq!(addr, "127.0.0.1:8443".parse().unwrap());
             assert!(dns.is_none(), "IP literal must not record a DNS phase");
         }
 
         #[tokio::test]
         async fn resolve_addr_ipv6_literal() {
-            let (addr, dns) = resolve_addr("::1", 443).await.unwrap();
+            let (addr, dns) = resolve_addr("::1", 443, false, false).await.unwrap();
             assert_eq!(addr, "[::1]:443".parse().unwrap());
             assert!(dns.is_none());
         }
 
+        /// Deep-measurement M2 D2: h3 must resolve through the SAME hickory
+        /// instrument as h1/h2, so the recorded resolver label is the hickory
+        /// one ("system (…:53)" / "google-fallback …") — never the old
+        /// "system (OS getaddrinfo)" second instrument.
         #[tokio::test]
         async fn resolve_addr_hostname_localhost() {
-            let (addr, dns) = resolve_addr("localhost", 9999).await.unwrap();
+            let (addr, dns) = resolve_addr("localhost", 9999, false, false).await.unwrap();
             assert_eq!(addr.port(), 9999);
             assert!(addr.ip().is_loopback());
             // Trust audit V10: an actual DNS lookup must emit phase timing.
@@ -962,12 +966,33 @@ mod real {
             assert!(dns.success);
             assert!(dns.duration_ms >= 0.0);
             assert!(!dns.resolved_ips.is_empty());
-            assert_eq!(dns.resolver.as_deref(), Some("system (OS getaddrinfo)"));
+            let resolver = dns.resolver.expect("resolver identity must be recorded");
+            assert_ne!(
+                resolver, "system (OS getaddrinfo)",
+                "h3 DNS must use the hickory instrument, not getaddrinfo"
+            );
+            assert!(
+                resolver.starts_with("system") || resolver.contains("fallback"),
+                "unexpected resolver label: {resolver}"
+            );
+        }
+
+        /// `--ipv4-only` must be honored by the h3 resolution path (the old
+        /// getaddrinfo path could not express family pinning).
+        #[tokio::test]
+        async fn resolve_addr_hostname_ipv4_only_pins_family() {
+            let (addr, dns) = resolve_addr("localhost", 9999, true, false).await.unwrap();
+            assert!(addr.ip().is_ipv4(), "ipv4_only must pin the family");
+            let dns = dns.expect("hostname resolution must record a DnsResult");
+            assert!(dns
+                .resolved_ips
+                .iter()
+                .all(|ip| ip.parse::<std::net::IpAddr>().unwrap().is_ipv4()));
         }
 
         #[tokio::test]
         async fn resolve_addr_unresolvable() {
-            let err = resolve_addr("this-does-not-exist-xyz.invalid", 443)
+            let err = resolve_addr("this-does-not-exist-xyz.invalid", 443, false, false)
                 .await
                 .unwrap_err();
             assert!(

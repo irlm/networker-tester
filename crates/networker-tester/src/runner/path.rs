@@ -19,6 +19,18 @@
 //!
 //! Firewalls that drop the probes (or rate-limit ICMP) show up as silent
 //! hops / an unreached destination — reported as such, not invented.
+//!
+//! # Flow consistency (Paris-traceroute semantics)
+//!
+//! Every probe uses a CONSTANT 5-tuple: one socket (fixed source port on
+//! Linux) and a single destination port for all TTLs. Classic traceroute
+//! varied the destination port per TTL to demultiplex responses, which makes
+//! per-flow ECMP load balancers hash consecutive TTLs onto different physical
+//! paths — the false-link/phantom-loop artifact Paris traceroute (Augustin et
+//! al., IMC 2006) was invented to eliminate. Our matching is temporal and
+//! sequential (one probe in flight at a time), so the port variation bought
+//! nothing; holding the 5-tuple constant keeps every hop on one flow.
+//! Honest caveat: per-PACKET load balancers can still scramble any traceroute.
 
 use crate::metrics::{ErrorCategory, ErrorRecord, PathHop, PathResult, Protocol, RequestAttempt};
 use chrono::Utc;
@@ -37,8 +49,9 @@ pub struct PathProbeConfig {
     pub max_ttl: u32,
     /// Per-hop wait for an ICMP error (ms).
     pub per_hop_timeout_ms: u64,
-    /// First destination UDP port; hop N probes `base_port + N - 1`
-    /// (traceroute's classic 33434+ range, chosen to be closed).
+    /// Destination UDP port used for EVERY probe (traceroute's classic 33434,
+    /// chosen to be closed). Constant across TTLs so all hops are measured on
+    /// one ECMP flow — see the module docs on Paris-traceroute semantics.
     pub base_port: u16,
 }
 
@@ -127,6 +140,7 @@ pub async fn run_path_probe(
     };
 
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::Path,
@@ -195,6 +209,7 @@ fn path_failed(
     message: String,
 ) -> RequestAttempt {
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::Path,
@@ -288,10 +303,14 @@ pub(crate) mod linux_impl {
         let mut destination_rtt_ms = None;
         let mut hop_count = None;
 
+        // Constant 5-tuple: one socket (fixed src port) + one dest port for
+        // all TTLs, so every hop rides the same per-flow ECMP path. Probes
+        // are sequential and matched temporally via the error queue, so no
+        // per-TTL port demultiplexing is needed (module docs).
+        let dest = SocketAddr::new(addr, base_port);
+
         for ttl in 1..=max_ttl {
             set_ttl(&socket, &addr, ttl).map_err(|e| format!("set TTL={ttl} failed: {e}"))?;
-            let port = base_port.wrapping_add((ttl - 1) as u16);
-            let dest = SocketAddr::new(addr, port);
             let sent_at = Instant::now();
             if let Err(e) = socket.send_to(&[0u8; 8], dest) {
                 // A synchronous refusal (previous hop's queued error) is
@@ -569,9 +588,11 @@ pub(crate) mod portable_impl {
             // probe cannot be misattributed to this one.
             let socket = UdpSocket::bind(bind).map_err(|e| format!("UDP bind failed: {e}"))?;
             set_hop_limit(&socket, &addr, ttl)?;
-            let port = base_port.wrapping_add((ttl - 1) as u16);
+            // Constant destination port (Paris-consistent); the source port
+            // still varies per TTL here because each TTL needs a fresh socket
+            // to keep queued ICMP errors from being misattributed.
             socket
-                .connect(SocketAddr::new(addr, port))
+                .connect(SocketAddr::new(addr, base_port))
                 .map_err(|e| format!("UDP connect failed: {e}"))?;
             socket
                 .set_read_timeout(Some(Duration::from_millis(per_hop_timeout_ms)))

@@ -28,6 +28,7 @@ fn make_rpm_attempt(bufferbloat_factor: Option<f64>) -> RequestAttempt {
         loaded_rtt_avg_ms: 8.0,
         loaded_rtt_p95_ms: 16.0,
         loaded_jitter_ms: 1.2,
+        loaded_probes_censored: None,
         rpm: Some(7500.0),
         bufferbloat_factor,
         load_duration_ms: 5000.0,

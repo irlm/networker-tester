@@ -230,11 +230,16 @@ loss/jitter control yet.
 
 > `rpm` is the latency-under-load / bufferbloat probe: it samples UDP echo RTT
 > on an idle link, then repeats the sampling at a steady cadence while the
-> endpoint's `/download` route saturates the link. Reports unloaded vs loaded
+> endpoint's `/download` route loads the link. Reports unloaded vs loaded
 > RTT (min/avg/p95), loaded jitter + loss, RPM (60000 / loaded avg RTT —
 > round-trips per minute, higher is better), and the bufferbloat factor
-> (loaded avg / unloaded avg). Requires a networker-endpoint target (the
-> `/download` route plus the UDP echo server on port 9999).
+> (loaded avg / unloaded avg). Loaded-phase echoes are waited for up to the
+> full `--udp-timeout` so deep-queue echoes count as high RTTs, not loss
+> (`loaded_probes_censored` reports any truncated waits). Requires a
+> networker-endpoint target (the `/download` route plus the UDP echo server
+> on port 9999). NOTE: this is a UDP-echo-under-single-flow-load diagnostic,
+> not the draft-ietf-ippm-responsiveness methodology — its RPM figure is not
+> comparable with Apple `networkQuality`/Cloudflare/Ookla RPM numbers.
 
 > `ping` sends ICMP echo probes (count/timeout follow `--udp-probes` /
 > `--udp-timeout`) — no raw sockets, no root on any platform. Unix uses
@@ -246,8 +251,10 @@ loss/jitter control yet.
 > reply TTL is reported for IPv4 targets only (the IPv6 echo reply structure
 > carries no hop limit).
 
-> `path` is a traceroute-style hop-discovery probe: UDP probes to high ports
-> (33434+) with rising TTL. On Linux, `IP_RECVERR` yields each hop's router
+> `path` is a traceroute-style hop-discovery probe: UDP probes to a constant
+> high port (33434) with rising TTL — the 5-tuple is held constant across
+> TTLs (Paris-traceroute semantics) so per-flow ECMP load balancers keep all
+> hops on one path. On Linux, `IP_RECVERR` yields each hop's router
 > address and RTT unprivileged (`method: "udp-ttl/ip-recverr"`). On
 > macOS/Windows hop addresses are not observable without raw sockets, so the
 > probe degrades honestly to a hop-count estimate + destination reachability
@@ -262,7 +269,8 @@ loss/jitter control yet.
 > `websocket` runs the full DNS + TCP + TLS ladder, measures the HTTP 101
 > upgrade round-trip (`upgrade_ms`), then sends echo messages over the open
 > socket against the endpoint's `/ws` route — message RTT min/avg/p95,
-> arrival-order jitter, and loss. Message count/size/timeout follow
+> mean inter-probe delay variation (IPDV) as `jitter_ms`, and loss. Message
+> count/size/timeout follow
 > `--udp-probes` / `--udp-payload` / `--udp-timeout`. Requires a
 > networker-endpoint target (the `/ws` echo route).
 

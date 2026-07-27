@@ -1228,6 +1228,7 @@ mod tests {
         use crate::metrics::{HttpResult, Protocol};
         use chrono::Utc;
         RequestAttempt {
+            phase: None,
             attempt_id: uuid::Uuid::new_v4(),
             run_id: uuid::Uuid::new_v4(),
             protocol: Protocol::Upload,
@@ -1281,6 +1282,7 @@ mod tests {
         use crate::metrics::{HttpResult, Protocol};
         use chrono::Utc;
         RequestAttempt {
+            phase: None,
             attempt_id: uuid::Uuid::new_v4(),
             run_id: uuid::Uuid::new_v4(),
             protocol: Protocol::Upload,
@@ -1388,6 +1390,7 @@ mod tests {
         // Header name matching must be case-insensitive.
         use crate::metrics::{HttpResult, Protocol};
         let mut attempt = RequestAttempt {
+            phase: None,
             attempt_id: uuid::Uuid::new_v4(),
             run_id: uuid::Uuid::new_v4(),
             protocol: Protocol::Upload,
@@ -1537,6 +1540,7 @@ mod tests {
     #[test]
     fn compute_overhead_ms_all_none() {
         let attempt = RequestAttempt {
+            phase: None,
             attempt_id: Uuid::new_v4(),
             run_id: Uuid::new_v4(),
             protocol: Protocol::Download,
@@ -1574,6 +1578,7 @@ mod tests {
     fn verify_upload_non_numeric_header_silently_skips() {
         // Non-numeric header value parses as None → treated as absent.
         let mut attempt = RequestAttempt {
+            phase: None,
             attempt_id: Uuid::new_v4(),
             run_id: Uuid::new_v4(),
             protocol: Protocol::Upload,
@@ -1633,6 +1638,7 @@ mod tests {
     #[test]
     fn verify_upload_float_header_skips() {
         let mut attempt = RequestAttempt {
+            phase: None,
             attempt_id: Uuid::new_v4(),
             run_id: Uuid::new_v4(),
             protocol: Protocol::Upload,
@@ -1688,6 +1694,7 @@ mod tests {
     #[test]
     fn verify_upload_empty_header_value_skips() {
         let mut attempt = RequestAttempt {
+            phase: None,
             attempt_id: Uuid::new_v4(),
             run_id: Uuid::new_v4(),
             protocol: Protocol::Upload,
@@ -1744,6 +1751,7 @@ mod tests {
         use crate::metrics::{DnsResult, TcpResult, TlsResult};
         let now = Utc::now();
         let attempt = RequestAttempt {
+            phase: None,
             attempt_id: Uuid::new_v4(),
             run_id: Uuid::new_v4(),
             protocol: Protocol::Download,

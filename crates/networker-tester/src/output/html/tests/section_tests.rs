@@ -199,6 +199,7 @@ fn udp_statistics_section_appears_when_udp_attempts_present() {
     let mut run = make_run();
     run.attempts.clear();
     run.attempts.push(RequestAttempt {
+        phase: None,
         attempt_id: Uuid::new_v4(),
         run_id,
         protocol: Protocol::Udp,
@@ -219,6 +220,8 @@ fn udp_statistics_section_appears_when_udp_attempts_present() {
             rtt_avg_ms: 1.5,
             rtt_p95_ms: 2.0,
             jitter_ms: 0.2,
+            ipdv_p95_ms: None,
+            ipdv_p99_ms: None,
             started_at: Utc::now(),
             probe_rtts_ms: vec![Some(1.5); 10],
         }),
@@ -251,6 +254,7 @@ fn udp_loss_shows_warn_class_when_nonzero() {
     let mut run = make_run();
     run.attempts.clear();
     run.attempts.push(RequestAttempt {
+        phase: None,
         attempt_id: Uuid::new_v4(),
         run_id,
         protocol: Protocol::Udp,
@@ -271,6 +275,8 @@ fn udp_loss_shows_warn_class_when_nonzero() {
             rtt_avg_ms: 1.5,
             rtt_p95_ms: 2.0,
             jitter_ms: 0.5,
+            ipdv_p95_ms: None,
+            ipdv_p99_ms: None,
             started_at: Utc::now(),
             probe_rtts_ms: vec![Some(1.5); 8],
         }),
@@ -447,6 +453,7 @@ fn protocol_comparison_metric_label_correct_for_tcp() {
     let make_tcp = |ms: f64| -> RequestAttempt {
         let run_id = Uuid::new_v4();
         RequestAttempt {
+            phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
             protocol: Protocol::Tcp,

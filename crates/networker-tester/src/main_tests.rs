@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 fn request_attempt(success: bool, retry_count: u32) -> RequestAttempt {
     RequestAttempt {
+        phase: None,
         attempt_id: Uuid::new_v4(),
         run_id: Uuid::new_v4(),
         protocol: Protocol::Http1,
@@ -60,6 +61,7 @@ fn measured_http_attempt(
 ) -> RequestAttempt {
     let started_at = Utc.timestamp_millis_opt(start_offset_ms).single().unwrap();
     RequestAttempt {
+        phase: None,
         attempt_id: Uuid::new_v4(),
         run_id: Uuid::new_v4(),
         protocol: Protocol::Http1,
@@ -117,6 +119,7 @@ fn failed_http_attempt(
 ) -> RequestAttempt {
     let started_at = Utc.timestamp_millis_opt(start_offset_ms).single().unwrap();
     RequestAttempt {
+        phase: None,
         attempt_id: Uuid::new_v4(),
         run_id: Uuid::new_v4(),
         protocol: Protocol::Http1,
@@ -487,6 +490,7 @@ fn sample_resolved_config(delay_ms: u64) -> ResolvedConfig {
         proxy: None,
         ca_bundle: None,
         insecure: true,
+        accept_encoding: false,
         retries: 0,
         output_dir: ".".into(),
         html_report: "report.html".into(),
@@ -697,6 +701,47 @@ fn bootstrap_median_interval_is_deterministic() {
     let a = bootstrap_median_interval(&values);
     let b = bootstrap_median_interval(&values);
     assert_eq!(a, b);
+}
+
+#[test]
+fn bootstrap_median_interval_nonzero_width_at_power_of_two_n() {
+    // Regression pin (m5 A3/G1): the old raw-LCG-modulo RNG had low-bit
+    // periodicity, so at power-of-two n every bootstrap "resample" was a
+    // permutation of the data — CI width collapsed to 0 and the adaptive
+    // stop declared AccuracyTargetReached the moment n hit 2/4/8/16.
+    for n in [2usize, 4, 8, 16, 32] {
+        let values: Vec<f64> = (0..n).map(|i| 100.0 + i as f64).collect();
+        let (se, lo, hi) = bootstrap_median_interval(&values);
+        assert!(
+            hi > lo,
+            "CI width zero at n={n} with distinct values: ({se}, {lo}, {hi})"
+        );
+        assert!(se > 0.0, "bootstrap SE zero at n={n}");
+    }
+}
+
+#[test]
+fn bootstrap_median_interval_nonzero_width_identical_ish_samples() {
+    // n=8, nearly identical but distinct values — width must still be > 0.
+    let values = [10.0, 10.01, 9.99, 10.02, 9.98, 10.005, 9.995, 10.015];
+    let (se, lo, hi) = bootstrap_median_interval(&values);
+    assert!(
+        hi > lo,
+        "CI width zero for identical-ish n=8: ({se}, {lo}, {hi})"
+    );
+    assert!(se > 0.0);
+}
+
+#[test]
+fn median_error_bounds_nonzero_half_width_at_power_of_two_n() {
+    // The adaptive stop consumes this — a zero half-width at n=8 was the
+    // vacuous-stop defect.
+    let values: Vec<f64> = (0..8).map(|i| 50.0 + i as f64 * 0.5).collect();
+    let bounds = median_error_bounds(&values).expect("bounds for n=8");
+    assert!(
+        bounds.absolute_half_width > 0.0,
+        "half-width zero at n=8: {bounds:?}"
+    );
 }
 
 #[test]

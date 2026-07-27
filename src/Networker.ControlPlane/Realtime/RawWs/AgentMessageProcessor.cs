@@ -59,21 +59,28 @@ public sealed class AgentMessageProcessor
     private readonly EventBus _bus;
     private readonly ILogger<AgentMessageProcessor> _logger;
     private readonly Alerting.AlertEvaluator? _alerts;
+    private readonly Provisioning.BenchmarkRegressionDetector? _regressions;
 
     /// <param name="alerts">Optional so hosts/tests that don't wire the
     /// alerting module (<c>AddNetworkerAlerting</c>) keep working; when
     /// present, terminal runs are evaluated against the project's alert
     /// rules (best-effort — see <see cref="OnRunFinished"/>).</param>
+    /// <param name="regressions">Optional for the same reason; when present,
+    /// completed benchmark runs are compared against their baseline run and
+    /// breaches persisted/broadcast (best-effort — see
+    /// <see cref="OnRunFinished"/>).</param>
     public AgentMessageProcessor(
         NetworkerDbContext db,
         EventBus bus,
         ILogger<AgentMessageProcessor> logger,
-        Alerting.AlertEvaluator? alerts = null)
+        Alerting.AlertEvaluator? alerts = null,
+        Provisioning.BenchmarkRegressionDetector? regressions = null)
     {
         _db = db;
         _bus = bus;
         _logger = logger;
         _alerts = alerts;
+        _regressions = regressions;
     }
 
     // ── Frame codec (shared parse seam — also what the unit tests exercise) ──
@@ -581,6 +588,16 @@ public sealed class AgentMessageProcessor
             rf.RunId, rf.RunId,
             counts?.SuccessCount ?? 0,
             counts?.FailureCount ?? 0));
+
+        // Regression hook: compare this completed benchmark run's per-case
+        // stats against its baseline run and persist/broadcast breaches
+        // (M5/A12/G2 — the policy the Benchmark Regressions page documents).
+        // DetectAsync catches its own exceptions (log-and-continue) and
+        // no-ops when the artifact failed to persist above.
+        if (_regressions is not null && rf.Status == "completed" && rf.Artifact is not null)
+        {
+            await _regressions.DetectAsync(rf.RunId, ct);
+        }
 
         // Alerting hook: evaluate the project's rules against this now-terminal
         // run. EvaluateRunAsync catches its own exceptions (log-and-continue)

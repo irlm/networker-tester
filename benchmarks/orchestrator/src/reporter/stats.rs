@@ -8,6 +8,17 @@ use std::cmp::Ordering;
 pub(super) const REPORT_CONFIDENCE_LEVEL: f64 = 0.95;
 const TUKEY_FENCE_MULTIPLIER: f64 = 1.5;
 const BOOTSTRAP_RESAMPLES: usize = 2_048;
+/// Deterministic RNG for bootstrap resampling.
+///
+/// DRIFT NOTE: this is an intentional copy of
+/// `crates/networker-tester/src/stats_rng.rs` — the orchestrator is excluded
+/// from the workspace and cannot depend on the tester crate. Any change here
+/// must be mirrored there (and vice versa).
+///
+/// The LCG output is passed through a splitmix64 finalizer (raw LCG low bits
+/// have period 2^k and previously made power-of-two-length resamples exact
+/// permutations of the data, collapsing CI width to 0), and bounded indices
+/// use Lemire's multiply-shift instead of raw modulo.
 #[derive(Debug, Clone)]
 struct DeterministicRng {
     state: u64,
@@ -31,11 +42,17 @@ impl DeterministicRng {
             .state
             .wrapping_mul(6364136223846793005)
             .wrapping_add(1442695040888963407);
-        self.state
+        let mut z = self.state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
     }
 
     fn next_index(&mut self, upper: usize) -> usize {
-        (self.next_u64() as usize) % upper
+        if upper == 0 {
+            return 0;
+        }
+        (((self.next_u64() as u128) * (upper as u128)) >> 64) as usize
     }
 }
 
@@ -249,5 +266,87 @@ pub(super) fn cohens_d(candidate: &[f64], baseline: &[f64]) -> f64 {
         0.0
     } else {
         (candidate_mean - baseline_mean) / pooled_variance.sqrt()
+    }
+}
+
+#[cfg(test)]
+mod rng_tests {
+    use super::*;
+
+    /// Regression pin (m5 A3/G1): the old raw-LCG-modulo generator made
+    /// every block of 8 draws with upper=8 a permutation of 0..8. A healthy
+    /// generator produces a permutation block with probability 8!/8^8 ≈
+    /// 0.24%, so over 200 blocks essentially none should be.
+    #[test]
+    fn power_of_two_blocks_are_not_permutations() {
+        let mut rng = DeterministicRng::from_values(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+        let blocks = 200;
+        let mut permutation_blocks = 0;
+        for _ in 0..blocks {
+            let mut seen = [false; 8];
+            for _ in 0..8 {
+                seen[rng.next_index(8)] = true;
+            }
+            if seen.iter().all(|&s| s) {
+                permutation_blocks += 1;
+            }
+        }
+        assert!(
+            permutation_blocks <= 2,
+            "{permutation_blocks}/{blocks} blocks were permutations — low-bit periodicity is back"
+        );
+    }
+
+    /// Chi-square-ish uniformity of bounded indices for power-of-two and
+    /// non-power-of-two uppers.
+    #[test]
+    fn bounded_index_chi_square_uniformity() {
+        for upper in [8usize, 10] {
+            let mut rng = DeterministicRng::from_values(&[0.5, 1.5, 2.5]);
+            let draws = 8000;
+            let mut counts = vec![0u32; upper];
+            for _ in 0..draws {
+                counts[rng.next_index(upper)] += 1;
+            }
+            let expected = draws as f64 / upper as f64;
+            let chi_square: f64 = counts
+                .iter()
+                .map(|&c| {
+                    let d = c as f64 - expected;
+                    d * d / expected
+                })
+                .sum();
+            assert!(
+                chi_square < 35.0,
+                "chi-square {chi_square:.1} too high for upper={upper}: counts {counts:?}"
+            );
+        }
+    }
+
+    /// CI width must be nonzero at power-of-two n with distinct values —
+    /// the collapsed-to-zero width was the vacuous-verdict defect.
+    #[test]
+    fn bootstrap_nonzero_width_at_power_of_two_n() {
+        for n in [2usize, 4, 8, 16, 32] {
+            let values: Vec<f64> = (0..n).map(|i| 100.0 + i as f64).collect();
+            let (se, lo, hi) = bootstrap_median_interval(&values);
+            assert!(
+                hi > lo,
+                "CI width zero at n={n} with distinct values: ({se}, {lo}, {hi})"
+            );
+            assert!(se > 0.0, "bootstrap SE zero at n={n}");
+        }
+    }
+
+    /// Determinism / replay: seed is derived from the values, so identical
+    /// inputs must produce identical draws.
+    #[test]
+    fn same_values_same_sequence() {
+        let values = [10.0, 20.0, 30.0];
+        let mut a = DeterministicRng::from_values(&values);
+        let mut b = DeterministicRng::from_values(&values);
+        for _ in 0..256 {
+            assert_eq!(a.next_u64(), b.next_u64());
+        }
     }
 }

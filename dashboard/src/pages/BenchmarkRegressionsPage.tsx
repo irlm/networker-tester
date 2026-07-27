@@ -20,14 +20,23 @@ function severityColor(severity: string): string {
 function metricLabel(metric: string): string {
   switch (metric) {
     case 'p50_latency_ms': return 'p50 Latency';
+    case 'p50': return 'p50';
     case 'success_rate': return 'Success Rate';
     default: return metric;
   }
 }
 
-function formatValue(metric: string, value: number): string {
+function formatValue(metric: string, unit: string, value: number): string {
   if (metric === 'success_rate') return `${value.toFixed(1)}%`;
-  return `${value.toFixed(2)}ms`;
+  return `${value.toFixed(2)} ${unit}`;
+}
+
+// Every row in this table IS a regression, so the delta is always adverse —
+// rendered red regardless of sign (latency deltas are positive, throughput
+// and success-rate deltas negative).
+function formatDelta(metric: string, delta: number): string {
+  const signed = `${delta > 0 ? '+' : ''}${delta.toFixed(1)}`;
+  return metric === 'success_rate' ? `${signed} pp` : `${signed}%`;
 }
 
 export function BenchmarkRegressionsPage() {
@@ -74,7 +83,7 @@ export function BenchmarkRegressionsPage() {
       {regressions.length === 0 ? (
         <EmptyState
           message="No regressions detected"
-          detail="Regressions are automatically flagged when a benchmark completes and its p50 latency increases by more than 10% or success rate drops below 99% compared to the baseline run. Run benchmarks with a baseline set to enable regression tracking."
+          detail="When a benchmark run completes, each case is compared against the same case in the baseline run (the config's pinned baseline, or the previous completed run): a p50 more than 10% worse or a success rate below 99% is flagged automatically. Cases with fewer than 10 samples on either side are skipped so noise-level runs are never flagged. Run a benchmark config at least twice to enable regression tracking."
         />
       ) : (
         <>
@@ -90,7 +99,7 @@ export function BenchmarkRegressionsPage() {
                     >
                       {r.config_name}
                     </Link>
-                    <p className="text-gray-500 text-xs">{r.language}</p>
+                    <p className="text-gray-500 text-xs font-mono">{r.case_id}</p>
                   </div>
                   <span className={`text-xs px-2 py-0.5 rounded ${severityColor(r.severity)}`}>
                     {r.severity}
@@ -98,11 +107,11 @@ export function BenchmarkRegressionsPage() {
                 </div>
                 <div className="flex items-center gap-3 text-xs">
                   <span className="text-gray-400">{metricLabel(r.metric)}</span>
-                  <span className="text-gray-500">{formatValue(r.metric, r.baseline_value)}</span>
+                  <span className="text-gray-500">{formatValue(r.metric, r.metric_unit, r.baseline_value)}</span>
                   <span className="text-gray-600">-&gt;</span>
-                  <span className="text-gray-200">{formatValue(r.metric, r.current_value)}</span>
-                  <span className={r.delta_percent > 0 ? 'text-red-400' : 'text-green-400'}>
-                    {r.delta_percent > 0 ? '+' : ''}{r.delta_percent.toFixed(1)}%
+                  <span className="text-gray-200">{formatValue(r.metric, r.metric_unit, r.current_value)}</span>
+                  <span className="text-red-400">
+                    {formatDelta(r.metric, r.delta_percent)}
                   </span>
                 </div>
                 <p className="text-xs text-gray-600 mt-1">{timeAgo(r.detected_at)}</p>
@@ -117,7 +126,7 @@ export function BenchmarkRegressionsPage() {
                 <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
                   <th className="px-4 py-2.5 text-left font-medium">Detected</th>
                   <th className="px-4 py-2.5 text-left font-medium">Benchmark</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Language</th>
+                  <th className="px-4 py-2.5 text-left font-medium">Case</th>
                   <th className="px-4 py-2.5 text-left font-medium">Metric</th>
                   <th className="px-4 py-2.5 text-right font-medium">Baseline</th>
                   <th className="px-4 py-2.5 text-right font-medium">Current</th>
@@ -142,18 +151,16 @@ export function BenchmarkRegressionsPage() {
                         {r.config_name}
                       </Link>
                     </td>
-                    <td className="px-4 py-3 text-gray-400 font-mono text-xs">{r.language}</td>
+                    <td className="px-4 py-3 text-gray-400 font-mono text-xs">{r.case_id}</td>
                     <td className="px-4 py-3 text-gray-400 text-xs">{metricLabel(r.metric)}</td>
                     <td className="px-4 py-3 text-gray-500 text-xs text-right font-mono">
-                      {formatValue(r.metric, r.baseline_value)}
+                      {formatValue(r.metric, r.metric_unit, r.baseline_value)}
                     </td>
                     <td className="px-4 py-3 text-gray-200 text-xs text-right font-mono">
-                      {formatValue(r.metric, r.current_value)}
+                      {formatValue(r.metric, r.metric_unit, r.current_value)}
                     </td>
-                    <td className={`px-4 py-3 text-xs text-right font-mono ${
-                      r.delta_percent > 0 ? 'text-red-400' : 'text-green-400'
-                    }`}>
-                      {r.delta_percent > 0 ? '+' : ''}{r.delta_percent.toFixed(1)}%
+                    <td className="px-4 py-3 text-xs text-right font-mono text-red-400">
+                      {formatDelta(r.metric, r.delta_percent)}
                     </td>
                     <td className="px-4 py-3">
                       <span className={`text-xs px-2 py-0.5 rounded ${severityColor(r.severity)}`}>

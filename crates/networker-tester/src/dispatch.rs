@@ -622,9 +622,12 @@ pub fn log_attempt(a: &RequestAttempt) {
                     .map(|(p, n)| format!("{p}×{n}"))
                     .collect::<Vec<_>>()
                     .join(" ");
+                // TTFB here is the *browser* definition (navigationStart →
+                // responseStart, includes DNS/connect/TLS); cl_bytes is the
+                // sum of declared Content-Length headers, not wire bytes.
                 info!(
-                    "{status} #{seq} [{mode}] proto={proto} TTFB:{ttfb:.1}ms \
-                     DCL:{dcl:.1}ms Load:{load:.1}ms res={res} bytes={bytes} [{protos}]{retry}",
+                    "{status} #{seq} [{mode}] proto={proto} TTFB(nav):{ttfb:.1}ms \
+                     DCL:{dcl:.1}ms Load:{load:.1}ms res={res} cl_bytes={bytes} [{protos}]{retry}",
                     mode = a.protocol,
                     seq = a.sequence_num,
                     proto = b.protocol,

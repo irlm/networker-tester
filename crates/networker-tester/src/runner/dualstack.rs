@@ -135,6 +135,7 @@ pub async fn run_dualstack_probe(
     };
 
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::DualStack,
@@ -265,6 +266,7 @@ fn dualstack_failed(
     message: String,
 ) -> RequestAttempt {
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::DualStack,

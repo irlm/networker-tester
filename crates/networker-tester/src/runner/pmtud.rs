@@ -195,6 +195,7 @@ pub async fn run_pmtud_probe(
     };
 
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::Pmtud,
@@ -247,6 +248,7 @@ fn pmtud_failed(
     message: String,
 ) -> RequestAttempt {
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::Pmtud,

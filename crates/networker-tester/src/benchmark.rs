@@ -49,36 +49,10 @@ pub struct MedianErrorBounds {
     pub absolute_half_width: f64,
 }
 
-#[derive(Debug, Clone)]
-pub struct DeterministicRng {
-    pub state: u64,
-}
-
-impl DeterministicRng {
-    pub fn from_values(values: &[f64]) -> Self {
-        let mut state = 0x9e37_79b9_7f4a_7c15_u64 ^ values.len() as u64;
-        for value in values {
-            state ^= value.to_bits().wrapping_mul(0xbf58_476d_1ce4_e5b9);
-            state = state.rotate_left(13);
-        }
-        if state == 0 {
-            state = 0x94d0_49bb_1331_11eb;
-        }
-        Self { state }
-    }
-
-    pub fn next_u64(&mut self) -> u64 {
-        self.state = self
-            .state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        self.state
-    }
-
-    pub fn next_index(&mut self, upper: usize) -> usize {
-        (self.next_u64() as usize) % upper
-    }
-}
+// Canonical deterministic bootstrap RNG lives in `crate::stats_rng`;
+// re-exported here so existing `benchmark::DeterministicRng` imports keep
+// working.
+pub use crate::stats_rng::DeterministicRng;
 
 pub fn benchmark_pilot_criteria(cfg: &ResolvedConfig) -> Option<BenchmarkPilotCriteria> {
     if !cfg.benchmark_mode || cfg.benchmark_phase != "measured" || !cfg.http_stacks.is_empty() {

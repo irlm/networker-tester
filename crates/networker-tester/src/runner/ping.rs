@@ -19,8 +19,8 @@
 //! Probes are sent back-to-back like the `udp` probe (next probe fires when
 //! the previous echo arrives or times out); late/reordered/duplicate echoes
 //! are credited to the probe that sent them by their embedded ICMP sequence
-//! id (trust audit V12 semantics). Aggregation (min/avg/p95, arrival-order
-//! jitter, loss) reuses [`aggregate_udp_rtts`].
+//! id (trust audit V12 semantics). Aggregation (min/avg/p95, mean inter-probe
+//! delay variation as `jitter_ms`, loss) reuses [`aggregate_udp_rtts`].
 
 use crate::metrics::{
     aggregate_udp_rtts, ErrorCategory, ErrorRecord, PingResult, Protocol, RequestAttempt,
@@ -164,6 +164,7 @@ pub async fn run_ping_probe(
     };
 
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::Ping,
@@ -220,6 +221,7 @@ fn ping_failed(
     detail: Option<String>,
 ) -> RequestAttempt {
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::Ping,

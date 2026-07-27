@@ -64,6 +64,13 @@ pub async fn run_curl_probe(
     } else if cfg.ipv6_only {
         cmd.arg("--ipv6");
     }
+    // Opt-in compression negotiation (--accept-encoding), mirroring the
+    // native http1/http2 probes. Sent as a raw header — deliberately NOT
+    // curl's `--compressed`, which would decompress the body; without it
+    // curl leaves the body compressed, so `size_download` stays wire bytes.
+    if cfg.accept_encoding {
+        cmd.arg("-H").arg("Accept-Encoding: gzip, br, zstd");
+    }
 
     // timeout in seconds (curl accepts fractional)
     let timeout_secs = cfg.timeout_ms as f64 / 1000.0;
@@ -287,6 +294,7 @@ pub async fn run_curl_probe(
     let success = parsed.code > 0 && parsed.code < 400;
 
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::Curl,
@@ -407,6 +415,7 @@ fn make_failed(
     detail: Option<String>,
 ) -> RequestAttempt {
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::Curl,

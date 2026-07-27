@@ -206,6 +206,7 @@ fn html_contains_error_section_for_failed_attempt() {
         client_geo: None,
         target_geo: None,
         attempts: vec![RequestAttempt {
+            phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
             protocol: Protocol::Http1,
@@ -283,6 +284,7 @@ fn html_contains_throughput_section_for_download_attempt() {
         client_geo: None,
         target_geo: None,
         attempts: vec![RequestAttempt {
+            phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
             protocol: Protocol::Download,
@@ -379,6 +381,7 @@ fn html_contains_tls_section_for_tls_attempt() {
         client_geo: None,
         target_geo: None,
         attempts: vec![RequestAttempt {
+            phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
             protocol: crate::metrics::Protocol::Tls,
@@ -479,6 +482,7 @@ fn html_contains_page_load_section() {
         client_geo: None,
         target_geo: None,
         attempts: vec![RequestAttempt {
+            phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
             protocol: crate::metrics::Protocol::PageLoad,
@@ -510,6 +514,7 @@ fn html_contains_page_load_section() {
                 cpu_time_ms: Some(8.3),
                 connection_reused: false,
                 per_connection_socket_stats: vec![],
+                assets_failed: None,
             }),
             browser: None,
             http_stack: None,
@@ -577,6 +582,7 @@ fn append_proto_row_averages_ttfb_correctly() {
 #[test]
 fn append_proto_row_no_http_shows_dashes() {
     let a = RequestAttempt {
+        phase: None,
         attempt_id: Uuid::new_v4(),
         run_id: Uuid::new_v4(),
         protocol: Protocol::Tcp,
@@ -655,6 +661,7 @@ fn append_attempt_row_failed_shows_err_class() {
 #[test]
 fn append_attempt_row_udp_echo_shows_rtt() {
     let a = RequestAttempt {
+        phase: None,
         attempt_id: Uuid::new_v4(),
         run_id: Uuid::new_v4(),
         protocol: Protocol::Udp,
@@ -675,6 +682,8 @@ fn append_attempt_row_udp_echo_shows_rtt() {
             rtt_avg_ms: 2.5,
             rtt_p95_ms: 3.0,
             jitter_ms: 0.5,
+            ipdv_p95_ms: None,
+            ipdv_p99_ms: None,
             started_at: Utc::now(),
             probe_rtts_ms: vec![Some(2.5); 5],
         }),
@@ -701,6 +710,7 @@ fn append_attempt_row_udp_echo_shows_rtt() {
 #[test]
 fn append_attempt_row_udp_throughput_shows_transfer_ms() {
     let a = RequestAttempt {
+        phase: None,
         attempt_id: Uuid::new_v4(),
         run_id: Uuid::new_v4(),
         protocol: Protocol::UdpDownload,
@@ -746,6 +756,7 @@ fn append_attempt_row_udp_throughput_shows_transfer_ms() {
 #[test]
 fn append_attempt_row_no_results_shows_dashes() {
     let a = RequestAttempt {
+        phase: None,
         attempt_id: Uuid::new_v4(),
         run_id: Uuid::new_v4(),
         protocol: Protocol::Tcp,
@@ -870,6 +881,7 @@ fn html_contains_browser_section() {
         client_geo: None,
         target_geo: None,
         attempts: vec![RequestAttempt {
+            phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
             protocol: crate::metrics::Protocol::Browser,

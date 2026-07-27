@@ -1310,9 +1310,11 @@ export interface BenchmarkConfigResults {
 export interface BenchmarkRegression {
   regression_id: string;
   config_id: string;
-  baseline_config_id: string | null;
-  language: string;
+  run_id: string;
+  baseline_run_id: string | null;
+  case_id: string;
   metric: string;
+  metric_unit: string;
   baseline_value: number;
   current_value: number;
   delta_percent: number;

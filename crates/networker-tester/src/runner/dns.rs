@@ -12,6 +12,29 @@ use std::time::Instant;
 use tracing::warn;
 use uuid::Uuid;
 
+/// Apply the measurement-path resolver options on top of whatever the system
+/// config provided.
+///
+/// 1. `ip_strategy = Ipv4thenIpv6` — hickory 0.26 changed the default lookup
+///    strategy to Ipv6AndIpv4 (AAAA ordered before A); pin the 0.24 behavior
+///    so resolved-IP ordering, and therefore which address downstream
+///    TCP/TLS/HTTP probes connect to, is unchanged. (No resolv.conf/system
+///    option maps to this, so overriding after `read_system_conf()` cannot
+///    clobber user configuration.)
+/// 2. `cache_size = 0` — hickory's in-process response LRU defaults to 8192
+///    entries. With it enabled, attempt 1 of a run measured the real resolver
+///    path while attempts 2..N within TTL measured an in-memory hashmap hit
+///    (tens of µs) still labeled "system (…:53)". Measurement paths must
+///    measure the wire: every `resolve()`/`resolve_detailed()` caller records
+///    the duration as `dns_ms`, so the cache is disabled for all of them
+///    (deep-measurement audit M2 finding D1). Non-measurement address lookups
+///    elsewhere in the tester use the OS via `tokio::net::lookup_host` and are
+///    unaffected.
+fn apply_measurement_opts(opts: &mut ResolverOpts) {
+    opts.ip_strategy = LookupIpStrategy::Ipv4thenIpv6;
+    opts.cache_size = 0;
+}
+
 /// Process-wide resolver plus a human-readable identity label.
 ///
 /// Uses the OS resolver configuration (/etc/resolv.conf, macOS SystemConfiguration,
@@ -21,7 +44,8 @@ use uuid::Uuid;
 /// previously hardcoded to 8.8.8.8 via `ResolverConfig::default()`.)
 ///
 /// Built once per process: reading the system config touches the filesystem and
-/// must never pollute a DNS timing window.
+/// must never pollute a DNS timing window. Response caching is disabled — see
+/// [`apply_measurement_opts`] — so every attempt's `dns_ms` is a real query.
 ///
 /// hickory 0.26: construction goes through `ResolverBuilder`, whose `build()`
 /// is fallible. Without TLS features the only fallible branch (TLS provider
@@ -65,13 +89,7 @@ fn shared_resolver() -> Result<&'static (TokioResolver, String), String> {
                 }
             };
             let mut opts = opts;
-            // hickory 0.26 changed the default lookup strategy to Ipv6AndIpv4
-            // (AAAA ordered before A). Pin the 0.24 behavior — A first, AAAA
-            // only if A fails — so resolved-IP ordering, and therefore which
-            // address downstream TCP/TLS/HTTP probes connect to, is unchanged.
-            // (No resolv.conf/system option maps to this, so overriding after
-            // read_system_conf() cannot clobber user configuration.)
-            opts.ip_strategy = LookupIpStrategy::Ipv4thenIpv6;
+            apply_measurement_opts(&mut opts);
             let mut builder =
                 TokioResolver::builder_with_config(config, TokioRuntimeProvider::default());
             // Apply the options exactly as hickory's own `Resolver::builder()`
@@ -383,6 +401,7 @@ pub async fn run_dns_probe(
 
     match resolve_detailed(hostname, ipv4_only, ipv6_only).await {
         Ok((_, dns_result)) => RequestAttempt {
+            phase: None,
             attempt_id,
             run_id,
             protocol: Protocol::Dns,
@@ -410,6 +429,7 @@ pub async fn run_dns_probe(
             pmtud: None,
         },
         Err(err) => RequestAttempt {
+            phase: None,
             attempt_id,
             run_id,
             protocol: Protocol::Dns,
@@ -527,6 +547,98 @@ mod tests {
         assert!(!dns.resolved_ips.is_empty());
         assert!(attempt.tcp.is_none());
         assert!(attempt.http.is_none());
+    }
+
+    // ── measurement resolver: cache must be off (deep-measurement M2 D1) ────
+
+    /// The options applied to every measurement resolver must disable
+    /// hickory's in-process response cache: with the default (8192-entry LRU),
+    /// attempts 2..N of a run measured a hashmap lookup labeled as the system
+    /// resolver.
+    #[test]
+    fn measurement_opts_disable_cache_and_pin_strategy() {
+        let mut opts = ResolverOpts::default();
+        assert_ne!(opts.cache_size, 0, "hickory default is a non-zero cache");
+        apply_measurement_opts(&mut opts);
+        assert_eq!(
+            opts.cache_size, 0,
+            "measurement paths must measure the wire"
+        );
+        assert!(matches!(opts.ip_strategy, LookupIpStrategy::Ipv4thenIpv6));
+    }
+
+    /// End-to-end proof against a counting mock nameserver: two sequential
+    /// lookups of the same name (answered with a comfortably cacheable
+    /// TTL 300 A record) must BOTH hit the wire. Before the fix the second
+    /// lookup was served from hickory's in-process LRU and never reached the
+    /// socket.
+    #[tokio::test]
+    async fn measurement_resolver_repeat_lookup_hits_the_wire() {
+        use hickory_resolver::config::{ConnectionConfig, NameServerConfig, ResolverConfig};
+        use hickory_resolver::proto::op::{Message, OpCode};
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+
+        let server = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let addr = server.local_addr().unwrap();
+        let queries = Arc::new(AtomicU32::new(0));
+        let counter = queries.clone();
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 1500];
+            while let Ok((n, from)) = server.recv_from(&mut buf).await {
+                let Ok(req) = Message::from_vec(&buf[..n]) else {
+                    continue;
+                };
+                counter.fetch_add(1, Ordering::SeqCst);
+                let mut resp = Message::response(req.id, OpCode::Query);
+                resp.metadata.recursion_desired = req.recursion_desired;
+                resp.metadata.recursion_available = true;
+                if let Some(q) = req.queries.first() {
+                    resp.add_query(q.clone());
+                    resp.add_answer(Record::from_rdata(
+                        q.name().clone(),
+                        300, // cacheable TTL — a cache would serve hit #2 from memory
+                        RData::A(rdata::A(std::net::Ipv4Addr::new(192, 0, 2, 7))),
+                    ));
+                }
+                if let Ok(bytes) = resp.to_vec() {
+                    let _ = server.send_to(&bytes, from).await;
+                }
+            }
+        });
+
+        let mut conn = ConnectionConfig::udp();
+        conn.port = addr.port();
+        let config = ResolverConfig::from_parts(
+            None,
+            Vec::new(),
+            vec![NameServerConfig::new(addr.ip(), true, vec![conn])],
+        );
+        let mut builder =
+            TokioResolver::builder_with_config(config, TokioRuntimeProvider::default());
+        apply_measurement_opts(builder.options_mut());
+        let resolver = builder.build().expect("mock-backed resolver");
+
+        let first = resolver
+            .lookup("cache-check.example.", RecordType::A)
+            .await
+            .expect("first lookup");
+        assert!(!first.answers().is_empty());
+        let after_first = queries.load(Ordering::SeqCst);
+        assert!(after_first >= 1, "first lookup must reach the mock server");
+
+        let second = resolver
+            .lookup("cache-check.example.", RecordType::A)
+            .await
+            .expect("second lookup");
+        assert!(!second.answers().is_empty());
+        let after_second = queries.load(Ordering::SeqCst);
+        assert!(
+            after_second > after_first,
+            "second lookup was served from an in-process cache \
+             (queries: {after_first} → {after_second}) — dns_ms would be a \
+             hashmap lookup, not a resolver measurement"
+        );
     }
 
     // ── extract_cname_chain ──────────────────────────────────────────────────

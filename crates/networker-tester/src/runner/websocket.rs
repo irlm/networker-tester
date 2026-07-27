@@ -13,8 +13,8 @@
 //!    route. Each message embeds `[seq u32 BE][timestamp_us i64 BE]`; echoes
 //!    are credited to the message that sent them by the embedded sequence id
 //!    (trust audit V12), so a late/reordered echo cannot desync the matcher.
-//!    Aggregation (min/avg/p95, arrival-order jitter, loss) reuses
-//!    [`aggregate_udp_rtts`].
+//!    Aggregation (min/avg/p95, mean inter-probe delay variation as
+//!    `jitter_ms`, loss) reuses [`aggregate_udp_rtts`].
 //!
 //! The target path is rewritten to `/ws` (like webdownload rewrites to
 //! `/download`): the probe requires a networker-endpoint target.
@@ -372,6 +372,7 @@ pub async fn run_websocket_probe(
     };
 
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::WebSocket,
@@ -541,6 +542,7 @@ fn ws_failed(
     tls: Option<crate::metrics::TlsResult>,
 ) -> RequestAttempt {
     RequestAttempt {
+        phase: None,
         attempt_id,
         run_id,
         protocol: Protocol::WebSocket,

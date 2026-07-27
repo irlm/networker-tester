@@ -421,6 +421,80 @@ impl TestRun {
             })
             .collect()
     }
+
+    /// The phase whose samples count as measured for this run
+    /// ("measured" for non-benchmark runs).
+    pub fn primary_phase(&self) -> &str {
+        self.benchmark_phase.as_deref().unwrap_or("measured")
+    }
+
+    /// Phase label for each attempt, index-aligned with `self.attempts`.
+    ///
+    /// Prefers the structural `RequestAttempt.phase` (set at attempt creation
+    /// by the benchmark runner since v0.28.81); falls back to positional
+    /// reconstruction from the recorded phase counts for runs captured before
+    /// the field existed. This is the single source of phase attribution —
+    /// the benchmark JSON artifact and every human-facing stats surface
+    /// (console summary, HTML, Excel) derive from it.
+    pub fn resolved_attempt_phases(&self) -> Vec<String> {
+        let primary_phase = self.primary_phase();
+        let warmup_end = self.benchmark_warmup_attempt_count as usize;
+        let overhead_end = warmup_end + self.benchmark_overhead_attempt_count as usize;
+        let pilot_end = overhead_end + self.benchmark_pilot_attempt_count as usize;
+        let cooldown_start = self
+            .attempts
+            .len()
+            .saturating_sub(self.benchmark_cooldown_attempt_count as usize);
+        let primary_is_special =
+            matches!(primary_phase, "warmup" | "overhead" | "pilot" | "cooldown");
+
+        self.attempts
+            .iter()
+            .enumerate()
+            .map(|(idx, attempt)| {
+                if let Some(phase) = attempt.phase.as_deref() {
+                    phase.to_string()
+                } else if primary_is_special {
+                    primary_phase.to_string()
+                } else if idx < warmup_end {
+                    "warmup".to_string()
+                } else if idx < overhead_end {
+                    "overhead".to_string()
+                } else if idx < pilot_end {
+                    "pilot".to_string()
+                } else if self.benchmark_cooldown_attempt_count > 0 && idx >= cooldown_start {
+                    "cooldown".to_string()
+                } else {
+                    primary_phase.to_string()
+                }
+            })
+            .collect()
+    }
+
+    /// Attempts belonging to this run's primary (measured) phase — the same
+    /// set the benchmark JSON artifact computes its summaries over. For
+    /// non-benchmark runs this is all attempts. Every stats surface (console
+    /// summary, HTML report, Excel workbook) must compute over this set so
+    /// human-facing numbers agree with the artifact.
+    pub fn measured_attempts(&self) -> Vec<&RequestAttempt> {
+        let primary_phase = self.primary_phase();
+        self.resolved_attempt_phases()
+            .iter()
+            .zip(self.attempts.iter())
+            .filter(|(phase, _)| phase.as_str() == primary_phase)
+            .map(|(_, attempt)| attempt)
+            .collect()
+    }
+
+    /// Number of attempts excluded from stats because they belong to a
+    /// non-primary benchmark phase (warmup/overhead/pilot/cooldown).
+    pub fn excluded_attempt_count(&self) -> usize {
+        let primary_phase = self.primary_phase();
+        self.resolved_attempt_phases()
+            .iter()
+            .filter(|phase| phase.as_str() != primary_phase)
+            .count()
+    }
 }
 
 impl HostInfo {
@@ -1050,6 +1124,14 @@ pub struct RequestAttempt {
     /// Path-MTU discovery result (`pmtud` mode only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pmtud: Option<PmtudResult>,
+    /// Benchmark phase this attempt executed in ("warmup", "overhead",
+    /// "pilot", "measured", "cooldown"), set at attempt creation by the
+    /// benchmark runner. `None` means the attempt was not produced by a
+    /// benchmark phase loop and is treated as measured. Additive — schema
+    /// stays 1.0; older artifacts without the field fall back to positional
+    /// phase reconstruction (see `TestRun::resolved_attempt_phases`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
 }
 
 impl RequestAttempt {
@@ -1088,11 +1170,15 @@ pub enum Protocol {
     UdpDownload,
     /// UDP bulk upload to the networker-endpoint UDP throughput server (port 9998).
     UdpUpload,
-    /// Latency-under-load / bufferbloat probe (Apple-RPM-style responsiveness):
-    /// samples unloaded UDP echo RTT, then saturates the link with a sustained
-    /// HTTP download from the networker-endpoint while probing UDP echo RTT at
-    /// a steady cadence. Reports RPM (60000 / loaded avg RTT — round-trips per
-    /// minute, higher is better) and the bufferbloat factor (loaded/unloaded).
+    /// Latency-under-load / bufferbloat probe: samples unloaded UDP echo RTT,
+    /// then loads the link with sustained HTTP downloads from the
+    /// networker-endpoint while probing UDP echo RTT at a steady cadence.
+    /// Reports RPM (60000 / loaded avg RTT — round-trips per minute, higher
+    /// is better) and the bufferbloat factor (loaded/unloaded). NOTE: this is
+    /// a UDP-echo-under-single-flow-load diagnostic, NOT the
+    /// draft-ietf-ippm-responsiveness methodology — its RPM figure is not
+    /// comparable with Apple `networkQuality`/Cloudflare/Ookla RPM (see
+    /// [`RpmResult`] docs).
     Rpm,
     /// ICMP echo probe — measures raw network-layer RTT (min/avg/p95), jitter,
     /// and packet loss to the target host without any TCP/UDP dependency.
@@ -1114,8 +1200,8 @@ pub enum Protocol {
     /// WebSocket probe: full DNS + TCP + TLS timing ladder, then the HTTP 101
     /// upgrade round-trip (`upgrade_ms`), then N echo messages against the
     /// networker-endpoint's `/ws` route — per-message RTT min/avg/p95,
-    /// arrival-order jitter, and loss. Uses ws:// or wss:// derived from the
-    /// target scheme.
+    /// mean inter-probe delay variation (IPDV), and loss. Uses ws:// or
+    /// wss:// derived from the target scheme.
     WebSocket,
     /// Path-MTU discovery probe: UDP datagrams with the DF bit set at
     /// binary-searched sizes toward the target. On Linux, ICMP
@@ -1930,7 +2016,18 @@ pub struct HttpResult {
     pub negotiated_version: String,
     pub status_code: u16,
     pub headers_size_bytes: usize,
+    /// Response body bytes actually received, as delivered by the HTTP layer.
+    /// hyper performs no transparent decompression, so when the server
+    /// compresses (see `content_encoding` / `--accept-encoding`) this is the
+    /// compressed on-the-wire body size, not the decoded size.
     pub body_size_bytes: usize,
+    /// Probe TTFB (ms): request write start → response headers received, on
+    /// an already-established connection. Excludes DNS/TCP/TLS and the HTTP
+    /// connection handshake, which are reported as their own phases. For
+    /// upload probes this window deliberately spans the request-body write
+    /// plus the server draining it (see `runner/throughput.rs`). NOT
+    /// comparable with [`BrowserResult::ttfb_ms`], which uses the browser
+    /// navigation-relative definition.
     pub ttfb_ms: f64,
     pub total_duration_ms: f64,
     pub redirect_count: u32,
@@ -1972,8 +2069,14 @@ pub struct HttpResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub socket_stats: Option<SocketStats>,
     /// Response `Content-Encoding` header value (e.g. "gzip", "br", "zstd").
-    /// Reported as received — the probe does not change what Accept-Encoding
-    /// it sends. None when the header is absent. Additive.
+    /// By default probes send **no** `Accept-Encoding` header, so
+    /// well-behaved origins answer identity and this stays `None`. Opt in
+    /// with `--accept-encoding` (env `NETWORKER_ACCEPT_ENCODING=true`), which
+    /// sends `Accept-Encoding: gzip, br, zstd` on http1/http2/curl probe
+    /// requests; the probe never decompresses, so `body_size_bytes` remains
+    /// the wire size. Throughput modes always negotiate identity (payload
+    /// sizes are the measurement contract). None when the header is absent.
+    /// Additive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_encoding: Option<String>,
     /// Declared response `Content-Length` header value in bytes. None when
@@ -1998,7 +2101,21 @@ pub struct UdpResult {
     pub rtt_min_ms: f64,
     pub rtt_avg_ms: f64,
     pub rtt_p95_ms: f64,
+    /// Mean inter-probe delay variation (IPDV): mean |Δ| of RTTs paired
+    /// consecutive-by-sequence over received probes (RFC 3393 §4.2 selection,
+    /// RTT-based). NOT RFC 3550 interarrival jitter (that is a 1/16-gain EWMA
+    /// over one-way transit deltas) — the serde field name is kept for
+    /// contract compatibility.
     pub jitter_ms: f64,
+    /// 95th percentile of the |IPDV| samples the mean above is computed from.
+    /// `None` below [`MIN_SAMPLES_P95`] IPDV pairs (the project-wide
+    /// small-n honesty gate) — absent at the default 10-probe train.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ipdv_p95_ms: Option<f64>,
+    /// 99th percentile of the |IPDV| samples; `None` below
+    /// [`MIN_SAMPLES_P99`] pairs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ipdv_p99_ms: Option<f64>,
     pub started_at: DateTime<Utc>,
     /// Per-probe RTT values (ms), None if probe was lost.
     pub probe_rtts_ms: Vec<Option<f64>>,
@@ -2036,12 +2153,31 @@ pub struct UdpThroughputResult {
 ///
 /// Two phases against a networker-endpoint target:
 /// 1. **Unloaded** — a burst of UDP echo probes (port 9999) on an idle link.
-/// 2. **Loaded** — sustained HTTP downloads saturate the link while UDP echo
+/// 2. **Loaded** — sustained HTTP downloads load the link while UDP echo
 ///    probes fire at a steady cadence.
 ///
 /// Headline numbers: `rpm` = 60000 / loaded avg RTT (round-trips per minute,
-/// Apple-RPM-style — higher is better) and `bufferbloat_factor` =
-/// loaded avg / unloaded avg (1.0 ≈ no bufferbloat).
+/// higher is better) and `bufferbloat_factor` = loaded avg / unloaded avg
+/// (1.0 ≈ no bufferbloat).
+///
+/// **Methodology honesty.** This probe is NOT conformant with
+/// draft-ietf-ippm-responsiveness (the Apple/Cloudflare/Ookla "RPM"
+/// methodology): the load is a single sequential HTTP download flow (no
+/// multi-connection ramp, no saturation detection, no upload direction), and
+/// latency is probed with UDP echoes on a separate socket (no HTTP
+/// foreign/self probes — flow-isolating AQMs like fq_codel can prioritize the
+/// sparse echo stream past the loaded flow's queue). The `rpm` figure here is
+/// therefore typically much HIGHER than a spec RPM for the same link and must
+/// not be compared across tools; treat it as a UDP-echo-under-load
+/// diagnostic. A spec-conformant responsiveness mode is tracked separately
+/// (Wave R).
+///
+/// **Loaded-tail accounting.** Loaded-phase echoes are waited for up to the
+/// full per-probe `--udp-timeout` (Tmax, default 5 s) past the load window,
+/// so slow echoes from deep queues count as high RTTs instead of silently
+/// becoming loss. `loaded_loss_percent` counts only probes unanswered after
+/// their full Tmax; `loaded_probes_censored` reports probes whose wait was
+/// truncated below Tmax (should be 0 in normal operation).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RpmResult {
     pub remote_addr: String,
@@ -2053,14 +2189,22 @@ pub struct RpmResult {
     pub unloaded_rtt_avg_ms: f64,
     pub unloaded_rtt_p95_ms: f64,
     pub unloaded_jitter_ms: f64,
-    // ── Phase 2: UDP echo RTT while the link is saturated ──────────────────
+    // ── Phase 2: UDP echo RTT while the link is loaded ─────────────────────
     pub loaded_probe_count: u32,
     pub loaded_success_count: u32,
+    /// Probes unanswered after their full per-probe Tmax (`--udp-timeout`).
     pub loaded_loss_percent: f64,
     pub loaded_rtt_min_ms: f64,
     pub loaded_rtt_avg_ms: f64,
     pub loaded_rtt_p95_ms: f64,
     pub loaded_jitter_ms: f64,
+    /// Loaded-phase probes whose echo wait was truncated before their full
+    /// Tmax elapsed (e.g. a socket error ended the drain early) — these are
+    /// counted in `loaded_loss_percent` but may actually be very-late echoes,
+    /// so a nonzero value means the loaded RTT average is optimistically
+    /// biased. Additive; absent in pre-v0.28.82 results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loaded_probes_censored: Option<u32>,
     // ── Derived headline metrics ───────────────────────────────────────────
     /// Round-trips per minute under load: 60000 / loaded_rtt_avg_ms.
     /// `None` when every loaded probe was lost (no avg to derive from).
@@ -2087,10 +2231,10 @@ pub struct RpmResult {
 
 /// ICMP echo result (`ping` mode).
 ///
-/// Same aggregate shape as [`UdpResult`] (min/avg/p95, RFC-3550-style
-/// arrival-order jitter via [`aggregate_udp_rtts`], loss percent, per-probe
-/// RTTs) but measured at the network layer with ICMP echo — no TCP/UDP
-/// service on the target required.
+/// Same aggregate shape as [`UdpResult`] (min/avg/p95, mean |IPDV| as
+/// `jitter_ms` via [`aggregate_udp_rtts`], loss percent, per-probe RTTs) but
+/// measured at the network layer with ICMP echo — no TCP/UDP service on the
+/// target required.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PingResult {
     /// IP actually pinged (first resolved address of the target host).
@@ -2215,8 +2359,8 @@ pub struct DualStackResult {
 /// sub-results exactly like the `tls` probe; this struct carries what happens
 /// after the socket is up: the HTTP 101 upgrade round-trip and the echo
 /// message RTT distribution. Message RTTs share [`UdpResult`]'s aggregate
-/// semantics (min/avg/p95 via [`aggregate_udp_rtts`], RFC-3550-style
-/// arrival-order jitter, per-message RTTs with `None` for lost echoes).
+/// semantics (min/avg/p95 via [`aggregate_udp_rtts`], mean |IPDV| as
+/// `jitter_ms`, per-message RTTs with `None` for lost echoes).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebSocketResult {
     /// ws:// or wss:// URL the probe connected to.
@@ -2236,7 +2380,9 @@ pub struct WebSocketResult {
     pub msg_rtt_min_ms: f64,
     pub msg_rtt_avg_ms: f64,
     pub msg_rtt_p95_ms: f64,
-    /// Arrival-order jitter over received echoes (mean |Δ| of consecutive RTTs).
+    /// Mean inter-probe delay variation (IPDV): mean |Δ| of RTTs paired
+    /// consecutive-by-sequence over received echoes (RFC 3393-style; NOT
+    /// RFC 3550 interarrival jitter).
     pub jitter_ms: f64,
     /// Per-message RTT values (ms), `None` if the echo never arrived.
     pub msg_rtts_ms: Vec<Option<f64>>,
@@ -2298,17 +2444,32 @@ pub struct PmtudResult {
 pub struct PageLoadResult {
     /// Number of assets listed in the manifest.
     pub asset_count: usize,
-    /// Number of assets successfully retrieved.
+    /// Number of assets successfully retrieved — a 2xx response with the body
+    /// fully drained. Asset requests never follow redirects, so a 3xx asset
+    /// response yields no asset body and counts as *failed*, as do 4xx/5xx and
+    /// transport errors. (Before v0.28.82 any status < 500 — including 404 —
+    /// counted as "fetched"; the number may drop on re-measurement of targets
+    /// that error on assets because the old number was wrong.)
     pub assets_fetched: usize,
-    /// Sum of all asset response body bytes.
+    /// Sum of all fetched (2xx) asset response body bytes.
     pub total_bytes: usize,
     /// Wall-clock time from probe start to last asset byte received (ms).
     pub total_ms: f64,
-    /// Time to first asset's first byte (ms).
+    /// TTFB of the `/page` manifest request (ms): request write → first
+    /// response byte, measured on an already-established connection
+    /// (probe-style TTFB — excludes DNS/TCP/TLS setup, which are reported in
+    /// their own phases). NOT the browser TTFB definition; see
+    /// [`BrowserResult::ttfb_ms`].
     pub ttfb_ms: f64,
     /// Number of distinct TCP connections opened (6 for H1.1, 1 for H2).
     pub connections_opened: u32,
-    /// Per-asset total durations in ms.
+    /// Per-asset total durations in ms, index-aligned with asset ids
+    /// (`asset_timings_ms[i]` is asset `i`; length == `asset_count`). Assets
+    /// that were not fetched successfully carry the `0.0` sentinel — use
+    /// `assets_failed`/`assets_fetched` to tell "failed" apart from "instant".
+    /// Caveat: pageload2/pageload3 results recorded before v0.28.82 pushed
+    /// only *successful* fetches, so on any failure the old vector was shorter
+    /// than `asset_count` and not index-aligned.
     pub asset_timings_ms: Vec<f64>,
     pub started_at: DateTime<Utc>,
     /// Sum of all TLS handshake durations during this page load (ms).
@@ -2339,6 +2500,13 @@ pub struct PageLoadResult {
     /// pre-established connection. Additive; `schema_version` stays 1.0.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub per_connection_socket_stats: Vec<SocketStats>,
+    /// Number of assets that did NOT come back as a fully drained 2xx
+    /// response (non-2xx status — including unfollowed 3xx — or a transport
+    /// error/timeout). Always `Some(asset_count - assets_fetched)` on new
+    /// runs; `None` on pre-v0.28.82 data. Additive; `schema_version` stays
+    /// 1.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assets_failed: Option<u32>,
 }
 
 /// Real-browser page-load result (browser mode, requires `--features browser`).
@@ -2348,11 +2516,22 @@ pub struct BrowserResult {
     pub load_ms: f64,
     /// DOMContentLoaded event timing (ms from navigation start).
     pub dom_content_loaded_ms: f64,
-    /// Time to first byte of the main document (ms).
+    /// Browser TTFB (ms): `responseStart − navigationStart` from
+    /// `window.performance.timing`. This is the *browser* definition — it
+    /// includes DNS, TCP connect, TLS, and any redirects before the main
+    /// document's first byte. NOT comparable with [`HttpResult::ttfb_ms`] or
+    /// [`PageLoadResult::ttfb_ms`], which measure request-send → first byte
+    /// on an already-established connection.
     pub ttfb_ms: f64,
     /// Total resources loaded (main doc + all sub-resources).
     pub resource_count: u32,
-    /// Total bytes transferred across all resources.
+    /// Sum of *declared* `Content-Length` response headers across all
+    /// resources — NOT wire bytes. It excludes response headers, counts 0 for
+    /// responses without a Content-Length (e.g. chunked), and reflects the
+    /// declared (possibly compressed) body size. Field name kept for wire
+    /// compat; true wire-byte accounting (CDP
+    /// `Network.loadingFinished.encodedDataLength`) is planned for a later
+    /// wave.
     pub transferred_bytes: usize,
     /// HTTP protocol negotiated for the main document ("h2", "h3", "http/1.1" …).
     pub protocol: String,
@@ -2661,12 +2840,27 @@ pub struct RttStats {
     pub min: f64,
     pub avg: f64,
     pub p95: f64,
+    /// Mean |IPDV| — see [`aggregate_udp_rtts`] for the exact estimator.
     pub jitter: f64,
+    /// 95th percentile of the |IPDV| samples; `None` below
+    /// [`MIN_SAMPLES_P95`] pairs (small-n honesty gate).
+    pub ipdv_p95: Option<f64>,
+    /// 99th percentile of the |IPDV| samples; `None` below
+    /// [`MIN_SAMPLES_P99`] pairs.
+    pub ipdv_p99: Option<f64>,
     pub loss_percent: f64,
 }
 
 /// Compute aggregate stats from a slice of Option<f64> RTT samples.
 /// None values count as lost probes.
+///
+/// `jitter` is the mean inter-probe delay variation (IPDV): mean |Δ| of RTTs
+/// paired **consecutive-by-sequence over received probes** (the input slice
+/// is indexed by sequence number; lost probes are skipped when pairing). This
+/// is the RFC 3393 §4.2 selection function applied to round-trip delay — NOT
+/// RFC 3550 interarrival jitter (a 1/16-gain EWMA over one-way transit
+/// deltas), and not arrival-order pairing (a reordered late echo is paired by
+/// its sequence position, where it was credited).
 pub fn aggregate_udp_rtts(samples: &[Option<f64>]) -> RttStats {
     let total = samples.len() as f64;
     let mut rtts: Vec<f64> = samples.iter().filter_map(|v| *v).collect();
@@ -2683,20 +2877,29 @@ pub fn aggregate_udp_rtts(samples: &[Option<f64>]) -> RttStats {
             avg: 0.0,
             p95: 0.0,
             jitter: 0.0,
+            ipdv_p95: None,
+            ipdv_p99: None,
             loss_percent: loss,
         };
     }
 
-    // Jitter: mean absolute difference between consecutive RTTs in ARRIVAL
-    // order (RFC 3550-style inter-packet variation). This must be computed
-    // BEFORE sorting — successive diffs of a sorted array telescope to
-    // (max − min) / (n − 1), a range statistic, not jitter. (Trust audit V2.)
-    let jitter = if rtts.len() > 1 {
-        let diffs: Vec<f64> = rtts.windows(2).map(|w| (w[1] - w[0]).abs()).collect();
-        diffs.iter().sum::<f64>() / diffs.len() as f64
-    } else {
+    // Mean |IPDV| over sequence-consecutive received pairs. This must be
+    // computed BEFORE sorting — successive diffs of a sorted array telescope
+    // to (max − min) / (n − 1), a range statistic, not delay variation.
+    // (Trust audit V2.)
+    let mut ipdv_samples: Vec<f64> = rtts.windows(2).map(|w| (w[1] - w[0]).abs()).collect();
+    let jitter = if ipdv_samples.is_empty() {
         0.0
+    } else {
+        ipdv_samples.iter().sum::<f64>() / ipdv_samples.len() as f64
     };
+    // Tail percentiles of the IPDV distribution (a mean hides bimodality —
+    // RFC 5481 §4.2), gated by the project-wide small-n rules.
+    ipdv_samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let ipdv_p95 = (ipdv_samples.len() >= MIN_SAMPLES_P95)
+        .then(|| percentile_from_sorted(&ipdv_samples, 95.0));
+    let ipdv_p99 = (ipdv_samples.len() >= MIN_SAMPLES_P99)
+        .then(|| percentile_from_sorted(&ipdv_samples, 99.0));
 
     rtts.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let min = rtts[0];
@@ -2709,6 +2912,8 @@ pub fn aggregate_udp_rtts(samples: &[Option<f64>]) -> RttStats {
         avg,
         p95,
         jitter,
+        ipdv_p95,
+        ipdv_p99,
         loss_percent: loss,
     }
 }
@@ -2995,8 +3200,8 @@ mod tests {
 
     #[test]
     fn test_rtt_stats_no_loss() {
-        // Deliberately UNSORTED (arrival order). Percentile/min/avg must not
-        // depend on arrival order; jitter must (see dedicated tests below).
+        // Deliberately UNSORTED (sequence order). Percentile/min/avg must not
+        // depend on sample order; the IPDV mean must (dedicated tests below).
         let samples: Vec<Option<f64>> = vec![
             Some(7.0),
             Some(2.0),
@@ -3015,37 +3220,38 @@ mod tests {
         assert!((s.avg - 5.5).abs() < 1e-9);
         // 95th percentile of 10 values → index ceil(9.5)-1 = 9 → 10.0
         assert!((s.p95 - 10.0).abs() < 1e-9);
-        // Arrival-order |Δ|: 5,8,6,3,5,3,6,4,3 → mean = 43/9
+        // Sequence-consecutive |IPDV|: 5,8,6,3,5,3,6,4,3 → mean = 43/9
         assert!(
             (s.jitter - 43.0 / 9.0).abs() < 1e-9,
-            "jitter must be computed on arrival order, got {}",
+            "jitter must be the mean |IPDV| in sequence order, got {}",
             s.jitter
         );
     }
 
     #[test]
     fn test_rtt_stats_with_loss() {
-        // Unsorted arrival order; None entries are lost probes and are
-        // skipped when pairing consecutive samples for jitter.
+        // Unsorted sequence order; None entries are lost probes and are
+        // skipped when pairing sequence-consecutive samples for the IPDV mean
+        // (RFC 3393 §4.2 selection).
         let samples: Vec<Option<f64>> = vec![Some(15.0), None, Some(5.0), None, Some(10.0)];
         let s = aggregate_udp_rtts(&samples);
         assert!((s.loss_percent - 40.0).abs() < 1e-9);
         assert!((s.min - 5.0).abs() < 1e-9);
         assert!((s.avg - 10.0).abs() < 1e-9);
-        // Arrival-order |Δ| over received: |5−15|=10, |10−5|=5 → mean 7.5
+        // Sequence-consecutive |IPDV| over received: |5−15|=10, |10−5|=5 → mean 7.5
         assert!((s.jitter - 7.5).abs() < 1e-9, "got jitter {}", s.jitter);
     }
 
     /// Regression test for trust-audit V2: alternating 1/10/1/10 ms RTTs have
-    /// a true arrival-order jitter of 9 ms. The old implementation sorted the
-    /// samples first and reported (max−min)/(n−1) = 3 ms instead.
+    /// a true mean |IPDV| of 9 ms. The old implementation sorted the samples
+    /// first and reported (max−min)/(n−1) = 3 ms instead.
     #[test]
     fn test_rtt_jitter_uses_arrival_order_not_sorted() {
         let samples: Vec<Option<f64>> = vec![Some(1.0), Some(10.0), Some(1.0), Some(10.0)];
         let s = aggregate_udp_rtts(&samples);
         assert!(
             (s.jitter - 9.0).abs() < 1e-9,
-            "expected arrival-order jitter 9.0, got {} (sorted-input bug?)",
+            "expected sequence-order mean |IPDV| 9.0, got {} (sorted-input bug?)",
             s.jitter
         );
     }
@@ -3054,6 +3260,55 @@ mod tests {
     fn test_rtt_jitter_single_sample_is_zero() {
         let s = aggregate_udp_rtts(&[Some(5.0)]);
         assert_eq!(s.jitter, 0.0);
+    }
+
+    /// IPDV tail percentiles obey the project-wide small-n honesty gates:
+    /// suppressed below MIN_SAMPLES_P95/P99 *pairs* (so the default 10-probe
+    /// train reports none), present once enough pairs exist.
+    #[test]
+    fn test_rtt_ipdv_percentiles_gated_by_sample_size() {
+        // 10 samples → 9 IPDV pairs < MIN_SAMPLES_P95 → both suppressed.
+        let small: Vec<Option<f64>> = (0..10).map(|i| Some(i as f64)).collect();
+        let s = aggregate_udp_rtts(&small);
+        assert!(s.ipdv_p95.is_none(), "9 pairs must suppress ipdv_p95");
+        assert!(s.ipdv_p99.is_none());
+
+        // 30 samples alternating 1/10 ms → 29 pairs of |Δ| = 9 ms:
+        // ≥ MIN_SAMPLES_P95 → p95 present (= 9.0); < MIN_SAMPLES_P99 → p99
+        // still suppressed.
+        let medium: Vec<Option<f64>> = (0..30)
+            .map(|i| Some(if i % 2 == 0 { 1.0 } else { 10.0 }))
+            .collect();
+        let s = aggregate_udp_rtts(&medium);
+        let p95 = s.ipdv_p95.expect("29 pairs must yield ipdv_p95");
+        assert!((p95 - 9.0).abs() < 1e-9, "got {p95}");
+        assert!(s.ipdv_p99.is_none(), "29 pairs must suppress ipdv_p99");
+
+        // 101 samples → 100 pairs = MIN_SAMPLES_P99 → both present.
+        let large: Vec<Option<f64>> = (0..101)
+            .map(|i| Some(if i % 2 == 0 { 1.0 } else { 10.0 }))
+            .collect();
+        let s = aggregate_udp_rtts(&large);
+        assert!(s.ipdv_p95.is_some());
+        assert!(s.ipdv_p99.is_some());
+    }
+
+    /// A bimodal delay pattern the mean hides (RFC 5481 §4.2 rationale):
+    /// mostly-steady RTTs with occasional big spikes must surface in the
+    /// IPDV p95 while the mean stays small.
+    #[test]
+    fn test_rtt_ipdv_p95_exposes_bimodality() {
+        // 40 probes: steady 5 ms with a 45 ms spike every 10th probe.
+        let samples: Vec<Option<f64>> = (0..40)
+            .map(|i| Some(if i % 10 == 9 { 45.0 } else { 5.0 }))
+            .collect();
+        let s = aggregate_udp_rtts(&samples);
+        let p95 = s.ipdv_p95.expect("39 pairs must yield ipdv_p95");
+        assert!(
+            p95 > s.jitter * 2.0,
+            "spiky IPDV tail (p95 {p95:.1}) must exceed the mean ({:.1}) by far",
+            s.jitter
+        );
     }
 
     #[test]
@@ -3167,6 +3422,7 @@ mod tests {
     fn test_test_run_counts() {
         let run_id = Uuid::new_v4();
         let mk = |success: bool| RequestAttempt {
+            phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
             protocol: Protocol::Http1,
@@ -3497,6 +3753,7 @@ mod tests {
     // Helper to build a minimal RequestAttempt with no sub-results.
     fn bare_attempt(proto: Protocol) -> RequestAttempt {
         RequestAttempt {
+            phase: None,
             attempt_id: Uuid::new_v4(),
             run_id: Uuid::new_v4(),
             protocol: proto,
@@ -3724,6 +3981,8 @@ mod tests {
             rtt_avg_ms: 1.5,
             rtt_p95_ms: 2.0,
             jitter_ms: 0.1,
+            ipdv_p95_ms: None,
+            ipdv_p99_ms: None,
             loss_percent: 0.0,
             started_at: Utc::now(),
             probe_rtts_ms: vec![Some(1.0), Some(2.0)],
@@ -3748,6 +4007,8 @@ mod tests {
             rtt_avg_ms: 0.0,
             rtt_p95_ms: 0.0,
             jitter_ms: 0.0,
+            ipdv_p95_ms: None,
+            ipdv_p99_ms: None,
             loss_percent: 100.0,
             started_at: Utc::now(),
             probe_rtts_ms: vec![None; 10],
@@ -3784,6 +4045,7 @@ mod tests {
             loaded_rtt_avg_ms: 20.0,
             loaded_rtt_p95_ms: 60.0,
             loaded_jitter_ms: 5.0,
+            loaded_probes_censored: None,
             rpm: Some(3000.0),
             bufferbloat_factor: Some(10.0),
             load_duration_ms: 5000.0,
@@ -3817,6 +4079,7 @@ mod tests {
             loaded_rtt_avg_ms: 0.0,
             loaded_rtt_p95_ms: 0.0,
             loaded_jitter_ms: 0.0,
+            loaded_probes_censored: None,
             rpm: None,
             bufferbloat_factor: None,
             load_duration_ms: 5000.0,
@@ -3917,6 +4180,7 @@ mod tests {
                 cpu_time_ms: None,
                 connection_reused: false,
                 per_connection_socket_stats: vec![],
+                assets_failed: Some(0),
             });
             assert!(
                 (primary_metric_value(&a).unwrap() - 500.0).abs() < 1e-9,

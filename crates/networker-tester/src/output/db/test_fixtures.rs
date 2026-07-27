@@ -59,6 +59,7 @@ pub(crate) fn make_benchmark_run(run_id: Uuid, attempts: Vec<RequestAttempt>) ->
 
 pub(crate) fn bare_attempt(run_id: Uuid) -> RequestAttempt {
     RequestAttempt {
+        phase: None,
         attempt_id: Uuid::new_v4(),
         run_id,
         protocol: Protocol::Http1,
@@ -91,6 +92,7 @@ pub(crate) fn bare_attempt(run_id: Uuid) -> RequestAttempt {
 #[allow(dead_code)]
 pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
     RequestAttempt {
+        phase: None,
         attempt_id: Uuid::new_v4(),
         run_id,
         protocol: Protocol::Http1,
@@ -189,6 +191,8 @@ pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
             rtt_avg_ms: 0.25,
             rtt_p95_ms: 0.4,
             jitter_ms: 0.05,
+            ipdv_p95_ms: None,
+            ipdv_p99_ms: None,
             started_at: Utc::now(),
             probe_rtts_ms: vec![Some(0.1), Some(0.2), None, Some(0.3), Some(0.4)],
         }),

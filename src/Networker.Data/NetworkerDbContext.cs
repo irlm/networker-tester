@@ -69,6 +69,8 @@ public partial class NetworkerDbContext : DbContext
 
     public virtual DbSet<BenchmarkArtifact> BenchmarkArtifacts { get; set; }
 
+    public virtual DbSet<BenchmarkRegressionRecord> BenchmarkRegressions { get; set; }
+
     public virtual DbSet<TestSchedule> TestSchedules { get; set; }
 
     public virtual DbSet<ComparisonGroup> ComparisonGroups { get; set; }
@@ -1327,6 +1329,52 @@ public partial class NetworkerDbContext : DbContext
                 .HasForeignKey(d => d.TestRunId)
                 .OnDelete(DeleteBehavior.Cascade)
                 .HasConstraintName("benchmark_artifact_test_run_id_fkey");
+        });
+
+        modelBuilder.Entity<BenchmarkRegressionRecord>(entity =>
+        {
+            entity.HasKey(e => e.RegressionId).HasName("benchmark_regression_pkey");
+
+            entity.ToTable("benchmark_regression");
+
+            entity.HasIndex(
+                e => new { e.TestConfigId, e.DetectedAt }, "ix_benchmark_regression_config");
+
+            entity.HasIndex(e => e.TestRunId, "ix_benchmark_regression_run");
+
+            entity.Property(e => e.RegressionId)
+                .HasDefaultValueSql("gen_random_uuid()")
+                .HasColumnName("regression_id");
+            entity.Property(e => e.TestConfigId).HasColumnName("test_config_id");
+            entity.Property(e => e.TestRunId).HasColumnName("test_run_id");
+            entity.Property(e => e.BaselineRunId).HasColumnName("baseline_run_id");
+            entity.Property(e => e.CaseId).HasColumnName("case_id");
+            entity.Property(e => e.Metric).HasColumnName("metric");
+            entity.Property(e => e.MetricUnit).HasColumnName("metric_unit");
+            entity.Property(e => e.BaselineValue).HasColumnName("baseline_value");
+            entity.Property(e => e.CurrentValue).HasColumnName("current_value");
+            entity.Property(e => e.DeltaPercent).HasColumnName("delta_percent");
+            entity.Property(e => e.Severity)
+                .HasDefaultValueSql("'warning'::text")
+                .HasColumnName("severity");
+            entity.Property(e => e.DetectedAt)
+                .HasDefaultValueSql("now()")
+                .HasColumnName("detected_at");
+
+            entity.HasOne(d => d.TestConfig).WithMany()
+                .HasForeignKey(d => d.TestConfigId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("benchmark_regression_test_config_id_fkey");
+
+            entity.HasOne(d => d.TestRun).WithMany()
+                .HasForeignKey(d => d.TestRunId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("benchmark_regression_test_run_id_fkey");
+
+            entity.HasOne(d => d.BaselineRun).WithMany()
+                .HasForeignKey(d => d.BaselineRunId)
+                .OnDelete(DeleteBehavior.SetNull)
+                .HasConstraintName("benchmark_regression_baseline_run_id_fkey");
         });
 
         modelBuilder.Entity<TestSchedule>(entity =>

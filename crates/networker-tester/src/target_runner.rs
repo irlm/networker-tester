@@ -280,6 +280,7 @@ pub(crate) async fn run_for_target(
             .laghound_route
             .clone()
             .unwrap_or_else(|| "/laghound/echo".to_string()),
+        accept_encoding: cfg.accept_encoding,
     };
 
     let throughput_cfg = ThroughputConfig {
@@ -348,10 +349,27 @@ pub(crate) async fn run_for_target(
     let mut all_attempts = Vec::new();
     let mut seq = 0u32;
 
+    // Structural phase tag for benchmark-mode attempts: each attempt carries
+    // the phase it executed in, so the artifact and every stats surface no
+    // longer rely on fragile positional reconstruction (m5 A5.1). When the
+    // whole run *is* a dedicated warmup/overhead/pilot/cooldown run, that
+    // run-level phase wins (matches the artifact's primary-phase override).
+    // Non-benchmark runs leave `phase` as None (= measured).
+    let benchmark_phase_tag = |loop_phase: &str| -> Option<String> {
+        if !cfg.benchmark_mode {
+            return None;
+        }
+        match cfg.benchmark_phase.as_str() {
+            special @ ("warmup" | "overhead" | "pilot" | "cooldown") => Some(special.to_string()),
+            _ => Some(loop_phase.to_string()),
+        }
+    };
+
     // Warmup probes for connection-reuse modes
     let shared_h2 = if cfg.connection_reuse && has_pageload2 {
         info!("Connection reuse: warming up HTTP/2 connection…");
-        let (warmup, conn) = warmup_pageload2(run_id, seq, &pageload_cfg).await;
+        let (mut warmup, conn) = warmup_pageload2(run_id, seq, &pageload_cfg).await;
+        warmup.phase = benchmark_phase_tag("warmup");
         log_attempt(&warmup);
         all_attempts.push(warmup);
         seq += 1;
@@ -363,7 +381,8 @@ pub(crate) async fn run_for_target(
     #[cfg(feature = "http3")]
     let shared_h3 = if cfg.connection_reuse && has_pageload3 {
         info!("Connection reuse: warming up HTTP/3 QUIC connection…");
-        let (warmup, conn) = warmup_pageload3(run_id, seq, &pageload_cfg).await;
+        let (mut warmup, conn) = warmup_pageload3(run_id, seq, &pageload_cfg).await;
+        warmup.phase = benchmark_phase_tag("warmup");
         log_attempt(&warmup);
         all_attempts.push(warmup);
         seq += 1;
@@ -557,7 +576,10 @@ pub(crate) async fn run_for_target(
         info!(samples = overhead_runs, "Benchmark overhead phase enabled");
         for overhead_index in 0..overhead_runs {
             info!("Overhead {}/{}", overhead_index + 1, overhead_runs);
-            let published_results = collect_iteration(&mut seq).await;
+            let mut published_results = collect_iteration(&mut seq).await;
+            for attempt in &mut published_results {
+                attempt.phase = benchmark_phase_tag("overhead");
+            }
             overhead_attempts.extend(published_results.iter().cloned());
             all_attempts.extend(published_results);
         }
@@ -576,7 +598,10 @@ pub(crate) async fn run_for_target(
                 pilot_completed_runs + 1,
                 criteria.max_samples
             );
-            let published_results = collect_iteration(&mut seq).await;
+            let mut published_results = collect_iteration(&mut seq).await;
+            for attempt in &mut published_results {
+                attempt.phase = benchmark_phase_tag("pilot");
+            }
             pilot_attempts.extend(published_results.iter().cloned());
             all_attempts.extend(published_results);
             pilot_completed_runs += 1;
@@ -662,7 +687,10 @@ pub(crate) async fn run_for_target(
 
     while completed_runs < max_run_count {
         info!("Run {}/{}", completed_runs + 1, max_run_count);
-        let published_results = collect_iteration(&mut seq).await;
+        let mut published_results = collect_iteration(&mut seq).await;
+        for attempt in &mut published_results {
+            attempt.phase = benchmark_phase_tag(&cfg.benchmark_phase);
+        }
 
         // Report progress for each measured attempt
         if let Some(ref reporter) = progress_reporter {
@@ -712,7 +740,10 @@ pub(crate) async fn run_for_target(
         info!(samples = cooldown_runs, "Benchmark cooldown phase enabled");
         for cooldown_index in 0..cooldown_runs {
             info!("Cooldown {}/{}", cooldown_index + 1, cooldown_runs);
-            let published_results = collect_iteration(&mut seq).await;
+            let mut published_results = collect_iteration(&mut seq).await;
+            for attempt in &mut published_results {
+                attempt.phase = benchmark_phase_tag("cooldown");
+            }
             cooldown_attempts.extend(published_results.iter().cloned());
             all_attempts.extend(published_results);
         }
@@ -869,7 +900,14 @@ pub(crate) async fn run_for_target(
                         }
                     }
 
-                    all_attempts.extend(published_logical_attempts(attempts));
+                    let mut stack_attempts = published_logical_attempts(attempts);
+                    for attempt in &mut stack_attempts {
+                        // Stack comparison probes run in the primary phase;
+                        // structural tagging keeps them out of the positional
+                        // cooldown tail they used to be mislabelled into.
+                        attempt.phase = benchmark_phase_tag(&cfg.benchmark_phase);
+                    }
+                    all_attempts.extend(stack_attempts);
                 }
             }
         }

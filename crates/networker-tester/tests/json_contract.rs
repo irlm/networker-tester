@@ -25,6 +25,7 @@ fn sample_run() -> TestRun {
     let run_id = Uuid::new_v4();
 
     let attempt = RequestAttempt {
+        phase: None,
         attempt_id: Uuid::new_v4(),
         run_id,
         protocol: Protocol::Http1,
@@ -749,6 +750,7 @@ fn pageload_per_connection_socket_stats_is_additive_and_optional() {
         cpu_time_ms: None,
         connection_reused: false,
         per_connection_socket_stats: stats,
+        assets_failed: None,
     };
 
     // Empty → omitted (shape unchanged) and absent-field JSON deserializes.
@@ -798,6 +800,65 @@ fn pageload_per_connection_socket_stats_is_additive_and_optional() {
         .per_connection_socket_stats;
     assert_eq!(stats.len(), 2);
     assert_eq!(stats[0].congestion_algorithm.as_deref(), Some("cubic"));
+}
+
+/// Additive field `page_load.assets_failed` (Wave T: 404 ≠ fetched): omitted
+/// when None (pre-v0.28.82 data shape unchanged), tolerated when absent in
+/// old JSON, and round-trips when populated. schema_version stays 1.0.
+#[test]
+fn pageload_assets_failed_is_additive_and_optional() {
+    let make_page_load = |failed: Option<u32>| PageLoadResult {
+        asset_count: 3,
+        assets_fetched: 2,
+        total_bytes: 20_480,
+        total_ms: 120.0,
+        ttfb_ms: 15.0,
+        connections_opened: 1,
+        // Index-aligned: failed asset carries the 0.0 sentinel.
+        asset_timings_ms: vec![50.0, 0.0, 60.0],
+        started_at: Utc::now(),
+        tls_setup_ms: 0.0,
+        tls_overhead_ratio: 0.0,
+        per_connection_tls_ms: vec![0.0],
+        cpu_time_ms: None,
+        connection_reused: false,
+        per_connection_socket_stats: vec![],
+        assets_failed: failed,
+    };
+
+    // None → omitted (shape unchanged) and absent-field JSON deserializes.
+    let mut run = sample_run();
+    run.attempts[0].page_load = Some(make_page_load(None));
+    let v = serde_json::to_value(&run).expect("serialize");
+    assert!(
+        v.pointer("/attempts/0/page_load")
+            .expect("page_load block")
+            .get("assets_failed")
+            .is_none(),
+        "assets_failed must be omitted when None (shape unchanged)"
+    );
+    let back: TestRun = serde_json::from_value(v).expect("deserialize");
+    assert!(back.attempts[0]
+        .page_load
+        .as_ref()
+        .expect("page_load")
+        .assets_failed
+        .is_none());
+
+    // Populated → round-trips.
+    let mut run = sample_run();
+    run.attempts[0].page_load = Some(make_page_load(Some(1)));
+    let v = serde_json::to_value(&run).expect("serialize populated");
+    assert_eq!(
+        v.pointer("/attempts/0/page_load/assets_failed")
+            .and_then(|n| n.as_u64()),
+        Some(1)
+    );
+    let back: TestRun = serde_json::from_value(v).expect("deserialize populated");
+    assert_eq!(
+        back.attempts[0].page_load.as_ref().unwrap().assets_failed,
+        Some(1)
+    );
 }
 
 /// Additive `server_info.load_avg_1m` / `server_info.mem_available_mb`
@@ -924,4 +985,38 @@ fn url_test_run_security_headers_is_additive_and_optional() {
     let sec = back.security_headers.expect("security_headers round-trips");
     assert_eq!(sec.x_frame_options.as_deref(), Some("DENY"));
     assert_eq!(sec.csp_present, Some(false));
+}
+
+/// The v0.28.81 additive field `attempt.phase` (structural benchmark phase
+/// attribution, m5 G3) is optional and skip-serialized when `None`:
+/// pre-existing JSON without the field deserializes to `None`, a phase-less
+/// run serializes to the exact same shape as before (frozen 1.0 contract
+/// untouched), and a populated phase round-trips.
+#[test]
+fn attempt_phase_field_is_additive_and_optional() {
+    // Phase-less run (non-benchmark): field must be absent from the wire.
+    let run = sample_run();
+    let v = serde_json::to_value(&run).expect("serialize");
+    assert!(
+        v.pointer("/attempts/0/phase").is_none(),
+        "phase must be skip-serialized when None"
+    );
+
+    // Old JSON without the field must deserialize to None.
+    let back: TestRun = serde_json::from_value(v).expect("deserialize without phase");
+    assert_eq!(back.attempts[0].phase, None);
+
+    // Populated phase round-trips.
+    let mut run = sample_run();
+    run.attempts[0].phase = Some("warmup".to_string());
+    let v = serde_json::to_value(&run).expect("serialize populated");
+    assert_eq!(
+        v.pointer("/attempts/0/phase").and_then(|s| s.as_str()),
+        Some("warmup")
+    );
+    let back: TestRun = serde_json::from_value(v).expect("deserialize populated");
+    assert_eq!(back.attempts[0].phase.as_deref(), Some("warmup"));
+
+    // Schema version stays frozen at 1.0 — the field is additive.
+    assert_eq!(SCHEMA_VERSION, "1.0");
 }

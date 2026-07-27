@@ -778,6 +778,7 @@ mod tests {
             proxy: None,
             ca_bundle: None,
             insecure: true,
+            accept_encoding: false,
             retries: 0,
             output_dir: "./out".into(),
             html_report: "report.html".into(),
