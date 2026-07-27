@@ -61,9 +61,10 @@ public sealed class AgentProtocolHub : Hub
         RawWs.AgentAuthLimiter limiter,
         ILogger<AgentProtocolHub> logger,
         ILogger<AgentMessageProcessor> processorLogger,
-        Alerting.AlertEvaluator? alerts = null)
+        Alerting.AlertEvaluator? alerts = null,
+        Provisioning.BenchmarkRegressionDetector? regressions = null)
     {
-        _processor = new AgentMessageProcessor(db, bus, processorLogger, alerts);
+        _processor = new AgentMessageProcessor(db, bus, processorLogger, alerts, regressions);
         _registry = registry;
         _limiter = limiter;
         _logger = logger;

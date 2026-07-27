@@ -108,7 +108,7 @@ export function TlsProfileDetailPage() {
             ['Verified chain depth', trust.verified_chain_depth ?? '-'],
             ['Revocation method', trust.revocation.method],
             ['Revocation status', trust.revocation.status],
-            ['OCSP stapled', boolLabel(trust.revocation.ocsp_stapled)],
+            ['OCSP stapled', ocspStapledLabel(trust.revocation.ocsp_stapled)],
           ]}
         />
         <StringList title="Trust issues" items={trust.issues ?? []} empty="No trust issues recorded." />
@@ -256,6 +256,17 @@ function FindingsList({ title, items, empty, color }: { title: string; items: Ar
 
 function boolLabel(value: boolean) {
   return value ? 'Yes' : 'No';
+}
+
+// OCSP is a dying ecosystem, not a health check: Let's Encrypt stopped
+// embedding OCSP URLs (May 2025) and shut down its responders (Aug 2025), and
+// most CAs followed — so "not stapled" is the expected state for perfectly
+// good certs and must read neutral, never as a red flag. Stapling observed
+// stays a positive signal.
+function ocspStapledLabel(stapled: boolean) {
+  return stapled
+    ? <span className="text-green-400">Yes — staple observed</span>
+    : <span className="text-gray-400">Not stapled (common post-2025 — most CAs dropped OCSP)</span>;
 }
 
 function formatMs(value?: number | null) {

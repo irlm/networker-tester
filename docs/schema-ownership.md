@@ -19,13 +19,13 @@ finished and re-verified end to end:
   retired Rust dashboard no longer boots in prod. The C# migrator is now the sole
   runtime schema authority.
 
-Chain latest: **V046** (`SchemaMigrator.LatestVersion`).
+Chain latest: **V047** (`SchemaMigrator.LatestVersion`).
 
 ## Where the schema lives
 
 | Piece | Location |
 |---|---|
-| Ordered migration scripts (V002…V046) | `src/Networker.Data/Migrations/V0NN_*.sql` (embedded resources) |
+| Ordered migration scripts (V002…V047) | `src/Networker.Data/Migrations/V0NN_*.sql` (embedded resources) |
 | V025 (UUID → base36 project ids) | `src/Networker.Data/Migrations/V025ProjectIdMigration.cs` (code, like the Rust original) |
 | ProjectId base36 + Damm implementation | `src/Networker.Data/Migrations/ProjectId36.cs` |
 | Runner | `src/Networker.Data/Migrations/SchemaMigrator.cs` |
@@ -111,7 +111,7 @@ replay).
 (the reference-only snapshot; the source of truth is the ordered `V0NN` scripts,
 which are current, frozen, and CI-tested). Regenerating it requires the C#
 migrator (V025 is a code migration — base36/Damm can't run in raw SQL), so it is
-a low-priority refresh, not a correctness gap: the V042–V046 deltas are small and
+a low-priority refresh, not a correctness gap: the V042–V047 deltas are small and
 documented under "Out-of-band DDL" below, and every mapped table is proven
 against the live-applied chain by `SchemaMigrationTests`. Refresh it (fresh PG16
 → `SchemaMigrator.MigrateAsync` → `pg_dump`) next time a migration is added.
@@ -187,6 +187,12 @@ DDL instead of replaying the chain).
   Dropping the column also drops its `agent_api_key_key` UNIQUE constraint via
   the column dependency (an explicit `DROP INDEX` would fail — it is a constraint,
   not a standalone index).
+- **V047** recreates `benchmark_regression` on the unified schema (the V018
+  original hung off the dropped `benchmark_config` table and went down with it
+  in V036). Keyed on `test_config_id` / `test_run_id` (+ nullable
+  `baseline_run_id`, SET NULL on prune); written by
+  `BenchmarkRegressionDetector` on benchmark run completion, served by
+  `GET /api/projects/{projectId}/benchmark-regressions`.
 - `bootstrap/reset-pre-prod.sql` and the tester's V001 schema are separate,
   unaffected artifacts.
 
