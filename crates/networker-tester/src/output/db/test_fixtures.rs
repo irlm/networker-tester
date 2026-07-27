@@ -145,6 +145,7 @@ pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
             cert_issuer: Some("CN=localhost".into()),
             cert_expiry: None,
             handshake_duration_ms: 5.0,
+            chain_diagnosis: None,
             started_at: Utc::now(),
             success: true,
             cert_chain: vec![],

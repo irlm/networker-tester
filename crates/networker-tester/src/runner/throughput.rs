@@ -1836,6 +1836,7 @@ mod tests {
                 cert_issuer: None,
                 cert_expiry: None,
                 handshake_duration_ms: 15.0,
+                chain_diagnosis: None,
                 started_at: now,
                 success: true,
                 cert_chain: vec![],

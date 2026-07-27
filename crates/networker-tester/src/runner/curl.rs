@@ -223,6 +223,7 @@ pub async fn run_curl_probe(
             cert_issuer: None,
             cert_expiry: None,
             handshake_duration_ms: tls_ms,
+            chain_diagnosis: None,
             started_at,
             success: true,
             cert_chain: vec![],

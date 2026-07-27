@@ -75,6 +75,7 @@ fn sample_run() -> TestRun {
             cert_issuer: None,
             cert_expiry: None,
             handshake_duration_ms: 25.0,
+            chain_diagnosis: None,
             started_at: now,
             success: true,
             cert_chain: vec![],

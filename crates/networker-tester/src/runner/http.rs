@@ -1376,6 +1376,7 @@ fn extract_tls_info(
         cert_issuer,
         cert_expiry,
         handshake_duration_ms: duration_ms,
+        chain_diagnosis: None,
         started_at,
         success: true,
         cert_chain: vec![],

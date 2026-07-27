@@ -797,6 +797,7 @@ fn extract_native_tls_result(
         cert_issuer,
         cert_expiry,
         handshake_duration_ms: duration_ms,
+        chain_diagnosis: None,
         started_at,
         success: true,
         cert_chain,
