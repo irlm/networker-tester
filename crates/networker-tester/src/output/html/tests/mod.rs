@@ -129,6 +129,7 @@ fn make_run() -> TestRun {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         }],
     }
 }
@@ -227,6 +228,7 @@ fn make_http_attempt(success: bool, ttfb: f64, total: f64) -> RequestAttempt {
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 // ─────────────────────────────────────────────────────────────────────────
@@ -336,6 +338,7 @@ fn make_attempt(proto: Protocol, success: bool) -> RequestAttempt {
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 
@@ -378,6 +381,13 @@ fn make_browser_attempt(proto: Protocol, load_ms: f64, ttfb_ms: f64) -> RequestA
         protocol: "h2".into(),
         resource_protocols: vec![("h2".into(), 15)],
         started_at: Utc::now(),
+        lcp_ms: None,
+        cls: None,
+        fcp_ms: None,
+        tbt_ms: None,
+        wire_bytes_total: None,
+        waterfall: Vec::new(),
+        waterfall_truncated: false,
     });
     a
 }

@@ -3,9 +3,13 @@
 /// The probe:
 ///   1. Locates a Chromium/Chrome binary (`NETWORKER_CHROME_PATH` env var or well-known paths).
 ///   2. Rewrites the target URL to `/page` on the same host/port (like `pageload*` probes).
-///   3. Launches a headless browser, navigates to the URL, and waits for the load event.
-///   4. Extracts `window.performance.timing` via JS for TTFB, DCL, and load-event timings.
-///   5. Aggregates Network.responseReceived events to count resources and bytes per protocol.
+///   3. Launches a headless browser, injects a buffered PerformanceObserver
+///      (Core Web Vitals: LCP / CLS / FCP / longtasks) before navigation,
+///      navigates to the URL, and waits for the load event.
+///   4. Extracts `window.performance.timing` via JS for TTFB, DCL, and load-event
+///      timings, then collects the buffered vitals after a settle delay.
+///   5. Correlates Network.requestWillBeSent / responseReceived / loadingFinished
+///      events into a per-request waterfall with real wire bytes (encodedDataLength).
 ///
 /// Requires `--features browser` at compile time.
 use std::path::PathBuf;
@@ -197,15 +201,183 @@ pub fn build_browser_http3_url(base: &url::Url, asset_sizes: &[usize]) -> String
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Core Web Vitals helpers (pure — compiled and tested without the feature)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Init script injected via `Page.addScriptToEvaluateOnNewDocument` BEFORE
+/// navigation, so buffered `PerformanceObserver`s exist from document start
+/// (avoids the observer/lifecycle race).
+///
+/// Definitions implemented here:
+///   * LCP  — last `largest-contentful-paint` entry's startTime (candidates
+///     are re-emitted as larger elements paint; the last one wins).
+///   * FCP  — the `paint` entry named `first-contentful-paint`.
+///   * CLS  — session-window rule (web.dev/articles/cls): layout-shift
+///     entries without `hadRecentInput` are grouped into sessions; a NEW
+///     session starts when the gap since the previous entry is ≥ 1 s or the
+///     session would span > 5 s; CLS = max session value (NOT the naive sum
+///     of all shifts). `cls` is initialised to 0 as soon as the observer
+///     registers — zero observed shifts is a real 0.0, distinct from `null`
+///     (observer unavailable).
+///   * long tasks — raw (start, duration) pairs; TBT is computed on the Rust
+///     side (see [`parse_vitals`]) so the FCP cutoff can be applied.
+pub const VITALS_INIT_JS: &str = r#"
+(() => {
+  const v = {
+    lcp: null,
+    cls: null,
+    fcp: null,
+    longTasks: [],
+    longTasksSupported: false,
+    errors: [],
+  };
+  window.__networkerVitals = v;
+  const observe = (type, cb) => {
+    try {
+      const po = new PerformanceObserver((list) => {
+        try { cb(list.getEntries()); } catch (e) { v.errors.push(type + ': ' + e); }
+      });
+      po.observe({ type: type, buffered: true });
+      return true;
+    } catch (e) {
+      v.errors.push(type + ': ' + e);
+      return false;
+    }
+  };
+  observe('largest-contentful-paint', (entries) => {
+    for (const e of entries) { v.lcp = e.startTime; }
+  });
+  observe('paint', (entries) => {
+    for (const e of entries) {
+      if (e.name === 'first-contentful-paint' && v.fcp === null) { v.fcp = e.startTime; }
+    }
+  });
+  let sVal = 0, sFirst = 0, sLast = 0, clsMax = 0;
+  const clsOk = observe('layout-shift', (entries) => {
+    for (const e of entries) {
+      if (e.hadRecentInput) { continue; }
+      if (sVal > 0 && e.startTime - sLast < 1000 && e.startTime - sFirst < 5000) {
+        sVal += e.value;
+      } else {
+        sVal = e.value;
+        sFirst = e.startTime;
+      }
+      sLast = e.startTime;
+      if (sVal > clsMax) { clsMax = sVal; }
+      v.cls = clsMax;
+    }
+  });
+  if (clsOk) { v.cls = 0; }
+  v.longTasksSupported = observe('longtask', (entries) => {
+    for (const e of entries) { v.longTasks.push({ start: e.startTime, dur: e.duration }); }
+  });
+})();
+"#;
+
+/// Collector evaluated AFTER the load event + settle delay: returns the
+/// buffered vitals as a JSON string ("" when the init script never ran).
+pub const VITALS_COLLECT_JS: &str = r#"
+(() => {
+  const v = window.__networkerVitals;
+  return v ? JSON.stringify(v) : "";
+})()
+"#;
+
+/// Core Web Vitals parsed from the collector's JSON.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct ParsedVitals {
+    pub lcp_ms: Option<f64>,
+    pub cls: Option<f64>,
+    pub fcp_ms: Option<f64>,
+    pub tbt_ms: Option<f64>,
+}
+
+/// Parse the `window.__networkerVitals` JSON and derive TBT.
+///
+/// TBT (lab definition used here): Σ max(0, duration − 50 ms) over longtask
+/// entries whose startTime ≥ FCP (when FCP is known; otherwise all tasks),
+/// within the collection window (navigation start → load event + settle
+/// delay — a TTI proxy: headless lab pages receive no input, so the classic
+/// FCP→TTI window is approximated by the load window).
+///
+/// Every metric is `None` — never 0-as-missing — when the page produced no
+/// entries / the observer failed; CLS and TBT are `Some(0.0)` when their
+/// observers registered but observed nothing (a real measurement of zero).
+pub fn parse_vitals(json: &str) -> ParsedVitals {
+    if json.is_empty() {
+        return ParsedVitals::default();
+    }
+    let v: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(_) => return ParsedVitals::default(),
+    };
+    let fcp = v["fcp"].as_f64();
+    let tbt = if v["longTasksSupported"].as_bool() == Some(true) {
+        let mut sum = 0.0_f64;
+        if let Some(tasks) = v["longTasks"].as_array() {
+            for t in tasks {
+                let start = t["start"].as_f64().unwrap_or(0.0);
+                let dur = t["dur"].as_f64().unwrap_or(0.0);
+                if fcp.is_none_or(|f| start >= f) {
+                    sum += (dur - 50.0).max(0.0);
+                }
+            }
+        }
+        Some(sum)
+    } else {
+        None
+    };
+    ParsedVitals {
+        lcp_ms: v["lcp"].as_f64(),
+        cls: v["cls"].as_f64(),
+        fcp_ms: fcp,
+        tbt_ms: tbt,
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Waterfall helpers (pure — compiled and tested without the feature)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Truncate a URL to at most 160 chars (`…` suffix), on a char boundary.
+pub fn truncate_url(url: &str) -> String {
+    const MAX: usize = 160;
+    if url.chars().count() <= MAX {
+        return url.to_string();
+    }
+    let mut s: String = url.chars().take(MAX - 1).collect();
+    s.push('…');
+    s
+}
+
+/// Duration of one ResourceTiming phase. CDP reports −1 for phases that did
+/// not occur (e.g. no DNS on a reused connection) → `None`.
+pub fn timing_phase_ms(start: f64, end: f64) -> Option<f64> {
+    if start >= 0.0 && end >= 0.0 && end >= start {
+        Some(end - start)
+    } else {
+        None
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Real implementation (feature = "browser")
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(feature = "browser")]
 mod real {
-    use super::{build_browser_http1_url, build_page_url, find_chrome};
-    use crate::metrics::{BrowserResult, ErrorCategory, ErrorRecord, Protocol, RequestAttempt};
+    use super::{
+        build_browser_http1_url, build_page_url, find_chrome, parse_vitals, timing_phase_ms,
+        truncate_url, VITALS_COLLECT_JS, VITALS_INIT_JS,
+    };
+    use crate::metrics::{
+        BrowserRequest, BrowserRequestTiming, BrowserResult, ErrorCategory, ErrorRecord, Protocol,
+        RequestAttempt, BROWSER_WATERFALL_CAP,
+    };
     use chromiumoxide::browser::{Browser, BrowserConfig};
-    use chromiumoxide::cdp::browser_protocol::network::EventResponseReceived;
+    use chromiumoxide::cdp::browser_protocol::network::{
+        EventDataReceived, EventLoadingFinished, EventRequestWillBeSent, EventResponseReceived,
+    };
     use chromiumoxide::cdp::browser_protocol::security::SetIgnoreCertificateErrorsParams;
     use chrono::Utc;
     use futures::StreamExt;
@@ -545,6 +717,20 @@ mod real {
             }
         };
 
+        // 8b. Inject the Core Web Vitals observer script BEFORE any navigation
+        // (CDP Page.addScriptToEvaluateOnNewDocument) so buffered
+        // PerformanceObservers exist from document start. Runs on every new
+        // document — for browser3 the warmup document's values are discarded
+        // because the main navigation replaces the window. Non-fatal on
+        // failure: vitals simply report None.
+        let vitals_injected = match page.evaluate_on_new_document(VITALS_INIT_JS).await {
+            Ok(_) => true,
+            Err(e) => {
+                tracing::warn!("CWV init script injection failed (vitals will be None): {e}");
+                false
+            }
+        };
+
         // 9a. browser3: CDP cert override — only when SPKI pinning is unavailable.
         //
         // `Security.setIgnoreCertificateErrors(true)` is equivalent to
@@ -594,14 +780,60 @@ mod real {
             tokio::time::sleep(std::time::Duration::from_millis(1_000)).await;
         }
 
-        // 9c. Subscribe to ResponseReceived events.
-        // Subscribed AFTER the warmup so only the main navigation's resources are counted.
-        // Used for: protocol detection per resource + total resource count +
-        // summing declared `content-length` headers into `transferred_bytes`
-        // (declared body sizes, NOT wire bytes — see the drain loop below and
-        // the `BrowserResult::transferred_bytes` doc). True wire bytes need
-        // CDP `Network.loadingFinished.encodedDataLength` (planned).
+        // 9c. Subscribe to the CDP Network event stream.
+        // Subscribed AFTER the warmup so only the main navigation's resources
+        // are counted. Three listeners, correlated by requestId:
+        //   * RequestWillBeSent → url/method/start time (waterfall skeleton)
+        //   * ResponseReceived  → status/mime/protocol/cache flags/ResourceTiming,
+        //     plus the legacy declared `content-length` sum (`transferred_bytes`)
+        //   * LoadingFinished   → `encodedDataLength` = REAL wire bytes
+        //     (headers + compressed body as transferred) + end time
+        let mut request_events = match page.event_listener::<EventRequestWillBeSent>().await {
+            Ok(e) => e,
+            Err(e) => {
+                handler_task.abort();
+                return browser_error(
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    protocol,
+                    started_at,
+                    &format!("Failed to subscribe to network events: {e}"),
+                    ErrorCategory::Other,
+                );
+            }
+        };
         let mut response_events = match page.event_listener::<EventResponseReceived>().await {
+            Ok(e) => e,
+            Err(e) => {
+                handler_task.abort();
+                return browser_error(
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    protocol,
+                    started_at,
+                    &format!("Failed to subscribe to network events: {e}"),
+                    ErrorCategory::Other,
+                );
+            }
+        };
+        let mut finished_events = match page.event_listener::<EventLoadingFinished>().await {
+            Ok(e) => e,
+            Err(e) => {
+                handler_task.abort();
+                return browser_error(
+                    run_id,
+                    attempt_id,
+                    sequence_num,
+                    protocol,
+                    started_at,
+                    &format!("Failed to subscribe to network events: {e}"),
+                    ErrorCategory::Other,
+                );
+            }
+        };
+        let mut data_events = match page.event_listener::<EventDataReceived>().await {
             Ok(e) => e,
             Err(e) => {
                 handler_task.abort();
@@ -681,19 +913,28 @@ mod real {
             }
         };
 
-        // 12. Drain ResponseReceived events (500 ms after navigation).
+        // 12. Drain the Network event streams (500 ms after navigation — this
+        // doubles as the CWV settle delay before the collector runs).
         //
-        // Collects resource count, per-protocol breakdown, and *declared*
-        // bytes: `transferred_bytes` is the sum of `content-length` response
-        // headers. That is a declared-body-size figure, NOT wire bytes — it
-        // excludes response headers, counts 0 for responses without a
-        // Content-Length (e.g. chunked), and reflects the (possibly
-        // compressed) declared size. Chosen over Chrome's Resource Timing
-        // encodedBodySize / CDP encodedDataLength because both under-report
-        // for HTTP/1.1 connection reuse; our endpoint always sets an explicit
-        // content-length on asset responses, so the sum is stable across
-        // H1.1/H2/H3 there. Real wire-byte accounting (CDP
-        // `Network.loadingFinished.encodedDataLength`) is planned.
+        // Collects resource count, per-protocol breakdown, the per-request
+        // waterfall, and two byte figures:
+        //   * `transferred_bytes` — sum of declared `content-length` response
+        //     headers (kept as-is, Wave-T honest label: NOT wire bytes — it
+        //     excludes headers, counts 0 for chunked responses, reflects the
+        //     declared possibly-compressed size).
+        //   * `wire_bytes_total` — real wire bytes: per request,
+        //     max(`loadingFinished.encodedDataLength`, Σ `dataReceived`
+        //     chunk `encodedDataLength`). The dataReceived accumulation
+        //     matters because `loadingFinished.encodedDataLength` was
+        //     observed to under-report on fast multiplexed (H2) transfers —
+        //     it can reflect only the bytes accounted at finish time.
+        //
+        // NOTE on the drain loop shape: `tokio::select!` polls branches in
+        // RANDOM order, so events for one request can be processed out of
+        // arrival order across the four streams (e.g. responseReceived before
+        // requestWillBeSent). All branches therefore go through `entry_for`,
+        // which creates the map entry and records insertion order exactly
+        // once per requestId.
         //
         // All events should already be queued when we reach this point because the
         // page load event guarantees all resources are complete before
@@ -704,11 +945,75 @@ mod real {
         let mut first_resource = true;
         let mut protocol_counts: HashMap<String, u32> = HashMap::new();
 
+        /// Per-request correlation state (keyed by CDP requestId).
+        #[derive(Default)]
+        struct PendingReq {
+            url: String,
+            method: String,
+            /// requestWillBeSent MonotonicTime (seconds).
+            start_ts: Option<f64>,
+            status: Option<u16>,
+            mime_type: Option<String>,
+            protocol: Option<String>,
+            from_disk_cache: bool,
+            from_service_worker: bool,
+            timing: Option<chromiumoxide::cdp::browser_protocol::network::ResourceTiming>,
+            /// loadingFinished encodedDataLength.
+            finished_bytes: Option<u64>,
+            /// Σ dataReceived chunk encodedDataLength (wire bytes).
+            data_bytes: u64,
+            /// loadingFinished MonotonicTime (seconds).
+            end_ts: Option<f64>,
+        }
+        impl PendingReq {
+            /// Final wire bytes: the larger of the loadingFinished total and
+            /// the dataReceived chunk sum (see drain-loop comment). `None`
+            /// only when neither event carried any byte accounting.
+            fn wire_bytes(&self) -> Option<u64> {
+                match self.finished_bytes {
+                    Some(f) => Some(f.max(self.data_bytes)),
+                    None if self.data_bytes > 0 => Some(self.data_bytes),
+                    None => None,
+                }
+            }
+        }
+        let mut pending: HashMap<String, PendingReq> = HashMap::new();
+        let mut request_order: Vec<String> = Vec::new();
+        /// Get-or-create the correlation entry, recording first-seen order
+        /// exactly once per requestId (dedup across the four streams).
+        fn entry_for<'m>(
+            pending: &'m mut HashMap<String, PendingReq>,
+            order: &mut Vec<String>,
+            id: &str,
+        ) -> &'m mut PendingReq {
+            pending.entry(id.to_string()).or_insert_with(|| {
+                order.push(id.to_string());
+                PendingReq::default()
+            })
+        }
+        // Time origin for the waterfall: the main document request's
+        // requestWillBeSent timestamp (first request seen after subscribing).
+        let mut nav_origin_ts: Option<f64> = None;
+
         let drain_deadline = tokio::time::sleep(std::time::Duration::from_millis(500));
         tokio::pin!(drain_deadline);
 
         loop {
             tokio::select! {
+                event = request_events.next() => {
+                    match event {
+                        Some(evt) => {
+                            let ts = *evt.timestamp.inner();
+                            nav_origin_ts.get_or_insert(ts);
+                            let id = evt.request_id.inner().clone();
+                            let entry = entry_for(&mut pending, &mut request_order, &id);
+                            entry.url = truncate_url(&evt.request.url);
+                            entry.method = evt.request.method.clone();
+                            entry.start_ts = Some(ts);
+                        }
+                        None => break,
+                    }
+                }
                 event = response_events.next() => {
                     match event {
                         Some(evt) => {
@@ -721,7 +1026,7 @@ mod real {
                                 main_protocol = proto.clone();
                                 first_resource = false;
                             }
-                            *protocol_counts.entry(proto).or_insert(0) += 1;
+                            *protocol_counts.entry(proto.clone()).or_insert(0) += 1;
                             // Sum content-length headers for accurate byte accounting.
                             // Headers exposes inner() → &serde_json::Value.
                             // Header names are lower-case for H2/H3 but may be
@@ -732,6 +1037,49 @@ mod real {
                                 .and_then(|s| s.parse::<usize>().ok())
                                 .unwrap_or(0);
                             transferred_bytes += cl;
+                            // Waterfall detail.
+                            let id = evt.request_id.inner().clone();
+                            let entry = entry_for(&mut pending, &mut request_order, &id);
+                            if entry.url.is_empty() {
+                                // requestWillBeSent not processed yet (random
+                                // select! order) — take the URL from the response.
+                                entry.url = truncate_url(&evt.response.url);
+                            }
+                            entry.status = u16::try_from(evt.response.status).ok();
+                            let mime = evt.response.mime_type
+                                .split(';').next().unwrap_or_default().trim();
+                            if !mime.is_empty() {
+                                entry.mime_type = Some(mime.to_string());
+                            }
+                            entry.protocol = Some(proto);
+                            entry.from_disk_cache =
+                                evt.response.from_disk_cache.unwrap_or(false);
+                            entry.from_service_worker =
+                                evt.response.from_service_worker.unwrap_or(false);
+                            entry.timing = evt.response.timing.clone();
+                        }
+                        None => break,
+                    }
+                }
+                event = data_events.next() => {
+                    match event {
+                        Some(evt) => {
+                            let chunk = evt.encoded_data_length.max(0) as u64;
+                            let id = evt.request_id.inner().clone();
+                            let entry = entry_for(&mut pending, &mut request_order, &id);
+                            entry.data_bytes += chunk;
+                        }
+                        None => break,
+                    }
+                }
+                event = finished_events.next() => {
+                    match event {
+                        Some(evt) => {
+                            let bytes = evt.encoded_data_length.max(0.0) as u64;
+                            let id = evt.request_id.inner().clone();
+                            let entry = entry_for(&mut pending, &mut request_order, &id);
+                            entry.finished_bytes = Some(bytes);
+                            entry.end_ts = Some(*evt.timestamp.inner());
                         }
                         None => break,
                     }
@@ -745,6 +1093,90 @@ mod real {
         // Sort protocol counts by count descending.
         let mut resource_protocols: Vec<(String, u32)> = protocol_counts.into_iter().collect();
         resource_protocols.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+
+        // 13. Collect Core Web Vitals (after load event + the 500 ms settle
+        // above). None (not 0) when the observer never ran or produced nothing.
+        let vitals = if vitals_injected {
+            match page.evaluate(VITALS_COLLECT_JS).await {
+                Ok(v) => {
+                    let json: String = v.into_value().unwrap_or_default();
+                    tracing::debug!(raw = %json, "CWV collector payload");
+                    parse_vitals(&json)
+                }
+                Err(e) => {
+                    tracing::warn!("CWV collector failed (vitals will be None): {e}");
+                    super::ParsedVitals::default()
+                }
+            }
+        } else {
+            super::ParsedVitals::default()
+        };
+
+        // 14. Build the waterfall (insertion order, capped).
+        let waterfall_truncated = request_order.len() > BROWSER_WATERFALL_CAP;
+        let waterfall: Vec<BrowserRequest> = request_order
+            .iter()
+            .take(BROWSER_WATERFALL_CAP)
+            .filter_map(|id| pending.get(id))
+            .map(|p| {
+                let rel_ms = |ts: Option<f64>| -> Option<f64> {
+                    match (ts, nav_origin_ts) {
+                        (Some(t), Some(t0)) => Some(((t - t0) * 1000.0).max(0.0)),
+                        _ => None,
+                    }
+                };
+                let timing = p.timing.as_ref().map(|t| {
+                    // Content download: receiveHeadersEnd (ms relative to
+                    // requestTime, same monotonic base as event timestamps)
+                    // → loadingFinished.
+                    let receive_ms = match (p.end_ts, t.receive_headers_end) {
+                        (Some(end), rhe) if rhe >= 0.0 && t.request_time > 0.0 => {
+                            Some(((end - (t.request_time + rhe / 1000.0)) * 1000.0).max(0.0))
+                        }
+                        _ => None,
+                    };
+                    BrowserRequestTiming {
+                        dns_ms: timing_phase_ms(t.dns_start, t.dns_end),
+                        connect_ms: timing_phase_ms(t.connect_start, t.connect_end),
+                        ssl_ms: timing_phase_ms(t.ssl_start, t.ssl_end),
+                        send_ms: timing_phase_ms(t.send_start, t.send_end),
+                        wait_ms: timing_phase_ms(t.send_end, t.receive_headers_end),
+                        receive_ms,
+                    }
+                });
+                BrowserRequest {
+                    url: p.url.clone(),
+                    method: if p.method.is_empty() {
+                        "GET".to_string()
+                    } else {
+                        p.method.clone()
+                    },
+                    status: p.status,
+                    mime_type: p.mime_type.clone(),
+                    protocol: p.protocol.clone(),
+                    wire_bytes: p.wire_bytes(),
+                    start_ms: rel_ms(p.start_ts),
+                    end_ms: rel_ms(p.end_ts),
+                    from_disk_cache: p.from_disk_cache,
+                    from_service_worker: p.from_service_worker,
+                    timing,
+                }
+            })
+            .collect();
+        // Total wire bytes across ALL requests (including any beyond the
+        // waterfall cap). None — not 0 — when no request carried byte
+        // accounting (e.g. the event streams produced nothing).
+        let wire_bytes_total = {
+            let mut sum: u64 = 0;
+            let mut any = false;
+            for p in pending.values() {
+                if let Some(w) = p.wire_bytes() {
+                    sum += w;
+                    any = true;
+                }
+            }
+            any.then_some(sum)
+        };
 
         // Close the browser gracefully before aborting the handler so chromiumoxide
         // does not warn "Browser was not closed manually".
@@ -780,6 +1212,13 @@ mod real {
                 protocol: main_protocol,
                 resource_protocols,
                 started_at,
+                lcp_ms: vitals.lcp_ms,
+                cls: vitals.cls,
+                fcp_ms: vitals.fcp_ms,
+                tbt_ms: vitals.tbt_ms,
+                wire_bytes_total,
+                waterfall,
+                waterfall_truncated,
             }),
             http_stack: None,
             rpm: None,
@@ -790,6 +1229,7 @@ mod real {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         }
     }
 
@@ -912,6 +1352,7 @@ mod real {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         }
     }
 
@@ -1166,6 +1607,7 @@ mod stub {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         }
     }
 }
@@ -1451,6 +1893,99 @@ mod tests {
     #[test]
     fn browser_asset_bytes_empty() {
         assert_eq!(super::browser_asset_bytes(&[]), 0);
+    }
+
+    // ── Core Web Vitals parsing tests ────────────────────────────────────────
+
+    #[test]
+    fn parse_vitals_empty_and_malformed_yield_all_none() {
+        for json in ["", "{not json", "null", "42"] {
+            let v = parse_vitals(json);
+            assert_eq!(v, ParsedVitals::default(), "input={json:?}");
+        }
+    }
+
+    #[test]
+    fn parse_vitals_full_payload() {
+        let json = r#"{
+            "lcp": 321.5, "cls": 0.042, "fcp": 120.25,
+            "longTasksSupported": true,
+            "longTasks": [
+                {"start": 100.0, "dur": 80.0},
+                {"start": 200.0, "dur": 120.0},
+                {"start": 50.0,  "dur": 300.0}
+            ]
+        }"#;
+        let v = parse_vitals(json);
+        assert_eq!(v.lcp_ms, Some(321.5));
+        assert_eq!(v.cls, Some(0.042));
+        assert_eq!(v.fcp_ms, Some(120.25));
+        // FCP = 120.25 → the tasks starting at 50 and 100 are excluded
+        // (pre-FCP); only the task at 200 counts: TBT = 120 − 50 = 70.
+        assert_eq!(v.tbt_ms, Some(70.0));
+    }
+
+    #[test]
+    fn parse_vitals_tbt_without_fcp_sums_all_tasks() {
+        let json = r#"{
+            "lcp": null, "cls": null, "fcp": null,
+            "longTasksSupported": true,
+            "longTasks": [{"start": 10.0, "dur": 90.0}, {"start": 20.0, "dur": 30.0}]
+        }"#;
+        let v = parse_vitals(json);
+        assert_eq!(v.fcp_ms, None);
+        // No FCP cutoff → all tasks; sub-50ms task contributes 0.
+        assert_eq!(v.tbt_ms, Some(40.0));
+    }
+
+    #[test]
+    fn parse_vitals_tbt_none_when_longtask_unsupported() {
+        let json = r#"{"lcp": 100.0, "cls": 0.0, "fcp": 50.0, "longTasksSupported": false, "longTasks": []}"#;
+        let v = parse_vitals(json);
+        assert_eq!(v.tbt_ms, None, "unsupported observer must be None, not 0");
+        // CLS 0.0 is a real value (observer registered, zero shifts).
+        assert_eq!(v.cls, Some(0.0));
+    }
+
+    #[test]
+    fn parse_vitals_zero_tasks_is_zero_tbt_not_none() {
+        let json = r#"{"lcp": 100.0, "cls": 0.0, "fcp": 50.0, "longTasksSupported": true, "longTasks": []}"#;
+        let v = parse_vitals(json);
+        assert_eq!(v.tbt_ms, Some(0.0), "observer worked, no tasks → real 0");
+    }
+
+    #[test]
+    fn parse_vitals_null_metrics_stay_none() {
+        let json = r#"{"lcp": null, "cls": null, "fcp": null, "longTasksSupported": false}"#;
+        let v = parse_vitals(json);
+        assert_eq!(v, ParsedVitals::default());
+    }
+
+    // ── Waterfall helper tests ───────────────────────────────────────────────
+
+    #[test]
+    fn truncate_url_short_unchanged() {
+        assert_eq!(truncate_url("https://a/b"), "https://a/b");
+    }
+
+    #[test]
+    fn truncate_url_long_gets_ellipsis_on_char_boundary() {
+        let long: String = "https://example.com/"
+            .chars()
+            .chain("é".chars().cycle().take(400))
+            .collect();
+        let t = truncate_url(&long);
+        assert_eq!(t.chars().count(), 160);
+        assert!(t.ends_with('…'));
+    }
+
+    #[test]
+    fn timing_phase_ms_maps_negative_sentinel_to_none() {
+        assert_eq!(timing_phase_ms(-1.0, 5.0), None);
+        assert_eq!(timing_phase_ms(3.0, -1.0), None);
+        assert_eq!(timing_phase_ms(5.0, 3.0), None, "end before start");
+        assert_eq!(timing_phase_ms(3.0, 5.0), Some(2.0));
+        assert_eq!(timing_phase_ms(0.0, 0.0), Some(0.0));
     }
 
     #[test]

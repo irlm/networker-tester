@@ -429,6 +429,7 @@ pub async fn run_dns_probe(
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         },
         Err(err) => RequestAttempt {
             phase: None,
@@ -459,6 +460,7 @@ pub async fn run_dns_probe(
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         },
     }
 }

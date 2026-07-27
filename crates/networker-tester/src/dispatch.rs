@@ -10,6 +10,7 @@ use crate::runner::{
     dualstack::run_dualstack_probe,
     http::{run_probe, RunConfig},
     http3::run_http3_probe,
+    mthroughput::{run_mthroughput_probe, MthroughputConfig},
     native::run_native_probe,
     pageload::{run_pageload2_probe, run_pageload3_probe, run_pageload_probe, PageLoadConfig},
     path::{run_path_probe, PathProbeConfig},
@@ -141,6 +142,14 @@ pub async fn dispatch_once(
             // the draft-08 defaults.
             let resp_cfg = ResponsivenessConfig::from_parts(throughput_cfg);
             run_responsiveness_probe(run_id, seq, &resp_cfg).await
+        }
+        (Protocol::Mthroughput, _) => {
+            // Multi-connection capacity: base URL + TLS trust settings come
+            // from the throughput config; ramp/measure parameters are the
+            // mode's time-boxed defaults (no payload size — stages are
+            // time-boxed, see runner docs).
+            let m_cfg = MthroughputConfig::from_parts(throughput_cfg);
+            run_mthroughput_probe(run_id, seq, &m_cfg).await
         }
         (Protocol::Stamp, _) => {
             // STAMP Session-Sender: reflector host follows the UDP echo
@@ -476,6 +485,42 @@ pub fn log_attempt(a: &RequestAttempt) {
                 );
             }
         }
+        Mthroughput => {
+            if let Some(m) = &a.mthroughput {
+                let fmt_cap = |v: Option<f64>| {
+                    v.map(|x| format!("{x:.1} MB/s"))
+                        .unwrap_or_else(|| "\u{2014}".into())
+                };
+                let fmt_spread = |v: Option<f64>| {
+                    v.map(|x| format!("{x:.0}%"))
+                        .unwrap_or_else(|| "\u{2014}".into())
+                };
+                let d = &m.download;
+                let up = m
+                    .upload
+                    .as_ref()
+                    .map(|u| {
+                        format!(
+                            "up cap={cap} conns={c} spread={sp} sat={s}",
+                            cap = fmt_cap(u.capacity_mbps),
+                            c = u.connections,
+                            sp = fmt_spread(u.fair_share_spread_pct),
+                            s = u.saturation_reached,
+                        )
+                    })
+                    .unwrap_or_else(|| "up \u{2014}".into());
+                info!(
+                    "{status} #{seq} [mthroughput] down cap={cap} conns={conns} \
+                     spread={spread} sat={sat} | {up}{retry}",
+                    seq = a.sequence_num,
+                    cap = fmt_cap(d.capacity_mbps),
+                    conns = d.connections,
+                    spread = fmt_spread(d.fair_share_spread_pct),
+                    sat = d.saturation_reached,
+                    retry = retry_suffix,
+                );
+            }
+        }
         Stamp => {
             if let Some(s) = &a.stamp {
                 let fmt_pct =
@@ -698,11 +743,31 @@ pub fn log_attempt(a: &RequestAttempt) {
                     .collect::<Vec<_>>()
                     .join(" ");
                 // TTFB here is the *browser* definition (navigationStart →
-                // responseStart, includes DNS/connect/TLS); cl_bytes is the
-                // sum of declared Content-Length headers, not wire bytes.
+                // responseStart, includes DNS/connect/TLS). Bytes: prefer
+                // wire_bytes (Σ CDP encodedDataLength — real wire bytes incl.
+                // headers); fall back to cl_bytes (Σ declared Content-Length
+                // headers, NOT wire bytes) on pre-Wave-W data.
+                let bytes_str = match b.wire_bytes_total {
+                    Some(w) => format!("wire_bytes={w}"),
+                    None => format!("cl_bytes={}", b.transferred_bytes),
+                };
+                // Core Web Vitals — only what was actually observed.
+                let mut cwv = String::new();
+                if let Some(v) = b.fcp_ms {
+                    cwv.push_str(&format!(" FCP:{v:.1}ms"));
+                }
+                if let Some(v) = b.lcp_ms {
+                    cwv.push_str(&format!(" LCP:{v:.1}ms"));
+                }
+                if let Some(v) = b.cls {
+                    cwv.push_str(&format!(" CLS:{v:.3}"));
+                }
+                if let Some(v) = b.tbt_ms {
+                    cwv.push_str(&format!(" TBT:{v:.1}ms"));
+                }
                 info!(
                     "{status} #{seq} [{mode}] proto={proto} TTFB(nav):{ttfb:.1}ms \
-                     DCL:{dcl:.1}ms Load:{load:.1}ms res={res} cl_bytes={bytes} [{protos}]{retry}",
+                     DCL:{dcl:.1}ms Load:{load:.1}ms{cwv} res={res} {bytes_str} [{protos}]{retry}",
                     mode = a.protocol,
                     seq = a.sequence_num,
                     proto = b.protocol,
@@ -710,7 +775,6 @@ pub fn log_attempt(a: &RequestAttempt) {
                     dcl = b.dom_content_loaded_ms,
                     load = b.load_ms,
                     res = b.resource_count,
-                    bytes = b.transferred_bytes,
                     retry = retry_suffix,
                 );
             }

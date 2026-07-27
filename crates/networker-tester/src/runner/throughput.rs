@@ -1281,6 +1281,7 @@ mod tests {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         }
     }
 
@@ -1339,6 +1340,7 @@ mod tests {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         }
     }
 
@@ -1452,6 +1454,7 @@ mod tests {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         };
         verify_upload(&mut attempt, 100);
         assert!(attempt.success);
@@ -1582,6 +1585,7 @@ mod tests {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         };
         assert_eq!(compute_overhead_ms(&attempt), 0.0);
     }
@@ -1648,6 +1652,7 @@ mod tests {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         };
         verify_upload(&mut attempt, 100);
         // Non-numeric treated as absent → skip verification, stay successful.
@@ -1709,6 +1714,7 @@ mod tests {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         };
         verify_upload(&mut attempt, 12);
         // "12.5" doesn't parse as usize → treated as absent → skip.
@@ -1769,6 +1775,7 @@ mod tests {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         };
         verify_upload(&mut attempt, 100);
         assert!(attempt.success);
@@ -1864,6 +1871,7 @@ mod tests {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         };
         assert!((compute_overhead_ms(&attempt) - 30.0).abs() < 1e-12);
     }

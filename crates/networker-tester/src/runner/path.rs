@@ -184,6 +184,7 @@ pub async fn run_path_probe(
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 
@@ -244,6 +245,7 @@ fn path_failed(
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 

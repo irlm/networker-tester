@@ -194,6 +194,7 @@ pub async fn run_ping_probe(
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 
@@ -256,6 +257,7 @@ fn ping_failed(
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 

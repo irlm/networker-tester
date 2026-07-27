@@ -4,6 +4,8 @@ pub mod dns;
 pub mod dualstack;
 pub mod http;
 pub mod http3;
+pub mod load_gen;
+pub mod mthroughput;
 pub mod native;
 pub mod pageload;
 pub mod path;

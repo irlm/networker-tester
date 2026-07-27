@@ -278,6 +278,7 @@ pub async fn run_tls_probe(
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 
@@ -491,6 +492,7 @@ pub async fn run_tls_resumption_probe(
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 
@@ -1236,6 +1238,7 @@ fn make_failed_with_protocol(
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 

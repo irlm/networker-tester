@@ -171,6 +171,7 @@ pub async fn run_udpdownload_probe(
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 
@@ -307,6 +308,7 @@ pub async fn run_udpupload_probe(
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 
@@ -553,6 +555,7 @@ fn udp_tp_failed(
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 

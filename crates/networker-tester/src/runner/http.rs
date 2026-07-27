@@ -193,6 +193,7 @@ pub async fn run_probe(
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         },
     }
 }
@@ -473,6 +474,7 @@ async fn run_http_or_tcp(
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         };
     }
 
@@ -707,6 +709,7 @@ async fn run_http_or_tcp(
                 pmtud: None,
                 responsiveness: None,
                 stamp: None,
+                mthroughput: None,
             }
         }
         Err(e) => {
@@ -1517,6 +1520,7 @@ fn failed_attempt(
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 

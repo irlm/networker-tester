@@ -1132,6 +1132,10 @@ pub struct RequestAttempt {
     /// in pre-Wave-R JSON.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stamp: Option<StampResult>,
+    /// Multi-connection capacity result (`mthroughput` mode only). Additive —
+    /// absent in pre-Wave-W JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mthroughput: Option<MthroughputResult>,
     /// Benchmark phase this attempt executed in ("warmup", "overhead",
     /// "pilot", "measured", "cooldown"), set at attempt creation by the
     /// benchmark runner. `None` means the attempt was not produced by a
@@ -1178,6 +1182,18 @@ pub enum Protocol {
     UdpDownload,
     /// UDP bulk upload to the networker-endpoint UDP throughput server (port 9998).
     UdpUpload,
+    /// Multi-connection capacity probe: ramps N parallel HTTP/2 connections
+    /// (shared load-gen machinery with `responsiveness`) each streaming the
+    /// endpoint's `/download` (then `/upload`) route until AGGREGATE goodput
+    /// stabilizes (same moving-average criterion) or the connection cap is
+    /// hit, then measures a fixed steady window. This is the Ookla-style
+    /// methodology: link CAPACITY, complementing the single-connection
+    /// `download`/`upload` figure (ndt7-style per-flow fair share) — the two
+    /// answer different questions and diverge exactly on high-BDP/lossy
+    /// paths. Per-connection goodput spread and post-transfer kernel TCP
+    /// attribution (rwnd/sndbuf/path-limited verdicts, retransmits) explain
+    /// the delta. See [`MthroughputResult`].
+    Mthroughput,
     /// Latency-under-load / bufferbloat probe: samples unloaded UDP echo RTT,
     /// then loads the link with sustained HTTP downloads from the
     /// networker-endpoint while probing UDP echo RTT at a steady cadence.
@@ -1302,6 +1318,7 @@ impl std::fmt::Display for Protocol {
             Protocol::WebUpload => write!(f, "webupload"),
             Protocol::UdpDownload => write!(f, "udpdownload"),
             Protocol::UdpUpload => write!(f, "udpupload"),
+            Protocol::Mthroughput => write!(f, "mthroughput"),
             Protocol::Rpm => write!(f, "rpm"),
             Protocol::Responsiveness => write!(f, "responsiveness"),
             Protocol::Stamp => write!(f, "stamp"),
@@ -1606,6 +1623,13 @@ impl Protocol {
                 "Bulk upload via UDP throughput server (port 9998)",
                 "Throughput",
             ),
+            m(
+                "mthroughput",
+                "Multi-Conn",
+                "Link capacity",
+                "Multi-connection capacity probe — ramps parallel HTTP/2 connections against /download then /upload until aggregate goodput stabilizes (Ookla-style link capacity vs the single-connection fair share of download/upload); reports per-connection spread and TCP-attribution verdicts",
+                "Throughput",
+            ),
         ]
     }
 }
@@ -1642,6 +1666,7 @@ impl std::str::FromStr for Protocol {
             "webupload" => Ok(Protocol::WebUpload),
             "udpdownload" => Ok(Protocol::UdpDownload),
             "udpupload" => Ok(Protocol::UdpUpload),
+            "mthroughput" => Ok(Protocol::Mthroughput),
             "rpm" => Ok(Protocol::Rpm),
             "responsiveness" => Ok(Protocol::Responsiveness),
             "stamp" => Ok(Protocol::Stamp),
@@ -2571,6 +2596,133 @@ pub struct ResponsivenessResult {
     pub started_at: DateTime<Utc>,
 }
 
+/// One connection of a multi-connection throughput direction — the compact
+/// per-flow diagnostic the aggregate capacity figure is explained by.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MthroughputConn {
+    /// Connection index (0-based, spawn order).
+    pub conn: u32,
+    /// This connection's goodput over the steady measure window (MB/s,
+    /// decimal 1e6). A wide spread across connections indicates per-flow
+    /// shaping/policing rather than a shared bottleneck.
+    pub mbps: f64,
+    /// Post-transfer kernel TCP attribution verdict, from the Linux ≥ 4.10
+    /// busy/rwnd/sndbuf chronograph triad sampled on a `dup(2)` of this
+    /// connection's socket: `"rwnd-limited NN%"` (peer receive window),
+    /// `"sndbuf-limited NN%"` (local send buffer), `"path-limited"` (neither
+    /// ≥ 5% — congestion/path was the constraint), or `"unobserved"` (no
+    /// triad: non-Linux platform or old kernel). The triad is SEND-side: it
+    /// attests the data direction for the upload stage; on the download
+    /// stage the sender is the endpoint, whose kernel is not readable from
+    /// here, so download verdicts describe only the request/ACK flow.
+    pub verdict: String,
+    /// Lifetime retransmitted segments on this connection (Linux
+    /// tcpi_total_retrans; macOS tcpi_txretransmitpackets). `None` when the
+    /// kernel exposes no counter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retrans: Option<u32>,
+}
+
+/// One direction (download or upload) of the `mthroughput` probe.
+///
+/// Ramp: start 1 HTTP/2 connection, add 1 per 1 s interval (cap 8) until the
+/// aggregate goodput's moving average stabilizes (stddev of the last 4
+/// moving averages < 5% of the current average — the same criterion the
+/// `responsiveness` mode uses), then hold the connection count fixed for a
+/// 4-interval steady measure window that produces `capacity_mbps` and the
+/// per-connection figures. Stages are time-boxed (15 s cap per direction),
+/// not payload-sized.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MthroughputDirection {
+    /// Aggregate goodput stabilized before the time cap. `false` means the
+    /// cap hit mid-ramp — `capacity_mbps` is then the goodput over the final
+    /// intervals, NOT a verified saturation figure.
+    pub saturation_reached: bool,
+    /// Parallel connections open during the measure window.
+    pub connections: u32,
+    /// Total measurement intervals the direction ran (ramp + measure).
+    pub intervals: u32,
+    /// Wall-clock duration of the ramp phase, start → saturation declared
+    /// (or the whole direction when saturation never was) (ms).
+    pub ramp_duration_ms: f64,
+    /// Wall-clock duration of the steady measure window (ms).
+    pub measure_duration_ms: f64,
+    /// Wall-clock duration of the whole direction (ms).
+    pub load_duration_ms: f64,
+    /// Bytes moved by all connections over the whole direction.
+    pub bytes_transferred: u64,
+    /// Aggregate capacity over the steady measure window (MB/s, decimal 1e6).
+    /// `None` when no bytes moved in the window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity_mbps: Option<f64>,
+    /// Slowest connection's goodput over the measure window (MB/s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub per_conn_min_mbps: Option<f64>,
+    /// Fastest connection's goodput over the measure window (MB/s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub per_conn_max_mbps: Option<f64>,
+    /// Mean per-connection goodput over the measure window (MB/s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub per_conn_mean_mbps: Option<f64>,
+    /// Fair-share spread `(max − min) / mean × 100` (%). Near 0 = the
+    /// bottleneck is shared fairly across flows; large = per-flow
+    /// shaping/policing or asymmetric path treatment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fair_share_spread_pct: Option<f64>,
+    /// Connections whose verdict was receiver-window-limited (≥ 5% of busy
+    /// time in tcpi_rwnd_limited).
+    pub rwnd_limited_conns: u32,
+    /// Connections whose verdict was local-send-buffer-limited.
+    pub sndbuf_limited_conns: u32,
+    /// Connections limited by neither (path/congestion was the constraint).
+    pub path_limited_conns: u32,
+    /// Connections with no triad data (non-Linux platform / old kernel) —
+    /// honest count, never folded into the other buckets.
+    pub unobserved_conns: u32,
+    /// Per-connection detail, one entry per connection (`connections` long).
+    pub per_conn: Vec<MthroughputConn>,
+}
+
+/// Multi-connection capacity result (`mthroughput` mode). Both directions
+/// are measured sequentially (download first). Complements the
+/// single-connection `download`/`upload` modes: those report per-flow fair
+/// share (ndt7-style), this reports link capacity (Ookla-style) — on
+/// high-BDP or lossy paths the two legitimately diverge, and the
+/// per-connection TCP attribution here explains why.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MthroughputResult {
+    /// Endpoint base URL the load ran against.
+    pub remote_addr: String,
+    /// Headline: download capacity at saturation (MB/s, decimal 1e6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity_down_mbps: Option<f64>,
+    /// Upload capacity at saturation (MB/s, decimal 1e6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity_up_mbps: Option<f64>,
+    /// Download connections open at saturation.
+    pub conns_down: u32,
+    /// Upload connections open at saturation; `None` when the upload stage
+    /// could not run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conns_up: Option<u32>,
+    /// Download fair-share spread (%, see [`MthroughputDirection`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fair_share_spread_down_pct: Option<f64>,
+    /// Upload fair-share spread (%).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fair_share_spread_up_pct: Option<f64>,
+    /// Download-direction detail.
+    pub download: MthroughputDirection,
+    /// Upload-direction detail. `None` when the upload stage could not run
+    /// (see `upload_error`) — never fabricated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upload: Option<MthroughputDirection>,
+    /// Why the upload stage is absent, when it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upload_error: Option<String>,
+    pub started_at: DateTime<Utc>,
+}
+
 /// STAMP (RFC 8762) probe result (`stamp` mode).
 ///
 /// The Session-Reflector stamps each reflected packet with its receive (T2)
@@ -2964,6 +3116,141 @@ pub struct BrowserResult {
     /// Per-protocol resource counts sorted by count desc: [("h2", 18), ("h3", 2)].
     pub resource_protocols: Vec<(String, u32)>,
     pub started_at: DateTime<Utc>,
+    /// Largest Contentful Paint (ms from navigation start), from a buffered
+    /// `PerformanceObserver` injected before navigation. The reported value is
+    /// the *last* LCP candidate entry observed by collection time. `None` when
+    /// the page produced no LCP entry or the observer failed — never
+    /// 0-as-missing. Additive; `schema_version` stays 1.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lcp_ms: Option<f64>,
+    /// Cumulative Layout Shift (unitless), computed with the web.dev
+    /// session-window rule: layout-shift entries (excluding
+    /// `hadRecentInput`) are grouped into sessions — a new session starts
+    /// when the gap since the previous entry exceeds 1 s or the session span
+    /// exceeds 5 s — and CLS is the *maximum* session value, not the naive
+    /// sum. `Some(0.0)` is a real measurement (observer registered, zero
+    /// shifts); `None` means the observer failed / entry type unsupported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cls: Option<f64>,
+    /// First Contentful Paint (ms from navigation start), from the buffered
+    /// `paint` observer. `None` when no FCP entry was produced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fcp_ms: Option<f64>,
+    /// Total Blocking Time (ms): Σ max(0, duration − 50 ms) over `longtask`
+    /// entries whose start falls at/after FCP (when FCP is known; otherwise
+    /// over the whole window), within the lab collection window = navigation
+    /// start → load event + settle delay (a TTI proxy — headless lab pages
+    /// have no user input, so the classic FCP→TTI window is approximated by
+    /// the load window). `Some(0.0)` = observer worked, no blocking tasks;
+    /// `None` = longtask observation unavailable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tbt_ms: Option<f64>,
+    /// Real wire bytes across all requests: per request,
+    /// max(`Network.loadingFinished.encodedDataLength`, Σ `dataReceived`
+    /// chunk `encodedDataLength`) — headers + bodies as transferred
+    /// (compressed size when the server compresses). The honest replacement
+    /// for the declared-length sum in `transferred_bytes` (kept as-is for
+    /// wire compat). Caveat (measured 2026-07): Chrome's CDP byte
+    /// attribution under-reports on very fast (loopback) transfers — some
+    /// requests get body-only or partial counts, so on loopback this is a
+    /// *lower bound*; attribution is reliable on real-RTT paths. (The
+    /// JS-side `ResourceTiming.transferSize` is NOT an alternative: the
+    /// spec pegs it to `encodedBodySize + 300` as a fingerprinting
+    /// mitigation.) `None` on pre-Wave-W data or when the event streams
+    /// carried no byte accounting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wire_bytes_total: Option<u64>,
+    /// Per-request CDP waterfall (capped at [`BROWSER_WATERFALL_CAP`]
+    /// entries; see `waterfall_truncated`). Empty on pre-Wave-W data.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waterfall: Vec<BrowserRequest>,
+    /// True when the page issued more requests than the waterfall cap and
+    /// the vector was truncated (aggregates such as `wire_bytes_total` still
+    /// cover ALL requests).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub waterfall_truncated: bool,
+}
+
+/// Maximum number of per-request entries kept in [`BrowserResult::waterfall`].
+/// Third-party pages can fire thousands of requests; aggregates still count
+/// everything, only the per-request detail vector is capped.
+pub const BROWSER_WATERFALL_CAP: usize = 200;
+
+/// One network request captured from the CDP event stream during a browser
+/// probe (Network.requestWillBeSent / responseReceived / dataReceived /
+/// loadingFinished, correlated by requestId). Additive; `schema_version`
+/// stays 1.0.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrowserRequest {
+    /// Request URL, truncated to 160 chars (with `…`) for report sanity.
+    pub url: String,
+    /// HTTP method ("GET", "POST", …).
+    pub method: String,
+    /// HTTP status code. `None` when no response was received (failed /
+    /// still in flight at collection time).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+    /// Coarse MIME type from the response ("text/html", "image/png", …) —
+    /// parameters after `;` stripped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    /// Protocol this resource was fetched over ("h2", "h3", "http/1.1", …).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
+    /// Wire bytes for this request:
+    /// max(`Network.loadingFinished.encodedDataLength`, Σ `dataReceived`
+    /// chunk `encodedDataLength`) — includes headers and reflects
+    /// on-the-wire (possibly compressed) size. Disk-cache hits report
+    /// `Some(0)` honestly (nothing crossed the wire). `None` when no event
+    /// carried byte accounting for this request. See
+    /// [`BrowserResult::wire_bytes_total`] for the loopback
+    /// under-attribution caveat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wire_bytes: Option<u64>,
+    /// Request start (ms relative to the main document request's
+    /// `requestWillBeSent` timestamp — the navigation origin of this capture).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_ms: Option<f64>,
+    /// Loading finished (same time base as `start_ms`). `None` when the
+    /// request did not finish before collection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_ms: Option<f64>,
+    /// Served from disk cache (no network fetch for the body).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub from_disk_cache: bool,
+    /// Served by a service worker.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub from_service_worker: bool,
+    /// Per-phase ResourceTiming breakdown (absent for cache hits / data URLs
+    /// and whenever Chrome reports no timing for the fetch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timing: Option<BrowserRequestTiming>,
+}
+
+/// DevTools-waterfall phase breakdown for one request, mapped from CDP
+/// `ResourceTiming` (all ms; a phase is `None` when Chrome reports −1, i.e.
+/// the phase did not occur — e.g. no DNS on a reused connection).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrowserRequestTiming {
+    /// DNS resolve (dnsStart → dnsEnd).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns_ms: Option<f64>,
+    /// TCP/QUIC connect (connectStart → connectEnd; includes SSL time on
+    /// Chrome's clock — see `ssl_ms` for the TLS share).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connect_ms: Option<f64>,
+    /// TLS handshake (sslStart → sslEnd).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssl_ms: Option<f64>,
+    /// Request send (sendStart → sendEnd).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send_ms: Option<f64>,
+    /// Server wait / TTFB (sendEnd → receiveHeadersEnd).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_ms: Option<f64>,
+    /// Content download (receiveHeadersEnd → loadingFinished).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receive_ms: Option<f64>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3445,6 +3732,10 @@ pub fn primary_metric_label(proto: &Protocol) -> &'static str {
         // headline (higher is better), labeled to distinguish it from the
         // UDP-echo-derived `rpm` figure.
         Protocol::Responsiveness => "RPM (draft)",
+        // Multi-connection link capacity (download direction) — labeled apart
+        // from the single-connection "Throughput MB/s" because the two are
+        // different measurements (link capacity vs per-flow fair share).
+        Protocol::Mthroughput => "Capacity MB/s",
         // Processing-corrected round-trip time is the probe's distinguishing
         // measurement; directional loss/jitter are reported separately.
         Protocol::Stamp => "RTT avg ms",
@@ -3527,6 +3818,9 @@ pub fn primary_metric_value(a: &RequestAttempt) -> Option<f64> {
         // Download-direction draft RPM; None when either probe family
         // produced no samples (no fabricated responsiveness).
         Protocol::Responsiveness => a.responsiveness.as_ref().and_then(|r| r.rpm_download),
+        // Download-direction aggregate capacity; None when the measure window
+        // moved no bytes (no fabricated capacity).
+        Protocol::Mthroughput => a.mthroughput.as_ref().and_then(|m| m.capacity_down_mbps),
         // A fully-lost stamp attempt carries a 0.0 sentinel avg, not a
         // measurement — excluded exactly like the UDP arm (trust audit V11).
         Protocol::Stamp => a
@@ -3893,6 +4187,7 @@ mod tests {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         };
         let run = TestRun {
             schema_version: crate::metrics::SCHEMA_VERSION.to_string(),
@@ -4226,6 +4521,7 @@ mod tests {
             pmtud: None,
             responsiveness: None,
             stamp: None,
+            mthroughput: None,
         }
     }
 
@@ -4337,6 +4633,13 @@ mod tests {
             protocol: "h2".into(),
             resource_protocols: vec![("h2".into(), 10)],
             started_at: Utc::now(),
+            lcp_ms: None,
+            cls: None,
+            fcp_ms: None,
+            tbt_ms: None,
+            wire_bytes_total: None,
+            waterfall: Vec::new(),
+            waterfall_truncated: false,
         });
         assert!((primary_metric_value(&a).unwrap() - 350.0).abs() < 1e-9);
     }
@@ -4661,6 +4964,13 @@ mod tests {
                 protocol: "h2".into(),
                 resource_protocols: vec![],
                 started_at: Utc::now(),
+                lcp_ms: None,
+                cls: None,
+                fcp_ms: None,
+                tbt_ms: None,
+                wire_bytes_total: None,
+                waterfall: Vec::new(),
+                waterfall_truncated: false,
             });
             assert!(
                 (primary_metric_value(&a).unwrap() - 700.0).abs() < 1e-9,

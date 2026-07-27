@@ -539,6 +539,179 @@ pub(super) fn write_protocol_sections(run: &TestRun, out: &mut String, stack_fil
                 out,
                 "      </tbody>\n    </table>\n  </details>\n</section>"
             );
+
+            // ── Core Web Vitals (data-gated: only for runs that captured CWV
+            //    or wire bytes — pre-Wave-W runs render nothing here) ─────────
+            let cwv_rows: Vec<&&RequestAttempt> = browser_rows
+                .iter()
+                .filter(|a| {
+                    a.browser.as_ref().is_some_and(|b| {
+                        b.lcp_ms.is_some()
+                            || b.cls.is_some()
+                            || b.fcp_ms.is_some()
+                            || b.tbt_ms.is_some()
+                            || b.wire_bytes_total.is_some()
+                    })
+                })
+                .collect();
+            if !cwv_rows.is_empty() {
+                let _ = write!(
+                    out,
+                    r#"
+<section class="card">
+  <h2>Core Web Vitals</h2>
+  <p><small>Buffered PerformanceObserver injected before navigation. CLS uses the session-window rule (max session, not naive sum); TBT = &Sigma; max(0, longtask &minus; 50ms) from FCP over the load window (lab TTI proxy). &mdash; = not observed (distinct from 0). Wire Bytes = &Sigma; CDP encodedDataLength (real wire bytes incl. headers).</small></p>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th><th>Mode</th>
+        <th>FCP (ms)</th><th>LCP (ms)</th><th>CLS</th><th>TBT (ms)</th>
+        <th>Wire Bytes</th><th>Decl. Bytes</th>
+      </tr>
+    </thead>
+    <tbody>
+"#
+                );
+                let opt_ms =
+                    |v: Option<f64>| v.map(|x| format!("{x:.1}")).unwrap_or_else(|| "—".into());
+                for a in &cwv_rows {
+                    let b = a.browser.as_ref().unwrap();
+                    let _ = write!(
+                        out,
+                        r#"      <tr>
+          <td>{seq}</td>
+          <td><code>{mode}</code></td>
+          <td>{fcp}</td>
+          <td>{lcp}</td>
+          <td>{cls}</td>
+          <td>{tbt}</td>
+          <td>{wire}</td>
+          <td>{decl}</td>
+        </tr>
+"#,
+                        seq = a.sequence_num,
+                        mode = escape_html(&a.protocol.to_string()),
+                        fcp = opt_ms(b.fcp_ms),
+                        lcp = opt_ms(b.lcp_ms),
+                        cls = b
+                            .cls
+                            .map(|x| format!("{x:.4}"))
+                            .unwrap_or_else(|| "—".into()),
+                        tbt = opt_ms(b.tbt_ms),
+                        wire = b
+                            .wire_bytes_total
+                            .map(|w| format_bytes(w as usize))
+                            .unwrap_or_else(|| "—".into()),
+                        decl = format_bytes(b.transferred_bytes),
+                    );
+                }
+                let _ = writeln!(out, "    </tbody>\n  </table>\n</section>");
+            }
+
+            // ── Request Waterfall (data-gated; first attempt per mode with a
+            //    captured waterfall, top 20 rows) ─────────────────────────────
+            for proto in &[
+                Protocol::Browser1,
+                Protocol::Browser2,
+                Protocol::Browser3,
+                Protocol::Browser,
+            ] {
+                let Some(a) = browser_rows.iter().find(|a| {
+                    &a.protocol == proto
+                        && a.browser.as_ref().is_some_and(|b| !b.waterfall.is_empty())
+                }) else {
+                    continue;
+                };
+                let b = a.browser.as_ref().unwrap();
+                const TOP_N: usize = 20;
+                let shown = b.waterfall.len().min(TOP_N);
+                let mut note = String::new();
+                if b.waterfall.len() > TOP_N {
+                    note = format!(" (first {TOP_N} of {} captured)", b.waterfall.len());
+                }
+                if b.waterfall_truncated {
+                    note.push_str(" (capture capped — page issued more requests)");
+                }
+                let _ = write!(
+                    out,
+                    r#"
+<section class="card">
+  <h2>Request Waterfall – {mode}</h2>
+  <p><small>CDP per-request detail, attempt #{seq}{note}. Start/End relative to navigation; Wire = encodedDataLength (headers incl.); Wait = sendEnd &rarr; receiveHeadersEnd (TTFB). &mdash; = phase absent (e.g. reused connection / cache hit).</small></p>
+  <details>
+    <summary><span class="grp-lbl">{shown} requests</span></summary>
+    <table>
+      <thead>
+        <tr>
+          <th>URL</th><th>Method</th><th>Status</th><th>MIME</th><th>Proto</th>
+          <th>Start (ms)</th><th>DNS</th><th>Conn</th><th>TLS</th><th>Wait</th><th>Recv</th>
+          <th>End (ms)</th><th>Wire</th><th>Cache</th>
+        </tr>
+      </thead>
+      <tbody>
+"#,
+                    mode = escape_html(&proto.to_string()),
+                    seq = a.sequence_num,
+                    note = escape_html(&note),
+                    shown = shown,
+                );
+                let opt1 =
+                    |v: Option<f64>| v.map(|x| format!("{x:.1}")).unwrap_or_else(|| "—".into());
+                for r in b.waterfall.iter().take(TOP_N) {
+                    let t = r.timing.as_ref();
+                    let cache = if r.from_service_worker {
+                        "sw"
+                    } else if r.from_disk_cache {
+                        "disk"
+                    } else {
+                        "—"
+                    };
+                    let _ = write!(
+                        out,
+                        r#"        <tr>
+          <td><code>{url}</code></td>
+          <td>{method}</td>
+          <td>{status}</td>
+          <td>{mime}</td>
+          <td>{proto}</td>
+          <td>{start}</td>
+          <td>{dns}</td>
+          <td>{conn}</td>
+          <td>{tls}</td>
+          <td>{wait}</td>
+          <td>{recv}</td>
+          <td>{end}</td>
+          <td>{wire}</td>
+          <td>{cache}</td>
+        </tr>
+"#,
+                        url = escape_html(&r.url),
+                        method = escape_html(&r.method),
+                        status = r
+                            .status
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| "—".into()),
+                        mime = escape_html(r.mime_type.as_deref().unwrap_or("—")),
+                        proto = escape_html(r.protocol.as_deref().unwrap_or("—")),
+                        start = opt1(r.start_ms),
+                        dns = opt1(t.and_then(|t| t.dns_ms)),
+                        conn = opt1(t.and_then(|t| t.connect_ms)),
+                        tls = opt1(t.and_then(|t| t.ssl_ms)),
+                        wait = opt1(t.and_then(|t| t.wait_ms)),
+                        recv = opt1(t.and_then(|t| t.receive_ms)),
+                        end = opt1(r.end_ms),
+                        wire = r
+                            .wire_bytes
+                            .map(|w| format_bytes(w as usize))
+                            .unwrap_or_else(|| "—".into()),
+                        cache = cache,
+                    );
+                }
+                let _ = writeln!(
+                    out,
+                    "      </tbody>\n    </table>\n  </details>\n</section>"
+                );
+            }
         }
     }
 

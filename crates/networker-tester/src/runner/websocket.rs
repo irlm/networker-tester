@@ -400,6 +400,7 @@ pub async fn run_websocket_probe(
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 
@@ -577,6 +578,7 @@ fn ws_failed(
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 

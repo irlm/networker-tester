@@ -257,6 +257,7 @@ pub async fn run_stamp_probe(
         pmtud: None,
         responsiveness: None,
         stamp: Some(result),
+        mthroughput: None,
     }
 }
 
@@ -477,6 +478,7 @@ fn stamp_failed(
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 

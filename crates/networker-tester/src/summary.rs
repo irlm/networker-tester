@@ -136,6 +136,7 @@ pub fn print_summary(run: &TestRun) {
         Protocol::WebUpload,
         Protocol::UdpDownload,
         Protocol::UdpUpload,
+        Protocol::Mthroughput,
         Protocol::PageLoad,
         Protocol::PageLoad2,
         Protocol::PageLoad3,
@@ -290,6 +291,11 @@ pub fn print_summary(run: &TestRun) {
     // rendered only when those probes produced results.
     print_responsiveness_summary(run);
     print_stamp_summary(run);
+
+    // Multi-connection capacity breakdown (aggregate capacity, per-connection
+    // fair-share spread, TCP-attribution verdicts) — rendered only when the
+    // probe produced a result.
+    print_mthroughput_summary(run);
 
     // path hop table and dualstack family comparison — rendered only when
     // those probes produced results.
@@ -749,6 +755,76 @@ fn print_responsiveness_summary(run: &TestRun) {
         None => println!(
             "   Upload    │ absent — {}",
             r.upload_error.as_deref().unwrap_or("unknown reason")
+        ),
+    }
+}
+
+/// Render the multi-connection capacity breakdown: per-direction aggregate
+/// capacity at saturation, connection count, fair-share spread, and the
+/// per-connection goodput + TCP-attribution verdicts. Shows the FIRST
+/// attempt's result; per-attempt data is in the JSON output.
+fn print_mthroughput_summary(run: &TestRun) {
+    let Some(m) = run
+        .attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::Mthroughput)
+        .find_map(|a| a.mthroughput.as_ref())
+    else {
+        return;
+    };
+
+    let fmt2 = |v: Option<f64>, unit: &str| {
+        v.map_or_else(|| "\u{2014}".to_string(), |x| format!("{x:.2}{unit}"))
+    };
+    let fmt0 = |v: Option<f64>, unit: &str| {
+        v.map_or_else(|| "\u{2014}".to_string(), |x| format!("{x:.0}{unit}"))
+    };
+
+    println!();
+    println!(" Multi-connection throughput (link capacity)");
+    println!("\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}");
+    let render = |label: &str, d: &crate::metrics::MthroughputDirection| {
+        println!(
+            "   {label:<9} \u{2502} capacity {cap} \u{2502} {conns} conns \u{2502} saturated: {sat} \u{2502} \
+             per-conn min {min} / mean {mean} / max {max} \u{2502} spread {spread}",
+            cap = fmt2(d.capacity_mbps, " MB/s"),
+            conns = d.connections,
+            sat = if d.saturation_reached {
+                "yes"
+            } else {
+                "NO (cap hit)"
+            },
+            min = fmt2(d.per_conn_min_mbps, ""),
+            mean = fmt2(d.per_conn_mean_mbps, ""),
+            max = fmt2(d.per_conn_max_mbps, ""),
+            spread = fmt0(d.fair_share_spread_pct, "%"),
+        );
+        println!(
+            "             \u{2502} attribution: {rw} rwnd-limited, {sb} sndbuf-limited, {pl} path-limited, \
+             {un} unobserved",
+            rw = d.rwnd_limited_conns,
+            sb = d.sndbuf_limited_conns,
+            pl = d.path_limited_conns,
+            un = d.unobserved_conns,
+        );
+        for c in &d.per_conn {
+            println!(
+                "             \u{2502}   conn {idx}: {mbps:.2} MB/s \u{2502} {verdict} \u{2502} retrans {retrans}",
+                idx = c.conn,
+                mbps = c.mbps,
+                verdict = c.verdict,
+                retrans = c
+                    .retrans
+                    .map_or_else(|| "\u{2014}".to_string(), |r| r.to_string()),
+            );
+        }
+    };
+    render("Download", &m.download);
+    match &m.upload {
+        Some(u) => render("Upload", u),
+        None => println!(
+            "   Upload    \u{2502} absent \u{2014} {}",
+            m.upload_error.as_deref().unwrap_or("unknown reason")
         ),
     }
 }

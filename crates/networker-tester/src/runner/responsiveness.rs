@@ -58,24 +58,18 @@ use crate::metrics::{
     ErrorCategory, ErrorRecord, Protocol, RequestAttempt, ResponsivenessDirection,
     ResponsivenessResult,
 };
-use crate::runner::http::build_tls_config;
+use crate::runner::load_gen::{
+    connect_h2, empty_body, host_header, load_download_once, load_upload_once, mean, stddev,
+    H2Sender, H2Target, LoadDirection,
+};
 use crate::runner::throughput::ThroughputConfig;
-use bytes::Bytes;
 use chrono::Utc;
-use http_body_util::{combinators::BoxBody, BodyExt, Full};
-use hyper::body::Body as HyperBody;
+use http_body_util::BodyExt;
 use hyper::Request;
-use hyper_util::rt::{TokioExecutor, TokioIo};
-use rustls::pki_types::ServerName;
-use std::convert::Infallible;
-use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
-use tokio::net::TcpStream;
 use tokio::sync::Mutex;
-use tokio_rustls::TlsConnector;
 use tracing::debug;
 use uuid::Uuid;
 
@@ -154,6 +148,16 @@ impl ResponsivenessConfig {
             load_request_bytes: DEFAULT_LOAD_REQUEST_BYTES,
         }
     }
+
+    /// Connection parameters for the shared H2 load-generation machinery.
+    fn h2_target(&self) -> H2Target {
+        H2Target {
+            base_url: self.base_url.clone(),
+            insecure: self.insecure,
+            ca_bundle: self.ca_bundle.clone(),
+            timeout_ms: self.timeout_ms,
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -169,7 +173,7 @@ pub async fn run_responsiveness_probe(
     let started_at = Utc::now();
 
     // ── Download direction (the draft measures download first) ───────────────
-    let download = run_direction(cfg, Direction::Download).await;
+    let download = run_direction(cfg, LoadDirection::Download).await;
     let download = match download {
         Ok(d) => d,
         Err(msg) => {
@@ -184,7 +188,7 @@ pub async fn run_responsiveness_probe(
     };
 
     // ── Upload direction — sequential, never fabricated on failure ───────────
-    let (upload, upload_error) = match run_direction(cfg, Direction::Upload).await {
+    let (upload, upload_error) = match run_direction(cfg, LoadDirection::Upload).await {
         Ok(u) => (Some(u), None),
         Err(msg) => (None, Some(format!("Upload stage: {msg}"))),
     };
@@ -230,21 +234,13 @@ pub async fn run_responsiveness_probe(
         pmtud: None,
         responsiveness: Some(result),
         stamp: None,
+        mthroughput: None,
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Direction engine
 // ─────────────────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Direction {
-    Download,
-    Upload,
-}
-
-type ProbeBody = BoxBody<Bytes, Infallible>;
-type H2Sender = hyper::client::conn::http2::SendRequest<ProbeBody>;
 
 /// One probe latency sample.
 struct ProbeSample {
@@ -272,7 +268,7 @@ struct SharedState {
 
 async fn run_direction(
     cfg: &ResponsivenessConfig,
-    direction: Direction,
+    direction: LoadDirection,
 ) -> Result<ResponsivenessDirection, String> {
     let state = Arc::new(SharedState {
         bytes: Arc::new(AtomicU64::new(0)),
@@ -519,18 +515,20 @@ async fn stop_and_reap(
 // Load connections
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Open one H2 connection (TLS+ALPN h2 for https, h2c prior knowledge for
-/// http), register its sender for self probes, and spawn its load loop.
+/// Open one H2 connection via the shared load-gen machinery, register its
+/// sender for self probes, and spawn its load loop.
 async fn spawn_load_connection(
     cfg: &ResponsivenessConfig,
-    direction: Direction,
+    direction: LoadDirection,
     state: &Arc<SharedState>,
     stop: tokio::sync::watch::Receiver<bool>,
 ) -> Result<tokio::task::JoinHandle<()>, String> {
-    let (sender, _, _) = connect_h2(cfg).await?;
+    let conn = connect_h2(&cfg.h2_target()).await?;
+    let sender = conn.sender;
     state.senders.lock().await.push(sender.clone());
 
-    let cfg = cfg.clone();
+    let target = cfg.h2_target();
+    let load_request_bytes = cfg.load_request_bytes;
     let state = state.clone();
     let mut stop = stop;
     Ok(tokio::spawn(async move {
@@ -540,10 +538,19 @@ async fn spawn_load_connection(
             }
             let xfer = async {
                 match direction {
-                    Direction::Download => {
-                        load_download_once(&cfg, sender.clone(), &state.bytes).await
+                    LoadDirection::Download => {
+                        load_download_once(
+                            &target,
+                            sender.clone(),
+                            &state.bytes,
+                            load_request_bytes,
+                        )
+                        .await
                     }
-                    Direction::Upload => load_upload_once(&cfg, sender.clone(), &state.bytes).await,
+                    LoadDirection::Upload => {
+                        load_upload_once(&target, sender.clone(), &state.bytes, load_request_bytes)
+                            .await
+                    }
                 }
             };
             tokio::select! {
@@ -560,171 +567,6 @@ async fn spawn_load_connection(
     }))
 }
 
-async fn load_download_once(
-    cfg: &ResponsivenessConfig,
-    mut sender: H2Sender,
-    bytes: &AtomicU64,
-) -> Result<(), String> {
-    let host = host_header(&cfg.base_url);
-    let req = Request::builder()
-        .method("GET")
-        .uri(format!("/download?bytes={}", cfg.load_request_bytes))
-        .header("host", &host)
-        .header("user-agent", "networker-tester/responsiveness")
-        .body(empty_body())
-        .map_err(|e| e.to_string())?;
-    let resp = sender.send_request(req).await.map_err(|e| e.to_string())?;
-    let mut body = resp.into_body();
-    while let Some(frame) = body.frame().await {
-        let frame = frame.map_err(|e| e.to_string())?;
-        if let Some(data) = frame.data_ref() {
-            bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
-        }
-    }
-    Ok(())
-}
-
-async fn load_upload_once(
-    cfg: &ResponsivenessConfig,
-    mut sender: H2Sender,
-    bytes: &Arc<AtomicU64>,
-) -> Result<(), String> {
-    let host = host_header(&cfg.base_url);
-    let body = CountedUploadBody::new(cfg.load_request_bytes, bytes.clone());
-    let req = Request::builder()
-        .method("POST")
-        .uri("/upload")
-        .header("host", &host)
-        .header("user-agent", "networker-tester/responsiveness")
-        .header("content-length", cfg.load_request_bytes.to_string())
-        .body(BoxBody::new(body))
-        .map_err(|e| e.to_string())?;
-    let resp = sender.send_request(req).await.map_err(|e| e.to_string())?;
-    // Drain the (tiny JSON) response so the stream completes cleanly.
-    let mut body = resp.into_body();
-    while let Some(frame) = body.frame().await {
-        frame.map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-/// Upload body yielding zero-filled 64 KiB chunks, counting bytes as the H2
-/// layer polls them — the poll is back-pressured by H2 flow control, so the
-/// counter tracks what actually entered the send window (not what we wished
-/// we could send).
-struct CountedUploadBody {
-    remaining: usize,
-    chunk: Bytes,
-    counter: Arc<AtomicU64>,
-}
-
-impl CountedUploadBody {
-    fn new(total: usize, counter: Arc<AtomicU64>) -> Self {
-        Self {
-            remaining: total,
-            chunk: Bytes::from(vec![0u8; 64 * 1024]),
-            counter,
-        }
-    }
-}
-
-impl HyperBody for CountedUploadBody {
-    type Data = Bytes;
-    type Error = Infallible;
-
-    fn poll_frame(
-        mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
-        if self.remaining == 0 {
-            return Poll::Ready(None);
-        }
-        let n = self.remaining.min(self.chunk.len());
-        let data = self.chunk.slice(..n);
-        self.remaining -= n;
-        self.counter.fetch_add(n as u64, Ordering::Relaxed);
-        Poll::Ready(Some(Ok(hyper::body::Frame::data(data))))
-    }
-
-    fn size_hint(&self) -> hyper::body::SizeHint {
-        hyper::body::SizeHint::with_exact(self.remaining as u64)
-    }
-}
-
-fn empty_body() -> ProbeBody {
-    BoxBody::new(Full::new(Bytes::new()).map_err(|never| match never {}))
-}
-
-fn host_header(url: &url::Url) -> String {
-    let host = url.host_str().unwrap_or("localhost");
-    match url.port() {
-        Some(p) => format!("{host}:{p}"),
-        None => host.to_string(),
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Connection setup
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Establish an H2 connection to the endpoint. Returns the sender plus the
-/// measured TCP-connect and (for HTTPS) TLS-handshake durations so foreign
-/// probes get their `tcp_f`/`tls_f` components from the same code path.
-async fn connect_h2(cfg: &ResponsivenessConfig) -> Result<(H2Sender, f64, Option<f64>), String> {
-    let url = &cfg.base_url;
-    let host = url.host_str().ok_or("target URL has no host")?.to_string();
-    let is_https = url.scheme() == "https";
-    let port = url.port().unwrap_or(if is_https { 443 } else { 80 });
-    let timeout = Duration::from_millis(cfg.timeout_ms.max(1));
-
-    let t_tcp = Instant::now();
-    let tcp = tokio::time::timeout(timeout, TcpStream::connect((host.as_str(), port)))
-        .await
-        .map_err(|_| format!("TCP connect timed out after {}ms", cfg.timeout_ms))?
-        .map_err(|e| format!("TCP connect failed: {e}"))?;
-    let tcp_ms = t_tcp.elapsed().as_secs_f64() * 1000.0;
-    let _ = tcp.set_nodelay(true);
-
-    if is_https {
-        let tls_config = build_tls_config(&Protocol::Http2, cfg.insecure, cfg.ca_bundle.as_deref())
-            .map_err(|e| e.to_string())?;
-        let connector = TlsConnector::from(Arc::new(tls_config));
-        let server_name =
-            ServerName::try_from(host.clone()).map_err(|e| format!("Invalid SNI: {e}"))?;
-        let t_tls = Instant::now();
-        let tls = tokio::time::timeout(timeout, connector.connect(server_name, tcp))
-            .await
-            .map_err(|_| format!("TLS handshake timed out after {}ms", cfg.timeout_ms))?
-            .map_err(|e| format!("TLS handshake failed: {e}"))?;
-        let tls_ms = t_tls.elapsed().as_secs_f64() * 1000.0;
-        let (sender, conn) = hyper::client::conn::http2::Builder::new(TokioExecutor::new())
-            .adaptive_window(true)
-            .handshake::<_, ProbeBody>(TokioIo::new(tls))
-            .await
-            .map_err(|e| format!("H2 handshake failed: {e}"))?;
-        tokio::spawn(async move {
-            if let Err(e) = conn.await {
-                debug!("responsiveness H2 connection ended: {e}");
-            }
-        });
-        Ok((sender, tcp_ms, Some(tls_ms)))
-    } else {
-        // Cleartext: HTTP/2 with prior knowledge (h2c). The endpoint's plain
-        // listener (hyper auto builder) detects the H2 preface.
-        let (sender, conn) = hyper::client::conn::http2::Builder::new(TokioExecutor::new())
-            .adaptive_window(true)
-            .handshake::<_, ProbeBody>(TokioIo::new(tcp))
-            .await
-            .map_err(|e| format!("h2c handshake failed: {e}"))?;
-        tokio::spawn(async move {
-            if let Err(e) = conn.await {
-                debug!("responsiveness h2c connection ended: {e}");
-            }
-        });
-        Ok((sender, tcp_ms, None))
-    }
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Probes
 // ─────────────────────────────────────────────────────────────────────────────
@@ -735,11 +577,11 @@ async fn foreign_probe(cfg: &ResponsivenessConfig) -> Option<ProbeSample> {
     let sent_at = Instant::now();
     let timeout = Duration::from_millis(cfg.timeout_ms.max(1));
 
-    let connected = connect_h2(cfg).await;
+    let connected = connect_h2(&cfg.h2_target()).await;
     match connected {
-        Ok((sender, tcp_ms, tls_ms)) => {
+        Ok(conn) => {
             let t_http = Instant::now();
-            let ok = tokio::time::timeout(timeout, one_byte_get(cfg, sender))
+            let ok = tokio::time::timeout(timeout, one_byte_get(cfg, conn.sender))
                 .await
                 .ok()
                 .and_then(|r| r.ok())
@@ -748,8 +590,8 @@ async fn foreign_probe(cfg: &ResponsivenessConfig) -> Option<ProbeSample> {
             Some(ProbeSample {
                 sent_at,
                 foreign: true,
-                tcp_ms: Some(tcp_ms),
-                tls_ms,
+                tcp_ms: Some(conn.tcp_ms),
+                tls_ms: conn.tls_ms,
                 http_ms,
                 ok,
             })
@@ -820,24 +662,8 @@ async fn one_byte_get(cfg: &ResponsivenessConfig, mut sender: H2Sender) -> Resul
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Math helpers (draft-08 formulas)
+// Math helpers (draft-08 formulas; mean/stddev shared via load_gen)
 // ─────────────────────────────────────────────────────────────────────────────
-
-fn mean(v: &[f64]) -> f64 {
-    if v.is_empty() {
-        0.0
-    } else {
-        v.iter().sum::<f64>() / v.len() as f64
-    }
-}
-
-fn stddev(v: &[f64]) -> f64 {
-    if v.len() < 2 {
-        return 0.0;
-    }
-    let m = mean(v);
-    (v.iter().map(|x| (x - m).powi(2)).sum::<f64>() / v.len() as f64).sqrt()
-}
 
 /// Single-sided trimmed mean at `tmp` (draft-08 TM): discard the samples
 /// above the `tmp` percentile (the top 5 % for TMP = 95 %), mean the rest.
@@ -934,6 +760,7 @@ fn responsiveness_failed(
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     }
 }
 
@@ -979,16 +806,6 @@ mod tests {
     fn foreign_responsiveness_requires_tcp_and_http() {
         assert!(foreign_responsiveness(None, None, Some(30.0)).is_none());
         assert!(foreign_responsiveness(Some(10.0), None, None).is_none());
-    }
-
-    #[test]
-    fn stddev_stability_criterion() {
-        // Perfectly flat window → stddev 0 < 5% of anything positive.
-        let flat = vec![100.0, 100.0, 100.0, 100.0];
-        assert!(stddev(&flat) < 0.05 * mean(&flat));
-        // Ramp still growing → not stable at 5%.
-        let ramp = vec![100.0, 150.0, 200.0, 250.0];
-        assert!(stddev(&ramp) >= 0.05 * mean(&ramp));
     }
 
     #[test]

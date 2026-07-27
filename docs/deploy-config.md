@@ -225,8 +225,8 @@ loss/jitter control yet.
 
 **Network probes:**
 `tcp`, `http1`, `http2`, `http3`, `udp`, `rpm`, `responsiveness`, `stamp`,
-`ping`, `path`, `dualstack`, `websocket`, `pmtud`, `download`, `upload`,
-`webdownload`, `webupload`, `udpdownload`, `udpupload`
+`mthroughput`, `ping`, `path`, `dualstack`, `websocket`, `pmtud`, `download`,
+`upload`, `webdownload`, `webupload`, `udpdownload`, `udpupload`
 
 > `rpm` is the latency-under-load / bufferbloat probe: it samples UDP echo RTT
 > on an idle link, then repeats the sampling at a steady cadence while the
@@ -257,6 +257,26 @@ loss/jitter control yet.
 > h2c (prior knowledge) and the draft's TCP-only aggregation variant.
 > Requires a networker-endpoint target. Unlike `rpm`, these figures ARE
 > comparable with other draft implementations.
+
+> `mthroughput` is the multi-connection capacity probe — the methodology
+> split real speed tests disagree on, made explicit: the single-connection
+> `download`/`upload` modes measure one TCP flow's fair share (ndt7-style),
+> while `mthroughput` ramps parallel HTTP/2 connections (1 added per 1 s
+> interval, up to 8) against the endpoint's `/download` then `/upload` routes
+> until AGGREGATE goodput stabilizes (stddev of the last 4 moving averages
+> < 5 % of the current average — the same criterion `responsiveness` uses),
+> then measures a fixed 4-interval steady window at that connection count
+> (Ookla-style link capacity). Stages are TIME-boxed (15 s cap per
+> direction), not payload-sized — `--payload-sizes` does not apply. Reports
+> per direction: aggregate `capacity_mbps`, connection count at saturation,
+> per-connection goodput (min/mean/max + fair-share spread %, where a wide
+> spread indicates per-flow shaping/policing), and a per-connection TCP
+> attribution verdict from post-transfer kernel `tcp_info` sampled on a
+> `dup(2)` of each socket (`rwnd-limited` / `sndbuf-limited` /
+> `path-limited` / `unobserved`; Linux ≥ 4.10 — the triad is send-side, so
+> it attests the data direction for upload, and only the request/ACK flow
+> for download). Cleartext targets use h2c (prior knowledge). Requires a
+> networker-endpoint target.
 
 > `stamp` is a STAMP (RFC 8762, unauthenticated mode) probe against the
 > endpoint's Session-Reflector (UDP port 9997, `--stamp-port`): 50 probes at

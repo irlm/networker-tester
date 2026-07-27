@@ -22,7 +22,7 @@ pub struct Cli {
 
     // ── Modes ─────────────────────────────────────────────────────────────────
     /// Comma-separated probe modes:
-    /// tcp,http1,http2,http3,udp,rpm,responsiveness,stamp,ping,path,dualstack,websocket,pmtud,download,download1,download2,download3,upload,upload1,upload2,upload3,webdownload,webupload,udpdownload,udpupload,
+    /// tcp,http1,http2,http3,udp,rpm,responsiveness,stamp,mthroughput,ping,path,dualstack,websocket,pmtud,download,download1,download2,download3,upload,upload1,upload2,upload3,webdownload,webupload,udpdownload,udpupload,
     /// dns,tls,tlsresume,native,curl,pageload,pageload1,pageload2,pageload3,browser,browser1,browser2,browser3.
     /// rpm: latency-under-load / bufferbloat probe (UDP echo RTT idle vs during a sustained
     ///   /download transfer; requires a networker-endpoint target).
@@ -32,6 +32,10 @@ pub struct Cli {
     /// stamp: STAMP (RFC 8762) probe against the endpoint's Session-Reflector
     ///   (--stamp-port, default 9997) — processing-corrected RTT, per-direction delay
     ///   variation, directional loss (requires a networker-endpoint target).
+    /// mthroughput: multi-connection capacity probe — ramps parallel HTTP/2 connections
+    ///   against /download then /upload until aggregate goodput stabilizes (time-boxed
+    ///   stages, no --payload-sizes); reports link capacity, per-connection fair-share
+    ///   spread, and TCP-attribution verdicts (requires a networker-endpoint target).
     /// ping: ICMP echo RTT via unprivileged ICMP datagram sockets (count/timeout follow
     ///   --udp-probes / --udp-timeout; Linux needs net.ipv4.ping_group_range).
     /// path: traceroute-style hop discovery via UDP TTL probes; per-hop addresses on Linux

@@ -11,6 +11,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.85] — 2026-07-27
+
+Wave W — web vitals + real capacity measurement (deep audit m3 G2/G3/G4).
+
+### Added
+- **Core Web Vitals in the browser probes** (G2, 82): `lcp_ms`, `cls`
+  (web.dev session-window rule, max-session — 0.0 is a measured value,
+  distinct from None), `fcp_ms`, `tbt_ms` (Σ blocking time ≥50ms from FCP,
+  definition documented) via a buffered PerformanceObserver injected before
+  navigation. INP/Speed-Index deliberately excluded (not lab-appropriate,
+  per the audit's cited rejection).
+- **Request waterfall with real wire bytes** (G3, 80): per-request method/
+  status/protocol/mime, start/end vs navigation, dns/connect/ssl/send/wait/
+  receive phase ladder, cache flags, and `encodedDataLength` wire bytes
+  (capped at 200 entries + truncated flag); `wire_bytes_total` finally gives
+  wire-truth next to the declared-length sum. Two real CDP bugs found and
+  fixed during E2E (event-order dedup; dataReceived accumulation).
+- **New probe mode: `mthroughput`** (G4, 76; requires a networker-endpoint) —
+  capacity the way real speed tests measure it: parallel-connection ramp to
+  aggregate-goodput saturation (shared load-generator module with
+  `responsiveness`), download + upload stages, **per-connection TCP
+  attribution** (rwnd/sndbuf/path-limited verdicts + retrans via the Wave-S
+  triad) and fair-share spread — so the single-connection vs capacity delta
+  is explained, not just observed. Complements (does not replace) the
+  single-connection `download`/`upload` fair-share modes.
+
+---
+
 ## [0.28.84] — 2026-07-27
 
 Wave R — the "own-both-ends" builds from the deep audit (m4 §2.1/§2.2).

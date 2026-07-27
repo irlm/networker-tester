@@ -133,6 +133,7 @@ fn sample_run() -> TestRun {
         pmtud: None,
         responsiveness: None,
         stamp: None,
+        mthroughput: None,
     };
 
     TestRun {
@@ -1223,6 +1224,108 @@ fn responsiveness_and_stamp_fields_are_additive_and_optional() {
     assert_eq!(SCHEMA_VERSION, "1.0");
 }
 
+/// Wave W additive attempt field: `mthroughput` (multi-connection link
+/// capacity). Old JSON without it deserializes to None, None is
+/// skip-serialized, populated results round-trip. schema_version stays 1.0.
+#[test]
+fn mthroughput_field_is_additive_and_optional() {
+    use networker_tester::metrics::{MthroughputConn, MthroughputDirection, MthroughputResult};
+
+    // Absent from every attempt of a run that never ran the mode.
+    let run = sample_run();
+    let v = serde_json::to_value(&run).expect("serialize");
+    assert!(
+        v.pointer("/attempts/0/mthroughput").is_none(),
+        "mthroughput must be skip-serialized when None"
+    );
+
+    // Old JSON (no field) deserializes to None.
+    let back: TestRun = serde_json::from_value(v).expect("deserialize pre-Wave-W attempt");
+    assert!(back.attempts[0].mthroughput.is_none());
+
+    // Populated results round-trip.
+    let now = Utc::now();
+    let direction = MthroughputDirection {
+        saturation_reached: true,
+        connections: 3,
+        intervals: 9,
+        ramp_duration_ms: 5_000.0,
+        measure_duration_ms: 4_000.0,
+        load_duration_ms: 9_000.0,
+        bytes_transferred: 1_200_000_000,
+        capacity_mbps: Some(120.0),
+        per_conn_min_mbps: Some(20.0),
+        per_conn_max_mbps: Some(60.0),
+        per_conn_mean_mbps: Some(40.0),
+        fair_share_spread_pct: Some(100.0),
+        rwnd_limited_conns: 1,
+        sndbuf_limited_conns: 0,
+        path_limited_conns: 2,
+        unobserved_conns: 0,
+        per_conn: vec![
+            MthroughputConn {
+                conn: 0,
+                mbps: 60.0,
+                verdict: "path-limited".into(),
+                retrans: Some(0),
+            },
+            MthroughputConn {
+                conn: 1,
+                mbps: 40.0,
+                verdict: "path-limited".into(),
+                retrans: Some(12),
+            },
+            MthroughputConn {
+                conn: 2,
+                mbps: 20.0,
+                verdict: "rwnd-limited 84%".into(),
+                retrans: None, // kernel exposed no counter — omitted, not 0
+            },
+        ],
+    };
+    let mut run = sample_run();
+    run.attempts[0].mthroughput = Some(MthroughputResult {
+        remote_addr: "http://127.0.0.1:8080/".into(),
+        capacity_down_mbps: Some(120.0),
+        capacity_up_mbps: Some(45.0),
+        conns_down: 3,
+        conns_up: Some(3),
+        fair_share_spread_down_pct: Some(100.0),
+        fair_share_spread_up_pct: Some(10.0),
+        download: direction.clone(),
+        upload: Some(direction),
+        upload_error: None,
+        started_at: now,
+    });
+
+    let v = serde_json::to_value(&run).expect("serialize populated");
+    assert_eq!(
+        v.pointer("/attempts/0/mthroughput/capacity_down_mbps")
+            .and_then(|n| n.as_f64()),
+        Some(120.0)
+    );
+    assert_eq!(
+        v.pointer("/attempts/0/mthroughput/download/per_conn/2/verdict")
+            .and_then(|n| n.as_str()),
+        Some("rwnd-limited 84%")
+    );
+    assert!(
+        v.pointer("/attempts/0/mthroughput/download/per_conn/2/retrans")
+            .is_none(),
+        "None retrans must be omitted"
+    );
+    let back: TestRun = serde_json::from_value(v).expect("deserialize populated");
+    let m = back.attempts[0].mthroughput.as_ref().unwrap();
+    assert_eq!(m.capacity_down_mbps, Some(120.0));
+    assert!(m.download.saturation_reached);
+    assert_eq!(m.download.per_conn.len(), 3);
+    assert_eq!(m.download.per_conn[1].retrans, Some(12));
+    assert_eq!(m.conns_up, Some(3));
+
+    // Schema version stays frozen at 1.0 — the field is additive.
+    assert_eq!(SCHEMA_VERSION, "1.0");
+}
+
 /// Additive B.2 tcp_info fields on `socket_stats` (busy/rwnd/sndbuf triad,
 /// bytes_retrans, delivered_ce, ECN/TFO/app-limited flags, pacing rate…):
 /// omitted when unobserved (non-Linux, old kernels, pre-fix JSON) and
@@ -1328,5 +1431,105 @@ fn udp_local_drop_fields_are_additive_and_optional() {
     let back: UdpThroughputResult = serde_json::from_value(v).expect("deserialize populated");
     assert_eq!(back.local_drops, Some(8));
     assert!((back.loss_percent - 4.2).abs() < 1e-9);
+    assert_eq!(SCHEMA_VERSION, "1.0");
+}
+
+/// Wave W additive browser fields: Core Web Vitals (`lcp_ms`, `cls`,
+/// `fcp_ms`, `tbt_ms`), the CDP request waterfall (`waterfall`,
+/// `waterfall_truncated`) and real wire bytes (`wire_bytes_total`).
+/// Pre-Wave-W browser JSON deserializes with all of them None/empty/false,
+/// None/empty are skip-serialized, populated results round-trip.
+/// schema_version stays 1.0.
+#[test]
+fn browser_cwv_and_waterfall_fields_are_additive_and_optional() {
+    use networker_tester::metrics::{BrowserRequest, BrowserRequestTiming, BrowserResult};
+
+    // Pre-Wave-W browser JSON (no new keys) must deserialize.
+    let old: BrowserResult = serde_json::from_str(
+        r#"{
+            "load_ms": 350.0, "dom_content_loaded_ms": 200.0, "ttfb_ms": 50.0,
+            "resource_count": 21, "transferred_bytes": 204800,
+            "protocol": "h2", "resource_protocols": [["h2", 21]],
+            "started_at": "2026-07-27T00:00:00Z"
+        }"#,
+    )
+    .expect("pre-Wave-W browser JSON deserializes");
+    assert_eq!(old.lcp_ms, None);
+    assert_eq!(old.cls, None);
+    assert_eq!(old.fcp_ms, None);
+    assert_eq!(old.tbt_ms, None);
+    assert_eq!(old.wire_bytes_total, None);
+    assert!(old.waterfall.is_empty());
+    assert!(!old.waterfall_truncated);
+
+    // None/empty → omitted on the wire (0-as-missing is banned; absence is).
+    let v = serde_json::to_value(&old).expect("serialize");
+    assert!(v.get("lcp_ms").is_none());
+    assert!(v.get("cls").is_none());
+    assert!(v.get("fcp_ms").is_none());
+    assert!(v.get("tbt_ms").is_none());
+    assert!(v.get("wire_bytes_total").is_none());
+    assert!(v.get("waterfall").is_none());
+    assert!(v.get("waterfall_truncated").is_none());
+
+    // Populated → round-trips. CLS 0.0 is a real value, distinct from None.
+    let mut populated = old.clone();
+    populated.lcp_ms = Some(321.5);
+    populated.cls = Some(0.0);
+    populated.fcp_ms = Some(120.25);
+    populated.tbt_ms = Some(0.0);
+    populated.wire_bytes_total = Some(212_345);
+    populated.waterfall_truncated = true;
+    populated.waterfall = vec![BrowserRequest {
+        url: "https://localhost:8443/browser-page".into(),
+        method: "GET".into(),
+        status: Some(200),
+        mime_type: Some("text/html".into()),
+        protocol: Some("h2".into()),
+        wire_bytes: Some(1_234),
+        start_ms: Some(0.0),
+        end_ms: Some(48.7),
+        from_disk_cache: false,
+        from_service_worker: false,
+        timing: Some(BrowserRequestTiming {
+            dns_ms: Some(0.1),
+            connect_ms: Some(1.2),
+            ssl_ms: Some(0.9),
+            send_ms: Some(0.05),
+            wait_ms: Some(12.0),
+            receive_ms: Some(30.0),
+        }),
+    }];
+    let v = serde_json::to_value(&populated).expect("serialize populated");
+    assert_eq!(
+        v.pointer("/cls").and_then(|n| n.as_f64()),
+        Some(0.0),
+        "CLS 0.0 must serialize (a value, not missing)"
+    );
+    assert_eq!(
+        v.pointer("/wire_bytes_total").and_then(|n| n.as_u64()),
+        Some(212_345)
+    );
+    assert_eq!(
+        v.pointer("/waterfall/0/timing/wait_ms")
+            .and_then(|n| n.as_f64()),
+        Some(12.0)
+    );
+    assert_eq!(
+        v.pointer("/waterfall/0/status").and_then(|n| n.as_u64()),
+        Some(200)
+    );
+    assert_eq!(
+        v.pointer("/waterfall_truncated").and_then(|b| b.as_bool()),
+        Some(true)
+    );
+    let back: BrowserResult = serde_json::from_value(v).expect("deserialize populated");
+    assert_eq!(back.lcp_ms, Some(321.5));
+    assert_eq!(back.cls, Some(0.0));
+    assert_eq!(back.waterfall.len(), 1);
+    assert_eq!(back.waterfall[0].wire_bytes, Some(1_234));
+    assert!(back.waterfall_truncated);
+    // Legacy fields untouched.
+    assert_eq!(back.transferred_bytes, 204_800);
     assert_eq!(SCHEMA_VERSION, "1.0");
 }
