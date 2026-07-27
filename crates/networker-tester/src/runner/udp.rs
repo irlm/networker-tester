@@ -142,6 +142,7 @@ pub async fn run_udp_probe(
 
     let stats = aggregate_udp_rtts(&probe_rtts);
     let success_count = probe_rtts.iter().filter(|r| r.is_some()).count() as u32;
+    let loss_pattern = crate::metrics::compute_loss_pattern(&probe_rtts);
 
     // Local-drop vs path-loss split (B.6): one getsockopt at train end — the
     // socket is fresh, so the cumulative kernel drop counter is per-train.
@@ -163,6 +164,7 @@ pub async fn run_udp_probe(
         probe_rtts_ms: probe_rtts,
         local_drops: diag.local_drops,
         so_rcvbuf_bytes: diag.so_rcvbuf_bytes,
+        loss_pattern,
     };
 
     RequestAttempt {

@@ -268,6 +268,11 @@ pub fn print_summary(run: &TestRun) {
     // QUIC analogue (deep-measurement M1 B.1): post-transfer quinn stats.
     // Only printed when packets were actually declared lost.
     print_quic_loss_note(run);
+
+    // UDP loss-pattern note (RFC 3357, deep-measurement M4 §2.4): only when a
+    // probe train showed a burst — bursty loss points at congestion/buffer
+    // events, random-scattered loss at path noise. Silence = clean or random.
+    print_loss_pattern_note(run);
     // Throughput-attribution triad (B.2): when the kernel chronographs show
     // the transfer was receiver-window- or send-buffer-limited, say so — the
     // throughput number alone blames the path for a bottleneck that wasn't.
@@ -427,6 +432,32 @@ fn print_quic_loss_note(run: &TestRun) {
         println!(
             "\n ⚠ QUIC packet loss during transfer: {total_lost} packet(s) / {total_lost_bytes} byte(s) \
              across {attempts_with_loss} attempt(s) — h3 throughput numbers may reflect loss recovery"
+        );
+    }
+}
+
+/// UDP loss-pattern note (RFC 3357): warn when any probe train's loss was
+/// classified `bursty` or `single-burst` — consecutive losses point at a
+/// congestion/buffer event rather than random path noise. Random-like and
+/// no-loss trains stay silent (matching the retransmission-note pattern).
+fn print_loss_pattern_note(run: &TestRun) {
+    let mut bursty = 0usize;
+    let mut single_burst = 0usize;
+    let mut worst_run = 0u32;
+    for a in &run.attempts {
+        if let Some(lp) = a.udp.as_ref().and_then(|u| u.loss_pattern.as_ref()) {
+            match lp.classification.as_str() {
+                "bursty" => bursty += 1,
+                "single-burst" => single_burst += 1,
+                _ => continue,
+            }
+            worst_run = worst_run.max(lp.loss_max_burst);
+        }
+    }
+    if bursty + single_burst > 0 {
+        println!(
+            "\n ⚠ UDP loss was patterned: {bursty} bursty + {single_burst} single-burst \
+             train(s), worst run {worst_run} consecutive — congestion/buffer event, not random path noise"
         );
     }
 }

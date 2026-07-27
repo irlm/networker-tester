@@ -190,6 +190,7 @@ pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
         udp: Some(UdpResult {
             local_drops: None,
             so_rcvbuf_bytes: None,
+            loss_pattern: None,
             remote_addr: "127.0.0.1:9999".into(),
             probe_count: 5,
             success_count: 4,

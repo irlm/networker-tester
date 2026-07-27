@@ -693,6 +693,7 @@ fn append_attempt_row_udp_echo_shows_rtt() {
         udp: Some(UdpResult {
             local_drops: None,
             so_rcvbuf_bytes: None,
+            loss_pattern: None,
             remote_addr: "127.0.0.1:9000".into(),
             probe_count: 5,
             success_count: 5,
