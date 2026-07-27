@@ -676,6 +676,8 @@ fn append_attempt_row_udp_echo_shows_rtt() {
         tls: None,
         http: None,
         udp: Some(UdpResult {
+            local_drops: None,
+            so_rcvbuf_bytes: None,
             remote_addr: "127.0.0.1:9000".into(),
             probe_count: 5,
             success_count: 5,
@@ -729,6 +731,8 @@ fn append_attempt_row_udp_throughput_shows_transfer_ms() {
         retry_count: 0,
         server_timing: None,
         udp_throughput: Some(UdpThroughputResult {
+            local_drops: None,
+            so_rcvbuf_bytes: None,
             remote_addr: "127.0.0.1:9998".into(),
             payload_bytes: 65_536,
             datagrams_sent: 50,

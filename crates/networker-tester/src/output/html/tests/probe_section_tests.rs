@@ -13,6 +13,7 @@ use super::*;
 fn make_rpm_attempt(bufferbloat_factor: Option<f64>) -> RequestAttempt {
     let mut a = make_attempt(Protocol::Rpm, true);
     a.rpm = Some(crate::metrics::RpmResult {
+        loaded_local_drops: None,
         remote_addr: "10.0.0.1:9999".into(),
         unloaded_probe_count: 20,
         unloaded_success_count: 20,

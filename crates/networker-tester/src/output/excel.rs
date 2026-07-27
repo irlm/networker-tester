@@ -1323,6 +1323,8 @@ mod tests {
             tls: None,
             http: None,
             udp: Some(UdpResult {
+                local_drops: None,
+                so_rcvbuf_bytes: None,
                 remote_addr: "127.0.0.1:9999".into(),
                 probe_count: 10,
                 success_count: 10,
@@ -1369,6 +1371,8 @@ mod tests {
             retry_count: 0,
             server_timing: None,
             udp_throughput: Some(UdpThroughputResult {
+                local_drops: None,
+                so_rcvbuf_bytes: None,
                 remote_addr: "127.0.0.1:9998".into(),
                 payload_bytes: 1_048_576,
                 datagrams_sent: 800,
@@ -1663,6 +1667,7 @@ mod tests {
 
         let mut rpm_attempt = empty_attempt(Protocol::Rpm, 0, run_id);
         rpm_attempt.rpm = Some(RpmResult {
+            loaded_local_drops: None,
             remote_addr: "10.0.0.1:9999".into(),
             unloaded_probe_count: 20,
             unloaded_success_count: 20,

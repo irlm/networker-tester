@@ -211,8 +211,8 @@ pub async fn run_rpm_probe(
     load_handle.abort();
     let _ = load_handle.await;
 
-    let (loaded, loaded_censored) = match loaded {
-        Ok(train) => (train.rtts, train.censored),
+    let (loaded, loaded_censored, loaded_local_drops) = match loaded {
+        Ok(train) => (train.rtts, train.censored, train.local_drops),
         Err(msg) => return rpm_failed(run_id, attempt_id, sequence_num, started_at, msg),
     };
     let loaded_stats = aggregate_udp_rtts(&loaded);
@@ -258,6 +258,7 @@ pub async fn run_rpm_probe(
         loaded_rtt_p95_ms: loaded_stats.p95,
         loaded_jitter_ms: loaded_stats.jitter,
         loaded_probes_censored: Some(loaded_censored),
+        loaded_local_drops,
         rpm,
         bufferbloat_factor,
         load_duration_ms,
@@ -367,6 +368,9 @@ struct EchoTrain {
     /// (drain ended early, e.g. socket error) — counted as lost in `rtts`
     /// but possibly just very late (censored observations).
     censored: u32,
+    /// Echo datagrams the kernel dropped on the train's socket (rcvbuf
+    /// overflow; Linux SO_MEMINFO — B.6). `None` = unobservable.
+    local_drops: Option<u64>,
 }
 
 /// Send `count` seq-stamped echo probes and return per-probe RTTs
@@ -455,9 +459,17 @@ async fn echo_rtts(
             .count() as u32;
     }
 
+    // Local-drop split (B.6): one getsockopt at train end — the socket is
+    // fresh per train, so the cumulative kernel counter is per-train. The
+    // loaded phase shares the process with the load generator, so echo
+    // datagrams can be dropped by OUR rcvbuf under CPU pressure and would
+    // otherwise read as under-load path loss.
+    let local_drops = crate::runner::socket_info::UdpSocketDiag::from_socket(&socket).local_drops;
+
     Ok(EchoTrain {
         rtts: probe_rtts,
         censored,
+        local_drops,
     })
 }
 

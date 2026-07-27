@@ -23,23 +23,40 @@
 ///
 /// # Linux tcp_info byte offsets used for version-guarded fields
 ///
-/// The kernel struct has grown over releases.  We read into a raw `[u8; 232]`
-/// buffer and gate each field on the `optlen` returned by `getsockopt`, so the
-/// binary runs on any kernel ≥ 3.x but silently omits fields the running kernel
-/// does not report.
+/// The kernel struct has grown over releases (uapi `linux/tcp.h`, verified
+/// against torvalds/linux master 2026-07: append-only through the 6.17 AccECN
+/// fields, 280 bytes total).  We read into a raw `[u8; 288]` buffer and gate
+/// each field on the `optlen` returned by `getsockopt`, so the binary runs on
+/// any kernel ≥ 3.x but silently omits fields the running kernel does not
+/// report.  The `TcpInfoLayout` test mirror below pins every offset.
 ///
-/// | Offset | Size | Field              | Added    |
-/// |--------|------|--------------------|----------|
-/// |    68  |  u32 | tcpi_rtt (µs)      | baseline |
-/// |    72  |  u32 | tcpi_rttvar (µs)   | baseline |
-/// |    76  |  u32 | tcpi_snd_ssthresh  | baseline |
-/// |    80  |  u32 | tcpi_snd_cwnd      | baseline |
-/// |    96  |  u32 | tcpi_rcv_space     | baseline |
-/// |   100  |  u32 | tcpi_total_retrans | baseline |
-/// |   136  |  u32 | tcpi_segs_out      | 4.2      |
-/// |   140  |  u32 | tcpi_segs_in       | 4.2      |
-/// |   148  |  u32 | tcpi_min_rtt (µs)  | 4.9      |
-/// |   160  |  u64 | tcpi_delivery_rate | 4.9      |
+/// | Offset | Size | Field                     | Added    |
+/// |--------|------|---------------------------|----------|
+/// |     5  |  u8  | tcpi_options (bitflags)   | baseline |
+/// |     7  |  u8  | delivery_rate_app_limited | 4.9 (bit 0 of the byte) |
+/// |    68  |  u32 | tcpi_rtt (µs)             | baseline |
+/// |    72  |  u32 | tcpi_rttvar (µs)          | baseline |
+/// |    76  |  u32 | tcpi_snd_ssthresh         | baseline |
+/// |    80  |  u32 | tcpi_snd_cwnd             | baseline |
+/// |    92  |  u32 | tcpi_rcv_rtt (µs)         | baseline |
+/// |    96  |  u32 | tcpi_rcv_space            | baseline |
+/// |   100  |  u32 | tcpi_total_retrans        | baseline |
+/// |   104  |  u64 | tcpi_pacing_rate (B/s)    | 3.15     |
+/// |   120  |  u64 | tcpi_bytes_acked          | 4.1      |
+/// |   136  |  u32 | tcpi_segs_out             | 4.2      |
+/// |   140  |  u32 | tcpi_segs_in              | 4.2      |
+/// |   144  |  u32 | tcpi_notsent_bytes        | 4.6      |
+/// |   148  |  u32 | tcpi_min_rtt (µs)         | 4.6      |
+/// |   160  |  u64 | tcpi_delivery_rate        | 4.9      |
+/// |   168  |  u64 | tcpi_busy_time (µs)       | 4.10     |
+/// |   176  |  u64 | tcpi_rwnd_limited (µs)    | 4.10     |
+/// |   184  |  u64 | tcpi_sndbuf_limited (µs)  | 4.10     |
+/// |   192  |  u32 | tcpi_delivered            | 4.18     |
+/// |   196  |  u32 | tcpi_delivered_ce         | 4.18     |
+/// |   200  |  u64 | tcpi_bytes_sent           | 4.19     |
+/// |   208  |  u64 | tcpi_bytes_retrans        | 4.19     |
+/// |   216  |  u32 | tcpi_dsack_dups           | 4.19     |
+/// |   220  |  u32 | tcpi_reord_seen           | 4.19     |
 use tokio::net::TcpStream;
 
 #[derive(Debug, Clone, Default)]
@@ -75,6 +92,55 @@ pub struct SocketInfo {
     pub delivery_rate_bps: Option<u64>,
     /// Minimum RTT ever observed by the kernel in ms (Linux ≥ 4.9: tcpi_min_rtt).
     pub min_rtt_ms: Option<f64>,
+    // ── B.2 full tcp_info additions (all Linux-only; honest None elsewhere) ──
+    /// µs the connection spent busy sending data (Linux ≥ 4.10:
+    /// tcpi_busy_time). Denominator of the throughput-attribution triad.
+    pub busy_time_us: Option<u64>,
+    /// µs of busy time limited by the peer's receive window (Linux ≥ 4.10:
+    /// tcpi_rwnd_limited) — bottleneck was the receiver, not the path.
+    pub rwnd_limited_us: Option<u64>,
+    /// µs of busy time limited by our own send buffer (Linux ≥ 4.10:
+    /// tcpi_sndbuf_limited) — bottleneck was local, not the path.
+    pub sndbuf_limited_us: Option<u64>,
+    /// Bytes acked by the peer (Linux ≥ 4.1: tcpi_bytes_acked, RFC 4898
+    /// tcpEStatsAppHCThruOctetsAcked).
+    pub bytes_acked: Option<u64>,
+    /// Bytes sent incl. retransmissions (Linux ≥ 4.19: tcpi_bytes_sent,
+    /// RFC 4898 tcpEStatsPerfHCDataOctetsOut).
+    pub bytes_sent: Option<u64>,
+    /// Bytes retransmitted (Linux ≥ 4.19: tcpi_bytes_retrans, RFC 4898
+    /// tcpEStatsPerfOctetsRetrans) — the RFC 6349 retransmitted-bytes-ratio
+    /// numerator over `bytes_sent`.
+    pub bytes_retrans: Option<u64>,
+    /// Data packets delivered to the peer incl. retransmits (Linux ≥ 4.18:
+    /// tcpi_delivered).
+    pub delivered: Option<u32>,
+    /// Delivered packets that carried a CE mark (Linux ≥ 4.18:
+    /// tcpi_delivered_ce) — a real ECN/L4S congestion signal (RFC 3168/9330).
+    pub delivered_ce: Option<u32>,
+    /// ECN was negotiated at session establishment (tcpi_options bit
+    /// TCPI_OPT_ECN).
+    pub ecn_negotiated: Option<bool>,
+    /// TCP Fast Open data was used on the SYN (tcpi_options bit
+    /// TCPI_OPT_SYN_DATA).
+    pub tfo_used: Option<bool>,
+    /// The `delivery_rate_bps` sample was application-limited rather than
+    /// network-limited (Linux ≥ 4.9: tcpi_delivery_rate_app_limited bitfield)
+    /// — when true the delivery rate is NOT a path-capacity signal.
+    pub app_limited: Option<bool>,
+    /// Kernel pacing rate in bytes/sec (Linux ≥ 3.15: tcpi_pacing_rate).
+    pub pacing_rate_bps: Option<u64>,
+    /// Bytes buffered but not yet sent at sample time (Linux ≥ 4.6:
+    /// tcpi_notsent_bytes).
+    pub notsent_bytes: Option<u32>,
+    /// Reordering events seen (Linux ≥ 4.19: tcpi_reord_seen). With
+    /// `dsack_dups` distinguishes spurious retransmission from genuine loss.
+    pub reord_seen: Option<u32>,
+    /// DSACK-reported duplicate segments (Linux ≥ 4.19: tcpi_dsack_dups,
+    /// RFC 4898 tcpEStatsStackDSACKDups).
+    pub dsack_dups: Option<u32>,
+    /// Receiver-side RTT estimate in ms (tcpi_rcv_rtt, µs in the kernel).
+    pub rcv_rtt_ms: Option<f64>,
 }
 
 impl SocketInfo {
@@ -124,8 +190,169 @@ impl From<SocketInfo> for crate::metrics::SocketStats {
             congestion_algorithm: i.congestion_algorithm,
             delivery_rate_bps: i.delivery_rate_bps,
             min_rtt_ms: i.min_rtt_ms,
+            busy_time_us: i.busy_time_us,
+            rwnd_limited_us: i.rwnd_limited_us,
+            sndbuf_limited_us: i.sndbuf_limited_us,
+            bytes_acked: i.bytes_acked,
+            bytes_sent: i.bytes_sent,
+            bytes_retrans: i.bytes_retrans,
+            delivered: i.delivered,
+            delivered_ce: i.delivered_ce,
+            ecn_negotiated: i.ecn_negotiated,
+            tfo_used: i.tfo_used,
+            app_limited: i.app_limited,
+            pacing_rate_bps: i.pacing_rate_bps,
+            notsent_bytes: i.notsent_bytes,
+            reord_seen: i.reord_seen,
+            dsack_dups: i.dsack_dups,
+            rcv_rtt_ms: i.rcv_rtt_ms,
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// tcp_info bit decoding (pure helpers, unit-tested on every platform)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `tcpi_options` bitflags (uapi `linux/tcp.h`, stable since their addition).
+/// TCPI_OPT_ECN: ECN negotiated at session init. TCPI_OPT_SYN_DATA (3.7+,
+/// TFO era): data was acked on the SYN — TCP Fast Open was actually used.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+const TCPI_OPT_ECN: u8 = 8;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+const TCPI_OPT_SYN_DATA: u8 = 32;
+
+/// Decode `(ecn_negotiated, tfo_used)` from the `tcpi_options` byte (@5).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn decode_tcpi_options(options: u8) -> (bool, bool) {
+    (
+        options & TCPI_OPT_ECN != 0,
+        options & TCPI_OPT_SYN_DATA != 0,
+    )
+}
+
+/// Decode `tcpi_delivery_rate_app_limited` from byte @7 of tcp_info.
+///
+/// The byte is a C bitfield (`app_limited:1, fastopen_client_fail:2, pad:5`);
+/// the first-declared bitfield occupies the least-significant bit on
+/// little-endian targets and the most-significant bit on big-endian targets
+/// (GCC/Clang bitfield allocation order follows target endianness). Kernel
+/// 4.9 added the bit — callers must additionally gate on the 4.9 struct
+/// length (`optlen ≥ 168`) because older kernels report the byte as zero
+/// padding, which would decode as a false `Some(false)`.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn decode_app_limited(byte7: u8) -> bool {
+    #[cfg(target_endian = "little")]
+    const APP_LIMITED_BIT: u8 = 0x01;
+    #[cfg(target_endian = "big")]
+    const APP_LIMITED_BIT: u8 = 0x80;
+    byte7 & APP_LIMITED_BIT != 0
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UDP socket diagnostics — local-drop vs path-loss split (B.6)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Post-transfer observations of a receiving UDP socket.
+///
+/// `local_drops` splits "loss" honestly: datagrams the kernel dropped because
+/// THIS socket's receive buffer was full arrived over the path fine — counting
+/// them as path loss (as all pre-fix results do) blames the network for a
+/// local bottleneck.
+///
+/// Sourced from `getsockopt(SOL_SOCKET, SO_MEMINFO)` (Linux ≥ 4.14,
+/// socket(7)): one syscall at transfer end, zero hot-path cost. The
+/// `SK_MEMINFO_DROPS` slot is the same cumulative `sk_drops` counter the
+/// `SO_RXQ_OVFL`/`SCM_RXQ_OVFL` cmsg reports, without per-datagram
+/// `recvmsg` cmsg parsing (the report offers either; the probe sockets are
+/// created fresh per transfer, so the cumulative counter IS the per-transfer
+/// count). macOS exposes no per-socket drop counter (no SO_RXQ_OVFL /
+/// SO_MEMINFO; SO_NREAD reports current queued bytes, not drops) — honest
+/// `None`. Windows: `None` (no per-socket counter without privileged ETW).
+///
+/// `so_rcvbuf_bytes` is the effective `SO_RCVBUF` at transfer end (Unix; on
+/// Linux the kernel-doubled bookkeeping value, as sysadmins see in `ss -m`),
+/// recorded so a drop report carries its context.
+#[derive(Debug, Clone, Default)]
+pub struct UdpSocketDiag {
+    /// Datagrams dropped by the kernel on this socket (rcvbuf overflow).
+    /// `None` = unobservable on this platform/kernel, NOT zero.
+    pub local_drops: Option<u64>,
+    /// Effective receive buffer size in bytes at sample time.
+    pub so_rcvbuf_bytes: Option<u32>,
+}
+
+impl UdpSocketDiag {
+    /// Sample drop/buffer state for a UDP socket. Best-effort: all-None on
+    /// unsupported platforms or failed getsockopt.
+    #[allow(unused_variables)]
+    pub fn from_socket(sock: &tokio::net::UdpSocket) -> Self {
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let fd = sock.as_raw_fd();
+            return Self {
+                local_drops: udp_local_drops(fd),
+                so_rcvbuf_bytes: so_rcvbuf(fd),
+            };
+        }
+        #[allow(unreachable_code)]
+        Self::default()
+    }
+}
+
+/// Effective SO_RCVBUF in bytes (any Unix).
+#[cfg(unix)]
+fn so_rcvbuf(fd: std::os::unix::io::RawFd) -> Option<u32> {
+    unsafe {
+        let mut val: libc::c_int = 0;
+        let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+        let ret = libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_RCVBUF,
+            &mut val as *mut _ as *mut libc::c_void,
+            &mut len,
+        );
+        if ret == 0 && val > 0 {
+            Some(val as u32)
+        } else {
+            None
+        }
+    }
+}
+
+/// Per-socket dropped-datagram counter via SO_MEMINFO (Linux ≥ 4.14).
+///
+/// Returns the `SK_MEMINFO_DROPS` slot (`sk_drops`): datagrams the kernel
+/// discarded on this socket — for UDP that is receive-queue overflow (and
+/// rmem exhaustion). Gated on the syscall succeeding AND the kernel filling
+/// all 9 `u32` slots; older kernels → `None`, never a fabricated 0.
+#[cfg(target_os = "linux")]
+fn udp_local_drops(fd: std::os::unix::io::RawFd) -> Option<u64> {
+    const SLOTS: usize = 9; // SK_MEMINFO_VARS
+    let mut vals = [0u32; SLOTS];
+    let mut len = (SLOTS * std::mem::size_of::<u32>()) as libc::socklen_t;
+    let ret = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_MEMINFO,
+            vals.as_mut_ptr() as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    if ret == 0 && (len as usize) >= SLOTS * std::mem::size_of::<u32>() {
+        Some(vals[libc::SK_MEMINFO_DROPS as usize] as u64)
+    } else {
+        None
+    }
+}
+
+/// macOS/other Unix: no per-socket UDP drop counter — honest `None`.
+#[cfg(all(unix, not(target_os = "linux")))]
+fn udp_local_drops(_fd: std::os::unix::io::RawFd) -> Option<u64> {
+    None
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -212,7 +439,10 @@ fn linux_socket_info(fd: std::os::unix::io::RawFd) -> SocketInfo {
     // Read tcp_info into a raw buffer.  We use byte-offset reads rather than
     // casting to libc::tcp_info so that fields added in later kernels (4.2, 4.9,
     // 4.13 …) are safely gated on the `optlen` the kernel actually filled.
-    const BUF: usize = 232; // larger than any known tcp_info
+    // 288 covers the current uapi struct (280 bytes as of the 6.17 AccECN
+    // fields; append-only) with headroom — the kernel copies min(optlen,
+    // sizeof(struct)) and reports what it filled.
+    const BUF: usize = 288;
     let mut buf = [0u8; BUF];
     let mut optlen = BUF as libc::socklen_t;
 
@@ -266,16 +496,56 @@ fn linux_socket_info(fd: std::os::unix::io::RawFd) -> SocketInfo {
     let rtt_var_ms = u32_at!(72).and_then(|v| if v > 0 { Some(v as f64 / 1000.0) } else { None });
     let snd_ssthresh = u32_at!(76).and_then(|v| if v < 0x7fff_ffff { Some(v) } else { None });
     let snd_cwnd = u32_at!(80).and_then(|v| if v > 0 { Some(v) } else { None });
+    let rcv_rtt_ms = u32_at!(92).and_then(|v| if v > 0 { Some(v as f64 / 1000.0) } else { None });
     let rcv_space = u32_at!(96).and_then(|v| if v > 0 { Some(v) } else { None });
     let total_retrans = u32_at!(100);
+
+    // tcpi_options (u8 @5) — baseline bitflags; the ECN and SYN_DATA bits are
+    // decoded into report-grade facts. Present whenever the 104-byte floor
+    // above passed.
+    let (ecn_negotiated, tfo_used) = {
+        let (ecn, tfo) = decode_tcpi_options(buf[5]);
+        (Some(ecn), Some(tfo))
+    };
+
+    // Linux ≥ 3.15
+    let pacing_rate_bps = u64_at!(104).and_then(|v| if v > 0 { Some(v) } else { None });
+
+    // Linux ≥ 4.1
+    let bytes_acked = u64_at!(120);
 
     // Linux ≥ 4.2
     let segs_out = u32_at!(136).and_then(|v| if v > 0 { Some(v) } else { None });
     let segs_in = u32_at!(140).and_then(|v| if v > 0 { Some(v) } else { None });
 
-    // Linux ≥ 4.9
+    // Linux ≥ 4.6
+    let notsent_bytes = u32_at!(144);
     let min_rtt_ms = u32_at!(148).and_then(|v| if v > 0 { Some(v as f64 / 1000.0) } else { None });
+
+    // Linux ≥ 4.9
     let delivery_rate_bps = u64_at!(160).and_then(|v| if v > 0 { Some(v) } else { None });
+    // tcpi_delivery_rate_app_limited lives in byte @7 (bitfield), which
+    // pre-4.9 kernels report as zero padding — gate on the 4.9 struct length
+    // (168 = end of tcpi_delivery_rate) so old kernels stay honest None
+    // instead of a false Some(false).
+    let app_limited = (n >= 168).then(|| decode_app_limited(buf[7]));
+
+    // Linux ≥ 4.10 — the throughput-attribution triad. Zero is meaningful
+    // ("never limited by X"), so values are kept as-is once the offset is
+    // covered by optlen.
+    let busy_time_us = u64_at!(168);
+    let rwnd_limited_us = u64_at!(176);
+    let sndbuf_limited_us = u64_at!(184);
+
+    // Linux ≥ 4.18
+    let delivered = u32_at!(192);
+    let delivered_ce = u32_at!(196);
+
+    // Linux ≥ 4.19
+    let bytes_sent = u64_at!(200);
+    let bytes_retrans = u64_at!(208);
+    let dsack_dups = u32_at!(216);
+    let reord_seen = u32_at!(220);
 
     SocketInfo {
         mss_bytes: mss,
@@ -291,6 +561,22 @@ fn linux_socket_info(fd: std::os::unix::io::RawFd) -> SocketInfo {
         congestion_algorithm,
         delivery_rate_bps,
         min_rtt_ms,
+        busy_time_us,
+        rwnd_limited_us,
+        sndbuf_limited_us,
+        bytes_acked,
+        bytes_sent,
+        bytes_retrans,
+        delivered,
+        delivered_ce,
+        ecn_negotiated,
+        tfo_used,
+        app_limited,
+        pacing_rate_bps,
+        notsent_bytes,
+        reord_seen,
+        dsack_dups,
+        rcv_rtt_ms,
     }
 }
 
@@ -483,6 +769,10 @@ fn macos_socket_info(fd: std::os::unix::io::RawFd) -> SocketInfo {
         congestion_algorithm,
         delivery_rate_bps: None, // not available via TCP_CONNECTION_INFO
         min_rtt_ms: None,        // not available via TCP_CONNECTION_INFO
+        // B.2 Linux tcp_info additions: xnu's tcp_connection_info exposes no
+        // busy/rwnd/sndbuf chronographs, delivery accounting, ECN/TFO options
+        // byte in this layout slice, or pacing rate — honest None on macOS.
+        ..Default::default()
     }
 }
 
@@ -577,6 +867,206 @@ mod tests {
         {
             let _ = probe.stats();
         }
+    }
+
+    /// Field-for-field mirror of uapi `linux/tcp.h` `struct tcp_info` through
+    /// the 4.19 fields we read (bitfield bytes flattened to explicit u8s —
+    /// same layout). Every field is naturally aligned, so the offsets are
+    /// identical on every target we build for; the test therefore pins the
+    /// `u32_at!/u64_at!` offset table even when it runs on macOS/Windows CI.
+    #[repr(C)]
+    #[allow(dead_code)] // fields exist for offset_of! layout pinning only
+    struct TcpInfoLayout {
+        tcpi_state: u8,            // 0
+        tcpi_ca_state: u8,         // 1
+        tcpi_retransmits: u8,      // 2
+        tcpi_probes: u8,           // 3
+        tcpi_backoff: u8,          // 4
+        tcpi_options: u8,          // 5
+        tcpi_wscale_bits: u8,      // 6: snd_wscale:4, rcv_wscale:4
+        tcpi_app_limited_bits: u8, // 7: delivery_rate_app_limited:1, …
+        tcpi_rto: u32,             // 8
+        tcpi_ato: u32,             // 12
+        tcpi_snd_mss: u32,         // 16
+        tcpi_rcv_mss: u32,         // 20
+        tcpi_unacked: u32,         // 24
+        tcpi_sacked: u32,          // 28
+        tcpi_lost: u32,            // 32
+        tcpi_retrans: u32,         // 36
+        tcpi_fackets: u32,         // 40
+        tcpi_last_data_sent: u32,  // 44
+        tcpi_last_ack_sent: u32,   // 48
+        tcpi_last_data_recv: u32,  // 52
+        tcpi_last_ack_recv: u32,   // 56
+        tcpi_pmtu: u32,            // 60
+        tcpi_rcv_ssthresh: u32,    // 64
+        tcpi_rtt: u32,             // 68
+        tcpi_rttvar: u32,          // 72
+        tcpi_snd_ssthresh: u32,    // 76
+        tcpi_snd_cwnd: u32,        // 80
+        tcpi_advmss: u32,          // 84
+        tcpi_reordering: u32,      // 88
+        tcpi_rcv_rtt: u32,         // 92
+        tcpi_rcv_space: u32,       // 96
+        tcpi_total_retrans: u32,   // 100
+        tcpi_pacing_rate: u64,     // 104 (3.15)
+        tcpi_max_pacing_rate: u64, // 112 (3.15)
+        tcpi_bytes_acked: u64,     // 120 (4.1)
+        tcpi_bytes_received: u64,  // 128 (4.1)
+        tcpi_segs_out: u32,        // 136 (4.2)
+        tcpi_segs_in: u32,         // 140 (4.2)
+        tcpi_notsent_bytes: u32,   // 144 (4.6)
+        tcpi_min_rtt: u32,         // 148 (4.6)
+        tcpi_data_segs_in: u32,    // 152 (4.6)
+        tcpi_data_segs_out: u32,   // 156 (4.6)
+        tcpi_delivery_rate: u64,   // 160 (4.9)
+        tcpi_busy_time: u64,       // 168 (4.10)
+        tcpi_rwnd_limited: u64,    // 176 (4.10)
+        tcpi_sndbuf_limited: u64,  // 184 (4.10)
+        tcpi_delivered: u32,       // 192 (4.18)
+        tcpi_delivered_ce: u32,    // 196 (4.18)
+        tcpi_bytes_sent: u64,      // 200 (4.19)
+        tcpi_bytes_retrans: u64,   // 208 (4.19)
+        tcpi_dsack_dups: u32,      // 216 (4.19)
+        tcpi_reord_seen: u32,      // 220 (4.19)
+    }
+
+    /// Pin every byte offset the Linux reader uses (mirror of the doc table).
+    /// A silent uapi drift or a typo'd offset would read garbage into a
+    /// report-grade field — this is the tripwire.
+    #[test]
+    fn linux_tcp_info_offset_table_matches_uapi() {
+        use std::mem::offset_of;
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_retransmits), 2);
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_options), 5);
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_app_limited_bits), 7);
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_rtt), 68);
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_rttvar), 72);
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_snd_ssthresh), 76);
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_snd_cwnd), 80);
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_rcv_rtt), 92);
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_rcv_space), 96);
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_total_retrans), 100);
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_pacing_rate), 104);
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_bytes_acked), 120);
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_segs_out), 136);
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_segs_in), 140);
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_notsent_bytes), 144);
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_min_rtt), 148);
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_delivery_rate), 160);
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_busy_time), 168);
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_rwnd_limited), 176);
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_sndbuf_limited), 184);
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_delivered), 192);
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_delivered_ce), 196);
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_bytes_sent), 200);
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_bytes_retrans), 208);
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_dsack_dups), 216);
+        assert_eq!(offset_of!(TcpInfoLayout, tcpi_reord_seen), 220);
+        // Mirror ends right after the last field we read; the 4.19 struct
+        // continues (rcv_ooopack @224 …) but nothing below 224 can move —
+        // the uapi struct is append-only.
+        assert_eq!(std::mem::size_of::<TcpInfoLayout>(), 224);
+    }
+
+    /// tcpi_options bitflag fixtures (uapi: ECN=8, SYN_DATA=32). A wrong bit
+    /// value would publish false ECN/TFO facts on every Linux probe.
+    #[test]
+    fn tcpi_options_bits_decode_correctly() {
+        assert_eq!(decode_tcpi_options(0), (false, false));
+        assert_eq!(decode_tcpi_options(8), (true, false)); // TCPI_OPT_ECN
+        assert_eq!(decode_tcpi_options(32), (false, true)); // TCPI_OPT_SYN_DATA
+        assert_eq!(decode_tcpi_options(8 | 32), (true, true));
+        // TIMESTAMPS|SACK|WSCALE (1|2|4) must not leak into either flag.
+        assert_eq!(decode_tcpi_options(7), (false, false));
+        // USEC_TS (64) / TFO_CHILD (128) must not either.
+        assert_eq!(decode_tcpi_options(64 | 128), (false, false));
+    }
+
+    /// app_limited is bit 0 of byte @7 on little-endian (first-declared C
+    /// bitfield = LSB); the neighboring fastopen_client_fail:2 bits must not
+    /// bleed in.
+    #[test]
+    fn app_limited_bitfield_decodes_correctly() {
+        #[cfg(target_endian = "little")]
+        {
+            assert!(decode_app_limited(0x01));
+            assert!(decode_app_limited(0x07)); // app_limited + fastopen_fail bits
+            assert!(!decode_app_limited(0x00));
+            assert!(!decode_app_limited(0x06)); // fastopen_client_fail only
+            assert!(!decode_app_limited(0x80));
+        }
+        #[cfg(target_endian = "big")]
+        {
+            assert!(decode_app_limited(0x80));
+            assert!(!decode_app_limited(0x01));
+        }
+    }
+
+    /// The B.2 fields must survive the SocketInfo → SocketStats conversion.
+    #[test]
+    fn socket_info_conversion_preserves_b2_fields() {
+        let info = SocketInfo {
+            busy_time_us: Some(1_000_000),
+            rwnd_limited_us: Some(840_000),
+            sndbuf_limited_us: Some(10_000),
+            bytes_acked: Some(1_048_577),
+            bytes_sent: Some(1_050_000),
+            bytes_retrans: Some(2_800),
+            delivered: Some(750),
+            delivered_ce: Some(3),
+            ecn_negotiated: Some(true),
+            tfo_used: Some(false),
+            app_limited: Some(true),
+            pacing_rate_bps: Some(125_000_000),
+            notsent_bytes: Some(0),
+            reord_seen: Some(2),
+            dsack_dups: Some(1),
+            rcv_rtt_ms: Some(12.5),
+            ..Default::default()
+        };
+        let stats: crate::metrics::SocketStats = info.into();
+        assert_eq!(stats.busy_time_us, Some(1_000_000));
+        assert_eq!(stats.rwnd_limited_us, Some(840_000));
+        assert_eq!(stats.sndbuf_limited_us, Some(10_000));
+        assert_eq!(stats.bytes_acked, Some(1_048_577));
+        assert_eq!(stats.bytes_sent, Some(1_050_000));
+        assert_eq!(stats.bytes_retrans, Some(2_800));
+        assert_eq!(stats.delivered, Some(750));
+        assert_eq!(stats.delivered_ce, Some(3));
+        assert_eq!(stats.ecn_negotiated, Some(true));
+        assert_eq!(stats.tfo_used, Some(false));
+        assert_eq!(stats.app_limited, Some(true));
+        assert_eq!(stats.pacing_rate_bps, Some(125_000_000));
+        assert_eq!(stats.notsent_bytes, Some(0));
+        assert_eq!(stats.reord_seen, Some(2));
+        assert_eq!(stats.dsack_dups, Some(1));
+        assert_eq!(stats.rcv_rtt_ms, Some(12.5));
+    }
+
+    /// UdpSocketDiag on a live socket: rcvbuf is observable on every Unix;
+    /// local_drops is Some(0) on Linux (fresh socket, nothing dropped) and
+    /// honest None on macOS.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn udp_socket_diag_reports_rcvbuf_and_platform_honest_drops() {
+        let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let diag = UdpSocketDiag::from_socket(&sock);
+        assert!(
+            diag.so_rcvbuf_bytes.is_some_and(|b| b > 0),
+            "SO_RCVBUF must be observable on Unix: {diag:?}"
+        );
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            diag.local_drops,
+            Some(0),
+            "fresh Linux socket must report zero drops via SO_MEMINFO"
+        );
+        #[cfg(not(target_os = "linux"))]
+        assert_eq!(
+            diag.local_drops, None,
+            "non-Linux platforms have no per-socket drop counter — must be None, not 0"
+        );
     }
 
     /// xnu's `struct tcp_connection_info` is exactly 112 bytes; the u64

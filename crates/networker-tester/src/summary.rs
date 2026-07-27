@@ -265,6 +265,15 @@ pub fn print_summary(run: &TestRun) {
     // QUIC analogue (deep-measurement M1 B.1): post-transfer quinn stats.
     // Only printed when packets were actually declared lost.
     print_quic_loss_note(run);
+    // Throughput-attribution triad (B.2): when the kernel chronographs show
+    // the transfer was receiver-window- or send-buffer-limited, say so — the
+    // throughput number alone blames the path for a bottleneck that wasn't.
+    print_throughput_attribution_note(run);
+
+    // UDP local-drop split (B.6): datagrams dropped by OUR socket's receive
+    // buffer are counted inside loss% — flag them so local overflow is not
+    // read as path loss.
+    print_udp_local_drop_note(run);
 
     // sdkprobe network-vs-server latency split — the core "find the main
     // issue" breakdown. Only rendered when a sdkprobe run produced a split.
@@ -405,6 +414,122 @@ fn print_quic_loss_note(run: &TestRun) {
             "\n ⚠ QUIC packet loss during transfer: {total_lost} packet(s) / {total_lost_bytes} byte(s) \
              across {attempts_with_loss} attempt(s) — h3 throughput numbers may reflect loss recovery"
         );
+    }
+}
+
+/// Aggregate the tcpi_busy_time/rwnd_limited/sndbuf_limited chronographs
+/// (Linux ≥ 4.10, sampled post-transfer via `http.socket_stats`) across a
+/// run's attempts and produce the attribution line, or `None` when nothing
+/// noteworthy: no triad data (non-Linux / old kernels), no busy time, or
+/// both limited fractions under 5% (path/CPU-limited transfers are the
+/// normal case and stay quiet, matching the retransmission-note pattern).
+fn throughput_attribution_line(run: &TestRun) -> Option<String> {
+    let triads: Vec<(u64, u64, u64)> = run
+        .attempts
+        .iter()
+        .filter_map(|a| a.http.as_ref().and_then(|h| h.socket_stats.as_ref()))
+        .filter_map(|s| match s.busy_time_us {
+            Some(b) if b > 0 => Some((
+                b,
+                s.rwnd_limited_us.unwrap_or(0),
+                s.sndbuf_limited_us.unwrap_or(0),
+            )),
+            _ => None,
+        })
+        .collect();
+    attribution_note(&triads)
+}
+
+/// Pure attribution logic over per-attempt `(busy, rwnd_limited,
+/// sndbuf_limited)` µs triads (unit-tested directly).
+fn attribution_note(triads: &[(u64, u64, u64)]) -> Option<String> {
+    let attempts = triads.len();
+    let busy_us: u64 = triads.iter().map(|t| t.0).sum();
+    let rwnd_us: u64 = triads.iter().map(|t| t.1).sum();
+    let sndbuf_us: u64 = triads.iter().map(|t| t.2).sum();
+    if busy_us == 0 {
+        return None;
+    }
+    let rwnd_pct = rwnd_us as f64 / busy_us as f64 * 100.0;
+    let sndbuf_pct = sndbuf_us as f64 / busy_us as f64 * 100.0;
+    const NOTEWORTHY_PCT: f64 = 5.0;
+    if rwnd_pct < NOTEWORTHY_PCT && sndbuf_pct < NOTEWORTHY_PCT {
+        return None;
+    }
+    let mut limits: Vec<String> = Vec::new();
+    if rwnd_pct >= NOTEWORTHY_PCT {
+        limits.push(format!(
+            "receiver-window-limited {rwnd_pct:.0}% of the transfer"
+        ));
+    }
+    if sndbuf_pct >= NOTEWORTHY_PCT {
+        limits.push(format!(
+            "local send-buffer-limited {sndbuf_pct:.0}% of the transfer"
+        ));
+    }
+    let s = if attempts == 1 { "" } else { "s" };
+    Some(format!(
+        " ⚠ Throughput attribution (kernel tcp_info): {} across {attempts} attempt{s} — \
+         the bottleneck was not the network path for that share of the busy time",
+        limits.join(", ")
+    ))
+}
+
+/// Print the throughput-attribution note (quiet when unremarkable).
+fn print_throughput_attribution_note(run: &TestRun) {
+    if let Some(line) = throughput_attribution_line(run) {
+        println!("\n{line}");
+    }
+}
+
+/// Aggregate UDP local socket drops (B.6) across udp / udpdownload /
+/// udpupload / rpm-loaded results; `None` when no attempt observed any.
+fn udp_local_drop_line(run: &TestRun) -> Option<String> {
+    let per_attempt: Vec<u64> = run
+        .attempts
+        .iter()
+        .map(|a| {
+            a.udp
+                .as_ref()
+                .and_then(|u| u.local_drops)
+                .unwrap_or(0)
+                .saturating_add(
+                    a.udp_throughput
+                        .as_ref()
+                        .and_then(|u| u.local_drops)
+                        .unwrap_or(0),
+                )
+                .saturating_add(
+                    a.rpm
+                        .as_ref()
+                        .and_then(|r| r.loaded_local_drops)
+                        .unwrap_or(0),
+                )
+        })
+        .collect();
+    local_drop_note(&per_attempt)
+}
+
+/// Pure local-drop warning logic over per-attempt drop counts
+/// (unit-tested directly). `None`-unobservable attempts contribute 0.
+fn local_drop_note(per_attempt_drops: &[u64]) -> Option<String> {
+    let drops: u64 = per_attempt_drops.iter().sum();
+    let attempts = per_attempt_drops.iter().filter(|&&d| d > 0).count();
+    if drops == 0 {
+        return None;
+    }
+    let s = if drops == 1 { "" } else { "s" };
+    let atts = if attempts == 1 { "" } else { "s" };
+    Some(format!(
+        " ⚠ {drops} datagram{s} dropped locally (socket receive buffer full) across \
+         {attempts} attempt{atts} — loss% includes them; this is not path loss"
+    ))
+}
+
+/// Print the UDP local-drop warning (quiet when no local drops observed).
+fn print_udp_local_drop_note(run: &TestRun) {
+    if let Some(line) = udp_local_drop_line(run) {
+        println!("\n{line}");
     }
 }
 
@@ -1210,4 +1335,94 @@ fn print_pmtud_summary(run: &TestRun) {
         println!("   local interface MTU: {m} bytes{note}");
     }
     println!("   → {probes} DF probe(s) sent", probes = p.probes_sent);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::{attribution_note, local_drop_note};
+
+    // ── Throughput-attribution triad (B.2) ───────────────────────────────────
+
+    #[test]
+    fn attribution_note_none_without_triad_data() {
+        assert!(attribution_note(&[]).is_none());
+    }
+
+    #[test]
+    fn attribution_note_quiet_when_path_limited() {
+        // 2% rwnd, 1% sndbuf — normal path/CPU-limited transfer stays silent.
+        let line = attribution_note(&[(1_000_000, 20_000, 10_000)]);
+        assert!(line.is_none(), "unexpected note: {line:?}");
+    }
+
+    #[test]
+    fn attribution_note_reports_rwnd_limited_share() {
+        let line = attribution_note(&[(1_000_000, 840_000, 0)]).expect("note expected");
+        assert!(
+            line.contains("receiver-window-limited 84% of the transfer"),
+            "{line}"
+        );
+        assert!(!line.contains("send-buffer-limited"), "{line}");
+        assert!(line.contains("1 attempt"), "{line}");
+    }
+
+    #[test]
+    fn attribution_note_reports_sndbuf_limited_share() {
+        let line = attribution_note(&[(2_000_000, 0, 500_000)]).expect("note expected");
+        assert!(
+            line.contains("local send-buffer-limited 25% of the transfer"),
+            "{line}"
+        );
+        assert!(!line.contains("receiver-window-limited"), "{line}");
+    }
+
+    #[test]
+    fn attribution_note_aggregates_across_attempts() {
+        // Two attempts: 50% and 100% rwnd-limited → 75% of total busy time.
+        let line = attribution_note(&[(1_000_000, 500_000, 0), (1_000_000, 1_000_000, 0)])
+            .expect("note expected");
+        assert!(line.contains("receiver-window-limited 75%"), "{line}");
+        assert!(line.contains("2 attempts"), "{line}");
+    }
+
+    #[test]
+    fn attribution_note_reports_both_limits_when_both_noteworthy() {
+        let line = attribution_note(&[(1_000_000, 300_000, 200_000)]).expect("note expected");
+        assert!(line.contains("receiver-window-limited 30%"), "{line}");
+        assert!(line.contains("local send-buffer-limited 20%"), "{line}");
+    }
+
+    // ── UDP local-drop warning (B.6) ─────────────────────────────────────────
+
+    #[test]
+    fn local_drop_note_none_when_no_drops_observed() {
+        assert!(local_drop_note(&[]).is_none());
+        assert!(local_drop_note(&[0, 0, 0]).is_none());
+    }
+
+    #[test]
+    fn local_drop_note_reports_count_and_honest_attribution() {
+        let line = local_drop_note(&[0, 12, 0]).expect("note expected");
+        assert!(line.contains("12 datagrams dropped locally"), "{line}");
+        assert!(line.contains("1 attempt "), "{line}");
+        assert!(line.contains("loss% includes them"), "{line}");
+        assert!(line.contains("not path loss"), "{line}");
+    }
+
+    #[test]
+    fn local_drop_note_singular_forms() {
+        let line = local_drop_note(&[1]).expect("note expected");
+        assert!(line.contains("1 datagram dropped locally"), "{line}");
+    }
+
+    #[test]
+    fn local_drop_note_sums_across_attempts() {
+        let line = local_drop_note(&[3, 4]).expect("note expected");
+        assert!(line.contains("7 datagrams"), "{line}");
+        assert!(line.contains("2 attempts"), "{line}");
+    }
 }
