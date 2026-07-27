@@ -237,6 +237,8 @@ fn html_contains_error_section_for_failed_attempt() {
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         }],
     };
     let html = render(&run, None, None);
@@ -333,6 +335,8 @@ fn html_contains_throughput_section_for_download_attempt() {
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         }],
     };
     let html = render(&run, None, None);
@@ -434,6 +438,8 @@ fn html_contains_tls_section_for_tls_attempt() {
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         }],
     };
     let html = render(&run, None, None);
@@ -526,6 +532,8 @@ fn html_contains_page_load_section() {
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         }],
     };
     let html = render(&run, None, None);
@@ -610,6 +618,8 @@ fn append_proto_row_no_http_shows_dashes() {
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     };
     let rows: Vec<&RequestAttempt> = vec![&a];
     let mut out = String::new();
@@ -704,6 +714,8 @@ fn append_attempt_row_udp_echo_shows_rtt() {
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     };
     let mut out = String::new();
     append_attempt_row(&mut out, &a, false);
@@ -752,6 +764,8 @@ fn append_attempt_row_udp_throughput_shows_transfer_ms() {
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     };
     let mut out = String::new();
     append_attempt_row(&mut out, &a, false);
@@ -788,6 +802,8 @@ fn append_attempt_row_no_results_shows_dashes() {
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     };
     let mut out = String::new();
     append_attempt_row(&mut out, &a, false);
@@ -922,6 +938,8 @@ fn html_contains_browser_section() {
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         }],
     };
     let html = render(&run, None, None);

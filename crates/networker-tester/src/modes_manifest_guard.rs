@@ -64,6 +64,8 @@ fn manifest_id_of(p: &Protocol) -> &'static str {
         Protocol::UdpDownload => "udpdownload",
         Protocol::UdpUpload => "udpupload",
         Protocol::Rpm => "rpm",
+        Protocol::Responsiveness => "responsiveness",
+        Protocol::Stamp => "stamp",
         Protocol::Ping => "ping",
         Protocol::Path => "path",
         Protocol::DualStack => "dualstack",

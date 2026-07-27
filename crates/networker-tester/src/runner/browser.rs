@@ -788,6 +788,8 @@ mod real {
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         }
     }
 
@@ -908,6 +910,8 @@ mod real {
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         }
     }
 
@@ -1160,6 +1164,8 @@ mod stub {
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         }
     }
 }

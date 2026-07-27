@@ -221,6 +221,8 @@ pub async fn run_pmtud_probe(
         dualstack: None,
         websocket: None,
         pmtud: Some(result),
+        responsiveness: None,
+        stamp: None,
     }
 }
 
@@ -279,6 +281,8 @@ fn pmtud_failed(
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 

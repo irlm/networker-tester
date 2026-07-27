@@ -317,6 +317,8 @@ pub async fn run_rpm_probe(
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 
@@ -554,6 +556,8 @@ fn rpm_failed(
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 

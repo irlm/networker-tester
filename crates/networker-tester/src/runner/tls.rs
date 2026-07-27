@@ -276,6 +276,8 @@ pub async fn run_tls_probe(
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 
@@ -487,6 +489,8 @@ pub async fn run_tls_resumption_probe(
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 
@@ -1230,6 +1234,8 @@ fn make_failed_with_protocol(
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 

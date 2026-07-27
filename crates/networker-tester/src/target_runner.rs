@@ -953,6 +953,26 @@ pub(crate) async fn run_for_target(
         }
     }
 
+    // ── STAMP one-way-delay ESTIMATE: raw readings + the run's SNTP offset ──
+    // Pure arithmetic on data already in hand. Only filled when the clock-sync
+    // query succeeded; the ±(delay/2) uncertainty is attached so the consumer
+    // can see how coarse the estimate is. Assumes the reflector's own clock is
+    // NTP-true (documented on the fields).
+    if let Some(cs) = clock_sync.as_ref() {
+        if let (Some(offset_ms), Some(rtt_ms)) = (cs.offset_ms, cs.round_trip_ms) {
+            for attempt in &mut all_attempts {
+                if let Some(stamp) = attempt.stamp.as_mut() {
+                    // offset_ms is positive when the local clock is BEHIND
+                    // NTP truth: forward readings (T2−T1) read high by the
+                    // offset, return readings (T4−T3) read low by it.
+                    stamp.owd_forward_est_ms = stamp.near_owd_raw_avg_ms.map(|raw| raw - offset_ms);
+                    stamp.owd_return_est_ms = stamp.far_owd_raw_avg_ms.map(|raw| raw + offset_ms);
+                    stamp.owd_uncertainty_ms = Some(rtt_ms / 2.0);
+                }
+            }
+        }
+    }
+
     let benchmark_noise_thresholds = cfg.benchmark_mode.then(|| BenchmarkNoiseThresholds {
         max_packet_loss_percent: cfg
             .benchmark_max_packet_loss_percent

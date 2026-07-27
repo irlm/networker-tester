@@ -90,6 +90,8 @@ mod stub {
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         }
     }
 }
@@ -806,6 +808,8 @@ mod real {
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         }
     }
 
@@ -855,6 +859,8 @@ mod real {
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         }
     }
 
@@ -900,6 +906,7 @@ mod real {
                     https_port,
                     udp_port,
                     udp_throughput_port,
+                    stamp_port: free_udp_port(),
                 };
                 tokio::spawn(async move {
                     networker_endpoint::run_with_shutdown(cfg, rx).await.ok();

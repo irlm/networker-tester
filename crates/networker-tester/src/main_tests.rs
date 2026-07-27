@@ -49,6 +49,8 @@ fn request_attempt(success: bool, retry_count: u32) -> RequestAttempt {
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 
@@ -110,6 +112,8 @@ fn measured_http_attempt(
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 
@@ -147,6 +151,8 @@ fn failed_http_attempt(
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 
@@ -483,6 +489,7 @@ fn sample_resolved_config(delay_ms: u64) -> ResolvedConfig {
         laghound_route: None,
         udp_port: 9999,
         udp_throughput_port: 9998,
+        stamp_port: 9997,
         udp_probes: 20,
         connection_reuse: false,
         dns_enabled: true,

@@ -10,6 +10,7 @@ struct ConfigFile {
     https_port: Option<u16>,
     udp_port: Option<u16>,
     udp_throughput_port: Option<u16>,
+    stamp_port: Option<u16>,
     log_level: Option<String>,
 }
 
@@ -48,6 +49,10 @@ struct Cli {
     /// UDP bulk throughput server port (for udpdownload / udpupload probes)
     #[arg(long)]
     udp_throughput_port: Option<u16>,
+
+    /// STAMP Session-Reflector port (RFC 8762, for the stamp probe mode)
+    #[arg(long)]
+    stamp_port: Option<u16>,
 
     /// Log level e.g. "debug", "info,tower_http=debug". Overrides RUST_LOG.
     #[arg(long)]
@@ -107,6 +112,7 @@ async fn main() -> anyhow::Result<()> {
         .udp_throughput_port
         .or(f.udp_throughput_port)
         .unwrap_or(9998);
+    let stamp_port = cli.stamp_port.or(f.stamp_port).unwrap_or(9997);
     let log_level = cli.log_level.or(f.log_level);
 
     let mut builder =
@@ -124,6 +130,7 @@ async fn main() -> anyhow::Result<()> {
         https_port,
         udp_port,
         udp_throughput_port: udp_tp_port,
+        stamp_port,
     };
 
     run(cfg).await

@@ -1,5 +1,6 @@
 mod http3_server;
 mod routes;
+mod stamp;
 mod udp_echo;
 mod udp_throughput;
 
@@ -22,6 +23,9 @@ pub struct ServerConfig {
     pub udp_port: u16,
     /// UDP bulk throughput server port (udpdownload / udpupload probes).
     pub udp_throughput_port: u16,
+    /// STAMP Session-Reflector port (RFC 8762 unauthenticated mode; `stamp`
+    /// probe mode).
+    pub stamp_port: u16,
 }
 
 impl Default for ServerConfig {
@@ -31,6 +35,7 @@ impl Default for ServerConfig {
             https_port: 8443,
             udp_port: 9999,
             udp_throughput_port: 9998,
+            stamp_port: 9997,
         }
     }
 }
@@ -65,6 +70,7 @@ pub async fn run_with_shutdown(
     );
     info!("UDP echo       → 0.0.0.0:{}", cfg.udp_port);
     info!("UDP throughput → 0.0.0.0:{}", cfg.udp_throughput_port);
+    info!("STAMP reflector→ 0.0.0.0:{}", cfg.stamp_port);
 
     // Pass the QUIC port so the router can advertise H3 via Alt-Svc headers.
     // Chrome only acts on Alt-Svc from HTTPS origins, so HTTP clients ignore it.
@@ -89,6 +95,7 @@ pub async fn run_with_shutdown(
         https_port: cfg.https_port,
         udp_port: cfg.udp_port,
         udp_throughput_port: cfg.udp_throughput_port,
+        stamp_port: cfg.stamp_port,
         started_at: std::time::Instant::now(),
         system_meta,
     };
@@ -99,6 +106,8 @@ pub async fn run_with_shutdown(
     let udp_handle = tokio::spawn(udp_echo::run_udp_echo(cfg.udp_port));
     // Spawn UDP throughput server
     let udp_tp_handle = tokio::spawn(udp_throughput::run_udp_throughput(cfg.udp_throughput_port));
+    // Spawn STAMP Session-Reflector (RFC 8762)
+    let stamp_handle = tokio::spawn(stamp::run_stamp_reflector(cfg.stamp_port));
 
     // HTTP server — NoDelayAcceptor sets TCP_NODELAY on every accepted socket,
     // preventing 40 ms Nagle + delayed-ACK stalls during the HTTP/2 handshake.
@@ -148,6 +157,7 @@ pub async fn run_with_shutdown(
     // Abort remaining tasks (some may have already exited)
     udp_handle.abort();
     udp_tp_handle.abort();
+    stamp_handle.abort();
     #[cfg(feature = "http3")]
     h3_handle.abort();
 

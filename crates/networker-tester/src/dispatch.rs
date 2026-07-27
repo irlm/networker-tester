@@ -15,7 +15,9 @@ use crate::runner::{
     path::{run_path_probe, PathProbeConfig},
     ping::{run_ping_probe, PingProbeConfig},
     pmtud::{run_pmtud_probe, PmtudProbeConfig},
+    responsiveness::{run_responsiveness_probe, ResponsivenessConfig},
     rpm::{run_rpm_probe, RpmProbeConfig},
+    stamp::{run_stamp_probe, StampProbeConfig},
     throughput::{
         run_download1_probe, run_download2_probe, run_download3_probe, run_download_probe,
         run_upload1_probe, run_upload2_probe, run_upload3_probe, run_upload_probe,
@@ -132,6 +134,25 @@ pub async fn dispatch_once(
             // both phases and the throughput config for the load generator.
             let rpm_cfg = RpmProbeConfig::from_parts(udp_cfg.clone(), throughput_cfg.clone());
             run_rpm_probe(run_id, seq, &rpm_cfg).await
+        }
+        (Protocol::Responsiveness, _) => {
+            // Draft-conformant responsiveness: base URL + TLS trust settings
+            // come from the throughput config; ramp/stability parameters are
+            // the draft-08 defaults.
+            let resp_cfg = ResponsivenessConfig::from_parts(throughput_cfg);
+            run_responsiveness_probe(run_id, seq, &resp_cfg).await
+        }
+        (Protocol::Stamp, _) => {
+            // STAMP Session-Sender: reflector host follows the UDP echo
+            // target; the port is the endpoint's Session-Reflector
+            // (`--stamp-port`, default 9997); Tmax follows --udp-timeout.
+            let stamp_cfg = StampProbeConfig {
+                target_host: udp_cfg.target_host.clone(),
+                target_port: resolved_cfg.stamp_port,
+                timeout_ms: udp_cfg.timeout_ms,
+                ..StampProbeConfig::default()
+            };
+            run_stamp_probe(run_id, seq, &stamp_cfg).await
         }
         (Protocol::Ping, _) => {
             // ICMP echo to the target host; probe count/timeout reuse the
@@ -417,6 +438,60 @@ pub fn log_attempt(a: &RequestAttempt) {
                     load_p95 = r.loaded_rtt_p95_ms,
                     jitter = r.loaded_jitter_ms,
                     loss = r.loaded_loss_percent,
+                    retry = retry_suffix,
+                );
+            }
+        }
+        Responsiveness => {
+            if let Some(r) = &a.responsiveness {
+                let fmt_rpm =
+                    |v: Option<f64>| v.map(|x| format!("{x:.0}")).unwrap_or_else(|| "—".into());
+                let fmt_cap = |v: Option<f64>| {
+                    v.map(|x| format!("{x:.1} MB/s"))
+                        .unwrap_or_else(|| "—".into())
+                };
+                let d = &r.download;
+                let up = r
+                    .upload
+                    .as_ref()
+                    .map(|u| {
+                        format!(
+                            "up RPM={rpm} cap={cap} conns={c} sat={s}",
+                            rpm = fmt_rpm(u.rpm),
+                            cap = fmt_cap(u.capacity_mbps),
+                            c = u.saturated_connections,
+                            s = u.saturation_reached,
+                        )
+                    })
+                    .unwrap_or_else(|| "up —".into());
+                info!(
+                    "{status} #{seq} [responsiveness] down RPM={rpm} cap={cap} \
+                     conns={conns} sat={sat} | {up}{retry}",
+                    seq = a.sequence_num,
+                    rpm = fmt_rpm(d.rpm),
+                    cap = fmt_cap(d.capacity_mbps),
+                    conns = d.saturated_connections,
+                    sat = d.saturation_reached,
+                    retry = retry_suffix,
+                );
+            }
+        }
+        Stamp => {
+            if let Some(s) = &a.stamp {
+                let fmt_pct =
+                    |v: Option<f64>| v.map(|x| format!("{x:.1}%")).unwrap_or_else(|| "—".into());
+                info!(
+                    "{status} #{seq} [stamp] {addr} RTT avg={avg:.2}ms p95={p95:.2}ms \
+                     (processing-corrected) loss fwd={fwd}/rev={rev} \
+                     replies={replies}/{sent}{retry}",
+                    seq = a.sequence_num,
+                    addr = s.remote_addr,
+                    avg = s.rtt_avg_ms,
+                    p95 = s.rtt_p95_ms,
+                    fwd = fmt_pct(s.loss_sent_percent),
+                    rev = fmt_pct(s.loss_return_percent),
+                    replies = s.replies_received,
+                    sent = s.probes_sent,
                     retry = retry_suffix,
                 );
             }

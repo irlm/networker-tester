@@ -47,6 +47,14 @@ export const MODE_REQUIREMENT: Readonly<Record<string, ModeRequirement>> = {
   // route to saturate the link AND its UDP echo server (:9999).
   rpm: 'networker-endpoint',
 
+  // Draft-conformant responsiveness — needs the endpoint's /download and
+  // /upload routes for the H2 load ramp + 1-byte probe object.
+  responsiveness: 'networker-endpoint',
+
+  // STAMP (RFC 8762) — needs the endpoint's Session-Reflector (:9997);
+  // arbitrary hosts run no STAMP reflector.
+  stamp: 'networker-endpoint',
+
   // WebSocket probe — needs the endpoint's /ws echo route for the
   // message-RTT phase; an arbitrary URL has no frame-echoing WS server.
   websocket: 'networker-endpoint',

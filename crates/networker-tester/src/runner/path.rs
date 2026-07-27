@@ -182,6 +182,8 @@ pub async fn run_path_probe(
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 
@@ -240,6 +242,8 @@ fn path_failed(
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 

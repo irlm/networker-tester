@@ -114,6 +114,8 @@ pub fn print_summary(run: &TestRun) {
         Protocol::Tcp,
         Protocol::Udp,
         Protocol::Rpm,
+        Protocol::Responsiveness,
+        Protocol::Stamp,
         Protocol::Ping,
         Protocol::Path,
         Protocol::DualStack,
@@ -282,6 +284,12 @@ pub fn print_summary(run: &TestRun) {
     // rpm latency-under-load breakdown — unloaded vs loaded RTT, bufferbloat
     // factor, and RPM. Only rendered when an rpm attempt produced a result.
     print_rpm_summary(run);
+
+    // Draft-conformant responsiveness breakdown (per-direction RPM, capacity
+    // at saturation, probe trimmed means) and STAMP directional detail —
+    // rendered only when those probes produced results.
+    print_responsiveness_summary(run);
+    print_stamp_summary(run);
 
     // path hop table and dualstack family comparison — rendered only when
     // those probes produced results.
@@ -679,6 +687,123 @@ fn print_rpm_summary(run: &TestRun) {
         println!(
             "   ⚠ {censored} loaded probe(s) censored (echo wait truncated before \
              the full timeout) — loaded RTT/factor may be optimistically biased"
+        );
+    }
+}
+
+/// Render the draft-conformant responsiveness breakdown: per-direction RPM
+/// (with the foreign/self split), capacity at saturation, connection count,
+/// and the stability flags. Shows the FIRST attempt's result (typically one
+/// per run iteration; per-attempt data is in the JSON output). Numbers here
+/// follow draft-ietf-ippm-responsiveness-08 and ARE cross-tool comparable —
+/// unlike the `rpm` mode's UDP-echo figure.
+fn print_responsiveness_summary(run: &TestRun) {
+    let Some(r) = run
+        .attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::Responsiveness)
+        .find_map(|a| a.responsiveness.as_ref())
+    else {
+        return;
+    };
+
+    let fmt =
+        |v: Option<f64>, unit: &str| v.map_or_else(|| "—".to_string(), |x| format!("{x:.0}{unit}"));
+    let fmt2 =
+        |v: Option<f64>, unit: &str| v.map_or_else(|| "—".to_string(), |x| format!("{x:.2}{unit}"));
+
+    println!();
+    println!(" Responsiveness (draft-ietf-ippm-responsiveness)");
+    println!("──────────────────────────────────────────────────────────");
+    let render = |label: &str, d: &crate::metrics::ResponsivenessDirection| {
+        println!(
+            "   {label:<9} │ RPM {rpm:>6} (foreign {frpm}, self {srpm}) │ \
+             capacity {cap} │ {conns} conns │ saturated: {sat}",
+            rpm = fmt(d.rpm, ""),
+            frpm = fmt(d.foreign_rpm, ""),
+            srpm = fmt(d.self_rpm, ""),
+            cap = fmt2(d.capacity_mbps, " MB/s"),
+            conns = d.saturated_connections,
+            sat = if d.saturation_reached {
+                "yes"
+            } else {
+                "NO (cap hit)"
+            },
+        );
+        println!(
+            "             │ probe TM: tcp_f {tcp} tls_f {tls} http_f {httpf} http_l(self) {httpl} \
+             │ probes ok {fok}/{fs} foreign, {sok}/{ss} self",
+            tcp = fmt2(d.foreign_tcp_tm_ms, "ms"),
+            tls = fmt2(d.foreign_tls_tm_ms, "ms"),
+            httpf = fmt2(d.foreign_http_tm_ms, "ms"),
+            httpl = fmt2(d.self_http_tm_ms, "ms"),
+            fok = d.foreign_probes_ok,
+            fs = d.foreign_probes_sent,
+            sok = d.self_probes_ok,
+            ss = d.self_probes_sent,
+        );
+    };
+    render("Download", &r.download);
+    match &r.upload {
+        Some(u) => render("Upload", u),
+        None => println!(
+            "   Upload    │ absent — {}",
+            r.upload_error.as_deref().unwrap_or("unknown reason")
+        ),
+    }
+}
+
+/// Render the STAMP (RFC 8762) breakdown: processing-corrected RTT,
+/// per-direction delay variation, and directional loss. Shows the FIRST
+/// attempt's result; per-attempt data is in the JSON output.
+fn print_stamp_summary(run: &TestRun) {
+    let Some(s) = run
+        .attempts
+        .iter()
+        .filter(|a| a.protocol == Protocol::Stamp)
+        .find_map(|a| a.stamp.as_ref())
+    else {
+        return;
+    };
+
+    let fmt =
+        |v: Option<f64>, unit: &str| v.map_or_else(|| "—".to_string(), |x| format!("{x:.2}{unit}"));
+    println!();
+    println!(" STAMP (RFC 8762, reflector {})", s.remote_addr);
+    println!("──────────────────────────────────────────────────────────");
+    println!(
+        "   RTT (processing-corrected) │ min {min:.2}ms avg {avg:.2}ms p95 {p95:.2}ms │ \
+         reflector processing avg {proc}",
+        min = s.rtt_min_ms,
+        avg = s.rtt_avg_ms,
+        p95 = s.rtt_p95_ms,
+        proc = s
+            .reflector_processing_avg_us
+            .map_or_else(|| "—".to_string(), |x| format!("{x:.0}µs")),
+    );
+    println!(
+        "   Delay variation (IPDV)     │ near (out) mean {nm} p95 {np} │ far (back) mean {fm} p95 {fp}",
+        nm = fmt(s.near_ipdv_mean_ms, "ms"),
+        np = fmt(s.near_ipdv_p95_ms, "ms"),
+        fm = fmt(s.far_ipdv_mean_ms, "ms"),
+        fp = fmt(s.far_ipdv_p95_ms, "ms"),
+    );
+    println!(
+        "   Loss                       │ sender→reflector {fwd} │ reflector→sender {rev} │ \
+         replies {r}/{p}",
+        fwd = fmt(s.loss_sent_percent, "%"),
+        rev = fmt(s.loss_return_percent, "%"),
+        r = s.replies_received,
+        p = s.probes_sent,
+    );
+    if let (Some(f), Some(b), Some(u)) = (
+        s.owd_forward_est_ms,
+        s.owd_return_est_ms,
+        s.owd_uncertainty_ms,
+    ) {
+        println!(
+            "   One-way delay (ESTIMATE)   │ out {f:.2}ms │ back {b:.2}ms │ ±{u:.1}ms \
+             (SNTP-offset-corrected; assumes reflector clock is NTP-true)"
         );
     }
 }

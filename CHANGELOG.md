@@ -11,6 +11,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.84] — 2026-07-27
+
+Wave R — the "own-both-ends" builds from the deep audit (m4 §2.1/§2.2).
+
+### Added
+- **New probe mode: `responsiveness`** (audit score 88; requires a
+  networker-endpoint) — draft-ietf-ippm-responsiveness working-conditions
+  measurement, properly: parallel HTTP load-connection ramp with the draft's
+  saturation-stability criterion, download AND upload stages, and probes
+  measured under load both on FRESH connections (foreign) and ON the load
+  connections themselves (self — the fix for flow-isolating-AQM blindness).
+  Reports `rpm_download`/`rpm_upload` via the draft's trimmed-mean formula,
+  capacity at saturation, foreign-vs-self probe splits, and saturation flags.
+  Draft-08 parameters cited in code; deliberate deviations documented. The
+  existing `rpm` mode stays as the UDP diagnostic complement.
+- **New probe mode: `stamp` + endpoint reflector** (score 84; RFC 8762
+  unauthenticated) — a stateless Session-Reflector on the endpoint (UDP
+  :9997, `--stamp-port`) and a Session-Sender probe: **processing-corrected
+  RTT** (T4−T1−(T3−T2), no clock sync needed), **per-direction delay
+  variation** (near/far IPDV), and **directional loss** (sender→reflector vs
+  return, from the reflector sequence). Optional absolute one-way-delay
+  estimate when SNTP clock-sync is available, explicitly uncertainty-labeled.
+
+---
+
 ## [0.28.83] — 2026-07-27
 
 Wave S — transport symmetry: the deep audit's top-scored capability gaps.

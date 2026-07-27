@@ -184,6 +184,8 @@ fn write_statistics(
         Protocol::UdpDownload,
         Protocol::UdpUpload,
         Protocol::Rpm,
+        Protocol::Responsiveness,
+        Protocol::Stamp,
         Protocol::Ping,
         Protocol::Path,
         Protocol::DualStack,
@@ -1307,6 +1309,8 @@ mod tests {
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         };
 
         let udp_attempt = RequestAttempt {
@@ -1351,6 +1355,8 @@ mod tests {
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         };
 
         let udp_throughput_attempt = RequestAttempt {
@@ -1392,6 +1398,8 @@ mod tests {
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         };
 
         let pageload_attempt = RequestAttempt {
@@ -1437,6 +1445,8 @@ mod tests {
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         };
 
         let error_attempt = RequestAttempt {
@@ -1471,6 +1481,8 @@ mod tests {
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         };
 
         TestRun {
@@ -1653,6 +1665,8 @@ mod tests {
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         }
     }
 
@@ -1935,6 +1949,8 @@ mod tests {
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         };
 
         let upload_attempt = RequestAttempt {
@@ -1987,6 +2003,8 @@ mod tests {
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         };
 
         let run = TestRun {

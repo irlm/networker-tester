@@ -398,6 +398,8 @@ pub async fn run_websocket_probe(
         dualstack: None,
         websocket: Some(result),
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 
@@ -573,6 +575,8 @@ fn ws_failed(
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 

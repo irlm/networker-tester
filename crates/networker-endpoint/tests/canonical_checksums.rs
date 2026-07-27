@@ -32,6 +32,7 @@ fn app() -> axum::Router {
         https_port: 8443,
         udp_port: 9999,
         udp_throughput_port: 9998,
+        stamp_port: 9997,
         started_at: std::time::Instant::now(),
         system_meta: SystemMeta::collect(),
     })

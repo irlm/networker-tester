@@ -169,6 +169,8 @@ pub async fn run_udpdownload_probe(
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 
@@ -303,6 +305,8 @@ pub async fn run_udpupload_probe(
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 
@@ -547,6 +551,8 @@ fn udp_tp_failed(
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 
