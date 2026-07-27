@@ -22,10 +22,16 @@ pub struct Cli {
 
     // ── Modes ─────────────────────────────────────────────────────────────────
     /// Comma-separated probe modes:
-    /// tcp,http1,http2,http3,udp,rpm,ping,path,dualstack,websocket,pmtud,download,download1,download2,download3,upload,upload1,upload2,upload3,webdownload,webupload,udpdownload,udpupload,
+    /// tcp,http1,http2,http3,udp,rpm,responsiveness,stamp,ping,path,dualstack,websocket,pmtud,download,download1,download2,download3,upload,upload1,upload2,upload3,webdownload,webupload,udpdownload,udpupload,
     /// dns,tls,tlsresume,native,curl,pageload,pageload1,pageload2,pageload3,browser,browser1,browser2,browser3.
     /// rpm: latency-under-load / bufferbloat probe (UDP echo RTT idle vs during a sustained
     ///   /download transfer; requires a networker-endpoint target).
+    /// responsiveness: draft-ietf-ippm-responsiveness working-conditions probe — parallel
+    ///   HTTP/2 load ramp to saturation with foreign + self probes; reports RPM per
+    ///   direction and capacity (requires a networker-endpoint target).
+    /// stamp: STAMP (RFC 8762) probe against the endpoint's Session-Reflector
+    ///   (--stamp-port, default 9997) — processing-corrected RTT, per-direction delay
+    ///   variation, directional loss (requires a networker-endpoint target).
     /// ping: ICMP echo RTT via unprivileged ICMP datagram sockets (count/timeout follow
     ///   --udp-probes / --udp-timeout; Linux needs net.ipv4.ping_group_range).
     /// path: traceroute-style hop discovery via UDP TTL probes; per-hop addresses on Linux
@@ -138,6 +144,11 @@ pub struct Cli {
     /// UDP bulk throughput server port (for udpdownload / udpupload probes)
     #[arg(long)]
     pub udp_throughput_port: Option<u16>,
+
+    /// STAMP Session-Reflector port on the target endpoint (for the `stamp`
+    /// probe mode, RFC 8762)
+    #[arg(long)]
+    pub stamp_port: Option<u16>,
 
     /// Number of UDP probe packets per run
     #[arg(long)]
@@ -579,6 +590,7 @@ pub struct ConfigFile {
     pub laghound_route: Option<String>,
     pub udp_port: Option<u16>,
     pub udp_throughput_port: Option<u16>,
+    pub stamp_port: Option<u16>,
     pub udp_probes: Option<u32>,
     pub connection_reuse: Option<bool>,
     pub dns_enabled: Option<bool>,
@@ -672,6 +684,7 @@ pub struct ResolvedConfig {
     pub laghound_route: Option<String>,
     pub udp_port: u16,
     pub udp_throughput_port: u16,
+    pub stamp_port: u16,
     pub udp_probes: u32,
     pub connection_reuse: bool,
     pub dns_enabled: bool,
@@ -900,6 +913,7 @@ impl Cli {
             laghound_route: self.laghound_route.or(f.laghound_route),
             udp_port: pick!(udp_port, 9999),
             udp_throughput_port: pick!(udp_throughput_port, 9998),
+            stamp_port: pick!(stamp_port, 9997),
             udp_probes: pick!(udp_probes, 10),
             connection_reuse: flag!(connection_reuse),
             dns_enabled: self.dns_enabled.or(f.dns_enabled).unwrap_or(true),

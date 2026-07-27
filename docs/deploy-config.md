@@ -224,9 +224,9 @@ loss/jitter control yet.
 > `pageload`, and `apibench` is runner-level (see note under Default modes).
 
 **Network probes:**
-`tcp`, `http1`, `http2`, `http3`, `udp`, `rpm`, `ping`, `path`, `dualstack`,
-`websocket`, `pmtud`, `download`, `upload`, `webdownload`, `webupload`,
-`udpdownload`, `udpupload`
+`tcp`, `http1`, `http2`, `http3`, `udp`, `rpm`, `responsiveness`, `stamp`,
+`ping`, `path`, `dualstack`, `websocket`, `pmtud`, `download`, `upload`,
+`webdownload`, `webupload`, `udpdownload`, `udpupload`
 
 > `rpm` is the latency-under-load / bufferbloat probe: it samples UDP echo RTT
 > on an idle link, then repeats the sampling at a steady cadence while the
@@ -240,6 +240,36 @@ loss/jitter control yet.
 > on port 9999). NOTE: this is a UDP-echo-under-single-flow-load diagnostic,
 > not the draft-ietf-ippm-responsiveness methodology — its RPM figure is not
 > comparable with Apple `networkQuality`/Cloudflare/Ookla RPM numbers.
+> For the spec-conformant methodology use `responsiveness`.
+
+> `responsiveness` is the draft-ietf-ippm-responsiveness (draft-08)
+> working-conditions probe: per direction (download, then upload) it ramps
+> parallel HTTP/2 load connections against the endpoint's `/download` and
+> `/upload` routes (1 connection added per 1 s interval, up to 16) until
+> goodput stabilizes (stddev of the last 4 moving averages < 5 % of the
+> current average), while measuring HTTP probe latency on NEW connections
+> ("foreign": TCP + TLS + 1-byte GET) and multiplexed ON the load connections
+> ("self" — shares the loaded flow's queue, so flow-isolating AQMs like
+> fq_codel cannot hide bufferbloat from it). RPM per direction follows the
+> draft's 95 % trimmed-mean formula over the final 4 intervals; capacity at
+> saturation, per-component trimmed means, connection counts, and
+> `saturation_reached` flags are reported alongside. Cleartext targets use
+> h2c (prior knowledge) and the draft's TCP-only aggregation variant.
+> Requires a networker-endpoint target. Unlike `rpm`, these figures ARE
+> comparable with other draft implementations.
+
+> `stamp` is a STAMP (RFC 8762, unauthenticated mode) probe against the
+> endpoint's Session-Reflector (UDP port 9997, `--stamp-port`): 50 probes at
+> a fixed 50 ms cadence. The reflector's receive/transmit timestamps and
+> stateful sequence number yield RTT corrected for reflector processing time
+> ((T4−T1) − (T3−T2) — no clock sync needed), per-direction delay variation
+> (near = sender→reflector, far = reflector→sender; clock offsets cancel
+> within each direction), and DIRECTIONAL loss (`loss_sent_percent` vs
+> `loss_return_percent`). Timestamps are NTP 64-bit. When the run's SNTP
+> clock-sync query succeeded, indicative absolute one-way delays are also
+> reported with an explicit ± uncertainty (half the SNTP round-trip) —
+> labeled estimates, never measurements. Each probe gets its full
+> `--udp-timeout` before being declared lost.
 
 > `ping` sends ICMP echo probes (count/timeout follow `--udp-probes` /
 > `--udp-timeout`) — no raw sockets, no root on any platform. Unix uses

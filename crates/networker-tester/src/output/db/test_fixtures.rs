@@ -85,6 +85,8 @@ pub(crate) fn bare_attempt(run_id: Uuid) -> RequestAttempt {
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 
@@ -229,6 +231,8 @@ pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 

@@ -459,6 +459,8 @@ pub async fn run_pageload_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) ->
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 
@@ -1233,6 +1235,8 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 
@@ -1382,6 +1386,8 @@ fn error_attempt_proto(
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 
@@ -1824,6 +1830,8 @@ pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 
@@ -2432,6 +2440,8 @@ async fn fetch_h2_pageload(
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 
@@ -2996,6 +3006,8 @@ async fn fetch_h3_pageload(
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 
@@ -3053,6 +3065,7 @@ mod tests {
                 https_port,
                 udp_port,
                 udp_throughput_port,
+                stamp_port: free_udp_port(),
             };
             tokio::spawn(async move {
                 networker_endpoint::run_with_shutdown(cfg, rx).await.ok();

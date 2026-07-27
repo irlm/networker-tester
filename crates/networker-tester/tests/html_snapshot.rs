@@ -89,6 +89,8 @@ fn http_attempt(run_id: Uuid, seq: u32, proto: Protocol, ms: f64) -> RequestAtte
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 
@@ -125,6 +127,8 @@ fn failed_attempt(run_id: Uuid, seq: u32) -> RequestAttempt {
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 
@@ -171,6 +175,8 @@ fn udp_attempt(run_id: Uuid, seq: u32) -> RequestAttempt {
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 

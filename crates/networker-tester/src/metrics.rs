@@ -1124,6 +1124,14 @@ pub struct RequestAttempt {
     /// Path-MTU discovery result (`pmtud` mode only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pmtud: Option<PmtudResult>,
+    /// Draft-conformant working-conditions responsiveness result
+    /// (`responsiveness` mode only). Additive — absent in pre-Wave-R JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub responsiveness: Option<ResponsivenessResult>,
+    /// STAMP (RFC 8762) probe result (`stamp` mode only). Additive — absent
+    /// in pre-Wave-R JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stamp: Option<StampResult>,
     /// Benchmark phase this attempt executed in ("warmup", "overhead",
     /// "pilot", "measured", "cooldown"), set at attempt creation by the
     /// benchmark runner. `None` means the attempt was not produced by a
@@ -1180,6 +1188,26 @@ pub enum Protocol {
     /// comparable with Apple `networkQuality`/Cloudflare/Ookla RPM (see
     /// [`RpmResult`] docs).
     Rpm,
+    /// Working-conditions responsiveness probe conformant with
+    /// draft-ietf-ippm-responsiveness (draft-08 parameters): ramps parallel
+    /// HTTP/2 load connections against the networker-endpoint's `/download`
+    /// (then `/upload`) route until goodput stabilizes (moving-average
+    /// stability criterion), while measuring HTTP probe latency on NEW
+    /// connections ("foreign" probes: TCP + TLS + GET phases) and ON the
+    /// load-generating connections themselves ("self" probes — multiplexed
+    /// H2 GETs that share the loaded flow's queue, defeating flow-isolating
+    /// AQM blindness). Reports RPM per direction via the draft's trimmed-mean
+    /// formula plus capacity at saturation. Unlike `rpm`, this figure IS
+    /// comparable with other draft implementations. See
+    /// [`ResponsivenessResult`].
+    Responsiveness,
+    /// STAMP (RFC 8762) probe: sends unauthenticated-mode Session-Sender test
+    /// packets to the networker-endpoint's Session-Reflector (UDP port 9997)
+    /// at a fixed cadence. The reflector's receive/transmit timestamps and
+    /// sequence number yield processing-corrected RTT (T4−T1 − (T3−T2), no
+    /// clock sync needed), per-direction delay variation, and DIRECTIONAL
+    /// loss (sender→reflector vs reflector→sender). See [`StampResult`].
+    Stamp,
     /// ICMP echo probe — measures raw network-layer RTT (min/avg/p95), jitter,
     /// and packet loss to the target host without any TCP/UDP dependency.
     /// Uses unprivileged ICMP datagram sockets (Linux `ping_group_range`,
@@ -1275,6 +1303,8 @@ impl std::fmt::Display for Protocol {
             Protocol::UdpDownload => write!(f, "udpdownload"),
             Protocol::UdpUpload => write!(f, "udpupload"),
             Protocol::Rpm => write!(f, "rpm"),
+            Protocol::Responsiveness => write!(f, "responsiveness"),
+            Protocol::Stamp => write!(f, "stamp"),
             Protocol::Ping => write!(f, "ping"),
             Protocol::Path => write!(f, "path"),
             Protocol::DualStack => write!(f, "dualstack"),
@@ -1360,6 +1390,20 @@ impl Protocol {
                 "RPM",
                 "Latency under load",
                 "Bufferbloat probe — UDP echo RTT idle vs during a sustained download; reports RPM (round-trips per minute) and bufferbloat factor",
+                "Network",
+            ),
+            m(
+                "responsiveness",
+                "Responsiveness",
+                "RPM under load",
+                "Working-conditions responsiveness per draft-ietf-ippm-responsiveness — ramps parallel HTTP/2 load connections to saturation while probing latency on new and on the loaded connections; reports RPM per direction and capacity",
+                "Network",
+            ),
+            m(
+                "stamp",
+                "STAMP",
+                "RFC 8762 probe",
+                "STAMP (RFC 8762) UDP probe against the endpoint's Session-Reflector (port 9997) — processing-corrected RTT, per-direction delay variation, and directional loss",
                 "Network",
             ),
             m(
@@ -1599,6 +1643,8 @@ impl std::str::FromStr for Protocol {
             "udpdownload" => Ok(Protocol::UdpDownload),
             "udpupload" => Ok(Protocol::UdpUpload),
             "rpm" => Ok(Protocol::Rpm),
+            "responsiveness" => Ok(Protocol::Responsiveness),
+            "stamp" => Ok(Protocol::Stamp),
             "ping" => Ok(Protocol::Ping),
             "path" => Ok(Protocol::Path),
             "dualstack" => Ok(Protocol::DualStack),
@@ -2427,6 +2473,188 @@ pub struct RpmResult {
     pub started_at: DateTime<Utc>,
 }
 
+/// One direction (download or upload) of the `responsiveness` probe.
+///
+/// Parameters follow draft-ietf-ippm-responsiveness-08 §4: interval duration
+/// ID = 1 s, initial connections INP = 1, added per interval INC = 1, cap
+/// MNP = 16, moving-average distance MAD = 4, standard-deviation tolerance
+/// SDT = 5 %, trimmed-mean percentage TMP = 95 %. Saturation is declared when
+/// the standard deviation of the last MAD moving-average goodput values is
+/// below SDT of the current moving average; responsiveness stability is then
+/// checked the same way over per-interval responsiveness values.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResponsivenessDirection {
+    /// Goodput stability (saturation) was declared before the direction's
+    /// time cap. `false` means the link was still ramping when the cap hit —
+    /// the RPM is still reported but was NOT measured at verified saturation.
+    pub saturation_reached: bool,
+    /// Per-interval responsiveness values also stabilized (the draft's second
+    /// stability criterion) before the cap.
+    pub responsiveness_stable: bool,
+    /// Number of parallel load connections open when the direction ended.
+    pub saturated_connections: u32,
+    /// Number of measurement intervals (ID each) the direction ran.
+    pub intervals: u32,
+    /// Wall-clock duration of the direction (ms).
+    pub load_duration_ms: f64,
+    /// Bytes moved by the load connections over the whole direction.
+    pub bytes_transferred: u64,
+    /// Final moving-average goodput (MB/s, decimal 1e6) — the capacity at
+    /// (or nearest to) saturation. `None` when no bytes moved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity_mbps: Option<f64>,
+    /// The draft's Responsiveness value (round-trips per minute):
+    /// `(60000/((TM(tcp_f)+TM(tls_f)+TM(http_f))/3) + 60000/TM(http_l)) / 2`
+    /// with TM = single-sided 95 % trimmed mean over the final MAD intervals
+    /// (TLS term omitted for cleartext targets, per the draft's TCP-only
+    /// variant). `None` when either probe family produced no samples.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpm: Option<f64>,
+    /// Foreign-probe component: `60000 / mean(TM(tcp_f), TM(tls_f), TM(http_f))`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreign_rpm: Option<f64>,
+    /// Self-probe component: `60000 / TM(http_l)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub self_rpm: Option<f64>,
+    /// Trimmed-mean TCP connect time of foreign probes (ms, final MAD intervals).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreign_tcp_tm_ms: Option<f64>,
+    /// Trimmed-mean TLS handshake time of foreign probes (ms); `None` for
+    /// cleartext targets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreign_tls_tm_ms: Option<f64>,
+    /// Trimmed-mean HTTP GET (1-byte object) time of foreign probes (ms).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreign_http_tm_ms: Option<f64>,
+    /// Trimmed-mean HTTP GET time of self probes — multiplexed on a
+    /// load-generating connection (ms). This is the number flow-isolating
+    /// AQMs cannot hide.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub self_http_tm_ms: Option<f64>,
+    pub foreign_probes_sent: u32,
+    pub foreign_probes_ok: u32,
+    pub self_probes_sent: u32,
+    pub self_probes_ok: u32,
+}
+
+/// Working-conditions responsiveness result (`responsiveness` mode) —
+/// draft-ietf-ippm-responsiveness-08 methodology. Both directions are
+/// measured sequentially (download first). Unlike [`RpmResult`], the RPM
+/// figures here follow the draft's probe types and aggregation formula and
+/// ARE comparable with other conformant implementations (Apple
+/// `networkQuality`, Cloudflare, Ookla RPM).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResponsivenessResult {
+    /// Endpoint base URL the load and probes ran against.
+    pub remote_addr: String,
+    /// Headline: download-direction RPM (higher is better).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpm_download: Option<f64>,
+    /// Upload-direction RPM.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpm_upload: Option<f64>,
+    /// Download capacity at saturation (MB/s, decimal 1e6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity_down_mbps: Option<f64>,
+    /// Upload capacity at saturation (MB/s, decimal 1e6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity_up_mbps: Option<f64>,
+    /// Download-direction detail.
+    pub download: ResponsivenessDirection,
+    /// Upload-direction detail. `None` when the upload stage could not run
+    /// (see `upload_error`) — never fabricated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upload: Option<ResponsivenessDirection>,
+    /// Why the upload stage is absent, when it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upload_error: Option<String>,
+    pub started_at: DateTime<Utc>,
+}
+
+/// STAMP (RFC 8762) probe result (`stamp` mode).
+///
+/// The Session-Reflector stamps each reflected packet with its receive (T2)
+/// and transmit (T3) timestamps plus its own sequence number, so the sender
+/// can compute — with NO clock synchronization:
+/// - RTT corrected for reflector processing time: `(T4−T1) − (T3−T2)`;
+/// - per-direction delay VARIATION (clock offsets cancel within a direction);
+/// - DIRECTIONAL loss: the highest reflector sequence observed says how many
+///   probes reached the reflector, splitting sender→reflector loss from
+///   reflector→sender loss (RFC 8762 §4.2).
+///
+/// Timestamps use the NTP 64-bit format (RFC 8762 default; PTP not used).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StampResult {
+    /// Reflector address the probes were sent to.
+    pub remote_addr: String,
+    pub probes_sent: u32,
+    pub replies_received: u32,
+    /// Overall round-trip loss percent (either direction).
+    pub loss_percent: f64,
+    /// Sender→reflector loss percent, derived from the reflector's sequence
+    /// numbers. `None` when no reply arrived (nothing to derive from).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loss_sent_percent: Option<f64>,
+    /// Reflector→sender loss percent. `None` when no reply arrived.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loss_return_percent: Option<f64>,
+    // ── Processing-corrected RTT ((T4−T1) − (T3−T2)) ───────────────────────
+    pub rtt_min_ms: f64,
+    pub rtt_avg_ms: f64,
+    pub rtt_p95_ms: f64,
+    /// Mean |IPDV| (RFC 3393, consecutive-by-sequence) of the corrected RTT.
+    pub jitter_ms: f64,
+    // ── Per-direction delay variation (no clock sync needed) ───────────────
+    /// Mean |IPDV| of the forward (sender→reflector) one-way delay (ms).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub near_ipdv_mean_ms: Option<f64>,
+    /// p95 |IPDV| of the forward direction; `None` below the p95 sample gate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub near_ipdv_p95_ms: Option<f64>,
+    /// Mean |IPDV| of the return (reflector→sender) one-way delay (ms).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub far_ipdv_mean_ms: Option<f64>,
+    /// p95 |IPDV| of the return direction; `None` below the p95 sample gate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub far_ipdv_p95_ms: Option<f64>,
+    /// Mean reflector processing time T3−T2 (µs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reflector_processing_avg_us: Option<f64>,
+    /// Highest reflector sequence number observed (0-based). The reflector
+    /// increments per received packet, so `max+1` probes reached it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reflector_seq_max: Option<u32>,
+    // ── Raw one-way readings + optional clock-synced estimate ──────────────
+    /// Mean raw forward reading T2−T1 (ms) — INCLUDES the unknown clock
+    /// offset between sender and reflector; may be negative. Useful only for
+    /// variation and for the offset-corrected estimate below.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub near_owd_raw_avg_ms: Option<f64>,
+    /// Mean raw return reading T4−T3 (ms) — includes the clock offset with
+    /// the opposite sign.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub far_owd_raw_avg_ms: Option<f64>,
+    /// INDICATIVE absolute forward one-way delay (ms): raw reading corrected
+    /// by the run's SNTP clock offset. Only filled when the run performed a
+    /// clock-sync query; uncertainty is at least `owd_uncertainty_ms` and
+    /// assumes the reflector's own clock is NTP-true. An ESTIMATE, not a
+    /// measurement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owd_forward_est_ms: Option<f64>,
+    /// Indicative absolute return one-way delay (ms) — same caveats.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owd_return_est_ms: Option<f64>,
+    /// ± uncertainty of the OWD estimates (ms): half the SNTP round-trip
+    /// delay (the offset's intrinsic error bound).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owd_uncertainty_ms: Option<f64>,
+    /// Per-probe processing-corrected RTTs (ms); `None` = lost.
+    pub probe_rtts_ms: Vec<Option<f64>>,
+    /// Send cadence (ms) — probes are periodic (RFC 3432), not send-on-echo.
+    pub interval_ms: u64,
+    pub started_at: DateTime<Utc>,
+}
+
 /// ICMP echo result (`ping` mode).
 ///
 /// Same aggregate shape as [`UdpResult`] (min/avg/p95, mean |IPDV| as
@@ -3213,6 +3441,13 @@ pub fn primary_metric_label(proto: &Protocol) -> &'static str {
         // Round-trips per minute under load — higher is better, like the
         // throughput modes.
         Protocol::Rpm => "RPM",
+        // Draft-conformant responsiveness — the download-direction RPM is the
+        // headline (higher is better), labeled to distinguish it from the
+        // UDP-echo-derived `rpm` figure.
+        Protocol::Responsiveness => "RPM (draft)",
+        // Processing-corrected round-trip time is the probe's distinguishing
+        // measurement; directional loss/jitter are reported separately.
+        Protocol::Stamp => "RTT avg ms",
         Protocol::Ping => "RTT avg ms",
         // Path length is the probe's distinguishing measurement; destination
         // RTT is already covered by ping/tcp and is reported separately in
@@ -3289,6 +3524,16 @@ pub fn primary_metric_value(a: &RequestAttempt) -> Option<f64> {
         // `rpm` is None when every loaded probe was lost — same "no samples is
         // not a 0.0 measurement" rule as the UDP arm above (trust audit V11).
         Protocol::Rpm => a.rpm.as_ref().and_then(|r| r.rpm),
+        // Download-direction draft RPM; None when either probe family
+        // produced no samples (no fabricated responsiveness).
+        Protocol::Responsiveness => a.responsiveness.as_ref().and_then(|r| r.rpm_download),
+        // A fully-lost stamp attempt carries a 0.0 sentinel avg, not a
+        // measurement — excluded exactly like the UDP arm (trust audit V11).
+        Protocol::Stamp => a
+            .stamp
+            .as_ref()
+            .filter(|s| s.replies_received > 0)
+            .map(|s| s.rtt_avg_ms),
         // Fully-lost ping attempts carry a 0.0 sentinel avg, not a
         // measurement — excluded exactly like the UDP arm (trust audit V11).
         Protocol::Ping => a
@@ -3646,6 +3891,8 @@ mod tests {
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         };
         let run = TestRun {
             schema_version: crate::metrics::SCHEMA_VERSION.to_string(),
@@ -3977,6 +4224,8 @@ mod tests {
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         }
     }
 

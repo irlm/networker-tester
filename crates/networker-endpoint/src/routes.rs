@@ -36,6 +36,8 @@ pub struct AppState {
     pub https_port: u16,
     pub udp_port: u16,
     pub udp_throughput_port: u16,
+    /// STAMP Session-Reflector port (RFC 8762).
+    pub stamp_port: u16,
     pub started_at: Instant,
     pub system_meta: SystemMeta,
 }
@@ -711,12 +713,14 @@ async fn landing_page(State(state): State<AppState>) -> impl IntoResponse {
            <div class=\"row\"><span class=\"lbl\">HTTP/3 QUIC</span><span class=\"val\">{h3_port_display}</span></div>\n\
            <div class=\"row\"><span class=\"lbl\">UDP echo</span><span class=\"val\">:{udp_port}</span></div>\n\
            <div class=\"row\"><span class=\"lbl\">UDP throughput</span><span class=\"val\">:{udp_tp_port}</span></div>\n\
+           <div class=\"row\"><span class=\"lbl\">STAMP reflector</span><span class=\"val\">:{stamp_port}</span></div>\n\
          </div>\n",
         http_port = state.http_port,
         https_port = state.https_port,
         h3_port_display = h3_port_display,
         udp_port = state.udp_port,
         udp_tp_port = state.udp_throughput_port,
+        stamp_port = state.stamp_port,
     ));
 
     // Protocols card
@@ -1801,6 +1805,7 @@ mod tests {
             https_port: 8443,
             udp_port: 9999,
             udp_throughput_port: 9998,
+            stamp_port: 9997,
             started_at: std::time::Instant::now(),
             system_meta: SystemMeta::collect(),
         })

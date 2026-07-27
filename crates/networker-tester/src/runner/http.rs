@@ -191,6 +191,8 @@ pub async fn run_probe(
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         },
     }
 }
@@ -469,6 +471,8 @@ async fn run_http_or_tcp(
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         };
     }
 
@@ -701,6 +705,8 @@ async fn run_http_or_tcp(
                 dualstack: None,
                 websocket: None,
                 pmtud: None,
+                responsiveness: None,
+                stamp: None,
             }
         }
         Err(e) => {
@@ -1509,6 +1515,8 @@ fn failed_attempt(
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 

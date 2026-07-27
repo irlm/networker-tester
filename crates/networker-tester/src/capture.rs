@@ -769,6 +769,7 @@ mod tests {
             laghound_route: None,
             udp_port: 9999,
             udp_throughput_port: 9998,
+            stamp_port: 9997,
             udp_probes: 20,
             connection_reuse: false,
             dns_enabled: true,

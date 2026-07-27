@@ -1073,7 +1073,7 @@ fn benchmark_case_id(attempt: &RequestAttempt) -> String {
 }
 
 fn metric_unit_for_protocol(protocol: &Protocol) -> &'static str {
-    if matches!(protocol, Protocol::Rpm) {
+    if matches!(protocol, Protocol::Rpm | Protocol::Responsiveness) {
         // Round-trips per minute under load (higher is better).
         "RPM"
     } else if matches!(protocol, Protocol::Path) {
@@ -1089,9 +1089,11 @@ fn metric_unit_for_protocol(protocol: &Protocol) -> &'static str {
     }
 }
 
-/// Higher-is-better protocols: throughput (MB/s) and rpm (round-trips/min).
+/// Higher-is-better protocols: throughput (MB/s) and the RPM modes
+/// (round-trips/min — both the UDP-echo `rpm` and the draft-conformant
+/// `responsiveness`).
 fn protocol_is_higher_better(protocol: &Protocol) -> bool {
-    protocol_is_throughput(protocol) || matches!(protocol, Protocol::Rpm)
+    protocol_is_throughput(protocol) || matches!(protocol, Protocol::Rpm | Protocol::Responsiveness)
 }
 
 fn protocol_is_throughput(protocol: &Protocol) -> bool {
@@ -1320,6 +1322,8 @@ mod tests {
                 dualstack: None,
                 websocket: None,
                 pmtud: None,
+                responsiveness: None,
+                stamp: None,
             }],
         }
     }
@@ -1617,6 +1621,8 @@ mod tests {
                 dualstack: None,
                 websocket: None,
                 pmtud: None,
+                responsiveness: None,
+                stamp: None,
             })
             .collect();
         let run = TestRun {
@@ -1888,6 +1894,8 @@ mod tests {
                 dualstack: None,
                 websocket: None,
                 pmtud: None,
+                responsiveness: None,
+                stamp: None,
             })
             .collect();
         let run = TestRun {

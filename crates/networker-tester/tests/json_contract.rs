@@ -131,6 +131,8 @@ fn sample_run() -> TestRun {
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     };
 
     TestRun {
@@ -1103,6 +1105,121 @@ fn attempt_phase_field_is_additive_and_optional() {
     assert_eq!(back.attempts[0].phase.as_deref(), Some("warmup"));
 
     // Schema version stays frozen at 1.0 — the field is additive.
+    assert_eq!(SCHEMA_VERSION, "1.0");
+}
+
+/// Wave R additive attempt fields: `responsiveness` (draft-conformant
+/// working-conditions RPM) and `stamp` (RFC 8762). Old JSON without them
+/// deserializes to None, None is skip-serialized, populated results
+/// round-trip. schema_version stays 1.0.
+#[test]
+fn responsiveness_and_stamp_fields_are_additive_and_optional() {
+    use networker_tester::metrics::{ResponsivenessDirection, ResponsivenessResult, StampResult};
+
+    // Absent from every attempt of a run that never ran the modes.
+    let run = sample_run();
+    let v = serde_json::to_value(&run).expect("serialize");
+    assert!(
+        v.pointer("/attempts/0/responsiveness").is_none(),
+        "responsiveness must be skip-serialized when None"
+    );
+    assert!(
+        v.pointer("/attempts/0/stamp").is_none(),
+        "stamp must be skip-serialized when None"
+    );
+
+    // Old JSON (no fields) deserializes to None.
+    let back: TestRun = serde_json::from_value(v).expect("deserialize pre-Wave-R attempt");
+    assert!(back.attempts[0].responsiveness.is_none());
+    assert!(back.attempts[0].stamp.is_none());
+
+    // Populated results round-trip.
+    let now = Utc::now();
+    let direction = ResponsivenessDirection {
+        saturation_reached: true,
+        responsiveness_stable: true,
+        saturated_connections: 6,
+        intervals: 9,
+        load_duration_ms: 9_000.0,
+        bytes_transferred: 900_000_000,
+        capacity_mbps: Some(100.0),
+        rpm: Some(950.0),
+        foreign_rpm: Some(900.0),
+        self_rpm: Some(1000.0),
+        foreign_tcp_tm_ms: Some(20.0),
+        foreign_tls_tm_ms: None, // cleartext target — TCP-only variant
+        foreign_http_tm_ms: Some(113.0),
+        self_http_tm_ms: Some(60.0),
+        foreign_probes_sent: 45,
+        foreign_probes_ok: 44,
+        self_probes_sent: 45,
+        self_probes_ok: 45,
+    };
+    let mut run = sample_run();
+    run.attempts[0].responsiveness = Some(ResponsivenessResult {
+        remote_addr: "http://127.0.0.1:8080/".into(),
+        rpm_download: Some(950.0),
+        rpm_upload: Some(800.0),
+        capacity_down_mbps: Some(100.0),
+        capacity_up_mbps: Some(50.0),
+        download: direction.clone(),
+        upload: Some(direction),
+        upload_error: None,
+        started_at: now,
+    });
+    run.attempts[0].stamp = Some(StampResult {
+        remote_addr: "127.0.0.1:9997".into(),
+        probes_sent: 50,
+        replies_received: 49,
+        loss_percent: 2.0,
+        loss_sent_percent: Some(2.0),
+        loss_return_percent: Some(0.0),
+        rtt_min_ms: 1.0,
+        rtt_avg_ms: 1.4,
+        rtt_p95_ms: 2.1,
+        jitter_ms: 0.2,
+        near_ipdv_mean_ms: Some(0.1),
+        near_ipdv_p95_ms: Some(0.3),
+        far_ipdv_mean_ms: Some(0.15),
+        far_ipdv_p95_ms: Some(0.4),
+        reflector_processing_avg_us: Some(42.0),
+        reflector_seq_max: Some(48),
+        near_owd_raw_avg_ms: Some(12.5),
+        far_owd_raw_avg_ms: Some(-11.1),
+        owd_forward_est_ms: Some(0.7),
+        owd_return_est_ms: Some(0.7),
+        owd_uncertainty_ms: Some(9.5),
+        probe_rtts_ms: vec![Some(1.4); 49].into_iter().chain([None]).collect(),
+        interval_ms: 50,
+        started_at: now,
+    });
+
+    let v = serde_json::to_value(&run).expect("serialize populated");
+    assert_eq!(
+        v.pointer("/attempts/0/responsiveness/rpm_download")
+            .and_then(|n| n.as_f64()),
+        Some(950.0)
+    );
+    assert!(
+        v.pointer("/attempts/0/responsiveness/download/foreign_tls_tm_ms")
+            .is_none(),
+        "None trimmed means must be omitted"
+    );
+    assert_eq!(
+        v.pointer("/attempts/0/stamp/loss_return_percent")
+            .and_then(|n| n.as_f64()),
+        Some(0.0)
+    );
+    let back: TestRun = serde_json::from_value(v).expect("deserialize populated");
+    let r = back.attempts[0].responsiveness.as_ref().unwrap();
+    assert_eq!(r.rpm_download, Some(950.0));
+    assert!(r.download.saturation_reached);
+    let s = back.attempts[0].stamp.as_ref().unwrap();
+    assert_eq!(s.replies_received, 49);
+    assert_eq!(s.loss_sent_percent, Some(2.0));
+    assert_eq!(s.probe_rtts_ms.len(), 50);
+
+    // Schema version stays frozen at 1.0 — the fields are additive.
     assert_eq!(SCHEMA_VERSION, "1.0");
 }
 

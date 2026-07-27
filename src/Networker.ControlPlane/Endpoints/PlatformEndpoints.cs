@@ -71,6 +71,8 @@ public static class PlatformEndpoints
         new("native", "Native TLS", "OS TLS stack", "Uses SChannel (Win), SecureTransport (macOS), or OpenSSL (Linux)", "Network", "any"),
         new("udp", "UDP", "Round-trip", "UDP echo probe — measures RTT, jitter, and packet loss", "Network", "any"),
         new("rpm", "RPM", "Latency under load", "Bufferbloat probe — UDP echo RTT idle vs during a sustained download; reports RPM (round-trips per minute) and bufferbloat factor", "Network", "networker-endpoint"),
+        new("responsiveness", "Responsiveness", "RPM under load", "Working-conditions responsiveness per draft-ietf-ippm-responsiveness — ramps parallel HTTP/2 load connections to saturation while probing latency on new and on the loaded connections; reports RPM per direction and capacity", "Network", "networker-endpoint"),
+        new("stamp", "STAMP", "RFC 8762 probe", "STAMP (RFC 8762) UDP probe against the endpoint's Session-Reflector (port 9997) — processing-corrected RTT, per-direction delay variation, and directional loss", "Network", "networker-endpoint"),
         new("ping", "Ping", "ICMP echo", "ICMP echo RTT probe — measures network-layer RTT, jitter, and packet loss without TCP/UDP (unprivileged ICMP sockets)", "Network", "any"),
         new("path", "Path", "Hop discovery", "Traceroute-style probe — UDP probes with rising TTL map the hops toward the target; degrades to an honest hop-count estimate where ICMP errors are not readable unprivileged", "Network", "any"),
         new("dualstack", "Dual Stack", "IPv4 vs IPv6", "Resolves A and AAAA separately, runs an HTTP GET pinned to each family, and compares per-phase timing with a happy-eyeballs verdict", "Network", "any"),

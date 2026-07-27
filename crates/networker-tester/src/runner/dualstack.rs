@@ -161,6 +161,8 @@ pub async fn run_dualstack_probe(
         dualstack: Some(result),
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 
@@ -297,6 +299,8 @@ fn dualstack_failed(
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 

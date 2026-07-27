@@ -27,7 +27,9 @@ use networker_tester::runner::pageload::{run_pageload2_probe, run_pageload_probe
 use networker_tester::runner::path::{run_path_probe, PathProbeConfig};
 use networker_tester::runner::ping::{run_ping_probe, PingProbeConfig};
 use networker_tester::runner::pmtud::{run_pmtud_probe, PmtudProbeConfig};
+use networker_tester::runner::responsiveness::{run_responsiveness_probe, ResponsivenessConfig};
 use networker_tester::runner::rpm::{run_rpm_probe, RpmProbeConfig};
+use networker_tester::runner::stamp::{run_stamp_probe, StampProbeConfig};
 use networker_tester::runner::throughput::{
     run_download_probe, run_upload_probe, run_webdownload_probe, run_webupload_probe,
     ThroughputConfig,
@@ -73,6 +75,7 @@ struct Endpoint {
     pub https_port: u16,
     pub udp_port: u16,
     pub udp_throughput_port: u16,
+    pub stamp_port: u16,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
@@ -84,6 +87,7 @@ impl Endpoint {
         let https_port = free_port();
         let udp_port = free_udp_port();
         let udp_throughput_port = free_udp_port();
+        let stamp_port = free_udp_port();
 
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
 
@@ -92,6 +96,7 @@ impl Endpoint {
             https_port,
             udp_port,
             udp_throughput_port,
+            stamp_port,
         };
 
         tokio::spawn(async move {
@@ -187,11 +192,37 @@ impl Endpoint {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
 
+        // Wait for the STAMP reflector: a valid 44-byte sender packet must
+        // come back reflected (44 bytes, our sequence echoed at offset 24).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let probe = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            probe
+                .connect(format!("127.0.0.1:{stamp_port}"))
+                .await
+                .unwrap();
+            let _ = probe.send(&[0u8; 44]).await;
+            let mut buf = [0u8; 64];
+            let reflected =
+                tokio::time::timeout(std::time::Duration::from_millis(100), probe.recv(&mut buf))
+                    .await
+                    .map(|r| matches!(r, Ok(n) if n == 44))
+                    .unwrap_or(false);
+            if reflected {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!("STAMP reflector did not start within 10 seconds");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
         Endpoint {
             http_port,
             https_port,
             udp_port,
             udp_throughput_port,
+            stamp_port,
             shutdown: Some(tx),
         }
     }
@@ -497,6 +528,126 @@ async fn rpm_probe_reports_latency_under_load() {
         "factor must equal loaded/unloaded avg"
     );
     assert!(factor > 0.0);
+}
+
+/// Draft-conformant responsiveness (`responsiveness`) against the in-process
+/// endpoint over cleartext h2c.
+///
+/// Loopback saturates essentially instantly (memory-speed transfers), so this
+/// asserts the STRUCTURE of the result — both directions ran, saturation was
+/// declared by the moving-average stability criterion, both probe families
+/// produced samples, RPM derivable via the draft formula — not latency or
+/// capacity magnitudes. Shortened intervals keep the test fast; the ramp,
+/// stability, and aggregation logic is exactly the production path.
+#[tokio::test]
+async fn responsiveness_probe_reports_working_conditions_rpm() {
+    init_crypto();
+    let ep = Endpoint::start().await;
+    let mut cfg = ResponsivenessConfig::from_parts(&ThroughputConfig {
+        run_cfg: RunConfig {
+            dns_enabled: false,
+            timeout_ms: 5_000,
+            ..Default::default()
+        },
+        base_url: ep.http_url("/"),
+    });
+    // Shorten for test speed: 250 ms intervals, 4 MiB load requests, 5 s cap,
+    // fast probe cadence. Draft ratios (MAD=4, SDT=5%, TMP=95%) unchanged.
+    cfg.interval_ms = 250;
+    cfg.max_duration_ms = 5_000;
+    cfg.probe_interval_ms = 25;
+    cfg.load_request_bytes = 4 * 1024 * 1024;
+    cfg.max_connections = 8;
+
+    let attempt = run_responsiveness_probe(Uuid::new_v4(), 0, &cfg).await;
+    assert!(attempt.success, "{:?}", attempt.error);
+    assert_eq!(attempt.protocol, Protocol::Responsiveness);
+    assert_eq!(attempt.protocol.to_string(), "responsiveness");
+
+    let r = attempt.responsiveness.expect("responsiveness result");
+
+    // Download direction: load really moved bytes, goodput stabilized.
+    let d = &r.download;
+    assert!(d.bytes_transferred > 0, "download load moved no bytes");
+    assert!(
+        d.saturation_reached,
+        "loopback goodput must stabilize within the cap: {d:?}"
+    );
+    assert!(d.saturated_connections >= 1);
+    assert!(d.intervals >= 4, "at least MAD intervals must run");
+    assert!(d.capacity_mbps.unwrap_or(0.0) > 0.0);
+    // Both probe families sampled; RPM derivable from the draft formula.
+    assert!(d.foreign_probes_ok > 0, "no foreign probe succeeded");
+    assert!(d.self_probes_ok > 0, "no self probe succeeded");
+    let rpm = d.rpm.expect("download RPM derivable");
+    assert!(rpm > 0.0);
+    // Cleartext target: TCP-only aggregation variant — no TLS trimmed mean.
+    assert!(d.foreign_tls_tm_ms.is_none(), "h2c must have no tls_f");
+    assert!(d.foreign_tcp_tm_ms.is_some());
+    assert!(d.foreign_http_tm_ms.is_some());
+    assert!(d.self_http_tm_ms.is_some());
+    // Headline copies match the direction detail.
+    assert_eq!(r.rpm_download, d.rpm);
+    assert_eq!(r.capacity_down_mbps, d.capacity_mbps);
+
+    // Upload direction ran too (the draft measures both).
+    let u = r
+        .upload
+        .unwrap_or_else(|| panic!("upload stage must run: {:?}", r.upload_error));
+    assert!(u.bytes_transferred > 0, "upload load moved no bytes");
+    assert!(u.saturation_reached, "upload goodput must stabilize: {u:?}");
+    assert!(u.rpm.unwrap_or(0.0) > 0.0);
+    assert_eq!(r.rpm_upload, u.rpm);
+}
+
+/// STAMP (RFC 8762) against the in-process endpoint's Session-Reflector:
+/// processing-corrected RTT present, zero loss in BOTH directions (loopback),
+/// reflector sequence numbers consistent with the stateful mode.
+#[tokio::test]
+async fn stamp_probe_reports_directional_metrics() {
+    let ep = Endpoint::start().await;
+    let cfg = StampProbeConfig {
+        target_host: "127.0.0.1".into(),
+        target_port: ep.stamp_port,
+        probe_count: 25,
+        interval_ms: 10,
+        timeout_ms: 3_000,
+    };
+
+    let attempt = run_stamp_probe(Uuid::new_v4(), 0, &cfg).await;
+    assert!(attempt.success, "{:?}", attempt.error);
+    assert_eq!(attempt.protocol, Protocol::Stamp);
+    assert_eq!(attempt.protocol.to_string(), "stamp");
+
+    let s = attempt.stamp.expect("stamp result");
+    assert_eq!(s.probes_sent, 25);
+    assert_eq!(s.replies_received, 25, "loopback must lose nothing");
+    // Zero loss in both directions.
+    assert_eq!(s.loss_percent, 0.0);
+    assert_eq!(s.loss_sent_percent, Some(0.0));
+    assert_eq!(s.loss_return_percent, Some(0.0));
+    // Processing-corrected RTT is present and internally consistent.
+    assert!(s.rtt_avg_ms >= 0.0);
+    assert!(s.rtt_p95_ms >= s.rtt_min_ms);
+    assert_eq!(s.probe_rtts_ms.len(), 25);
+    assert!(s.probe_rtts_ms.iter().all(|r| r.is_some()));
+    // Reflector processing time observed (may be tiny but must exist).
+    assert!(s.reflector_processing_avg_us.is_some());
+    // Stateful reflector sequence: 25 probes → max seq 24.
+    assert_eq!(s.reflector_seq_max, Some(24));
+    // Per-direction delay variation computed (offsets cancel per direction);
+    // p95 gated: 24 deltas ≥ 20 → present.
+    assert!(s.near_ipdv_mean_ms.is_some());
+    assert!(s.far_ipdv_mean_ms.is_some());
+    assert!(s.near_ipdv_p95_ms.is_some());
+    assert!(s.far_ipdv_p95_ms.is_some());
+    // Raw one-way readings recorded for the run-level OWD estimate pass.
+    assert!(s.near_owd_raw_avg_ms.is_some());
+    assert!(s.far_owd_raw_avg_ms.is_some());
+    // The estimate fields are runner-empty (target_runner fills them when the
+    // run has an SNTP clock-sync result).
+    assert!(s.owd_forward_est_ms.is_none());
+    assert!(s.owd_uncertainty_ms.is_none());
 }
 
 /// ICMP echo (`ping`) against loopback: asserts the STRUCTURE of the result

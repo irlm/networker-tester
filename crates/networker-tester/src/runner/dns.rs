@@ -427,6 +427,8 @@ pub async fn run_dns_probe(
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         },
         Err(err) => RequestAttempt {
             phase: None,
@@ -455,6 +457,8 @@ pub async fn run_dns_probe(
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         },
     }
 }

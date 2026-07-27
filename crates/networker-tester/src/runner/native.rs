@@ -78,6 +78,8 @@ pub async fn run_native_probe(
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         }
     }
 
@@ -445,6 +447,8 @@ async fn run_native_probe_impl(
             dualstack: None,
             websocket: None,
             pmtud: None,
+            responsiveness: None,
+            stamp: None,
         }
     }
 }
@@ -748,6 +752,8 @@ async fn run_native_https(
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 
@@ -882,6 +888,8 @@ fn make_failed(
         dualstack: None,
         websocket: None,
         pmtud: None,
+        responsiveness: None,
+        stamp: None,
     }
 }
 

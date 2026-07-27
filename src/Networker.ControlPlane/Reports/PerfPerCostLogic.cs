@@ -38,6 +38,8 @@ public static class PerfPerCostLogic
             ["native"] = FamilyNet,
             ["udp"] = FamilyNet,
             ["rpm"] = FamilyNet,
+            ["responsiveness"] = FamilyNet,
+            ["stamp"] = FamilyNet,
             ["ping"] = FamilyNet,
             ["path"] = FamilyNet,
             ["dualstack"] = FamilyNet,
