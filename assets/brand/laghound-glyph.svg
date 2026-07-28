@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none" role="img" aria-label="LagHound">
+  <title>LagHound</title>
+  <!-- App-icon tile: brand surface + hairline border (zero-chrome, flat) -->
+  <rect x="1.5" y="1.5" width="61" height="61" rx="14" fill="#0d0e14" stroke="#1a1b25" stroke-width="1.5"/>
+
+  <!-- Terminal prompt chevron (brand purple = the mark) -->
+  <polyline points="12,24 20,32 12,40" fill="none" stroke="#863bff" stroke-width="3.4"
+            stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Latency waveform with a lag spike (cyan = the signal/pulse) -->
+  <polyline points="25,38 30,38 34,29 38,45 42,29 46,38" fill="none" stroke="#47bfff"
+            stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Blinking terminal cursor -->
+  <rect x="50" y="30.5" width="4.6" height="15" rx="1.3" fill="#863bff"/>
+</svg>

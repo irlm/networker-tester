@@ -19,6 +19,16 @@
     <EmbeddedResource Include="..\..\shared\cloud-costs.json"
                       Link="shared\cloud-costs.json"
                       LogicalName="Networker.ControlPlane.shared.cloud-costs.json" />
+
+    <!-- LagHound brand SVGs for the report exporters (Reports/Documents/).
+         Embedded so a deploy can't lose them; the assets/brand/ copies stay
+         the editable source of truth. -->
+    <EmbeddedResource Include="..\..\assets\brand\laghound-glyph.svg"
+                      Link="brand\laghound-glyph.svg"
+                      LogicalName="Networker.ControlPlane.brand.laghound-glyph.svg" />
+    <EmbeddedResource Include="..\..\assets\brand\laghound-wordmark.svg"
+                      Link="brand\laghound-wordmark.svg"
+                      LogicalName="Networker.ControlPlane.brand.laghound-wordmark.svg" />
   </ItemGroup>
 
   <ItemGroup>
@@ -29,6 +39,12 @@
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.9" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.15.0" />
     <PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
+    <!-- Pure-managed .docx writer for the report exporters (no native deps). -->
+    <PackageReference Include="DocumentFormat.OpenXml" Version="3.1.0" />
+    <!-- Override DocumentFormat.OpenXml's transitive System.IO.Packaging 8.0.0,
+         which carries GHSA-f32c-w444-8ppv / GHSA-qj66-m88j-hmgj (the C# audit
+         gate in dotnet.yml fails on transitive advisories). 9.0.x is patched. -->
+    <PackageReference Include="System.IO.Packaging" Version="9.0.9" />
   </ItemGroup>
 
   <ItemGroup>

@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Auth;
+using Networker.ControlPlane.Reports.Documents;
 using Networker.Data;
 using Npgsql;
 
@@ -253,6 +254,71 @@ public static class TestRunsEndpoints
                 data_quality = RawJson(art.DataQuality),
                 created_at = art.CreatedAt,
             });
+        }).RequireAuthorization();
+
+        // GET /api/v2/test-runs/{id}/report?format=html|md|docx — the run's
+        // results as a branded, downloadable document (LagHound logo, KPI
+        // summary, per-protocol latency chart + table, phase timings, capped
+        // per-attempt table). Same row-level authz as the detail route. The
+        // document formats reuse the shared exporter engine (Reports/Documents);
+        // no ?format defaults to HTML so a browser opening the URL gets a
+        // rendered page. `?format=json` is rejected here — the machine-readable
+        // shape is the existing /attempts + detail routes.
+        app.MapGet("/api/v2/test-runs/{id:guid}/report", async (
+            Guid id,
+            string? format,
+            HttpContext ctx,
+            ProjectAccessChecker access,
+            NetworkerDbContext db,
+            NpgsqlDataSource dataSource,
+            ReportExporterResolver exporters,
+            CancellationToken ct) =>
+        {
+            ReportFormat fmt;
+            if (string.IsNullOrWhiteSpace(format))
+            {
+                fmt = ReportFormat.Html;
+            }
+            else if (!ReportFormats.TryParse(format, out fmt) || fmt == ReportFormat.Json)
+            {
+                return ReportExport.BadFormat(format, exporters);
+            }
+
+            var header = await db.TestRuns
+                .AsNoTracking()
+                .Where(r => r.Id == id)
+                .Select(r => new
+                {
+                    r.Id, r.ProjectId, r.TestConfigId, r.Status, r.StartedAt, r.FinishedAt,
+                    r.SuccessCount, r.FailureCount, r.ErrorMessage,
+                    ConfigName = r.TestConfig.Name,
+                    Target = r.TestConfig.EndpointRef,
+                })
+                .FirstOrDefaultAsync(ct);
+
+            if (header is null ||
+                !await access.HasRoleAsync(ctx, header.ProjectId, ProjectRole.Viewer, ct))
+            {
+                return Results.NotFound();
+            }
+
+            var attempts = await LoadAttemptsAsync(dataSource, id, ct);
+
+            var input = new RunReportInput(
+                RunId: header.Id,
+                ProjectId: header.ProjectId,
+                ConfigName: header.ConfigName,
+                Target: header.Target,
+                Status: header.Status,
+                StartedAt: header.StartedAt,
+                FinishedAt: header.FinishedAt,
+                SuccessCount: header.SuccessCount,
+                FailureCount: header.FailureCount,
+                ErrorMessage: header.ErrorMessage,
+                Attempts: attempts);
+
+            return ReportExport.Deliver(exporters, fmt, RunReportDocument.Build(input),
+                fileBase: $"test-run-{id.ToString("N")[..8]}", requested: format);
         }).RequireAuthorization();
 
         return app;
