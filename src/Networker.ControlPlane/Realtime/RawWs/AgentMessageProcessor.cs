@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Security;
+using Npgsql;
 using Networker.Data;
 using Networker.Data.Entities;
 
@@ -438,6 +439,26 @@ public sealed class AgentMessageProcessor
             .Where(r => r.Id == ae.RunId)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(r => r.LastHeartbeat, DateTime.UtcNow), ct);
+
+        // Persist the attempt into the tester-owned V001 schema so the run's
+        // /attempts route + the reports have data (E2E P0-2: the C# agent
+        // relays attempts but nothing wrote them, leaving success_count=60 runs
+        // with an empty attempts list). Non-Postgres connections (SQLite in
+        // unit tests) and a missing probe schema are skipped, not thrown.
+        if (AttemptExtract.Parse(ae.RunId, ae.Attempt) is { } parsed
+            && _db.Database.GetDbConnection() is NpgsqlConnection conn)
+        {
+            try
+            {
+                await AttemptPersister.PersistAsync(conn, parsed, ct);
+            }
+            catch (Exception ex)
+            {
+                // Never let a persistence hiccup drop the live stream / heartbeat.
+                _logger.LogWarning(ex,
+                    "Failed to persist attempt {AttemptId} for run {RunId}", parsed.AttemptId, ae.RunId);
+            }
+        }
 
         _bus.Publish(new AttemptResult(ae.RunId, ae.Attempt));
     }
