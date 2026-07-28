@@ -23,7 +23,10 @@ other:
     requests.
   - `DocxReportExporter` — editable Word `.docx` via DocumentFormat.OpenXml
     (pure-managed, no native dependency).
-  - PDF ships next, behind its own package (QuestPDF); it reuses the same model.
+  - `PdfReportExporter` — paginated PDF via QuestPDF (SkiaSharp). Charts use
+    native primitives / a shapes-only SVG (no SVG text → no font resolution); on
+    Linux the `.NoDependencies` SkiaSharp asset + QuestPDF's embedded Lato mean
+    the host needs no system packages.
 
 Adding a new source report or a new output format is a one-file change.
 
@@ -47,9 +50,9 @@ JSON. RBAC and the JSON wire shapes are unchanged.
 
 | Route | Formats |
 |-------|---------|
-| `GET /api/projects/{projectId}/reports/app-network?format=` | `json` (default), `md`, `html`, `docx` |
-| `GET /api/projects/{projectId}/reports/perf-per-cost?format=` | `json` (default), `md`, `html`, `docx` |
-| `GET /api/v2/test-runs/{id}/report?format=` | `html` (default), `md`, `docx` — no JSON (use `/attempts`) |
+| `GET /api/projects/{projectId}/reports/app-network?format=` | `json` (default), `md`, `html`, `docx`, `pdf` |
+| `GET /api/projects/{projectId}/reports/perf-per-cost?format=` | `json` (default), `md`, `html`, `docx`, `pdf` |
+| `GET /api/v2/test-runs/{id}/report?format=` | `html` (default), `md`, `docx`, `pdf` — no JSON (use `/attempts`) |
 
 An unknown/unavailable format returns `400` naming the supported document
 formats. Documents download as `Content-Disposition: attachment`.

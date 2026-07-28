@@ -45,6 +45,13 @@
          which carries GHSA-f32c-w444-8ppv / GHSA-qj66-m88j-hmgj (the C# audit
          gate in dotnet.yml fails on transitive advisories). 9.0.x is patched. -->
     <PackageReference Include="System.IO.Packaging" Version="9.0.9" />
+    <!-- PDF export (Reports/Documents/PdfReportExporter). QuestPDF is code-first
+         and MIT (Community licence set at startup); it renders via SkiaSharp.
+         On Linux the .NoDependencies native asset bundles a fontconfig-free
+         libSkiaSharp so the prod VM needs no apt packages — the doc pins its own
+         font (QuestPDF's embedded Lato) and never enumerates system fonts. -->
+    <PackageReference Include="QuestPDF" Version="2024.12.3" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="2.88.9" />
   </ItemGroup>
 
   <ItemGroup>
