@@ -3,8 +3,8 @@
 //!
 //! # Design
 //! - A `tokio::sync::mpsc` channel decouples producers from the DB writer.
-//! - The writer task accumulates up to [`BATCH_SIZE`] entries or waits at most
-//!   [`FLUSH_INTERVAL`] before flushing, whichever comes first.
+//! - The writer task accumulates up to `BATCH_SIZE` entries or waits at most
+//!   `FLUSH_INTERVAL` before flushing, whichever comes first.
 //! - On channel close the task drains the remaining buffer and exits cleanly.
 //! - All errors are printed to `eprintln!` — **not** `tracing::error!` — to
 //!   avoid recursive log emission.

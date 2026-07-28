@@ -750,7 +750,7 @@ pub const MIN_CPU_WINDOW_TICKS: u64 = 20;
 ///   a wrapped delta yields `None`, never a fabricated value). No steal
 ///   concept/API → `steal` stays `None`.
 /// * Windows: `GetSystemTimes` (idle/kernel/user `FILETIME`s, 100 ns units;
-///   kernel time includes idle time, see [`cpu_ticks_from_windows_times`]).
+///   kernel time includes idle time, see `cpu_ticks_from_windows_times`).
 ///   No steal counter → `steal` stays `None`.
 /// * other: no collector; [`CpuTicks::snapshot`] returns `None`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3735,7 +3735,7 @@ pub struct RttStats {
     pub loss_percent: f64,
 }
 
-/// Compute aggregate stats from a slice of Option<f64> RTT samples.
+/// Compute aggregate stats from a slice of `Option<f64>` RTT samples.
 /// None values count as lost probes.
 ///
 /// `jitter` is the mean inter-probe delay variation (IPDV): mean |Δ| of RTTs
