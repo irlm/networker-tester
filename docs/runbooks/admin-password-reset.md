@@ -1,28 +1,28 @@
 # Runbook: Reset the admin password
 
-Resets the production admin login for the C# control plane.
+This runbook resets the production admin login for the C# control plane.
 
 ## Facts
 
 - Admin user: `admin@laghound.com`.
-- Password is stored as a **BCrypt** hash (`BCrypt.Net`, cost 11) in
-  `dash_user.password_hash`.
+- The control plane stores the password as a **BCrypt** hash (`BCrypt.Net`,
+  cost 11) in `dash_user.password_hash`.
 - Database: `alethedash_core` on the **alethedash-vm** (resource group
-  `ALETHEDASH-RG`), reached via `az vm run-command`.
+  `ALETHEDASH-RG`). You reach it through `az vm run-command`.
 
 ## Critical gotcha — a bcrypt hash contains `$`
 
-A bcrypt hash (`$2a$11$...`) contains `$` characters that the remote shell will
-**expand** if the SQL is passed inline. The reset SQL **must** be shipped
-**base64-encoded** and decoded on the VM — never inlined into the run-command
-script.
+A bcrypt hash (`$2a$11$...`) contains `$` characters. The remote shell
+**expands** these characters when you pass the SQL inline. You **must** ship the
+reset SQL as **base64** and decode it on the VM. Never put it inline in the
+run-command script.
 
 ## Procedure
 
-1. Generate the bcrypt hash for the new password (cost 11). Any BCrypt.Net /
-   `bcrypt` tool works; the control plane verifies against `BCrypt.Net` cost 11.
+1. Generate the bcrypt hash for the new password (cost 11). Any BCrypt.Net or
+   `bcrypt` tool works. The control plane verifies against `BCrypt.Net` cost 11.
 
-2. Build the reset SQL (clears the forced-reset and reset-token fields too):
+2. Build the reset SQL. This SQL also clears the forced-reset and reset-token fields:
 
    ```sql
    UPDATE dash_user
@@ -33,7 +33,7 @@ script.
    WHERE email = 'admin@laghound.com';
    ```
 
-3. Base64-encode that SQL, then ship + decode + apply on the VM (NOT inline):
+3. Encode the SQL as base64. Then ship it, decode it, and apply it on the VM. Do NOT use inline SQL:
 
    ```bash
    az vm run-command invoke \
@@ -45,18 +45,18 @@ script.
                 rm -f /tmp/reset.sql"
    ```
 
-4. Verify by logging in as `admin@laghound.com` with the new password.
+4. Verify the reset. Log in as `admin@laghound.com` with the new password.
 
 ## MANDATORY follow-up — update the soak secret
 
-The nightly **Prod soak check** workflow logs in as this admin using the
-`DASHBOARD_ADMIN_PASSWORD` repo secret. **After any reset you must update that
-secret**, or the soak turns red and resets the decommission clock:
+The nightly **Prod soak check** workflow logs in as this admin. It uses the
+`DASHBOARD_ADMIN_PASSWORD` repo secret. You **must** update that secret after any
+reset. If you do not, the soak turns red and resets the decommission clock:
 
 ```bash
 gh secret set DASHBOARD_ADMIN_PASSWORD
 ```
 
-> This exact failure happened on 2026-07-23: the admin password was reset without
-> updating `DASHBOARD_ADMIN_PASSWORD`, the soak went red, and the decommission
-> soak window restarted.
+> This exact failure happened on 2026-07-23. An operator reset the admin password
+> but did not update `DASHBOARD_ADMIN_PASSWORD`. The soak went red, and the
+> decommission soak window restarted.

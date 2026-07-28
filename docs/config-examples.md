@@ -1,15 +1,16 @@
 # Config Examples
 
-Checked-in sample JSON files live in [`examples/configs/`](../examples/configs/).
-Use them as copy-and-edit starting points rather than editing them in place.
+The repository keeps sample JSON files in
+[`examples/configs/`](../examples/configs/). Copy a file and edit the copy. Do
+not edit the sample file in place.
 
 ## Tester Configs
 
 - [`examples/configs/tester.example.json`](../examples/configs/tester.example.json)
-  Minimal CLI config for direct `networker-tester --config ...` usage.
+  A minimal CLI config for direct `networker-tester --config ...` use.
 - [`examples/configs/networker-cloud.example.json`](../examples/configs/networker-cloud.example.json)
-  Example of the generated cloud-target format that the installer writes to a local
-  `networker-cloud.json`.
+  An example of the generated cloud-target format. The installer writes this
+  format to a local `networker-cloud.json`.
 
 Run:
 
@@ -20,7 +21,7 @@ Run:
 ## Endpoint Configs
 
 - [`examples/configs/endpoint.example.json`](../examples/configs/endpoint.example.json)
-  Basic endpoint server ports and log level.
+  The basic endpoint server ports and the log level.
 
 Run:
 
@@ -31,15 +32,15 @@ Run:
 ## Deploy Configs
 
 - [`examples/configs/deploy.example.json`](../examples/configs/deploy.example.json)
-  Minimal deploy file for a local tester and one LAN endpoint.
+  A minimal deploy file for a local tester and one LAN endpoint.
 - [`examples/configs/deploy-lan.json`](../examples/configs/deploy-lan.json)
-  Multi-endpoint LAN deployment with a remote tester host.
+  A multi-endpoint LAN deployment with a remote tester host.
 - [`examples/configs/deploy-multi-cloud.json`](../examples/configs/deploy-multi-cloud.json)
-  Side-by-side Azure, AWS, and GCP endpoint deployment.
+  A side-by-side Azure, AWS, and GCP endpoint deployment.
 - [`examples/configs/deploy-test-3cloud.json`](../examples/configs/deploy-test-3cloud.json)
-  Three-cloud comparison with a local tester and a broader mode set.
+  A three-cloud comparison with a local tester and a broader mode set.
 - [`examples/configs/deploy-6ep-bench.json`](../examples/configs/deploy-6ep-bench.json)
-  Larger benchmark matrix across six endpoints.
+  A larger benchmark matrix across six endpoints.
 
 Run:
 
@@ -49,7 +50,9 @@ bash install.sh --deploy examples/configs/deploy.example.json
 
 ## Notes
 
-- The installer-generated `networker-cloud.json` is an output artifact written to the current
-  working directory or remote tester home directory during deployment flows.
-- The checked-in `networker-cloud.example.json` exists only as a reference format.
-- CLI flags override values loaded from tester and endpoint config files.
+- The installer generates `networker-cloud.json` as an output artifact. It writes
+  this file to the current working directory or to the remote tester home
+  directory during a deployment.
+- The `networker-cloud.example.json` file in the repository is a reference format
+  only.
+- CLI flags override the values from the tester and endpoint config files.

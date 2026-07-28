@@ -1,9 +1,10 @@
 # Runbook: Diagnose a slow page with `perf_log`
 
-The frontend and control plane record per-call timing in the `perf_log` table
-(shipped v0.28.61) in the `alethedash_core` database. Each API response carries an
-`X-Process-Time-Ms` header (`ServerTiming.cs`); the frontend reads it to split a
-call into server time vs network time before logging it.
+The frontend and the control plane record per-call timing in the `perf_log`
+table (shipped v0.28.61) in the `alethedash_core` database. Each API response
+carries an `X-Process-Time-Ms` header (`ServerTiming.cs`). The frontend reads
+this header. It splits each call into server time and network time before it
+logs the call.
 
 ## Columns
 
@@ -20,9 +21,9 @@ call into server time vs network time before logging it.
 | `render_ms` | Render duration (for `render` rows) |
 | `item_count` | Rows/items rendered |
 
-Aborted requests are excluded from `perf_log` so they don't pollute p95 — but a
-row with `status = 0` and NULL `server_ms` can still appear from client-side
-instrumentation; see the interpretation note.
+`perf_log` excludes aborted requests, so they do not pollute the p95. But a row
+with `status = 0` and NULL `server_ms` can still come from the client-side
+instrumentation. See the interpretation note below.
 
 ## Key queries
 
@@ -63,7 +64,8 @@ ORDER BY p95_render DESC;
 
 ## Interpretation lesson
 
-A huge `total_ms` with **NULL `server_ms` and `status = 0`** is an **aborted
-poll** — a client-side artifact (navigation/unmount cancelled the request), **not**
-server latency. Do not chase it as a slow endpoint. **Server truth is
-`server_ms`.** Investigate a path only when its `server_ms` p95 is high.
+A large `total_ms` with **NULL `server_ms` and `status = 0`** is an **aborted
+poll**. This is a client-side artifact: a navigation or an unmount cancelled the
+request. It is **not** server latency. Do not treat it as a slow endpoint. The
+server truth is `server_ms`. Investigate a path only when its `server_ms` p95 is
+high.

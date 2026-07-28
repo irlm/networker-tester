@@ -1,26 +1,27 @@
 # Networker Probes Reference
 
-Each probe mode runs a specific measurement sequence and populates a corresponding set of
-JSON fields in the `RequestAttempt` output. This reference describes what each probe
-measures, which fields it populates, and example CLI commands.
+Each probe mode runs a specified measurement sequence. Each mode also writes a
+matched set of JSON fields to the `RequestAttempt` output. This reference tells
+you what each probe measures, which fields it writes, and the example CLI
+commands.
 
-The canonical list of modes is [`shared/modes.json`](../shared/modes.json) (generated from
-the `Protocol` enum in `crates/networker-tester/src/metrics.rs`); this doc documents every
-mode there.
+The `Protocol` enum in `crates/networker-tester/src/metrics.rs` gives the
+canonical list of modes in [`shared/modes.json`](../shared/modes.json). This
+document describes every mode in that list.
 
 ## Target requirements
 
-Each mode needs one of three kinds of target:
+Each mode needs one of these kinds of target:
 
-- **Arbitrary URL** — hits any HTTP(S)/UDP target you point it at
+- **Arbitrary URL** — the probe uses any HTTP(S)/UDP target that you give it
   (`tcp`, `dns`, `tls`, `tlsresume`, `native`, `curl`, `udp`, `http1`, `http2`, `http3`).
-- **`networker-endpoint` target** — needs the diagnostic server's routes
+- **`networker-endpoint` target** — the probe needs the diagnostic server's routes
   (`/download`, `/upload`, `/page`, `/asset`, UDP throughput port)
   (`download`, `download1`–`download3`, `upload`, `upload1`–`upload3`, `webdownload`,
   `webupload`, `udpdownload`, `udpupload`, `pageload`, `pageload2`, `pageload3`).
-- **LagHound SDK endpoint** — probes a customer-embedded LagHound endpoint that emits
+- **LagHound SDK endpoint** — the probe uses a customer-embedded LagHound endpoint that emits
   `Server-Timing` (`sdkprobe`).
-- **Chrome/Chromium required** — needs a local Chrome install and `--features browser`
+- **Chrome/Chromium required** — the probe needs a local Chrome install and `--features browser`
   (`browser`, `browser1`, `browser2`, `browser3`).
 
 ---
@@ -48,7 +49,7 @@ Each mode needs one of three kinds of target:
 
 ## `tcp` — TCP Connect Only
 
-Measures: DNS resolution + TCP 3-way handshake. No HTTP.
+This mode measures DNS resolution and the TCP 3-way handshake. It does no HTTP.
 
 ```bash
 networker-tester --target http://example.com/health --modes tcp --runs 10
@@ -61,7 +62,8 @@ networker-tester --target http://example.com/health --modes tcp --runs 10
 
 ## `http1` — HTTP/1.1
 
-Measures: DNS → TCP → HTTP/1.1 request/response. No TLS required (plain HTTP).
+This mode measures the DNS → TCP → HTTP/1.1 request and response. It does not
+need TLS for plain HTTP.
 
 ```bash
 networker-tester --target http://example.com/health --modes http1 --runs 10
@@ -79,24 +81,25 @@ networker-tester --target https://example.com/health --modes http1 --runs 10
 
 ## `http2` — HTTP/2
 
-Measures: DNS → TCP → TLS (ALPN `h2`) → HTTP/2 request/response. TLS is required for
-ALPN negotiation.
+This mode measures the DNS → TCP → TLS (ALPN `h2`) → HTTP/2 request and
+response. It needs TLS for ALPN negotiation.
 
 ```bash
 networker-tester --target https://example.com/health --modes http2 --runs 10
 ```
 
 **Populated:** same as `http1` plus `tls` always present
-**Terminal:** same as `http1` (CPU and CSW will be higher than h1 for large payloads due to HPACK)
-**Note:** Attempting `http2` over plain HTTP will fail with a TLS error.
+**Terminal:** same as `http1`. HPACK makes the CPU and CSW higher than h1 for large payloads.
+**Note:** `http2` over plain HTTP fails with a TLS error.
 
 ---
 
 ## `tlsresume` — TLS session resumption
 
-Measures: two fresh TLS connections to the same HTTPS origin. The first request seeds
-resumption state (for TLS 1.3 this also allows `NewSessionTicket` to arrive post-handshake),
-and the second request succeeds only if rustls reports a resumed handshake.
+This mode makes two fresh TLS connections to the same HTTPS origin. The first
+request seeds the resumption state. For TLS 1.3, this seed also lets the
+`NewSessionTicket` arrive after the handshake. The second request succeeds only
+when rustls reports a resumed handshake.
 
 ```bash
 networker-tester --target https://www.microsoft.com/ --modes tlsresume --runs 3
@@ -105,17 +108,18 @@ networker-tester --target https://www.microsoft.com/ --modes tlsresume --runs 3
 **Populated:** `dns`, `tcp`, `tls`
 **Terminal:** `cold=full:Xms warm=resumed:Yms resumed=true cold_http=200 warm_http=200`
 **Notes:**
-- Uses a real HTTP/1.1 request on both connections; HTTP status may be non-2xx and the
-  transport result can still be useful.
-- Best for HTTPS targets. The metric is the warm handshake duration, with additional TLS fields
-  showing cold vs warm handshake kind and HTTP status codes.
+- The mode uses a real HTTP/1.1 request on both connections. The HTTP status can be non-2xx,
+  but the transport result is still useful.
+- Use this mode for HTTPS targets. The metric is the warm handshake duration. The extra TLS
+  fields show the cold and warm handshake kind and the HTTP status codes.
 
 ---
 
 ## `http3` — HTTP/3 over QUIC
 
-Measures: UDP-based QUIC handshake (combines TCP+TLS equivalent) → HTTP/3
-request/response. Included in the default build.
+This mode measures the UDP-based QUIC handshake and then the HTTP/3 request and
+response. The QUIC handshake is the equivalent of TCP plus TLS. The default
+build includes this mode.
 
 ```bash
 networker-tester --target https://example.com/health --modes http3 --runs 10 --insecure
@@ -124,15 +128,17 @@ networker-tester --target https://example.com/health --modes http3 --runs 10 --i
 **Populated:** `tls` (QUIC handshake, labeled `QUIC:` in terminal), `http` — `dns` and `tcp` are `None`
 because QUIC combines transport + crypto into a single UDP-based handshake.
 **Terminal:** `QUIC:Xms TTFB:Xms Total:Xms CPU:Xms CSW:Xv/Xi` — no `DNS:` or `TCP:` shown.
-**Note:** `QUIC:Xms` = full 1-RTT handshake including TLS 1.3. CPU is higher than H/1.1 or H/2
-because encryption runs in userspace per UDP datagram rather than in the kernel TCP stack.
+**Note:** `QUIC:Xms` is the full 1-RTT handshake, which includes TLS 1.3. The CPU is higher
+than H/1.1 or H/2 because the encryption runs in userspace per UDP datagram, not in the
+kernel TCP stack.
 
 ---
 
 ## `download` — Bulk HTTP Download (endpoint only)
 
-Measures end-to-end download throughput from the `networker-endpoint` `/download` route.
-URL path is **rewritten** automatically: `/health` → `/download?bytes=N`.
+This mode measures the end-to-end download throughput from the
+`networker-endpoint` `/download` route. It **rewrites** the URL path
+automatically: `/health` → `/download?bytes=N`.
 
 ```bash
 networker-tester --target http://127.0.0.1:8080/health \
@@ -152,8 +158,8 @@ networker-tester --target http://127.0.0.1:8080/health \
 
 ## `upload` — Bulk HTTP Upload (endpoint only)
 
-Measures end-to-end upload throughput to the `networker-endpoint` `/upload` route. URL
-path is **rewritten** automatically.
+This mode measures the end-to-end upload throughput to the `networker-endpoint`
+`/upload` route. It **rewrites** the URL path automatically.
 
 ```bash
 networker-tester --target http://127.0.0.1:8080/health \
@@ -169,9 +175,10 @@ near-zero readings when the server responds before fully draining the body.
 
 ## `webdownload` — Labeled Download Probe
 
-Uses the built-in `networker-endpoint` route `GET /download?bytes=N`, just like `download`.
-The difference is the **protocol label** in the output/report (`webdownload` vs `download`),
-which is useful when you want side-by-side comparison groups in a report.
+This mode uses the built-in `networker-endpoint` route `GET /download?bytes=N`,
+the same as `download`. The **protocol label** in the output and report is the
+only difference (`webdownload` against `download`). Use this label to make
+side-by-side comparison groups in a report.
 
 ```bash
 networker-tester --target https://host:8443/health \
@@ -179,14 +186,15 @@ networker-tester --target https://host:8443/health \
 ```
 
 **Populated:** same as `download`
-**Note:** currently rewrites to `/download`; it does not fetch an arbitrary URL as-is.
+**Note:** the mode rewrites the URL to `/download`. It does not fetch an arbitrary URL as-is.
 
 ---
 
 ## `webupload` — Labeled Upload Probe
 
-Uses the built-in `networker-endpoint` route `POST /upload`, just like `upload`.
-The difference is the **protocol label** in the output/report (`webupload` vs `upload`).
+This mode uses the built-in `networker-endpoint` route `POST /upload`, the same
+as `upload`. The **protocol label** in the output and report is the only
+difference (`webupload` against `upload`).
 
 ```bash
 networker-tester --target https://host:8443/health \
@@ -199,10 +207,11 @@ networker-tester --target https://host:8443/health \
 
 ## `download1` / `download2` / `download3` — Protocol-Pinned Download (endpoint only)
 
-Same as `download`, but force the HTTP version instead of negotiating it: `download1`
-over HTTP/1.1, `download2` over HTTP/2, `download3` over QUIC/HTTP3. Use these to compare
-sustained download throughput across protocol versions against the same
-`networker-endpoint` `/download` route.
+These modes work the same as `download`, but they force the HTTP version. They
+do not negotiate it. `download1` uses HTTP/1.1, `download2` uses HTTP/2, and
+`download3` uses QUIC/HTTP3. Use these modes to compare the sustained download
+throughput across protocol versions against the same `networker-endpoint`
+`/download` route.
 
 ```bash
 networker-tester --target https://127.0.0.1:8443/health \
@@ -216,8 +225,9 @@ networker-tester --target https://127.0.0.1:8443/health \
 
 ## `upload1` / `upload2` / `upload3` — Protocol-Pinned Upload (endpoint only)
 
-Same as `upload`, but force the HTTP version: `upload1` over HTTP/1.1, `upload2` over
-HTTP/2, `upload3` over QUIC/HTTP3, against the `networker-endpoint` `/upload` route.
+These modes work the same as `upload`, but they force the HTTP version. `upload1`
+uses HTTP/1.1, `upload2` uses HTTP/2, and `upload3` uses QUIC/HTTP3. They run
+against the `networker-endpoint` `/upload` route.
 
 ```bash
 networker-tester --target https://127.0.0.1:8443/health \
@@ -231,7 +241,7 @@ networker-tester --target https://127.0.0.1:8443/health \
 
 ## `udp` — UDP Echo
 
-Measures round-trip time for UDP packets to a UDP echo server.
+This mode measures the round-trip time for UDP packets to a UDP echo server.
 
 ```bash
 networker-tester --target udp://example.com --modes udp \
@@ -245,8 +255,9 @@ networker-tester --target udp://example.com --modes udp \
 
 ## `udpdownload` / `udpupload` — UDP Bulk Throughput
 
-Measures bulk UDP throughput using the custom NWKT protocol on the endpoint's UDP port
-(default 9998). Captures datagram count, loss, and effective throughput.
+These modes measure the bulk UDP throughput with the custom NWKT protocol on the
+endpoint's UDP port (default 9998). They capture the datagram count, the loss,
+and the effective throughput.
 
 ```bash
 networker-tester --target http://127.0.0.1:8080/health \
@@ -259,7 +270,8 @@ networker-tester --target http://127.0.0.1:8080/health \
 
 ## `dns` — Standalone DNS Resolution
 
-Resolves the target hostname and records the results without opening a TCP connection.
+This mode resolves the target hostname and records the results. It does not open
+a TCP connection.
 
 ```bash
 networker-tester --target http://example.com/health --modes dns --runs 5
@@ -272,8 +284,9 @@ networker-tester --target http://example.com/health --modes dns --runs 5
 
 ## `tls` — Standalone TLS Handshake
 
-Performs DNS → TCP → TLS only. Captures the full certificate chain (subject, issuer,
-SANs, expiry), cipher suite, TLS version, and ALPN.
+This mode does the DNS → TCP → TLS sequence only. It captures the full
+certificate chain (subject, issuer, SANs, expiry), the cipher suite, the TLS
+version, and the ALPN.
 
 ```bash
 networker-tester --target https://example.com --modes tls --runs 5
@@ -286,8 +299,9 @@ networker-tester --target https://example.com --modes tls --runs 5
 
 ## `pageload` — HTTP/1.1 Multi-Asset Page Load
 
-Simulates a browser page load: fetches a root HTML page and then downloads N parallel
-assets over up to 6 concurrent HTTP/1.1 connections (matching browser connection limits).
+This mode simulates a browser page load. It fetches a root HTML page. It then
+downloads N parallel assets over a maximum of 6 concurrent HTTP/1.1 connections.
+This maximum matches the browser connection limits.
 
 ```bash
 networker-tester --target https://127.0.0.1:8443/health \
@@ -302,8 +316,9 @@ networker-tester --target https://127.0.0.1:8443/health \
 
 ## `pageload2` — HTTP/2 Multiplexed Page Load
 
-Like `pageload` but uses a single TLS connection with HTTP/2 multiplexing — all N assets
-in-flight simultaneously. Demonstrates H/2 multiplexing advantage.
+This mode works like `pageload`, but it uses one TLS connection with HTTP/2
+multiplexing. All N assets are in flight at the same time. This mode shows the
+H/2 multiplexing advantage.
 
 ```bash
 networker-tester --target https://127.0.0.1:8443/health \
@@ -317,7 +332,8 @@ networker-tester --target https://127.0.0.1:8443/health \
 
 ## `pageload3` — HTTP/3 Multiplexed Page Load
 
-Like `pageload2` but over QUIC. Included in the default build.
+This mode works like `pageload2`, but it runs over QUIC. The default build
+includes this mode.
 
 ```bash
 networker-tester --target https://127.0.0.1:8443/health \
@@ -325,14 +341,15 @@ networker-tester --target https://127.0.0.1:8443/health \
 ```
 
 **Populated:** same as `pageload`
-**Note:** UDP must not be firewalled; `--insecure` needed for self-signed certs.
+**Note:** a firewall must not block UDP. Use `--insecure` for self-signed certificates.
 
 ---
 
 ## `native` — System TLS Stack
 
-Like `http1` but uses the platform's native TLS library (Secure Transport on macOS,
-SChannel on Windows, OpenSSL on Linux) instead of rustls. Requires `--features native`.
+This mode works like `http1`, but it uses the platform's native TLS library, not
+rustls. The native library is Secure Transport on macOS, SChannel on Windows,
+and OpenSSL on Linux. This mode needs `--features native`.
 
 ```bash
 networker-tester --target https://example.com/health --modes native --runs 5
@@ -344,8 +361,8 @@ networker-tester --target https://example.com/health --modes native --runs 5
 
 ## `curl` — System curl Binary
 
-Runs the system `curl` binary and parses its `--write-out` timing fields. Useful as a
-ground-truth baseline.
+This mode runs the system `curl` binary. It reads the `--write-out` timing
+fields from curl. Use this mode as a ground-truth baseline.
 
 ```bash
 networker-tester --target https://example.com/health --modes curl --runs 5
@@ -357,9 +374,10 @@ networker-tester --target https://example.com/health --modes curl --runs 5
 
 ## `sdkprobe` — LagHound SDK Endpoint (server-time split)
 
-Probes a **customer-embedded LagHound SDK endpoint** (not the `networker-endpoint`
-diagnostic server, and not an arbitrary URL). Splits total time into DNS, TCP, TLS,
-network transfer, and server processing using the endpoint's `Server-Timing` header.
+This mode probes a **customer-embedded LagHound SDK endpoint**. It does not probe
+the `networker-endpoint` diagnostic server or an arbitrary URL. It splits the
+total time into DNS, TCP, TLS, network transfer, and server processing. It uses
+the endpoint's `Server-Timing` header for this split.
 
 ```bash
 networker-tester --target https://app.example.com/__laghound --modes sdkprobe --runs 10
@@ -375,9 +393,10 @@ See [`sdk/`](sdk/README.md) and the [Application Network Performance report](rep
 
 ## `browser` — Real Headless Chromium (CDP)
 
-Drives a real headless Chromium instance via the Chrome DevTools Protocol (chromiumoxide)
-to measure actual page-load performance that no synthetic probe can replicate.
-Requires `--features browser` at compile time and a local Chrome/Chromium installation.
+This mode drives a real headless Chromium instance through the Chrome DevTools
+Protocol (chromiumoxide). It measures the true page-load performance that no
+synthetic probe can copy. This mode needs `--features browser` at compile time
+and a local Chrome/Chromium installation.
 
 ```bash
 networker-tester --target https://127.0.0.1:8443/health \
@@ -388,21 +407,23 @@ networker-tester --target https://127.0.0.1:8443/health \
 `transferred_bytes`, `protocol` (main-document ALPN), `resource_protocols` (per-protocol
 resource counts, e.g. `[("h2", 18), ("h3", 2)]`)
 **Terminal:** `[browser] proto=h2 TTFB:Xms DCL:Xms Load:Xms res=21 bytes=...`
-**Note:** URL is rewritten to `/page` so results are directly comparable with
-`pageload` / `pageload2` / `pageload3`. Chrome binary search order:
-`NETWORKER_CHROME_PATH` env var → system paths (`/usr/bin/google-chrome`, etc. on Linux;
-`/Applications/Google Chrome.app/…` on macOS). If no Chrome binary is found the probe
-returns a skipped `RequestAttempt` rather than crashing the run.
+**Note:** the mode rewrites the URL to `/page`, so you can compare the results
+directly with `pageload` / `pageload2` / `pageload3`. The Chrome binary search
+order is: `NETWORKER_CHROME_PATH` env var → system paths (`/usr/bin/google-chrome`,
+etc. on Linux; `/Applications/Google Chrome.app/…` on macOS). When the mode finds
+no Chrome binary, the probe returns a skipped `RequestAttempt`. It does not crash
+the run.
 
 ---
 
 ## `browser1` / `browser2` / `browser3` — Protocol-Pinned Headless Chrome
 
-Like `browser`, but force the transport the real Chrome uses:
+These modes work like `browser`, but they force the transport that the real
+Chrome uses:
 
-- `browser1` — HTTP/2 disabled, so Chrome falls back to HTTP/1.1.
-- `browser2` — QUIC disabled, so Chrome uses HTTP/2.
-- `browser3` — QUIC forced via origin flag + SPKI cert pinning, so Chrome uses HTTP/3.
+- `browser1` — the mode disables HTTP/2, so Chrome uses HTTP/1.1.
+- `browser2` — the mode disables QUIC, so Chrome uses HTTP/2.
+- `browser3` — the mode forces QUIC with an origin flag and SPKI cert pinning, so Chrome uses HTTP/3.
 
 The `--modes browser` CLI shorthand expands to `browser1,browser2,browser3`.
 
@@ -418,9 +439,9 @@ networker-tester --target https://127.0.0.1:8443/health \
 
 ## URL Page-Load Diagnostic (CLI workflow)
 
-This is not a classic `--modes ...` probe. It is a higher-level workflow driven by
-`--url-test-*` flags and intended for real website diagnostics rather than synthetic
-endpoint comparison.
+This is not a classic `--modes ...` probe. It is a higher-level workflow. The
+`--url-test-*` flags drive it. Use it for real website diagnostics, not for
+synthetic endpoint comparison.
 
 ```bash
 networker-tester \
@@ -447,12 +468,12 @@ networker-tester \
 
 ## GeoIP / ASN Enrichment (optional, offline)
 
-The tester can annotate each run with geo/ISP/ASN context for both sides of the
-path — `client_geo` (the client's egress IP) and `target_geo` (the first
-resolved target IP) in the run JSON, plus a line in the summary and the HTML
-host cards. Enrichment is **strictly offline**: lookups run against local
-MaxMind `.mmdb` files that you supply. The tester never downloads databases and
-never calls a runtime geolocation or "what's my IP" API.
+The tester can add geo/ISP/ASN context to each run for both sides of the path.
+It adds `client_geo` (the client's egress IP) and `target_geo` (the first
+resolved target IP) to the run JSON. It also adds a line to the summary and to
+the HTML host cards. This enrichment is **strictly offline**: the lookups use
+local MaxMind `.mmdb` files that you supply. The tester never downloads a
+database. It never calls a runtime geolocation or "what's my IP" API.
 
 ```bash
 # Get the free GeoLite2 databases (requires a free MaxMind account):
