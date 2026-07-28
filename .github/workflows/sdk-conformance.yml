@@ -64,8 +64,12 @@ jobs:
 
       - name: npm ci
         working-directory: sdk/js
-        # No package-lock deps beyond dev tooling; ci falls back cleanly.
-        run: npm ci
+        # --ignore-scripts blocks dependency lifecycle/postinstall scripts (the
+        # top npm supply-chain execution path), matching ci.yml and release.yml.
+        # The SDK's only deps are typescript + @types/node and the build is pure
+        # tsc, so no install script is needed (verified). No package-lock deps
+        # beyond dev tooling; ci falls back cleanly.
+        run: npm ci --ignore-scripts
 
       - name: build
         working-directory: sdk/js

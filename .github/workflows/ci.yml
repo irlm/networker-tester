@@ -256,6 +256,34 @@ jobs:
         run: cargo check -p networker-tester -p networker-endpoint --target x86_64-unknown-linux-musl
 
   # ──────────────────────────────────────────────────────────────────────────
+  # Supply-chain provenance gate (cargo-vet). The current dependency tree is
+  # baselined as exemptions in supply-chain/config.toml, so this passes today;
+  # any NEW or bumped crate (e.g. a Dependabot cargo PR) that is not covered by
+  # a trusted upstream audit set (Mozilla/Google/Bytecode-Alliance, imported in
+  # config.toml + pinned in imports.lock) FAILS here — forcing a human
+  # provenance review before the code can enter CI/prod. `--locked` uses the
+  # committed imports.lock, so this does not re-fetch audit sets at run time.
+  # cargo audit catches KNOWN advisories; cargo-vet gates UNVETTED code.
+  # ──────────────────────────────────────────────────────────────────────────
+  cargo-vet:
+    name: cargo-vet (supply-chain provenance)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+        with:
+          key: cargo-vet
+          cache-on-failure: "true"
+      - name: Install cargo-vet
+        run: cargo install cargo-vet --locked --version 0.10.2
+      - name: Vet dependencies (main workspace)
+        run: cargo vet --locked
+
+  # ──────────────────────────────────────────────────────────────────────────
   # Benchmark orchestrator (alethabench): workspace-excluded, so the lint job
   # above never touches it. Guards the clippy debt cleared in #441 (53→0).
   # Gated like the other areas: PRs run it only when benchmarks/orchestrator/**
