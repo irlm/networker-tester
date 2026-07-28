@@ -150,7 +150,7 @@ fn query_sntp_blocking(server: &str) -> Option<ClockSync> {
     })
 }
 
-/// Best-effort one-shot clock-sync query, bounded by [`OVERALL_TIMEOUT`]
+/// Best-effort one-shot clock-sync query, bounded by `OVERALL_TIMEOUT`
 /// (which also covers DNS resolution). Returns `None` when disabled via
 /// `NETWORKER_NTP_DISABLE=1` or on any failure.
 pub async fn query_clock_sync() -> Option<ClockSync> {

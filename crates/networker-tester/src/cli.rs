@@ -181,7 +181,7 @@ pub struct Cli {
     #[arg(long)]
     pub no_proxy: bool,
 
-    /// Explicit HTTP proxy URL (e.g. http://proxy.corp:3128).
+    /// Explicit HTTP proxy URL (e.g. `http://proxy.corp:3128`).
     /// Overrides HTTP_PROXY / HTTPS_PROXY env vars.
     #[arg(long)]
     pub proxy: Option<String>,

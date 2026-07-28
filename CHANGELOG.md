@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.89] — 2026-07-28
+
+### Fixed
+- **Doc-comment defects (rustdoc).** Fixed the doc-comment markup rustdoc
+  actually fails on — `asset[k]`/`asset[2k]` parsed as broken intra-doc links,
+  `Option<f64>` and a bare proxy URL outside backticks, and `[`PRIVATE_ITEM`]`
+  links from public docs. No code/behavior change; the compiled binary is
+  identical. A new CI lint-job step (`cargo doc` with
+  `-D rustdoc::{broken_intra_doc_links,bare_urls,invalid_html_tags}`) keeps the
+  class from regressing.
+
+### Security (CI/tooling)
+- Also in this window (#568): `cargo-vet` supply-chain provenance gate (trusted
+  Mozilla/Google/Bytecode-Alliance audits imported; new crates without an audit
+  fail CI) and `sdk-conformance.yml` `npm ci --ignore-scripts`.
+
+---
+
 ## [0.28.88] — 2026-07-27
 
 ### Added

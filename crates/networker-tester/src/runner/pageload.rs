@@ -198,10 +198,13 @@ struct ConnResult {
 /// HTTP/1.1 keep-alive connections — accurately mimicking browser behavior.
 ///
 /// Connection pool assignment (round-robin):
+///
+/// ```text
 ///   conn 0: /page manifest → asset[0] → asset[k] → asset[2k] …
 ///   conn 1:                   asset[1] → asset[k+1] …
 ///   …
 ///   conn k-1:                 asset[k-1] → asset[2k-1] …
+/// ```
 pub async fn run_pageload_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -> RequestAttempt {
     let cpu_start = cpu_time::ProcessTime::now();
     let attempt_id = Uuid::new_v4();

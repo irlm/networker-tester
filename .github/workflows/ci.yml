@@ -224,6 +224,16 @@ jobs:
       - name: Build without default features (stub paths)
         run: cargo build -p networker-tester --no-default-features
 
+      # Doc hygiene: fail on broken rustdoc intra-doc links, bare URLs, and
+      # malformed HTML in doc comments — the class of defect where `[k]` or
+      # `Option<f64>` outside backticks silently breaks the rendered docs.
+      # Scoped to the current crates (the retired networker-dashboard/agent/
+      # common are being deleted at the decommission — not worth gating).
+      - name: Rustdoc lint (broken links / bare URLs / bad HTML)
+        env:
+          RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links -D rustdoc::bare_urls -D rustdoc::invalid_html_tags"
+        run: cargo doc -p networker-tester -p networker-endpoint -p networker-log --no-deps --document-private-items
+
   # ──────────────────────────────────────────────────────────────────────────
   # musl type-check: the RELEASE builds target x86_64-unknown-linux-musl, whose
   # libc types differ from the glibc the test jobs run against (e.g. msghdr's
