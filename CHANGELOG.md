@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.97] — 2026-07-28
+
+### Fixed
+- **P0: every agent-relayed run was instantly marked `failed` by the tester's
+  stderr INFO stream.** The agent streams tester stderr as `error` frames
+  labelled `[tester] …` (log relay by design), and the tester's tracing
+  subscriber writes INFO to **stderr** — the control plane's `OnError` treated
+  the first frame as run-fatal, so healthy runs went `failed` ~10 ms after
+  spawn with the startup INFO line as their "error" (found by the live E2E
+  pass: a 60/60-success run marked failed; a 50-iteration benchmark "finishing"
+  in 10 ms). Relayed `[tester]`/`[tester/<workload>]` frames are now log-only;
+  the agent's own unprefixed critical frames (spawn failure, deadline kill,
+  stdout overflow, unparseable JSON) still fail the run, and `run_finished`
+  carries the real verdict. Full findings: `docs/analysis/e2e-pass-2026-07-28.md`.
+
+---
+
 ## [0.28.96] — 2026-07-28
 
 ### Fixed
