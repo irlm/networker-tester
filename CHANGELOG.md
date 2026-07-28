@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.98] — 2026-07-28
+
+### Fixed
+- **P0: streamed probe attempts were never persisted** (E2E finding P0-2). The
+  C# agent runs the tester with `--json-stdout` and relays each attempt over
+  WS, but `OnAttemptEvent` only bumped the heartbeat + forwarded to the live
+  bus — nothing wrote to the tester-owned V001 schema, so completed runs (even
+  60/60-success ones) showed an empty `/attempts` list and starved the reports.
+  Added `AttemptExtract` (pure JSON→typed) + `AttemptPersister` (raw Npgsql):
+  `OnAttemptEvent` now upserts the V001 `testrun` row (which `RequestAttempt`
+  FKs to — a separate table the control plane never created) and inserts
+  `RequestAttempt` + the present phase rows (DNS/TCP/TLS/HTTP/UDP/ServerTiming),
+  idempotent on `AttemptId`, skipping gracefully when the probe schema is
+  absent. Every INSERT was dry-run-verified (rolled back) against the live prod
+  schema, which caught four column/constraint mismatches before ship
+  (`extrajson` not `extra_json`, the `testrun` FK, phase `startedat` NOT NULL,
+  `udpresult.remoteaddr` NOT NULL).
+
+---
+
 ## [0.28.97] — 2026-07-28
 
 ### Fixed
