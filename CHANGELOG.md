@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.93] — 2026-07-28
+
+### Changed
+- **Dependency bump — `base64` 0.22 → 0.23** (Dependabot #555): the tester's
+  optional `base64` (behind the `browser` feature, used by the screenshot path)
+  and the retired dashboard's direct dep. Verified with
+  `cargo build --features browser`; added the `safe-to-deploy` cargo-vet
+  exemption for `base64:0.23.0`. (`0.21.7`/`0.22.1` stay in the lock via the
+  tiberius/rustls and axum chains — unchanged.)
+
+---
+
 ## [0.28.92] — 2026-07-28
 
 ### Changed
