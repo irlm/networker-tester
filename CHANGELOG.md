@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.95] — 2026-07-28
+
+### Added
+- **Dashboard "Export" buttons for the report documents.** A shared
+  `ExportMenu` dropdown (PDF / HTML / Word / Markdown) now sits on: the
+  project **Dashboard** ("Export report" → the Integrated Test Report), the
+  **run detail** page (that run's report), and the **Application Network** and
+  **Value** report pages (their standalone exports). Downloads are
+  authenticated (Bearer fetch → blob; a plain link can't carry the JWT), honour
+  the server's Content-Disposition filename, show a busy state while the
+  server renders, and surface failures as toasts. Export is read-only and
+  available to every role that can see the page.
+
+---
+
 ## [0.28.94] — 2026-07-28
 
 ### Added

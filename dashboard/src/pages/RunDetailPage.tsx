@@ -5,6 +5,7 @@ import { stripAnsi } from '../lib/ansi';
 import type { TestRun, LiveAttempt, BenchmarkArtifact } from '../api/types';
 import { useProject } from '../hooks/useProject';
 import { Breadcrumb } from '../components/common/Breadcrumb';
+import { ExportMenu } from '../components/common/ExportMenu';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { RunResult } from '../components/common/RunResult';
 import { RunEnvelopeBlock } from '../components/RunEnvelopeBlock';
@@ -208,6 +209,11 @@ export function RunDetailPage() {
             >
               Cancel
             </button>
+          )}
+          {/* Read-only document export — available to every role that can see
+              the run (same visibility as the page itself). */}
+          {runId && (
+            <ExportMenu path={`/v2/test-runs/${runId}/report`} fileBase={`test-run-${shortId}`} />
           )}
           {isProjectAdmin && runId && (
             <button

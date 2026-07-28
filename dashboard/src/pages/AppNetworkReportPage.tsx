@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { Link } from 'react-router';
 import { api, type AppNetworkReport, type AppNetworkGroup, type AppNetworkVerdict } from '../api/client';
+import { ExportMenu } from '../components/common/ExportMenu';
 import { PageHeader } from '../components/common/PageHeader';
 import { EmptyState } from '../components/common/EmptyState';
 import { usePolling } from '../hooks/usePolling';
@@ -162,6 +163,14 @@ export function AppNetworkReportPage() {
           report && !noData
             ? `${report.attempt_count} sdkprobe attempt${report.attempt_count === 1 ? '' : 's'} across ${report.groups.length} endpoint${report.groups.length === 1 ? '' : 's'}`
             : 'Is the slowness your application or the network?'
+        }
+        action={
+          projectId && report && !noData ? (
+            <ExportMenu
+              path={`/projects/${projectId}/reports/app-network`}
+              fileBase="app-network-report"
+            />
+          ) : undefined
         }
       />
 
