@@ -42,10 +42,13 @@ jobs:
           for HOST in laghound.com alethedash.com; do
             # --retry rides out a transient blip (a single flaky 5xx/timeout
             # from the runner must not page) but still returns the real code
-            # for a persistent failure.
-            BODY=$(curl -s --max-time 15 --retry 3 --retry-delay 3 --retry-connrefused \
+            # for a persistent failure. -L follows the alethedash.com bridge's
+            # 301 to laghound.com (docs/branding.md §2) so the check validates
+            # that the old domain still reaches a healthy app + body; a bare 200
+            # on alethedash.com is no longer expected.
+            BODY=$(curl -sL --max-time 15 --retry 3 --retry-delay 3 --retry-connrefused \
               "https://${HOST}/api/health" || true)
-            CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 --retry 3 --retry-delay 3 \
+            CODE=$(curl -sL -o /dev/null -w '%{http_code}' --max-time 15 --retry 3 --retry-delay 3 \
               --retry-connrefused "https://${HOST}/api/health" || echo 000)
             echo "${HOST}/api/health → ${CODE}  ${BODY}" | tee -a "$GITHUB_STEP_SUMMARY"
             [ "$CODE" = "200" ] || { echo "::error::${HOST} /api/health HTTP ${CODE}"; FAIL=1; }
@@ -66,7 +69,9 @@ jobs:
             https://laghound.com/api/modes \
             https://laghound.com/api/zones \
             https://alethedash.com/api/health ; do
-            CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 --retry 2 --retry-delay 3 \
+            # -L follows the alethedash.com bridge redirect so a broken redirect
+            # target surfaces as a real 5xx rather than being masked by the 301.
+            CODE=$(curl -sL -o /dev/null -w '%{http_code}' --max-time 15 --retry 2 --retry-delay 3 \
               --retry-connrefused "$URL" || echo 000)
             echo "${URL} → ${CODE}" | tee -a "$GITHUB_STEP_SUMMARY"
             if [ "$CODE" = "000" ] || [ "$CODE" -ge 500 ]; then
