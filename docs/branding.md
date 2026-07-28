@@ -30,11 +30,17 @@ unchanged) is the mark for now. The single source of truth in the frontend is
 Fielded tester agents hold **provision-time** WebSocket URLs pointing at
 `alethedash.com`, so the old domain is a live compatibility surface:
 
-1. `alethedash.com` stays **fully functional** (API + WS + UI, not a redirect)
-   for at least one full fleet re-provision cycle after the cutover. The
-   nightly soak check alerts if the bridge stops answering 200.
-2. After the fleet no longer holds `alethedash.com` URLs, it may be demoted to
-   a browser-only 301 to `laghound.com`.
+1. `alethedash.com` stayed **fully functional** (API + WS + UI, not a redirect)
+   through one full fleet re-provision cycle after the cutover.
+2. **DONE (2026-07-28): demoted to a `301` redirect to `laghound.com`.** The
+   fleet is drained (0 fielded testers; new provisions bake in `laghound.com`),
+   so no agent holds an `alethedash.com` URL and the bridge's compatibility job
+   is complete. The nginx `alethedash.com` block now `return 301`s to
+   `laghound.com` (TLS still terminates so the HTTPS redirect is valid); the
+   pre-demotion proxy config is kept at `alethedash.pre-redirect.bak` on the VM.
+   The nightly soak check now follows the redirect and asserts it lands on a
+   healthy `laghound.com` (a bare `200` on `alethedash.com` is no longer
+   expected).
 3. The registration is kept for **at least 1 year** to prevent takeover of a
    domain that fielded binaries and docs have referenced.
 

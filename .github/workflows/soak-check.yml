@@ -35,14 +35,18 @@ jobs:
           echo "public /api/health (laghound.com) → $CODE" | tee -a "$GITHUB_STEP_SUMMARY"
           [ "$CODE" = "200" ]
 
-      # Fielded agents still hold provision-time alethedash.com WS URLs; the
-      # bridge must answer 200 until its decommission window closes
-      # (docs/branding.md domain bridge policy). This alerts if it dies early.
-      - name: Bridge health — alethedash.com still 200
+      # alethedash.com was DEMOTED from a full bridge to a compatibility
+      # redirect (fleet drained 2026-07; docs/branding.md §2). The invariant is
+      # now "a client hitting the old domain still reaches a healthy app": the
+      # first hop must 301 to laghound.com and the followed request must be 200.
+      # `-L` follows the redirect, so this stays green through the demotion and
+      # does NOT reset the decommission soak streak.
+      - name: Bridge health — alethedash.com redirects to a healthy laghound
         run: |
-          CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://alethedash.com/api/health)
-          echo "bridge /api/health (alethedash.com) → $CODE" | tee -a "$GITHUB_STEP_SUMMARY"
-          [ "$CODE" = "200" ]
+          HOP=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://alethedash.com/api/health)
+          FINAL=$(curl -sL -o /dev/null -w '%{http_code}' --max-time 15 https://alethedash.com/api/health)
+          echo "bridge alethedash.com/api/health → first hop $HOP, followed → $FINAL" | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$FINAL" = "200" ]
 
       - name: Azure Login
         uses: azure/login@a65d910e8af852a8061c627c456678983e180302 # v2
