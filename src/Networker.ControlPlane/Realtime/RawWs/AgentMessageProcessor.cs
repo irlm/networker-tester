@@ -629,6 +629,22 @@ public sealed class AgentMessageProcessor
 
         var cleanMessage = AnsiText.Strip(err.Message);
 
+        // Relayed subprocess output (RunExecutor step 5) arrives prefixed
+        // "[tester] " / "[tester/<workload>] " — it is LOG STREAMING, not a
+        // verdict. The tester's tracing subscriber writes INFO to stderr, so
+        // treating these as fatal failed every healthy run ~10ms after spawn
+        // (E2E pass 2026-07-28, P0-1: a 60/60-success run marked 'failed' with
+        // the startup INFO line as its "error"). Only the agent's own
+        // unprefixed critical frames (spawn failure, deadline kill, stdout
+        // overflow, unparseable JSON) decide status here; the real terminal
+        // verdict travels in run_finished.
+        if (IsRelayedSubprocessOutput(cleanMessage))
+        {
+            _logger.LogInformation(
+                "Agent {AgentId} run {RunId} stderr: {Message}", agentId, runId, cleanMessage);
+            return;
+        }
+
         // Status precondition (audit F6): a late error frame — the agent
         // streams tester stderr as error frames, which can trail the terminal
         // run_finished — must never flip an already-terminal run (a successful
@@ -651,6 +667,17 @@ public sealed class AgentMessageProcessor
 
         _bus.Publish(new JobUpdate(runId, "failed", agentId, null, DateTimeOffset.UtcNow));
     }
+
+    /// <summary>
+    /// True for error frames that are relayed child-process output rather than
+    /// an agent verdict: the agent labels every relayed stderr line
+    /// <c>[tester] …</c> (or <c>[tester/&lt;workload&gt;] …</c> in benchmark
+    /// mode) — see <c>Networker.Agent.RunExecutor</c> step 5. The agent's own
+    /// fatal messages are plain prose and never carry the bracket label.
+    /// </summary>
+    internal static bool IsRelayedSubprocessOutput(string message) =>
+        message.StartsWith("[tester] ", StringComparison.Ordinal)
+        || message.StartsWith("[tester/", StringComparison.Ordinal);
 
     /// <summary>
     /// CommandLog → lazily stamp <c>agent_command.started_at</c> (idempotent:

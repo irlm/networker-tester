@@ -24,13 +24,18 @@ public sealed class AnsiScrubIngestTests
     private const string ProjectId = "proj-ansi-test";
     private const string Esc = "\u001B";
 
-    /// <summary>The tester log line the audit captured, as the agent relays it.</summary>
+    /// <summary>
+    /// An ANSI-laden AGENT-CRITICAL message (unprefixed — relayed tester stderr
+    /// carries the <c>[tester]</c> label and is handled as log streaming, not a
+    /// verdict; see <see cref="TesterStderrRelayTests"/>). Critical messages can
+    /// still embed colorized tester output, e.g. the unparseable-JSON snippet.
+    /// </summary>
     private static readonly string AnsiLaden =
-        $"[tester] {Esc}[2m2026-07-14T01:22:24.974248Z{Esc}[0m " +
+        $"Tester exited with code 1 and unparseable JSON: head {Esc}[2m2026-07-14T01:22:24.974248Z{Esc}[0m " +
         $"{Esc}[31mERROR{Esc}[0m {Esc}[2mnetworker_tester{Esc}[0m connection refused (os error 111)";
 
     private const string CleanExpected =
-        "[tester] 2026-07-14T01:22:24.974248Z ERROR networker_tester connection refused (os error 111)";
+        "Tester exited with code 1 and unparseable JSON: head 2026-07-14T01:22:24.974248Z ERROR networker_tester connection refused (os error 111)";
 
     [Fact]
     public async Task Error_frame_stores_ansi_stripped_error_message_on_the_run()
