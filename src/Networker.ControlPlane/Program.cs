@@ -269,6 +269,10 @@ app.MapPerfPerCostEndpoints();
 // Application Network Performance report (project-scoped, member-read) — for
 // sdkprobe runs, the network-vs-server latency split + verdict.
 app.MapAppNetworkEndpoints();
+// Integrated Test Report (project-scoped, member-read) — every test result in
+// one exportable document: executive summary + per-test/per-protocol details +
+// the condensed analysis sections (same BuildReportAsync computations).
+app.MapIntegratedReportEndpoints();
 app.MapSystemHealthEndpoints();
 app.MapLogsEndpoints();
 app.MapPerfLogEndpoints();

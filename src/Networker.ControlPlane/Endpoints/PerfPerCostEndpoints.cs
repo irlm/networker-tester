@@ -53,6 +53,26 @@ public static class PerfPerCostEndpoints
                 return ReportExport.BadFormat(format, exporters);
             }
 
+            var report = await BuildReportAsync(db, dataSource, projectId, log, ct);
+
+            if (reportFormat == ReportFormat.Json)
+            {
+                return Results.Ok(report);
+            }
+
+            return ReportExport.Deliver(exporters, reportFormat,
+                PerfPerCostReportDocument.Build(report, projectId),
+                fileBase: $"perf-per-cost-{ReportExport.SafeFileBase(projectId)}", requested: format);
+        }).RequireAuthorization(AuthPolicies.ProjectMember);
+
+        return app;
+    }
+
+    /// <summary>Compute the full report for a project. Shared by the route
+    /// above and the project-level integrated report.</summary>
+    internal static async Task<PerfPerCostReport> BuildReportAsync(
+        NetworkerDbContext db, NpgsqlDataSource dataSource, string projectId, ILogger log, CancellationToken ct)
+    {
             var costs = CloudCostTable.Instance;
 
             var aggregates = await LoadAggregatesAsync(dataSource, projectId, ct);
@@ -134,7 +154,7 @@ public static class PerfPerCostEndpoints
             var completedRuns = await db.TestRuns.AsNoTracking()
                 .CountAsync(r => r.ProjectId == projectId && r.Status == "completed", ct);
 
-            var report = new PerfPerCostReport(
+            return new PerfPerCostReport(
                 GeneratedAt: DateTime.UtcNow,
                 CostTable: new CostTableInfo(
                     costs.AsOf,
@@ -147,18 +167,6 @@ public static class PerfPerCostEndpoints
                 ProvidersWithData: providersWithData,
                 Groups: groups,
                 MissingCostSkus: missing);
-
-            if (reportFormat == ReportFormat.Json)
-            {
-                return Results.Ok(report);
-            }
-
-            return ReportExport.Deliver(exporters, reportFormat,
-                PerfPerCostReportDocument.Build(report, projectId),
-                fileBase: $"perf-per-cost-{ReportExport.SafeFileBase(projectId)}", requested: format);
-        }).RequireAuthorization(AuthPolicies.ProjectMember);
-
-        return app;
     }
 
     private static double? Round4(double? v) => v is double d ? Math.Round(d, 4) : null;

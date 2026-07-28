@@ -15,6 +15,12 @@ other:
     (DNS/TCP/TLS/TTFB/server), and a capped per-attempt table.
   - `AppNetworkReportDocument` / `PerfPerCostReportDocument` — the existing
     analysis reports (they add no new statistics; they render the wire report).
+  - `IntegratedReportDocument` — the project-level **Integrated Test Report**:
+    executive summary (KPIs, verdict, runs-by-status, app-vs-network headline)
+    plus the details — results per test, per-protocol distributions, condensed
+    analysis sections, recent runs. Its analysis data comes from the same
+    `BuildReportAsync` helpers the standalone routes serve, so the views can't
+    disagree.
 - **Exporters** (`IReportExporter`) render the document → bytes:
   - `MarkdownReportExporter` — GitHub-flavoured Markdown (unicode block/box-plot
     charts).
@@ -52,6 +58,7 @@ JSON. RBAC and the JSON wire shapes are unchanged.
 |-------|---------|
 | `GET /api/projects/{projectId}/reports/app-network?format=` | `json` (default), `md`, `html`, `docx`, `pdf` |
 | `GET /api/projects/{projectId}/reports/perf-per-cost?format=` | `json` (default), `md`, `html`, `docx`, `pdf` |
+| `GET /api/projects/{projectId}/reports/integrated?format=` | `html` (default), `md`, `docx`, `pdf` — no JSON (use the standalone reports) |
 | `GET /api/v2/test-runs/{id}/report?format=` | `html` (default), `md`, `docx`, `pdf` — no JSON (use `/attempts`) |
 
 An unknown/unavailable format returns `400` naming the supported document
