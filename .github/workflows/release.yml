@@ -526,10 +526,13 @@ jobs:
               # ── Public-path check through nginx ─────────────────────────
               # Canonical domain AND the alethedash.com bridge (fielded agents
               # hold provision-time WS URLs — the bridge MUST stay alive until
-              # its decommission window closes).
+              # its decommission window closes). alethedash.com was demoted to a
+              # 301 redirect to laghound.com (docs/branding.md §2), so -L follows
+              # the hop and asserts the client still reaches a healthy app — a
+              # bare 200 on alethedash.com is no longer expected.
               for DOMAIN in laghound.com alethedash.com; do
-                PUB=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 https://\${DOMAIN}/api/health || echo '000')
-                echo \">> Public https://\${DOMAIN}/api/health: HTTP \${PUB}\"
+                PUB=\$(curl -sL -o /dev/null -w '%{http_code}' --max-time 8 https://\${DOMAIN}/api/health || echo '000')
+                echo \">> Public https://\${DOMAIN}/api/health (following redirects): HTTP \${PUB}\"
                 if [ \"\${PUB}\" != '200' ]; then
                   echo \">> DEPLOY_FAILED: https://\${DOMAIN}/api/health not 200\"
                   exit 1
