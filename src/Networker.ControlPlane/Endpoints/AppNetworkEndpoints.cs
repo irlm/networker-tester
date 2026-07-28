@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using Networker.ControlPlane.Auth;
 using Networker.ControlPlane.Reports;
+using Networker.ControlPlane.Reports.Documents;
 using Npgsql;
 
 namespace Networker.ControlPlane.Endpoints;
@@ -33,11 +34,18 @@ public static class AppNetworkEndpoints
         app.MapGet("/api/projects/{projectId}/reports/app-network", async (
             string projectId,
             Guid? config_id,
+            string? format,
             NpgsqlDataSource dataSource,
+            ReportExporterResolver exporters,
             ILoggerFactory loggerFactory,
             CancellationToken ct) =>
         {
             var log = loggerFactory.CreateLogger("AppNetwork");
+
+            if (!ReportFormats.TryParse(format, out var reportFormat))
+            {
+                return ReportExport.BadFormat(format, exporters);
+            }
 
             var aggregates = await LoadAggregatesAsync(dataSource, projectId, config_id, ct);
 
@@ -87,7 +95,7 @@ public static class AppNetworkEndpoints
                     projectId, config_id, totalAnomalies);
             }
 
-            return Results.Ok(new AppNetworkReport(
+            var report = new AppNetworkReport(
                 GeneratedAt: DateTime.UtcNow,
                 Formulas: new AppNetworkFormulas(
                     ServerMs: "server_ms = ServerTimingResult.TotalServerMs (the SDK's Server-Timing total;dur, per attempt joined on AttemptId)",
@@ -104,7 +112,16 @@ public static class AppNetworkEndpoints
                 OverallMedianNetworkMs: AppNetworkLogic.Round4(overallStats.MedianNetworkMs),
                 OverallMedianWallMs: AppNetworkLogic.Round4(overallStats.MedianWallMs),
                 OverallServerRatio: AppNetworkLogic.ServerRatio(overallStats.MedianServerMs, overallStats.MedianWallMs),
-                Groups: groups));
+                Groups: groups);
+
+            if (reportFormat == ReportFormat.Json)
+            {
+                return Results.Ok(report);
+            }
+
+            return ReportExport.Deliver(exporters, reportFormat,
+                AppNetworkReportDocument.Build(report, projectId),
+                fileBase: $"app-network-{ReportExport.SafeFileBase(projectId)}", requested: format);
         }).RequireAuthorization(AuthPolicies.ProjectMember);
 
         return app;

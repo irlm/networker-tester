@@ -8,6 +8,7 @@ using Networker.ControlPlane.Dispatch;
 using Networker.ControlPlane.Endpoints;
 using Networker.ControlPlane.Realtime;
 using Networker.ControlPlane.Realtime.RawWs;
+using Networker.ControlPlane.Reports.Documents;
 using Networker.ControlPlane.Notifications;
 using Networker.ControlPlane.Observability;
 using Networker.ControlPlane.Provisioning;
@@ -112,6 +113,14 @@ builder.Services.AddVersionRefresh(VersionEndpoints.DashboardVersion);
 builder.Services.AddRawWebSockets();
 builder.Services.AddAgentRawSocket();
 builder.Services.AddOpsInfrastructure();
+// Report-export engine: the stateless document exporters (Markdown / HTML /
+// DOCX) + the format→exporter resolver, consumed by the run / app-network /
+// perf-per-cost report endpoints (?format=). PDF ships behind its own package
+// in a follow-up (Reports/Documents/).
+builder.Services.AddSingleton<IReportExporter, MarkdownReportExporter>();
+builder.Services.AddSingleton<IReportExporter, HtmlReportExporter>();
+builder.Services.AddSingleton<IReportExporter, DocxReportExporter>();
+builder.Services.AddSingleton<ReportExporterResolver>();
 
 var app = builder.Build();
 

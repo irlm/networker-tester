@@ -2,6 +2,7 @@ using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Auth;
 using Networker.ControlPlane.Reports;
+using Networker.ControlPlane.Reports.Documents;
 using Networker.Data;
 using Npgsql;
 
@@ -38,12 +39,20 @@ public static class PerfPerCostEndpoints
         // every /api/projects/{projectId}/* route.
         app.MapGet("/api/projects/{projectId}/reports/perf-per-cost", async (
             string projectId,
+            string? format,
             NetworkerDbContext db,
             NpgsqlDataSource dataSource,
+            ReportExporterResolver exporters,
             ILoggerFactory loggerFactory,
             CancellationToken ct) =>
         {
             var log = loggerFactory.CreateLogger("PerfPerCost");
+
+            if (!ReportFormats.TryParse(format, out var reportFormat))
+            {
+                return ReportExport.BadFormat(format, exporters);
+            }
+
             var costs = CloudCostTable.Instance;
 
             var aggregates = await LoadAggregatesAsync(dataSource, projectId, ct);
@@ -125,7 +134,7 @@ public static class PerfPerCostEndpoints
             var completedRuns = await db.TestRuns.AsNoTracking()
                 .CountAsync(r => r.ProjectId == projectId && r.Status == "completed", ct);
 
-            return Results.Ok(new PerfPerCostReport(
+            var report = new PerfPerCostReport(
                 GeneratedAt: DateTime.UtcNow,
                 CostTable: new CostTableInfo(
                     costs.AsOf,
@@ -137,7 +146,16 @@ public static class PerfPerCostEndpoints
                 CompletedRuns: completedRuns,
                 ProvidersWithData: providersWithData,
                 Groups: groups,
-                MissingCostSkus: missing));
+                MissingCostSkus: missing);
+
+            if (reportFormat == ReportFormat.Json)
+            {
+                return Results.Ok(report);
+            }
+
+            return ReportExport.Deliver(exporters, reportFormat,
+                PerfPerCostReportDocument.Build(report, projectId),
+                fileBase: $"perf-per-cost-{ReportExport.SafeFileBase(projectId)}", requested: format);
         }).RequireAuthorization(AuthPolicies.ProjectMember);
 
         return app;

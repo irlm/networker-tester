@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.90] — 2026-07-28
+
+### Added
+- **Report export engine + LagHound logo.** A new control-plane module
+  (`Reports/Documents/`) turns test results into branded, downloadable
+  documents in **Markdown, HTML and DOCX** (PDF ships next, behind its own
+  package). A format-agnostic `ReportDocument` model is fed by three builders —
+  a per-run report (KPI summary, per-protocol latency **distribution box-plot**
+  + table, median phase timings, capped attempts table), plus the existing
+  App-Network and Perf-per-Cost reports — and rendered by pluggable exporters.
+  Charts render natively per format (inline SVG in HTML, unicode block/box-plots
+  in Markdown/DOCX) with no image pipeline or native dependency. New brand
+  assets `assets/brand/laghound-{glyph,wordmark}.svg` (terminal prompt + latency
+  waveform + cursor, brand purple/cyan) are embedded into the assembly.
+- **`?format=` on the report endpoints.** `GET …/reports/app-network` and
+  `…/reports/perf-per-cost` accept `?format=md|html|docx` (JSON stays the
+  default); new `GET /api/v2/test-runs/{id}/report?format=` downloads a run's
+  results as a document (defaults to HTML). RBAC and the JSON wire shapes are
+  unchanged.
+
+---
+
 ## [0.28.89] — 2026-07-28
 
 ### Fixed
