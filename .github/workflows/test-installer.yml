@@ -32,7 +32,7 @@ jobs:
     outputs:
       installer: ${{ steps.detect.outputs.installer }}
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
         with:
           fetch-depth: 0
 
@@ -67,7 +67,7 @@ jobs:
     if: needs.changes.outputs.installer == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
 
       - name: Install shellcheck
         run: sudo apt-get install -y shellcheck
@@ -89,7 +89,7 @@ jobs:
     if: needs.changes.outputs.installer == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
 
       - name: Install bats-core
         run: |
@@ -108,7 +108,7 @@ jobs:
     if: needs.changes.outputs.installer == 'true'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
 
       - name: Lint install.ps1
         shell: pwsh
