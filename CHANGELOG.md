@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.92] — 2026-07-28
+
+### Changed
+- **Dependency bumps (batched Dependabot).** `rust_xlsxwriter` 0.94 → 0.96
+  (Excel report writer, `networker-tester`) and the tester's direct
+  `tokio-tungstenite` 0.29 → 0.30 (aligning it with `networker-agent`; both
+  versions already coexisted in the lock via axum, so no new crate versions are
+  introduced). Supersedes #553 and #554. Workspace builds; 960 tester lib tests
+  green.
+
+---
+
 ## [0.28.91] — 2026-07-28
 
 ### Added
