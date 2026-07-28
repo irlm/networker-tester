@@ -1014,7 +1014,7 @@ version = "0.0.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.rust_xlsxwriter]]
-version = "0.94.1"
+version = "0.96.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustc-hash]]
