@@ -1,8 +1,9 @@
 # Testing Guide: H1 vs H2 vs H3 Protocol Comparison
 
-This guide shows how to use `networker-tester` + `networker-endpoint` to run a fair,
-reproducible comparison of HTTP/1.1, HTTP/2, and HTTP/3 across the metrics that matter
-for a research-quality protocol evaluation:
+This guide shows you how to use `networker-tester` and `networker-endpoint`
+together. You run a fair, repeatable comparison of HTTP/1.1, HTTP/2, and HTTP/3.
+The comparison covers the metrics that matter for a research-quality protocol
+evaluation:
 
 | Metric | Why it matters |
 |---|---|
@@ -24,7 +25,7 @@ for a research-quality protocol evaluation:
 cargo build --release
 ```
 
-HTTP/3 is included by default. No extra flags needed.
+The build includes HTTP/3 by default. You do not need extra flags.
 
 ### 2. Start the endpoint
 
@@ -33,22 +34,22 @@ HTTP/3 is included by default. No extra flags needed.
 ./target/release/networker-endpoint
 ```
 
-> **Windows note:** Replace `./target/release/` with `.\target\release\` and add `.exe`
-> to binary names. Use backtick `` ` `` instead of `\` for line continuation in PowerShell.
-> Examples in this guide use Unix syntax; PowerShell equivalents are shown where the syntax
-> differs meaningfully (loops, `open`).
+> **Windows note:** Replace `./target/release/` with `.\target\release\`. Add
+> `.exe` to the binary names. In PowerShell, use the backtick `` ` `` for line
+> continuation, not `\`. The examples in this guide use Unix syntax. This guide
+> shows the PowerShell equivalents where the syntax is different (loops, `open`).
 
-The endpoint serves:
-- `/health` — tiny JSON response for latency probes
-- `/download?bytes=N` — generates N bytes of body on the fly
-- `/upload` — drains request body; reports receive time in `Server-Timing`
-- `/page` + `/asset?size=N` — simulates HTML page + parallel asset fetches
+The endpoint serves these routes:
+- `/health` — a tiny JSON response for latency probes
+- `/download?bytes=N` — generates N bytes of body on demand
+- `/upload` — drains the request body and reports the receive time in `Server-Timing`
+- `/page` + `/asset?size=N` — simulates an HTML page with parallel asset fetches
 
 ---
 
 ## Test 1: Simple Request Latency (H1 vs H2 vs H3)
 
-Measures the per-request overhead of each protocol on a tiny payload.
+This test measures the per-request overhead of each protocol on a tiny payload.
 
 ```bash
 # HTTP/1.1 and HTTP/2 (plain HTTP and HTTPS)
@@ -73,20 +74,21 @@ Measures the per-request overhead of each protocol on a tiny payload.
 ✓ #1 [http3] 200 HTTP/3    QUIC:1.5ms TTFB:0.4ms Total:2.1ms CPU:2.4ms CSW:4v/1i
 ```
 
-HTTP/3 has no separate DNS or TCP phase — QUIC is UDP-based and combines transport +
-crypto into one handshake, shown as `QUIC:Xms`. HTTP/1.1 and HTTP/2 show `DNS:` and
-`TCP:` separately because those are distinct phases before the `TLS:` handshake.
+HTTP/3 has no separate DNS or TCP phase. QUIC is UDP-based. It combines the
+transport and the crypto into one handshake, shown as `QUIC:Xms`. HTTP/1.1 and
+HTTP/2 show `DNS:` and `TCP:` separately, because these are distinct phases
+before the `TLS:` handshake.
 
 **Expected patterns:**
-- `CPU` for HTTP/3 is notably higher — QUIC encryption runs in userspace (no kernel offload)
-- `TTFB` should be similar on loopback; differences appear on real network links
-- `CSW` higher for H/3 reflects more context switches from the async QUIC runtime
+- The `CPU` for HTTP/3 is much higher, because QUIC encryption runs in userspace with no kernel offload
+- The `TTFB` is similar on loopback. The differences appear on real network links
+- A higher `CSW` for H/3 shows more context switches from the async QUIC runtime
 
 ---
 
 ## Test 2: Download Throughput — Single Large Transfer
 
-Measures sustained download rate with different payload sizes.
+This test measures the sustained download rate with different payload sizes.
 
 ```bash
 ./target/release/networker-tester \
@@ -97,8 +99,8 @@ Measures sustained download rate with different payload sizes.
   --insecure
 ```
 
-Then repeat selecting a specific HTTP version by running against the plain-HTTP port
-(HTTP/1.1 only) or forcing via TLS:
+Then repeat the test for one HTTP version. Run against the plain-HTTP port for
+HTTP/1.1 only, or force the version through TLS:
 
 ```bash
 # Force HTTP/1.1 (plain — no TLS negotiation)
@@ -141,9 +143,9 @@ Then repeat selecting a specific HTTP version by running against the plain-HTTP 
 
 ## Test 4: Browser-Like Page Load (the key H1 vs H2 vs H3 test)
 
-This is the most realistic comparison. A browser loads an HTML page then fetches N
-parallel assets. HTTP/1.1 opens up to 6 TCP connections; HTTP/2 and H/3 multiplex all
-assets over one connection.
+This is the most realistic comparison. A browser loads an HTML page. It then
+fetches N parallel assets. HTTP/1.1 opens a maximum of 6 TCP connections. HTTP/2
+and H/3 multiplex all the assets over one connection.
 
 ```bash
 # HTTP/1.1: up to 6 parallel TCP connections
@@ -174,7 +176,7 @@ assets over one connection.
   --insecure
 ```
 
-Or run all four in a single invocation (including the real-browser probe):
+Or run all four modes in one command, which includes the real-browser probe:
 
 ```bash
 ./target/release/networker-tester \
@@ -186,9 +188,9 @@ Or run all four in a single invocation (including the real-browser probe):
   --insecure
 ```
 
-> `browser` requires `cargo build --release --features browser` and a local Chrome/Chromium
-> installation. Drop it from `--modes` if Chrome is not available — the run continues with
-> the other three modes.
+> `browser` needs `cargo build --release --features browser` and a local
+> Chrome/Chromium installation. If Chrome is not available, remove `browser` from
+> `--modes`. The run then continues with the other three modes.
 
 **What to look for:**
 
@@ -208,8 +210,8 @@ more CPU.
 
 ## Test 5: Varied Asset Count (Simulating Different Page Complexity)
 
-Run a sweep across asset counts to find the crossover point where H/2 multiplexing
-starts to beat H/1.1's parallel connections:
+Run a sweep across the asset counts. This sweep finds the crossover point where
+H/2 multiplexing starts to beat the parallel connections of H/1.1:
 
 ```bash
 # bash / zsh (macOS, Linux)
@@ -239,14 +241,15 @@ foreach ($N in 5, 10, 20, 40, 80) {
 }
 ```
 
-Expect H/2 to break even or win at around 6-10 assets (the browser-connection-limit
-threshold) and pull ahead at higher counts.
+H/2 breaks even or wins at about 6-10 assets. This range is the
+browser-connection-limit threshold. H/2 then leads at higher counts.
 
 ---
 
 ## Test 6: Varied Asset Size (Simulating Different Content Types)
 
-Small assets expose connection overhead; large assets expose transfer efficiency:
+Small assets show the connection overhead. Large assets show the transfer
+efficiency:
 
 ```bash
 # bash / zsh (macOS, Linux)
@@ -280,8 +283,9 @@ foreach ($SZ in '1k', '10k', '100k', '1m') {
 
 ## Test 7: Multi-Target Comparison (Local vs Remote)
 
-The most powerful use-case: run the same probe set against two (or more) endpoints in one
-invocation and get a single HTML report with a side-by-side comparison table.
+This is the most powerful use case. Run the same probe set against two or more
+endpoints in one command. You get one HTML report with a side-by-side comparison
+table.
 
 ### Setup
 
@@ -297,10 +301,11 @@ Deploy a remote endpoint via the installer:
 bash install.sh --azure endpoint   # or --aws endpoint, --gcp endpoint, --lan endpoint
 ```
 
-The installer writes `networker-cloud.json` pointing at the remote VM's IP.
+The installer writes `networker-cloud.json` with the remote VM's IP.
 
-**Alternative:** Use `--deploy` with a JSON config for non-interactive, repeatable
-multi-endpoint deployment. See the [deploy-config reference](deploy-config.md).
+**Alternative:** Use `--deploy` with a JSON config for a non-interactive,
+repeatable multi-endpoint deployment. See the
+[deploy-config reference](deploy-config.md).
 
 ```bash
 bash install.sh --deploy examples/configs/deploy.example.json
@@ -337,10 +342,11 @@ bash install.sh --deploy examples/configs/deploy.example.json
 
 ### What to look for in the HTML report
 
-The report opens with a **Multi-Target Summary** table (one row per target) and a
-**Cross-Target Protocol Comparison** table. The comparison shows the primary metric for
-each protocol (e.g. `total_duration_ms` for HTTP, `throughput_mbps` for download) with
-the % delta vs the first (local) target:
+The report opens with a **Multi-Target Summary** table (one row per target) and
+a **Cross-Target Protocol Comparison** table. The comparison shows the primary
+metric for each protocol (for example, `total_duration_ms` for HTTP,
+`throughput_mbps` for download). It also shows the % delta against the first
+(local) target:
 
 | What to compare | What it tells you |
 |-----------------|-------------------|
@@ -362,7 +368,7 @@ the % delta vs the first (local) target:
 
 ### JSON (default — every run)
 
-JSON output is written automatically to `output/` on every run:
+The tester writes the JSON output to `output/` on every run:
 
 ```bash
 ./target/release/networker-tester \
@@ -392,8 +398,9 @@ xdg-open output/report.html   # Linux
 Invoke-Item output\report.html  # Windows
 ```
 
-The HTML report includes a **Protocol Comparison** table and a **Throughput Results** table
-with Goodput, CPU, Client CSW, and Server CSW columns.
+The HTML report includes a **Protocol Comparison** table and a **Throughput
+Results** table. The Throughput Results table has Goodput, CPU, Client CSW, and
+Server CSW columns.
 
 ### Excel Spreadsheet
 
@@ -473,7 +480,8 @@ See `networker-tester --help` for the full list.
 
 ## Test 8: HTTP Stack Comparison (nginx / IIS vs endpoint)
 
-Compare the performance of different HTTP servers serving identical static content.
+Compare the performance of different HTTP servers that serve the same static
+content.
 
 ```bash
 # 1. Set up the endpoint + nginx on your Ubuntu server (the installer does this automatically)
@@ -496,8 +504,8 @@ Compare the performance of different HTTP servers serving identical static conte
   --page-preset mixed
 ```
 
-The tester automatically:
-1. Checks each stack's `/health` endpoint (skips unreachable stacks)
-2. Runs pageload/browser probes against the stack's HTTPS port
-3. Tags results with the stack name
-4. Shows an "HTTP Stack Comparison" table in the HTML report
+The tester does these steps automatically:
+1. Check each stack's `/health` endpoint. Skip an unreachable stack.
+2. Run the pageload and browser probes against the stack's HTTPS port.
+3. Tag the results with the stack name.
+4. Show an "HTTP Stack Comparison" table in the HTML report.

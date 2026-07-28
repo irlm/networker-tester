@@ -1,8 +1,8 @@
 # LagHound
 
-**LagHound** is a cross-platform network diagnostics suite for measuring TCP, HTTP/1.1,
-HTTP/2, HTTP/3, UDP, page-load, throughput, TLS, and URL-diagnostic behavior.
-The CLI probe engine ships as `networker-tester`.
+**LagHound** is a cross-platform network diagnostics suite. It measures TCP,
+HTTP/1.1, HTTP/2, HTTP/3, UDP, page-load, throughput, TLS, and URL-diagnostic
+behavior. The CLI probe engine ships as `networker-tester`.
 
 > **Brand:** the product is **LagHound** (renamed from Networker, 2026-07) —
 > one name across the tester, the dashboard/control plane, and the benchmark
@@ -14,17 +14,17 @@ The CLI probe engine ships as `networker-tester`.
 > `alethedash-*`. See [`docs/branding.md`](docs/branding.md).
 
 The repository is a hybrid Rust + C# system:
-- `networker-tester` (Rust): the CLI probe engine — runs probes and writes JSON, HTML, Excel, and DB output. This is the permanent measurement core.
-- `networker-endpoint` (Rust): the server used as the diagnostic target
-- `Networker.ControlPlane` (C#, ASP.NET): the production control plane — REST API, raw-WebSocket hubs, JWT auth, scheduling, provisioning, and background loops over PostgreSQL
-- `Networker.Agent` (C#): a worker that connects to the control plane and runs tester jobs
-- `Networker.Contracts` / `Networker.Data` / `Networker.Security` (C#): the versioned JSON seam, EF Core model, and crypto shared by the C# services
+- `networker-tester` (Rust): the CLI probe engine. It runs the probes and writes JSON, HTML, Excel, and DB output. This is the permanent measurement core.
+- `networker-endpoint` (Rust): the server that is the diagnostic target.
+- `Networker.ControlPlane` (C#, ASP.NET): the production control plane. It provides the REST API, the raw-WebSocket hubs, JWT auth, scheduling, provisioning, and the background loops over PostgreSQL.
+- `Networker.Agent` (C#): a worker that connects to the control plane and runs the tester jobs.
+- `Networker.Contracts` / `Networker.Data` / `Networker.Security` (C#): the versioned JSON seam, the EF Core model, and the crypto that the C# services share.
 
-The legacy Rust control plane (`networker-dashboard`, `networker-agent`,
-`networker-common`) has been replaced by the C# solution and is pending
-decommission — the crates remain in the tree for the soak/rollback window
-(see `docs/phase2-cutover-runbook.md`; full-Rust snapshot at the
-`rust-legacy-*` tag and `legacy/rust` branch).
+The C# solution replaced the retired Rust control plane
+(`networker-dashboard`, `networker-agent`, `networker-common`). The retired
+crates are pending decommission. They remain in the tree for the soak and
+rollback window (see `docs/phase2-cutover-runbook.md`). The full-Rust snapshot
+is at the `rust-legacy-*` tag and on the `legacy/rust` branch.
 
 ## Architecture
 
@@ -55,10 +55,10 @@ flowchart LR
 ```
 
 There are two main ways to use the system:
-- Direct mode: run `networker-tester` yourself against `networker-endpoint` or another target and collect artifacts locally.
-- Managed mode: use the browser UI and the control plane to dispatch runs to agents, which execute `networker-tester` and stream results back live.
+- Direct mode: run `networker-tester` yourself against `networker-endpoint` or another target. Collect the artifacts locally.
+- Managed mode: use the browser UI and the control plane to dispatch runs to the agents. Each agent runs `networker-tester` and streams the results back live.
 
-More detail is in [`docs/architecture.md`](docs/architecture.md).
+For more detail, see [`docs/architecture.md`](docs/architecture.md).
 
 ## Install
 
@@ -69,10 +69,10 @@ curl -fsSL https://laghound.sh | bash -s -- tester
 curl -fsSL https://laghound.sh | bash -s -- endpoint
 ```
 
-(`laghound.sh` serves the installer script to `curl` and redirects browsers
-to the dashboard. The Gist mirror at
+(`laghound.sh` serves the installer script to `curl`. It redirects a browser to
+the dashboard. The Gist mirror at
 `https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh`
-keeps working.)
+still works.)
 
 ### Windows PowerShell
 
@@ -179,7 +179,7 @@ scripts/                Deployment and maintenance scripts
 
 ## Control Plane Quick Start
 
-The C# control plane requires PostgreSQL, .NET 10, and a few environment variables:
+The C# control plane needs PostgreSQL, .NET 10, and a few environment variables:
 
 ```bash
 # 1. Start PostgreSQL
@@ -214,9 +214,9 @@ Key environment variables:
 | `AGENT_DASHBOARD_URL` | no | `ws://localhost:3000/ws/agent` | Full agent WebSocket URL (also accepted: `AGENT_DASHBOARDURL`) |
 | `AGENT_API_KEY` | yes | -- | Agent authentication key, sent in the `X-LagHound-Agent-Key` header and validated against the SHA-256 `agent.api_key_hash` (also accepted: `AGENT_APIKEY`) |
 
-See [`docs/phase2-cutover-runbook.md`](docs/phase2-cutover-runbook.md) for
-production operations and [`docs/setup-guide.md`](docs/setup-guide.md) for
-deployment.
+For production operations, see
+[`docs/phase2-cutover-runbook.md`](docs/phase2-cutover-runbook.md). For
+deployment, see [`docs/setup-guide.md`](docs/setup-guide.md).
 
 ## Development
 
@@ -231,5 +231,5 @@ dotnet test Networker.sln
 cd dashboard && npm install && npm run build
 ```
 
-For deeper usage, deployment, and benchmarking guidance, start with
+For more usage, deployment, and benchmarking guidance, start with
 [`docs/README.md`](docs/README.md).

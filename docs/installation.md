@@ -1,7 +1,7 @@
 # Installation and Startup
 
-This guide covers the supported install paths, local development builds, and the fastest way to
-start each major component in this repository.
+This guide gives the supported install paths and the local build steps. It
+also shows you how to start each component in this repository.
 
 ## Components
 
@@ -11,8 +11,9 @@ start each major component in this repository.
 - `Networker.Agent` (C#): control-plane-connected worker that runs tester jobs
 - `dashboard/` (React): browser SPA — served static by nginx in prod, Vite dev server locally
 
-The legacy Rust control plane (`networker-dashboard`, `networker-agent`) is retired and off the
-release train; see [`architecture.md`](architecture.md#retired-components-rust-control-plane).
+The retired Rust control plane (`networker-dashboard`, `networker-agent`) is
+off the release train. See
+[`architecture.md`](architecture.md#retired-components-rust-control-plane).
 
 ## Install from the Hosted Scripts
 
@@ -145,8 +146,9 @@ Example:
 
 ### `Networker.ControlPlane` (C#)
 
-The control plane runs DB migrations on startup, may seed the first admin
-user, and expects environment-based configuration. Typical local flow:
+The control plane runs the DB migrations at startup. It can also seed the first
+admin user. It reads its configuration from the environment. Use this local
+flow:
 
 ```bash
 # Start PostgreSQL (use the dashboard compose file, not docker-compose.db.yml which is for MSSQL tests)
@@ -170,7 +172,7 @@ Optional:
 
 ### `Networker.Agent` (C#)
 
-The agent connects back to the control plane over WebSocket and runs tester
+The agent connects to the control plane over a WebSocket. It runs the tester
 jobs on that machine.
 
 ```bash
@@ -190,15 +192,15 @@ Optional:
 cd dashboard && npm install && npm run dev
 ```
 
-The Vite dev server on port `5173` proxies `/api` and `/ws` to the control
-plane. In production, nginx serves the built SPA from disk and proxies
-`/api` + `/ws` to the control plane on port `5030`.
+The Vite dev server on port `5173` sends `/api` and `/ws` to the control plane
+through a proxy. In production, nginx serves the built SPA from disk. nginx also
+sends `/api` and `/ws` to the control plane on port `5030`.
 
 ## Config Files
 
-Checked-in sample JSON files are in [`examples/configs/`](../examples/configs/).
-Use [`config-examples.md`](config-examples.md)
-to choose the right starting point.
+The repository keeps sample JSON files in
+[`examples/configs/`](../examples/configs/). Use
+[`config-examples.md`](config-examples.md) to select the correct starting point.
 
 ## Next Reading
 

@@ -1,8 +1,8 @@
 # Deploy Config Reference
 
-The `--deploy` flag enables non-interactive, config-driven deployment and testing.
-A single JSON file describes where to install the tester, where to deploy endpoint(s),
-and what tests to run.
+The `--deploy` flag enables non-interactive, config-driven deployment and
+testing. One JSON file describes where to install the tester, where to deploy
+the endpoints, and which tests to run.
 
 ```bash
 bash install.sh --deploy deploy.json
@@ -31,15 +31,15 @@ bash install.sh --deploy deploy.json
 
 ## Execution Flow
 
-1. **Validate** — JSON syntax, required fields, valid modes
-2. **Pre-flight** — tool availability, cloud credentials, SSH connectivity
-3. **Display plan** — show what will be deployed and tested
-4. **Deploy tester** — install binary on local or remote machine
-5. **Deploy endpoint(s)** — install + start service on each endpoint
-6. **Generate tester config** — build `networker-cloud.json` from deployed IPs
-7. **Run tests** — execute networker-tester (locally or via SSH on remote tester)
-8. **Download results** — copy HTML/Excel reports back to local machine
-9. **Summary** — display deployed infrastructure and report locations
+1. **Validate** — check the JSON syntax, the required fields, and the valid modes.
+2. **Pre-flight** — check the tool availability, the cloud credentials, and the SSH connectivity.
+3. **Display plan** — show the deployment and the tests.
+4. **Deploy tester** — install the binary on the local or the remote machine.
+5. **Deploy endpoint(s)** — install and start the service on each endpoint.
+6. **Generate tester config** — build `networker-cloud.json` from the deployed IPs.
+7. **Run tests** — run networker-tester on the local machine or on the remote tester through SSH.
+8. **Download results** — copy the HTML and Excel reports back to the local machine.
+9. **Summary** — show the deployed infrastructure and the report locations.
 
 ## Schema
 
@@ -68,7 +68,7 @@ bash install.sh --deploy deploy.json
 
 ### `endpoints[]` items
 
-Each endpoint has the same structure as `tester`, plus:
+Each endpoint has the same structure as `tester`. It also adds this field:
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
@@ -174,17 +174,19 @@ All fields are optional. If omitted, packet capture is disabled.
 | `write_pcap` | boolean | `true` | Save raw `.pcapng` artifacts |
 | `write_summary_json` | boolean | `true` | Save parsed packet summary JSON |
 
-> Packet capture is intentionally **off by default**. The installer should only enable it when the
-> user explicitly selects it, or when a deploy config requests it.
+> Packet capture is **off by default**. The installer enables it only when the
+> user selects it, or when a deploy config requests it.
 >
-> **macOS note:** having `tshark` installed is not sufficient by itself. Capturing on `lo0`/other
-> interfaces also requires Wireshark/TShark BPF permissions (for example via ChmodBPF). If you see
-> `/dev/bpf*: Permission denied`, packet capture is configured correctly but the OS permission layer
-> still needs to be enabled.
+> **macOS note:** an installed `tshark` is not sufficient on its own. To capture
+> on `lo0` or other interfaces, you also need Wireshark/TShark BPF permissions
+> (for example, through ChmodBPF). The `/dev/bpf*: Permission denied` message
+> means that packet capture is configured correctly, but the OS permission layer
+> is not yet enabled.
 >
-> In practice, macOS users may need to **install the full Wireshark app manually** and run its
-> **ChmodBPF** helper once. The CLI/package-manager install path can provide `tshark`, but it may
-> not complete the privileged BPF permission setup non-interactively.
+> On macOS, you may need to **install the full Wireshark app manually** and run
+> its **ChmodBPF** helper once. The CLI or package-manager install path can
+> provide `tshark`, but it may not complete the privileged BPF permission setup
+> non-interactively.
 
 ### `impairment` object
 
@@ -199,9 +201,9 @@ Current scoped support in this first version focuses on **delay injection** by r
 HTTP-family probes through the endpoint's built-in `/delay?ms=N` behavior.
 
 Security note:
-- `/delay` is intended for **controlled benchmark environments**.
-- Do not expose it broadly on public/shared endpoints unless you understand and accept the risk.
-- The client-side config clamps `delay_ms` to a maximum of `10000 ms` in this version.
+- Use `/delay` only in **controlled benchmark environments**.
+- Do not expose `/delay` on a public or shared endpoint unless you understand and accept the risk.
+- The client-side config limits `delay_ms` to a maximum of `10000 ms` in this version.
 
 Default profile mapping:
 - `none` → `0 ms`
@@ -430,8 +432,9 @@ CSS/JS/fonts, and large images/bundles — rather than uniform-size assets.
 > [`phase2-cutover-runbook.md`](phase2-cutover-runbook.md). The `tester` and
 > `endpoints` objects above remain fully current.
 
-Optional. When present, the installer sets up the legacy dashboard control plane on the local
-machine. This includes PostgreSQL, the dashboard binary, the agent binary, and the React frontend.
+Optional. When this object is present, the installer sets up the legacy
+dashboard control plane on the local machine. This setup includes PostgreSQL,
+the dashboard binary, the agent binary, and the React frontend.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -455,14 +458,14 @@ Example:
 }
 ```
 
-The dashboard setup installs:
-1. **PostgreSQL** — database for storing test results, agents, deployments
-2. **networker-dashboard** — axum HTTP server (REST API + WebSocket + static files)
-3. **networker-agent** — daemon that connects to dashboard and runs probe jobs
-4. **React frontend** — built from source and served by the dashboard at `/`
-5. **systemd service** — `networker-dashboard.service` with auto-restart
+The dashboard setup installs these parts:
+1. **PostgreSQL** — the database for the test results, the agents, and the deployments.
+2. **networker-dashboard** — the axum HTTP server (REST API, WebSocket, and static files).
+3. **networker-agent** — the daemon that connects to the dashboard and runs probe jobs.
+4. **React frontend** — built from source, served by the dashboard at `/`.
+5. **systemd service** — `networker-dashboard.service` with auto-restart.
 
-After install, access the dashboard at `http://localhost:<port>`.
+After the install, open the dashboard at `http://localhost:<port>`.
 
 ## Examples
 
@@ -472,8 +475,8 @@ After install, access the dashboard at `http://localhost:<port>`.
 
 ## Validation & Limitations
 
-The installer validates your deploy config before any resources are created. Validation
-errors are shown with the endpoint index and a description of the problem:
+The installer validates your deploy config before it creates any resources. A
+validation error shows the endpoint index and a description of the problem:
 
 ```
 Validating deploy config ────
@@ -491,9 +494,10 @@ Known constraints:
 
 ## Non-interactive mode
 
-The `--deploy` flag automatically sets `AUTO_YES=1`, so all confirmation prompts
-(e.g., VM existence check: reuse/rename/delete) proceed with the default choice
-without user input. This is required for CI/CD pipelines and scripted automation.
+The `--deploy` flag sets `AUTO_YES=1` automatically. Therefore, every
+confirmation prompt (for example, the VM existence check: reuse, rename, or
+delete) uses the default choice without user input. CI/CD pipelines and scripted
+automation need this behavior.
 
 ## Requirements
 

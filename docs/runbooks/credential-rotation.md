@@ -1,9 +1,9 @@
 # Runbook: Rotate DASHBOARD_CREDENTIAL_KEY / DASHBOARD_JWT_SECRET
 
-Both secrets are read by the C# control plane and are **fail-closed** outside
-`Development` — the service refuses to start without a valid value. They live in
-the service unit environment file `/etc/alethedash-cs.env` on the control-plane
-VM; the service is `alethedash-cs`.
+The C# control plane reads both secrets. Both are **fail-closed** outside
+`Development`: the service refuses to start without a valid value. Both secrets
+live in the service unit environment file `/etc/alethedash-cs.env` on the
+control-plane VM. The service is `alethedash-cs`.
 
 | Secret | Format | Protects | Rotation impact |
 |---|---|---|---|
@@ -12,42 +12,44 @@ VM; the service is `alethedash-cs`.
 
 ## Rotating `DASHBOARD_CREDENTIAL_KEY`
 
-`CredentialCipher` supports a **dual-key decrypt window** via
+`CredentialCipher` supports a **dual-key decrypt window** through
 `DASHBOARD_CREDENTIAL_KEY_OLD`
 (`src/Networker.Security/CredentialCipher.cs`,
-`src/Networker.ControlPlane/Security/CredentialCipherExtensions.cs`): `Decrypt`
-tries the primary key first and falls back to the old key on a
-`CryptographicException`. This lets you rotate without a flag-day re-encrypt:
+`src/Networker.ControlPlane/Security/CredentialCipherExtensions.cs`). `Decrypt`
+tries the primary key first. It falls back to the old key on a
+`CryptographicException`. This window lets you rotate without a flag-day
+re-encrypt:
 
 1. Generate a new key: `openssl rand -hex 32`.
 2. In `/etc/alethedash-cs.env`, set:
    - `DASHBOARD_CREDENTIAL_KEY` = **new** key
    - `DASHBOARD_CREDENTIAL_KEY_OLD` = **previous** key
-3. Restart: `sudo systemctl restart alethedash-cs`.
-4. New writes encrypt under the new key; old rows still decrypt via the fallback.
-5. Re-encrypt existing rows under the new key (re-save each cloud account, e.g.
-   `PUT /api/projects/{id}/cloud-accounts/{id}`, or run the project's re-encrypt
-   pass), then remove `DASHBOARD_CREDENTIAL_KEY_OLD` and restart again.
+3. Restart the service: `sudo systemctl restart alethedash-cs`.
+4. New writes encrypt under the new key. Old rows still decrypt through the fallback.
+5. Re-encrypt the existing rows under the new key. Re-save each cloud account
+   (for example, `PUT /api/projects/{id}/cloud-accounts/{id}`), or run the
+   project's re-encrypt pass. Then remove `DASHBOARD_CREDENTIAL_KEY_OLD` and
+   restart the service again.
 
-> If you set only `DASHBOARD_CREDENTIAL_KEY` to a fresh value with no
-> `_OLD` fallback, **every previously stored credential becomes undecryptable**.
-> Always stage the old key first.
+> If you set only `DASHBOARD_CREDENTIAL_KEY` to a fresh value and give no
+> `_OLD` fallback, you cannot decrypt **any** stored credential. Always stage
+> the old key first.
 
 ## Rotating `DASHBOARD_JWT_SECRET`
 
-1. Generate: `openssl rand -base64 32`.
+1. Generate a new secret: `openssl rand -base64 32`.
 2. Set `DASHBOARD_JWT_SECRET` in `/etc/alethedash-cs.env`.
-3. `sudo systemctl restart alethedash-cs`.
-4. All existing JWTs (minted under the old secret) now fail validation — expected.
-   Users re-authenticate.
+3. Restart the service: `sudo systemctl restart alethedash-cs`.
+4. All existing JWTs from the old secret now fail validation. This result is
+   expected. Users re-authenticate.
 
 ## Validation
 
-- Service is up: `systemctl status alethedash-cs` and
-  `curl -s https://laghound.com/api/health` returns `ok`.
-- Credential key works: validate a stored cloud account
-  (`POST /api/projects/{id}/cloud-accounts/{id}/validate`) — a successful decrypt
+- Confirm the service is up. Run `systemctl status alethedash-cs`, and confirm
+  that `curl -s https://laghound.com/api/health` returns `ok`.
+- Confirm the credential key works. Validate a stored cloud account
+  (`POST /api/projects/{id}/cloud-accounts/{id}/validate`). A successful decrypt
   proves the key.
-- JWT works: log in and call a protected endpoint.
-- After a credential-key rotation that touched the soak, confirm the nightly
+- Confirm the JWT works. Log in and call a protected endpoint.
+- After a credential-key rotation that touched the soak, confirm that the nightly
   **Prod soak check** stays green.

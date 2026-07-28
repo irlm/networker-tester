@@ -1,8 +1,9 @@
 # Release Flow
 
-How a merged PR becomes a deployed release. Written for a new maintainer; the
-authoritative implementations are `.github/workflows/ci.yml` (version-check +
-auto-tag) and `.github/workflows/release.yml` (build + release + deploy).
+This page shows how a merged PR becomes a deployed release. It is for a new
+maintainer. The authoritative implementations are `.github/workflows/ci.yml`
+(version-check + auto-tag) and `.github/workflows/release.yml`
+(build + release + deploy).
 
 ## The whole flow in one line
 
@@ -23,35 +24,36 @@ Every PR that touches a **shipping artifact** (`crates/`, `dashboard/`,
 4. `install.ps1` — `InstallerVersion`
 5. `Directory.Build.props` — `<Version>` (single source for **all** C# assemblies)
 
-Everything else is derived at build time — the C# agent heartbeat, endpoint
-`ServerInfo`, and the control plane's `/api/health` + `/api/version` all read
-the assembly version. Never hand-bump a version constant in C# code or add
+The build derives everything else. The C# agent heartbeat, the endpoint
+`ServerInfo`, and the control plane's `/api/health` and `/api/version` all read
+the assembly version. Never hand-bump a version constant in C# code. Never add
 `<Version>` to an individual `.csproj`.
 
-Docs-only / C#-source-only / CI-only PRs do **not** require a bump (the
-`version-check` job's SHIPPING filter skips them).
+A docs-only, C#-source-only, or CI-only PR does **not** need a bump. The SHIPPING
+filter of the `version-check` job skips these PRs.
 
 ## 2. Gates on the PR
 
-The `Version bump check` job fails the PR if any of the five locations is
-missing or inconsistent. Branch protection additionally requires:
+The `Version bump check` job fails the PR when any of the five locations is
+missing or inconsistent. Branch protection also requires these checks:
 `Test (ubuntu-latest)`, `Test (windows-latest)`, `Detect changed areas`,
 `Build & audit (C#)`, `bats (installer unit tests)`, `shellcheck`,
 `cargo audit (RUSTSEC advisories)`, and `Orchestrator lint & test`.
 
 ## 3. Auto-tag on main push
 
-On every push to `main`, the `Auto-tag & deploy` job (ci.yml) reads the
-version from `Cargo.toml`. If tag `vX.Y.Z` doesn't exist yet, it creates and
-pushes it, then explicitly dispatches `release.yml` with that tag (tags pushed
-by the Actions token don't trigger workflows on their own). If the tag already
-exists — e.g. a docs-only merge with no bump — nothing happens.
+On every push to `main`, the `Auto-tag & deploy` job (ci.yml) reads the version
+from `Cargo.toml`. If the tag `vX.Y.Z` does not exist yet, the job creates and
+pushes it. The job then dispatches `release.yml` with that tag. A tag that the
+Actions token pushes does not trigger a workflow on its own. If the tag already
+exists — for example, after a docs-only merge with no bump — nothing happens.
 
 ## 4. The release graph (release.yml)
 
-All five builds start in parallel at the tag push; the release is created
-once, complete (GitHub releases are immutable after publish — asset uploads
-then fail with HTTP 422, which killed the old attach-async pattern):
+All five builds start in parallel at the tag push. The workflow creates the
+release once and complete. GitHub releases are immutable after publish: a later
+asset upload fails with HTTP 422. This constraint killed the old attach-async
+pattern.
 
 ```
 build-linux (musl: tester, endpoint, alethabench + frontend)  ┐
@@ -59,30 +61,30 @@ build-csharp (control plane + C# agent, ubuntu runner)        ├─→ release 
 build-native (mac x64/ARM64, win x64 — the ~11 min floor)     ┘
 ```
 
-1. **build-linux** + **build-csharp** (~6 min) and **build-native**
-   (~11 min — windows-msvc/chromiumoxide is the floor) run in parallel and
-   hand their archives to the release job as artifacts.
-2. **release** waits for all of them and publishes ONE complete GitHub
-   release with every platform's assets, using the `## [X.Y.Z]` CHANGELOG
-   section as notes. No missing-asset window; `releases/latest` is always
-   complete.
-3. **deploy** ships to the Azure VM as soon as the release exists
-   (~12–14 min after the tag): `az vm run-command` on `alethedash-vm` stops
-   `alethedash-cs`, moves the old build to `/opt/alethedash-cs.prevbuild`,
-   extracts the new control plane, asserts
-   `DASHBOARD_PUBLIC_URL=https://laghound.com` into `/etc/alethedash-cs.env`
-   (replacing a stale value if present), swaps the Rust
-   endpoint/tester/orchestrator binaries and the static frontend, restarts,
-   and polls `/api/health/ready` (30 s budget — **auto-rolls-back to
-   `.prevbuild` on failure**). It then verifies the public path through nginx
-   — BOTH `https://laghound.com/api/health` and the `https://alethedash.com`
-   bridge must be 200 (fielded agents hold provision-time alethedash.com WS
-   URLs; see `branding.md` domain bridge policy), login must 401 bad creds —
-   and refreshes the installer Gist.
+1. **build-linux** + **build-csharp** (~6 min) and **build-native** run in
+   parallel. build-native takes ~11 min; windows-msvc/chromiumoxide is the
+   floor. Each build hands its archives to the release job as artifacts.
+2. **release** waits for all the builds. It publishes ONE complete GitHub
+   release with every platform's assets. It uses the `## [X.Y.Z]` CHANGELOG
+   section as the notes. There is no missing-asset window, so `releases/latest`
+   is always complete.
+3. **deploy** ships to the Azure VM as soon as the release exists (~12–14 min
+   after the tag). `az vm run-command` on `alethedash-vm` does these steps. It
+   stops `alethedash-cs`. It moves the old build to
+   `/opt/alethedash-cs.prevbuild`. It extracts the new control plane. It asserts
+   `DASHBOARD_PUBLIC_URL=https://laghound.com` into `/etc/alethedash-cs.env` and
+   replaces a stale value. It swaps the Rust endpoint, tester, and orchestrator
+   binaries and the static frontend. It restarts the service. It then polls
+   `/api/health/ready` with a 30 s budget, and it **rolls back to `.prevbuild`
+   automatically on failure**. Next, it verifies the public path through nginx.
+   BOTH `https://laghound.com/api/health` and the `https://alethedash.com` bridge
+   must return 200. Fielded agents hold provision-time alethedash.com WS URLs;
+   see the `branding.md` domain bridge policy. A login with bad credentials must
+   return 401. Finally, deploy refreshes the installer Gist.
 
-Releases v0.28.35–v0.28.38 predate this fix and permanently lack mac/windows
-assets (immutable — cannot be repaired); installers fall back to the newest
-release that carries the requested asset.
+Releases v0.28.35–v0.28.38 predate this fix. They permanently lack mac and
+windows assets, and you cannot repair them because releases are immutable. The
+installers fall back to the newest release that carries the requested asset.
 
 ## 5. Asset inventory
 
@@ -97,49 +99,49 @@ release that carries the requested asset.
 | `networker-agent-cs-win-x64.zip` | build-csharp | Windows C# agent |
 
 **Not shipped:** the retired Rust `networker-dashboard`/`networker-agent`
-crates are off the release train (older tags still carry the Rust agent asset;
-the bootstrap's legacy fallback only fires for those).
+crates are off the release train. Older tags still carry the Rust agent asset.
+The bootstrap's legacy fallback fires only for those tags.
 
 ## 6. Rollback
 
-Two levels:
+There are two levels:
 
-- **Automatic (in-deploy):** if `/api/health/ready` doesn't come up within
+- **Automatic (in-deploy):** if `/api/health/ready` does not come up within
   30 s, the deploy job restores `/opt/alethedash-cs.prevbuild` and fails the
   run.
 - **Manual (previous release):** re-dispatch the Release workflow with the
-  last-good tag — the deploy job re-ships that version end to end:
+  last-good tag. The deploy job then re-ships that version end to end:
 
   ```bash
   gh workflow run release.yml --field tag=vX.Y.Z
   ```
 
-  The graph rebuilds from the tagged sources and re-runs the deploy job.
-  Note: the `release` job runs `gh release create`, which fails if a GitHub
-  release for that tag already exists — delete the release first (keeping the
-  tag) so the job can recreate it:
+  The graph rebuilds from the tagged sources and re-runs the deploy job. Note:
+  the `release` job runs `gh release create`. This command fails if a GitHub
+  release for that tag already exists. Delete the release first, but keep the
+  tag, so the job can recreate the release:
 
   ```bash
   gh release delete vX.Y.Z --yes   # deletes the release, not the tag
   gh workflow run release.yml --field tag=vX.Y.Z
   ```
 
-For rollback of the *cutover itself* (C# → Rust control plane) see
-[`phase2-cutover-runbook.md`](phase2-cutover-runbook.md) §5 — only relevant
-during the decommission soak window.
+To roll back the *cutover itself* (C# → Rust control plane), see
+[`phase2-cutover-runbook.md`](phase2-cutover-runbook.md) §5. This rollback is
+relevant only during the decommission soak window.
 
 ## 7. Post-release checks
 
-- `gh run list --branch main` — confirm auto-tag and the Gist sync landed.
-- `gh run watch` the Release run; the `deploy` and `Verify deployment` steps
-  print service status and binary versions from the VM.
-- The nightly `Prod soak check` workflow (06:47 UTC) validates
-  `/api/health`, `/api/health/background` (`all_healthy`), queue depth, and
+- `gh run list --branch main` — confirm that auto-tag and the Gist sync landed.
+- `gh run watch` the Release run. The `deploy` and `Verify deployment` steps
+  print the service status and the binary versions from the VM.
+- The nightly `Prod soak check` workflow (06:47 UTC) validates `/api/health`,
+  `/api/health/background` (`all_healthy`), and the queue depth. It also confirms
   that the retired Rust services stay inactive.
 
 ## Dependency updates (Dependabot)
 
-Dependabot PRs are exempt from the version-bump requirement (author-gated in
-ci.yml's version-check): they are dependency-only, and their lockfile/manifest
-changes ship with the **next** bumped release — release builds are `--locked`
-against the merged lockfile.
+Dependabot PRs are exempt from the version-bump requirement. The version-check in
+ci.yml gates this exemption by author. These PRs are dependency-only. Their
+lockfile and manifest changes ship with the **next** bumped release. The release
+builds run `--locked` against the merged lockfile.

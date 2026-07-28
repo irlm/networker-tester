@@ -1,20 +1,20 @@
 # LagHound SDK
 
-Embed a tiny diagnostic endpoint into **your** app; the LagHound multi-cloud
-tester fleet measures your *real* app from outside and tells you where the
-time goes:
+Embed a tiny diagnostic endpoint into **your** app. The LagHound multi-cloud
+tester fleet measures your *real* app from outside. It tells you where the time
+goes:
 
 ```
 DNS  →  TCP  →  TLS  →  network transfer  →  server processing
 ```
 
-The first four phases are measured by the probes. The last one comes from
-your app itself, via a `Server-Timing: app;dur=<ms>` header the SDK stamps on
-every response — that split is the whole point.
+The probes measure the first four phases. Your app provides the last phase. The
+SDK stamps a `Server-Timing: app;dur=<ms>` header on every response. This split
+is the whole point.
 
 - **Spec:** [`contract-v1.md`](contract-v1.md) (authoritative)
 - **Machine-readable:** [`shared/sdk-contract-v1.json`](../../shared/sdk-contract-v1.json)
-  (SDKs + tester pin conformance tests to it)
+  (the SDKs and the tester pin the conformance tests to it)
 
 ## What you get
 
@@ -31,17 +31,22 @@ shared token:
 
 ## Safe in production, by contract
 
-Per-IP + global rate limits, ≤ 8 concurrent requests, ≤ 2 concurrent
-transfers, hard 32 MiB byte cap, streamed bodies (no allocation proportional
-to request size), optional byte budget with `429 + Retry-After`, zero logging
-of bodies/tokens, zero reflection of request input, and a kill switch:
-`LAGHOUND_DISABLED=1` makes every route a plain 404 — the same 404 a wrong
-token gets, so the routes are invisible to scanners.
+The contract keeps the SDK safe in production:
+
+- Per-IP and global rate limits.
+- A maximum of 8 concurrent requests and 2 concurrent transfers.
+- A hard 32 MiB byte cap.
+- Streamed bodies. The allocation is not proportional to the request size.
+- An optional byte budget with `429 + Retry-After`.
+- No logging of bodies or tokens.
+- No reflection of the request input.
+- A kill switch. `LAGHOUND_DISABLED=1` makes every route a plain 404. This is
+  the same 404 that a wrong token gets, so the routes are invisible to scanners.
 
 ## Per-language integration (the API every SDK wave must implement)
 
-Each SDK is three steps: **install → mount → token**. Constructor/mount names
-below are the contract for the language waves.
+Each SDK is three steps: **install → mount → token**. The constructor and mount
+names below are the contract for the language waves.
 
 ### C# (ASP.NET Core)
 
@@ -90,23 +95,24 @@ mux.Handle("/laghound/", laghound.Handler(laghound.Config{Token: os.Getenv("LAGH
 
 Shipped: [`sdk/go/`](../../sdk/go/) — `net/http` + chi quickstart, conformance suite, and a runnable sample.
 
-Every SDK also exposes `mark(name, duration)` so your handlers can add custom
-`Server-Timing` marks (`mark-db`, `mark-cache`, …) that show up in reports as
-a server-side breakdown.
+Every SDK also exposes `mark(name, duration)`. Your handlers can add custom
+`Server-Timing` marks (`mark-db`, `mark-cache`, …) with it. These marks show up
+in the reports as a server-side breakdown.
 
 ## Run all five languages on one host
 
-The [`examples/`](../../examples/) harness builds and runs every SDK sample
-(C# 8081, JS 8082, Python 8083, Rust 8084, Go 8085) via `docker compose up
---build` on a single target — a cross-language conformance demo and the "works
-in every language" sales demo. `examples/probe-all.sh` asserts the contract
-(200 + `contract:v1` with the token, bare 404 without) across all five at once.
+The [`examples/`](../../examples/) harness builds and runs every SDK sample on
+one target. It uses `docker compose up --build` (C# 8081, JS 8082, Python 8083,
+Rust 8084, Go 8085). This harness is a cross-language conformance demo and the
+"works in every language" sales demo. `examples/probe-all.sh` asserts the
+contract across all five samples at once (200 + `contract:v1` with the token, a
+bare 404 without it).
 
 ## Pointing the fleet at it
 
-Existing tester modes work today (see spec §8): `http1/2/3` and `curl` against
-`{prefix}/echo`, `webdownload`/`webupload` against the transfer routes — all
-with `--bearer-token <token>` (the SDK accepts `Authorization: Bearer` as an
-equivalent of `X-LagHound-Token`). The dedicated `sdkprobe` mode — which reads
-the `/health` capability map and reports the five-way split as its primary
-metric — lands with the control-plane wave.
+The existing tester modes work today (see spec §8). Use `http1/2/3` and `curl`
+against `{prefix}/echo`. Use `webdownload`/`webupload` against the transfer
+routes. Add `--bearer-token <token>` to each mode. The SDK accepts
+`Authorization: Bearer` as an equivalent of `X-LagHound-Token`. The dedicated
+`sdkprobe` mode lands with the control-plane wave. It reads the `/health`
+capability map. It reports the five-way split as its primary metric.
