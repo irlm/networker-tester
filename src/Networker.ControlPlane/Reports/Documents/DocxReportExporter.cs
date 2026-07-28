@@ -281,7 +281,69 @@ public sealed class DocxReportExporter : IReportExporter
         return rp;
     }
 
-    private static Text Text(string s) => new(s) { Space = SpaceProcessingModeValues.Preserve };
+    private static Text Text(string s) =>
+        new(SanitizeXml(s)) { Space = SpaceProcessingModeValues.Preserve };
+
+    /// <summary>
+    /// Drop characters that are not legal in XML 1.0 (control chars other than
+    /// TAB/LF/CR, and unpaired surrogates). Word documents are XML — a stray
+    /// ESC (0x1B) from an ANSI-colored tester error 500'd the export while
+    /// every non-XML format tolerated it. Defense-in-depth: builders should
+    /// strip ANSI at the source, but NO content may be able to break a
+    /// renderer.
+    /// </summary>
+    private static string SanitizeXml(string s)
+    {
+        // Fast path: scan first, allocate only when something is illegal.
+        var bad = -1;
+        for (var i = 0; i < s.Length; i++)
+        {
+            if (!IsXmlChar(s, i))
+            {
+                bad = i;
+                break;
+            }
+        }
+        if (bad < 0)
+        {
+            return s;
+        }
+
+        var sb = new System.Text.StringBuilder(s.Length);
+        sb.Append(s, 0, bad);
+        for (var i = bad; i < s.Length; i++)
+        {
+            if (IsXmlChar(s, i))
+            {
+                sb.Append(s[i]);
+            }
+        }
+        return sb.ToString();
+    }
+
+    private static bool IsXmlChar(string s, int i)
+    {
+        var c = s[i];
+        if (c is '\t' or '\n' or '\r')
+        {
+            return true;
+        }
+        if (c < 0x20)
+        {
+            return false;
+        }
+        // Surrogates are only legal as a well-ordered pair; XmlConvert treats a
+        // valid pair's halves as valid via the two-char overload.
+        if (char.IsHighSurrogate(c))
+        {
+            return i + 1 < s.Length && char.IsLowSurrogate(s[i + 1]);
+        }
+        if (char.IsLowSurrogate(c))
+        {
+            return i > 0 && char.IsHighSurrogate(s[i - 1]);
+        }
+        return System.Xml.XmlConvert.IsXmlChar(c);
+    }
 
     private static string ToneHex(ReportTone tone) => tone switch
     {

@@ -314,7 +314,11 @@ public static class TestRunsEndpoints
                 FinishedAt: header.FinishedAt,
                 SuccessCount: header.SuccessCount,
                 FailureCount: header.FailureCount,
-                ErrorMessage: header.ErrorMessage,
+                // Strip ANSI like the /attempts route: rows written before the
+                // ingest-time scrub carry raw SGR codes, and ESC (0x1B) is not
+                // a legal XML character — it 500'd the DOCX export (found by
+                // clicking the live export button on a 2026-07-19 run).
+                ErrorMessage: header.ErrorMessage is null ? null : AnsiText.Strip(header.ErrorMessage),
                 Attempts: attempts);
 
             return ReportExport.Deliver(exporters, fmt, RunReportDocument.Build(input),

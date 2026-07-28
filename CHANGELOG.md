@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.96] — 2026-07-28
+
+### Fixed
+- **DOCX run-report export 500 on runs with ANSI-colored errors.** Found by
+  clicking the live export button: runs written before the ingest-time ANSI
+  scrub carry raw SGR codes in `error_message`, and ESC (0x1B) is not a legal
+  XML 1.0 character — Word documents are XML, so the DOCX exporter threw while
+  every non-XML format tolerated (but ugly-rendered) the codes. Two-layer fix:
+  the run-report endpoint now strips ANSI from the run-level error exactly like
+  the `/attempts` route (clean text in ALL formats), and `DocxReportExporter`
+  sanitizes XML-illegal characters at the renderer so no content can ever 500 a
+  Word export (defense-in-depth).
+
+---
+
 ## [0.28.95] — 2026-07-28
 
 ### Added

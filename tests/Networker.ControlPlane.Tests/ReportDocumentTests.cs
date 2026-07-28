@@ -209,6 +209,56 @@ public class ReportDocumentTests
     }
 
     [Fact]
+    public void Docx_survives_ansi_and_xml_invalid_control_characters()
+    {
+        // Regression: a 2026-07-19 run's error_message carried raw ANSI SGR
+        // codes ("\u001b[2m…") — ESC is not a legal XML char, so the DOCX
+        // export 500'd in prod while MD/HTML/PDF tolerated it. The exporter
+        // must sanitize rather than throw, whatever the content.
+        var doc = new ReportDocument("T", null, DateTime.UtcNow, Array.Empty<ReportMeta>(),
+            new[]
+            {
+                new ReportSection("S",
+                    new CalloutBlock("Run error: [tester] \u001b[2m2026-07-19\u001b[0m \u001b[32mINFO\u001b[0m boom \u0000\u0001", ReportTone.Bad),
+                    new ProseBlock("plain text stays intact")),
+            });
+
+        var bytes = new DocxReportExporter().Render(doc);   // must not throw
+
+        Assert.Equal((byte)'P', bytes[0]);
+        Assert.Equal((byte)'K', bytes[1]);
+        // Inspect the actual XML part (raw zip bytes are deflate-compressed —
+        // scanning THEM for 0x1b would be meaningless): the visible text
+        // survives, the illegal characters do not.
+        using var zip = new System.IO.Compression.ZipArchive(new MemoryStream(bytes));
+        using var reader = new StreamReader(zip.GetEntry("word/document.xml")!.Open());
+        var xml = reader.ReadToEnd();
+        Assert.Contains("boom", xml);
+        Assert.Contains("plain text stays intact", xml);
+        Assert.DoesNotContain('\u001b', xml);
+        Assert.DoesNotContain('\u0000', xml);
+        Assert.DoesNotContain('\u0001', xml);
+    }
+
+    [Fact]
+    public void RunReport_error_message_flows_ansi_free_when_prestripped()
+    {
+        // The endpoint strips ANSI before building (AnsiText.Strip, matching
+        // /attempts); verify the stripped text flows through the render.
+        var input = new RunReportInput(
+            Guid.NewGuid(), "acme", "cfg", null, "failed", null, null,
+            SuccessCount: 0, FailureCount: 1,
+            ErrorMessage: Networker.ControlPlane.AnsiText.Strip("[tester] \u001b[2m2026-07-19\u001b[0m fatal: no route"),
+            Attempts: Array.Empty<AttemptView>());
+
+        var md = Encoding.UTF8.GetString(
+            new MarkdownReportExporter().Render(RunReportDocument.Build(input)));
+
+        Assert.Contains("fatal: no route", md);
+        Assert.Equal(-1, md.IndexOf('\u001b'));
+    }
+
+    [Fact]
     public void Docx_is_a_valid_zip_package()
     {
         var bytes = new DocxReportExporter().Render(SampleDoc());
