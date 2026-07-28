@@ -120,6 +120,7 @@ builder.Services.AddOpsInfrastructure();
 builder.Services.AddSingleton<IReportExporter, MarkdownReportExporter>();
 builder.Services.AddSingleton<IReportExporter, HtmlReportExporter>();
 builder.Services.AddSingleton<IReportExporter, DocxReportExporter>();
+builder.Services.AddSingleton<IReportExporter, PdfReportExporter>();
 builder.Services.AddSingleton<ReportExporterResolver>();
 
 var app = builder.Build();

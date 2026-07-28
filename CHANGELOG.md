@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.91] — 2026-07-28
+
+### Added
+- **PDF report export.** `?format=pdf` (and the run-report route) now render the
+  same `ReportDocument` as a paginated PDF via QuestPDF (code-first, MIT;
+  Community licence). Layout mirrors the HTML — dark brand header with the logo
+  glyph, KPI strip, the latency **distribution candle** + bar charts, and dark
+  tables — plus a page footer. Charts draw from native QuestPDF primitives / a
+  shapes-only SVG (no SVG text), so rendering needs no font resolution. On Linux
+  the `SkiaSharp.NativeAssets.Linux.NoDependencies` asset bundles a
+  fontconfig-free `libSkiaSharp` and the document pins QuestPDF's embedded Lato,
+  so the prod host needs no extra system packages.
+
+---
+
 ## [0.28.90] — 2026-07-28
 
 ### Added

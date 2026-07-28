@@ -59,6 +59,7 @@ public class ReportDocumentTests
         yield return new object[] { new MarkdownReportExporter() };
         yield return new object[] { new HtmlReportExporter() };
         yield return new object[] { new DocxReportExporter() };
+        yield return new object[] { new PdfReportExporter() };
     }
 
     [Theory]
@@ -193,6 +194,18 @@ public class ReportDocumentTests
         Assert.Equal(0.5, chart.Fraction(50), 3);
         Assert.Equal(1.0, chart.Fraction(100), 3);
         Assert.Equal(1.0, chart.Fraction(200), 3);   // clamped
+    }
+
+    [Fact]
+    public void Pdf_starts_with_the_pdf_magic_and_has_content()
+    {
+        var bytes = new PdfReportExporter().Render(SampleDoc());
+
+        Assert.True(bytes.Length > 1000);
+        Assert.Equal("%PDF-", Encoding.ASCII.GetString(bytes, 0, 5));
+        // %%EOF trailer near the end.
+        var tail = Encoding.ASCII.GetString(bytes, Math.Max(0, bytes.Length - 8), Math.Min(8, bytes.Length));
+        Assert.Contains("%%EOF", tail);
     }
 
     [Fact]
