@@ -13,6 +13,7 @@ import type { PerfPerCostReport, PerfPerCostGroup, PerfPerCostFamily } from '../
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
+import { ExportMenu } from '../components/common/ExportMenu';
 import { PageHeader } from '../components/common/PageHeader';
 import { EmptyState } from '../components/common/EmptyState';
 import { TOOLTIP_STYLE } from '../lib/chart';
@@ -131,6 +132,14 @@ export function ValueReportPage() {
         subtitle={report
           ? `Provider performance per cost — ${report.completed_runs} completed runs across ${providers} provider${providers === 1 ? '' : 's'}`
           : undefined}
+        action={
+          projectId && report && report.groups.length > 0 ? (
+            <ExportMenu
+              path={`/projects/${projectId}/reports/perf-per-cost`}
+              fileBase="perf-per-cost-report"
+            />
+          ) : undefined
+        }
       />
 
       {!report || report.groups.length === 0 ? (

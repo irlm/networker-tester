@@ -284,6 +284,47 @@ export interface PendingProject {
   invited_at: string;
 }
 
+/**
+ * Authenticated binary download for the report exports (?format=html|pdf|docx|md).
+ * Sanctioned raw-`fetch` exception (like `importMembers`): the shared `request`
+ * helper JSON-parses the body, which would corrupt a binary document. Fetches
+ * with the Bearer token, honours the server's Content-Disposition filename
+ * (falling back to `fallbackName`), and triggers a browser download via a
+ * transient object URL. 401 runs the same session-expiry path as `request`.
+ */
+export async function downloadExport(path: string, fallbackName: string): Promise<void> {
+  const token = localStorage.getItem('token');
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+  });
+  if (res.status === 401) {
+    handleUnauthorized();
+    throw new ApiError(401, 'Session expired', null);
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new ApiError(res.status, body || `Export failed: ${res.status} ${res.statusText}`, body || null);
+  }
+
+  // attachment; filename="test-run-a1b2c3d4.pdf"
+  const disposition = res.headers.get('Content-Disposition') ?? '';
+  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition);
+  const filename = match?.[1] ?? fallbackName;
+
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 export const api = {
   // ── Auth (NOT project-scoped) ─────────────────────────────────────────
   login: (email: string, password: string) =>

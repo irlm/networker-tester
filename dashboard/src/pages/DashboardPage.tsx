@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useCallback } from 'react';
 import { Link } from 'react-router';
 import { api, errorMessage } from '../api/client';
 import type { Agent, Deployment, TestRun } from '../api/types';
+import { ExportMenu } from '../components/common/ExportMenu';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { RunResult } from '../components/common/RunResult';
 import { runDisplayStatus } from '../lib/runStatus';
@@ -117,9 +118,20 @@ export function DashboardPage() {
   return (
     <div className="p-4 md:p-6">
       {/* Header */}
-      <div className="flex items-baseline justify-between mb-6">
+      <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-bold text-gray-100">Dashboard</h2>
-        <span className="text-xs text-gray-600">v{versionInfo?.dashboard_version}</span>
+        <div className="flex items-center gap-3">
+          {/* Integrated Test Report — the whole project's results (summary +
+              details) as one downloadable document. */}
+          {projectId && (
+            <ExportMenu
+              path={`/projects/${projectId}/reports/integrated`}
+              fileBase="integrated-report"
+              label="Export report"
+            />
+          )}
+          <span className="text-xs text-gray-600">v{versionInfo?.dashboard_version}</span>
+        </div>
       </div>
 
       {/* ── KPI Row — skip when all zeros ── */}
