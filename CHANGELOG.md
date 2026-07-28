@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.94] — 2026-07-28
+
+### Added
+- **Integrated Test Report.** `GET /api/projects/{id}/reports/integrated?format=html|md|docx|pdf`
+  exports every test result of a project in ONE branded document — an executive
+  summary (KPIs, health verdict, runs-by-status chart, the app-vs-network
+  headline) followed by the details: results per test (p95 comparison + table),
+  per-protocol latency distribution box-plots, condensed application-vs-network
+  and perf-per-cost sections, and a recent-runs table. The analysis sections
+  are computed by the same `BuildReportAsync` helpers the standalone report
+  routes now share (extracted, no behavior change — wire shapes still pinned by
+  the contract tests), so the integrated view can never disagree with them.
+  Defaults to HTML; member-read RBAC; missing tester probe schema degrades to
+  an empty-but-valid report.
+
+---
+
 ## [0.28.93] — 2026-07-28
 
 ### Changed

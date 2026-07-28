@@ -47,6 +47,26 @@ public static class AppNetworkEndpoints
                 return ReportExport.BadFormat(format, exporters);
             }
 
+            var report = await BuildReportAsync(dataSource, projectId, config_id, log, ct);
+
+            if (reportFormat == ReportFormat.Json)
+            {
+                return Results.Ok(report);
+            }
+
+            return ReportExport.Deliver(exporters, reportFormat,
+                AppNetworkReportDocument.Build(report, projectId),
+                fileBase: $"app-network-{ReportExport.SafeFileBase(projectId)}", requested: format);
+        }).RequireAuthorization(AuthPolicies.ProjectMember);
+
+        return app;
+    }
+
+    /// <summary>Compute the full report for a project (optionally one config).
+    /// Shared by the route above and the project-level integrated report.</summary>
+    internal static async Task<AppNetworkReport> BuildReportAsync(
+        NpgsqlDataSource dataSource, string projectId, Guid? config_id, ILogger log, CancellationToken ct)
+    {
             var aggregates = await LoadAggregatesAsync(dataSource, projectId, config_id, ct);
 
             var groups = new List<AppNetworkGroup>();
@@ -95,7 +115,7 @@ public static class AppNetworkEndpoints
                     projectId, config_id, totalAnomalies);
             }
 
-            var report = new AppNetworkReport(
+            return new AppNetworkReport(
                 GeneratedAt: DateTime.UtcNow,
                 Formulas: new AppNetworkFormulas(
                     ServerMs: "server_ms = ServerTimingResult.TotalServerMs (the SDK's Server-Timing total;dur, per attempt joined on AttemptId)",
@@ -113,18 +133,6 @@ public static class AppNetworkEndpoints
                 OverallMedianWallMs: AppNetworkLogic.Round4(overallStats.MedianWallMs),
                 OverallServerRatio: AppNetworkLogic.ServerRatio(overallStats.MedianServerMs, overallStats.MedianWallMs),
                 Groups: groups);
-
-            if (reportFormat == ReportFormat.Json)
-            {
-                return Results.Ok(report);
-            }
-
-            return ReportExport.Deliver(exporters, reportFormat,
-                AppNetworkReportDocument.Build(report, projectId),
-                fileBase: $"app-network-{ReportExport.SafeFileBase(projectId)}", requested: format);
-        }).RequireAuthorization(AuthPolicies.ProjectMember);
-
-        return app;
     }
 
     // ── SQL ──────────────────────────────────────────────────────────────────
