@@ -30,11 +30,13 @@ public static class AgentsEndpoints
         // exist so the wire shape can never silently change again.
         app.MapGet("/api/projects/{projectId}/agents", async (
             string projectId,
+            NetworkerDbContext db,
             // Long-dead registrations are RETIRED by the reaper (E2E P2-8:
             // 48 stale Apr–Jul rows polluted this list). Excluded by default;
-            // ?include_retired=true shows them (absent → false).
-            [FromQuery(Name = "include_retired")] bool includeRetired,
-            NetworkerDbContext db) =>
+            // ?include_retired=true shows them. The default makes the param
+            // OPTIONAL — a required value-type query param 500s when absent
+            // (caught by EndpointSmokeTests in CI).
+            [FromQuery(Name = "include_retired")] bool includeRetired = false) =>
         {
             var agents = await db.Agents
                 .AsNoTracking()
