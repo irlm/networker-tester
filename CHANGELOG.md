@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.102] — 2026-07-28
+
+### Fixed
+- **P1-14 (second half): provisioned full-stack benchmarks still failed 100% at
+  TLS** — the CA:FALSE cert fix (v0.28.99) got proxy targets past rustls's
+  structural `CaUsedAsEndEntity` rejection, but live verification showed the
+  benchmark still failing 50/50 (TCP connected, no TLS phase). Root cause: the
+  dispatcher only injects `workload.insecure` for `endpoint_kind == "proxy"`,
+  but the provisioning promote rewrites a Pending proxy-stack target to
+  `network` before dispatch — so the flag was dropped and the tester VALIDATED
+  the target's self-signed cert (`CN=localhost`, no SAN, generated per-VM by
+  install.sh) and rejected every attempt. `ProvisioningOrchestrator.PromoteAsync`
+  now persists `workload.insecure = true` when it promotes a provisioned target
+  (self-signed by construction). Verified live on the provisioned VM: with
+  `insecure` the identical run goes from 0/50 to **50/50 pass**, every attempt
+  completing the TLS handshake.
+
+---
+
 ## [0.28.101] — 2026-07-28
 
 ### Fixed
