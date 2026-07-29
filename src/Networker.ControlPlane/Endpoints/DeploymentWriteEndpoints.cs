@@ -191,18 +191,64 @@ public static class DeploymentWriteEndpoints
         .RequireAuthorization(AuthPolicies.ProjectOperator);
 
         // DELETE /api/projects/{projectId}/deployments/{deploymentId} — remove the
-        // deployment record. Admin-only (tightened from the Rust Operator per M4 scope).
+        // deployment record AND tear down its cloud VM(s). Admin-only (tightened
+        // from the Rust Operator per M4 scope).
+        //
+        // P1-16 (E2E pass 2026-07-28): deleting a deployment used to drop only the
+        // DB row, orphaning the endpoint VM to bill until the orphan reaper (or
+        // forever, if it was never reaper-eligible). Deploy VMs are created by
+        // install.sh, so — unlike a tester — the row never stored a resource id;
+        // all it has is the endpoint IP/FQDN. We reverse-look-up the VM by that
+        // endpoint and tear it down. The endpoint list + provider are captured
+        // BEFORE the row is deleted (so deleting it can't lose the teardown
+        // inputs); the actual cloud delete is backgrounded so the request returns
+        // promptly and a cloud hiccup can't fail the DB delete (the reaper remains
+        // the backstop).
         app.MapDelete("/api/projects/{projectId}/deployments/{deploymentId:guid}", async (
             string projectId,
             Guid deploymentId,
             NetworkerDbContext db,
+            IServiceScopeFactory scopeFactory,
+            ILoggerFactory loggerFactory,
             CancellationToken ct) =>
         {
+            var deployment = await db.Deployments
+                .AsNoTracking()
+                .FirstOrDefaultAsync(d => d.ProjectId == projectId && d.DeploymentId == deploymentId, ct);
+            if (deployment is null)
+            {
+                return Results.NotFound();
+            }
+
+            // Capture teardown inputs before the row goes away.
+            var endpoints = ParseHosts(deployment.EndpointIps);
+            string? provider = null;
+            string? region = null;
+            if (deployment.CloudAccountId is { } accountId)
+            {
+                var acct = await db.CloudAccounts.AsNoTracking()
+                    .Where(a => a.AccountId == accountId)
+                    .Select(a => new { a.Provider, a.RegionDefault })
+                    .FirstOrDefaultAsync(ct);
+                provider = acct?.Provider;
+                region = acct?.RegionDefault;
+            }
+            provider ??= FirstProviderFromConfig(deployment.Config);
+
             var deleted = await db.Deployments
                 .Where(d => d.ProjectId == projectId && d.DeploymentId == deploymentId)
                 .ExecuteDeleteAsync(ct);
+            if (deleted == 0)
+            {
+                return Results.NotFound();
+            }
 
-            return deleted > 0 ? Results.Ok(new { deleted = true }) : Results.NotFound();
+            if (!string.IsNullOrEmpty(provider) && endpoints.Count > 0)
+            {
+                SpawnVmTeardown(scopeFactory, loggerFactory, deploymentId, provider!, region, endpoints);
+            }
+
+            return Results.Ok(new { deleted = true });
         })
         .RequireAuthorization(AuthPolicies.ProjectAdmin);
 
@@ -229,6 +275,114 @@ public static class DeploymentWriteEndpoints
                 logger.LogError(ex, "Background deploy failed for deployment {DeploymentId}", deploymentId);
             }
         }, CancellationToken.None);
+    }
+
+    /// <summary>First endpoint provider from a deploy.json config
+    /// (<c>endpoints[0].provider</c>) — the fallback when the deployment has no
+    /// <c>cloud_account_id</c> to read the provider from. Returns null if absent.</summary>
+    internal static string? FirstProviderFromConfig(string? config)
+    {
+        if (string.IsNullOrWhiteSpace(config))
+        {
+            return null;
+        }
+        try
+        {
+            using var doc = JsonDocument.Parse(config);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("endpoints", out var eps)
+                && eps.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var ep in eps.EnumerateArray())
+                {
+                    if (ep.ValueKind == JsonValueKind.Object
+                        && ep.TryGetProperty("provider", out var p)
+                        && p.ValueKind == JsonValueKind.String
+                        && p.GetString() is { Length: > 0 } provider)
+                    {
+                        return provider;
+                    }
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            // malformed config — no provider to derive
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Background-tear-down the deployment's cloud VM(s) (P1-16). For each captured
+    /// endpoint (IP/FQDN), reverse-resolve the owning VM and delete it via the
+    /// provisioner (which cascades the per-VM Azure NSG/IP). Detached from the
+    /// request and fully best-effort: every failure is logged and left to the
+    /// orphan reaper, never surfaced. Runs in its own DI scope (the request's
+    /// DbContext is already disposed with the response).
+    /// </summary>
+    private static void SpawnVmTeardown(
+        IServiceScopeFactory scopeFactory,
+        ILoggerFactory loggerFactory,
+        Guid deploymentId,
+        string provider,
+        string? region,
+        IReadOnlyList<string> endpoints)
+    {
+        var logger = loggerFactory.CreateLogger("DeploymentWriteEndpoints.teardown");
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var scope = scopeFactory.CreateScope();
+                var provisioner = scope.ServiceProvider.GetRequiredService<Provisioning.IComputeProvisioner>();
+                // No stored per-connection credentials for a deploy row; the
+                // control plane manages the endpoint RG via ambient auth (managed
+                // identity), the same way install.sh created the VM. The delete's
+                // NSG/IP cascade derives subscription+RG from the resolved VM's
+                // resource id, so ambient creds (region only) are sufficient.
+                var creds = new Provisioning.ProviderCredentials(provider, Region: region);
+
+                foreach (var endpoint in endpoints)
+                {
+                    var vm = await provisioner
+                        .ResolveByEndpointAsync(provider, creds, endpoint, CancellationToken.None)
+                        .ConfigureAwait(false);
+                    if (vm is null)
+                    {
+                        continue; // unsupported provider / already gone / no match — logged inside
+                    }
+
+                    // Synthesise the minimal tester the provisioner's DeleteAsync
+                    // needs: it reads only Cloud + VmResourceId + VmName (and
+                    // derives subscription/RG from the resource id for the cascade).
+                    var synthetic = new Networker.Data.Entities.ProjectTester
+                    {
+                        Cloud = provider,
+                        Region = region ?? string.Empty,
+                        VmResourceId = vm.ResourceId,
+                        VmName = vm.Name,
+                    };
+
+                    var res = await provisioner.DeleteAsync(synthetic, creds, CancellationToken.None).ConfigureAwait(false);
+                    if (res.Success)
+                    {
+                        logger.LogInformation(
+                            "Deployment {DeploymentId}: torn down VM {VmName} (endpoint {Endpoint})",
+                            deploymentId, vm.Name, endpoint);
+                    }
+                    else
+                    {
+                        logger.LogWarning(
+                            "Deployment {DeploymentId}: VM {VmName} teardown did not succeed ({Err}); leaving for the reaper",
+                            deploymentId, vm.Name, res.Error ?? res.StdErr);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Deployment {DeploymentId} VM teardown threw", deploymentId);
+            }
+        });
     }
 
     private static Task<bool> DeploymentExistsAsync(
