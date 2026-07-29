@@ -52,7 +52,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             <p className="text-sm text-gray-300 mb-2">
               This page hit an unexpected error and stopped rendering. The rest of your data is safe.
             </p>
-            <p className="text-xs text-gray-500 font-mono mb-4 break-all" data-testid="error-boundary-message">
+            <p className="text-xs text-gray-400 font-mono mb-4 break-all" data-testid="error-boundary-message">
               {error.message || String(error)}
             </p>
             <div className="flex items-center gap-3">

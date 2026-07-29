@@ -17,6 +17,6 @@ describe('RunResult (audit F4/F5 — one format, zero never red)', () => {
     render(<RunResult ok={0} fail={0} />);
     const fail = screen.getByText('0 fail');
     expect(fail).not.toHaveClass('text-red-400');
-    expect(fail).toHaveClass('text-gray-600');
+    expect(fail).toHaveClass('text-gray-500');
   });
 });

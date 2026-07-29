@@ -267,7 +267,7 @@ export function InfraDeployWizard({
             <h3 id={titleId} className="text-lg font-bold text-gray-100">
               {upgradeMode ? 'Add Stack to Target' : 'Deploy'}
             </h3>
-            <button type="button" onClick={onClose} className="text-gray-500 hover:text-gray-300 text-sm" aria-label="Close">&#x2715;</button>
+            <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-300 text-sm" aria-label="Close">&#x2715;</button>
           </div>
 
           {/* Stepper bar — clickable to jump back */}
@@ -284,13 +284,13 @@ export function InfraDeployWizard({
                   className={`flex items-center gap-2 text-xs font-mono whitespace-nowrap ${
                     i === step ? accentClass :
                     reachable ? 'text-gray-400 hover:text-gray-200 cursor-pointer' :
-                    'text-gray-600 cursor-not-allowed'
+                    'text-gray-500 cursor-not-allowed'
                   }`}
                 >
                   <span className={`w-5 h-5 rounded-full inline-flex items-center justify-center text-[10px] border ${
                     i === step ? `${accentBorder} bg-transparent ${accentClass}` :
                     i < step ? 'border-green-500/40 bg-green-500/10 text-green-400' :
-                    'border-gray-700 bg-gray-900 text-gray-600'
+                    'border-gray-700 bg-gray-900 text-gray-500'
                   }`}>
                     {i < step ? '✓' : i + 1}
                   </span>
@@ -312,7 +312,7 @@ export function InfraDeployWizard({
           {step === 0 && (
             <div>
               <h4 className="text-base font-semibold text-gray-100 mb-1">What kind of VM?</h4>
-              <p className="text-xs text-gray-500 mb-4">Targets are servers you measure against. Runners are the agents that send the probes.</p>
+              <p className="text-xs text-gray-400 mb-4">Targets are servers you measure against. Runners are the agents that send the probes.</p>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {([
@@ -339,7 +339,7 @@ export function InfraDeployWizard({
                           : 'bg-purple-500/15 border-purple-500/40 text-purple-300'
                       }`}>{card.id.toUpperCase()}</span>
                       <h5 className="text-sm font-medium text-gray-100 mb-1">{card.title}</h5>
-                      <p className="text-xs text-gray-500 font-mono leading-relaxed">{card.desc}</p>
+                      <p className="text-xs text-gray-400 font-mono leading-relaxed">{card.desc}</p>
                     </button>
                   );
                 })}
@@ -351,7 +351,7 @@ export function InfraDeployWizard({
           {step === 1 && (
             <div>
               <h4 className="text-base font-semibold text-gray-100 mb-1">Which cloud account?</h4>
-              <p className="text-xs text-gray-500 mb-4">Pick from validated accounts. The combobox supports type-ahead — try typing "azure" or "prod".</p>
+              <p className="text-xs text-gray-400 mb-4">Pick from validated accounts. The combobox supports type-ahead — try typing "azure" or "prod".</p>
               <CloudAccountCombobox
                 projectId={projectId}
                 cloudAccounts={cloudAccounts}
@@ -365,11 +365,11 @@ export function InfraDeployWizard({
           {step === 2 && (
             <div>
               <h4 className="text-base font-semibold text-gray-100 mb-1">Region, instance type, and OS</h4>
-              <p className="text-xs text-gray-500 mb-4">Cloud-native instance type names (no Small/Medium/Large abstraction).</p>
+              <p className="text-xs text-gray-400 mb-4">Cloud-native instance type names (no Small/Medium/Large abstraction).</p>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">Region</label>
+                  <label className="block text-xs text-gray-400 mb-1">Region</label>
                   <select
                     value={region}
                     onChange={e => setRegion(e.target.value)}
@@ -379,7 +379,7 @@ export function InfraDeployWizard({
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">Instance type</label>
+                  <label className="block text-xs text-gray-400 mb-1">Instance type</label>
                   <select
                     value={vmSize}
                     onChange={e => setVmSize(e.target.value)}
@@ -391,7 +391,7 @@ export function InfraDeployWizard({
                   </select>
                 </div>
                 <div className="md:col-span-2">
-                  <label className="block text-xs text-gray-500 mb-1">Operating system</label>
+                  <label className="block text-xs text-gray-400 mb-1">Operating system</label>
                   <div className="flex">
                     {(['linux', 'windows'] as const).map(o => (
                       <button
@@ -403,7 +403,7 @@ export function InfraDeployWizard({
                             ? o === 'linux'
                               ? 'bg-green-500/10 border-green-500/40 text-green-300 z-10'
                               : 'bg-blue-500/10 border-blue-500/40 text-blue-300 z-10'
-                            : 'border-gray-700 text-gray-500 hover:text-gray-300'
+                            : 'border-gray-700 text-gray-400 hover:text-gray-300'
                         } ${o === 'linux' ? '' : '-ml-px'}`}
                       >
                         {o === 'linux' ? 'Linux (Ubuntu)' : 'Windows Server'}
@@ -411,12 +411,12 @@ export function InfraDeployWizard({
                     ))}
                   </div>
                   {kind === 'target' && (
-                    <p className="text-[11px] text-gray-600 mt-2 font-mono">
+                    <p className="text-[11px] text-gray-500 mt-2 font-mono">
                       ⓘ Linux unlocks all 5 proxy stacks; Windows adds IIS but excludes native Caddy / HAProxy packages.
                     </p>
                   )}
                   {kind === 'runner' && (
-                    <p className="text-[11px] text-gray-600 mt-2 font-mono">
+                    <p className="text-[11px] text-gray-500 mt-2 font-mono">
                       ⓘ Runners are typically Linux. Windows runners are supported but require additional setup.
                     </p>
                   )}
@@ -429,13 +429,13 @@ export function InfraDeployWizard({
           {step === 3 && kind === 'target' && (
             <div>
               <h4 className="text-base font-semibold text-gray-100 mb-1">Configure target</h4>
-              <p className="text-xs text-gray-500 mb-4">Pick which proxy stacks to install. install.sh runs idempotently — already-installed stacks are skipped.</p>
+              <p className="text-xs text-gray-400 mb-4">Pick which proxy stacks to install. install.sh runs idempotently — already-installed stacks are skipped.</p>
 
               <div className="bg-cyan-500/5 border-l-2 border-cyan-500 px-3 py-1.5 mb-4 text-[10px] font-mono text-cyan-400 tracking-wider uppercase">
                 ▢ Target-only fields
               </div>
 
-              <label className="block text-xs text-gray-500 mb-2">Reverse proxies</label>
+              <label className="block text-xs text-gray-400 mb-2">Reverse proxies</label>
               <div className="flex flex-wrap gap-2 mb-4">
                 {validProxyList.map(p => {
                   const active = proxies.includes(p);
@@ -484,7 +484,7 @@ export function InfraDeployWizard({
           {step === 3 && kind === 'runner' && (
             <div>
               <h4 className="text-base font-semibold text-gray-100 mb-1">Configure runner</h4>
-              <p className="text-xs text-gray-500 mb-4">Name the runner so you can find it in the regional list. Auto-shutdown saves cost when the runner is idle past business hours.</p>
+              <p className="text-xs text-gray-400 mb-4">Name the runner so you can find it in the regional list. Auto-shutdown saves cost when the runner is idle past business hours.</p>
 
               <div className="bg-purple-500/5 border-l-2 border-purple-500 px-3 py-1.5 mb-4 text-[10px] font-mono text-purple-400 tracking-wider uppercase">
                 ↗ Runner-only fields
@@ -492,7 +492,7 @@ export function InfraDeployWizard({
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">Name</label>
+                  <label className="block text-xs text-gray-400 mb-1">Name</label>
                   <input
                     type="text"
                     value={runnerName}
@@ -500,12 +500,12 @@ export function InfraDeployWizard({
                     placeholder={`${region}-runner-01`}
                     className="w-full bg-[var(--bg-base)] border border-gray-700 px-3 py-2 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
                   />
-                  <p className="text-[11px] text-gray-600 mt-1 font-mono">
+                  <p className="text-[11px] text-gray-500 mt-1 font-mono">
                     ⓘ Suggested format: {`{region}-runner-{nn}`}. Must be unique within this project.
                   </p>
                 </div>
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">Auto-shutdown hour (local)</label>
+                  <label className="block text-xs text-gray-400 mb-1">Auto-shutdown hour (local)</label>
                   <input
                     type="number"
                     min={0}
@@ -515,7 +515,7 @@ export function InfraDeployWizard({
                     disabled={!autoShutdownEnabled}
                     className="w-full bg-[var(--bg-base)] border border-gray-700 px-3 py-2 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500 disabled:opacity-40"
                   />
-                  <p className="text-[11px] text-gray-600 mt-1 font-mono">
+                  <p className="text-[11px] text-gray-500 mt-1 font-mono">
                     ⓘ Runner deallocates if idle past this hour. Default = 23:00.
                   </p>
                 </div>
@@ -538,7 +538,7 @@ export function InfraDeployWizard({
           {step === 4 && (
             <div>
               <h4 className="text-base font-semibold text-gray-100 mb-1">Review and deploy</h4>
-              <p className="text-xs text-gray-500 mb-4">Click any row in the stepper to jump back. Deploying spawns the install job and streams logs.</p>
+              <p className="text-xs text-gray-400 mb-4">Click any row in the stepper to jump back. Deploying spawns the install job and streams logs.</p>
 
               <div className="space-y-1 mb-4">
                 {[
@@ -550,25 +550,25 @@ export function InfraDeployWizard({
                   { k: 'Region', v: region },
                   {
                     k: 'Instance type',
-                    v: <span>{vmSize} <span className="text-gray-600">· {(INSTANCE_TYPES[cloud] ?? []).find(t => t.id === vmSize)?.hint ?? ''}</span></span>,
+                    v: <span>{vmSize} <span className="text-gray-500">· {(INSTANCE_TYPES[cloud] ?? []).find(t => t.id === vmSize)?.hint ?? ''}</span></span>,
                   },
                   { k: 'Operating system', v: os === 'linux' ? 'Linux (Ubuntu)' : 'Windows Server' },
                   ...(kind === 'target' ? [
                     { k: 'Reverse proxies', v: <span className="text-cyan-400">{proxies.map(p => PROXY_LABELS[p] ?? p).join(', ')}</span> },
-                    { k: 'Existing VM', v: useExistingVm ? <span className="font-mono text-cyan-400">{existingVmIp}</span> : <span className="text-gray-500">no — provisioning new</span> },
+                    { k: 'Existing VM', v: useExistingVm ? <span className="font-mono text-cyan-400">{existingVmIp}</span> : <span className="text-gray-400">no — provisioning new</span> },
                   ] : [
                     { k: 'Name', v: <span className="font-mono">{runnerName}</span> },
-                    { k: 'Auto-shutdown', v: autoShutdownEnabled ? <span className="font-mono">{String(autoShutdownHour).padStart(2, '0')}:00 local</span> : <span className="text-gray-500">disabled</span> },
+                    { k: 'Auto-shutdown', v: autoShutdownEnabled ? <span className="font-mono">{String(autoShutdownHour).padStart(2, '0')}:00 local</span> : <span className="text-gray-400">disabled</span> },
                   ]),
                 ].map((row, idx) => (
                   <div key={idx} className="flex items-baseline gap-3 px-3 py-2 border border-gray-800 bg-[var(--bg-raised)] font-mono text-xs">
-                    <span className="text-gray-500 w-32 flex-shrink-0 text-[10px] tracking-wider uppercase">{row.k}</span>
+                    <span className="text-gray-400 w-32 flex-shrink-0 text-[10px] tracking-wider uppercase">{row.k}</span>
                     <span className="text-gray-200 flex-1">{row.v}</span>
                   </div>
                 ))}
               </div>
 
-              <label className="block text-xs text-gray-500 mb-1">Deployment name</label>
+              <label className="block text-xs text-gray-400 mb-1">Deployment name</label>
               <input
                 type="text"
                 value={deployName}

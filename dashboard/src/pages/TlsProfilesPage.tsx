@@ -55,7 +55,7 @@ export function TlsProfilesPage() {
     return (
       <div className="p-4 md:p-6">
         <h2 className="text-lg md:text-xl font-bold text-gray-100 mb-6">TLS Profiles</h2>
-        <div className="text-gray-500 motion-safe:animate-pulse">Loading TLS profile history...</div>
+        <div className="text-gray-400 motion-safe:animate-pulse">Loading TLS profile history...</div>
       </div>
     );
   }
@@ -77,7 +77,7 @@ export function TlsProfilesPage() {
       <div className="flex items-center justify-between mb-4 md:mb-6 gap-2">
         <div>
           <h2 className="text-lg md:text-xl font-bold text-gray-100">TLS Profiles</h2>
-          <p className="text-xs text-gray-500 mt-1">Persisted target TLS observations and history.</p>
+          <p className="text-xs text-gray-400 mt-1">Persisted target TLS observations and history.</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
           <input
@@ -126,14 +126,14 @@ export function TlsProfilesPage() {
         </div>
       )}
 
-      <div className="text-xs text-gray-500 mb-3">
+      <div className="text-xs text-gray-400 mb-3">
         Showing {filtered.length} of {profiles.length} TLS profile runs
       </div>
 
       <div className="md:hidden space-y-2">
         {filtered.length === 0 ? (
           <div className="border border-gray-800 rounded p-8 text-center">
-            <p className="text-gray-500 text-sm">No TLS profile runs yet</p>
+            <p className="text-gray-400 text-sm">No TLS profile runs yet</p>
             <p className="text-gray-700 text-xs mt-1">Run a TLS endpoint profile with DB saving enabled and it will show up here.</p>
           </div>
         ) : filtered.map((profile) => (
@@ -144,11 +144,11 @@ export function TlsProfilesPage() {
           >
             <div className="flex items-center justify-between mb-1 gap-2">
               <span className="text-cyan-400 font-medium text-xs truncate">{profile.host}:{profile.port}</span>
-              <span className="text-xs text-gray-500">{new Date(profile.started_at).toLocaleTimeString()}</span>
+              <span className="text-xs text-gray-400">{new Date(profile.started_at).toLocaleTimeString()}</span>
             </div>
             <div className="flex flex-wrap gap-2 text-xs">
               <span className="text-gray-400">{profile.target_kind}</span>
-              <span className="text-gray-500">{profile.coverage_level}</span>
+              <span className="text-gray-400">{profile.coverage_level}</span>
               <span className={`font-medium ${statusClass(profile.summary_status)}`}>{profile.summary_status}</span>
               {profile.summary_score != null && <span className="text-amber-400">score {profile.summary_score}</span>}
             </div>
@@ -159,7 +159,7 @@ export function TlsProfilesPage() {
       <div className="hidden md:block table-container">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
+            <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
               <th className="px-4 py-2.5 text-left font-medium">Target</th>
               <th className="px-4 py-2.5 text-left font-medium">Kind</th>
               <th className="px-4 py-2.5 text-left font-medium">Coverage</th>
@@ -177,10 +177,10 @@ export function TlsProfilesPage() {
                   </Link>
                 </td>
                 <td className="px-4 py-3 text-gray-300 text-xs">{profile.target_kind}</td>
-                <td className="px-4 py-3 text-gray-500 text-xs">{profile.coverage_level}</td>
+                <td className="px-4 py-3 text-gray-400 text-xs">{profile.coverage_level}</td>
                 <td className={`px-4 py-3 text-xs font-medium ${statusClass(profile.summary_status)}`}>{profile.summary_status}</td>
                 <td className="px-4 py-3 text-amber-400 text-xs">{profile.summary_score ?? '-'}</td>
-                <td className="px-4 py-3 text-gray-500 text-xs">{new Date(profile.started_at).toLocaleString()}</td>
+                <td className="px-4 py-3 text-gray-400 text-xs">{new Date(profile.started_at).toLocaleString()}</td>
               </tr>
             ))}
           </tbody>
@@ -188,7 +188,7 @@ export function TlsProfilesPage() {
 
         {filtered.length === 0 && (
           <div className="py-10 text-center">
-            <p className="text-gray-500 text-sm">No TLS profile runs yet</p>
+            <p className="text-gray-400 text-sm">No TLS profile runs yet</p>
             <p className="text-gray-700 text-xs mt-1">Run a TLS endpoint profile with DB saving enabled and it will show up here.</p>
           </div>
         )}

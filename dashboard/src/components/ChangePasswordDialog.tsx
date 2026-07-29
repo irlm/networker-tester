@@ -73,7 +73,7 @@ export function ChangePasswordDialog({ onClose }: ChangePasswordDialogProps) {
           <h2 id="change-pw-title" className="text-sm font-semibold text-gray-200">Change password</h2>
           <button
             onClick={onClose}
-            className="text-gray-600 hover:text-gray-400 transition-colors text-xs px-1"
+            className="text-gray-500 hover:text-gray-400 transition-colors text-xs px-1"
             aria-label="Close"
           >
             Esc
@@ -95,7 +95,7 @@ export function ChangePasswordDialog({ onClose }: ChangePasswordDialogProps) {
             )}
 
             <div className="mb-4">
-              <label htmlFor="dlg-current-password" className="block text-xs text-gray-600 mb-1.5 uppercase tracking-wider">
+              <label htmlFor="dlg-current-password" className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">
                 Current password
               </label>
               <input
@@ -110,7 +110,7 @@ export function ChangePasswordDialog({ onClose }: ChangePasswordDialogProps) {
             </div>
 
             <div className="mb-4">
-              <label htmlFor="dlg-new-password" className="block text-xs text-gray-600 mb-1.5 uppercase tracking-wider">
+              <label htmlFor="dlg-new-password" className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">
                 New password
               </label>
               <input
@@ -125,7 +125,7 @@ export function ChangePasswordDialog({ onClose }: ChangePasswordDialogProps) {
             </div>
 
             <div className="mb-6">
-              <label htmlFor="dlg-confirm-password" className="block text-xs text-gray-600 mb-1.5 uppercase tracking-wider">
+              <label htmlFor="dlg-confirm-password" className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">
                 Confirm password
               </label>
               <input
@@ -142,7 +142,7 @@ export function ChangePasswordDialog({ onClose }: ChangePasswordDialogProps) {
               <button
                 type="button"
                 onClick={onClose}
-                className="text-xs text-gray-500 hover:text-gray-300 px-3 py-2 transition-colors"
+                className="text-xs text-gray-400 hover:text-gray-300 px-3 py-2 transition-colors"
               >
                 Cancel
               </button>

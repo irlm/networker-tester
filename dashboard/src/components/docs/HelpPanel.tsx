@@ -187,7 +187,7 @@ export default function HelpPanel() {
             className="flex-1 bg-[var(--bg-base)] border border-[var(--border-default)] px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-cyan-500/50"
           />
           <span className={`text-[10px] font-medium whitespace-nowrap transition-colors duration-100 ${
-            isInsertMode ? 'text-cyan-500/50' : 'text-gray-600'
+            isInsertMode ? 'text-cyan-500/50' : 'text-gray-500'
           }`}>
             -- {isInsertMode ? 'INSERT' : 'NORMAL'} --
           </span>
@@ -204,9 +204,9 @@ export default function HelpPanel() {
                   : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/20 border-l-2 border-transparent -ml-0.5 pl-1.5'
               }`}
             >
-              <span className="text-gray-600 text-[10px] w-3">0</span>
+              <span className="text-gray-500 text-[10px] w-3">0</span>
               <span>All</span>
-              <span className="text-gray-600 ml-auto">{DOC_ENTRIES.length}</span>
+              <span className="text-gray-500 ml-auto">{DOC_ENTRIES.length}</span>
             </button>
             {DOC_CATEGORIES.map((cat, idx) => {
               const count = DOC_ENTRIES.filter((e) => e.category === cat.id).length;
@@ -221,24 +221,24 @@ export default function HelpPanel() {
                       : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/20 border-l-2 border-transparent -ml-0.5 pl-1.5'
                   }`}
                 >
-                  <span className="text-gray-600 text-[10px] w-3">{idx + 1}</span>
+                  <span className="text-gray-500 text-[10px] w-3">{idx + 1}</span>
                   <span aria-hidden="true">{cat.icon}</span>
                   <span>{cat.label}</span>
-                  <span className="text-gray-600 ml-auto">{count}</span>
+                  <span className="text-gray-500 ml-auto">{count}</span>
                 </button>
               );
             })}
 
             <div className="mt-auto pt-3 border-t border-[var(--border-default)]">
-              <div className="px-2 text-[10px] text-gray-600 leading-relaxed">
-                <kbd className="text-gray-500">j</kbd>/<kbd className="text-gray-500">k</kbd> navigate
-                {' '}<kbd className="text-gray-500">l</kbd> expand
+              <div className="px-2 text-[10px] text-gray-500 leading-relaxed">
+                <kbd className="text-gray-400">j</kbd>/<kbd className="text-gray-400">k</kbd> navigate
+                {' '}<kbd className="text-gray-400">l</kbd> expand
                 <br />
-                <kbd className="text-gray-500">0-5</kbd> category
-                {' '}<kbd className="text-gray-500">q</kbd> close
+                <kbd className="text-gray-400">0-5</kbd> category
+                {' '}<kbd className="text-gray-400">q</kbd> close
                 <br />
-                <kbd className="text-gray-500">/</kbd> search
-                {' '}<kbd className="text-gray-500">Tab</kbd> toggle mode
+                <kbd className="text-gray-400">/</kbd> search
+                {' '}<kbd className="text-gray-400">Tab</kbd> toggle mode
               </div>
             </div>
           </div>
@@ -248,7 +248,7 @@ export default function HelpPanel() {
             <button
               onClick={() => setCategory(null)}
               className={`px-2 py-1 text-[10px] whitespace-nowrap ${
-                activeCategory === null ? 'bg-gray-800/60 text-gray-100' : 'text-gray-500'
+                activeCategory === null ? 'bg-gray-800/60 text-gray-100' : 'text-gray-400'
               }`}
             >
               All
@@ -258,7 +258,7 @@ export default function HelpPanel() {
                 key={cat.id}
                 onClick={() => setCategory(activeCategory === cat.id ? null : cat.id)}
                 className={`px-2 py-1 text-[10px] whitespace-nowrap ${
-                  activeCategory === cat.id ? 'bg-gray-800/60 text-gray-100' : 'text-gray-500'
+                  activeCategory === cat.id ? 'bg-gray-800/60 text-gray-100' : 'text-gray-400'
                 }`}
               >
                 {cat.icon} {cat.label}
@@ -270,13 +270,13 @@ export default function HelpPanel() {
           <div ref={listRef} className="flex-1 overflow-y-auto p-3">
             {filtered.length === 0 ? (
               <div className="py-8 px-4 text-center">
-                <div className="text-gray-600 text-sm">
+                <div className="text-gray-500 text-sm">
                   No manual entry for &ldquo;{query}&rdquo;
                 </div>
                 {query && (
                   <button
                     onClick={() => { setQuery(''); setSelectedIndex(0); }}
-                    className="mt-2 text-xs text-gray-500 hover:text-gray-300"
+                    className="mt-2 text-xs text-gray-400 hover:text-gray-300"
                   >
                     Clear search
                   </button>
@@ -316,7 +316,7 @@ export default function HelpPanel() {
         </div>
 
         {/* Status bar — vim-style */}
-        <div className="flex items-center justify-between border-t border-[var(--border-default)] px-3 py-1 text-[10px] text-gray-600">
+        <div className="flex items-center justify-between border-t border-[var(--border-default)] px-3 py-1 text-[10px] text-gray-500">
           <span>
             {activeCategoryLabel}
             {query && ` \u00b7 "${query}"`}

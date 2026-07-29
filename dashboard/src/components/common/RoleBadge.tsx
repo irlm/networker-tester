@@ -1,7 +1,7 @@
 const ROLE_COLORS: Record<string, string> = {
   admin: 'text-green-400',
   operator: 'text-cyan-400',
-  viewer: 'text-gray-500',
+  viewer: 'text-gray-400',
 };
 
 interface RoleBadgeProps {
@@ -11,7 +11,7 @@ interface RoleBadgeProps {
 
 export function RoleBadge({ role, className = 'text-[10px]' }: RoleBadgeProps) {
   return (
-    <span className={`${className} ${ROLE_COLORS[role] || 'text-gray-500'}`}>
+    <span className={`${className} ${ROLE_COLORS[role] || 'text-gray-400'}`}>
       {role}
     </span>
   );

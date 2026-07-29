@@ -52,13 +52,13 @@ export function MethodologyPanel({
           />
           <div>
             <span className="text-sm text-gray-200">Enable benchmark mode</span>
-            <p className="text-xs text-gray-500">Adds warmup, measured iterations, quality gates, and generates a publishable artifact.</p>
+            <p className="text-xs text-gray-400">Adds warmup, measured iterations, quality gates, and generates a publishable artifact.</p>
           </div>
         </label>
       )}
 
       {alwaysOn && (
-        <p className="text-xs text-gray-500 mb-6">
+        <p className="text-xs text-gray-400 mb-6">
           Benchmark methodology is always enabled for this test type. Configure warmup, measured iterations, and quality gates below.
         </p>
       )}
@@ -79,7 +79,7 @@ export function MethodologyPanel({
                 }`}
               >
                 <h4 className="text-sm font-medium text-gray-100">{p.label}</h4>
-                <div className="text-xs text-gray-500 mt-2 space-y-1">
+                <div className="text-xs text-gray-400 mt-2 space-y-1">
                   <div>{p.warmup} warmup runs</div>
                   <div>{p.measured} measured runs</div>
                   <div>{p.targetError != null ? `${p.targetError}% target error` : 'No error target'}</div>
@@ -100,7 +100,7 @@ export function MethodologyPanel({
           {showAdvanced && (
             <div className="border border-gray-800 p-4 space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <label className="text-xs text-gray-500">
+                <label className="text-xs text-gray-400">
                   Warmup runs
                   <input
                     type="number"
@@ -110,7 +110,7 @@ export function MethodologyPanel({
                     className="mt-1 w-full bg-[var(--bg-base)] border border-gray-700 px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                   />
                 </label>
-                <label className="text-xs text-gray-500">
+                <label className="text-xs text-gray-400">
                   Measured runs
                   <input
                     type="number"
@@ -120,7 +120,7 @@ export function MethodologyPanel({
                     className="mt-1 w-full bg-[var(--bg-base)] border border-gray-700 px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                   />
                 </label>
-                <label className="text-xs text-gray-500">
+                <label className="text-xs text-gray-400">
                   Cooldown (ms)
                   <input
                     type="number"
@@ -130,7 +130,7 @@ export function MethodologyPanel({
                     className="mt-1 w-full bg-[var(--bg-base)] border border-gray-700 px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                   />
                 </label>
-                <label className="text-xs text-gray-500">
+                <label className="text-xs text-gray-400">
                   Target error %
                   <input
                     type="number"
@@ -142,7 +142,7 @@ export function MethodologyPanel({
                   />
                 </label>
               </div>
-              <div className="text-xs text-gray-600 pt-2">
+              <div className="text-xs text-gray-500 pt-2">
                 Quality gates: CV &lt; {methodology.quality_gates.max_cv_pct}%, min {methodology.quality_gates.min_samples} samples.
                 Publication gate: failure rate &lt; {methodology.publication_gates.max_failure_pct}%.
               </div>

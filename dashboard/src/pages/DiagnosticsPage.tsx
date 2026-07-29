@@ -223,7 +223,7 @@ function PhaseBar({ timings }: { timings: PhaseTimings }) {
       </div>
       <div className="flex gap-4 text-[11px]">
         {phases.map(p => (
-          <span key={p.key} className="flex items-center gap-1.5 text-gray-500">
+          <span key={p.key} className="flex items-center gap-1.5 text-gray-400">
             <span
               className="w-1.5 h-1.5 rounded-sm flex-shrink-0"
               style={{ background: p.color }}
@@ -329,7 +329,7 @@ function UrlCard({
         aria-controls={`card-body-${host}`}
       >
         <span
-          className={`text-gray-600 text-[11px] flex-shrink-0 transition-transform duration-200 ${
+          className={`text-gray-500 text-[11px] flex-shrink-0 transition-transform duration-200 ${
             expanded ? 'rotate-90' : ''
           }`}
           aria-hidden="true"
@@ -346,7 +346,7 @@ function UrlCard({
           {totalDuration != null && (
             <div className="hidden xl:flex items-center gap-3 text-xs tabular-nums whitespace-nowrap">
               <span className="text-gray-200 font-medium" title="Wall-clock duration of the last full run">
-                <span className="text-gray-500 mr-1 font-normal">run</span>
+                <span className="text-gray-400 mr-1 font-normal">run</span>
                 {fmtMs(totalDuration)}
               </span>
             </div>
@@ -355,10 +355,10 @@ function UrlCard({
 
         <div className="flex items-center gap-3 flex-shrink-0">
           {sparklineValues.length >= 2 && <Sparkline values={sparklineValues} />}
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-gray-500 font-medium tabular-nums">
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-gray-400 font-medium tabular-nums">
             {runs.length}
           </span>
-          <span className="text-[11px] text-gray-600 whitespace-nowrap">
+          <span className="text-[11px] text-gray-500 whitespace-nowrap">
             {timeAgo(lastRun.created_at)}
           </span>
           <span className={`w-[7px] h-[7px] rounded-full flex-shrink-0 ${dotColor}`} />
@@ -378,12 +378,12 @@ function UrlCard({
           <div className="mt-3">
             {groupedRuns.map(group => (
               <div key={group.label}>
-                <div className="text-[11px] text-gray-600 uppercase tracking-wider mb-1 mt-3 first:mt-0">
+                <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-1 mt-3 first:mt-0">
                   {group.label}
                 </div>
                 <table className="w-full text-xs tabular-nums">
                   <thead>
-                    <tr className="text-[10px] text-gray-600 uppercase tracking-wider">
+                    <tr className="text-[10px] text-gray-500 uppercase tracking-wider">
                       <th className="text-left py-1 px-2 font-medium border-b border-gray-800/50">Time</th>
                       <th className="text-left py-1 px-2 font-medium border-b border-gray-800/50" />
                       <th className="text-left py-1 px-2 font-medium border-b border-gray-800/50">Status</th>
@@ -415,7 +415,7 @@ function UrlCard({
                             ) : verdict === 'running' || verdict === 'queued' ? (
                               <span className="text-cyan-400 motion-safe:animate-pulse">{'\u25CF'}</span>
                             ) : (
-                              <span className="text-gray-600">-</span>
+                              <span className="text-gray-500">-</span>
                             )}
                           </td>
                           <td className="py-1.5 px-2">
@@ -456,7 +456,7 @@ function UrlCard({
             </button>
             <button
               onClick={() => onRemove(host, configIds)}
-              className="ml-auto text-[11px] text-gray-600 hover:text-red-400 transition-colors"
+              className="ml-auto text-[11px] text-gray-500 hover:text-red-400 transition-colors"
             >
               Remove from watchlist
             </button>
@@ -828,16 +828,16 @@ export function DiagnosticsPage() {
       <div className="flex items-start justify-between mb-6">
         <div>
           <h1 className="text-[22px] font-semibold text-gray-200 tracking-tight">URL Probe</h1>
-          <p className="text-xs text-gray-500 mt-1">Discover what features a URL supports — protocols, TLS, certificates, ALPN.</p>
+          <p className="text-xs text-gray-400 mt-1">Discover what features a URL supports — protocols, TLS, certificates, ALPN.</p>
         </div>
       </div>
 
       {/* Probe input bar */}
       <div className="border border-gray-800 rounded p-4 mb-7">
-        <div className="text-[11px] tracking-wider text-gray-600 mb-2.5">Probe a URL</div>
+        <div className="text-[11px] tracking-wider text-gray-500 mb-2.5">Probe a URL</div>
         <div className="flex items-center gap-2.5">
           <div className="flex-1 flex items-center gap-2">
-            <label htmlFor="diag-url" className="text-xs text-gray-500 flex-shrink-0">URL:</label>
+            <label htmlFor="diag-url" className="text-xs text-gray-400 flex-shrink-0">URL:</label>
             <input
               ref={inputRef}
               id="diag-url"
@@ -850,7 +850,7 @@ export function DiagnosticsPage() {
               aria-label="URL or hostname to test"
             />
           </div>
-          <label htmlFor="diag-preset" className="text-xs text-gray-500">Preset</label>
+          <label htmlFor="diag-preset" className="text-xs text-gray-400">Preset</label>
           <select
             id="diag-preset"
             value={preset}
@@ -868,7 +868,7 @@ export function DiagnosticsPage() {
               </option>
             ))}
           </select>
-          <label htmlFor="diag-runner" className="text-xs text-gray-500">Runner</label>
+          <label htmlFor="diag-runner" className="text-xs text-gray-400">Runner</label>
           <select
             id="diag-runner"
             value={selectedTesterId ?? ''}
@@ -912,7 +912,7 @@ export function DiagnosticsPage() {
       {/* Recent host chips */}
       {recentHosts.length > 0 && (
         <div className="mb-6 flex flex-wrap gap-1.5 items-center">
-          <span className="text-xs text-gray-600 mr-1">Recent:</span>
+          <span className="text-xs text-gray-500 mr-1">Recent:</span>
           {recentHosts.map(host => (
             <button
               key={host}
@@ -920,7 +920,7 @@ export function DiagnosticsPage() {
               className={`text-xs px-2 py-1 rounded border transition-colors font-mono ${
                 extractHost(url) === host
                   ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-400'
-                  : 'border-gray-800 text-gray-500 hover:border-gray-600 hover:text-gray-400'
+                  : 'border-gray-800 text-gray-400 hover:border-gray-600 hover:text-gray-400'
               }`}
             >
               {host.length > 30 ? host.slice(0, 27) + '...' : host}
@@ -933,43 +933,43 @@ export function DiagnosticsPage() {
       {!loading && urlGroups.length > 0 && (
         <div className="flex items-center gap-4 mb-4 text-xs">
           {/* Color carries signal — zero counts stay grey (audit: colored zeros). */}
-          <span className="text-gray-500">
+          <span className="text-gray-400">
             <strong className="text-gray-400 font-medium">{summary.total}</strong> {summary.total === 1 ? 'URL' : 'URLs'}
           </span>
           <span className="text-gray-700">&middot;</span>
-          <span className="text-gray-500">
-            <strong className={`font-medium ${summary.healthy > 0 ? 'text-emerald-400' : 'text-gray-600'}`}>{summary.healthy}</strong> healthy
+          <span className="text-gray-400">
+            <strong className={`font-medium ${summary.healthy > 0 ? 'text-emerald-400' : 'text-gray-500'}`}>{summary.healthy}</strong> healthy
           </span>
           {summary.partial > 0 && (
             <>
               <span className="text-gray-700">&middot;</span>
-              <span className="text-gray-500">
+              <span className="text-gray-400">
                 <strong className="text-amber-400 font-medium">{summary.partial}</strong> partial
               </span>
             </>
           )}
           <span className="text-gray-700">&middot;</span>
-          <span className="text-gray-500">
-            <strong className={`font-medium ${summary.failed > 0 ? 'text-red-400' : 'text-gray-600'}`}>{summary.failed}</strong> failed
+          <span className="text-gray-400">
+            <strong className={`font-medium ${summary.failed > 0 ? 'text-red-400' : 'text-gray-500'}`}>{summary.failed}</strong> failed
           </span>
           {summary.pending > 0 && (
             <>
               <span className="text-gray-700">&middot;</span>
-              <span className="text-gray-500">
+              <span className="text-gray-400">
                 <strong className="text-cyan-400 font-medium">{summary.pending}</strong> pending
               </span>
             </>
           )}
           <span className="text-gray-700">&middot;</span>
-          <span className="text-gray-500">
-            <strong className={`font-medium ${summary.stale > 0 ? 'text-amber-400' : 'text-gray-600'}`}>{summary.stale}</strong> stale (no check in 24h)
+          <span className="text-gray-400">
+            <strong className={`font-medium ${summary.stale > 0 ? 'text-amber-400' : 'text-gray-500'}`}>{summary.stale}</strong> stale (no check in 24h)
           </span>
         </div>
       )}
 
       {/* Toolbar */}
       <div className="flex items-center justify-between mb-3">
-        <span className="text-[11px] tracking-wider text-gray-600">
+        <span className="text-[11px] tracking-wider text-gray-500">
           Watched URLs ({filteredGroups.length})
         </span>
         <div className="flex items-center gap-3">
@@ -982,7 +982,7 @@ export function DiagnosticsPage() {
                 className={`px-3 py-1 text-[11px] font-mono border-r border-gray-800 last:border-r-0 transition-colors ${
                   filter === f
                     ? 'bg-white/5 text-gray-200'
-                    : 'text-gray-600 hover:text-gray-400'
+                    : 'text-gray-500 hover:text-gray-400'
                 }`}
                 aria-pressed={filter === f}
               >
@@ -994,7 +994,7 @@ export function DiagnosticsPage() {
           <select
             value={sort}
             onChange={e => setSort(e.target.value as SortMode)}
-            className="bg-transparent border border-gray-800 rounded px-2.5 py-1 text-[11px] font-mono text-gray-500 focus:outline-none appearance-none pr-6 cursor-pointer"
+            className="bg-transparent border border-gray-800 rounded px-2.5 py-1 text-[11px] font-mono text-gray-400 focus:outline-none appearance-none pr-6 cursor-pointer"
             style={{
               backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23475569' stroke-width='1.5'/%3E%3C/svg%3E")`,
               backgroundRepeat: 'no-repeat',
@@ -1023,7 +1023,7 @@ export function DiagnosticsPage() {
         </div>
       ) : paginatedGroups.length === 0 ? (
         <div className="border border-gray-800 rounded p-12 text-center">
-          <p className="text-gray-500 text-sm">
+          <p className="text-gray-400 text-sm">
             {filter !== 'all'
               ? `No ${filter} URLs found. Try changing the filter.`
               : 'No probes yet. Enter a URL above to discover what it supports.'}
@@ -1047,7 +1047,7 @@ export function DiagnosticsPage() {
       {/* Pagination */}
       {totalPages > 1 && (
         <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-800">
-          <span className="text-xs text-gray-600">
+          <span className="text-xs text-gray-500">
             Showing {(safePage - 1) * PAGE_SIZE + 1}-{Math.min(safePage * PAGE_SIZE, filteredGroups.length)} of{' '}
             {filteredGroups.length} URLs
           </span>
@@ -1055,17 +1055,17 @@ export function DiagnosticsPage() {
             <button
               onClick={() => setPage(p => Math.max(1, p - 1))}
               disabled={safePage <= 1}
-              className="px-3 py-1 text-xs border border-gray-800 rounded text-gray-500 hover:text-gray-300 hover:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              className="px-3 py-1 text-xs border border-gray-800 rounded text-gray-400 hover:text-gray-300 hover:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             >
               Previous
             </button>
-            <span className="text-xs text-gray-500 tabular-nums px-2">
+            <span className="text-xs text-gray-400 tabular-nums px-2">
               {safePage} / {totalPages}
             </span>
             <button
               onClick={() => setPage(p => Math.min(totalPages, p + 1))}
               disabled={safePage >= totalPages}
-              className="px-3 py-1 text-xs border border-gray-800 rounded text-gray-500 hover:text-gray-300 hover:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              className="px-3 py-1 text-xs border border-gray-800 rounded text-gray-400 hover:text-gray-300 hover:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             >
               Next
             </button>

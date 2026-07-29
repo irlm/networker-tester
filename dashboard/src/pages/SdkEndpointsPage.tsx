@@ -63,7 +63,7 @@ export function SdkEndpointsPage() {
     return (
       <div className="p-4 md:p-6">
         <h2 className="text-lg md:text-xl font-bold text-gray-100 mb-6">SDK Endpoints</h2>
-        <div className="text-gray-500 motion-safe:animate-pulse">Loading SDK endpoints...</div>
+        <div className="text-gray-400 motion-safe:animate-pulse">Loading SDK endpoints...</div>
       </div>
     );
   }
@@ -137,7 +137,7 @@ export function SdkEndpointsPage() {
         />
       ) : (
         <>
-          <div className="text-xs text-gray-500 mb-3">
+          <div className="text-xs text-gray-400 mb-3">
             {endpoints.length} SDK endpoint{endpoints.length === 1 ? '' : 's'}
             {' · '}
             <Link to={`/projects/${projectId}/reports/app-network`} className="text-cyan-400 hover:underline">
@@ -148,7 +148,7 @@ export function SdkEndpointsPage() {
           <div className="table-container">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
+                <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
                   <th className="px-4 py-2.5 text-left font-medium">Name</th>
                   <th className="px-4 py-2.5 text-left font-medium">Target URL</th>
                   <th className="px-4 py-2.5 text-left font-medium">Route</th>
@@ -163,7 +163,7 @@ export function SdkEndpointsPage() {
                     <td className="px-4 py-3 text-gray-200">
                       {ep.name}
                       {ep.description && (
-                        <div className="text-xs text-gray-600 mt-0.5">{ep.description}</div>
+                        <div className="text-xs text-gray-500 mt-0.5">{ep.description}</div>
                       )}
                     </td>
                     <td className="px-4 py-3 text-cyan-400 font-mono text-xs break-all">{ep.url ?? '—'}</td>
@@ -177,12 +177,12 @@ export function SdkEndpointsPage() {
                         <span className="text-yellow-500">not set</span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-gray-500 text-xs">{new Date(ep.created_at).toLocaleString()}</td>
+                    <td className="px-4 py-3 text-gray-400 text-xs">{new Date(ep.created_at).toLocaleString()}</td>
                     {isOperator && (
                       <td className="px-4 py-3 text-right">
                         <button
                           onClick={() => setConfirmDelete(ep)}
-                          className="text-gray-500 hover:text-red-400 text-xs transition-colors"
+                          className="text-gray-400 hover:text-red-400 text-xs transition-colors"
                           aria-label={`Delete ${ep.name}`}
                         >
                           Delete

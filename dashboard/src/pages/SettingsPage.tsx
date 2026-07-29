@@ -131,7 +131,7 @@ export function SettingsPage() {
     return (
       <div className="p-4 md:p-6">
         <h2 className="text-xl font-bold text-gray-100 mb-6">Settings</h2>
-        <p className="text-gray-500">Loading settings...</p>
+        <p className="text-gray-400">Loading settings...</p>
       </div>
     );
   }
@@ -145,7 +145,7 @@ export function SettingsPage() {
         <h2 className="text-xl font-bold text-gray-100">Settings</h2>
         <button
           onClick={loadData}
-          className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+          className="text-xs text-gray-400 hover:text-gray-300 transition-colors"
         >
           refresh
         </button>
@@ -160,9 +160,9 @@ export function SettingsPage() {
       {/* System Versions */}
       <div className="mb-8">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-xs text-gray-500 tracking-wider font-medium">system versions</h3>
+          <h3 className="text-xs text-gray-400 tracking-wider font-medium">system versions</h3>
           {latestRelease && (
-            <span className="text-xs text-gray-600 font-mono">
+            <span className="text-xs text-gray-500 font-mono">
               latest: v{latestRelease}
             </span>
           )}
@@ -176,7 +176,7 @@ export function SettingsPage() {
               <div className="flex items-center justify-between py-2.5">
                 <div>
                   <span className="text-sm text-gray-200">Dashboard</span>
-                  <span className="text-xs text-gray-600 ml-2">Control plane API + UI</span>
+                  <span className="text-xs text-gray-500 ml-2">Control plane API + UI</span>
                 </div>
                 <div className="flex items-center gap-3">
                   <span
@@ -235,13 +235,13 @@ export function SettingsPage() {
                 <div>
                   <span className="text-sm text-gray-200">{hostLabel(host)}</span>
                   {hostLabel(host) !== host && (
-                    <span className="text-xs text-gray-600 ml-2 truncate" title={host}>{host}</span>
+                    <span className="text-xs text-gray-500 ml-2 truncate" title={host}>{host}</span>
                   )}
                 </div>
                 <div className="flex items-center gap-3">
                   <span
                     className={`text-xs font-mono ${
-                      !ep.reachable ? 'text-gray-600' :
+                      !ep.reachable ? 'text-gray-500' :
                       outdated ? 'text-yellow-400' : 'text-green-400'
                     }`}
                     title={outdated ? `Update available (latest: v${latestRelease})` : undefined}
@@ -291,7 +291,7 @@ export function SettingsPage() {
             {!Object.values(updating).some(v => v) && (
               <button
                 onClick={() => setActiveUpdateId(null)}
-                className="text-xs text-gray-500 hover:text-gray-300"
+                className="text-xs text-gray-400 hover:text-gray-300"
               >
                 Close
               </button>
@@ -312,9 +312,9 @@ export function SettingsPage() {
 
       {/* Deployed Targets */}
       <div className="section-divider">
-        <h3 className="text-xs text-gray-500 tracking-wider font-medium mb-3">deployed targets</h3>
+        <h3 className="text-xs text-gray-400 tracking-wider font-medium mb-3">deployed targets</h3>
         {deployments.length === 0 ? (
-          <p className="text-gray-600 text-sm">No targets deployed yet. Deploy one from the Infrastructure page.</p>
+          <p className="text-gray-500 text-sm">No targets deployed yet. Deploy one from the Infrastructure page.</p>
         ) : (
           <div>
             {deployments.map((d, i) => {
@@ -324,8 +324,8 @@ export function SettingsPage() {
                 <div key={d.deployment_id} className={`flex items-center justify-between py-3 ${i > 0 ? 'border-t border-gray-800/30' : ''}`}>
                   <div>
                     <span className="text-sm text-gray-200">{d.name}</span>
-                    <span className="text-xs text-gray-600 ml-2">{d.provider_summary}</span>
-                    <div className="text-xs text-gray-500 mt-0.5 font-mono">
+                    <span className="text-xs text-gray-500 ml-2">{d.provider_summary}</span>
+                    <div className="text-xs text-gray-400 mt-0.5 font-mono">
                       {ips.join(', ') || 'No IPs'}
                     </div>
                   </div>
@@ -350,7 +350,7 @@ export function SettingsPage() {
       {/* Cloud Inventory */}
       <div className="section-divider">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-xs text-gray-500 tracking-wider font-medium">cloud inventory</h3>
+          <h3 className="text-xs text-gray-400 tracking-wider font-medium">cloud inventory</h3>
           <button
             onClick={async () => {
               setInventoryLoading(true);
@@ -380,16 +380,16 @@ export function SettingsPage() {
         )}
 
         {inventory.length === 0 && !inventoryLoading ? (
-          <p className="text-gray-600 text-sm">
+          <p className="text-gray-500 text-sm">
             Click "scan all providers" to discover VMs across Azure, AWS, and GCP.
           </p>
         ) : inventoryLoading ? (
-          <p className="text-gray-500 text-sm motion-safe:animate-pulse">Scanning cloud providers...</p>
+          <p className="text-gray-400 text-sm motion-safe:animate-pulse">Scanning cloud providers...</p>
         ) : (
           <div className="table-container">
             <table className="text-xs">
               <thead>
-                <tr className="border-b border-gray-800/50 text-gray-500 bg-[var(--bg-surface)]">
+                <tr className="border-b border-gray-800/50 text-gray-400 bg-[var(--bg-surface)]">
                   <th className="px-3 py-2 text-left">Provider</th>
                   <th className="px-3 py-2 text-left">Name</th>
                   <th className="px-3 py-2 text-left">Region</th>
@@ -433,20 +433,20 @@ export function SettingsPage() {
                     <td className="px-3 py-2 text-gray-400 font-mono text-[11px] max-w-48 truncate" title={vm.fqdn || vm.public_ip || ''}>
                       {vm.fqdn || vm.public_ip || '-'}
                     </td>
-                    <td className="px-3 py-2 text-gray-500">{vm.vm_size || '-'}</td>
-                    <td className="px-3 py-2 text-gray-500">{vm.os || '-'}</td>
+                    <td className="px-3 py-2 text-gray-400">{vm.vm_size || '-'}</td>
+                    <td className="px-3 py-2 text-gray-400">{vm.os || '-'}</td>
                     <td className="px-3 py-2">
                       {vm.managed ? (
                         <span className="text-gray-300 text-[11px]">tracked</span>
                       ) : (
-                        <span className="text-gray-600 text-[11px]">untracked</span>
+                        <span className="text-gray-500 text-[11px]">untracked</span>
                       )}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            <div className="px-3 py-2 text-xs text-gray-600 border-t border-gray-800">
+            <div className="px-3 py-2 text-xs text-gray-500 border-t border-gray-800">
               {inventory.length} VM{inventory.length !== 1 ? 's' : ''} found
               {' · '}
               {inventory.filter(v => v.managed).length} tracked
@@ -461,7 +461,7 @@ export function SettingsPage() {
       {isProjectAdmin && (
         <div className="section-divider">
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-xs text-gray-500 tracking-wider font-medium">cloud accounts</h3>
+            <h3 className="text-xs text-gray-400 tracking-wider font-medium">cloud accounts</h3>
             <button
               onClick={() => {
                 setShowAddAccount(true);
@@ -482,7 +482,7 @@ export function SettingsPage() {
                 <span className="text-sm text-gray-200 font-medium">New Cloud Connection</span>
                 <button
                   onClick={() => setShowAddAccount(false)}
-                  className="text-xs text-gray-500 hover:text-gray-300"
+                  className="text-xs text-gray-400 hover:text-gray-300"
                 >
                   Cancel
                 </button>
@@ -536,7 +536,7 @@ export function SettingsPage() {
                       className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500"
                     />
                   </div>
-                  <p className="text-xs text-gray-600">
+                  <p className="text-xs text-gray-500">
                     The dashboard's managed identity needs Contributor role on this subscription.
                     Run: <code className="text-gray-400">az role assignment create --assignee 7dc26030-4be5-4866-938e-772cfe965043 --role Contributor --scope /subscriptions/&lt;id&gt;</code>
                   </p>
@@ -581,7 +581,7 @@ export function SettingsPage() {
                       className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500"
                     />
                   </div>
-                  <p className="text-xs text-gray-600">
+                  <p className="text-xs text-gray-500">
                     Create an IAM role that trusts Azure AD for cross-cloud federation. The role must allow <code className="text-gray-400">sts:AssumeRoleWithWebIdentity</code>.
                   </p>
                 </div>
@@ -616,7 +616,7 @@ export function SettingsPage() {
                       className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500"
                     />
                   </div>
-                  <p className="text-xs text-gray-600">
+                  <p className="text-xs text-gray-500">
                     Create a workload identity pool and grant the Azure managed identity access. See GCP documentation for setup.
                   </p>
                 </div>
@@ -672,7 +672,7 @@ export function SettingsPage() {
 
           {/* Connection List */}
           {cloudConnections.length === 0 && !showAddAccount ? (
-            <p className="text-gray-600 text-sm">
+            <p className="text-gray-500 text-sm">
               No cloud accounts configured. Add one to enable identity-federated deployments.
             </p>
           ) : (
@@ -682,7 +682,7 @@ export function SettingsPage() {
                 const statusColor =
                   conn.status === 'active' ? 'text-green-400' :
                   conn.status === 'error' ? 'text-red-400' :
-                  conn.status === 'disabled' ? 'text-gray-500' :
+                  conn.status === 'disabled' ? 'text-gray-400' :
                   'text-yellow-400';
                 const dotColor =
                   conn.status === 'active' ? 'bg-green-400' :
@@ -720,7 +720,7 @@ export function SettingsPage() {
                       <span className={`text-xs ${statusColor}`}>{conn.status}</span>
                     </div>
                     <div className="flex items-center justify-between">
-                      <div className="text-xs text-gray-500">
+                      <div className="text-xs text-gray-400">
                         <span className={providerColor}>{conn.provider}</span>
                         {' · '}{configSummary}
                         {regionStr && <>{' · '}{regionStr}</>}
@@ -756,13 +756,13 @@ export function SettingsPage() {
                               addToast('error', `Failed to remove ${conn.name}`);
                             }
                           }}
-                          className="text-xs text-gray-500 hover:text-red-400 transition-colors"
+                          className="text-xs text-gray-400 hover:text-red-400 transition-colors"
                         >
                           remove
                         </button>
                       </div>
                     </div>
-                    <div className="text-xs text-gray-600 mt-1">
+                    <div className="text-xs text-gray-500 mt-1">
                       {conn.status === 'error' && conn.validation_error ? (
                         <span className="text-red-400/70">{conn.validation_error}</span>
                       ) : (

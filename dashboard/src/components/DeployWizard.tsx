@@ -224,7 +224,7 @@ export function DeployWizard({ projectId, onClose, onCreated, prefill }: DeployW
                 ))}
               </div>
             </div>
-            <button type="button" onClick={onClose} className="text-gray-500 hover:text-gray-300 text-sm" aria-label="Close">&#x2715;</button>
+            <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-300 text-sm" aria-label="Close">&#x2715;</button>
           </div>
 
           {error && (
@@ -245,7 +245,7 @@ export function DeployWizard({ projectId, onClose, onCreated, prefill }: DeployW
               )}
 
               {cloudLoading && cloudAccounts.length === 0 ? (
-                <p className="text-xs text-gray-500 py-3">Loading cloud accounts...</p>
+                <p className="text-xs text-gray-400 py-3">Loading cloud accounts...</p>
               ) : cloudAccounts.length === 0 ? (
                 <div className="border border-yellow-500/30 bg-yellow-500/5 rounded p-3 mb-3 text-xs text-yellow-300">
                   No cloud accounts configured. Add one in Settings → Cloud, or check "Use existing VM" on each testbed to install on a host you already have.
@@ -294,10 +294,10 @@ export function DeployWizard({ projectId, onClose, onCreated, prefill }: DeployW
               </div>
 
               <div className="bg-[var(--bg-base)] border border-gray-800 rounded p-3 mb-3">
-                <p className="text-xs text-gray-500 mb-2 font-medium">Targets ({testbeds.length})</p>
+                <p className="text-xs text-gray-400 mb-2 font-medium">Targets ({testbeds.length})</p>
                 {testbeds.map((tb, i) => (
                   <div key={tb.key} className="text-sm text-gray-300 py-1 flex flex-wrap items-center gap-2">
-                    <span className="text-gray-500 font-mono w-4">{i + 1}</span>
+                    <span className="text-gray-400 font-mono w-4">{i + 1}</span>
                     {tb.existingVm ? (
                       <>
                         <span className="text-amber-400 text-[10px] px-1.5 py-0.5 border border-amber-500/30 rounded">upgrade</span>
@@ -306,11 +306,11 @@ export function DeployWizard({ projectId, onClose, onCreated, prefill }: DeployW
                     ) : (
                       <>
                         <span>{tb.cloud}</span>
-                        <span className="text-gray-500">/</span>
+                        <span className="text-gray-400">/</span>
                         <span className="text-gray-300">{tb.region}</span>
-                        <span className="text-gray-500">·</span>
+                        <span className="text-gray-400">·</span>
                         <span className="text-gray-400">{tb.os}</span>
-                        <span className="text-gray-500">·</span>
+                        <span className="text-gray-400">·</span>
                         <span className="text-gray-400">{tb.vmSize}</span>
                       </>
                     )}
@@ -321,7 +321,7 @@ export function DeployWizard({ projectId, onClose, onCreated, prefill }: DeployW
                 ))}
               </div>
 
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-gray-400">
                 install.sh runs idempotently — already-installed proxies are skipped, new ones added.
               </p>
             </div>

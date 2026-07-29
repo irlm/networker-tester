@@ -128,7 +128,7 @@ export function CommandApprovalsPage() {
             className={`px-4 py-2 text-sm capitalize transition-colors ${
               tab === t
                 ? 'text-gray-100 border-b-2 border-cyan-500'
-                : 'text-gray-500 hover:text-gray-300'
+                : 'text-gray-400 hover:text-gray-300'
             }`}
           >
             {t === 'pending' ? `Pending (${pending.length})` : 'History'}
@@ -137,10 +137,10 @@ export function CommandApprovalsPage() {
       </div>
 
       {loading ? (
-        <div className="text-gray-500 text-sm py-8 text-center">Loading...</div>
+        <div className="text-gray-400 text-sm py-8 text-center">Loading...</div>
       ) : tab === 'pending' ? (
         pending.length === 0 ? (
-          <div className="text-gray-500 text-sm py-8 text-center">No pending approvals</div>
+          <div className="text-gray-400 text-sm py-8 text-center">No pending approvals</div>
         ) : (
           <div className="space-y-2">
             {pending.map(a => (
@@ -156,7 +156,7 @@ export function CommandApprovalsPage() {
                         {a.status}
                       </span>
                     </div>
-                    <div className="text-xs text-gray-500 space-x-3">
+                    <div className="text-xs text-gray-400 space-x-3">
                       <span>by {a.requested_by_email}</span>
                       <span><RelativeTime iso={a.requested_at} /></span>
                       <span>expires: <TimeUntil iso={a.expires_at} /></span>
@@ -243,16 +243,16 @@ function HistoryTab({ projectId }: { projectId: string }) {
     api.getPendingApprovals(projectId).then(setApprovals).catch(() => {});
   });
 
-  if (loading) return <div className="text-gray-500 text-sm py-8 text-center">Loading...</div>;
+  if (loading) return <div className="text-gray-400 text-sm py-8 text-center">Loading...</div>;
 
   if (approvals.length === 0) {
-    return <div className="text-gray-500 text-sm py-8 text-center">No approval history</div>;
+    return <div className="text-gray-400 text-sm py-8 text-center">No approval history</div>;
   }
 
   return (
     <table className="w-full text-sm">
       <thead>
-        <tr className="text-gray-500 text-xs border-b border-gray-800">
+        <tr className="text-gray-400 text-xs border-b border-gray-800">
           <th className="text-left py-2 font-normal">Command</th>
           <th className="text-left py-2 font-normal">Status</th>
           <th className="text-left py-2 font-normal">Requested By</th>
@@ -272,8 +272,8 @@ function HistoryTab({ projectId }: { projectId: string }) {
             </td>
             <td className="py-2 text-gray-400">{a.requested_by_email}</td>
             <td className="py-2 text-gray-400">{a.decided_by_email || '-'}</td>
-            <td className="py-2 text-gray-500"><RelativeTime iso={a.requested_at} /></td>
-            <td className="py-2 text-gray-500">{a.decided_at ? <RelativeTime iso={a.decided_at} /> : '-'}</td>
+            <td className="py-2 text-gray-400"><RelativeTime iso={a.requested_at} /></td>
+            <td className="py-2 text-gray-400">{a.decided_at ? <RelativeTime iso={a.decided_at} /> : '-'}</td>
           </tr>
         ))}
       </tbody>

@@ -20,7 +20,7 @@ export function WizardStepper({ steps, currentStep, onStepClick }: WizardStepper
               isCurrent
                 ? 'text-cyan-300'
                 : isPast
-                  ? 'text-gray-500 hover:text-gray-300 cursor-pointer'
+                  ? 'text-gray-400 hover:text-gray-300 cursor-pointer'
                   : 'text-gray-700 cursor-not-allowed'
             }`}
           >

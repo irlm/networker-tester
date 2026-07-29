@@ -82,7 +82,7 @@ export function CreateTlsProfileDialog({ projectId, onClose, onCreated }: Create
         <form onSubmit={handleSubmit} className="p-4 md:p-6">
           <div className="flex items-center justify-between mb-6">
             <h3 id="create-tls-profile-title" className="text-lg font-bold text-gray-100">Run TLS Profile</h3>
-            <button type="button" onClick={onClose} className="text-gray-500 hover:text-gray-300 text-sm" aria-label="Close">&#x2715;</button>
+            <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-300 text-sm" aria-label="Close">&#x2715;</button>
           </div>
 
           {error && <div className="bg-red-500/10 border border-red-500/30 rounded p-2 mb-4 text-red-400 text-sm">{error}</div>}

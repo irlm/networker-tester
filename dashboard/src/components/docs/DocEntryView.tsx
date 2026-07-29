@@ -19,7 +19,7 @@ export function DocEntryView({ entry, compact, showCategory = true }: DocEntryVi
         </div>
       )}
       <h3 className="text-cyan-400 text-sm font-medium mb-0.5">{entry.title}</h3>
-      <p className="text-gray-500 text-xs">{entry.brief}</p>
+      <p className="text-gray-400 text-xs">{entry.brief}</p>
       {!compact && (
         <>
           <div className="border-t border-[var(--border-default)] my-3" />

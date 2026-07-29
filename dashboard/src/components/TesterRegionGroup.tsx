@@ -77,7 +77,7 @@ export function TesterRegionGroup({
           <span className="font-mono">
             {cloud} / {region}
           </span>
-          <span className="text-xs text-gray-500">
+          <span className="text-xs text-gray-400">
             {testers.length} runner{testers.length === 1 ? '' : 's'} ·{' '}
             {runningCount} running · {inQueueCount} in queue
           </span>
@@ -117,14 +117,14 @@ export function TesterRegionGroup({
                               <StatusBadge status="failed" label="key expired" />
                             )}
                           </div>
-                          <div className="text-gray-500 truncate">
+                          <div className="text-gray-400 truncate">
                             {t.vm_size} · v{t.installer_version ?? '?'}
                           </div>
                         </div>
-                        <div className="w-32 text-right font-mono text-gray-500">
+                        <div className="w-32 text-right font-mono text-gray-400">
                           <div>{detail ?? ''}</div>
                           <div
-                            className="text-gray-600"
+                            className="text-gray-500"
                             title="last time the runner's agent key authenticated"
                           >
                             {t.api_key_last_used_at
@@ -140,7 +140,7 @@ export function TesterRegionGroup({
             );
           })}
           {testers.length === 0 && (
-            <li className="px-3 py-3 text-xs text-gray-500">No runners in this region.</li>
+            <li className="px-3 py-3 text-xs text-gray-400">No runners in this region.</li>
           )}
         </ul>
       )}

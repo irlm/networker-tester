@@ -147,9 +147,9 @@ export function ProjectsPage() {
                 <RoleBadge role={project.role} />
               </div>
               {project.description && (
-                <p className="text-xs text-gray-500 truncate mb-2">{project.description}</p>
+                <p className="text-xs text-gray-400 truncate mb-2">{project.description}</p>
               )}
-              <p className="text-xs text-gray-600">{project.slug}</p>
+              <p className="text-xs text-gray-500">{project.slug}</p>
             </button>
           ))}
         </div>

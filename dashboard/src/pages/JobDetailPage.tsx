@@ -105,13 +105,13 @@ function ProbeTable({ attempts }: { attempts: LiveAttempt[] }) {
 
   return (
     <div className="table-container mb-6">
-      <h3 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
+      <h3 className="px-4 py-2.5 text-xs text-gray-400 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
         all probes ({attempts.length})
       </h3>
       <div ref={scrollRef} className="max-h-72 overflow-y-auto">
         <table className="w-full text-xs">
           <thead>
-            <tr className="text-gray-500 border-b border-gray-800">
+            <tr className="text-gray-400 border-b border-gray-800">
               <th className="px-3 py-2 text-left">#</th>
               <th className="px-3 py-2 text-left">Protocol</th>
               <th className="px-3 py-2 text-left">Status</th>
@@ -136,7 +136,7 @@ function ProbeTable({ attempts }: { attempts: LiveAttempt[] }) {
                   key={a.attempt_id}
                   className="border-b border-gray-800/30 hover:bg-gray-800/20"
                 >
-                  <td className="px-3 py-1.5 text-gray-500 font-mono">{a.sequence_num}</td>
+                  <td className="px-3 py-1.5 text-gray-400 font-mono">{a.sequence_num}</td>
                   <td className="px-3 py-1.5 text-gray-300">{a.protocol}</td>
                   <td className="px-3 py-1.5">
                     {a.success ? (
@@ -145,13 +145,13 @@ function ProbeTable({ attempts }: { attempts: LiveAttempt[] }) {
                       <span className="text-red-400">FAIL</span>
                     )}
                   </td>
-                  <td className="px-3 py-1.5 text-gray-500 text-right font-mono">
+                  <td className="px-3 py-1.5 text-gray-400 text-right font-mono">
                     {formatMs(a.dns?.duration_ms)}
                   </td>
-                  <td className="px-3 py-1.5 text-gray-500 text-right font-mono">
+                  <td className="px-3 py-1.5 text-gray-400 text-right font-mono">
                     {formatMs(a.tcp?.connect_duration_ms)}
                   </td>
-                  <td className="px-3 py-1.5 text-gray-500 text-right font-mono">
+                  <td className="px-3 py-1.5 text-gray-400 text-right font-mono">
                     {formatMs(a.tls?.handshake_duration_ms)}
                   </td>
                   <td className="px-3 py-1.5 text-gray-200 text-right font-mono">
@@ -164,7 +164,7 @@ function ProbeTable({ attempts }: { attempts: LiveAttempt[] }) {
                         a.page_load?.total_ms,
                     )}
                   </td>
-                  <td className="px-3 py-1.5 text-gray-600 max-w-48 truncate" title={a.error?.message}>
+                  <td className="px-3 py-1.5 text-gray-500 max-w-48 truncate" title={a.error?.message}>
                     {a.error ? (
                       <span className="text-red-400">{a.error.message}</span>
                     ) : a.http?.negotiated_version ? (
@@ -423,7 +423,7 @@ export function JobDetailPage() {
     return (
       <div className="p-4 md:p-6">
         <Breadcrumb items={[{ label: 'Tests', to: `/projects/${projectId}/tests` }, { label: `Test ${shortId}` }]} />
-        <div className="text-gray-500 motion-safe:animate-pulse">Loading job {shortId}...</div>
+        <div className="text-gray-400 motion-safe:animate-pulse">Loading job {shortId}...</div>
       </div>
     );
   }
@@ -435,7 +435,7 @@ export function JobDetailPage() {
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
           <h3 className="text-red-400 font-bold mb-2">Failed to load job</h3>
           <p className="text-red-300 text-sm font-mono">{error}</p>
-          <p className="text-gray-500 text-xs mt-2">Test ID: {jobId}</p>
+          <p className="text-gray-400 text-xs mt-2">Test ID: {jobId}</p>
         </div>
       </div>
     );
@@ -444,7 +444,7 @@ export function JobDetailPage() {
   if (!job) {
     return (
       <div className="p-4 md:p-6">
-        <div className="text-gray-500">Job not found: {jobId}</div>
+        <div className="text-gray-400">Job not found: {jobId}</div>
       </div>
     );
   }
@@ -465,17 +465,17 @@ export function JobDetailPage() {
             </h2>
             <StatusBadge status={job.status} />
           </div>
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-gray-400">
             Target: {jobTarget(job)} | {isTlsProfileJob(job) ? 'Profile' : 'Modes'}: {jobSummary(job)}
           </p>
           {runMeta && (
             <div className="flex gap-3 mt-1">
-              <span className="text-xs text-gray-600">
+              <span className="text-xs text-gray-500">
                 Runner: <span className="text-gray-400 font-mono">v{runMeta.client_version}</span>
                 <span className="text-gray-700 ml-1">({runMeta.client_os})</span>
               </span>
               {runMeta.endpoint_version && (
-                <span className="text-xs text-gray-600">
+                <span className="text-xs text-gray-500">
                   Target: <span className="text-gray-400 font-mono">v{runMeta.endpoint_version}</span>
                 </span>
               )}
@@ -541,12 +541,12 @@ export function JobDetailPage() {
           <p className="text-gray-400 text-sm">
             Test {job.status}.
             {job.tls_profile_run_id && (
-              <span className="ml-2 text-gray-500">
+              <span className="ml-2 text-gray-400">
                 TLS Profile: <Link to={`/projects/${projectId}/tls-profiles/${job.tls_profile_run_id}`} className="font-mono text-cyan-400 hover:underline">{job.tls_profile_run_id.slice(0, 8)}</Link>
               </span>
             )}
             {job.run_id && (
-              <span className="ml-2 text-gray-500">
+              <span className="ml-2 text-gray-400">
                 Run: <Link to={`/projects/${projectId}/runs/${job.run_id}`} className="font-mono text-cyan-400 hover:underline">{job.run_id.slice(0, 8)}</Link>
               </span>
             )}
@@ -560,16 +560,16 @@ export function JobDetailPage() {
       {/* Inline metrics — compact bar instead of card grid */}
       {attempts.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-5 gap-y-1 py-3 mb-6 text-xs border-b border-gray-800/50">
-          <span className="text-gray-500">
+          <span className="text-gray-400">
             Probes <span className="text-gray-200 font-mono font-semibold ml-1">{attempts.length}</span>
           </span>
-          <span className="text-gray-500">
+          <span className="text-gray-400">
             Success <span className="text-green-400 font-mono font-semibold ml-1">{successCount}</span>
           </span>
-          <span className="text-gray-500">
-            Failed <span className={`font-mono font-semibold ml-1 ${failureCount > 0 ? 'text-red-400' : 'text-gray-600'}`}>{failureCount}</span>
+          <span className="text-gray-400">
+            Failed <span className={`font-mono font-semibold ml-1 ${failureCount > 0 ? 'text-red-400' : 'text-gray-500'}`}>{failureCount}</span>
           </span>
-          <span className="text-gray-500">
+          <span className="text-gray-400">
             Rate <span className={`font-mono font-semibold ml-1 ${successRateClass(attempts.length > 0 ? (successCount / attempts.length) * 100 : 100)}`}>
               {attempts.length > 0 ? `${((successCount / attempts.length) * 100).toFixed(0)}%` : '-'}
             </span>
@@ -580,7 +580,7 @@ export function JobDetailPage() {
       {/* Probe Timing per attempt */}
       {chartData.length > 0 && (
         <div className="mb-6">
-          <h3 className="text-xs text-gray-500 tracking-wider mb-3 font-medium">probe timing by attempt</h3>
+          <h3 className="text-xs text-gray-400 tracking-wider mb-3 font-medium">probe timing by attempt</h3>
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2028" />
@@ -609,13 +609,13 @@ export function JobDetailPage() {
       {/* Timing Breakdown (shared analysis from lib/analysis.ts) */}
       {timingBreakdown.length > 0 && (
         <div className="table-container mb-6">
-          <h3 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
+          <h3 className="px-4 py-2.5 text-xs text-gray-400 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
             timing breakdown
           </h3>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="border-b border-gray-800 text-gray-500">
+                <tr className="border-b border-gray-800 text-gray-400">
                   <th className="px-3 py-2 text-left">Protocol</th>
                   <th className="px-3 py-2 text-right">N</th>
                   <th className="px-3 py-2 text-right">DNS</th>
@@ -650,13 +650,13 @@ export function JobDetailPage() {
       {/* Statistics Summary (shared analysis — same as HTML report) */}
       {protocolStats.length > 0 && (
         <div className="table-container mb-6">
-          <h3 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
+          <h3 className="px-4 py-2.5 text-xs text-gray-400 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
             statistics summary
           </h3>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="border-b border-gray-800 text-gray-500">
+                <tr className="border-b border-gray-800 text-gray-400">
                   <th className="px-3 py-2 text-left">Protocol</th>
                   <th className="px-3 py-2 text-right">N</th>
                   <th className="px-3 py-2 text-right">Min</th>
@@ -674,7 +674,7 @@ export function JobDetailPage() {
                   <tr key={`${ps.protocol}:${ps.payloadBytes}`} className="border-b border-gray-800/30">
                     <td className="px-3 py-2 text-gray-200">
                       {ps.protocol}
-                      {ps.payloadBytes != null && <span className="text-gray-500 ml-1">({formatBytes(ps.payloadBytes)})</span>}
+                      {ps.payloadBytes != null && <span className="text-gray-400 ml-1">({formatBytes(ps.payloadBytes)})</span>}
                     </td>
                     <td className="px-3 py-2 text-gray-400 text-right">{ps.stats.count}</td>
                     <td className="px-3 py-2 text-gray-400 text-right font-mono">{formatMetricValue(ps.protocol, ps.stats.min)}</td>
@@ -683,7 +683,7 @@ export function JobDetailPage() {
                     <td className="px-3 py-2 text-yellow-400 text-right font-mono">{formatMetricValue(ps.protocol, ps.stats.p95)}</td>
                     <td className="px-3 py-2 text-orange-400 text-right font-mono">{formatMetricValue(ps.protocol, ps.stats.p99)}</td>
                     <td className="px-3 py-2 text-gray-400 text-right font-mono">{formatMetricValue(ps.protocol, ps.stats.max)}</td>
-                    <td className="px-3 py-2 text-gray-500 text-right font-mono">{formatMetricValue(ps.protocol, ps.stats.stddev)}</td>
+                    <td className="px-3 py-2 text-gray-400 text-right font-mono">{formatMetricValue(ps.protocol, ps.stats.stddev)}</td>
                     <td className={`px-3 py-2 text-right font-mono ${successRateClass(ps.successRate)}`}>
                       {ps.successRate.toFixed(0)}%
                     </td>
@@ -698,7 +698,7 @@ export function JobDetailPage() {
       {/* Protocol Comparison Chart */}
       {protocolChartData.length > 1 && (
         <div className="mb-6">
-          <h3 className="text-xs text-gray-500 tracking-wider mb-3 font-medium">protocol comparison — p50 vs p95</h3>
+          <h3 className="text-xs text-gray-400 tracking-wider mb-3 font-medium">protocol comparison — p50 vs p95</h3>
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={protocolChartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2028" />
@@ -715,7 +715,7 @@ export function JobDetailPage() {
       {/* Box-and-Whisker: p5 ── [Q1 | median | Q3] ── p95 */}
       {boxPlotData.length > 0 && (
         <div className="mb-6">
-          <h3 className="text-xs text-gray-500 tracking-wider mb-3 font-medium">distribution by protocol</h3>
+          <h3 className="text-xs text-gray-400 tracking-wider mb-3 font-medium">distribution by protocol</h3>
           <BoxWhiskerChart groups={boxPlotData} />
         </div>
       )}
@@ -723,7 +723,7 @@ export function JobDetailPage() {
       {/* TTFB Distribution */}
       {ttfbDistribution.length > 0 && (
         <div className="mb-6">
-          <h3 className="text-xs text-gray-500 tracking-wider mb-3 font-medium">timing distribution (ms)</h3>
+          <h3 className="text-xs text-gray-400 tracking-wider mb-3 font-medium">timing distribution (ms)</h3>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={ttfbDistribution}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2028" />
@@ -739,7 +739,7 @@ export function JobDetailPage() {
       {/* Analysis & Observations */}
       {observations.length > 0 && (
         <div className="mb-6 border-l-2 border-gray-700 pl-4">
-          <h3 className="text-xs text-gray-500 tracking-wider mb-2 font-medium">analysis</h3>
+          <h3 className="text-xs text-gray-400 tracking-wider mb-2 font-medium">analysis</h3>
           <ul className="space-y-1">
             {observations.map((obs, i) => (
               <li key={i} className="text-xs text-gray-400">
@@ -753,28 +753,28 @@ export function JobDetailPage() {
       {/* Packet Capture */}
       {packetCapture && packetCapture.total_packets > 0 && (
         <div className="table-container mb-6">
-          <h3 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
+          <h3 className="px-4 py-2.5 text-xs text-gray-400 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
             packet capture
           </h3>
           <div className="p-4 space-y-4">
             {/* Summary bar */}
             <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs">
-              <span className="text-gray-500">
+              <span className="text-gray-400">
                 Status <span className={`font-mono font-semibold ml-1 ${packetCapture.capture_status === 'captured' ? 'text-green-400' : 'text-yellow-400'}`}>{packetCapture.capture_status}</span>
               </span>
-              <span className="text-gray-500">
+              <span className="text-gray-400">
                 Interface <span className="text-gray-300 font-mono ml-1">{packetCapture.interface}</span>
               </span>
-              <span className="text-gray-500">
+              <span className="text-gray-400">
                 Total <span className="text-gray-200 font-mono font-semibold ml-1">{packetCapture.total_packets.toLocaleString()}</span> packets
               </span>
-              <span className="text-gray-500">
+              <span className="text-gray-400">
                 Confidence <span className={`font-mono font-semibold ml-1 ${
                   packetCapture.capture_confidence === 'high' ? 'text-green-400' :
                   packetCapture.capture_confidence === 'medium' ? 'text-yellow-400' : 'text-red-400'
                 }`}>{packetCapture.capture_confidence}</span>
               </span>
-              <span className="text-gray-500">
+              <span className="text-gray-400">
                 Mode <span className="text-gray-400 font-mono ml-1">{packetCapture.mode}</span>
               </span>
             </div>
@@ -782,10 +782,10 @@ export function JobDetailPage() {
             {/* Transport breakdown */}
             {packetCapture.transport_shares.length > 0 && (
               <div>
-                <div className="text-xs text-gray-500 tracking-wider mb-2 font-medium">transport breakdown</div>
+                <div className="text-xs text-gray-400 tracking-wider mb-2 font-medium">transport breakdown</div>
                 <table className="w-full text-xs">
                   <thead>
-                    <tr className="border-b border-gray-800 text-gray-500">
+                    <tr className="border-b border-gray-800 text-gray-400">
                       <th className="px-3 py-1.5 text-left">Protocol</th>
                       <th className="px-3 py-1.5 text-right">Packets</th>
                       <th className="px-3 py-1.5 text-right">% of Total</th>
@@ -813,16 +813,16 @@ export function JobDetailPage() {
             {/* TCP Health Indicators */}
             {(packetCapture.retransmissions > 0 || packetCapture.duplicate_acks > 0 || packetCapture.resets > 0) && (
               <div>
-                <div className="text-xs text-gray-500 tracking-wider mb-2 font-medium">TCP health</div>
+                <div className="text-xs text-gray-400 tracking-wider mb-2 font-medium">TCP health</div>
                 <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs">
-                  <span className="text-gray-500">
-                    Retransmissions <span className={`font-mono font-semibold ml-1 ${packetCapture.retransmissions > 0 ? 'text-yellow-400' : 'text-gray-600'}`}>{packetCapture.retransmissions.toLocaleString()}</span>
+                  <span className="text-gray-400">
+                    Retransmissions <span className={`font-mono font-semibold ml-1 ${packetCapture.retransmissions > 0 ? 'text-yellow-400' : 'text-gray-500'}`}>{packetCapture.retransmissions.toLocaleString()}</span>
                   </span>
-                  <span className="text-gray-500">
-                    Duplicate ACKs <span className={`font-mono font-semibold ml-1 ${packetCapture.duplicate_acks > 0 ? 'text-yellow-400' : 'text-gray-600'}`}>{packetCapture.duplicate_acks.toLocaleString()}</span>
+                  <span className="text-gray-400">
+                    Duplicate ACKs <span className={`font-mono font-semibold ml-1 ${packetCapture.duplicate_acks > 0 ? 'text-yellow-400' : 'text-gray-500'}`}>{packetCapture.duplicate_acks.toLocaleString()}</span>
                   </span>
-                  <span className="text-gray-500">
-                    Resets <span className={`font-mono font-semibold ml-1 ${packetCapture.resets > 0 ? 'text-red-400' : 'text-gray-600'}`}>{packetCapture.resets.toLocaleString()}</span>
+                  <span className="text-gray-400">
+                    Resets <span className={`font-mono font-semibold ml-1 ${packetCapture.resets > 0 ? 'text-red-400' : 'text-gray-500'}`}>{packetCapture.resets.toLocaleString()}</span>
                   </span>
                 </div>
               </div>
@@ -831,17 +831,17 @@ export function JobDetailPage() {
             {/* Target endpoint info */}
             {packetCapture.likely_target_endpoints.length > 0 && (
               <div>
-                <div className="text-xs text-gray-500 tracking-wider mb-2 font-medium">target endpoints</div>
+                <div className="text-xs text-gray-400 tracking-wider mb-2 font-medium">target endpoints</div>
                 <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
-                  <span className="text-gray-500">
+                  <span className="text-gray-400">
                     Endpoints <span className="text-gray-300 font-mono ml-1">{packetCapture.likely_target_endpoints.join(', ')}</span>
                   </span>
-                  <span className="text-gray-500">
+                  <span className="text-gray-400">
                     Target packets <span className="text-gray-200 font-mono font-semibold ml-1">{packetCapture.likely_target_packets.toLocaleString()}</span>
-                    <span className="text-gray-600 ml-1">({packetCapture.likely_target_pct_of_total.toFixed(1)}%)</span>
+                    <span className="text-gray-500 ml-1">({packetCapture.likely_target_pct_of_total.toFixed(1)}%)</span>
                   </span>
                   {packetCapture.dominant_trace_port != null && (
-                    <span className="text-gray-500">
+                    <span className="text-gray-400">
                       Dominant port <span className="text-gray-300 font-mono ml-1">{packetCapture.dominant_trace_port}</span>
                     </span>
                   )}
@@ -853,10 +853,10 @@ export function JobDetailPage() {
             <div className="grid grid-cols-2 gap-4">
               {packetCapture.top_endpoints.length > 0 && (
                 <div>
-                  <div className="text-xs text-gray-500 tracking-wider mb-2 font-medium">top endpoints</div>
+                  <div className="text-xs text-gray-400 tracking-wider mb-2 font-medium">top endpoints</div>
                   <table className="w-full text-xs">
                     <thead>
-                      <tr className="border-b border-gray-800 text-gray-500">
+                      <tr className="border-b border-gray-800 text-gray-400">
                         <th className="px-2 py-1 text-left">Endpoint</th>
                         <th className="px-2 py-1 text-right">Packets</th>
                       </tr>
@@ -874,10 +874,10 @@ export function JobDetailPage() {
               )}
               {packetCapture.top_ports.length > 0 && (
                 <div>
-                  <div className="text-xs text-gray-500 tracking-wider mb-2 font-medium">top ports</div>
+                  <div className="text-xs text-gray-400 tracking-wider mb-2 font-medium">top ports</div>
                   <table className="w-full text-xs">
                     <thead>
-                      <tr className="border-b border-gray-800 text-gray-500">
+                      <tr className="border-b border-gray-800 text-gray-400">
                         <th className="px-2 py-1 text-left">Port</th>
                         <th className="px-2 py-1 text-right">Packets</th>
                       </tr>
@@ -926,7 +926,7 @@ export function JobDetailPage() {
       {/* Tester Log */}
       {jobLogs.length > 0 && (
         <div className="table-container mb-6">
-          <h3 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
+          <h3 className="px-4 py-2.5 text-xs text-gray-400 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
             runner log
           </h3>
           <div ref={testerLogRef} className="h-[400px] overflow-y-auto p-3 font-mono text-xs leading-5">
@@ -951,11 +951,11 @@ export function JobDetailPage() {
       {/* Browser Results */}
       {attempts.some(a => a.browser) && (
         <div className="table-container mb-6">
-          <h3 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">browser results</h3>
+          <h3 className="px-4 py-2.5 text-xs text-gray-400 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">browser results</h3>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="border-b border-gray-800 text-gray-500">
+                <tr className="border-b border-gray-800 text-gray-400">
                   <th className="px-3 py-2 text-left">#</th>
                   <th className="px-3 py-2 text-left">Protocol</th>
                   <th className="px-3 py-2 text-right">TTFB</th>
@@ -969,7 +969,7 @@ export function JobDetailPage() {
               <tbody>
                 {attempts.filter(a => a.browser).map(a => (
                   <tr key={a.attempt_id} className="border-b border-gray-800/30">
-                    <td className="px-3 py-2 text-gray-500 font-mono">{a.sequence_num}</td>
+                    <td className="px-3 py-2 text-gray-400 font-mono">{a.sequence_num}</td>
                     <td className="px-3 py-2 text-gray-300">{a.protocol}</td>
                     <td className="px-3 py-2 text-gray-200 text-right font-mono">{formatMs(a.browser?.ttfb_ms)}</td>
                     <td className="px-3 py-2 text-gray-400 text-right font-mono">{formatMs(a.browser?.dom_content_loaded_ms)}</td>
@@ -988,11 +988,11 @@ export function JobDetailPage() {
       {/* Page Load Results */}
       {attempts.some(a => a.page_load) && (
         <div className="table-container mb-6">
-          <h3 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">page load results</h3>
+          <h3 className="px-4 py-2.5 text-xs text-gray-400 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">page load results</h3>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="border-b border-gray-800 text-gray-500">
+                <tr className="border-b border-gray-800 text-gray-400">
                   <th className="px-3 py-2 text-left">#</th>
                   <th className="px-3 py-2 text-left">Protocol</th>
                   <th className="px-3 py-2 text-right">TTFB</th>
@@ -1006,7 +1006,7 @@ export function JobDetailPage() {
               <tbody>
                 {attempts.filter(a => a.page_load).map(a => (
                   <tr key={a.attempt_id} className="border-b border-gray-800/30">
-                    <td className="px-3 py-2 text-gray-500 font-mono">{a.sequence_num}</td>
+                    <td className="px-3 py-2 text-gray-400 font-mono">{a.sequence_num}</td>
                     <td className="px-3 py-2 text-gray-300">{a.protocol}</td>
                     <td className="px-3 py-2 text-gray-200 text-right font-mono">{formatMs(a.page_load?.ttfb_ms)}</td>
                     <td className="px-3 py-2 text-gray-100 text-right font-mono font-bold">{formatMs(a.page_load?.total_ms)}</td>
@@ -1025,11 +1025,11 @@ export function JobDetailPage() {
       {/* TLS Details */}
       {attempts.some(a => a.tls) && (
         <div className="table-container mb-6">
-          <h3 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">TLS details</h3>
+          <h3 className="px-4 py-2.5 text-xs text-gray-400 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">TLS details</h3>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="border-b border-gray-800 text-gray-500">
+                <tr className="border-b border-gray-800 text-gray-400">
                   <th className="px-3 py-2 text-left">#</th>
                   <th className="px-3 py-2 text-left">Protocol</th>
                   <th className="px-3 py-2 text-left">Version</th>
@@ -1040,7 +1040,7 @@ export function JobDetailPage() {
               <tbody>
                 {attempts.filter(a => a.tls).map(a => (
                   <tr key={a.attempt_id} className="border-b border-gray-800/30">
-                    <td className="px-3 py-2 text-gray-500 font-mono">{a.sequence_num}</td>
+                    <td className="px-3 py-2 text-gray-400 font-mono">{a.sequence_num}</td>
                     <td className="px-3 py-2 text-gray-300">{a.protocol}</td>
                     <td className="px-3 py-2 text-gray-400">{a.tls?.protocol_version}</td>
                     <td className="px-3 py-2 text-gray-400 font-mono text-[11px]">{a.tls?.cipher_suite}</td>
@@ -1067,9 +1067,9 @@ export function JobDetailPage() {
           <div className="p-3 space-y-2">
             {attempts.filter(a => a.error).map(a => (
               <div key={a.attempt_id} className="text-xs">
-                <span className="text-gray-500 font-mono">#{a.sequence_num} [{a.protocol}]</span>
+                <span className="text-gray-400 font-mono">#{a.sequence_num} [{a.protocol}]</span>
                 <span className="text-red-400 ml-2">{a.error?.message}</span>
-                {a.error?.detail && <span className="text-gray-600 ml-2">{a.error.detail}</span>}
+                {a.error?.detail && <span className="text-gray-500 ml-2">{a.error.detail}</span>}
               </div>
             ))}
           </div>
@@ -1078,37 +1078,37 @@ export function JobDetailPage() {
 
       {/* Job metadata */}
       <div className="section-divider">
-        <h3 className="text-xs text-gray-500 tracking-wider mb-3 font-medium">test details</h3>
+        <h3 className="text-xs text-gray-400 tracking-wider mb-3 font-medium">test details</h3>
         <div className="grid grid-cols-2 gap-2 text-xs">
-          <div className="text-gray-500">Test ID</div>
+          <div className="text-gray-400">Test ID</div>
           <div className="text-gray-300 font-mono">{job.job_id}</div>
-          <div className="text-gray-500">Status</div>
+          <div className="text-gray-400">Status</div>
           <div><StatusBadge status={job.status} /></div>
-          <div className="text-gray-500">Target</div>
+          <div className="text-gray-400">Target</div>
           <div className="text-gray-300 break-all">{jobTarget(job)}</div>
-          <div className="text-gray-500">Type</div>
+          <div className="text-gray-400">Type</div>
           <div className="text-gray-300">{jobLabel(job)}</div>
-          <div className="text-gray-500">{isTlsProfileJob(job) ? 'Profile' : 'Modes'}</div>
+          <div className="text-gray-400">{isTlsProfileJob(job) ? 'Profile' : 'Modes'}</div>
           <div className="text-gray-300">{jobSummary(job)}</div>
-          <div className="text-gray-500">Runs</div>
+          <div className="text-gray-400">Runs</div>
           <div className="text-gray-300">{job.config?.runs}</div>
-          <div className="text-gray-500">Created</div>
+          <div className="text-gray-400">Created</div>
           <div className="text-gray-300">{new Date(job.created_at).toLocaleString()}</div>
           {job.started_at && (
             <>
-              <div className="text-gray-500">Started</div>
+              <div className="text-gray-400">Started</div>
               <div className="text-gray-300">{new Date(job.started_at).toLocaleString()}</div>
             </>
           )}
           {job.finished_at && (
             <>
-              <div className="text-gray-500">Finished</div>
+              <div className="text-gray-400">Finished</div>
               <div className="text-gray-300">{new Date(job.finished_at).toLocaleString()}</div>
             </>
           )}
           {job.run_id && (
             <>
-              <div className="text-gray-500">Run ID</div>
+              <div className="text-gray-400">Run ID</div>
               <div className="font-mono">
                 <Link to={`/projects/${projectId}/runs/${job.run_id}`} className="text-cyan-400 hover:underline">
                   {job.run_id}
@@ -1118,7 +1118,7 @@ export function JobDetailPage() {
           )}
           {job.tls_profile_run_id && (
             <>
-              <div className="text-gray-500">TLS Profile Run ID</div>
+              <div className="text-gray-400">TLS Profile Run ID</div>
               <div className="font-mono">
                 <Link to={`/projects/${projectId}/tls-profiles/${job.tls_profile_run_id}`} className="text-cyan-400 hover:underline">
                   {job.tls_profile_run_id}
@@ -1128,13 +1128,13 @@ export function JobDetailPage() {
           )}
           {job.agent_id && (
             <>
-              <div className="text-gray-500">Agent ID</div>
+              <div className="text-gray-400">Agent ID</div>
               <div className="text-gray-300 font-mono">{job.agent_id.slice(0, 12)}</div>
             </>
           )}
           {job.error_message && (
             <>
-              <div className="text-gray-500">Error</div>
+              <div className="text-gray-400">Error</div>
               <div className="text-red-400">{stripAnsi(job.error_message)}</div>
             </>
           )}

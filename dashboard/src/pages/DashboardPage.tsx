@@ -130,7 +130,7 @@ export function DashboardPage() {
               label="Export report"
             />
           )}
-          <span className="text-xs text-gray-600">v{versionInfo?.dashboard_version}</span>
+          <span className="text-xs text-gray-500">v{versionInfo?.dashboard_version}</span>
         </div>
       </div>
 
@@ -138,30 +138,30 @@ export function DashboardPage() {
       {!allKpisZero && (
         <div className="flex flex-wrap gap-x-8 gap-y-3 mb-8 pb-6 border-b border-gray-800/50 items-end">
           <div>
-            <div className={`text-3xl font-bold tabular-nums ${onlineAgents.length > 0 ? 'text-green-400' : 'text-gray-600'}`}>
+            <div className={`text-3xl font-bold tabular-nums ${onlineAgents.length > 0 ? 'text-green-400' : 'text-gray-500'}`}>
               {onlineAgents.length}
             </div>
-            <div className="text-xs text-gray-500" title="Agents that execute network tests from remote locations">runners online</div>
+            <div className="text-xs text-gray-400" title="Agents that execute network tests from remote locations">runners online</div>
           </div>
           <div>
-            <div className={`text-xl font-semibold tabular-nums ${activeCount > 0 ? 'text-cyan-400' : 'text-gray-600'}`}>
+            <div className={`text-xl font-semibold tabular-nums ${activeCount > 0 ? 'text-cyan-400' : 'text-gray-500'}`}>
               {activeCount}
             </div>
-            <div className="text-xs text-gray-600">running</div>
+            <div className="text-xs text-gray-500">running</div>
           </div>
           {showRuns24h && (
             <div>
               <div className="text-xl font-semibold tabular-nums text-gray-300">
                 {summary?.runs_24h ?? 0}
               </div>
-              <div className="text-xs text-gray-600">runs · last 24h</div>
+              <div className="text-xs text-gray-500">runs · last 24h</div>
             </div>
           )}
           <div>
             <div className="text-xl font-semibold tabular-nums text-gray-300">
               {completedDeps.length}
             </div>
-            <div className="text-xs text-gray-600">targets</div>
+            <div className="text-xs text-gray-500">targets</div>
           </div>
         </div>
       )}
@@ -192,12 +192,12 @@ export function DashboardPage() {
                 to={item.to}
                 className="flex items-center gap-4 p-3 rounded border border-gray-800 hover:border-gray-700 transition-colors group"
               >
-                <span className="w-6 h-6 rounded-full border border-gray-700 flex items-center justify-center text-xs text-gray-600 group-hover:border-cyan-500/50 group-hover:text-cyan-400 transition-colors flex-shrink-0">
+                <span className="w-6 h-6 rounded-full border border-gray-700 flex items-center justify-center text-xs text-gray-500 group-hover:border-cyan-500/50 group-hover:text-cyan-400 transition-colors flex-shrink-0">
                   {item.step}
                 </span>
                 <div className="min-w-0">
                   <p className="text-sm text-gray-300 group-hover:text-gray-100 transition-colors">{item.title}</p>
-                  <p className="text-xs text-gray-600">{item.desc}</p>
+                  <p className="text-xs text-gray-500">{item.desc}</p>
                 </div>
               </Link>
             ))}
@@ -208,7 +208,7 @@ export function DashboardPage() {
         <div className="max-w-2xl space-y-6">
           {/* Inline summary line */}
           {allKpisZero && (
-            <p className="text-sm text-gray-500">
+            <p className="text-sm text-gray-400">
               {onlineAgents.length} runners online · {completedDeps.length} targets · {nonQueuedRuns.length} runs
             </p>
           )}
@@ -229,12 +229,12 @@ export function DashboardPage() {
                   <span className={`w-6 h-6 rounded-full border flex items-center justify-center text-xs flex-shrink-0 ${
                     item.done
                       ? 'border-green-500/50 text-green-400'
-                      : 'border-gray-700 text-gray-600 group-hover:border-cyan-500/50 group-hover:text-cyan-400'
+                      : 'border-gray-700 text-gray-500 group-hover:border-cyan-500/50 group-hover:text-cyan-400'
                   } transition-colors`}>
                     {item.done ? '\u2713' : item.step}
                   </span>
                   <p className="text-sm text-gray-300 group-hover:text-gray-100 transition-colors">{item.title}</p>
-                  <span className="ml-auto text-gray-700 group-hover:text-gray-500 transition-colors">&rarr;</span>
+                  <span className="ml-auto text-gray-700 group-hover:text-gray-400 transition-colors">&rarr;</span>
                 </Link>
               ))}
             </div>
@@ -266,7 +266,7 @@ export function DashboardPage() {
             <div>
               <div className="flex items-center gap-2 mb-3">
                 <span className="w-1.5 h-1.5 rounded-full bg-green-400 motion-safe:animate-pulse" />
-                <h3 className="text-xs text-gray-500 tracking-wider font-medium">live feed</h3>
+                <h3 className="text-xs text-gray-400 tracking-wider font-medium">live feed</h3>
               </div>
               <div className="border border-gray-800/50 rounded max-h-64 overflow-y-auto">
                 {recentEvents.map((event, i) => (
@@ -275,7 +275,7 @@ export function DashboardPage() {
                     className="px-3 py-2 border-b border-gray-800/30 text-xs flex items-center gap-2"
                   >
                     <StatusBadge status={event.status || event.type} />
-                    <span className="text-gray-500 font-mono">
+                    <span className="text-gray-400 font-mono">
                       {event.job_id?.slice(0, 8) || event.agent_id?.slice(0, 8)}
                     </span>
                   </div>
@@ -298,13 +298,13 @@ function InfraSection({ agents, endpoints, projectId }: {
   return (
     <div>
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-xs text-gray-500 tracking-wider font-medium">infrastructure</h3>
-        <Link to={`/projects/${projectId}/vms`} className="text-xs text-gray-600 hover:text-gray-400 transition-colors">View all &rarr;</Link>
+        <h3 className="text-xs text-gray-400 tracking-wider font-medium">infrastructure</h3>
+        <Link to={`/projects/${projectId}/vms`} className="text-xs text-gray-500 hover:text-gray-400 transition-colors">View all &rarr;</Link>
       </div>
 
       {endpoints.length === 0 && agents.length === 0 ? (
         <div className="border border-gray-800 rounded p-6 text-center">
-          <p className="text-gray-600 text-sm">No runners or targets deployed yet</p>
+          <p className="text-gray-500 text-sm">No runners or targets deployed yet</p>
           <Link to={`/projects/${projectId}/vms`} className="text-xs text-cyan-400 mt-1 inline-block">Deploy your first target</Link>
         </div>
       ) : (
@@ -328,7 +328,7 @@ function InfraSection({ agents, endpoints, projectId }: {
                       <div className="text-sm text-gray-300 truncate">{host}</div>
                       <div className="text-xs text-gray-700 truncate" title={ep.host}>{ep.host}</div>
                     </div>
-                    <span className="text-xs font-mono text-gray-600">
+                    <span className="text-xs font-mono text-gray-500">
                       {ep.reachable ? `v${ep.version}` : 'offline'}
                     </span>
                   </div>
@@ -366,7 +366,7 @@ function InfraSection({ agents, endpoints, projectId }: {
                       />
                       <div className="min-w-0 flex-1">
                         <div className="text-sm text-gray-200 truncate">{a.name}</div>
-                        <div className="text-xs text-gray-600">
+                        <div className="text-xs text-gray-500">
                           {a.provider && `${a.provider} `}
                           {a.region && a.region}
                         </div>
@@ -378,7 +378,7 @@ function InfraSection({ agents, endpoints, projectId }: {
                 {hidden > 0 && (
                   <Link
                     to={`/projects/${projectId}/vms`}
-                    className="block text-xs text-gray-500 hover:text-cyan-400 mt-2 text-center"
+                    className="block text-xs text-gray-400 hover:text-cyan-400 mt-2 text-center"
                   >
                     + {hidden} more -- view all runners &rarr;
                   </Link>
@@ -397,19 +397,19 @@ function RecentRunsSection({ runs, projectId }: { runs: TestRun[]; projectId: st
   return (
     <div>
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-xs text-gray-500 tracking-wider font-medium">recent runs</h3>
-        <Link to={`/projects/${projectId}/runs`} className="text-xs text-gray-600 hover:text-gray-400 transition-colors">View all &rarr;</Link>
+        <h3 className="text-xs text-gray-400 tracking-wider font-medium">recent runs</h3>
+        <Link to={`/projects/${projectId}/runs`} className="text-xs text-gray-500 hover:text-gray-400 transition-colors">View all &rarr;</Link>
       </div>
       {runs.length === 0 ? (
         <div className="border border-gray-800 rounded p-6 text-center">
-          <p className="text-gray-600 text-sm">No completed runs yet</p>
+          <p className="text-gray-500 text-sm">No completed runs yet</p>
           <Link to={`/projects/${projectId}/tests/new`} className="text-xs text-cyan-400 mt-1 inline-block">Run your first test</Link>
         </div>
       ) : (
         <div className="table-container">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
+              <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
                 <th className="px-3 py-2 text-left font-medium">ID</th>
                 <th className="px-3 py-2 text-left font-medium">Status</th>
                 <th className="px-3 py-2 text-left font-medium">Result</th>
@@ -428,7 +428,7 @@ function RecentRunsSection({ runs, projectId }: { runs: TestRun[]; projectId: st
                   <td className="px-3 py-2 text-xs">
                     <RunResult ok={run.success_count} fail={run.failure_count} />
                   </td>
-                  <td className="px-3 py-2 text-gray-500 text-xs font-mono">
+                  <td className="px-3 py-2 text-gray-400 text-xs font-mono">
                     {run.started_at && run.finished_at
                       ? `${((new Date(run.finished_at).getTime() - new Date(run.started_at).getTime()) / 1000).toFixed(1)}s`
                       : run.status === 'running' ? '...' : '-'}

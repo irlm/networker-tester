@@ -99,7 +99,7 @@ export function BenchmarkRegressionsPage() {
                     >
                       {r.config_name}
                     </Link>
-                    <p className="text-gray-500 text-xs font-mono">{r.case_id}</p>
+                    <p className="text-gray-400 text-xs font-mono">{r.case_id}</p>
                   </div>
                   <span className={`text-xs px-2 py-0.5 rounded ${severityColor(r.severity)}`}>
                     {r.severity}
@@ -107,14 +107,14 @@ export function BenchmarkRegressionsPage() {
                 </div>
                 <div className="flex items-center gap-3 text-xs">
                   <span className="text-gray-400">{metricLabel(r.metric)}</span>
-                  <span className="text-gray-500">{formatValue(r.metric, r.metric_unit, r.baseline_value)}</span>
-                  <span className="text-gray-600">-&gt;</span>
+                  <span className="text-gray-400">{formatValue(r.metric, r.metric_unit, r.baseline_value)}</span>
+                  <span className="text-gray-500">-&gt;</span>
                   <span className="text-gray-200">{formatValue(r.metric, r.metric_unit, r.current_value)}</span>
                   <span className="text-red-400">
                     {formatDelta(r.metric, r.delta_percent)}
                   </span>
                 </div>
-                <p className="text-xs text-gray-600 mt-1">{timeAgo(r.detected_at)}</p>
+                <p className="text-xs text-gray-500 mt-1">{timeAgo(r.detected_at)}</p>
               </div>
             ))}
           </div>
@@ -123,7 +123,7 @@ export function BenchmarkRegressionsPage() {
           <div className="hidden md:block table-container">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
+                <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
                   <th className="px-4 py-2.5 text-left font-medium">Detected</th>
                   <th className="px-4 py-2.5 text-left font-medium">Benchmark</th>
                   <th className="px-4 py-2.5 text-left font-medium">Case</th>
@@ -142,7 +142,7 @@ export function BenchmarkRegressionsPage() {
                       r.severity === 'critical' ? 'bg-red-500/5' : ''
                     }`}
                   >
-                    <td className="px-4 py-3 text-gray-500 text-xs">{timeAgo(r.detected_at)}</td>
+                    <td className="px-4 py-3 text-gray-400 text-xs">{timeAgo(r.detected_at)}</td>
                     <td className="px-4 py-3">
                       <Link
                         to={`/projects/${projectId}/benchmark-configs/${r.config_id}/results`}
@@ -153,7 +153,7 @@ export function BenchmarkRegressionsPage() {
                     </td>
                     <td className="px-4 py-3 text-gray-400 font-mono text-xs">{r.case_id}</td>
                     <td className="px-4 py-3 text-gray-400 text-xs">{metricLabel(r.metric)}</td>
-                    <td className="px-4 py-3 text-gray-500 text-xs text-right font-mono">
+                    <td className="px-4 py-3 text-gray-400 text-xs text-right font-mono">
                       {formatValue(r.metric, r.metric_unit, r.baseline_value)}
                     </td>
                     <td className="px-4 py-3 text-gray-200 text-xs text-right font-mono">

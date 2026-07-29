@@ -48,12 +48,12 @@ export function ModeSelector({
                 onChange={() => onToggleGroup(selectableIds, allSelected)}
                 className="accent-cyan-500"
               />
-              <span className="text-xs text-gray-500 font-medium">{group.label}</span>
+              <span className="text-xs text-gray-400 font-medium">{group.label}</span>
               {someSelected && (
-                <span className="text-[11px] text-gray-600">{selectedCount}/{selectableIds.length}</span>
+                <span className="text-[11px] text-gray-500">{selectedCount}/{selectableIds.length}</span>
               )}
               {group.detail && (
-                <span className="text-gray-600 hover:text-gray-400 cursor-help ml-1 text-xs" title={group.detail}>&#9432;</span>
+                <span className="text-gray-500 hover:text-gray-400 cursor-help ml-1 text-xs" title={group.detail}>&#9432;</span>
               )}
             </label>
             <div className={`pl-5 ${group.label === 'Throughput' ? 'grid grid-cols-2 gap-x-4' : ''}`}>
@@ -66,7 +66,7 @@ export function ModeSelector({
                     title={reason ?? mode.detail}
                     className={`flex items-center gap-2 text-sm py-0.5 ${
                       disabled
-                        ? 'text-gray-600 cursor-not-allowed'
+                        ? 'text-gray-500 cursor-not-allowed'
                         : 'text-gray-300 cursor-pointer hover:text-gray-100'
                     }`}
                   >
@@ -78,7 +78,7 @@ export function ModeSelector({
                       className="accent-cyan-500"
                     />
                     <span className={disabled ? 'line-through decoration-gray-700' : ''}>{mode.name}</span>
-                    <span className="text-xs text-gray-600 ml-auto">
+                    <span className="text-xs text-gray-500 ml-auto">
                       {disabled ? 'unsupported' : mode.desc}
                     </span>
                   </label>

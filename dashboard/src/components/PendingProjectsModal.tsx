@@ -73,7 +73,7 @@ export function PendingProjectsModal({ projects: initialProjects, onComplete }: 
             <h2 id="pending-projects-title" className="text-sm font-semibold text-gray-100 tracking-tight">
               Pending Project Invitations
             </h2>
-            <p className="text-xs text-gray-500 mt-0.5">
+            <p className="text-xs text-gray-400 mt-0.5">
               {items.length === 0
                 ? 'All invitations handled.'
                 : `${items.length} invitation${items.length !== 1 ? 's' : ''} awaiting your response`}
@@ -84,7 +84,7 @@ export function PendingProjectsModal({ projects: initialProjects, onComplete }: 
         {/* Invitation list */}
         <div className="px-5 py-3 max-h-72 overflow-y-auto">
           {items.length === 0 ? (
-            <p className="text-xs text-gray-500 py-4 text-center">No more pending invitations.</p>
+            <p className="text-xs text-gray-400 py-4 text-center">No more pending invitations.</p>
           ) : (
             <ul className="space-y-2">
               {items.map(p => {
@@ -102,7 +102,7 @@ export function PendingProjectsModal({ projects: initialProjects, onComplete }: 
                           {roleBadge(p.role)}
                         </div>
                         {p.invited_by_email && (
-                          <p className="text-xs text-gray-500 truncate">
+                          <p className="text-xs text-gray-400 truncate">
                             invited by {p.invited_by_email}
                           </p>
                         )}
@@ -132,7 +132,7 @@ export function PendingProjectsModal({ projects: initialProjects, onComplete }: 
                       <button
                         disabled={isBusy}
                         onClick={() => handleIgnore(p.project_id)}
-                        className="flex-1 text-xs py-1.5 rounded bg-transparent border border-gray-700 text-gray-500 hover:text-gray-400 hover:border-gray-600 transition-colors disabled:opacity-40"
+                        className="flex-1 text-xs py-1.5 rounded bg-transparent border border-gray-700 text-gray-400 hover:text-gray-400 hover:border-gray-600 transition-colors disabled:opacity-40"
                       >
                         Ignore
                       </button>

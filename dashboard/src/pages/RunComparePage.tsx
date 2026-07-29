@@ -46,7 +46,7 @@ export function RunComparePage() {
     return (
       <div className="p-4 md:p-6">
         <Breadcrumb items={[{ label: 'Runs', to: `/projects/${projectId}/runs` }, { label: 'Compare' }]} />
-        <div className="text-gray-500 motion-safe:animate-pulse text-sm">Loading comparison...</div>
+        <div className="text-gray-400 motion-safe:animate-pulse text-sm">Loading comparison...</div>
       </div>
     );
   }
@@ -69,17 +69,17 @@ export function RunComparePage() {
     <div className="p-4 md:p-6">
       <Breadcrumb items={[{ label: 'Runs', to: `/projects/${projectId}/runs` }, { label: 'Compare' }]} />
       <h2 className="text-xl font-bold text-gray-100 mb-2">Run Comparison</h2>
-      <p className="text-xs text-gray-500 mb-6">{runIds.length} runs compared</p>
+      <p className="text-xs text-gray-400 mb-6">{runIds.length} runs compared</p>
 
       {report.cases.length === 0 ? (
         <div className="border border-gray-800 rounded p-8 text-center">
-          <p className="text-gray-500 text-sm">No comparable cases found across these runs.</p>
+          <p className="text-gray-400 text-sm">No comparable cases found across these runs.</p>
         </div>
       ) : (
         <div className="table-container">
           <table className="w-full text-xs">
             <thead>
-              <tr className="border-b border-gray-800/50 text-gray-500 bg-[var(--bg-surface)]">
+              <tr className="border-b border-gray-800/50 text-gray-400 bg-[var(--bg-surface)]">
                 <th className="px-4 py-2.5 text-left font-medium">Case</th>
                 <th className="px-4 py-2.5 text-left font-medium">Protocol</th>
                 <th className="px-4 py-2.5 text-left font-medium">Metric</th>
@@ -102,7 +102,7 @@ export function RunComparePage() {
                   </td>
                   {c.candidates?.map((cand, i) => {
                     const delta = cand.percent_delta;
-                    const color = delta == null ? 'text-gray-600' :
+                    const color = delta == null ? 'text-gray-500' :
                       (c.higher_is_better ? delta > 0 : delta < 0) ? 'text-green-400' : 'text-red-400';
                     return (
                       <td key={i} className={`px-4 py-2 text-right font-mono ${color}`}>

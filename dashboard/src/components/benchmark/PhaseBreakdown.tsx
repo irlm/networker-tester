@@ -141,7 +141,7 @@ interface DeltaInfo {
 
 function DeltaBadge({ delta }: { delta: DeltaInfo }) {
   if (delta.value === null) {
-    return <span style={{ color: '#6b7280' /* gray-500 */ }}>—</span>;
+    return <span style={{ color: '#9ca3af' /* gray-500 */ }}>—</span>;
   }
   const v = delta.value;
   let color = '#22c55e'; // green — faster
@@ -237,7 +237,7 @@ export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps
 
   if (modes.length === 0) {
     return (
-      <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded p-3 text-gray-500 text-xs font-mono">
+      <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded p-3 text-gray-400 text-xs font-mono">
         No phase data available
       </div>
     );
@@ -278,7 +278,7 @@ export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps
           <div key={modeData.mode} className="flex items-center gap-3">
             {/* Mode label */}
             <div
-              className="text-gray-500 text-xs font-mono w-24 shrink-0 truncate text-right"
+              className="text-gray-400 text-xs font-mono w-24 shrink-0 truncate text-right"
               title={modeData.mode}
             >
               {modeData.mode}
@@ -306,7 +306,7 @@ export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps
               className="w-2.5 h-2.5 rounded-sm shrink-0"
               style={{ backgroundColor: p.color }}
             />
-            <span className="text-gray-500 text-xs font-mono">{p.label}</span>
+            <span className="text-gray-400 text-xs font-mono">{p.label}</span>
           </div>
         ))}
       </div>
@@ -315,7 +315,7 @@ export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps
       <div className="overflow-x-auto">
         <table className="w-full text-xs font-mono border-collapse">
           <thead>
-            <tr className="text-gray-500 border-b border-[var(--border-default)]">
+            <tr className="text-gray-400 border-b border-[var(--border-default)]">
               <th className="text-left py-1 pr-2 font-normal">Mode</th>
               <th className="text-right py-1 px-1 font-normal">DNS</th>
               <th className="text-right py-1 px-1 font-normal">TCP</th>
@@ -386,7 +386,7 @@ export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps
                   {/* Delta row */}
                   {deltas && (
                     <tr className="border-b border-[var(--border-default)] bg-[var(--bg-base)]">
-                      <td className="py-0.5 pr-2 text-gray-600 text-[10px]">Δ</td>
+                      <td className="py-0.5 pr-2 text-gray-500 text-[10px]">Δ</td>
                       <td className="text-right py-0.5 px-1">
                         <DeltaBadge delta={deltas['dns_ms']} />
                       </td>

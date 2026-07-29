@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.106] — 2026-07-29
+
+### Fixed
+- **Muted dashboard text failed WCAG AA contrast, system-wide** — the muted
+  text role (`text-gray-500`, #6b7280, 653 uses) measured 4.07:1 on the
+  #0a0b0f base (below the 4.5:1 AA floor for the 12px it's mostly set at) and
+  the faint role (`text-gray-600`, #4b5563, 306 uses) just 2.6:1 for real
+  metadata. Both roles lifted one step (gray-500→gray-400 ≈7:1,
+  gray-600→gray-500), including SVG chart tick/label fills; placeholders and
+  disabled states deliberately stay dim (WCAG-exempt); hierarchy preserved
+  (muted remains clearly quieter than primary content). Verified visually on
+  live prod pages (side-by-side before/after) before shipping.
+
+### Added
+- **PRODUCT.md + DESIGN.md + `.impeccable/design.json`** — durable product and
+  design-system context ("The Signal Terminal"): machine-readable tokens
+  (colors/typography/spacing/components), named rules (Logo-Only Violet, One
+  Voice, Status Semantics, Data-First, Borders-Not-Shadows, and the new **AA
+  Floor Rule** that pins this contrast fix against regression).
+
+---
+
 ## [0.28.105] — 2026-07-29
 
 ### Fixed

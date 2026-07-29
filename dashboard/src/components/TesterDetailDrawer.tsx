@@ -195,14 +195,14 @@ export function TesterDetailDrawer({
               <h3 id="tester-detail-title" className="text-lg font-bold text-gray-100">
                 {tester.name}
               </h3>
-              <p className="text-xs text-gray-500 font-mono">
+              <p className="text-xs text-gray-400 font-mono">
                 {tester.cloud} / {tester.region} · {tester.tester_id.slice(0, 8)}
               </p>
             </div>
             <button
               type="button"
               onClick={onClose}
-              className="text-gray-500 hover:text-gray-300 text-sm"
+              className="text-gray-400 hover:text-gray-300 text-sm"
               aria-label="Close"
             >
               &#x2715;
@@ -283,7 +283,7 @@ export function TesterDetailDrawer({
 
           {/* ── Status ─────────────────────────────────────────────────── */}
           <section>
-            <h4 className="text-xs uppercase tracking-wide text-gray-500 mb-2">Status</h4>
+            <h4 className="text-xs uppercase tracking-wide text-gray-400 mb-2">Status</h4>
             <div className="flex items-center gap-2">
               <StatusBadge
                 status={stateBadgeStatus(tester.power_state, tester.allocation)}
@@ -296,7 +296,7 @@ export function TesterDetailDrawer({
               )}
             </div>
             {tester.status_message && !isError && (
-              <p className="text-xs text-gray-500 mt-2 font-mono">
+              <p className="text-xs text-gray-400 mt-2 font-mono">
                 {tester.status_message}
               </p>
             )}
@@ -304,42 +304,42 @@ export function TesterDetailDrawer({
 
           {/* ── Identity ───────────────────────────────────────────────── */}
           <section>
-            <h4 className="text-xs uppercase tracking-wide text-gray-500 mb-2">Identity</h4>
+            <h4 className="text-xs uppercase tracking-wide text-gray-400 mb-2">Identity</h4>
             <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-              <dt className="text-gray-500">Cloud</dt>
+              <dt className="text-gray-400">Cloud</dt>
               <dd className="text-gray-300 font-mono">{tester.cloud}</dd>
-              <dt className="text-gray-500">Region</dt>
+              <dt className="text-gray-400">Region</dt>
               <dd className="text-gray-300 font-mono">{tester.region}</dd>
-              <dt className="text-gray-500">VM size</dt>
+              <dt className="text-gray-400">VM size</dt>
               <dd className="text-gray-300 font-mono">{tester.vm_size}</dd>
-              <dt className="text-gray-500">VM name</dt>
+              <dt className="text-gray-400">VM name</dt>
               <dd className="text-gray-300 font-mono">{tester.vm_name ?? '—'}</dd>
-              <dt className="text-gray-500">Public IP</dt>
+              <dt className="text-gray-400">Public IP</dt>
               <dd className="text-gray-300 font-mono">{tester.public_ip ?? '—'}</dd>
-              <dt className="text-gray-500">SSH user</dt>
+              <dt className="text-gray-400">SSH user</dt>
               <dd className="text-gray-300 font-mono">{tester.ssh_user}</dd>
-              <dt className="text-gray-500">Created by</dt>
+              <dt className="text-gray-400">Created by</dt>
               <dd className="text-gray-300 font-mono">{tester.created_by}</dd>
-              <dt className="text-gray-500">Created at</dt>
+              <dt className="text-gray-400">Created at</dt>
               <dd className="text-gray-300 font-mono">{formatDate(tester.created_at)}</dd>
             </dl>
           </section>
 
           {/* ── Version ────────────────────────────────────────────────── */}
           <section>
-            <h4 className="text-xs uppercase tracking-wide text-gray-500 mb-2">Version</h4>
+            <h4 className="text-xs uppercase tracking-wide text-gray-400 mb-2">Version</h4>
             <div className="text-xs space-y-1">
               <div className="flex items-center gap-2">
-                <span className="text-gray-500">Installed:</span>
+                <span className="text-gray-400">Installed:</span>
                 <span className="text-gray-300 font-mono">{installerVersion}</span>
                 {tester.last_installed_at && (
-                  <span className="text-gray-500">
+                  <span className="text-gray-400">
                     · {formatDate(tester.last_installed_at)}
                   </span>
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-gray-500">Latest known:</span>
+                <span className="text-gray-400">Latest known:</span>
                 <span className="text-gray-300 font-mono">{latestVersion ?? '—'}</span>
                 {updateAvailable && (
                   <span className="px-1.5 py-0.5 text-[10px] rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
@@ -360,26 +360,26 @@ export function TesterDetailDrawer({
 
           {/* ── Cost ───────────────────────────────────────────────────── */}
           <section>
-            <h4 className="text-xs uppercase tracking-wide text-gray-500 mb-2">
+            <h4 className="text-xs uppercase tracking-wide text-gray-400 mb-2">
               Cost estimate
             </h4>
             {costError && (
               <p className="text-xs text-red-400">{costError}</p>
             )}
             {!costError && !costEstimate && (
-              <p className="text-xs text-gray-500">Loading…</p>
+              <p className="text-xs text-gray-400">Loading…</p>
             )}
             {costEstimate && (
               <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-                <dt className="text-gray-500">Hourly</dt>
+                <dt className="text-gray-400">Hourly</dt>
                 <dd className="text-gray-300 font-mono">
                   ${costEstimate.hourly_usd.toFixed(3)}
                 </dd>
-                <dt className="text-gray-500">Monthly (always-on)</dt>
+                <dt className="text-gray-400">Monthly (always-on)</dt>
                 <dd className="text-gray-300 font-mono">
                   ${costEstimate.monthly_always_on_usd.toFixed(2)}
                 </dd>
-                <dt className="text-gray-500">Monthly (with schedule)</dt>
+                <dt className="text-gray-400">Monthly (with schedule)</dt>
                 <dd className="text-cyan-400 font-mono">
                   ${costEstimate.monthly_with_schedule_usd.toFixed(2)}
                 </dd>
@@ -389,40 +389,40 @@ export function TesterDetailDrawer({
 
           {/* ── Usage ──────────────────────────────────────────────────── */}
           <section>
-            <h4 className="text-xs uppercase tracking-wide text-gray-500 mb-2">Usage</h4>
+            <h4 className="text-xs uppercase tracking-wide text-gray-400 mb-2">Usage</h4>
             <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-              <dt className="text-gray-500">Benchmarks run</dt>
+              <dt className="text-gray-400">Benchmarks run</dt>
               <dd className="text-gray-300 font-mono">{tester.benchmark_run_count}</dd>
-              <dt className="text-gray-500">Avg duration</dt>
+              <dt className="text-gray-400">Avg duration</dt>
               <dd className="text-gray-300 font-mono">
                 {formatDuration(tester.avg_benchmark_duration_seconds)}
               </dd>
-              <dt className="text-gray-500">Last used</dt>
+              <dt className="text-gray-400">Last used</dt>
               <dd className="text-gray-300 font-mono">{formatDate(tester.last_used_at)}</dd>
             </dl>
           </section>
 
           {/* ── Auto-shutdown ──────────────────────────────────────────── */}
           <section>
-            <h4 className="text-xs uppercase tracking-wide text-gray-500 mb-2">
+            <h4 className="text-xs uppercase tracking-wide text-gray-400 mb-2">
               Auto-shutdown
             </h4>
             <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs mb-3">
-              <dt className="text-gray-500">Enabled</dt>
+              <dt className="text-gray-400">Enabled</dt>
               <dd className="text-gray-300 font-mono">
                 {tester.auto_shutdown_enabled ? 'yes' : 'no'}
               </dd>
-              <dt className="text-gray-500">Local hour</dt>
+              <dt className="text-gray-400">Local hour</dt>
               <dd className="text-gray-300 font-mono">
                 {String(tester.auto_shutdown_local_hour).padStart(2, '0')}:00
               </dd>
-              <dt className="text-gray-500">Next shutdown</dt>
+              <dt className="text-gray-400">Next shutdown</dt>
               <dd className="text-gray-300 font-mono">
                 {formatDate(tester.next_shutdown_at)}
               </dd>
               {tester.shutdown_deferral_count > 0 && (
                 <>
-                  <dt className="text-gray-500">Deferrals</dt>
+                  <dt className="text-gray-400">Deferrals</dt>
                   <dd className="text-amber-400 font-mono">
                     {tester.shutdown_deferral_count}
                   </dd>
@@ -534,9 +534,9 @@ export function TesterDetailDrawer({
 
           {/* ── Recovery ───────────────────────────────────────────────── */}
           <section>
-            <h4 className="text-xs uppercase tracking-wide text-gray-500 mb-2">Recovery</h4>
+            <h4 className="text-xs uppercase tracking-wide text-gray-400 mb-2">Recovery</h4>
             <div className="flex items-center gap-2 mb-2">
-              <span className="text-xs text-gray-500">Auto-probe:</span>
+              <span className="text-xs text-gray-400">Auto-probe:</span>
               <span className="text-xs text-gray-300 font-mono">
                 {tester.auto_probe_enabled ? 'enabled' : 'disabled'}
               </span>
@@ -555,11 +555,11 @@ export function TesterDetailDrawer({
 
           {/* ── Agent key ──────────────────────────────────────────────── */}
           <section>
-            <h4 className="text-xs uppercase tracking-wide text-gray-500 mb-2">
+            <h4 className="text-xs uppercase tracking-wide text-gray-400 mb-2">
               Agent key
             </h4>
             <div className="flex items-center gap-2 mb-2">
-              <span className="text-xs text-gray-500">Last seen:</span>
+              <span className="text-xs text-gray-400">Last seen:</span>
               <span className="text-xs text-gray-300 font-mono">
                 {tester.api_key_last_used_at
                   ? formatDate(tester.api_key_last_used_at)
@@ -567,7 +567,7 @@ export function TesterDetailDrawer({
               </span>
             </div>
             <div className="flex items-center gap-2 mb-2">
-              <span className="text-xs text-gray-500">Key expiry:</span>
+              <span className="text-xs text-gray-400">Key expiry:</span>
               {keyExpiry.expired ? (
                 <StatusBadge status="failed" label="expired" />
               ) : tester.api_key_expires_at ? (
@@ -592,7 +592,7 @@ export function TesterDetailDrawer({
 
           {/* ── Queue ──────────────────────────────────────────────────── */}
           <section>
-            <h4 className="text-xs uppercase tracking-wide text-gray-500 mb-2">Queue</h4>
+            <h4 className="text-xs uppercase tracking-wide text-gray-400 mb-2">Queue</h4>
             {queueState?.running ? (
               <div className="border border-cyan-500/30 bg-cyan-500/5 rounded p-2 mb-2 text-xs">
                 <div className="text-cyan-400 font-mono">
@@ -600,7 +600,7 @@ export function TesterDetailDrawer({
                 </div>
               </div>
             ) : (
-              <p className="text-xs text-gray-500">No running benchmark.</p>
+              <p className="text-xs text-gray-400">No running benchmark.</p>
             )}
             {queueState && queueState.queued.length > 0 ? (
               <ol className="space-y-1 text-xs font-mono">
@@ -611,17 +611,17 @@ export function TesterDetailDrawer({
                 ))}
               </ol>
             ) : (
-              <p className="text-xs text-gray-500">No queued benchmarks.</p>
+              <p className="text-xs text-gray-400">No queued benchmarks.</p>
             )}
           </section>
 
           {/* ── Recent activity ────────────────────────────────────────── */}
           <section>
-            <h4 className="text-xs uppercase tracking-wide text-gray-500 mb-2">
+            <h4 className="text-xs uppercase tracking-wide text-gray-400 mb-2">
               Recent activity
             </h4>
             {/* Placeholder: dashboard has no service_log table (Task 11 note). */}
-            <p className="text-xs text-gray-500">Audit log coming soon.</p>
+            <p className="text-xs text-gray-400">Audit log coming soon.</p>
           </section>
 
           {/* ── Danger zone (operator+ only — viewers get read-only) ──── */}
@@ -680,7 +680,7 @@ export function TesterDetailDrawer({
               )}
             </div>
             {isRunningOrQueued && (
-              <p className="text-xs text-gray-500 mt-2">
+              <p className="text-xs text-gray-400 mt-2">
                 Disabled while benchmarks are running or queued.
               </p>
             )}

@@ -215,7 +215,7 @@ export default function CommandPalette() {
             autoComplete="off"
           />
           <span className={`text-[10px] ml-2 whitespace-nowrap font-medium transition-colors duration-100 ${
-            isInsertMode ? 'text-cyan-500/50' : detailEntry ? 'text-[#863bff]/60' : 'text-gray-600'
+            isInsertMode ? 'text-cyan-500/50' : detailEntry ? 'text-[#863bff]/60' : 'text-gray-500'
           }`}>
             -- {modeLabel} --
           </span>
@@ -226,9 +226,9 @@ export default function CommandPalette() {
           <div ref={detailRef} className="flex-1 overflow-y-auto p-4">
             <button
               onClick={goBack}
-              className="text-xs text-gray-500 hover:text-gray-300 mb-3 flex items-center gap-1"
+              className="text-xs text-gray-400 hover:text-gray-300 mb-3 flex items-center gap-1"
             >
-              <span className="text-gray-600">&larr;</span> back
+              <span className="text-gray-500">&larr;</span> back
               <span className="text-gray-700 ml-1">q</span>
             </button>
             <DocEntryView entry={detailEntry} />
@@ -238,7 +238,7 @@ export default function CommandPalette() {
           <div ref={listRef} className="flex-1 overflow-y-auto">
             {visibleResults.length === 0 && query ? (
               <div className="py-8 px-4 text-center">
-                <div className="text-gray-600 text-sm">
+                <div className="text-gray-500 text-sm">
                   No manual entry for &ldquo;{query}&rdquo;
                 </div>
                 <div className="text-gray-700 text-xs mt-1">
@@ -270,7 +270,7 @@ export default function CommandPalette() {
                       </span>
                     )}
                     <span className="text-cyan-400 flex-shrink-0">{entry.title}</span>
-                    <span className="text-gray-600 text-xs truncate">{entry.brief}</span>
+                    <span className="text-gray-500 text-xs truncate">{entry.brief}</span>
                   </button>
                 );
               })
@@ -280,7 +280,7 @@ export default function CommandPalette() {
 
         {/* Status bar */}
         {!detailEntry && (
-          <div className="flex items-center justify-between border-t border-[var(--border-default)] px-3 py-1 text-[10px] text-gray-600">
+          <div className="flex items-center justify-between border-t border-[var(--border-default)] px-3 py-1 text-[10px] text-gray-500">
             <span>
               {query && results.length !== DOC_ENTRIES.length
                 ? `${results.length} result${results.length !== 1 ? 's' : ''}`

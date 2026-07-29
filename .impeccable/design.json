@@ -1,0 +1,291 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-29T14:30:00Z",
+  "title": "Design System: LagHound",
+  "extensions": {
+    "colorMeta": {
+      "phosphor-cyan": {
+        "role": "primary",
+        "displayName": "Phosphor Cyan",
+        "canonical": "#47bfff",
+        "tonalRamp": [
+          "oklch(25% 0.09 230)",
+          "oklch(35% 0.11 230)",
+          "oklch(45% 0.12 230)",
+          "oklch(55% 0.13 230)",
+          "oklch(65% 0.13 230)",
+          "oklch(75% 0.11 230)",
+          "oklch(85% 0.08 230)",
+          "oklch(93% 0.04 230)"
+        ]
+      },
+      "interactive-cyan": {
+        "role": "primary",
+        "displayName": "Interactive Cyan (button fill)",
+        "canonical": "oklch(0.609 0.126 221.723)",
+        "tonalRamp": [
+          "oklch(25% 0.08 222)",
+          "oklch(35% 0.10 222)",
+          "oklch(45% 0.12 222)",
+          "oklch(55% 0.13 222)",
+          "oklch(61% 0.126 222)",
+          "oklch(66% 0.127 222)",
+          "oklch(80% 0.09 222)",
+          "oklch(92% 0.04 222)"
+        ]
+      },
+      "brand-violet": {
+        "role": "secondary",
+        "displayName": "Brand Violet (logo only)",
+        "canonical": "#863bff",
+        "tonalRamp": [
+          "oklch(25% 0.15 295)",
+          "oklch(35% 0.20 295)",
+          "oklch(45% 0.24 295)",
+          "oklch(55% 0.26 295)",
+          "oklch(62% 0.24 295)",
+          "oklch(72% 0.18 295)",
+          "oklch(82% 0.12 295)",
+          "oklch(92% 0.06 295)"
+        ]
+      },
+      "bg-base": {
+        "role": "neutral",
+        "displayName": "Terminal Black",
+        "canonical": "#0a0b0f",
+        "tonalRamp": [
+          "#0a0b0f",
+          "#0d0e14",
+          "#0f1015",
+          "#12131a",
+          "#1a1b25",
+          "#2a2b35",
+          "#374151",
+          "#4b5563"
+        ]
+      },
+      "text-primary": {
+        "role": "neutral",
+        "displayName": "Primary Text",
+        "canonical": "#e5e7eb",
+        "tonalRamp": [
+          "#4b5563",
+          "#6b7280",
+          "#9ca3af",
+          "#d1d5db",
+          "#e5e7eb",
+          "#f3f4f6",
+          "#f9fafb",
+          "#ffffff"
+        ]
+      },
+      "status-success": {
+        "role": "tertiary",
+        "displayName": "Success Green",
+        "canonical": "#4ade80",
+        "tonalRamp": [
+          "oklch(30% 0.10 150)",
+          "oklch(40% 0.13 150)",
+          "oklch(50% 0.15 150)",
+          "oklch(60% 0.17 150)",
+          "oklch(72% 0.18 150)",
+          "oklch(80% 0.15 150)",
+          "oklch(88% 0.10 150)",
+          "oklch(95% 0.05 150)"
+        ]
+      },
+      "status-failure": {
+        "role": "tertiary",
+        "displayName": "Failure Red",
+        "canonical": "#f87171",
+        "tonalRamp": [
+          "oklch(30% 0.10 25)",
+          "oklch(40% 0.14 25)",
+          "oklch(50% 0.17 25)",
+          "oklch(60% 0.19 25)",
+          "oklch(70% 0.16 25)",
+          "oklch(78% 0.13 25)",
+          "oklch(87% 0.08 25)",
+          "oklch(94% 0.04 25)"
+        ]
+      },
+      "status-attention": {
+        "role": "tertiary",
+        "displayName": "Attention Amber",
+        "canonical": "#fbbf24",
+        "tonalRamp": [
+          "oklch(35% 0.08 85)",
+          "oklch(45% 0.11 85)",
+          "oklch(55% 0.13 85)",
+          "oklch(65% 0.15 85)",
+          "oklch(75% 0.16 85)",
+          "oklch(83% 0.14 85)",
+          "oklch(90% 0.10 85)",
+          "oklch(96% 0.05 85)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Page and drawer titles — louder telemetry, same monospace voice."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Controls, form text, prose moments."
+      },
+      "data": {
+        "displayName": "Data",
+        "purpose": "The workhorse: tables, badges, metadata. Most of any screen."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Uppercase tracked section labels and column headers, in Muted gray."
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "ease-instrument",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "Default easing — drawers, toasts, panels."
+      },
+      {
+        "name": "duration-state",
+        "value": "150ms",
+        "purpose": "Color/border state transitions (hover, focus)."
+      },
+      {
+        "name": "duration-enter",
+        "value": "200ms",
+        "purpose": "Entrance animations (slide-over, toast). Disabled under prefers-reduced-motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "md",
+        "value": "768px"
+      },
+      {
+        "name": "lg",
+        "value": "1024px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single cyan action key — instrument-press feedback, one per view section.",
+      "html": "<button class=\"ds-btn-primary\">Launch Now</button>",
+      "css": ".ds-btn-primary { background: oklch(0.609 0.126 221.723); color: #fff; padding: 8px 16px; border: none; border-radius: 4px; font-family: 'Cascadia Code', 'JetBrains Mono', ui-monospace, Consolas, monospace; font-size: 0.875rem; font-weight: 500; cursor: pointer; transition: background-color 150ms; } .ds-btn-primary:hover { background: oklch(0.655 0.127 221.723); } .ds-btn-primary:active { transform: translateY(1px); } .ds-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Secondary action — bordered, transparent, quiet until hovered.",
+      "html": "<button class=\"ds-btn-ghost\">Save Config</button>",
+      "css": ".ds-btn-ghost { background: transparent; color: #d1d5db; padding: 8px 16px; border: 1px solid #374151; border-radius: 4px; font-family: 'Cascadia Code', 'JetBrains Mono', ui-monospace, Consolas, monospace; font-size: 0.875rem; cursor: pointer; transition: border-color 150ms; } .ds-btn-ghost:hover { border-color: #4b5563; } .ds-btn-ghost:active { transform: translateY(1px); } .ds-btn-ghost:disabled { opacity: 0.4; cursor: not-allowed; }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Terminal well input — dark field, gray stroke, cyan focus shift (no ring, no glow).",
+      "html": "<input class=\"ds-input\" type=\"text\" placeholder=\"URL or hostname to test\" />",
+      "css": ".ds-input { width: 100%; background: #0a0b0f; border: 1px solid #374151; border-radius: 4px; padding: 6px 12px; font-family: 'Cascadia Code', 'JetBrains Mono', ui-monospace, Consolas, monospace; font-size: 0.875rem; color: #e5e7eb; outline: none; transition: border-color 150ms; } .ds-input:focus { border-color: oklch(0.609 0.126 221.723); } .ds-input::placeholder { color: #4b5563; }"
+    },
+    {
+      "name": "Status Badge",
+      "kind": "chip",
+      "refersTo": "badge-status",
+      "description": "Status lamp — tinted fill at ~15%, full-strength status color as text. Semantics fixed everywhere.",
+      "html": "<span class=\"ds-badge ds-badge-success\">completed</span> <span class=\"ds-badge ds-badge-failure\">failed</span> <span class=\"ds-badge ds-badge-attention\">partial</span> <span class=\"ds-badge ds-badge-inflight\">running</span>",
+      "css": ".ds-badge { display: inline-block; font-family: 'Cascadia Code', 'JetBrains Mono', ui-monospace, Consolas, monospace; font-size: 0.75rem; padding: 2px 8px; border-radius: 4px; margin-right: 6px; } .ds-badge-success { background: rgba(74, 222, 128, 0.12); color: #4ade80; } .ds-badge-failure { background: rgba(248, 113, 113, 0.12); color: #f87171; } .ds-badge-attention { background: rgba(251, 191, 36, 0.12); color: #fbbf24; } .ds-badge-inflight { background: rgba(34, 211, 238, 0.12); color: #22d3ee; }"
+    },
+    {
+      "name": "Section Label",
+      "kind": "custom",
+      "refersTo": "section-label",
+      "description": "Uppercase tracked micro-heading that rules every data section.",
+      "html": "<div class=\"ds-section-label\">Runner Assignment</div>",
+      "css": ".ds-section-label { font-family: 'Cascadia Code', 'JetBrains Mono', ui-monospace, Consolas, monospace; font-size: 0.75rem; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; color: #9ca3af; }"
+    },
+    {
+      "name": "Data Table",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "The primary layout organism — hairline-ruled container, Surface header, 12px mono rows.",
+      "html": "<div class=\"ds-table-container\"><table class=\"ds-table\"><thead><tr><th>ID</th><th>Status</th><th>Duration</th></tr></thead><tbody><tr><td>04d309d8</td><td class=\"ds-td-ok\">completed</td><td>0.8s</td></tr><tr><td>4dac354c</td><td class=\"ds-td-fail\">failed</td><td>0.7s</td></tr></tbody></table></div>",
+      "css": ".ds-table-container { border: 1px solid #1a1b25; border-radius: 6px; overflow: hidden; background: #0a0b0f; } .ds-table { width: 100%; border-collapse: collapse; font-family: 'Cascadia Code', 'JetBrains Mono', ui-monospace, Consolas, monospace; } .ds-table th { background: #0d0e14; color: #9ca3af; font-size: 0.75rem; font-weight: 500; letter-spacing: 0.05em; text-transform: uppercase; text-align: left; padding: 8px 12px; } .ds-table td { color: #d1d5db; font-size: 0.75rem; padding: 8px 12px; border-top: 1px solid #1a1b25; } .ds-table tbody tr { transition: background-color 150ms ease-out; } .ds-table tbody tr:hover { background: #12131a; } .ds-td-ok { color: #4ade80; } .ds-td-fail { color: #f87171; }"
+    },
+    {
+      "name": "Nav Item",
+      "kind": "nav",
+      "refersTo": "nav-item",
+      "description": "Sidebar rail item — gray at rest, cyan when active with an inset left bar.",
+      "html": "<nav class=\"ds-nav\"><a class=\"ds-nav-item\" href=\"#\">Dashboard</a><a class=\"ds-nav-item ds-nav-item-active\" href=\"#\">URL Probe</a><a class=\"ds-nav-item\" href=\"#\">Runs</a></nav>",
+      "css": ".ds-nav { display: flex; flex-direction: column; background: #0f1015; padding: 8px; width: 180px; } .ds-nav-item { font-family: 'Cascadia Code', 'JetBrains Mono', ui-monospace, Consolas, monospace; font-size: 0.875rem; color: #9ca3af; text-decoration: none; padding: 6px 12px; border-radius: 4px; transition: color 150ms; } .ds-nav-item:hover { color: #e5e7eb; } .ds-nav-item-active { color: #22d3ee; box-shadow: inset 2px 0 0 #22d3ee; background: rgba(34, 211, 238, 0.06); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Signal Terminal",
+    "overview": "LagHound's interface is a premium terminal where the data itself is the light source. Everything is dark glass — near-black layered surfaces with thin borders instead of shadows — and the only things that glow are signals: phosphor-cyan interactions, green/red/amber status lamps, white-hot numbers. Monospace type everywhere gives the whole product the confidence of a tool built by engineers for engineers; nothing is decorated, everything is calibrated. Density is a feature: the workhorse type size is 12px monospace, and controls behave like tactile instrument keys — crisp edges, a 1px press on click, a border shift on focus.",
+    "keyCharacteristics": [
+      "Dark glass surfaces, flat: depth from four background steps + 1px borders, never shadows",
+      "Monospace-first at every level, 12px data type as the default voice",
+      "One interactive accent (Phosphor Cyan); brand violet reserved for the mark",
+      "Semantically fixed status colors, identical everywhere",
+      "Tactile instrument-key controls: press feedback, focus border shifts, 150–200ms motion"
+    ],
+    "rules": [
+      {
+        "name": "The Logo-Only Violet Rule",
+        "body": "Brand Violet appears only in the mark and brand assets — never on statuses, KPIs, buttons, or charts.",
+        "section": "colors"
+      },
+      {
+        "name": "The One Voice Rule",
+        "body": "Phosphor Cyan is the only interactive accent. If a second accent seems needed, the answer is hierarchy, not a new color.",
+        "section": "colors"
+      },
+      {
+        "name": "The Status Semantics Rule",
+        "body": "Green = success, red = failure, amber = attention/partial, cyan = in-flight, grey = inert — identically in every table, badge, chart, and report.",
+        "section": "colors"
+      },
+      {
+        "name": "The Data-First Rule",
+        "body": "12px monospace is the default voice; larger sizes are the exception and must earn their space.",
+        "section": "typography"
+      },
+      {
+        "name": "The Borders-Not-Shadows Rule",
+        "body": "If a surface needs separation, step its background one token and rule it with Hairline #1a1b25. A shadow is never the answer.",
+        "section": "elevation"
+      },
+      {
+        "name": "The AA Floor Rule",
+        "body": "Meaningful text never drops below 4.5:1 on its background: Muted #9ca3af is the workhorse, Faint #6b7280 the de-emphasis floor. Only placeholders and disabled states may go dimmer (#4b5563).",
+        "section": "colors"
+      }
+    ],
+    "dos": [
+      "Do set data in 12px monospace and let density carry the design; every pixel should communicate information.",
+      "Do use the four-step background stack + 1px Hairline borders for all separation and depth.",
+      "Do keep status colors semantically exact everywhere (green/red/amber/cyan/grey), including reports and charts.",
+      "Do give every control press feedback (1px translate) and a 150ms border/fill transition — tactile, not animated.",
+      "Do honor prefers-reduced-motion on every entrance animation.",
+      "Do keep muted text at gray-400 (#9ca3af) or brighter for anything a user must read."
+    ],
+    "donts": [
+      "Don't use Brand Violet outside the logo/brand mark (Logo-Only Violet Rule).",
+      "Don't add box-shadows, gradients, or glassmorphism — flat surfaces and borders only.",
+      "Don't introduce a second interactive accent or re-purpose a status color decoratively.",
+      "Don't put gray text on colored fills — use white/near-white or a darker shade of the fill.",
+      "Don't disable a control without disabled styling; a dead-looking-alive button is a bug."
+    ]
+  }
+}

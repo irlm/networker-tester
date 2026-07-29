@@ -106,7 +106,7 @@ export function TestbedMatrix({
 
       {testbeds.length === 0 && (
         <div className="border border-dashed border-gray-800 p-4">
-          <p className="text-xs text-gray-500 mb-3">No testbeds configured. Add one to define where tests run.</p>
+          <p className="text-xs text-gray-400 mb-3">No testbeds configured. Add one to define where tests run.</p>
           <div className="flex flex-wrap gap-2">
             {[
               { cloud: 'Azure', os: 'linux' as const },
@@ -155,7 +155,7 @@ export function TestbedMatrix({
           <div className="flex items-center justify-between mb-3">
             <h4 className="text-xs font-semibold text-gray-300 uppercase tracking-wider">Runner Assignment</h4>
             {!testersLoading && (
-              <span className="text-[10px] font-mono text-gray-600">
+              <span className="text-[10px] font-mono text-gray-500">
                 {runnerStats.idle} idle / {runnerStats.online} online
               </span>
             )}
@@ -170,7 +170,7 @@ export function TestbedMatrix({
                 className={`px-2.5 py-1 text-xs border transition-colors ${
                   runnerMode === mode
                     ? 'bg-cyan-500/10 border-cyan-500/40 text-cyan-300'
-                    : 'border-gray-700 text-gray-500 hover:text-gray-300'
+                    : 'border-gray-700 text-gray-400 hover:text-gray-300'
                 }`}
               >
                 {mode === 'auto' ? 'Auto-pick' : 'Pick specific'}
@@ -179,13 +179,13 @@ export function TestbedMatrix({
           </div>
 
           {runnerMode === 'auto' && (
-            <p className="text-xs text-gray-500">First available idle runner will be assigned.</p>
+            <p className="text-xs text-gray-400">First available idle runner will be assigned.</p>
           )}
 
           {runnerMode === 'specific' && (
             <div className="space-y-1">
-              {testersLoading && <p className="text-xs text-gray-500 motion-safe:animate-pulse">Loading runners...</p>}
-              {!testersLoading && testers.length === 0 && <p className="text-xs text-gray-500">No runners available.</p>}
+              {testersLoading && <p className="text-xs text-gray-400 motion-safe:animate-pulse">Loading runners...</p>}
+              {!testersLoading && testers.length === 0 && <p className="text-xs text-gray-400">No runners available.</p>}
               {!testersLoading && testers.length > 0 && testers.map(row => {
                 const isOnline = row.power_state === 'running';
                 const isIdle = isOnline && row.allocation === 'idle';
@@ -212,7 +212,7 @@ export function TestbedMatrix({
                       />
                       <span className={`w-1.5 h-1.5 rounded-full ${isIdle ? 'bg-green-400' : isBusy ? 'bg-yellow-400' : 'bg-gray-600'}`} />
                       <span className="text-sm font-medium text-gray-100 flex-1">{row.name}</span>
-                      <span className="text-[10px] font-mono text-gray-500">{row.cloud} / {row.region}</span>
+                      <span className="text-[10px] font-mono text-gray-400">{row.cloud} / {row.region}</span>
                       <span className={`text-[10px] font-mono px-1.5 py-0.5 border rounded ${testerStatusClass(row)}`}>
                         {testerStatusLabel(row)}
                       </span>

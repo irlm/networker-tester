@@ -344,7 +344,7 @@ export function CreateTesterModal({
               type="button"
               onClick={onClose}
               disabled={stage === 'creating'}
-              className="text-gray-500 hover:text-gray-300 text-sm disabled:opacity-50"
+              className="text-gray-400 hover:text-gray-300 text-sm disabled:opacity-50"
               aria-label="Close"
             >
               &#x2715;
@@ -375,7 +375,7 @@ export function CreateTesterModal({
                   </div>
                 )}
               </div>
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-gray-400">
                 This usually takes 2-4 minutes. You can close this dialog; the
                 runner will continue provisioning in the background.
               </p>
@@ -537,7 +537,7 @@ export function CreateTesterModal({
                     ))}
                   </select>
                 </div>
-                <p className="text-xs text-gray-500">
+                <p className="text-xs text-gray-400">
                   Runner stops automatically each day at this local time
                   (region timezone). Costs drop by roughly 2/3 with an overnight
                   schedule.
@@ -555,7 +555,7 @@ export function CreateTesterModal({
                   />
                   Auto-recover on error
                 </label>
-                <p className="text-xs text-gray-500 mt-1" title="When enabled, the dashboard probes this runner's SSH port on a short interval whenever it enters the error state and auto-clears transient faults.">
+                <p className="text-xs text-gray-400 mt-1" title="When enabled, the dashboard probes this runner's SSH port on a short interval whenever it enters the error state and auto-clears transient faults.">
                   When enabled, the dashboard probes this runner automatically if
                   it enters an error state. Off by default — you'll be asked to
                   run a probe manually from the detail drawer.

@@ -53,10 +53,10 @@ function scheduleStatus(s: TestSchedule): { badge: string; label: string; detail
     }
     const mins = Math.floor(diff / 60000);
     if (mins < 1) return { badge: 'online', label: 'active', detail: 'running now', detailColor: 'text-green-400/70' };
-    if (mins < 60) return { badge: 'online', label: 'active', detail: `next in ${mins}m`, detailColor: 'text-gray-500' };
+    if (mins < 60) return { badge: 'online', label: 'active', detail: `next in ${mins}m`, detailColor: 'text-gray-400' };
     const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return { badge: 'online', label: 'active', detail: `next in ${hrs}h`, detailColor: 'text-gray-500' };
-    return { badge: 'online', label: 'active', detail: `next in ${Math.floor(hrs / 24)}d`, detailColor: 'text-gray-600' };
+    if (hrs < 24) return { badge: 'online', label: 'active', detail: `next in ${hrs}h`, detailColor: 'text-gray-400' };
+    return { badge: 'online', label: 'active', detail: `next in ${Math.floor(hrs / 24)}d`, detailColor: 'text-gray-500' };
   }
   return { badge: 'online', label: 'active', detail: '', detailColor: '' };
 }
@@ -197,7 +197,7 @@ export function SchedulesPage() {
         <div className="flex items-center gap-3 min-w-0">
           <h2 className="text-lg md:text-xl font-bold text-gray-100">Schedules</h2>
           {schedules.length > 0 && (
-            <span className="text-xs text-gray-600 hidden sm:inline">
+            <span className="text-xs text-gray-500 hidden sm:inline">
               <span className="text-green-400">{enabledCount}</span> active
               {enabledCount !== schedules.length && (
                 <> · {schedules.length} total</>
@@ -248,7 +248,7 @@ export function SchedulesPage() {
       <div className="md:hidden space-y-2 mt-4">
         {filteredSchedules.length === 0 ? (
           <div className="border border-gray-800 rounded p-8 text-center">
-            <p className="text-gray-500 text-sm">{schedFilterCount > 0 ? 'No schedules match filters' : 'No scheduled tests yet'}</p>
+            <p className="text-gray-400 text-sm">{schedFilterCount > 0 ? 'No schedules match filters' : 'No scheduled tests yet'}</p>
             {schedFilterCount === 0 && (
               <Link
                 to={`/projects/${projectId}/benchmarks/full-stack/new`}
@@ -267,7 +267,7 @@ export function SchedulesPage() {
               <div className="flex items-start justify-between gap-2 mb-2">
                 <div className="min-w-0">
                   <p className="text-gray-200 text-sm font-medium truncate">{s._name}</p>
-                  <p className="text-gray-500 text-xs font-mono">{s.test_config_id.slice(0, 8)}</p>
+                  <p className="text-gray-400 text-xs font-mono">{s.test_config_id.slice(0, 8)}</p>
                 </div>
                 <button
                   onClick={() => handleToggle(s.id, s.enabled)}
@@ -285,7 +285,7 @@ export function SchedulesPage() {
                 <StatusBadge status={s._status.badge} label={s._status.label} />
                 {s._status.detail && <span className={`text-xs ${s._status.detailColor}`}>{s._status.detail}</span>}
                 <span className="text-xs text-cyan-400/70">{s._cron.label}</span>
-                {s.last_fired_at && <span className="text-xs text-gray-600">{timeAgo(s.last_fired_at)}</span>}
+                {s.last_fired_at && <span className="text-xs text-gray-500">{timeAgo(s.last_fired_at)}</span>}
               </div>
               <div className="flex items-center gap-3 mt-2 pt-2 border-t border-gray-800/50">
                 {isOperator && (
@@ -296,7 +296,7 @@ export function SchedulesPage() {
                 {isOperator && (
                   <button
                     onClick={() => handleDelete(s.id)}
-                    className={`text-xs py-1 transition-colors ${confirmDelete === s.id ? 'text-red-400' : 'text-gray-600'}`}
+                    className={`text-xs py-1 transition-colors ${confirmDelete === s.id ? 'text-red-400' : 'text-gray-500'}`}
                   >
                     {confirmDelete === s.id ? 'Click to confirm delete' : 'Delete'}
                   </button>
@@ -311,7 +311,7 @@ export function SchedulesPage() {
       <div className="hidden md:block table-container mt-4">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
+            <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
               <th className="px-4 py-2.5 text-left font-medium">Config</th>
               <th className="px-4 py-2.5 text-left font-medium">Frequency</th>
               <th className="px-4 py-2.5 text-left font-medium">Timezone</th>
@@ -331,14 +331,14 @@ export function SchedulesPage() {
                 <td className="px-4 py-3 text-xs" title={s._cron.raw}>
                   <span className="text-cyan-400/70">{s._cron.label}</span>
                 </td>
-                <td className="px-4 py-3 text-gray-500 text-xs">{s.timezone}</td>
+                <td className="px-4 py-3 text-gray-400 text-xs">{s.timezone}</td>
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2">
                     <StatusBadge status={s._status.badge} label={s._status.label} />
                     {s._status.detail && <span className={`text-xs ${s._status.detailColor}`}>{s._status.detail}</span>}
                   </div>
                 </td>
-                <td className="px-4 py-3 text-gray-500 text-xs hidden lg:table-cell">
+                <td className="px-4 py-3 text-gray-400 text-xs hidden lg:table-cell">
                   {s.last_fired_at ? timeAgo(s.last_fired_at) : '--'}
                 </td>
                 <td className="px-4 py-3 text-center">
@@ -367,7 +367,7 @@ export function SchedulesPage() {
                       </button>
                       <button
                         onClick={() => handleDelete(s.id)}
-                        className={`text-xs transition-colors ${confirmDelete === s.id ? 'text-red-400' : 'text-gray-600 hover:text-red-400'}`}
+                        className={`text-xs transition-colors ${confirmDelete === s.id ? 'text-red-400' : 'text-gray-500 hover:text-red-400'}`}
                         title={confirmDelete === s.id ? 'Click again to confirm' : 'Delete'}
                       >
                         {confirmDelete === s.id ? 'delete?' : '\u2715'}
@@ -382,10 +382,10 @@ export function SchedulesPage() {
 
         {filteredSchedules.length === 0 && (
           <div className="py-10 text-center">
-            <p className="text-gray-500 text-sm">{schedFilterCount > 0 ? 'No schedules match the current filters' : 'No scheduled tests yet'}</p>
+            <p className="text-gray-400 text-sm">{schedFilterCount > 0 ? 'No schedules match the current filters' : 'No scheduled tests yet'}</p>
             {schedFilterCount === 0 && (
               <>
-                <p className="text-gray-600 text-xs mt-1">
+                <p className="text-gray-500 text-xs mt-1">
                   Create one from the Full Stack benchmark wizard ("Add schedule" on the Review step).
                 </p>
                 <Link

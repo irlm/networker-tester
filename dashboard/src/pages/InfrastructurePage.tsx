@@ -99,10 +99,10 @@ function SectionDivider({
 }) {
   return (
     <div className="flex items-center justify-between mb-3 mt-8 first:mt-0">
-      <h3 className="text-xs text-gray-500 tracking-wider font-medium">
+      <h3 className="text-xs text-gray-400 tracking-wider font-medium">
         {title}
         {count != null && count > 0 && (
-          <span className="text-gray-600 ml-2">({count})</span>
+          <span className="text-gray-500 ml-2">({count})</span>
         )}
       </h3>
       {action}
@@ -356,13 +356,13 @@ export function InfrastructurePage() {
               KPI numbers stay neutral; purple is logo-only (F12). */}
           <div>
             <div className="text-2xl font-bold font-mono leading-none text-gray-100">{runnerActiveCt}</div>
-            <div className="text-[10px] uppercase tracking-wider text-gray-500 mt-1.5">Runners · {runnerIdleCt} ready</div>
-            <div className="text-[10px] font-mono mt-0.5 text-gray-500">
-              <span className={runnerIdleCt > 0 ? 'text-green-400' : 'text-gray-600'}>{runnerIdleCt} idle</span>
+            <div className="text-[10px] uppercase tracking-wider text-gray-400 mt-1.5">Runners · {runnerIdleCt} ready</div>
+            <div className="text-[10px] font-mono mt-0.5 text-gray-400">
+              <span className={runnerIdleCt > 0 ? 'text-green-400' : 'text-gray-500'}>{runnerIdleCt} idle</span>
               {' · '}
-              <span className={runnerBusyCt > 0 ? 'text-yellow-400' : 'text-gray-600'}>{runnerBusyCt} busy</span>
+              <span className={runnerBusyCt > 0 ? 'text-yellow-400' : 'text-gray-500'}>{runnerBusyCt} busy</span>
               {' · '}
-              <span className="text-gray-500">{runnerStoppedCt} stopped</span>
+              <span className="text-gray-400">{runnerStoppedCt} stopped</span>
               {runnerErrorCt > 0 && (
                 <span className="text-red-400"> · {runnerErrorCt} error</span>
               )}
@@ -370,7 +370,7 @@ export function InfrastructurePage() {
           </div>
           <div>
             <div className="text-2xl font-bold font-mono leading-none text-gray-100">{targetsCt}</div>
-            <div className="text-[10px] uppercase tracking-wider text-gray-500 mt-1.5">Targets</div>
+            <div className="text-[10px] uppercase tracking-wider text-gray-400 mt-1.5">Targets</div>
             {activeDeps.length > 0 && (
               <div className="text-[10px] text-amber-400 font-mono mt-0.5">
                 {activeDeps.length} in progress
@@ -379,7 +379,7 @@ export function InfrastructurePage() {
           </div>
           <div>
             <div className="text-2xl font-bold font-mono leading-none text-gray-100">{cloudAccountsCt ?? '—'}</div>
-            <div className="text-[10px] uppercase tracking-wider text-gray-500 mt-1.5">Cloud accounts</div>
+            <div className="text-[10px] uppercase tracking-wider text-gray-400 mt-1.5">Cloud accounts</div>
           </div>
         </div>
         {isOperator && (
@@ -395,14 +395,14 @@ export function InfrastructurePage() {
               <button
                 type="button"
                 onClick={() => { setWizardKind('runner'); setWizardPrefill(undefined); setShowWizard(true); }}
-                className="text-[10px] text-gray-500 hover:text-cyan-400 px-2 py-0.5 border border-gray-800 font-mono"
+                className="text-[10px] text-gray-400 hover:text-cyan-400 px-2 py-0.5 border border-gray-800 font-mono"
               >
                 + runner
               </button>
               <button
                 type="button"
                 onClick={() => { setWizardKind('target'); setWizardPrefill(undefined); setShowWizard(true); }}
-                className="text-[10px] text-gray-500 hover:text-cyan-400 px-2 py-0.5 border border-gray-800 font-mono"
+                className="text-[10px] text-gray-400 hover:text-cyan-400 px-2 py-0.5 border border-gray-800 font-mono"
               >
                 + target
               </button>
@@ -447,12 +447,12 @@ export function InfrastructurePage() {
               className={`flex items-center gap-1.5 px-3 py-2 text-xs border-b-2 -mb-px transition-colors ${
                 active
                   ? 'border-cyan-500 text-cyan-300'
-                  : 'border-transparent text-gray-500 hover:text-gray-300'
+                  : 'border-transparent text-gray-400 hover:text-gray-300'
               }`}
             >
               <span className="opacity-70">{tab.icon}</span>
               {tab.label}
-              <span className={`ml-1 font-mono text-[10px] ${active ? 'text-cyan-400' : 'text-gray-600'}`}>
+              <span className={`ml-1 font-mono text-[10px] ${active ? 'text-cyan-400' : 'text-gray-500'}`}>
                 {tab.count}
               </span>
             </button>
@@ -463,7 +463,7 @@ export function InfrastructurePage() {
       {/* Per-tab filter chips */}
       {runnerTab === 'active' && (
         <div className="flex flex-wrap items-center gap-1.5 mb-3">
-          <span className="text-[10px] uppercase tracking-wider text-gray-600 mr-2">status</span>
+          <span className="text-[10px] uppercase tracking-wider text-gray-500 mr-2">status</span>
           {([
             { id: 'all' as const, label: 'All', ct: runnerStatusCounts.all },
             { id: 'idle' as const, label: 'Idle', ct: runnerStatusCounts.idle },
@@ -480,10 +480,10 @@ export function InfrastructurePage() {
                 className={`px-2.5 py-1 text-xs border font-mono transition-colors ${
                   active
                     ? 'bg-cyan-500/10 border-cyan-500/40 text-cyan-300'
-                    : 'border-gray-700 text-gray-500 hover:text-gray-300'
+                    : 'border-gray-700 text-gray-400 hover:text-gray-300'
                 }`}
               >
-                {c.label} <span className={active ? 'text-cyan-400' : 'text-gray-600'}>·{c.ct}</span>
+                {c.label} <span className={active ? 'text-cyan-400' : 'text-gray-500'}>·{c.ct}</span>
               </button>
             );
           })}
@@ -492,13 +492,13 @@ export function InfrastructurePage() {
 
       {runnerTab === 'archived' && (
         <div className="flex flex-wrap items-center gap-1.5 mb-3">
-          <span className="text-[10px] uppercase tracking-wider text-gray-600 mr-2">archived in</span>
+          <span className="text-[10px] uppercase tracking-wider text-gray-500 mr-2">archived in</span>
           {['Last 7d', 'Last 30d', 'Last 90d', 'Last 12mo', 'All time'].map((label, i) => (
             <button
               key={label}
               type="button"
               disabled
-              className={`px-2.5 py-1 text-xs border font-mono text-gray-600 border-gray-800 opacity-40 cursor-not-allowed ${
+              className={`px-2.5 py-1 text-xs border font-mono text-gray-500 border-gray-800 opacity-40 cursor-not-allowed ${
                 i === 2 ? 'bg-cyan-500/5' : ''
               }`}
               title="Archive time-scope filter — lands with backend soft-delete"
@@ -511,7 +511,7 @@ export function InfrastructurePage() {
 
       {runnerTab === 'all' && (
         <div className="flex flex-wrap items-center gap-1.5 mb-3">
-          <span className="text-[10px] uppercase tracking-wider text-gray-600 mr-2">lifecycle</span>
+          <span className="text-[10px] uppercase tracking-wider text-gray-500 mr-2">lifecycle</span>
           {([
             { id: 'all', label: 'All', ct: runnerActiveCt + ARCHIVE_PLACEHOLDER_COUNT },
             { id: 'active-only', label: 'Active', ct: runnerActiveCt },
@@ -521,7 +521,7 @@ export function InfrastructurePage() {
               key={c.id}
               type="button"
               disabled
-              className="px-2.5 py-1 text-xs border font-mono text-gray-600 border-gray-800 opacity-40 cursor-not-allowed"
+              className="px-2.5 py-1 text-xs border font-mono text-gray-500 border-gray-800 opacity-40 cursor-not-allowed"
               title="Cross-lifecycle filter — lands with backend soft-delete"
             >
               {c.label} <span className="text-gray-700">·{c.ct}</span>
@@ -532,17 +532,17 @@ export function InfrastructurePage() {
 
       {/* Runners list — region-grouped inside the tab */}
       {testersLoading && testers.length === 0 ? (
-        <p className="text-sm text-gray-500">Loading{'\u2026'}</p>
+        <p className="text-sm text-gray-400">Loading{'\u2026'}</p>
       ) : runnerTab === 'archived' ? (
         <div className="border border-dashed border-gray-800 rounded p-6 text-center">
-          <p className="text-gray-500 text-sm">No archived runners</p>
-          <p className="text-[11px] text-gray-600 font-mono mt-2">
+          <p className="text-gray-400 text-sm">No archived runners</p>
+          <p className="text-[11px] text-gray-500 font-mono mt-2">
             Archiving is a soft-delete — it preserves run-history attribution. Backend support lands next.
           </p>
         </div>
       ) : filteredRunners.length === 0 && testers.length > 0 ? (
         <div className="border border-gray-800 rounded p-6 text-center">
-          <p className="text-gray-500 text-sm">No runners match the current filter</p>
+          <p className="text-gray-400 text-sm">No runners match the current filter</p>
           <button
             type="button"
             onClick={() => setRunnerStatusFilter('all')}
@@ -557,7 +557,7 @@ export function InfrastructurePage() {
           data-testid="testers-empty-state"
         >
           <h3 className="text-sm font-bold text-gray-200 mb-2">No runners yet</h3>
-          <p className="text-xs text-gray-500 mb-4 max-w-md mx-auto">
+          <p className="text-xs text-gray-400 mb-4 max-w-md mx-auto">
             Create a persistent runner VM in your preferred region. It will be reused across benchmarks and stopped each night to save costs.
           </p>
           {isProjectAdmin && (
@@ -586,7 +586,7 @@ export function InfrastructurePage() {
 
       {/* Pagination — only when a page overflow actually exists */}
       {filteredRunners.length > RUNNER_PAGE_SIZE && (
-        <div className="flex items-center justify-between mt-3 text-xs text-gray-500">
+        <div className="flex items-center justify-between mt-3 text-xs text-gray-400">
           <span className="font-mono">
             showing {runnerSafePage * RUNNER_PAGE_SIZE + 1}–{Math.min((runnerSafePage + 1) * RUNNER_PAGE_SIZE, filteredRunners.length)} of {filteredRunners.length}
           </span>
@@ -642,7 +642,7 @@ export function InfrastructurePage() {
                 <span className="text-cyan-400 text-sm">{d.name}</span>
                 <StatusBadge status={d.status} />
               </div>
-              <div className="text-xs text-gray-500">{d.provider_summary || 'Deploying...'}</div>
+              <div className="text-xs text-gray-400">{d.provider_summary || 'Deploying...'}</div>
             </Link>
           ))}
         </div>
@@ -659,13 +659,13 @@ export function InfrastructurePage() {
       ) : completedDeps.length === 0 ? (
         activeDeps.length > 0 ? (
           <div className="border border-gray-800 rounded p-4 text-center">
-            <p className="text-gray-500 text-sm">
+            <p className="text-gray-400 text-sm">
               No completed targets yet — {activeDeps.length} deployment{activeDeps.length === 1 ? '' : 's'} in progress above
             </p>
           </div>
         ) : (
           <div className="border border-gray-800 rounded p-8 text-center">
-            <p className="text-gray-500 text-sm">No targets deployed</p>
+            <p className="text-gray-400 text-sm">No targets deployed</p>
             {isOperator && (
               <button
                 type="button"
@@ -691,7 +691,7 @@ export function InfrastructurePage() {
                   <span className="text-cyan-400 text-sm">{d.name}</span>
                   <StatusBadge status={d.status} />
                 </div>
-                <div className="flex items-center gap-3 text-xs text-gray-500 flex-wrap">
+                <div className="flex items-center gap-3 text-xs text-gray-400 flex-wrap">
                   <span>{d.provider_summary || '\u2014'}</span>
                   {d.endpoint_ips?.[0] && (
                     <span className="font-mono truncate max-w-[200px]">{d.endpoint_ips[0]}</span>
@@ -705,7 +705,7 @@ export function InfrastructurePage() {
           <div className="hidden md:block table-container">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
+                <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
                   <th className="text-left px-4 py-2.5 font-medium">Name</th>
                   <th className="text-left px-4 py-2.5 font-medium">Provider</th>
                   <th className="text-left px-4 py-2.5 font-medium">Status</th>
@@ -731,7 +731,7 @@ export function InfrastructurePage() {
                     <td className="px-4 py-3 text-gray-400 font-mono text-xs hidden lg:table-cell">
                       {formatDuration(d.started_at, d.finished_at)}
                     </td>
-                    <td className="px-4 py-3 text-gray-500 text-xs hidden lg:table-cell" title={new Date(d.created_at).toISOString()}>
+                    <td className="px-4 py-3 text-gray-400 text-xs hidden lg:table-cell" title={new Date(d.created_at).toISOString()}>
                       {timeAgo(d.created_at)}
                     </td>
                     {isOperator && (
@@ -778,14 +778,14 @@ export function InfrastructurePage() {
         className="mt-6 flex items-center justify-between px-3 py-2.5 border border-gray-800 bg-[var(--bg-surface)] hover:border-cyan-500/40 transition-colors"
       >
         <div className="flex items-center gap-3 text-xs text-gray-400 min-w-0">
-          <span className="text-gray-600">≡</span>
+          <span className="text-gray-500">≡</span>
           <span className="text-gray-300">Recent activity</span>
           {history.length > 0 ? (
-            <span className="font-mono text-[11px] text-gray-500 truncate">
+            <span className="font-mono text-[11px] text-gray-400 truncate">
               {history[0].resource_name ?? '(unnamed)'} · <EventBadgeInline kind={history[0].event_type} /> · {formatTime(history[0].event_time)}
             </span>
           ) : (
-            <span className="font-mono text-[11px] text-gray-600">no recent events</span>
+            <span className="font-mono text-[11px] text-gray-500">no recent events</span>
           )}
         </div>
         <span className="text-xs text-cyan-400 flex-shrink-0">View full history →</span>

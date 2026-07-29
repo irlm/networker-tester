@@ -121,7 +121,7 @@ function ProjectRedirect() {
 
 function RouteFallback() {
   return (
-    <div className="px-4 py-8 text-sm text-gray-500 motion-safe:animate-pulse">
+    <div className="px-4 py-8 text-sm text-gray-400 motion-safe:animate-pulse">
       Loading page...
     </div>
   );

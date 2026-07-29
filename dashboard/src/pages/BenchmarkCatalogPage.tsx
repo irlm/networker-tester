@@ -19,7 +19,7 @@ const cloudBadge: Record<string, string> = {
 const statusBadge: Record<string, string> = {
   online: 'bg-green-500/20 text-green-400',
   offline: 'bg-red-500/20 text-red-400',
-  unknown: 'bg-gray-500/20 text-gray-500',
+  unknown: 'bg-gray-500/20 text-gray-400',
 };
 
 export function BenchmarkCatalogPage() {
@@ -124,7 +124,7 @@ export function BenchmarkCatalogPage() {
         <div className="mb-4 border border-gray-800 rounded bg-[var(--bg-card)] p-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Name</label>
+              <label className="block text-xs text-gray-400 mb-1">Name</label>
               <input
                 type="text"
                 value={formName}
@@ -135,7 +135,7 @@ export function BenchmarkCatalogPage() {
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">IP Address</label>
+              <label className="block text-xs text-gray-400 mb-1">IP Address</label>
               <input
                 type="text"
                 value={formIp}
@@ -145,7 +145,7 @@ export function BenchmarkCatalogPage() {
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">SSH User</label>
+              <label className="block text-xs text-gray-400 mb-1">SSH User</label>
               <input
                 type="text"
                 value={formSshUser}
@@ -155,7 +155,7 @@ export function BenchmarkCatalogPage() {
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Cloud</label>
+              <label className="block text-xs text-gray-400 mb-1">Cloud</label>
               <select
                 value={formCloud}
                 onChange={(e) => setFormCloud(e.target.value)}
@@ -168,7 +168,7 @@ export function BenchmarkCatalogPage() {
               </select>
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Region</label>
+              <label className="block text-xs text-gray-400 mb-1">Region</label>
               <input
                 type="text"
                 value={formRegion}
@@ -188,7 +188,7 @@ export function BenchmarkCatalogPage() {
             </button>
             <button
               onClick={() => { setShowRegister(false); setFormName(''); setFormIp(''); }}
-              className="px-2 py-1.5 text-xs text-gray-500 hover:text-gray-300 transition-colors"
+              className="px-2 py-1.5 text-xs text-gray-400 hover:text-gray-300 transition-colors"
             >
               Cancel
             </button>
@@ -200,7 +200,7 @@ export function BenchmarkCatalogPage() {
       {vms.length === 0 && (
         <EmptyState
           message="No benchmark VMs registered"
-          detail={<>Register a VM that has language servers deployed at <code className="text-gray-500">/opt/bench/</code>. Registered VMs appear in the benchmark wizard under "Use existing VM".</>}
+          detail={<>Register a VM that has language servers deployed at <code className="text-gray-400">/opt/bench/</code>. Registered VMs appear in the benchmark wizard under "Use existing VM".</>}
         />
       )}
 
@@ -209,7 +209,7 @@ export function BenchmarkCatalogPage() {
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-left text-xs text-gray-600 border-b border-gray-800">
+              <tr className="text-left text-xs text-gray-500 border-b border-gray-800">
                 <th className="py-2 pr-3 font-medium">Name</th>
                 <th className="py-2 pr-3 font-medium">Cloud</th>
                 <th className="py-2 pr-3 font-medium">Region</th>
@@ -237,7 +237,7 @@ export function BenchmarkCatalogPage() {
                   <td className="py-2.5 pr-3">
                     <div className="flex flex-wrap gap-1">
                       {vm.languages.length === 0 && (
-                        <span className="text-gray-600 text-xs">none</span>
+                        <span className="text-gray-500 text-xs">none</span>
                       )}
                       {vm.languages.map((lang) => (
                         <span
@@ -254,7 +254,7 @@ export function BenchmarkCatalogPage() {
                       {vm.status}
                     </span>
                   </td>
-                  <td className="py-2.5 pr-3 text-xs text-gray-500">
+                  <td className="py-2.5 pr-3 text-xs text-gray-400">
                     {vm.last_health_check ? timeAgo(vm.last_health_check) : '\u2014'}
                   </td>
                   <td className="py-2.5">
@@ -283,7 +283,7 @@ export function BenchmarkCatalogPage() {
                               </button>
                               <button
                                 onClick={() => setDeletingVmId(null)}
-                                className="px-1.5 py-1 text-[10px] text-gray-500 hover:text-gray-300 transition-colors"
+                                className="px-1.5 py-1 text-[10px] text-gray-400 hover:text-gray-300 transition-colors"
                               >
                                 Cancel
                               </button>

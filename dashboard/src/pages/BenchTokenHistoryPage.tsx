@@ -42,7 +42,7 @@ function howRevoked(token: BenchTokenInfo): { label: string; color: string } {
   if (lived !== null && lived < MAX_TTL_MS * 0.875) {
     return { label: 'revoked', color: 'text-red-400' };
   }
-  return { label: 'auto-expired', color: 'text-gray-500' };
+  return { label: 'auto-expired', color: 'text-gray-400' };
 }
 
 type TimeFilter = 'all' | '24h' | '7d' | '30d';
@@ -167,7 +167,7 @@ export function BenchTokenHistoryPage() {
           </Link>
           <h1 className="text-lg font-bold text-gray-100">Token History</h1>
           {!loading && !error && (
-            <span className="text-xs text-gray-500">
+            <span className="text-xs text-gray-400">
               {filtered.length} token{filtered.length !== 1 ? 's' : ''}
             </span>
           )}
@@ -199,21 +199,21 @@ export function BenchTokenHistoryPage() {
       {/* Loading */}
       {loading && (
         <div className="py-16 text-center">
-          <span className="text-gray-500 text-sm motion-safe:animate-pulse">Loading history...</span>
+          <span className="text-gray-400 text-sm motion-safe:animate-pulse">Loading history...</span>
         </div>
       )}
 
       {/* Error */}
       {!loading && error && (
         <div className="py-16 text-center">
-          <p className="text-gray-500 text-sm">{error}</p>
+          <p className="text-gray-400 text-sm">{error}</p>
         </div>
       )}
 
       {/* Empty */}
       {!loading && !error && filtered.length === 0 && (
         <div className="py-16 text-center">
-          <p className="text-gray-500 text-sm">No historical tokens found</p>
+          <p className="text-gray-400 text-sm">No historical tokens found</p>
         </div>
       )}
 
@@ -222,7 +222,7 @@ export function BenchTokenHistoryPage() {
         <div className="border border-gray-800 rounded overflow-hidden">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-800 text-left text-[10px] text-gray-500 uppercase tracking-wider">
+              <tr className="border-b border-gray-800 text-left text-[10px] text-gray-400 uppercase tracking-wider">
                 <th className="px-4 py-2">Config</th>
                 <th className="px-4 py-2">VM</th>
                 <th className="px-4 py-2">User</th>
@@ -248,16 +248,16 @@ export function BenchTokenHistoryPage() {
                     <td className="px-4 py-2.5 font-mono text-xs text-gray-400">
                       {t.testbed_id || '\u2014'}
                     </td>
-                    <td className="px-4 py-2.5 text-xs text-gray-500 truncate max-w-[140px]" title={t.user ?? undefined}>
+                    <td className="px-4 py-2.5 text-xs text-gray-400 truncate max-w-[140px]" title={t.user ?? undefined}>
                       {t.user ?? '\u2014'}
                     </td>
-                    <td className="px-4 py-2.5 text-xs text-gray-500 whitespace-nowrap">
+                    <td className="px-4 py-2.5 text-xs text-gray-400 whitespace-nowrap">
                       {formatAbsDate(t.created)}
                     </td>
-                    <td className={`px-4 py-2.5 text-xs whitespace-nowrap ${how.label === 'revoked' ? 'text-red-400' : 'text-gray-500'}`}>
+                    <td className={`px-4 py-2.5 text-xs whitespace-nowrap ${how.label === 'revoked' ? 'text-red-400' : 'text-gray-400'}`}>
                       {formatAbsDate(t.expires)}
                     </td>
-                    <td className={`px-4 py-2.5 text-xs font-mono whitespace-nowrap ${isShortLived ? 'text-yellow-400' : 'text-gray-500'}`}>
+                    <td className={`px-4 py-2.5 text-xs font-mono whitespace-nowrap ${isShortLived ? 'text-yellow-400' : 'text-gray-400'}`}>
                       {livedLabel(lived)}
                     </td>
                     <td className={`px-4 py-2.5 text-xs ${how.color}`}>
@@ -271,7 +271,7 @@ export function BenchTokenHistoryPage() {
 
           {/* Pagination */}
           <div className="flex items-center justify-between px-4 py-2.5 border-t border-gray-800 bg-gray-800/20">
-            <span className="text-[10px] text-gray-500">
+            <span className="text-[10px] text-gray-400">
               {rangeStart}-{rangeEnd} of {filtered.length}
             </span>
             <div className="flex items-center gap-1">
@@ -301,7 +301,7 @@ export function BenchTokenHistoryPage() {
                     className={`px-1.5 py-0.5 text-[10px] rounded transition-colors ${
                       pageNum === safePage
                         ? 'bg-cyan-500/20 text-cyan-400'
-                        : 'text-gray-500 hover:text-gray-300 hover:bg-gray-700/30'
+                        : 'text-gray-400 hover:text-gray-300 hover:bg-gray-700/30'
                     }`}
                   >
                     {pageNum + 1}

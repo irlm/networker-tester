@@ -19,7 +19,7 @@ function timingBar(entry: ApiLogEntry) {
 }
 
 function statusColor(status: number): string {
-  if (status === 0) return 'text-gray-500';
+  if (status === 0) return 'text-gray-400';
   if (status < 300) return 'text-green-400';
   if (status < 400) return 'text-yellow-400';
   return 'text-red-400';
@@ -97,29 +97,29 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
       >
         <span className="font-mono">{entries.filter(e => e.source === 'user').length}</span>
         <span>user</span>
-        <span className="text-gray-600 font-mono">+{entries.filter(e => e.source === 'poll').length}</span>
-        <span className="text-gray-600">poll</span>
+        <span className="text-gray-500 font-mono">+{entries.filter(e => e.source === 'poll').length}</span>
+        <span className="text-gray-500">poll</span>
         {entries.length > 0 && (
           <>
-            <span className="text-gray-600">|</span>
+            <span className="text-gray-500">|</span>
             <span className={speedIndicator(avgTotal)}>{formatMs(avgTotal)} avg</span>
           </>
         )}
         {renderEntries.length > 0 && (
           <>
-            <span className="text-gray-600">|</span>
+            <span className="text-gray-500">|</span>
             <span className={renderSpeedColor(avgRender)}>{formatMs(avgRender)} render</span>
           </>
         )}
         {slowRenders > 0 && (
           <>
-            <span className="text-gray-600">|</span>
+            <span className="text-gray-500">|</span>
             <span className="text-orange-400">{slowRenders} slow</span>
           </>
         )}
         {errorCount > 0 && (
           <>
-            <span className="text-gray-600">|</span>
+            <span className="text-gray-500">|</span>
             <span className="text-red-400">{errorCount} err</span>
           </>
         )}
@@ -135,13 +135,13 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
           {/* Tabs */}
           <button
             onClick={() => setTab('api')}
-            className={`px-2 py-0.5 text-[10px] rounded border font-bold tracking-wider ${tab === 'api' ? 'border-cyan-500/30 text-cyan-400 bg-cyan-500/5' : 'border-gray-800 text-gray-500'}`}
+            className={`px-2 py-0.5 text-[10px] rounded border font-bold tracking-wider ${tab === 'api' ? 'border-cyan-500/30 text-cyan-400 bg-cyan-500/5' : 'border-gray-800 text-gray-400'}`}
           >
             API ({entries.length})
           </button>
           <button
             onClick={() => setTab('render')}
-            className={`px-2 py-0.5 text-[10px] rounded border font-bold tracking-wider ${tab === 'render' ? 'border-green-500/30 text-green-400 bg-green-500/5' : 'border-gray-800 text-gray-500'}`}
+            className={`px-2 py-0.5 text-[10px] rounded border font-bold tracking-wider ${tab === 'render' ? 'border-green-500/30 text-green-400 bg-green-500/5' : 'border-gray-800 text-gray-400'}`}
           >
             RENDER ({renderEntries.length})
           </button>
@@ -149,23 +149,23 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
           {/* Summary stats */}
           {tab === 'api' && entries.length > 0 && (
             <div className="flex items-center gap-2 text-[10px] ml-2">
-              <span className="text-gray-500">avg:</span>
+              <span className="text-gray-400">avg:</span>
               <span className="text-cyan-400 font-mono">{formatMs(avgServer)}</span>
-              <span className="text-gray-600">srv</span>
+              <span className="text-gray-500">srv</span>
               <span className="text-purple-400 font-mono">{formatMs(avgTotal - avgServer)}</span>
-              <span className="text-gray-600">net</span>
+              <span className="text-gray-500">net</span>
               <span className={`font-mono ${speedIndicator(avgTotal)}`}>{formatMs(avgTotal)}</span>
-              <span className="text-gray-600">total</span>
+              <span className="text-gray-500">total</span>
             </div>
           )}
           {tab === 'render' && renderEntries.length > 0 && (
             <div className="flex items-center gap-2 text-[10px] ml-2">
-              <span className="text-gray-500">avg:</span>
+              <span className="text-gray-400">avg:</span>
               <span className={`font-mono ${renderSpeedColor(avgRender)}`}>{formatMs(avgRender)}</span>
-              <span className="text-gray-600">render</span>
+              <span className="text-gray-500">render</span>
               {slowRenders > 0 && (
                 <>
-                  <span className="text-gray-600">|</span>
+                  <span className="text-gray-500">|</span>
                   <span className="text-orange-400">{slowRenders} &gt;16ms</span>
                 </>
               )}
@@ -173,13 +173,13 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
           )}
         </div>
         <div className="flex items-center gap-1">
-          <button onClick={toggle} className={`px-2 py-0.5 text-[10px] rounded border ${enabled ? 'border-green-500/30 text-green-400' : 'border-gray-700 text-gray-500'}`}>
+          <button onClick={toggle} className={`px-2 py-0.5 text-[10px] rounded border ${enabled ? 'border-green-500/30 text-green-400' : 'border-gray-700 text-gray-400'}`}>
             {enabled ? 'ON' : 'OFF'}
           </button>
-          <button onClick={clear} className="px-2 py-0.5 text-[10px] text-gray-500 hover:text-gray-300 border border-gray-700 rounded">
+          <button onClick={clear} className="px-2 py-0.5 text-[10px] text-gray-400 hover:text-gray-300 border border-gray-700 rounded">
             Clear
           </button>
-          <button onClick={() => setOpen(false)} className="px-2 py-0.5 text-gray-500 hover:text-gray-300 text-sm" aria-label="Close performance log">&times;</button>
+          <button onClick={() => setOpen(false)} className="px-2 py-0.5 text-gray-400 hover:text-gray-300 text-sm" aria-label="Close performance log">&times;</button>
         </div>
       </div>
 
@@ -194,26 +194,26 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
         />
         <button
           onClick={() => setShowSlow(!showSlow)}
-          className={`px-2 py-0.5 text-[10px] rounded border ${showSlow ? 'border-orange-500/30 text-orange-400 bg-orange-500/5' : 'border-gray-700 text-gray-500'}`}
+          className={`px-2 py-0.5 text-[10px] rounded border ${showSlow ? 'border-orange-500/30 text-orange-400 bg-orange-500/5' : 'border-gray-700 text-gray-400'}`}
         >
           {tab === 'api' ? 'Slow (\u003E200ms)' : 'Janky (\u003E16ms)'}
         </button>
         {tab === 'api' && (
           <button
             onClick={() => setHidePoll(!hidePoll)}
-            className={`px-2 py-0.5 text-[10px] rounded border ${hidePoll ? 'border-yellow-500/30 text-yellow-400 bg-yellow-500/5' : 'border-gray-700 text-gray-500'}`}
+            className={`px-2 py-0.5 text-[10px] rounded border ${hidePoll ? 'border-yellow-500/30 text-yellow-400 bg-yellow-500/5' : 'border-gray-700 text-gray-400'}`}
           >
             Hide polling
           </button>
         )}
         {tab === 'api' && (
-          <div className="ml-auto flex items-center gap-2 text-[10px] text-gray-600">
+          <div className="ml-auto flex items-center gap-2 text-[10px] text-gray-500">
             <span className="flex items-center gap-1"><span className="w-2 h-1.5 bg-cyan-500 rounded-sm" /> server</span>
             <span className="flex items-center gap-1"><span className="w-2 h-1.5 bg-purple-500 rounded-sm" /> network</span>
           </div>
         )}
         {tab === 'render' && (
-          <div className="ml-auto flex items-center gap-2 text-[10px] text-gray-600">
+          <div className="ml-auto flex items-center gap-2 text-[10px] text-gray-500">
             <span className="flex items-center gap-1"><span className="text-green-400">&lt;16ms</span> smooth</span>
             <span className="flex items-center gap-1"><span className="text-orange-400">&gt;16ms</span> jank</span>
           </div>
@@ -224,13 +224,13 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
       <div className="overflow-auto flex-1 font-mono text-[11px]">
         {tab === 'api' && (
           filteredApi.length === 0 ? (
-            <div className="px-3 py-8 text-center text-gray-600 text-xs">
+            <div className="px-3 py-8 text-center text-gray-500 text-xs">
               {entries.length === 0 ? 'No API calls recorded yet' : 'No entries match filter'}
             </div>
           ) : (
             <table className="w-full">
               <thead>
-                <tr className="text-gray-600 text-left border-b border-gray-800/50 sticky top-0 bg-[var(--bg-surface)]">
+                <tr className="text-gray-500 text-left border-b border-gray-800/50 sticky top-0 bg-[var(--bg-surface)]">
                   <th className="px-2 py-1 font-normal">Time</th>
                   <th className="px-2 py-1 font-normal w-12">Method</th>
                   <th className="px-2 py-1 font-normal">Path</th>
@@ -244,10 +244,10 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
               <tbody>
                 {filteredApi.map((e) => (
                   <tr key={e.id} className={`border-b border-gray-800/30 hover:bg-gray-800/20 ${e.error ? 'bg-red-500/5' : ''}`}>
-                    <td className="px-2 py-1 text-gray-600">{new Date(e.timestamp).toLocaleTimeString()}</td>
-                    <td className="px-2 py-1 text-gray-500">
+                    <td className="px-2 py-1 text-gray-500">{new Date(e.timestamp).toLocaleTimeString()}</td>
+                    <td className="px-2 py-1 text-gray-400">
                       <span>{e.method}</span>
-                      {e.source === 'poll' && <span className="ml-1 text-[9px] text-gray-600" title="Background polling">&#x21BB;</span>}
+                      {e.source === 'poll' && <span className="ml-1 text-[9px] text-gray-500" title="Background polling">&#x21BB;</span>}
                     </td>
                     <td className="px-2 py-1 text-gray-300 truncate max-w-[200px]" title={e.path}>{e.path}</td>
                     <td className={`px-2 py-1 ${statusColor(e.status)}`}>{e.status || '-'}</td>
@@ -264,13 +264,13 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
 
         {tab === 'render' && (
           filteredRender.length === 0 ? (
-            <div className="px-3 py-8 text-center text-gray-600 text-xs">
+            <div className="px-3 py-8 text-center text-gray-500 text-xs">
               {renderEntries.length === 0 ? 'No render events recorded yet — interact with filters to see data' : 'No entries match filter'}
             </div>
           ) : (
             <table className="w-full">
               <thead>
-                <tr className="text-gray-600 text-left border-b border-gray-800/50 sticky top-0 bg-[var(--bg-surface)]">
+                <tr className="text-gray-500 text-left border-b border-gray-800/50 sticky top-0 bg-[var(--bg-surface)]">
                   <th className="px-2 py-1 font-normal">Time</th>
                   <th className="px-2 py-1 font-normal">Component</th>
                   <th className="px-2 py-1 font-normal">Trigger</th>
@@ -285,10 +285,10 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
                   const barWidth = Math.min(100, frames * 10);
                   return (
                     <tr key={e.id} className={`border-b border-gray-800/30 hover:bg-gray-800/20 ${e.renderMs > 100 ? 'bg-red-500/5' : e.renderMs > 16 ? 'bg-orange-500/5' : ''}`}>
-                      <td className="px-2 py-1 text-gray-600">{new Date(e.timestamp).toLocaleTimeString()}</td>
+                      <td className="px-2 py-1 text-gray-500">{new Date(e.timestamp).toLocaleTimeString()}</td>
                       <td className="px-2 py-1 text-gray-300">{e.component}</td>
                       <td className="px-2 py-1 text-gray-400">{e.trigger}</td>
-                      <td className="px-2 py-1 text-right text-gray-500">{e.itemCount ?? '-'}</td>
+                      <td className="px-2 py-1 text-right text-gray-400">{e.itemCount ?? '-'}</td>
                       <td className={`px-2 py-1 text-right ${renderSpeedColor(e.renderMs)}`}>{formatMs(e.renderMs)}</td>
                       <td className="px-2 py-1">
                         <div className="flex items-center gap-1">
@@ -298,7 +298,7 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
                               style={{ width: `${barWidth}%` }}
                             />
                           </div>
-                          <span className="text-[9px] text-gray-600">{frames.toFixed(1)}f</span>
+                          <span className="text-[9px] text-gray-500">{frames.toFixed(1)}f</span>
                         </div>
                       </td>
                     </tr>

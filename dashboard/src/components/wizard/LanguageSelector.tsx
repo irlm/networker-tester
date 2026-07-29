@@ -94,7 +94,7 @@ export function LanguageSelector({ selectedLangs, onLangsChange, testbeds, selec
       <div className="space-y-5">
         {LANGUAGE_GROUPS.map(group => (
           <div key={group.label}>
-            <div className="text-[10px] uppercase tracking-wider font-mono text-gray-600 mb-2">{group.label}</div>
+            <div className="text-[10px] uppercase tracking-wider font-mono text-gray-500 mb-2">{group.label}</div>
             <div className="flex flex-wrap gap-1.5">
               {group.entries.map(entry => {
                 const checked = selectedLangs.has(entry.id);
@@ -106,7 +106,7 @@ export function LanguageSelector({ selectedLangs, onLangsChange, testbeds, selec
                     key={entry.id}
                     className={`flex items-center gap-2 px-3 py-2 border transition-colors text-xs ${
                       noApi
-                        ? 'border-gray-800/60 text-gray-600 cursor-not-allowed'
+                        ? 'border-gray-800/60 text-gray-500 cursor-not-allowed'
                         : checked
                           ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200 cursor-pointer'
                           : 'border-gray-800 text-gray-400 hover:border-gray-600 cursor-pointer'
@@ -121,7 +121,7 @@ export function LanguageSelector({ selectedLangs, onLangsChange, testbeds, selec
                     />
                     <span>{entry.label}</span>
                     {noApi ? (
-                      <span className="text-[10px] uppercase tracking-wider text-gray-600 border border-gray-700 px-1 py-0.5">
+                      <span className="text-[10px] uppercase tracking-wider text-gray-500 border border-gray-700 px-1 py-0.5">
                         no /api/*
                       </span>
                     ) : isNginx ? (
@@ -129,7 +129,7 @@ export function LanguageSelector({ selectedLangs, onLangsChange, testbeds, selec
                         baseline
                       </span>
                     ) : h1Direct ? (
-                      <span className="text-[10px] uppercase tracking-wider text-gray-500 border border-gray-700 px-1 py-0.5">
+                      <span className="text-[10px] uppercase tracking-wider text-gray-400 border border-gray-700 px-1 py-0.5">
                         h1 direct
                       </span>
                     ) : null}
@@ -141,19 +141,19 @@ export function LanguageSelector({ selectedLangs, onLangsChange, testbeds, selec
         ))}
       </div>
 
-      <p className="text-xs text-gray-600 mt-4">
+      <p className="text-xs text-gray-500 mt-4">
         {selectedLangs.size} language{selectedLangs.size !== 1 ? 's' : ''} selected.
         {selectedLangs.has('nginx') && !wantsApibench && ' nginx is included as the static baseline.'}
       </p>
 
       {hasNoApiExclusions && (
-        <p className="text-xs text-gray-600 mt-1">
+        <p className="text-xs text-gray-500 mt-1">
           apibench selected: languages tagged <span className="font-mono">no /api/*</span> serve no measured API suite and are excluded.
         </p>
       )}
 
       {hasH1OnlyAnnotations && (
-        <p className="text-xs text-gray-600 mt-1">
+        <p className="text-xs text-gray-500 mt-1">
           Languages tagged <span className="font-mono">h1 direct</span> self-serve HTTP/1.1 only — h2/h3 modes measure the proxy in front of them, not the language runtime.
         </p>
       )}

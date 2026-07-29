@@ -164,7 +164,7 @@ export function EndpointRunsPage() {
             {deployment?.name ?? 'endpoint'}
             {ip !== '—' && <span className="text-cyan-400 text-sm ml-2">· {ip}</span>}
           </h2>
-          <div className="flex flex-wrap gap-3 mt-1 text-[11px] font-mono text-gray-500">
+          <div className="flex flex-wrap gap-3 mt-1 text-[11px] font-mono text-gray-400">
             {provider && <span>{provider} · {region}</span>}
             {vmSize && <span>· {vmSize}</span>}
             {stacks.length > 0 && <span className="text-cyan-400">· {stacks.join(', ')}</span>}
@@ -176,7 +176,7 @@ export function EndpointRunsPage() {
       {/* ── Run a test ─────────────────────────────────────────────── */}
       <div className="flex items-baseline justify-between mb-2">
         <h3 className="text-sm font-semibold text-gray-200">Run a test</h3>
-        <span className="text-[11px] text-gray-500">
+        <span className="text-[11px] text-gray-400">
           pick a saved config or build a custom one · color:
           <span className="ml-2 px-1.5 py-0.5 border rounded-sm bg-green-400/[.14] text-green-300 border-green-400/50 font-mono text-[9px]">net</span>
           <span className="ml-1 px-1.5 py-0.5 border rounded-sm bg-cyan-400/[.14] text-cyan-300 border-cyan-400/50 font-mono text-[9px]">http</span>
@@ -192,7 +192,7 @@ export function EndpointRunsPage() {
               {p.star && <span className="text-amber-300 mr-1">★</span>}
               {p.name}
             </div>
-            <div className="text-[10px] text-gray-500 font-mono mt-1">{p.desc}</div>
+            <div className="text-[10px] text-gray-400 font-mono mt-1">{p.desc}</div>
             <div className="mt-2"><ModeChipList modes={p.modes} max={6} /></div>
             <button
               type="button"
@@ -205,7 +205,7 @@ export function EndpointRunsPage() {
         ))}
       </div>
 
-      <div className="flex justify-between items-center mb-4 text-xs text-gray-500">
+      <div className="flex justify-between items-center mb-4 text-xs text-gray-400">
         <button
           type="button"
           onClick={() => navigate(`/projects/${projectId}/tests/new`)}
@@ -234,7 +234,7 @@ export function EndpointRunsPage() {
       {/* ── History ───────────────────────────────────────────────── */}
       <div className="flex items-baseline justify-between mt-6 mb-2">
         <h3 className="text-sm font-semibold text-gray-200">History</h3>
-        <span className="text-[11px] text-gray-500">
+        <span className="text-[11px] text-gray-400">
           {filteredRuns.length} of {runs.length} runs ·{' '}
           <Link to={`/projects/${projectId}/runs`} className="text-cyan-400 hover:underline">
             view all →
@@ -267,18 +267,18 @@ export function EndpointRunsPage() {
       </div>
 
       {runsLoading && runs.length === 0 ? (
-        <div className="border border-gray-800 p-8 text-center text-xs text-gray-500 motion-safe:animate-pulse">
+        <div className="border border-gray-800 p-8 text-center text-xs text-gray-400 motion-safe:animate-pulse">
           Loading runs…
         </div>
       ) : filteredRuns.length === 0 ? (
-        <div className="border border-dashed border-gray-800 p-8 text-center text-xs text-gray-500">
+        <div className="border border-dashed border-gray-800 p-8 text-center text-xs text-gray-400">
           {runs.length === 0 ? 'No network runs yet — pick a preset above to start.' : 'No runs match the current filter.'}
         </div>
       ) : (
         <div className="border border-gray-800">
           <table className="w-full text-xs font-mono">
             <thead>
-              <tr className="text-gray-500 text-[10px] uppercase tracking-wider bg-[var(--bg-raised)]">
+              <tr className="text-gray-400 text-[10px] uppercase tracking-wider bg-[var(--bg-raised)]">
                 <th className="text-left px-3 py-2 font-medium">Run</th>
                 <th className="text-left px-3 py-2 font-medium">When</th>
                 <th className="text-left px-3 py-2 font-medium">Config · modes</th>
@@ -300,7 +300,7 @@ export function EndpointRunsPage() {
                         {run.id.slice(0, 8)}
                       </Link>
                     </td>
-                    <td className="px-3 py-2 text-gray-500">{timeAgo(run.created_at)}</td>
+                    <td className="px-3 py-2 text-gray-400">{timeAgo(run.created_at)}</td>
                     <td className="px-3 py-2">
                       <div className="flex items-center gap-2 mb-1">
                         {preset ? (
@@ -309,7 +309,7 @@ export function EndpointRunsPage() {
                             {preset.name}
                           </span>
                         ) : (
-                          <span className="text-[10px] px-1.5 py-0.5 border border-gray-700 text-gray-500 rounded">
+                          <span className="text-[10px] px-1.5 py-0.5 border border-gray-700 text-gray-400 rounded">
                             custom
                           </span>
                         )}
@@ -330,14 +330,14 @@ export function EndpointRunsPage() {
                       <button
                         type="button"
                         onClick={() => launchModes(run.modes ?? [])}
-                        className="text-gray-500 hover:text-cyan-400 mr-3"
+                        className="text-gray-400 hover:text-cyan-400 mr-3"
                         title="Rerun this exact config"
                       >
                         ↻ rerun
                       </button>
                       <Link
                         to={`/projects/${projectId}/runs/${run.id}`}
-                        className="text-gray-500 hover:text-cyan-400"
+                        className="text-gray-400 hover:text-cyan-400"
                         title="Open run details"
                       >
                         →

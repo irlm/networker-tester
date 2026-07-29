@@ -12,7 +12,7 @@ function statusBadge(link: ShareLink) {
     return <span className="text-xs px-2 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/30">revoked</span>;
   }
   if (new Date(link.expires_at) < new Date()) {
-    return <span className="text-xs px-2 py-0.5 rounded bg-gray-500/15 text-gray-500 border border-gray-500/30">expired</span>;
+    return <span className="text-xs px-2 py-0.5 rounded bg-gray-500/15 text-gray-400 border border-gray-500/30">expired</span>;
   }
   return <span className="text-xs px-2 py-0.5 rounded bg-green-500/15 text-green-400 border border-green-500/30">active</span>;
 }
@@ -80,7 +80,7 @@ export function ShareLinksPage() {
 
       <div className="mb-6">
         <h2 className="text-xl font-bold text-gray-100 mb-1">Settings</h2>
-        <p className="text-sm text-gray-500">Manage external share links for runs and tests.</p>
+        <p className="text-sm text-gray-400">Manage external share links for runs and tests.</p>
       </div>
       <SettingsTabs />
 
@@ -91,9 +91,9 @@ export function ShareLinksPage() {
       )}
 
       {loading ? (
-        <div className="text-gray-500 motion-safe:animate-pulse">Loading share links...</div>
+        <div className="text-gray-400 motion-safe:animate-pulse">Loading share links...</div>
       ) : links.length === 0 ? (
-        <div className="text-center py-16 text-gray-600">
+        <div className="text-center py-16 text-gray-500">
           <p className="text-lg mb-2">No share links</p>
           <p className="text-sm">Share links can be created from run and test detail pages.</p>
         </div>
@@ -102,7 +102,7 @@ export function ShareLinksPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="border-b border-gray-800 text-gray-500">
+                <tr className="border-b border-gray-800 text-gray-400">
                   <th className="px-4 py-2 text-left">Label</th>
                   <th className="px-4 py-2 text-left">Type</th>
                   <th className="px-4 py-2 text-left">Status</th>
@@ -119,7 +119,7 @@ export function ShareLinksPage() {
                   return (
                     <tr key={link.link_id} className="border-b border-gray-800/30 hover:bg-gray-800/10">
                       <td className="px-4 py-2 text-gray-200">
-                        {link.label || <span className="text-gray-600 italic">no label</span>}
+                        {link.label || <span className="text-gray-500 italic">no label</span>}
                       </td>
                       <td className="px-4 py-2 text-gray-400 font-mono">{link.resource_type}</td>
                       <td className="px-4 py-2">{statusBadge(link)}</td>
@@ -127,7 +127,7 @@ export function ShareLinksPage() {
                       <td className="px-4 py-2 text-gray-400">
                         {new Date(link.expires_at).toLocaleDateString()}
                       </td>
-                      <td className="px-4 py-2 text-gray-500">{link.created_by_email}</td>
+                      <td className="px-4 py-2 text-gray-400">{link.created_by_email}</td>
                       <td className="px-4 py-2 text-right">
                         {isProjectAdmin && (
                           <div className="flex items-center justify-end gap-2">

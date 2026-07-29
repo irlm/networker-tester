@@ -10,11 +10,11 @@ export function RunResult({ ok, fail, className = '' }: { ok: number; fail: numb
   const total = ok + fail;
   return (
     <span className={`font-mono tabular-nums whitespace-nowrap ${className}`}>
-      <span className={ok > 0 ? 'text-green-400' : 'text-gray-600'}>
+      <span className={ok > 0 ? 'text-green-400' : 'text-gray-500'}>
         {ok}/{total}
       </span>
-      <span className="text-gray-600"> · </span>
-      <span className={fail > 0 ? 'text-red-400' : 'text-gray-600'}>{fail} fail</span>
+      <span className="text-gray-500"> · </span>
+      <span className={fail > 0 ? 'text-red-400' : 'text-gray-500'}>{fail} fail</span>
     </span>
   );
 }

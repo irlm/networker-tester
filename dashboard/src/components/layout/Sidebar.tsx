@@ -210,7 +210,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
           {probeItems.length > 0 && (
             <div className="mt-4">
               {!collapsed && (
-                <div className="px-3 mb-1 text-[10px] uppercase tracking-wider text-gray-600">
+                <div className="px-3 mb-1 text-[10px] uppercase tracking-wider text-gray-500">
                   probe
                 </div>
               )}
@@ -222,7 +222,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
           {benchmarkItems.length > 0 && (
             <div className="mt-4">
               {!collapsed && (
-                <div className="px-3 mb-1 text-[10px] uppercase tracking-wider text-gray-600">
+                <div className="px-3 mb-1 text-[10px] uppercase tracking-wider text-gray-500">
                   benchmarks
                 </div>
               )}
@@ -234,7 +234,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
           {sdkItems.length > 0 && (
             <div className="mt-4">
               {!collapsed && (
-                <div className="px-3 mb-1 text-[10px] uppercase tracking-wider text-gray-600">
+                <div className="px-3 mb-1 text-[10px] uppercase tracking-wider text-gray-500">
                   sdk
                 </div>
               )}
@@ -255,7 +255,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
               {!collapsed && (
                 <button
                   onClick={toggleAdmin}
-                  className="flex items-center justify-between w-full px-3 mb-1.5 text-[10px] uppercase tracking-wider text-gray-600 hover:text-gray-500 transition-colors"
+                  className="flex items-center justify-between w-full px-3 mb-1.5 text-[10px] uppercase tracking-wider text-gray-500 hover:text-gray-400 transition-colors"
                 >
                   <span>admin</span>
                   <span className="text-[8px]">{adminOpen ? '\u25B2' : '\u25BC'}</span>
@@ -288,7 +288,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
                     {email?.split('@')[0] ?? ''}
                   </div>
                   {(email?.split('@')[0] ?? '') !== (isPlatformAdmin ? 'admin' : role ?? 'viewer') && (
-                    <div className="text-[10px] text-gray-600">
+                    <div className="text-[10px] text-gray-500">
                       {isPlatformAdmin ? 'admin' : role ?? 'viewer'}
                     </div>
                   )}
@@ -296,7 +296,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
                 {/* Actions */}
                 <button
                   onClick={() => setShowPasswordDialog(true)}
-                  className="text-gray-600 hover:text-cyan-400 transition-colors p-1 rounded hover:bg-gray-800/50"
+                  className="text-gray-500 hover:text-cyan-400 transition-colors p-1 rounded hover:bg-gray-800/50"
                   title="Change password"
                   aria-label="Change password"
                 >
@@ -306,7 +306,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
                 </button>
                 <button
                   onClick={logout}
-                  className="text-gray-600 hover:text-red-400 transition-colors p-1 rounded hover:bg-gray-800/50"
+                  className="text-gray-500 hover:text-red-400 transition-colors p-1 rounded hover:bg-gray-800/50"
                   title="Log out"
                   aria-label="Log out"
                 >
@@ -326,7 +326,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
               </div>
               <button
                 onClick={() => setShowPasswordDialog(true)}
-                className="text-gray-600 hover:text-cyan-400 text-xs p-0.5"
+                className="text-gray-500 hover:text-cyan-400 text-xs p-0.5"
                 title="Change password"
                 aria-label="Change password"
               >
@@ -334,7 +334,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
               </button>
               <button
                 onClick={logout}
-                className="text-gray-600 hover:text-red-400 text-xs p-0.5"
+                className="text-gray-500 hover:text-red-400 text-xs p-0.5"
                 title="Log out"
                 aria-label="Log out"
               >
@@ -344,7 +344,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
           )}
           <button
             onClick={() => { const next = !collapsed; setCollapsed(next); localStorage.setItem('sidebar-collapsed', next ? '1' : '0'); }}
-            className="hidden md:flex w-full items-center justify-center py-2 text-gray-600 hover:text-gray-400 transition-colors text-xs"
+            className="hidden md:flex w-full items-center justify-center py-2 text-gray-500 hover:text-gray-400 transition-colors text-xs"
             title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
             {collapsed ? '\u25B6' : '\u25C0'}

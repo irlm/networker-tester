@@ -67,7 +67,7 @@ export default function SystemHealthPanel() {
     return (
       <div className="border border-gray-700/50 rounded p-4">
         <h3 className="text-sm font-medium text-gray-400 mb-3">System Health</h3>
-        <p className="text-xs text-gray-500">Loading...</p>
+        <p className="text-xs text-gray-400">Loading...</p>
       </div>
     );
   }
@@ -139,7 +139,7 @@ export default function SystemHealthPanel() {
                 <span className="text-gray-400 font-mono">{check.value}</span>
               )}
               {check.message && (
-                <span className="text-gray-500 truncate max-w-48" title={check.message}>
+                <span className="text-gray-400 truncate max-w-48" title={check.message}>
                   {check.message}
                 </span>
               )}
@@ -149,7 +149,7 @@ export default function SystemHealthPanel() {
       </div>
 
       {health?.checks[0] && (
-        <p className="text-[10px] text-gray-600 mt-2">
+        <p className="text-[10px] text-gray-500 mt-2">
           Last checked:{" "}
           {new Date(health.checks[0].checked_at).toLocaleString()}
         </p>

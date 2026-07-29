@@ -101,9 +101,9 @@ export function CreateSdkEndpointDialog({ projectId, onClose, onCreated }: Creat
         <form onSubmit={handleSubmit} className="p-4 md:p-6">
           <div className="flex items-center justify-between mb-2">
             <h3 id="create-sdk-endpoint-title" className="text-lg font-bold text-gray-100">Register SDK endpoint</h3>
-            <button type="button" onClick={onClose} className="text-gray-500 hover:text-gray-300 text-sm" aria-label="Close">&#x2715;</button>
+            <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-300 text-sm" aria-label="Close">&#x2715;</button>
           </div>
-          <p className="text-xs text-gray-500 mb-6">
+          <p className="text-xs text-gray-400 mb-6">
             Point LagHound at a URL that mounts the SDK routes. Probes run the{' '}
             <span className="font-mono text-purple-400">sdkprobe</span> mode and split latency into network vs server.
           </p>
@@ -136,7 +136,7 @@ export function CreateSdkEndpointDialog({ projectId, onClose, onCreated }: Creat
           {(!trimmedUrl || urlValid) && <div className="mb-3" />}
 
           <label htmlFor="sdk-token" className="block text-xs text-gray-400 mb-1">
-            LagHound token <span className="text-gray-600">(write-only)</span>
+            LagHound token <span className="text-gray-500">(write-only)</span>
           </label>
           <input
             id="sdk-token"
@@ -147,10 +147,10 @@ export function CreateSdkEndpointDialog({ projectId, onClose, onCreated }: Creat
             placeholder="Sent as X-LagHound-Token"
             className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 mb-1 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
           />
-          <p className="text-xs text-gray-600 mb-4">Encrypted at rest and never shown again — you can only replace it.</p>
+          <p className="text-xs text-gray-500 mb-4">Encrypted at rest and never shown again — you can only replace it.</p>
 
           <label htmlFor="sdk-route" className="block text-xs text-gray-400 mb-1">
-            Probe route <span className="text-gray-600">(optional)</span>
+            Probe route <span className="text-gray-500">(optional)</span>
           </label>
           <input
             id="sdk-route"
@@ -167,7 +167,7 @@ export function CreateSdkEndpointDialog({ projectId, onClose, onCreated }: Creat
           {routeValid && <div className="mb-3" />}
 
           <label htmlFor="sdk-desc" className="block text-xs text-gray-400 mb-1">
-            Description <span className="text-gray-600">(optional)</span>
+            Description <span className="text-gray-500">(optional)</span>
           </label>
           <input
             id="sdk-desc"

@@ -308,7 +308,7 @@ export function AppBenchmarkPage() {
 
       <div className="mb-6">
         <h2 className="text-lg md:text-xl font-bold text-gray-100">New Application Benchmark</h2>
-        <p className="text-xs text-gray-500 mt-1">
+        <p className="text-xs text-gray-400 mt-1">
           Compare language and framework performance with statistical methodology.
         </p>
       </div>
@@ -331,9 +331,9 @@ export function AppBenchmarkPage() {
                 }`}
               >
                 <div className="text-sm font-medium text-gray-100">{tmpl.name}</div>
-                <div className="text-[11px] text-gray-500 mt-0.5">{tmpl.description}</div>
+                <div className="text-[11px] text-gray-400 mt-0.5">{tmpl.description}</div>
                 {tmpl.defaultTestbedCount > 0 && (
-                  <div className="text-[10px] font-mono text-gray-600 mt-1.5">
+                  <div className="text-[10px] font-mono text-gray-500 mt-1.5">
                     {tmpl.defaultTestbedCount} testbed / {tmpl.defaultLanguages.length} lang
                   </div>
                 )}
@@ -386,7 +386,7 @@ export function AppBenchmarkPage() {
         <div>
           <h3 className="text-sm font-semibold text-gray-200 mb-4">Review & Launch</h3>
 
-          <label className="text-xs text-gray-500 block mb-4">
+          <label className="text-xs text-gray-400 block mb-4">
             Benchmark name
             <input
               type="text"
@@ -407,7 +407,7 @@ export function AppBenchmarkPage() {
 
           {/* Template */}
           <div className="mb-4">
-            <div className="text-[10px] uppercase tracking-wider text-gray-600 mb-1.5">Template</div>
+            <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">Template</div>
             <div className="text-xs font-mono text-gray-400">
               {RUNTIME_TEMPLATES.find(t => t.id === selectedTemplate)?.name ?? selectedTemplate}
             </div>
@@ -415,21 +415,21 @@ export function AppBenchmarkPage() {
 
           {/* Testbeds */}
           <div className="mb-4">
-            <div className="text-[10px] uppercase tracking-wider text-gray-600 mb-1.5">Testbeds</div>
+            <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">Testbeds</div>
             <div className="space-y-0.5">
               {testbeds.map((testbed, idx) => (
                 <div key={testbed.key} className="flex items-center gap-2 text-xs font-mono py-1 border-b border-gray-800/50 last:border-0">
-                  <span className="text-gray-500 w-4">{idx + 1}</span>
+                  <span className="text-gray-400 w-4">{idx + 1}</span>
                   <span className="text-gray-200">{testbed.cloud}</span>
-                  <span className="text-gray-500">/</span>
+                  <span className="text-gray-400">/</span>
                   <span className="text-gray-300">{testbed.region}</span>
                   <span className={`text-[10px] px-1 ${testbed.os === 'windows' ? 'text-blue-400' : 'text-green-400'}`}>
                     {testbed.os === 'windows' ? 'win' : 'linux'}
                   </span>
-                  <span className="text-gray-600">{testbed.vmSize}</span>
+                  <span className="text-gray-500">{testbed.vmSize}</span>
                   <span className="text-gray-700">{testbed.topology}</span>
                   <span className="text-cyan-500/70">{testbed.proxies.map(p => PROXY_LABELS[p] ?? p).join(', ')}</span>
-                  <span className="text-gray-600">{TESTER_OS_OPTIONS.find(o => o.id === testbed.testerOs)?.label ?? testbed.testerOs}</span>
+                  <span className="text-gray-500">{TESTER_OS_OPTIONS.find(o => o.id === testbed.testerOs)?.label ?? testbed.testerOs}</span>
                 </div>
               ))}
             </div>
@@ -437,7 +437,7 @@ export function AppBenchmarkPage() {
 
           {/* Languages */}
           <div className="mb-4">
-            <div className="text-[10px] uppercase tracking-wider text-gray-600 mb-1.5">Languages</div>
+            <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">Languages</div>
             <div className="text-xs font-mono text-gray-400">
               {[...selectedLangs].sort().map(lang => {
                 const entry = LANGUAGE_GROUPS.flatMap(g => g.entries).find(e => e.id === lang);
@@ -448,7 +448,7 @@ export function AppBenchmarkPage() {
 
           {/* Methodology */}
           <div className="mb-4">
-            <div className="text-[10px] uppercase tracking-wider text-gray-600 mb-1.5">Methodology</div>
+            <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">Methodology</div>
             <div className="text-xs font-mono text-gray-400">
               {methodology.warmup_runs} warmup / {methodology.measured_runs} measured / {methodology.target_error_pct > 0 ? `${methodology.target_error_pct}% target error` : 'no error target'}
             </div>
@@ -456,7 +456,7 @@ export function AppBenchmarkPage() {
 
           {/* Workload */}
           <div className="mb-4">
-            <div className="text-[10px] uppercase tracking-wider text-gray-600 mb-1.5">Workload</div>
+            <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">Workload</div>
             <div className="text-xs font-mono text-gray-400">
               {runs} runs x {concurrency} concurrency / {timeoutMs}ms timeout / {[...selectedModes].join(' ')}
             </div>
@@ -481,7 +481,7 @@ export function AppBenchmarkPage() {
 
           {addSchedule && (
             <div className="border border-gray-800 p-4 mb-4">
-              <label htmlFor="cron" className="text-xs text-gray-500 mb-1 block">Cron Expression (6-field)</label>
+              <label htmlFor="cron" className="text-xs text-gray-400 mb-1 block">Cron Expression (6-field)</label>
               <input
                 id="cron"
                 type="text"
@@ -489,7 +489,7 @@ export function AppBenchmarkPage() {
                 onChange={e => setCronExpr(e.target.value)}
                 className="bg-[var(--bg-base)] border border-gray-700 px-3 py-2 text-sm text-gray-200 w-full font-mono focus:outline-none focus:border-cyan-500"
               />
-              <p className="text-xs text-gray-600 mt-1">sec min hour day month weekday -- e.g. 0 0 * * * * = hourly</p>
+              <p className="text-xs text-gray-500 mt-1">sec min hour day month weekday -- e.g. 0 0 * * * * = hourly</p>
             </div>
           )}
 
@@ -527,7 +527,7 @@ export function AppBenchmarkPage() {
         <button
           onClick={goBack}
           disabled={step === 0}
-          className="text-xs text-gray-500 disabled:text-gray-700 disabled:cursor-not-allowed hover:text-gray-300 transition-colors"
+          className="text-xs text-gray-400 disabled:text-gray-700 disabled:cursor-not-allowed hover:text-gray-300 transition-colors"
         >
           Back
         </button>

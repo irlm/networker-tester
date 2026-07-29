@@ -49,7 +49,7 @@ export function TlsProfileDetailPage() {
     return (
       <div className="p-4 md:p-6">
         <Breadcrumb items={[{ label: 'TLS Profiles', to: `/projects/${projectId}/tls-profiles` }, { label: `Run ${shortId}` }]} />
-        <div className="text-gray-500 motion-safe:animate-pulse">Loading TLS profile...</div>
+        <div className="text-gray-400 motion-safe:animate-pulse">Loading TLS profile...</div>
       </div>
     );
   }
@@ -80,7 +80,7 @@ export function TlsProfileDetailPage() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-xl font-bold text-gray-100 mb-1">{detail.host}:{detail.port}</h2>
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-gray-400">
             {detail.target_kind} · {detail.coverage_level} · {new Date(detail.started_at).toLocaleString()}
           </p>
         </div>
@@ -136,7 +136,7 @@ export function TlsProfileDetailPage() {
             <StringList title="SAN IP" items={leaf.san_ip ?? []} empty="No IP SANs recorded." />
           </>
         ) : (
-          <p className="text-sm text-gray-500">No leaf certificate details recorded.</p>
+          <p className="text-sm text-gray-400">No leaf certificate details recorded.</p>
         )}
       </Section>
 
@@ -191,7 +191,7 @@ export function TlsProfileDetailPage() {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="table-container p-4 space-y-4">
-      <h3 className="text-xs text-gray-500 tracking-wider font-medium uppercase">{title}</h3>
+      <h3 className="text-xs text-gray-400 tracking-wider font-medium uppercase">{title}</h3>
       {children}
     </section>
   );
@@ -200,7 +200,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function MetricCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-gray-800 bg-[var(--bg-surface)] p-3">
-      <div className="text-[11px] uppercase tracking-wider text-gray-500">{label}</div>
+      <div className="text-[11px] uppercase tracking-wider text-gray-400">{label}</div>
       <div className="mt-1 text-sm font-medium text-gray-200">{value}</div>
     </div>
   );
@@ -211,7 +211,7 @@ function KeyValueGrid({ items }: { items: Array<[string, React.ReactNode]> }) {
     <div className="grid md:grid-cols-2 gap-x-6 gap-y-3 text-sm">
       {items.map(([label, value]) => (
         <div key={label} className="min-w-0">
-          <div className="text-xs text-gray-500 mb-1">{label}</div>
+          <div className="text-xs text-gray-400 mb-1">{label}</div>
           <div className="text-gray-200 break-all">{value}</div>
         </div>
       ))}
@@ -222,9 +222,9 @@ function KeyValueGrid({ items }: { items: Array<[string, React.ReactNode]> }) {
 function StringList({ title, items, empty }: { title: string; items: string[]; empty: string }) {
   return (
     <div>
-      <div className="text-xs text-gray-500 mb-2">{title}</div>
+      <div className="text-xs text-gray-400 mb-2">{title}</div>
       {items.length === 0 ? (
-        <p className="text-sm text-gray-600">{empty}</p>
+        <p className="text-sm text-gray-500">{empty}</p>
       ) : (
         <ul className="space-y-1 text-sm text-gray-300 list-disc pl-5">
           {items.map((item, i) => <li key={`${title}-${i}`} className="break-all">{item}</li>)}
@@ -237,9 +237,9 @@ function StringList({ title, items, empty }: { title: string; items: string[]; e
 function FindingsList({ title, items, empty, color }: { title: string; items: Array<{ code: string; message: string }>; empty: string; color: string }) {
   return (
     <div>
-      <div className="text-xs text-gray-500 mb-2">{title}</div>
+      <div className="text-xs text-gray-400 mb-2">{title}</div>
       {items.length === 0 ? (
-        <p className="text-sm text-gray-600">{empty}</p>
+        <p className="text-sm text-gray-500">{empty}</p>
       ) : (
         <ul className="space-y-2">
           {items.map((item, i) => (

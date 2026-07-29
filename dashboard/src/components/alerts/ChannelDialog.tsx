@@ -94,7 +94,7 @@ export function ChannelDialog({ projectId, existing, onClose, onSaved }: Channel
             <h3 id="alert-channel-dialog-title" className="text-lg font-bold text-gray-100">
               {existing ? 'Edit Channel' : 'New Channel'}
             </h3>
-            <button type="button" onClick={onClose} className="text-gray-500 hover:text-gray-300 text-sm" aria-label="Close">
+            <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-300 text-sm" aria-label="Close">
               &#x2715;
             </button>
           </div>
@@ -147,7 +147,7 @@ export function ChannelDialog({ projectId, existing, onClose, onSaved }: Channel
               </div>
               <div className="mb-4">
                 <label htmlFor="channel-secret" className="block text-xs text-gray-400 mb-1">
-                  HMAC secret <span className="text-gray-600">(optional)</span>
+                  HMAC secret <span className="text-gray-500">(optional)</span>
                 </label>
                 <input
                   id="channel-secret"
@@ -157,7 +157,7 @@ export function ChannelDialog({ projectId, existing, onClose, onSaved }: Channel
                   onChange={(e) => setSecret(e.target.value)}
                   className={`${inputCls} font-mono`}
                 />
-                <p className="text-[11px] text-gray-600 mt-1">
+                <p className="text-[11px] text-gray-500 mt-1">
                   {existing?.config.secret
                     ? 'Write-only — leave the mask untouched to keep the stored secret, clear it to remove signing.'
                     : 'When set, deliveries carry an X-Networker-Signature HMAC-SHA256 header.'}
@@ -175,7 +175,7 @@ export function ChannelDialog({ projectId, existing, onClose, onSaved }: Channel
                 rows={3}
                 className={`${inputCls} font-mono resize-y`}
               />
-              <p className="text-[11px] text-gray-600 mt-1">Comma or newline separated. One send per address.</p>
+              <p className="text-[11px] text-gray-500 mt-1">Comma or newline separated. One send per address.</p>
             </div>
           )}
 

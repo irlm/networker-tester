@@ -36,28 +36,28 @@ const MODE_FAMILIES: ModeFamilyDef[] = [
     // in shared/modes.json.
     modes: ['tcp', 'dns', 'tls', 'tlsresume', 'native', 'udp', 'ping', 'path', 'dualstack', 'pmtud', 'rpm', 'websocket'],
     activeClass: CHIP_ACTIVE_CLASS,
-    labelClass: 'text-gray-500',
+    labelClass: 'text-gray-400',
   },
   {
     id: 'http',
     label: 'HTTP',
     modes: ['http1', 'http2', 'http3', 'curl'],
     activeClass: CHIP_ACTIVE_CLASS,
-    labelClass: 'text-gray-500',
+    labelClass: 'text-gray-400',
   },
   {
     id: 'thru',
     label: 'THROUGHPUT',
     modes: ['download', 'upload'],
     activeClass: CHIP_ACTIVE_CLASS,
-    labelClass: 'text-gray-500',
+    labelClass: 'text-gray-400',
   },
   {
     id: 'page',
     label: 'PAGE-LOAD',
     modes: ['pageload', 'pageload2', 'pageload3'],
     activeClass: CHIP_ACTIVE_CLASS,
-    labelClass: 'text-gray-500',
+    labelClass: 'text-gray-400',
   },
 ];
 
@@ -86,7 +86,7 @@ const MODE_PRESETS: Array<{ id: string; label: string; modes: string[]; desc: st
 const ALL_MODES = new Set(MODE_FAMILIES.flatMap(f => f.modes));
 
 function classForMode(mode: string, active: boolean): string {
-  if (!active) return 'border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600';
+  if (!active) return 'border-gray-700 text-gray-400 hover:text-gray-300 hover:border-gray-600';
   // Prefer the page-local family table (covers 'native', which the shared
   // familyOf() map doesn't know), fall back to familyOf for legacy modes
   // that only appear on historical runs.
@@ -368,7 +368,7 @@ export function NetworkTestPage() {
 
       <div className="mb-4">
         <h2 className="text-lg md:text-xl font-bold text-gray-100">New Network Test</h2>
-        <p className="text-xs text-gray-500 mt-1">
+        <p className="text-xs text-gray-400 mt-1">
           Run network primitives against a deployed target. Most runs repeat — rerun a recent run below, or build a new one.
         </p>
       </div>
@@ -381,11 +381,11 @@ export function NetworkTestPage() {
         >
           <div className="text-cyan-400 text-xl leading-none">↻</div>
           <div>
-            <div className="text-[10px] uppercase tracking-wider font-mono text-gray-500">Repeat last run</div>
+            <div className="text-[10px] uppercase tracking-wider font-mono text-gray-400">Repeat last run</div>
             <div className="text-sm font-mono text-gray-200 mt-0.5">
               <span className="text-cyan-300">{lastRun.config_name ?? lastRun.id.slice(0, 8)}</span>
             </div>
-            <div className="flex items-center gap-1 flex-wrap mt-1 text-[11px] text-gray-500">
+            <div className="flex items-center gap-1 flex-wrap mt-1 text-[11px] text-gray-400">
               {lastRun.modes.slice(0, 8).map(m => (
                 <span
                   key={m}
@@ -395,7 +395,7 @@ export function NetworkTestPage() {
                 </span>
               ))}
               {lastRun.modes.length > 8 && (
-                <span className="text-[10px] text-gray-600">+{lastRun.modes.length - 8}</span>
+                <span className="text-[10px] text-gray-500">+{lastRun.modes.length - 8}</span>
               )}
               <span className="ml-2">· {relTime(lastRun.finished_at ?? lastRun.started_at ?? lastRun.created_at)}</span>
               {lastRun.status === 'completed' && (
@@ -429,7 +429,7 @@ export function NetworkTestPage() {
         <div className="mb-4">
           <div className="flex items-baseline justify-between mb-1.5">
             <h3 className="text-xs font-semibold text-gray-300 tracking-wider">Recent runs</h3>
-            <span className="text-[10px] font-mono text-gray-600">rerun any row or click → for detail</span>
+            <span className="text-[10px] font-mono text-gray-500">rerun any row or click → for detail</span>
           </div>
           <div className="flex items-center gap-1 mb-2 text-[11px]">
             {([
@@ -443,10 +443,10 @@ export function NetworkTestPage() {
                 className={`px-2.5 py-0.5 border transition-colors ${
                   scopeTab === t.id
                     ? 'border-cyan-500/40 text-cyan-300 bg-cyan-500/5'
-                    : 'border-transparent text-gray-500 hover:text-gray-300'
+                    : 'border-transparent text-gray-400 hover:text-gray-300'
                 } disabled:opacity-40 disabled:cursor-not-allowed`}
               >
-                {t.label} <span className="text-[10px] text-gray-600 font-mono">· {t.count}</span>
+                {t.label} <span className="text-[10px] text-gray-500 font-mono">· {t.count}</span>
               </button>
             ))}
             <div className="flex-1" />
@@ -462,12 +462,12 @@ export function NetworkTestPage() {
                   className="grid items-center gap-3 py-2 px-3 border-b border-gray-800/50 hover:bg-cyan-500/[.03]"
                   style={{ gridTemplateColumns: '28px 1fr auto auto 100px' }}
                 >
-                  <span className="inline-block px-1.5 py-0.5 text-[10px] font-mono text-gray-500 bg-gray-900 border border-gray-800 rounded text-center">
+                  <span className="inline-block px-1.5 py-0.5 text-[10px] font-mono text-gray-400 bg-gray-900 border border-gray-800 rounded text-center">
                     {i + 1}
                   </span>
                   <div className="min-w-0">
                     <span className="text-xs font-mono text-gray-200">{run.config_name ?? run.id.slice(0, 8)}</span>
-                    <span className="text-[10px] text-gray-500 ml-2">{relTime(run.finished_at ?? run.started_at ?? run.created_at)}</span>
+                    <span className="text-[10px] text-gray-400 ml-2">{relTime(run.finished_at ?? run.started_at ?? run.created_at)}</span>
                   </div>
                   <div className="flex gap-1 flex-wrap">
                     {modes.slice(0, 6).map(m => (
@@ -478,12 +478,12 @@ export function NetworkTestPage() {
                         {modeLabel(m)}
                       </span>
                     ))}
-                    {modes.length > 6 && <span className="text-[9px] text-gray-600">+{modes.length - 6}</span>}
+                    {modes.length > 6 && <span className="text-[9px] text-gray-500">+{modes.length - 6}</span>}
                   </div>
                   <RunResult ok={run.success_count} fail={run.failure_count} className="text-[11px]" />
                   <div className="text-right text-[11px]">
                     <button onClick={() => rerunConfig(run.test_config_id)} disabled={submitting} className="text-cyan-400 hover:underline disabled:opacity-50" title={`rerun (key ${i + 1})`}>↻ rerun</button>
-                    <button onClick={() => tweakFromRun(run)} className="text-gray-500 hover:text-cyan-300 ml-2" title="load into form">✎</button>
+                    <button onClick={() => tweakFromRun(run)} className="text-gray-400 hover:text-cyan-300 ml-2" title="load into form">✎</button>
                   </div>
                 </div>
               );
@@ -494,7 +494,7 @@ export function NetworkTestPage() {
 
       {/* ─── OR DIVIDER ──────────────────────────────────────────── */}
       {recentRuns.length > 0 && (
-        <div className="flex items-center gap-3 my-6 text-[11px] uppercase tracking-widest text-gray-600">
+        <div className="flex items-center gap-3 my-6 text-[11px] uppercase tracking-widest text-gray-500">
           <div className="flex-1 h-px bg-gray-800" />
           or build a new run
           <div className="flex-1 h-px bg-gray-800" />
@@ -507,9 +507,9 @@ export function NetworkTestPage() {
         {/* Step 1: MODES */}
         <div className="mb-5">
           <div className="flex items-baseline gap-2 mb-2">
-            <span className={`w-5 h-5 rounded-full text-[10px] font-mono text-center leading-[18px] border ${selectedModes.size > 0 ? 'bg-cyan-500 text-gray-900 border-cyan-500' : 'bg-gray-900 text-gray-500 border-gray-700'}`}>1</span>
+            <span className={`w-5 h-5 rounded-full text-[10px] font-mono text-center leading-[18px] border ${selectedModes.size > 0 ? 'bg-cyan-500 text-gray-900 border-cyan-500' : 'bg-gray-900 text-gray-400 border-gray-700'}`}>1</span>
             <span className="text-xs text-gray-200 font-medium">What are you testing?</span>
-            <span className="text-[11px] text-gray-500 ml-auto">
+            <span className="text-[11px] text-gray-400 ml-auto">
               {selectedModes.size === 0 ? 'pick at least one mode' : `${selectedModes.size} mode${selectedModes.size === 1 ? '' : 's'} selected`}
             </span>
           </div>
@@ -525,7 +525,7 @@ export function NetworkTestPage() {
                   className={`px-2.5 py-1 text-[11px] font-mono border transition-colors ${
                     active
                       ? 'border-cyan-500 text-cyan-300 bg-cyan-500/10'
-                      : 'border-gray-800 border-dashed text-gray-500 hover:text-cyan-300 hover:border-cyan-500/40 hover:border-solid'
+                      : 'border-gray-800 border-dashed text-gray-400 hover:text-cyan-300 hover:border-cyan-500/40 hover:border-solid'
                   }`}
                   title={p.desc}
                 >
@@ -534,7 +534,7 @@ export function NetworkTestPage() {
               );
             })}
             {selectedModes.size > 0 && (
-              <button onClick={clearModes} className="px-2.5 py-1 text-[11px] font-mono text-gray-600 hover:text-gray-300">clear all</button>
+              <button onClick={clearModes} className="px-2.5 py-1 text-[11px] font-mono text-gray-500 hover:text-gray-300">clear all</button>
             )}
           </div>
 
@@ -544,9 +544,9 @@ export function NetworkTestPage() {
             <div className="mb-2 px-2 py-1.5 border border-cyan-400/30 bg-cyan-500/5 rounded-sm">
               <div className="flex items-center justify-between mb-1">
                 <span className="text-[10px] uppercase tracking-wider font-mono text-gray-400">
-                  PAYLOAD SIZES <span className="text-gray-500 normal-case tracking-normal">· download/upload run once per selected size</span>
+                  PAYLOAD SIZES <span className="text-gray-400 normal-case tracking-normal">· download/upload run once per selected size</span>
                 </span>
-                <span className="text-[10px] font-mono text-gray-500">
+                <span className="text-[10px] font-mono text-gray-400">
                   {payloadSizes.size === 0 ? 'pick at least one' : `${payloadSizes.size} selected`}
                 </span>
               </div>
@@ -564,7 +564,7 @@ export function NetworkTestPage() {
                       className={`px-2 py-0.5 text-[11px] font-mono border transition-colors rounded-sm ${
                         active
                           ? CHIP_ACTIVE_CLASS
-                          : 'border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600'
+                          : 'border-gray-700 text-gray-400 hover:text-gray-300 hover:border-gray-600'
                       }`}
                     >
                       {p.label}
@@ -584,7 +584,7 @@ export function NetworkTestPage() {
                   <span className={`text-[10px] uppercase tracking-wider font-mono ${family.labelClass}`}>{family.label}</span>
                   <button
                     onClick={() => toggleFamily(family)}
-                    className="text-[10px] font-mono text-gray-600 hover:text-cyan-300"
+                    className="text-[10px] font-mono text-gray-500 hover:text-cyan-300"
                   >
                     {allSelected ? 'clear' : `select all (${family.modes.length})`}
                   </button>
@@ -611,22 +611,22 @@ export function NetworkTestPage() {
         {/* Step 2: TARGET */}
         <div className="mb-5">
           <div className="flex items-baseline gap-2 mb-2">
-            <span className={`w-5 h-5 rounded-full text-[10px] font-mono text-center leading-[18px] border ${selectedTargetId ? 'bg-cyan-500 text-gray-900 border-cyan-500' : 'bg-gray-900 text-gray-500 border-gray-700'}`}>2</span>
+            <span className={`w-5 h-5 rounded-full text-[10px] font-mono text-center leading-[18px] border ${selectedTargetId ? 'bg-cyan-500 text-gray-900 border-cyan-500' : 'bg-gray-900 text-gray-400 border-gray-700'}`}>2</span>
             <span className="text-xs text-gray-200 font-medium">Against which target?</span>
-            <span className="text-[11px] text-gray-500 ml-auto">{deployments.length} deployed</span>
+            <span className="text-[11px] text-gray-400 ml-auto">{deployments.length} deployed</span>
           </div>
 
           {selectedDeployment ? (
             <div className="flex items-center gap-2 px-3 py-2 bg-cyan-500/5 border border-cyan-500/40">
               <span className={`w-2 h-2 rounded-full ${deploymentStatusDot(selectedDeployment.status)}`} />
               <span className="text-xs font-mono text-gray-200">{selectedDeployment.name}</span>
-              <span className="text-[11px] text-gray-500">
+              <span className="text-[11px] text-gray-400">
                 {selectedDeployment.config?.endpoints?.[0]?.provider && `· ${selectedDeployment.config.endpoints[0].provider}`}
                 {selectedDeployment.config?.endpoints?.[0]?.region && ` ${selectedDeployment.config.endpoints[0].region}`}
               </span>
               <button
                 onClick={() => { setSelectedTargetId(''); setTargetSearch(''); setTargetPopoverOpen(true); targetInputRef.current?.focus(); }}
-                className="ml-auto text-[11px] text-gray-500 hover:text-cyan-300"
+                className="ml-auto text-[11px] text-gray-400 hover:text-cyan-300"
               >
                 change
               </button>
@@ -642,7 +642,7 @@ export function NetworkTestPage() {
                 placeholder={loading ? 'loading deployed targets…' : 'search by name, region, or cloud — press / to focus'}
                 className="w-full bg-[var(--bg-base)] border border-gray-700 px-3 py-2 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
               />
-              <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-mono text-gray-600">
+              <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-mono text-gray-500">
                 <span className="px-1 border border-gray-700 rounded">/</span>
               </span>
               {targetPopoverOpen && filteredTargets.length > 0 && (
@@ -657,20 +657,20 @@ export function NetworkTestPage() {
                       <span className={`w-2 h-2 rounded-full ${deploymentStatusDot(dep.status)}`} />
                       <div>
                         <div className="font-mono text-gray-200">{dep.name}</div>
-                        <div className="text-[10px] text-gray-500">
+                        <div className="text-[10px] text-gray-400">
                           {dep.config?.endpoints?.[0]?.provider ?? 'cloud unknown'}
                           {' · '}
                           {dep.config?.endpoints?.[0]?.region ?? 'region unknown'}
                           {dep.config?.endpoints?.[0]?.http_stacks && dep.config.endpoints[0].http_stacks.length > 0 && ` · ${dep.config.endpoints[0].http_stacks.join(', ')}`}
                         </div>
                       </div>
-                      <span className="text-[10px] text-gray-500 font-mono">{dep.status}</span>
+                      <span className="text-[10px] text-gray-400 font-mono">{dep.status}</span>
                     </button>
                   ))}
                 </div>
               )}
               {targetPopoverOpen && !loading && filteredTargets.length === 0 && (
-                <div className="mt-1 border border-gray-800 border-dashed px-3 py-4 text-center text-xs text-gray-500">
+                <div className="mt-1 border border-gray-800 border-dashed px-3 py-4 text-center text-xs text-gray-400">
                   {targetSearch
                     ? `No targets match "${targetSearch}".`
                     : 'No deployed targets yet.'}
@@ -687,15 +687,15 @@ export function NetworkTestPage() {
         {/* Step 3: RUNNER */}
         <div className="mb-0">
           <div className="flex items-baseline gap-2 mb-1">
-            <span className="w-5 h-5 rounded-full text-[10px] font-mono text-center leading-[18px] bg-gray-900 text-gray-500 border border-gray-700">3</span>
+            <span className="w-5 h-5 rounded-full text-[10px] font-mono text-center leading-[18px] bg-gray-900 text-gray-400 border border-gray-700">3</span>
             <span className="text-xs text-gray-200 font-medium">Runner</span>
-            <span className="text-[11px] text-gray-500 ml-auto">
+            <span className="text-[11px] text-gray-400 ml-auto">
               {runnerMode === 'auto' ? 'auto-pick' : selectedTesterId ? (testers.find(t => t.tester_id === selectedTesterId)?.name ?? 'none') : 'none selected'}
               {' · '}{runnerStats.idle} idle / {runnerStats.online} online
             </span>
           </div>
           {!runnerExpanded ? (
-            <div className="text-[11px] text-gray-500 ml-7">
+            <div className="text-[11px] text-gray-400 ml-7">
               First idle runner will execute this run.{' '}
               <button onClick={() => setRunnerExpanded(true)} className="text-cyan-400 hover:underline">pick specific →</button>
             </div>
@@ -704,17 +704,17 @@ export function NetworkTestPage() {
               <div className="flex gap-1">
                 <button
                   onClick={() => { setRunnerMode('auto'); setSelectedTesterId(null); }}
-                  className={`px-2.5 py-1 text-[11px] border transition-colors ${runnerMode === 'auto' ? 'border-cyan-500/40 text-cyan-300 bg-cyan-500/5' : 'border-gray-800 text-gray-500'}`}
+                  className={`px-2.5 py-1 text-[11px] border transition-colors ${runnerMode === 'auto' ? 'border-cyan-500/40 text-cyan-300 bg-cyan-500/5' : 'border-gray-800 text-gray-400'}`}
                 >
                   Auto-pick
                 </button>
                 <button
                   onClick={() => setRunnerMode('specific')}
-                  className={`px-2.5 py-1 text-[11px] border transition-colors ${runnerMode === 'specific' ? 'border-cyan-500/40 text-cyan-300 bg-cyan-500/5' : 'border-gray-800 text-gray-500'}`}
+                  className={`px-2.5 py-1 text-[11px] border transition-colors ${runnerMode === 'specific' ? 'border-cyan-500/40 text-cyan-300 bg-cyan-500/5' : 'border-gray-800 text-gray-400'}`}
                 >
                   Pick specific
                 </button>
-                <button onClick={() => setRunnerExpanded(false)} className="px-2.5 py-1 text-[11px] text-gray-600 hover:text-gray-300 ml-auto">collapse</button>
+                <button onClick={() => setRunnerExpanded(false)} className="px-2.5 py-1 text-[11px] text-gray-500 hover:text-gray-300 ml-auto">collapse</button>
               </div>
               {runnerMode === 'specific' && testers.length > 0 && (
                 <div className="space-y-1">
@@ -731,8 +731,8 @@ export function NetworkTestPage() {
                       >
                         <input type="radio" name="runner" checked={checked} disabled={!isOnline} onChange={() => setSelectedTesterId(row.tester_id)} className="accent-cyan-400" />
                         <span className="font-mono text-gray-200">{row.name}</span>
-                        <span className="text-[10px] text-gray-500">· {row.cloud}/{row.region}</span>
-                        <span className={`ml-auto text-[10px] font-mono ${isIdle ? 'text-green-400' : 'text-gray-500'}`}>
+                        <span className="text-[10px] text-gray-400">· {row.cloud}/{row.region}</span>
+                        <span className={`ml-auto text-[10px] font-mono ${isIdle ? 'text-green-400' : 'text-gray-400'}`}>
                           {isOnline ? (isIdle ? 'idle' : row.allocation) : row.power_state}
                         </span>
                       </label>
@@ -773,7 +773,7 @@ export function NetworkTestPage() {
 
       {/* Shortcuts hint — static footer so it can't collide with the fixed
           perf pill in the same corner (audit F11). */}
-      <div className="mt-4 text-right text-[10px] text-gray-600 font-mono select-none">
+      <div className="mt-4 text-right text-[10px] text-gray-500 font-mono select-none">
         <span className="px-1 bg-gray-900 border border-gray-800 rounded">R</span> rerun last ·{' '}
         <span className="px-1 bg-gray-900 border border-gray-800 rounded">1</span>-<span className="px-1 bg-gray-900 border border-gray-800 rounded">5</span> recent ·{' '}
         <span className="px-1 bg-gray-900 border border-gray-800 rounded">/</span> search ·{' '}
