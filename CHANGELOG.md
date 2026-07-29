@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.111] — 2026-07-29
+
+### Fixed
+- **Provisioned-target VM creation failed for some cell names** ("rust apibench
+  provisioning" — `install.sh exited code 1`). `SanitizeVmLabel` truncated the
+  generated VM name at 15 chars and could leave a **trailing dash**
+  (e.g. a comparison-group cell "rust @ nginx …" → `ShortIdFromName` "rust--ng"
+  → `nwk-auto-rust--`). Azure derives the NIC ipconfig name as
+  `ipconfig<vmName>`, which must end with a word character, so VM creation
+  failed with `InvalidResourceName` and took the whole deploy down. (Sibling
+  cells like "go …" survived only by where their truncation happened to land.)
+  `SanitizeVmLabel` now collapses dash-runs, forbids a leading dash, caps at 15,
+  and trims trailing dashes — the name always ends in a word char and is
+  Azure-valid. Verified live: the same rust cell now provisions.
+
+---
+
 ## [0.28.110] — 2026-07-29
 
 ### Fixed
