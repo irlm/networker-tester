@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.110] — 2026-07-29
+
+### Fixed
+- **Matrix (comparison-group) benchmark launch did nothing** — the Application
+  and Full-Stack "compare N cells" launch (`POST /comparison-groups/{id}/launch`)
+  was an unimplemented M3 stub: it returned `202 Accepted` but created **zero
+  runs**, so the UI redirected to an empty results page (reported live: a
+  70-cell Application benchmark → no results). The dispatcher + provisioning
+  orchestrator it was deferred against now exist, so it's implemented: for each
+  cell it creates a TestConfig (cell endpoint + the group's base_workload +
+  methodology) and dispatches a run tagged with the group id — `pending`
+  endpoints flow through provision → readiness-gate → dispatch, others dispatch
+  immediately; the group flips to `running`. One bad cell is recorded and
+  skipped, not fatal; the response reports launched/total/failed. (The results
+  page already filtered by `comparison_group_id`, so it now populates.)
+
+---
+
 ## [0.28.109] — 2026-07-29
 
 ### Fixed

@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Networker.ControlPlane;
 using Networker.ControlPlane.Auth;
+using Networker.ControlPlane.Dispatch;
 using Networker.Data;
 
 namespace Networker.ControlPlane.Endpoints;
@@ -129,40 +131,145 @@ public static class ComparisonGroupsEndpoints
             return Results.Ok(ToDetailDto(group, runs.Select(ToRunDto).ToArray()));
         }).RequireAuthorization();
 
-        // POST /api/v2/comparison-groups/{id}/launch — dispatch queued runs.
-        // In Rust this marks the group "running" and dispatch_or_provisions each
-        // queued run. That needs the run dispatcher (built in parallel), so M3
-        // ships only the endpoint shell: validate the group exists, then 202.
-        // Flat route: row-level authz via ProjectAccessChecker against
-        // group.ProjectId — launching is a mutation, so Operator (not Viewer) is
-        // required. No access → 404, identical to not-found.
+        // POST /api/v2/comparison-groups/{id}/launch — materialize + dispatch one
+        // run per cell. For each cell: create a TestConfig (cell endpoint +
+        // group base_workload + methodology), then IRunDispatcher.LaunchAsync
+        // tagging the run with this group id — pending endpoints are picked up by
+        // the ProvisioningOrchestrator (provision → readiness-gate → dispatch),
+        // network/proxy endpoints dispatch immediately. Operator required.
+        //
+        // Was an unimplemented M3 stub (returned 202, created ZERO runs — the UI
+        // then redirected to an empty results page; E2E follow-up 2026-07-29).
+        // The dispatcher + orchestrator it waited on now exist.
         app.MapPost("/api/v2/comparison-groups/{id:guid}/launch", async (
             Guid id,
             HttpContext ctx,
             ProjectAccessChecker access,
+            IRunDispatcher dispatcher,
             NetworkerDbContext db,
             CancellationToken ct) =>
         {
-            var groupProjectId = await db.ComparisonGroups
-                .AsNoTracking()
-                .Where(g => g.Id == id)
-                .Select(g => g.ProjectId)
-                .FirstOrDefaultAsync(ct);
-            if (groupProjectId is null ||
-                !await access.HasRoleAsync(ctx, groupProjectId, ProjectRole.Operator, ct))
+            var user = ctx.GetAuthUser();
+            if (user is null)
             {
-                return Results.NotFound();
+                return Results.Unauthorized();
             }
 
-            // TODO(M3): dispatch each config variant via IRunDispatcher — mark the
-            // group "running" and dispatch (or provision) every still-queued run in
-            // the group. Deferred until the run dispatcher lands; for now we accept
-            // the request without launching.
-            return Results.Accepted();
+            var group = await db.ComparisonGroups.AsTracking()
+                .FirstOrDefaultAsync(g => g.Id == id, ct);
+            if (group is null ||
+                !await access.HasRoleAsync(ctx, group.ProjectId, ProjectRole.Operator, ct))
+            {
+                return Results.NotFound(); // 404 == no-access, don't leak existence
+            }
+
+            List<CellSpec> cells;
+            try
+            {
+                cells = ParseCells(group.Cells);
+            }
+            catch (JsonException)
+            {
+                return ApiError.Status(StatusCodes.Status422UnprocessableEntity,
+                    "comparison group has malformed cells");
+            }
+            if (cells.Count == 0)
+            {
+                return ApiError.Status(StatusCodes.Status422UnprocessableEntity,
+                    "comparison group has no cells to launch");
+            }
+
+            var now = DateTime.UtcNow;
+            var launched = new List<Guid>(cells.Count);
+            var failures = new List<string>();
+
+            for (var i = 0; i < cells.Count; i++)
+            {
+                var cell = cells[i];
+                try
+                {
+                    var cfg = new Data.Entities.TestConfig
+                    {
+                        Id = Guid.NewGuid(),
+                        ProjectId = group.ProjectId,
+                        // UNIQUE(project_id, name): the group id + index keep every
+                        // cell distinct and a re-launch from colliding.
+                        Name = $"{cell.Label} · cg-{id.ToString()[..8]}·{i}",
+                        EndpointKind = cell.EndpointKind,
+                        EndpointRef = cell.EndpointRaw,
+                        Workload = group.BaseWorkload,
+                        Methodology = group.Methodology,
+                        MaxDurationSecs = DefaultMaxDurationSecs,
+                        CreatedBy = user.UserId,
+                        CreatedAt = now,
+                        UpdatedAt = now,
+                    };
+                    db.TestConfigs.Add(cfg);
+                    await db.SaveChangesAsync(ct);
+
+                    // Tag the run with THIS group so the runs list
+                    // (?comparison_group_id=) and the group detail collect it.
+                    var runId = await dispatcher.LaunchAsync(cfg.Id, id, cell.RunnerId, user, ct);
+                    launched.Add(runId);
+                }
+                catch (Exception ex)
+                {
+                    // One bad cell must not abort the matrix — record + continue.
+                    failures.Add($"{cell.Label}: {ex.Message}");
+                    ctx.RequestServices.GetService<ILoggerFactory>()?
+                        .CreateLogger("ComparisonGroups.launch")
+                        .LogWarning(ex, "Comparison group {GroupId} cell '{Cell}' failed to launch", id, cell.Label);
+                }
+            }
+
+            group.Status = launched.Count > 0 ? "running" : "failed";
+            await db.SaveChangesAsync(ct);
+
+            return Results.Accepted($"/api/v2/comparison-groups/{id}", new
+            {
+                launched = launched.Count,
+                total = cells.Count,
+                failed = failures.Count,
+                errors = failures.Count > 0 ? failures : null,
+            });
         }).RequireAuthorization();
 
         return app;
     }
+
+    /// <summary>A comparison-group cell resolved for launch.</summary>
+    internal sealed record CellSpec(string Label, string EndpointRaw, string EndpointKind, Guid? RunnerId);
+
+    /// <summary>Parse the group's <c>cells</c> JSON into launch specs. Each cell
+    /// carries a <c>label</c>, a polymorphic <c>endpoint</c> (kind pending /
+    /// network / proxy), and an optional <c>runner_id</c>.</summary>
+    internal static List<CellSpec> ParseCells(string cellsJson)
+    {
+        using var doc = JsonDocument.Parse(cellsJson);
+        var list = new List<CellSpec>();
+        if (doc.RootElement.ValueKind != JsonValueKind.Array)
+        {
+            return list;
+        }
+        foreach (var cell in doc.RootElement.EnumerateArray())
+        {
+            if (!cell.TryGetProperty("endpoint", out var ep) || ep.ValueKind != JsonValueKind.Object)
+            {
+                continue; // a cell with no endpoint can't become a run
+            }
+            var label = cell.TryGetProperty("label", out var l) && l.ValueKind == JsonValueKind.String
+                ? l.GetString() ?? "cell" : "cell";
+            var kind = ep.TryGetProperty("kind", out var k) && k.ValueKind == JsonValueKind.String
+                ? k.GetString() ?? "pending" : "pending";
+            Guid? runnerId = cell.TryGetProperty("runner_id", out var r)
+                && r.ValueKind == JsonValueKind.String && Guid.TryParse(r.GetString(), out var rid)
+                ? rid : null;
+            list.Add(new CellSpec(label, ep.GetRawText(), kind, runnerId));
+        }
+        return list;
+    }
+
+    private const int DefaultMaxDurationSecs = 900;
 
     // Shape a ComparisonGroup entity into the snake_case wire DTO matching the Rust
     // networker_common::ComparisonGroup. base_workload / methodology / cells are
