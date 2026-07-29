@@ -455,6 +455,16 @@ public sealed class ProvisioningOrchestrator : BackgroundService
         };
         cfg.EndpointRef = newEndpoint.ToJsonString();
         cfg.EndpointKind = EndpointKindNetwork;
+        // E2E pass 2026-07-28 P1-14 (second half): a provisioned proxy-stack target
+        // serves a SELF-SIGNED cert (CN=localhost, no SAN — install.sh generates it
+        // per-VM). The dispatcher only injects workload.insecure for endpoint_kind
+        // == "proxy"; once we rewrite the endpoint to `network` here that branch no
+        // longer fires, so the tester would VALIDATE the self-signed cert and fail
+        // every attempt at the TLS stage (confirmed live: TCP ok, no TLS phase,
+        // 50/50 fail even with the CA:FALSE cert fix). Persist insecure=true on the
+        // promoted config so the tester skips validation — provisioned targets are
+        // self-signed by construction, so this is always correct here.
+        cfg.Workload = WithInsecureWorkload(cfg.Workload);
         cfg.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
 
@@ -464,8 +474,33 @@ public sealed class ProvisioningOrchestrator : BackgroundService
             .ConfigureAwait(false);
 
         _logger.LogInformation(
-            "Provisioning complete for run {RunId}: endpoint rewritten to {Host}:{Port} (proxy {Proxy}), run re-queued",
+            "Provisioning complete for run {RunId}: endpoint rewritten to {Host}:{Port} (proxy {Proxy}, insecure), run re-queued",
             runId, host, port, pending.ProxyStack);
+    }
+
+    /// <summary>
+    /// Return the workload JSON with <c>insecure: true</c> set (P1-14 second half).
+    /// Mirrors <c>RunDispatcher.WithInsecure</c>, but PERSISTED on the promoted
+    /// config (the dispatcher applies it copy-on-write only for <c>proxy</c>-kind
+    /// endpoints, which no longer fires once we've rewritten to <c>network</c>).
+    /// A non-object / unparseable workload is returned unchanged (defensive; the
+    /// tester then just validates as before rather than crashing the promote).
+    /// </summary>
+    internal static string WithInsecureWorkload(string workloadText)
+    {
+        try
+        {
+            if (JsonNode.Parse(workloadText) is JsonObject obj)
+            {
+                obj["insecure"] = true;
+                return obj.ToJsonString();
+            }
+        }
+        catch (JsonException)
+        {
+            // leave the workload untouched — better than failing the promote
+        }
+        return workloadText;
     }
 
     private enum ReadinessOutcome { Ready, Deferred, FailedTerminally }
