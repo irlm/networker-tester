@@ -146,15 +146,26 @@ public static class DeploymentWriteEndpoints
                 return Results.NotFound();
             }
 
+            // E2E P3-12: this used to TCP-probe only and stub version:null /
+            // outdated:false — a VM that slept through releases (observed live:
+            // an endpoint still on 0.28.66) showed as perfectly current. Reuse
+            // the version-summary probe (HTTPS :8443 + HTTP :8080 /health,
+            // self-signed accepted, 1.5s budget) and compare against this
+            // control plane's own version — same release train, so any mismatch
+            // means the binary is stale and /update will refresh it.
             var hosts = ParseHosts(d.EndpointIps);
-            var results = new List<object>(hosts.Count);
-            foreach (var host in hosts)
+            var current = VersionEndpoints.DashboardVersion;
+            var probes = await Task.WhenAll(
+                hosts.Select(h => VersionEndpoints.ProbeEndpointVersionAsync(h)));
+            var results = probes.Select(p => (object)new
             {
-                var alive = await TcpProbeAsync(host, 8443, TimeSpan.FromSeconds(5), ct);
-                results.Add(new { ip = host, alive, version = (string?)null, outdated = false });
-            }
+                ip = p.host,
+                alive = p.reachable,
+                version = p.version,
+                outdated = p.reachable && p.version is not null && p.version != current,
+            }).ToList();
 
-            return Results.Ok(new { endpoints = results, latest_release = (string?)null });
+            return Results.Ok(new { endpoints = results, latest_release = current });
         })
         .RequireAuthorization(AuthPolicies.ProjectOperator);
 
@@ -439,21 +450,6 @@ public static class DeploymentWriteEndpoints
         return hosts;
     }
 
-    private static async Task<bool> TcpProbeAsync(string host, int port, TimeSpan timeout, CancellationToken ct)
-    {
-        try
-        {
-            using var client = new System.Net.Sockets.TcpClient();
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(timeout);
-            await client.ConnectAsync(host, port, cts.Token);
-            return client.Connected;
-        }
-        catch
-        {
-            return false;
-        }
-    }
 
     /// <summary>Create-deployment request body: a name + the deploy.json config.</summary>
     public sealed record CreateDeploymentRequest(string Name, JsonObject Config);

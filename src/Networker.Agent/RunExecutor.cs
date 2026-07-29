@@ -171,11 +171,15 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
 
             if (outcome.Status == InvocationStatus.Cancelled)
             {
+                logger.LogInformation("Run {RunId}: relaying run_finished status=cancelled", runId);
                 await SendFinishedAsync(sink, runId, "cancelled", artifact: null).ConfigureAwait(false);
                 return;
             }
             if (outcome.Status == InvocationStatus.Failed)
             {
+                logger.LogInformation(
+                    "Run {RunId}: relaying run_finished status=failed (ok={Ok} fail={Fail})",
+                    runId, successCount, failureCount);
                 await SendFinishedAsync(sink, runId, "failed", artifact: null).ConfigureAwait(false);
                 return;
             }
@@ -187,6 +191,10 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             ? BuildArtifact(config, successCount, failureCount)
             : null;
 
+        // E2E P3-13: the terminal relay is now visible agent-side.
+        logger.LogInformation(
+            "Run {RunId}: relaying run_finished status=completed (ok={Ok} fail={Fail})",
+            runId, successCount, failureCount);
         await SendFinishedAsync(sink, runId, "completed", artifact, envelope).ConfigureAwait(false);
     }
 
@@ -513,6 +521,13 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
                 }
             }
         }
+
+        // E2E P3-13: "Spawning tester" used to be the agent's LAST line for a
+        // run — exit, parse, and relay all happened silently, so a wedged or
+        // failed run was invisible agent-side. Log the terminal outcome.
+        logger.LogInformation(
+            "{CorrelationId}: Tester ({Label}) exited with code {ExitCode} — parsed {Ok} ok / {Fail} failed attempt(s)",
+            correlationId, label, exitCode, successCount, failureCount);
 
         return new(InvocationStatus.Completed, successCount, failureCount, envelope);
     }

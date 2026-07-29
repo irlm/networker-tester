@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.109] — 2026-07-29
+
+### Fixed
+- **E2E P3 polish cleared** (docs/analysis/e2e-pass-2026-07-28.md):
+  - **P3-11:** the Full-Stack wizard's Launch/Save sat silently disabled until
+    the suggested default name was retyped — the name now defaults to the
+    placeholder (same fix as the Application wizard in v0.28.104); buttons
+    disable only while submitting.
+  - **P3-12:** the deployment `/check` endpoint stubbed `version: null,
+    outdated: false`, so a VM that slept through releases (observed live: an
+    endpoint still on 0.28.66) reported as current. It now reuses the real
+    version probe (HTTPS :8443 + HTTP :8080 `/health`, self-signed accepted,
+    1.5s budget) and flags `outdated` against the control plane's own version;
+    `latest_release` is populated.
+  - **P3-13:** "Spawning tester" was the agent's last log line for a run —
+    exit, parse, and relay were silent. The agent now logs the tester's exit
+    code with parsed ok/fail counts and every terminal `run_finished` relay
+    (completed/failed/cancelled).
+
+---
+
 ## [0.28.108] — 2026-07-29
 
 ### Fixed

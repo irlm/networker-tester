@@ -302,7 +302,9 @@ public static class VersionEndpoints
     /// to ~3s despite the per-call 1.5s timeout.) Accepts self-signed certs,
     /// matching Rust's <c>danger_accept_invalid_certs(true)</c>.
     /// </summary>
-    private static async Task<EndpointVersionDto> ProbeEndpointVersionAsync(string host)
+    // internal: the deployment /check handler reuses this probe (E2E P3-12 —
+    // its stub reported version:null/outdated:false, hiding stale binaries).
+    internal static async Task<EndpointVersionDto> ProbeEndpointVersionAsync(string host)
     {
         using var handler = new HttpClientHandler
         {
@@ -387,7 +389,7 @@ public static class VersionEndpoints
         bool update_available,
         EndpointVersionDto[] endpoints);
 
-    private sealed record EndpointVersionDto(
+    internal sealed record EndpointVersionDto(
         string host,
         string? version,
         bool reachable);
