@@ -74,6 +74,23 @@ function extractHost(input: string): string {
   }
 }
 
+/**
+ * Full URL to actually probe — the URL Probe hits the URL AS ENTERED (root when
+ * no path is given), not `<host>/health`. A bare host becomes `https://<host>/`;
+ * a full URL is preserved. Passed as the config's endpoint host so the agent
+ * uses it verbatim (a bare host would get `/health` appended — the E2E P1-4
+ * false-failure on arbitrary sites like example.com).
+ */
+function toProbeUrl(input: string): string {
+  const t = input.trim();
+  try {
+    const u = t.includes('://') ? new URL(t) : new URL(`https://${t}`);
+    return u.toString();
+  } catch {
+    return t;
+  }
+}
+
 function getHostFromConfig(config: TestConfigListItem | TestConfig): string | null {
   // The endpoint is stored as JSON on TestConfigListItem, but we need to check
   // if endpoint info is available. For list items, we may need to parse from the name.
@@ -720,7 +737,10 @@ export function DiagnosticsPage() {
     try {
       const presetLabel = preset.charAt(0).toUpperCase() + preset.slice(1);
       const configName = `Diag: ${host} (${presetLabel})`;
-      const endpoint: EndpointRef = { kind: 'network', host };
+      // Probe the URL as entered (root by default) — a bare host would get
+      // `/health` appended by the agent (E2E P1-4). `host` stays bare for the
+      // display name / watchlist grouping.
+      const endpoint: EndpointRef = { kind: 'network', host: toProbeUrl(targetHost || url) };
       const workload: Workload = {
         modes: DIAG_PRESETS[preset],
         runs: 1,
