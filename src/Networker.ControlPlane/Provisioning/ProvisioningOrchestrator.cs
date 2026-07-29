@@ -813,21 +813,36 @@ public sealed class ProvisioningOrchestrator : BackgroundService
     }
 
     // Windows NetBIOS constraint (install.sh's strictest): ≤15 chars, alnum + '-'.
-    private static string SanitizeVmLabel(string raw)
+    // Azure VM names must start with a word char and — critically — Azure derives
+    // the NIC ipconfig name as `ipconfig<vmName>`, which must END with a word char
+    // or '_'. A trailing '-' fails VM creation with InvalidResourceName (E2E
+    // 2026-07-29: "rust @ nginx …" → ShortIdFromName "rust--ng" → truncated
+    // "nwk-auto-rust--" → ipconfig ended in '-' → whole deploy failed with
+    // install.sh exit 1). So: collapse dash-runs, forbid a leading dash, cap at
+    // 15, then trim any trailing dash left by the source or the truncation.
+    internal static string SanitizeVmLabel(string raw)
     {
-        var chars = new List<char>();
+        var sb = new System.Text.StringBuilder(16);
+        var lastDash = false;
         foreach (var c in raw)
         {
-            if (char.IsAsciiLetterOrDigit(c) || c == '-')
+            if (char.IsAsciiLetterOrDigit(c))
             {
-                chars.Add(c);
+                sb.Append(char.ToLowerInvariant(c));
+                lastDash = false;
             }
-            if (chars.Count >= 15)
+            else if (c == '-' && sb.Length > 0 && !lastDash)
+            {
+                sb.Append('-'); // collapse runs; never a leading dash
+                lastDash = true;
+            }
+            if (sb.Length >= 15)
             {
                 break;
             }
         }
-        return new string(chars.ToArray());
+        var label = sb.ToString().TrimEnd('-');
+        return label.Length == 0 ? "nwk-auto-vm" : label;
     }
 
     /// <summary>Parsed <c>EndpointRef::Pending</c> payload.</summary>
