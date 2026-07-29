@@ -94,7 +94,7 @@ spacing, and low information density.
 **Key Characteristics:**
 - Dark glass surfaces, flat: depth from four background steps + 1px borders, never shadows
 - Monospace-first at every level, 12px data type as the default voice
-- One interactive accent (Phosphor Cyan); brand violet reserved for the mark
+- One interactive accent (Phosphor Cyan); violet reserved for the mark + the runner/admin semantic
 - Semantically fixed status colors, identical everywhere
 - Tactile instrument-key controls: press feedback, focus border shifts, 150–200ms motion
 
@@ -111,8 +111,12 @@ ramp.
   one notch lighter.
 
 ### Secondary
-- **Brand Violet** (#863bff): the logo/wordmark identity color. Appears in the
-  mark, the report branding, and nowhere else.
+- **Brand Violet** (#863bff, working ramp purple-300/400/500): the logo/
+  wordmark identity color, plus exactly one functional meaning — the
+  **runner/operator side of a pairing**: runner vs target in the deploy wizard,
+  admin role chips, benchmark-artifact sections, the network-vs-server split
+  bar. It marks "the machine doing the measuring," never a status or a second
+  interactive accent.
 
 ### Neutral
 - **Terminal Black** (#0a0b0f): page background and input wells.
@@ -131,9 +135,13 @@ ramp.
   (#fbbf24), **In-flight Cyan** (phosphor ramp), **Inert Grey** (muted ramp).
 
 ### Named Rules
-**The Logo-Only Violet Rule.** Brand Violet appears only in the mark and brand
-assets — never on statuses, KPIs, buttons, or charts. (Enforced since audit
-F12; the comment lives in `index.css`.)
+**The Violet Semantics Rule.** Brand Violet carries exactly two meanings: the
+brand mark, and the runner/operator side of a pairing (runner vs target, admin
+role, benchmark artifacts, network-vs-server splits). Never a status, never a
+KPI accent, never decoration — and never a competitor to cyan for
+interactivity. (Amended 2026-07-29 from the stricter logo-only form of audit
+F12: the incumbent runner-semantic usage was disciplined and informative, so
+it was legitimized rather than repainted.)
 
 **The One Voice Rule.** Phosphor Cyan is the only interactive accent. If a
 second accent seems needed, the answer is hierarchy, not a new color.
@@ -261,8 +269,9 @@ all entrance animations.
 - **Do** honor `prefers-reduced-motion` on every entrance animation.
 
 ### Don't:
-- **Don't** use Brand Violet outside the logo/brand mark (Logo-Only Violet
-  Rule).
+- **Don't** use Brand Violet outside its two meanings — the mark and the
+  runner/admin semantic (Violet Semantics Rule); never as a status or a second
+  interactive accent.
 - **Don't** add box-shadows, gradients, or glassmorphism — flat surfaces and
   borders only.
 - **Don't** introduce a second interactive accent or re-purpose a status color

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { api, errorMessage, type SdkEndpoint } from '../api/client';
 import { CreateSdkEndpointDialog } from '../components/CreateSdkEndpointDialog';
@@ -43,6 +43,18 @@ export function SdkEndpointsPage() {
   }, [projectId]);
 
   usePolling(load, 20000);
+
+  // Keyboard path for the delete-confirm dialog (audit P2: the backdrop click
+  // was the only way to dismiss without reaching for Cancel — Escape now
+  // closes, matching every other dialog in the app).
+  useEffect(() => {
+    if (!confirmDelete) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setConfirmDelete(null);
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [confirmDelete]);
 
   const handleDelete = async () => {
     if (!projectId || !confirmDelete) return;

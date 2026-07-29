@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.107] — 2026-07-29
+
+### Fixed
+- **Design-audit P2 wave** — (1) the SDK-endpoint delete-confirm dialog gains
+  an Escape keyboard path (the one dialog of nine missing it; all others
+  already had Escape + `role="dialog"`); (2) touch targets: on coarse pointers
+  every button's hit area extends 4px via an invisible pseudo-element so the
+  densest 20px controls meet the WCAG 2.5.8 24px minimum — zero visual/layout
+  change on desktop; (3) the Violet rule amended to match disciplined incumbent
+  usage: Brand Violet = the mark **plus** the runner/operator semantic
+  (runner-vs-target, admin role, benchmark artifacts) — never a status/KPI
+  accent (DESIGN.md "Violet Semantics Rule" + index.css brand comment updated).
+  Audit follow-ups verified as already-correct, not changed: modal backdrops
+  are supplementary click-to-dismiss (aria-hidden, keyboard path via
+  Escape/Cancel), and all drawers are `w-full` on mobile with `max-w-[90vw]`
+  caps.
+
+---
+
 ## [0.28.106] — 2026-07-29
 
 ### Fixed
