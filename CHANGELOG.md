@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.104] — 2026-07-29
+
+### Fixed
+- **Application benchmark "Launch" button did nothing when the name was blank** —
+  the Launch button was `disabled` while `configName` was empty, but its
+  className carried no disabled styling (unlike the sibling "Save Config"
+  button), so it stayed solid cyan and looked fully clickable while being inert.
+  The benchmark-name field only ever shows a *placeholder* (`Application
+  benchmark <date>`) until typed, so a user who launched without renaming hit a
+  dead button with no feedback. The name now defaults to that placeholder when
+  left blank (the placeholder already reads as a ready-to-use default), so the
+  button just works; both launch buttons only disable while submitting, with
+  proper disabled cursors.
+
+---
+
 ## [0.28.103] — 2026-07-28
 
 ### Fixed
