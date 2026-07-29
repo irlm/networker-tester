@@ -324,7 +324,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.104"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.105"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -6288,6 +6288,13 @@ step_azure_create_vm() {
     print_dim "This typically takes 1–2 minutes…"
     echo ""
 
+    # --nic-delete-option / --os-disk-delete-option: bind the NIC and OS disk to
+    # the VM lifecycle so `az vm delete` cascades them natively. Without these,
+    # deleting the VM orphans both — the NIC then blocks the public-IP/NSG deletes
+    # ("in use") and the OS disk lingers, all billing until the reaper (or forever
+    # for the disk, whose name is a random suffix that can't be derived). The C#
+    # provisioner's CreateVmAsync already sets both; this brings install.sh's
+    # deploy path to parity (E2E teardown 2026-07-29).
     local ip
     ip="$(az vm create \
         --resource-group "$rg" \
@@ -6295,6 +6302,8 @@ step_azure_create_vm() {
         --image "$image" \
         --size "$size" \
         --admin-username azureuser \
+        --nic-delete-option delete \
+        --os-disk-delete-option delete \
         $auth_options \
         --only-show-errors \
         --output tsv \

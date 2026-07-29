@@ -719,12 +719,14 @@ export function TesterDetailDrawer({
           onConfirm={() => {
             setConfirmDelete(false);
             run(async () => {
+              // Delete is ASYNC (202 → the VM deprovisions in the background).
+              // Do NOT close the drawer here: refresh the list and stay open so
+              // the outcome is visible — the row goes deleting → gone (the parent
+              // then closes the drawer) or → "delete failed" (the Force-delete
+              // button below appears). Closing eagerly hid a failed background
+              // delete entirely (P2-15).
               await testersApi.deleteTester(projectId, tester.tester_id);
-              // Tell the parent list to refresh before we close — otherwise
-              // the just-deleted row stays visible until the next manual
-              // refresh or navigation.
               onChanged();
-              onClose();
             });
           }}
           onCancel={() => setConfirmDelete(false)}
