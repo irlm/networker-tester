@@ -152,7 +152,7 @@ export function FullStackPage() {
     }
     if (step === 1) return selectedModes.size > 0;
     if (step === 2) return true;
-    if (step === 3) return configName.trim().length > 0;
+    if (step === 3) return true; // name defaults to the placeholder
     return true;
   }, [step, testbeds, selectedModes.size, configName]);
 
@@ -217,9 +217,16 @@ export function FullStackPage() {
   const totalCells = testbeds.reduce((n, tb) => n + tb.proxies.length, 0);
   const isMatrixRun = totalCells > 1;
 
+  // Name defaults to the placeholder when left blank — requiring a retype of
+  // the suggested default left Launch silently disabled (E2E P3-11; same fix
+  // as AppBenchmarkPage in v0.28.104).
+  const effectiveName = () =>
+    configName.trim() || `Full stack benchmark ${new Date().toISOString().slice(0, 10)}`;
+
   const handleSubmit = async (launchNow: boolean) => {
     setSubmitting(true);
     try {
+      const name = effectiveName();
       const sizeMap: Record<string, number> = { '64k': 65536, '1m': 1048576, '16m': 16777216 };
       const payloadSizes = [...selectedPayloads].map(s => sizeMap[s]).filter(Boolean);
       const captureModeMap: Record<string, string> = { none: 'metrics-only', tester: 'headers-only', endpoint: 'headers-only', both: 'full' };
@@ -238,7 +245,7 @@ export function FullStackPage() {
       if (isMatrixRun && launchNow) {
         const cells = buildComparisonCells();
         const body: ComparisonGroupCreate = {
-          name: configName,
+          name,
           base_workload: workload,
           methodology,
           cells,
@@ -258,7 +265,7 @@ export function FullStackPage() {
         return;
       }
       const config: TestConfigCreate = {
-        name: configName,
+        name,
         endpoint: onlyEndpoint,
         workload,
         methodology,
@@ -278,7 +285,7 @@ export function FullStackPage() {
         addToast('success', `Run ${run.id.slice(0, 8)} launched`);
         navigate(`/projects/${projectId}/runs/${run.id}`);
       } else {
-        addToast('success', `Config "${configName}" saved`);
+        addToast('success', `Config "${name}" saved`);
         navigate(`/projects/${projectId}/runs`);
       }
     } catch (e) {
@@ -461,7 +468,7 @@ export function FullStackPage() {
             {!isMatrixRun && (
               <button
                 onClick={() => handleSubmit(false)}
-                disabled={submitting || configName.trim().length === 0}
+                disabled={submitting}
                 className="border border-gray-700 hover:border-gray-600 text-gray-300 px-4 py-2 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 Save Config
@@ -469,8 +476,8 @@ export function FullStackPage() {
             )}
             <button
               onClick={() => handleSubmit(true)}
-              disabled={submitting || configName.trim().length === 0}
-              className={`text-white px-6 py-2.5 text-sm font-medium transition-colors ${
+              disabled={submitting}
+              className={`text-white px-6 py-2.5 text-sm font-medium transition-colors disabled:cursor-wait ${
                 submitting ? 'bg-cyan-700 cursor-wait' : 'bg-cyan-600 hover:bg-cyan-500'
               }`}
             >
