@@ -1,0 +1,101 @@
+name: Prod run-execution canary
+
+# Executes a REAL run end-to-end against prod and asserts the outcome the
+# `Prod soak check` can't see. The soak check verifies /health + background
+# loops but never runs anything — which is exactly how the run pipeline stayed
+# silently broken for weeks (E2E pass 2026-07-28: P0-1 runs `failed` ~10ms after
+# spawn; P0-2 attempts never persisted; P1-14 benchmarks never worked). This
+# canary provisions an ephemeral runner, drives a probe run, asserts it reached
+# `completed` with persisted + successful attempts, and tears the runner down.
+#
+# A red run = the run-execution path regressed. Alerting mirrors the soak check
+# (a pinned issue, create-or-comment-or-close). Driven entirely through the
+# public API — the only secret it needs is the admin password.
+#
+# See scripts/soak-canary.sh for the full logic + assertions.
+
+on:
+  schedule:
+    - cron: '17 7 * * *'   # daily 07:17 UTC (30 min after the soak check)
+  workflow_dispatch:
+    inputs:
+      reuse_runner:
+        description: 'Reuse an existing idle runner instead of provisioning (1/0)'
+        required: false
+        default: '1'
+
+permissions:
+  contents: read
+  issues: write   # failure alerting creates/comments the pinned issue
+
+# Never overlap: an ephemeral runner + real run must finish before the next.
+concurrency:
+  group: soak-canary
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    name: Run-execution canary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Drive a real run end-to-end
+        env:
+          DASHBOARD_ADMIN_PASSWORD: ${{ secrets.DASHBOARD_ADMIN_PASSWORD }}
+          CANARY_REUSE_RUNNER: ${{ github.event.inputs.reuse_runner || '1' }}
+        run: bash scripts/soak-canary.sh
+
+      # ── Failure alerting (mirrors the soak check's pinned-issue pattern) ──
+      - name: Alert — open/update pinned issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TITLE='Run-execution canary failing'
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          FAILED=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
+            --jq '[.jobs[].steps[] | select(.conclusion=="failure") | .name] | join(", ")' 2>/dev/null || echo 'canary')
+          {
+            echo "The prod run-execution canary failed — a run did NOT complete end-to-end."
+            echo ""
+            echo "- Run: ${RUN_URL}"
+            echo "- Failing step(s): ${FAILED}"
+            echo ""
+            echo "This asserts what /health cannot: a real run reaching \`completed\` with"
+            echo "persisted + successful attempts. A failure means the run-execution path"
+            echo "regressed (P0-1 stderr-relay-fails-runs / P0-2 attempts-not-persisted /"
+            echo "dispatch / provisioning). See scripts/soak-canary.sh and"
+            echo "docs/analysis/e2e-pass-2026-07-28.md."
+          } > /tmp/canary-issue-body.md
+          NUM=$(gh issue list --state open --json number,title \
+            --jq "first(.[] | select(.title==\"${TITLE}\")).number // empty")
+          if [ -z "$NUM" ]; then
+            URL=$(gh issue create --title "$TITLE" --body-file /tmp/canary-issue-body.md)
+            NUM="${URL##*/}"
+            echo "Opened issue #${NUM}"
+            gh issue pin "$NUM" || echo "::warning::could not pin issue #${NUM} (pin needs push-level rights; issue still open)"
+          else
+            gh issue comment "$NUM" --body-file /tmp/canary-issue-body.md
+            echo "Commented on existing issue #${NUM}"
+          fi
+
+      # On the first green after a red streak: comment resolution, unpin, close.
+      - name: Resolve alert issue on green
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TITLE='Run-execution canary failing'
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          NUM=$(gh issue list --state open --json number,title \
+            --jq "first(.[] | select(.title==\"${TITLE}\")).number // empty")
+          if [ -z "$NUM" ]; then
+            echo "No open canary-failure issue — nothing to resolve."
+            exit 0
+          fi
+          gh issue unpin "$NUM" || echo "::warning::could not unpin issue #${NUM}"
+          gh issue close "$NUM" --comment "Resolved — run-execution canary is green again: ${RUN_URL}."
+          echo "Closed issue #${NUM}"
