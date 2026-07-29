@@ -356,6 +356,23 @@ public sealed class AgentMessageProcessor
         if (!string.IsNullOrEmpty(hb.Version))
         {
             agent.Version = hb.Version;
+
+            // E2E P2-7: nothing ever wrote project_tester.installer_version /
+            // last_installed_at, so runner selectors showed "v?" for live,
+            // connected runners. The agent IS the installed software — write its
+            // reported version through to the bound tester. The guarded
+            // predicate (version differs) keeps the steady-state heartbeat
+            // write-free and moves last_installed_at only on a real
+            // install/upgrade.
+            if (agent.TesterId is { } boundTesterId)
+            {
+                await _db.ProjectTesters
+                    .Where(t => t.TesterId == boundTesterId && t.InstallerVersion != hb.Version)
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(t => t.InstallerVersion, hb.Version)
+                        .SetProperty(t => t.LastInstalledAt, DateTime.UtcNow)
+                        .SetProperty(t => t.UpdatedAt, DateTime.UtcNow), ct);
+            }
         }
         await _db.SaveChangesAsync(ct);
     }

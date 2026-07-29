@@ -45,6 +45,13 @@ public sealed class ReaperService : BackgroundService
     /// </summary>
     private static readonly TimeSpan StaleAfter = TimeSpan.FromSeconds(90);
 
+    /// <summary>Silent this long → the registration is retired (E2E P2-8).</summary>
+    private static readonly TimeSpan RetireAfter = TimeSpan.FromDays(30);
+
+    /// <summary>Never heartbeated within this window of registering → retired
+    /// (covers aborted bootstraps that registered and died).</summary>
+    private static readonly TimeSpan RetireNeverBeatAfter = TimeSpan.FromDays(7);
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly AgentConnectionRegistry _registry;
     private readonly EventBus _events;
@@ -158,6 +165,32 @@ public sealed class ReaperService : BackgroundService
         if (reaped > 0)
         {
             _logger.LogInformation("Agent-status reaper: flipped {Count} stale agent(s) offline", reaped);
+        }
+
+        // ── Registration archival (E2E P2-8) ────────────────────────────────
+        // Long-dead registrations polluted the agents list forever (48 stale
+        // Apr–Jul rows, many never-heartbeated "vnull", observed live after the
+        // fleet drained). RETIRE — never delete — so history and FKs
+        // (agent_command / command_approval / deployment.agent_id) stay intact:
+        // status='retired', which the list endpoint excludes by default. A
+        // retired agent that reconnects is resurrected automatically (connect/
+        // heartbeat set status='online'). Conservative thresholds: 30 days
+        // without a heartbeat, or 7 days registered without ever beating.
+        var retireHeartbeatBefore = DateTime.UtcNow - RetireAfter;
+        var retireNeverBeatBefore = DateTime.UtcNow - RetireNeverBeatAfter;
+        var onlineNow = _registry.OnlineAgents(); // snapshot → NOT IN (…) parameter
+        var retired = await db.Agents
+            .Where(a => a.Status == "offline"
+                && ((a.LastHeartbeat != null && a.LastHeartbeat < retireHeartbeatBefore)
+                    || (a.LastHeartbeat == null && a.RegisteredAt < retireNeverBeatBefore))
+                && !onlineNow.Contains(a.AgentId))
+            .ExecuteUpdateAsync(s => s.SetProperty(a => a.Status, "retired"), ct)
+            .ConfigureAwait(false);
+        if (retired > 0)
+        {
+            _logger.LogInformation(
+                "Agent-status reaper: retired {Count} long-dead registration(s) (>30d silent or never-heartbeated >7d)",
+                retired);
         }
 
         _monitor.ReportTick(

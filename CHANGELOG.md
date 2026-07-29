@@ -11,6 +11,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.108] — 2026-07-29
+
+### Fixed
+- **E2E P2 backlog cleared** (docs/analysis/e2e-pass-2026-07-28.md):
+  - **P2-7:** runner selectors showed `v?` for live runners — nothing ever
+    wrote `project_tester.installer_version`/`last_installed_at`. The agent
+    heartbeat now writes its reported version through to the bound tester
+    (guarded: only on version change, so steady-state beats stay write-free).
+  - **P2-8:** 48 long-dead agent registrations polluted the agents list
+    forever. The agent-status reaper now RETIRES (never deletes — FKs and
+    history intact) registrations silent >30 days or never-heartbeated >7 days
+    after registering; the list excludes retired by default
+    (`?include_retired=true` opts in); a retired agent that reconnects is
+    resurrected automatically.
+  - **P2-9:** the Network-test target picker listed FAILED deployments (and
+    let you select them → guaranteed-failing runs), showed "region unknown" for
+    every auto-provisioned target (region lives under the provider block in
+    BuildDeployJson configs, not the endpoint level), and couldn't search by
+    hostname. Now: completed-only targets, region resolved from either shape,
+    and search matches the endpoint hostname/IP.
+  - **P2-6 / P2-10 verified already-fixed, no change:** run `error_message`
+    stopped carrying the stderr stream when P0-1 made relayed `[tester]` frames
+    log-only (only genuine agent verdicts write it), and the Full-Stack account
+    search has been case-insensitive since #477.
+
+---
+
 ## [0.28.107] — 2026-07-29
 
 ### Fixed

@@ -85,6 +85,19 @@ const MODE_PRESETS: Array<{ id: string; label: string; modes: string[]; desc: st
 
 const ALL_MODES = new Set(MODE_FAMILIES.flatMap(f => f.modes));
 
+/** Region of a deployment's first endpoint. Wizard-authored deploy.json puts
+ *  `region` at the endpoint level, but auto-provisioned configs
+ *  (BuildDeployJson) nest it under the provider block
+ *  (`endpoints[0].azure.region`) — reading only the top level rendered every
+ *  auto-provisioned card as "region unknown" (E2E P2-9). */
+function deploymentRegion(d: Deployment): string | undefined {
+  const ep = d.config?.endpoints?.[0];
+  if (!ep) return undefined;
+  if (ep.region) return ep.region;
+  const block = (ep as unknown as Record<string, { region?: string } | undefined>)[ep.provider];
+  return block?.region;
+}
+
 function classForMode(mode: string, active: boolean): string {
   if (!active) return 'border-gray-700 text-gray-400 hover:text-gray-300 hover:border-gray-600';
   // Prefer the page-local family table (covers 'native', which the shared
@@ -174,7 +187,10 @@ export function NetworkTestPage() {
       api.listTestRuns(projectId, { endpoint_kind: 'network', limit: 5 }).catch(() => [] as TestRun[]),
     ]).then(([deps, rnrs, runs]) => {
       if (cancelled) return;
-      setDeployments(deps);
+      // Only COMPLETED deployments are runnable targets — failed/cancelled ones
+      // have no live endpoint and used to be listed (and selectable!) here,
+      // producing guaranteed-failing runs (E2E P2-9).
+      setDeployments(deps.filter(d => d.status === 'completed'));
       setTesters(rnrs);
       setRecentRuns(runs);
       setLoading(false);
@@ -201,7 +217,10 @@ export function NetworkTestPage() {
     return deployments.filter(d =>
       d.name.toLowerCase().includes(q)
       || d.config?.endpoints?.[0]?.provider?.toLowerCase().includes(q)
-      || d.config?.endpoints?.[0]?.region?.toLowerCase().includes(q),
+      || (deploymentRegion(d) ?? '').toLowerCase().includes(q)
+      // The hostname/IP is what an engineer actually knows about a target —
+      // it wasn't searchable (E2E P2-9).
+      || (d.endpoint_ips ?? []).some(h => h.toLowerCase().includes(q)),
     );
   }, [deployments, targetSearch]);
 
@@ -622,7 +641,7 @@ export function NetworkTestPage() {
               <span className="text-xs font-mono text-gray-200">{selectedDeployment.name}</span>
               <span className="text-[11px] text-gray-400">
                 {selectedDeployment.config?.endpoints?.[0]?.provider && `· ${selectedDeployment.config.endpoints[0].provider}`}
-                {selectedDeployment.config?.endpoints?.[0]?.region && ` ${selectedDeployment.config.endpoints[0].region}`}
+                {deploymentRegion(selectedDeployment) && ` ${deploymentRegion(selectedDeployment)}`}
               </span>
               <button
                 onClick={() => { setSelectedTargetId(''); setTargetSearch(''); setTargetPopoverOpen(true); targetInputRef.current?.focus(); }}
@@ -660,7 +679,7 @@ export function NetworkTestPage() {
                         <div className="text-[10px] text-gray-400">
                           {dep.config?.endpoints?.[0]?.provider ?? 'cloud unknown'}
                           {' · '}
-                          {dep.config?.endpoints?.[0]?.region ?? 'region unknown'}
+                          {deploymentRegion(dep) ?? 'region unknown'}
                           {dep.config?.endpoints?.[0]?.http_stacks && dep.config.endpoints[0].http_stacks.length > 0 && ` · ${dep.config.endpoints[0].http_stacks.join(', ')}`}
                         </div>
                       </div>
