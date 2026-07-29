@@ -8,10 +8,12 @@
   --bg-raised: #12131a;   /* form inputs in panels, subtle elevation */
   --border-default: #1a1b25; /* table borders, section dividers */
 
-  /* Brand (see .impeccable.md): purple is the logo/wordmark ONLY; cyan is
-     the single interactive accent. Status ramp: green=success, red=failure,
-     amber=attention/partial, cyan=in-flight, grey=inert. Never re-purpose
-     purple for statuses/KPIs (audit F12). */
+  /* Brand (see DESIGN.md, Violet Semantics Rule): purple = the mark + the
+     runner/operator semantic (runner-vs-target, admin role, benchmark
+     artifacts) — never a status/KPI accent; cyan is the single interactive
+     accent. Status ramp: green=success, red=failure, amber=attention/partial,
+     cyan=in-flight, grey=inert. (Amended 2026-07-29 from the logo-only form
+     of audit F12.) */
   --brand-purple: #863bff;
   --accent-cyan: #47bfff;
 }
@@ -127,6 +129,23 @@ body {
 /* Buttons: slight press effect */
 button:not(:disabled):active {
   transform: translateY(1px);
+}
+
+/* ── Touch-target extension (audit P2, WCAG 2.5.8) ──
+   The densest controls (filter chips, tab pills at text-[10px] py-0.5) render
+   ~20px tall — fine for a pointer, sub-minimum for touch. On coarse pointers
+   only, extend every button's HIT AREA (not its visuals) via an invisible
+   pseudo-element so each reaches the 24px CSS-px minimum. -4px inset keeps
+   adjacent 8px-gapped controls from overlapping targets; layout is untouched. */
+@media (pointer: coarse) {
+  button {
+    position: relative;
+  }
+  button::after {
+    content: '';
+    position: absolute;
+    inset: -4px;
+  }
 }
 
 /* Table rows: smooth highlight */

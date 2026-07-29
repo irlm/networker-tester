@@ -36,7 +36,7 @@
       },
       "brand-violet": {
         "role": "secondary",
-        "displayName": "Brand Violet (logo only)",
+        "displayName": "Brand Violet (mark + runner semantic)",
         "canonical": "#863bff",
         "tonalRamp": [
           "oklch(25% 0.15 295)",
@@ -242,8 +242,8 @@
     ],
     "rules": [
       {
-        "name": "The Logo-Only Violet Rule",
-        "body": "Brand Violet appears only in the mark and brand assets — never on statuses, KPIs, buttons, or charts.",
+        "name": "The Violet Semantics Rule",
+        "body": "Brand Violet carries exactly two meanings: the brand mark, and the runner/operator side of a pairing (runner vs target, admin role, benchmark artifacts, network-vs-server splits). Never a status, never a KPI accent, never a competitor to cyan for interactivity.",
         "section": "colors"
       },
       {
@@ -281,7 +281,7 @@
       "Do keep muted text at gray-400 (#9ca3af) or brighter for anything a user must read."
     ],
     "donts": [
-      "Don't use Brand Violet outside the logo/brand mark (Logo-Only Violet Rule).",
+      "Don't use Brand Violet outside its two meanings — the mark and the runner/admin semantic; never as a status or a second interactive accent.",
       "Don't add box-shadows, gradients, or glassmorphism — flat surfaces and borders only.",
       "Don't introduce a second interactive accent or re-purpose a status color decoratively.",
       "Don't put gray text on colored fills — use white/near-white or a darker shade of the fill.",
