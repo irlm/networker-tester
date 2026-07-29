@@ -215,6 +215,22 @@ export function InfrastructurePage() {
 
   usePolling(() => void loadAll(), 10000, !!projectId);
 
+  // Keep an open runner drawer synced to live (polled) data instead of the
+  // snapshot captured on open — so an async delete's outcome is visible: the
+  // tester transitions deleting → gone (drawer auto-closes) or → "delete failed"
+  // (the drawer surfaces the Force-delete escape hatch). Without this the drawer
+  // held stale "running" state and a failed background delete was invisible (the
+  // P2-15 "delete does nothing / misleading" report).
+  useEffect(() => {
+    if (!selectedTester) return;
+    const live = testers.find(t => t.tester_id === selectedTester.tester_id) ?? null;
+    if (live === null) {
+      setSelectedTester(null); // removed from the fleet → close the drawer
+    } else if (live !== selectedTester) {
+      setSelectedTester(live); // reflect the latest power_state / status_message
+    }
+  }, [testers, selectedTester]);
+
   /* ── Open the wizard pre-filled to add stacks to an existing deployment.
         Pulls the cloud / region / OS / IP / installed proxies off the
         deployment's first endpoint so the user only ticks the new stacks. */

@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.105] — 2026-07-29
+
+### Fixed
+- **Deploy VMs orphaned their NIC + OS disk on delete** — `install.sh`'s
+  `az vm create` set no `--nic-delete-option` / `--os-disk-delete-option`, so
+  `az vm delete` left both behind: the NIC then blocked the public-IP/NSG cascade
+  ("in use") and the OS disk lingered (its random-suffix name can't be derived
+  for a targeted delete), all billing until the reaper — or forever for the disk.
+  The deploy `az vm create` now binds both to the VM lifecycle
+  (`--nic-delete-option delete --os-disk-delete-option delete`), matching the C#
+  provisioner's `CreateVmAsync`, so a plain `az vm delete` cascades everything.
+- **P2-15: deleting a runner "did nothing" / hid a failed teardown** — runner
+  delete is async (202, VM deprovisions in the background), but the detail drawer
+  closed immediately and held the stale snapshot it opened with, so a failed
+  background delete was invisible (the runner silently reverted to
+  `stopped: delete failed`) and a slow one looked like a no-op. The Infrastructure
+  page now keeps an open drawer synced to live polled data — the runner visibly
+  transitions deleting → gone (drawer auto-closes) or → `delete failed` (the
+  Force-delete escape hatch appears) — and the non-force delete no longer closes
+  the drawer eagerly. (The original "bare 400 on sync cloud-delete failure" was
+  already resolved by the async port.)
+
+---
+
 ## [0.28.104] — 2026-07-29
 
 ### Fixed
