@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.103] — 2026-07-28
+
+### Fixed
+- **Deploy-VM teardown (P1-16) leaked the NIC, public IP, and NSG to the reaper**
+  — live verification of the teardown showed the VM deleted cleanly but its
+  per-VM NIC (`<vm>VMNic`), public IP, and NSG left behind on every deploy
+  delete. Root cause: `install.sh`'s `az vm create` sets no
+  `--nic-delete-option`, so `az vm delete` does not remove the NIC, and while
+  the NIC exists the IP/NSG deletes fail "in use" — so the cascade exhausted its
+  retries and deferred all three to the orphan reaper (billing until its next
+  sweep). The Azure cleanup cascade now deletes the **NIC first** (`<vm>VMNic`),
+  which frees the IP and NSG, then deletes those — completing the teardown
+  immediately instead of leaking. Matched exact-name-only (never a list/filter),
+  same #419-safe discipline as the IP/NSG deletes.
+
+---
+
 ## [0.28.102] — 2026-07-28
 
 ### Fixed
