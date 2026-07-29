@@ -227,9 +227,17 @@ export function AppBenchmarkPage() {
 
   const isMatrixRun = buildComparisonCells().length > 1;
 
+  // Name defaults to the placeholder when left blank — the placeholder already
+  // reads as a ready-to-use default, so requiring a retype was pure friction
+  // (and, worse, left the Launch button silently disabled with no disabled
+  // styling → it looked clickable but did nothing).
+  const effectiveName = () =>
+    configName.trim() || `Application benchmark ${new Date().toISOString().slice(0, 10)}`;
+
   const handleSubmit = async (launchNow: boolean) => {
     setSubmitting(true);
     try {
+      const name = effectiveName();
       const workload: Workload = {
         modes: [...selectedModes],
         runs,
@@ -242,7 +250,7 @@ export function AppBenchmarkPage() {
       if (isMatrixRun && launchNow) {
         const cells = buildComparisonCells();
         const body: ComparisonGroupCreate = {
-          name: configName,
+          name,
           base_workload: workload,
           methodology,
           cells,
@@ -262,7 +270,7 @@ export function AppBenchmarkPage() {
         return;
       }
       const config: TestConfigCreate = {
-        name: configName,
+        name,
         endpoint: onlyEndpoint,
         workload,
         methodology,
@@ -282,7 +290,7 @@ export function AppBenchmarkPage() {
         addToast('success', `Run ${run.id.slice(0, 8)} launched`);
         navigate(`/projects/${projectId}/runs/${run.id}`);
       } else {
-        addToast('success', `Config "${configName}" saved`);
+        addToast('success', `Config "${name}" saved`);
         navigate(`/projects/${projectId}/runs`);
       }
     } catch (e) {
@@ -490,16 +498,16 @@ export function AppBenchmarkPage() {
             {!isMatrixRun && (
               <button
                 onClick={() => handleSubmit(false)}
-                disabled={submitting || configName.trim().length === 0}
-                className="border border-gray-700 hover:border-gray-600 text-gray-300 px-4 py-2 text-sm transition-colors disabled:opacity-40"
+                disabled={submitting}
+                className="border border-gray-700 hover:border-gray-600 text-gray-300 px-4 py-2 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 Save Config
               </button>
             )}
             <button
               onClick={() => handleSubmit(true)}
-              disabled={submitting || configName.trim().length === 0}
-              className={`text-white px-6 py-2.5 text-sm font-medium transition-colors ${
+              disabled={submitting}
+              className={`text-white px-6 py-2.5 text-sm font-medium transition-colors disabled:cursor-wait ${
                 submitting ? 'bg-cyan-700 cursor-wait' : 'bg-cyan-600 hover:bg-cyan-500'
               }`}
             >
