@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.100] — 2026-07-28
+
+### Fixed
+- **P1-3: provisioned runs dispatched before the endpoint was listening** — a
+  freshly-provisioned deployment flips to `completed` the moment `install.sh`
+  exits, but the proxy/endpoint services take a few more seconds to bind their
+  ports. The orchestrator re-queued the run immediately, so the dispatcher
+  handed it to an agent that hit a not-yet-listening port and the whole run
+  failed "connection refused" even though the target was healthy seconds later
+  (E2E pass 2026-07-28). `PromoteAsync` now gates on a bounded TCP connect to
+  `host:port`: it defers the re-queue to the next tick until the port answers,
+  and fails the run terminally only after a generous grace window (measured from
+  the deployment's completion) so a genuinely-dead endpoint can't spin the run
+  in `provisioning` forever. The shared-config promote path recovers `host:port`
+  from the already-rewritten `Network` endpoint and gates it too.
+
+---
+
 ## [0.28.99] — 2026-07-28
 
 ### Fixed
