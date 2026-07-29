@@ -65,6 +65,19 @@ public sealed class ProvisioningOrchestrator : BackgroundService
 
     private const int KickBatchLimit = 25;
 
+    // ── Readiness gate (E2E pass 2026-07-28 P1-3) ────────────────────────────
+    // A freshly-provisioned VM's deployment flips to `completed` the moment
+    // install.sh exits, but the proxy/endpoint services take a few more seconds
+    // to bind their listen ports. Promoting immediately re-queued the run, which
+    // the dispatcher then handed to an agent that hit a not-yet-listening port →
+    // the whole run failed "connection refused" even though the target was
+    // healthy seconds later. Gate the promote on a bounded TCP connect to
+    // host:port: defer to the next tick until it answers, and fail terminally
+    // only after a generous grace window so a genuinely-dead endpoint can't spin
+    // the run in `provisioning` forever (the F3(d) permanent-condition lesson).
+    private static readonly TimeSpan ReadinessProbeTimeout = TimeSpan.FromSeconds(3);
+    internal static TimeSpan ReadinessGrace = TimeSpan.FromMinutes(6);
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly DeployRunner _runner;
     private readonly ILogger<ProvisioningOrchestrator> _logger;
@@ -372,8 +385,23 @@ public sealed class ProvisioningOrchestrator : BackgroundService
         var pending = ParsePending(cfg.EndpointRef, _logger);
         if (pending is null)
         {
-            // Already rewritten by an earlier tick (shared config, or a prior
-            // promote) — just move the run along.
+            // Already rewritten to Network{host,port} by an earlier tick (shared
+            // config, or a prior promote). Still gate readiness on that endpoint
+            // before re-queue — otherwise a shared config's second run skips the
+            // gate entirely and races the services (E2E P1-3). If the ref isn't a
+            // parseable Network endpoint, fall through to the old immediate
+            // re-queue (behaviour-preserving).
+            if (TryParseNetworkHostPort(cfg.EndpointRef, out var nhost, out var nport))
+            {
+                switch (await GateReadinessAsync(db, runId, deployment, nhost, nport, ct).ConfigureAwait(false))
+                {
+                    case ReadinessOutcome.Deferred:
+                    case ReadinessOutcome.FailedTerminally:
+                        return; // stay in provisioning / already failed
+                    case ReadinessOutcome.Ready:
+                        break;
+                }
+            }
             await db.TestRuns
                 .Where(r => r.Id == runId)
                 .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, RunQueued), ct)
@@ -403,6 +431,20 @@ public sealed class ProvisioningOrchestrator : BackgroundService
 
         var port = ProxyHttpsPort(pending.ProxyStack);
 
+        // Readiness gate (E2E P1-3): don't rewrite the endpoint + re-queue until
+        // the proxy/endpoint port actually answers. Defer to the next tick while
+        // the just-provisioned services finish binding; fail only past the grace
+        // window. Gating BEFORE the rewrite keeps ParsePending valid on the next
+        // deferred tick (the pending endpoint is untouched until we know it's up).
+        switch (await GateReadinessAsync(db, runId, deployment, host, port, ct).ConfigureAwait(false))
+        {
+            case ReadinessOutcome.Deferred:
+            case ReadinessOutcome.FailedTerminally:
+                return;
+            case ReadinessOutcome.Ready:
+                break;
+        }
+
         // Rewrite endpoint_ref → Network{host,port} + endpoint_kind → network.
         // SHARED-CONFIG CAVEAT (see class doc): this mutates the shared template.
         var newEndpoint = new JsonObject
@@ -424,6 +466,108 @@ public sealed class ProvisioningOrchestrator : BackgroundService
         _logger.LogInformation(
             "Provisioning complete for run {RunId}: endpoint rewritten to {Host}:{Port} (proxy {Proxy}), run re-queued",
             runId, host, port, pending.ProxyStack);
+    }
+
+    private enum ReadinessOutcome { Ready, Deferred, FailedTerminally }
+
+    /// <summary>
+    /// Bounded readiness gate for a promoted endpoint (E2E P1-3). TCP-connects to
+    /// <paramref name="host"/>:<paramref name="port"/> and reports:
+    /// <list type="bullet">
+    ///   <item><b>Ready</b> — the port answered; the caller proceeds to re-queue.</item>
+    ///   <item><b>Deferred</b> — not listening yet but still inside the grace
+    ///     window; the caller leaves the run in <c>provisioning</c> for the next
+    ///     tick (no state change).</item>
+    ///   <item><b>FailedTerminally</b> — still unreachable past the grace window;
+    ///     the run is failed here (permanent condition, mirroring the no-host arm
+    ///     so a dead endpoint can't spin forever — F3(d)).</item>
+    /// </list>
+    /// Grace is measured from the deployment's completion (<c>FinishedAt</c>), so a
+    /// deploy that finished long ago fails fast while a just-completed one gets the
+    /// full window. The probe runs from the control plane — the same vantage the
+    /// existing <c>/check</c> endpoint uses — and the endpoint's proxy ports are
+    /// publicly reachable (that's how the agent reaches them too).
+    /// </summary>
+    private async Task<ReadinessOutcome> GateReadinessAsync(
+        NetworkerDbContext db, Guid runId, Deployment deployment, string host, int port, CancellationToken ct)
+    {
+        if (await TcpReadyAsync(host, port, ReadinessProbeTimeout, ct).ConfigureAwait(false))
+        {
+            return ReadinessOutcome.Ready;
+        }
+
+        var since = deployment.FinishedAt ?? deployment.StartedAt ?? DateTime.UtcNow;
+        if (DateTime.UtcNow - since <= ReadinessGrace)
+        {
+            _logger.LogInformation(
+                "Run {RunId}: endpoint {Host}:{Port} not listening yet; deferring re-queue (within {Grace:0}m grace)",
+                runId, host, port, ReadinessGrace.TotalMinutes);
+            return ReadinessOutcome.Deferred;
+        }
+
+        await db.TestRuns
+            .Where(r => r.Id == runId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.Status, "failed")
+                .SetProperty(r => r.ErrorMessage,
+                    $"Provisioned endpoint {host}:{port} never became reachable within {ReadinessGrace.TotalMinutes:0}m")
+                .SetProperty(r => r.FinishedAt, DateTime.UtcNow), ct)
+            .ConfigureAwait(false);
+        _logger.LogWarning(
+            "Run {RunId}: endpoint {Host}:{Port} unreachable past {Grace:0}m grace — failing run (permanent)",
+            runId, host, port, ReadinessGrace.TotalMinutes);
+        return ReadinessOutcome.FailedTerminally;
+    }
+
+    private static async Task<bool> TcpReadyAsync(string host, int port, TimeSpan timeout, CancellationToken ct)
+    {
+        try
+        {
+            using var client = new System.Net.Sockets.TcpClient();
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(timeout);
+            await client.ConnectAsync(host, port, cts.Token).ConfigureAwait(false);
+            return client.Connected;
+        }
+        catch
+        {
+            // Refused / timed out / DNS / cancelled → not ready. Never throws:
+            // the gate treats every failure as "not listening yet".
+            return false;
+        }
+    }
+
+    /// <summary>Read host+port out of an already-rewritten Network
+    /// <c>endpoint_ref</c> (the shared-config promote path). Returns false for a
+    /// non-Network or malformed ref, in which case the caller re-queues without
+    /// gating (behaviour-preserving fallback).</summary>
+    internal static bool TryParseNetworkHostPort(string endpointRef, out string host, out int port)
+    {
+        host = string.Empty;
+        port = 0;
+        try
+        {
+            using var doc = JsonDocument.Parse(endpointRef);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+            if (root.TryGetProperty("host", out var h) && h.ValueKind == JsonValueKind.String)
+            {
+                host = h.GetString()?.Trim() ?? string.Empty;
+            }
+            if (root.TryGetProperty("port", out var p)
+                && p.ValueKind == JsonValueKind.Number && p.TryGetInt32(out var pv))
+            {
+                port = pv;
+            }
+            return !string.IsNullOrEmpty(host) && port > 0;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     // ── deploy.json builder (port of build_deploy_json) ──────────────────────
