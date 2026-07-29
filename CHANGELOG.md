@@ -11,7 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.28.98] — 2026-07-28
+## [0.28.99] — 2026-07-28
+
+### Fixed
+- **P1-14: benchmark-proxy targets served a CA cert as their TLS leaf** — every
+  `openssl req -x509` in `install.sh` relied on OpenSSL's default `v3_ca`
+  profile (`basicConstraints: CA:TRUE`), so the tester (rustls) rejected every
+  connection with `CaUsedAsEndEntity` and full-stack benchmarks failed 100%.
+  All 7 cert-gen sites now pass `-addext "basicConstraints=critical,CA:FALSE"`
+  (verified live: the fixed command emits `CA:FALSE`). The endpoint's own
+  rcgen cert is deliberately CA:TRUE for Chrome pinning and is untouched.
+- **P1-4: URL Probe appended `/health` to arbitrary URLs**, so probing
+  `example.com` hit `example.com/health` → 404 → false "failed". The probe now
+  submits the URL as entered (root by default; `toProbeUrl`), which the agent
+  uses verbatim; the bare host is kept only for the watchlist display/grouping.
+
+
 
 ### Fixed
 - **P0: streamed probe attempts were never persisted** (E2E finding P0-2). The

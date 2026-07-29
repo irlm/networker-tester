@@ -324,7 +324,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.98"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.99"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -4436,6 +4436,7 @@ step_setup_letsencrypt() {
     # Self-signed fallback
     sudo mkdir -p /etc/nginx/ssl
     sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -addext "basicConstraints=critical,CA:FALSE" \
         -keyout /etc/nginx/ssl/dashboard.key \
         -out /etc/nginx/ssl/dashboard.crt \
         -subj "/CN=${DASHBOARD_FQDN:-networker-dashboard}" 2>/dev/null
@@ -4572,6 +4573,7 @@ http://nginx.org/packages/mainline/ubuntu $(lsb_release -cs) nginx" \
     sudo mkdir -p /etc/nginx/ssl
     local ep_ip="${ENDPOINT_IP:-127.0.0.1}"
     sudo openssl req -x509 -newkey rsa:2048 \
+        -addext "basicConstraints=critical,CA:FALSE" \
         -keyout /etc/nginx/ssl/networker.key \
         -out /etc/nginx/ssl/networker.crt \
         -days 365 -nodes \
@@ -4719,6 +4721,7 @@ _networker_prepare_shared_assets() {
     if [[ ! -f /etc/networker/ssl/networker.crt ]]; then
         local ep_ip="${ENDPOINT_IP:-127.0.0.1}"
         sudo openssl req -x509 -newkey rsa:2048 \
+            -addext "basicConstraints=critical,CA:FALSE" \
             -keyout /etc/networker/ssl/networker.key \
             -out /etc/networker/ssl/networker.crt \
             -days 365 -nodes \
@@ -5435,6 +5438,7 @@ sudo chown -R www-data:www-data "$site_root" 2>/dev/null || true
 # Self-signed cert
 sudo mkdir -p /etc/nginx/ssl
 sudo openssl req -x509 -newkey rsa:2048 \
+    -addext "basicConstraints=critical,CA:FALSE" \
     -keyout /etc/nginx/ssl/networker.key \
     -out /etc/nginx/ssl/networker.crt \
     -days 365 -nodes \
@@ -5742,6 +5746,7 @@ fi
 sudo chown -R www-data:www-data "$site_root" 2>/dev/null || true
 sudo mkdir -p /etc/nginx/ssl
 sudo openssl req -x509 -newkey rsa:2048 \
+    -addext "basicConstraints=critical,CA:FALSE" \
     -keyout /etc/nginx/ssl/networker.key \
     -out /etc/nginx/ssl/networker.crt \
     -days 365 -nodes -subj "/CN=localhost" 2>/dev/null < /dev/null
@@ -10263,6 +10268,7 @@ deploy_benchmark_proxy() {
     if [ ! -f "$cert_pem" ]; then
         echo ">> Generating self-signed TLS certificate"
         sudo openssl req -x509 -newkey rsa:2048 -keyout "$cert_key" \
+            -addext "basicConstraints=critical,CA:FALSE" \
             -out "$cert_pem" -days 365 -nodes -subj '/CN=bench' 2>/dev/null
     fi
 
@@ -10532,6 +10538,7 @@ deploy_benchmark_server() {
     if [ "$BENCH_USE_TLS" = "1" ] && [ ! -f "$CERT_PEM" ]; then
         echo ">> Generating self-signed TLS certificate"
         openssl req -x509 -newkey rsa:2048 -keyout "$CERT_KEY" \
+            -addext "basicConstraints=critical,CA:FALSE" \
             -out "$CERT_PEM" -days 365 -nodes -subj '/CN=bench' 2>/dev/null
     fi
 
