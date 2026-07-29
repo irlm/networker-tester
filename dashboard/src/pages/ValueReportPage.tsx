@@ -171,7 +171,7 @@ export function ValueReportPage() {
                 className={`text-xs px-3 py-1.5 rounded border transition-colors ${
                   f === activeFamily
                     ? 'border-cyan-500/50 text-cyan-400 bg-cyan-500/10'
-                    : 'border-gray-800 text-gray-500 hover:text-gray-300'
+                    : 'border-gray-800 text-gray-400 hover:text-gray-300'
                 }`}
               >
                 {FAMILY_LABEL[f] ?? f}
@@ -183,7 +183,7 @@ export function ValueReportPage() {
           <div className="table-container mb-6">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
+                <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
                   <th className="px-4 py-2.5 text-left font-medium">Provider</th>
                   <th className="px-4 py-2.5 text-left font-medium">VM size</th>
                   <th className="px-4 py-2.5 text-left font-medium">Region</th>
@@ -194,7 +194,7 @@ export function ValueReportPage() {
                   <th className="px-4 py-2.5 text-right font-medium">$/hr</th>
                   <th className="px-4 py-2.5 text-right font-medium">
                     {higherIsBetter ? 'Mbps per $·hr' : 'p95 × $/hr'}
-                    <span className="text-gray-600 font-normal ml-1">
+                    <span className="text-gray-500 font-normal ml-1">
                       ({higherIsBetter ? 'higher' : 'lower'} is better)
                     </span>
                   </th>
@@ -208,9 +208,9 @@ export function ValueReportPage() {
                   >
                     <td className="px-4 py-3 text-gray-200">{r.group.provider}</td>
                     <td className="px-4 py-3 text-gray-400 font-mono text-xs">{r.group.vm_size}</td>
-                    <td className="px-4 py-3 text-gray-500 text-xs">{r.group.region}</td>
+                    <td className="px-4 py-3 text-gray-400 text-xs">{r.group.region}</td>
                     <td className="px-4 py-3 text-gray-400 text-xs text-right font-mono">{r.fam.run_count}</td>
-                    <td className="px-4 py-3 text-gray-500 text-xs text-right font-mono">{r.fam.sample_count}</td>
+                    <td className="px-4 py-3 text-gray-400 text-xs text-right font-mono">{r.fam.sample_count}</td>
                     <td className="px-4 py-3 text-gray-300 text-xs text-right font-mono">
                       {fmtMetric(r.fam, r.fam.median)}
                     </td>
@@ -237,7 +237,7 @@ export function ValueReportPage() {
           {/* Value bars */}
           {chartData.length > 1 && (
             <div className="border border-gray-800 rounded p-4 mb-6">
-              <p className="text-xs text-gray-500 mb-2">
+              <p className="text-xs text-gray-400 mb-2">
                 {higherIsBetter
                   ? 'Sustained Mbps per dollar-hour (higher is better)'
                   : 'Dollar-weighted p95 latency (lower is better)'}
@@ -255,7 +255,7 @@ export function ValueReportPage() {
           )}
 
           {/* Formulas + disclaimer */}
-          <div className="text-xs text-gray-600 space-y-1">
+          <div className="text-xs text-gray-500 space-y-1">
             <p className="font-mono">{report.formulas.latency_cost_index}</p>
             <p className="font-mono">{report.formulas.mbps_per_dollar_hour}</p>
             <p>

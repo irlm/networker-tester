@@ -36,7 +36,7 @@ function verdictStyle(verdict: AppNetworkVerdict): VerdictStyle {
     case 'balanced':
       return { text: 'text-gray-300', border: 'border-gray-700', bg: 'bg-gray-800/30', label: 'Balanced' };
     default:
-      return { text: 'text-gray-500', border: 'border-gray-800', bg: 'bg-gray-900/40', label: 'No data' };
+      return { text: 'text-gray-400', border: 'border-gray-800', bg: 'bg-gray-900/40', label: 'No data' };
   }
 }
 
@@ -99,11 +99,11 @@ function SplitBar({
       <div className="flex justify-between mt-1 text-[11px] font-mono">
         <span className="text-cyan-400">
           net {fmtMs(networkMs)}
-          {p95NetworkMs != null && <span className="text-gray-600"> · p95 {fmtMs(p95NetworkMs)}</span>}
+          {p95NetworkMs != null && <span className="text-gray-500"> · p95 {fmtMs(p95NetworkMs)}</span>}
         </span>
         <span className="text-purple-400">
           srv {fmtMs(serverMs)}
-          {p95ServerMs != null && <span className="text-gray-600"> · p95 {fmtMs(p95ServerMs)}</span>}
+          {p95ServerMs != null && <span className="text-gray-500"> · p95 {fmtMs(p95ServerMs)}</span>}
         </span>
       </div>
     </div>
@@ -215,7 +215,7 @@ export function AppNetworkReportPage() {
           </div>
 
           {/* ── Legend ──────────────────────────────────────────────────────── */}
-          <div className="flex items-center gap-4 mb-3 text-xs text-gray-500">
+          <div className="flex items-center gap-4 mb-3 text-xs text-gray-400">
             <span className="flex items-center gap-1.5">
               <span className="inline-block w-3 h-3 rounded-sm" style={{ backgroundColor: NETWORK_COLOR }} /> Network
             </span>
@@ -228,7 +228,7 @@ export function AppNetworkReportPage() {
           <div className="table-container mb-6">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
+                <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
                   <th className="px-4 py-2.5 text-left font-medium">Endpoint</th>
                   <th className="px-4 py-2.5 text-left font-medium">Verdict</th>
                   <th className="px-4 py-2.5 text-left font-medium w-64">Split (median)</th>
@@ -253,10 +253,10 @@ export function AppNetworkReportPage() {
                       />
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-xs text-purple-300">
-                      {fmtMs(g.median_server_ms)} <span className="text-gray-600">/ {fmtMs(g.p95_server_ms)}</span>
+                      {fmtMs(g.median_server_ms)} <span className="text-gray-500">/ {fmtMs(g.p95_server_ms)}</span>
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-xs text-cyan-300">
-                      {fmtMs(g.median_network_ms)} <span className="text-gray-600">/ {fmtMs(g.p95_network_ms)}</span>
+                      {fmtMs(g.median_network_ms)} <span className="text-gray-500">/ {fmtMs(g.p95_network_ms)}</span>
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-xs text-gray-300">{fmtRatio(g.server_ratio)}</td>
                     <td className="px-4 py-3 text-right font-mono text-xs text-gray-400">
@@ -271,7 +271,7 @@ export function AppNetworkReportPage() {
                           ⚠ {g.split_anomaly_count}
                         </span>
                       ) : (
-                        <span className="text-gray-600">0</span>
+                        <span className="text-gray-500">0</span>
                       )}
                     </td>
                   </tr>
@@ -281,14 +281,14 @@ export function AppNetworkReportPage() {
           </div>
 
           {/* ── Formulas / disclaimer (verbatim from the response) ──────────── */}
-          <div className="text-xs text-gray-600 space-y-1">
+          <div className="text-xs text-gray-500 space-y-1">
             <p className="font-mono">{report!.formulas.server_ms}</p>
             <p className="font-mono">{report!.formulas.network_ms}</p>
             <p className="font-mono">{report!.formulas.split}</p>
             <p className="font-mono">{report!.formulas.split_anomaly}</p>
             <p className="pt-1">
               Generated {new Date(report!.generated_at).toLocaleString()} · mode{' '}
-              <span className="font-mono text-gray-500">{report!.mode}</span>
+              <span className="font-mono text-gray-400">{report!.mode}</span>
             </p>
           </div>
         </>

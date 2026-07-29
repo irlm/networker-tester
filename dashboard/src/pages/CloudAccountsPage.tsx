@@ -313,7 +313,7 @@ export function CloudAccountsPage() {
       <div className="p-4 md:p-6">
         <h2 className="text-xl font-bold text-gray-100 mb-6">Settings</h2>
         <SettingsTabs />
-        <p className="text-gray-500 motion-safe:animate-pulse">Loading accounts...</p>
+        <p className="text-gray-400 motion-safe:animate-pulse">Loading accounts...</p>
       </div>
     );
   }
@@ -383,7 +383,7 @@ export function CloudAccountsPage() {
 
           {/* Provider-specific credential fields */}
           {isEditing && (
-            <p className="text-xs text-gray-500 mb-2">Leave credential fields empty to keep existing values.</p>
+            <p className="text-xs text-gray-400 mb-2">Leave credential fields empty to keep existing values.</p>
           )}
           {formProvider === 'azure' && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
@@ -396,7 +396,7 @@ export function CloudAccountsPage() {
                   placeholder={isEditing ? 'leave empty to keep existing' : 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
-                <p className="text-[10px] text-gray-600 mt-0.5">Subscriptions page → your subscription → Overview → Subscription ID</p>
+                <p className="text-[10px] text-gray-500 mt-0.5">Subscriptions page → your subscription → Overview → Subscription ID</p>
               </div>
               <div>
                 <label className="block text-xs text-gray-400 mb-1">Resource Group</label>
@@ -407,7 +407,7 @@ export function CloudAccountsPage() {
                   placeholder={isEditing ? 'leave empty to keep existing' : 'networker-testers'}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
-                <p className="text-[10px] text-gray-600 mt-0.5">Resource group where runner VMs will be created. Must exist beforehand.</p>
+                <p className="text-[10px] text-gray-500 mt-0.5">Resource group where runner VMs will be created. Must exist beforehand.</p>
               </div>
               <div>
                 <label className="block text-xs text-gray-400 mb-1">Tenant ID</label>
@@ -418,7 +418,7 @@ export function CloudAccountsPage() {
                   placeholder={isEditing ? 'leave empty to keep existing' : undefined}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
-                <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.azure.fieldHelp.tenant_id}</p>
+                <p className="text-[10px] text-gray-500 mt-0.5">{CLOUD_SETUP_GUIDES.azure.fieldHelp.tenant_id}</p>
               </div>
               <div>
                 <label className="block text-xs text-gray-400 mb-1">Client ID</label>
@@ -429,7 +429,7 @@ export function CloudAccountsPage() {
                   placeholder={isEditing ? 'leave empty to keep existing' : undefined}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
-                <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.azure.fieldHelp.client_id}</p>
+                <p className="text-[10px] text-gray-500 mt-0.5">{CLOUD_SETUP_GUIDES.azure.fieldHelp.client_id}</p>
               </div>
               <div>
                 <label className="block text-xs text-gray-400 mb-1">Client Secret</label>
@@ -440,7 +440,7 @@ export function CloudAccountsPage() {
                   placeholder={isEditing ? 'leave empty to keep existing' : undefined}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
-                <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.azure.fieldHelp.client_secret}</p>
+                <p className="text-[10px] text-gray-500 mt-0.5">{CLOUD_SETUP_GUIDES.azure.fieldHelp.client_secret}</p>
               </div>
             </div>
           )}
@@ -456,7 +456,7 @@ export function CloudAccountsPage() {
                     placeholder={isEditing ? 'leave empty to keep existing' : 'AKIA...'}
                     className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                   />
-                  <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.aws.fieldHelp.access_key_id}</p>
+                  <p className="text-[10px] text-gray-500 mt-0.5">{CLOUD_SETUP_GUIDES.aws.fieldHelp.access_key_id}</p>
                 </div>
                 <div>
                   <label className="block text-xs text-gray-400 mb-1">Secret Access Key</label>
@@ -467,12 +467,12 @@ export function CloudAccountsPage() {
                     placeholder={isEditing ? 'leave empty to keep existing' : undefined}
                     className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                   />
-                  <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.aws.fieldHelp.secret_access_key}</p>
+                  <p className="text-[10px] text-gray-500 mt-0.5">{CLOUD_SETUP_GUIDES.aws.fieldHelp.secret_access_key}</p>
                 </div>
               </div>
               <div>
                 <label className="block text-xs text-gray-400 mb-1">
-                  Session Token <span className="text-gray-600">(optional — only for temporary/SSO credentials)</span>
+                  Session Token <span className="text-gray-500">(optional — only for temporary/SSO credentials)</span>
                 </label>
                 <input
                   type="password"
@@ -481,7 +481,7 @@ export function CloudAccountsPage() {
                   placeholder={isEditing ? 'leave empty to keep existing' : undefined}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 />
-                <p className="text-[10px] text-gray-600 mt-0.5">
+                <p className="text-[10px] text-gray-500 mt-0.5">
                   Required if using <span className="text-gray-400">aws sso login</span> or <span className="text-gray-400">aws sts assume-role</span>.
                   Not needed for permanent IAM user keys. Get all three values with: <span className="text-gray-400 font-mono">aws configure export-credentials --format env</span>
                 </p>
@@ -499,7 +499,7 @@ export function CloudAccountsPage() {
                 className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500 font-mono"
                 style={{ WebkitTextSecurity: 'disc' } as React.CSSProperties}
               />
-              <p className="text-[10px] text-gray-600 mt-0.5">{CLOUD_SETUP_GUIDES.gcp.fieldHelp.json_key}</p>
+              <p className="text-[10px] text-gray-500 mt-0.5">{CLOUD_SETUP_GUIDES.gcp.fieldHelp.json_key}</p>
             </div>
           )}
 
@@ -525,7 +525,7 @@ export function CloudAccountsPage() {
                   />
                   Personal account
                   {!isProjectAdmin && (
-                    <span className="text-xs text-gray-600">(shared requires admin)</span>
+                    <span className="text-xs text-gray-500">(shared requires admin)</span>
                   )}
                 </label>
               </div>
@@ -536,7 +536,7 @@ export function CloudAccountsPage() {
           {validationError && (
             <div className="mb-3 border border-red-500/30 bg-red-500/10 rounded p-3">
               <p className="text-sm text-red-400 mb-2">Validation failed: {validationError}</p>
-              <p className="text-xs text-gray-500 mb-2">
+              <p className="text-xs text-gray-400 mb-2">
                 The account was created but credentials could not be verified. You can keep it as a draft and fix your provider setup, or delete it.
               </p>
               <div className="flex gap-3">
@@ -578,14 +578,14 @@ export function CloudAccountsPage() {
 
       {accounts.length === 0 ? (
         <div className="border border-gray-800 rounded p-8 text-center">
-          <p className="text-gray-500 text-sm">No cloud accounts configured</p>
-          <p className="text-gray-600 text-xs mt-1">Add a cloud account to enable deployments with stored credentials</p>
+          <p className="text-gray-400 text-sm">No cloud accounts configured</p>
+          <p className="text-gray-500 text-xs mt-1">Add a cloud account to enable deployments with stored credentials</p>
         </div>
       ) : (
         <div className="table-container">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
+              <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
                 <th className="px-4 py-2.5 text-left font-medium">Name</th>
                 <th className="px-4 py-2.5 text-left font-medium">Provider</th>
                 <th className="px-4 py-2.5 text-left font-medium">Region</th>
@@ -606,7 +606,7 @@ export function CloudAccountsPage() {
                   </td>
                   <td className="px-4 py-3 text-gray-400 text-xs">{acct.region_default || '\u2014'}</td>
                   <td className="px-4 py-3">
-                    <span className={`text-xs ${acct.personal ? 'text-gray-500' : 'text-cyan-400'}`}>
+                    <span className={`text-xs ${acct.personal ? 'text-gray-400' : 'text-cyan-400'}`}>
                       {acct.personal ? 'personal' : 'shared'}
                     </span>
                   </td>
@@ -615,7 +615,7 @@ export function CloudAccountsPage() {
                       {acct.status}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-gray-500 text-xs">
+                  <td className="px-4 py-3 text-gray-400 text-xs">
                     {acct.last_validated ? new Date(acct.last_validated).toLocaleString() : '\u2014'}
                   </td>
                   <td className="px-4 py-3">
@@ -648,7 +648,7 @@ export function CloudAccountsPage() {
                       {isOperator && (
                         <button
                           onClick={() => handleDelete(acct.account_id, acct.name)}
-                          className="text-xs text-gray-600 hover:text-red-400 transition-colors"
+                          className="text-xs text-gray-500 hover:text-red-400 transition-colors"
                         >
                           Delete
                         </button>

@@ -126,7 +126,7 @@ export function VmHistoryPage() {
 
       {/* Filter bar */}
       <div className="flex flex-wrap items-center gap-3 mb-4 text-xs">
-        <span className="text-gray-500">Type</span>
+        <span className="text-gray-400">Type</span>
         <div className="flex gap-1">
           {([
             ['', 'All'],
@@ -167,7 +167,7 @@ export function VmHistoryPage() {
       )}
 
       {loading && rows.length === 0 ? (
-        <p className="text-sm text-gray-500">Loading…</p>
+        <p className="text-sm text-gray-400">Loading…</p>
       ) : rows.length === 0 ? (
         <div className="border border-gray-800 rounded p-6 text-center">
           <p className="text-sm text-gray-400">
@@ -179,7 +179,7 @@ export function VmHistoryPage() {
         <div className="table-container">
           <table className="w-full text-xs">
             <thead>
-              <tr className="text-gray-500 border-b border-gray-800">
+              <tr className="text-gray-400 border-b border-gray-800">
                 <th className="px-3 py-2 text-left">When</th>
                 <th className="px-3 py-2 text-left">Event</th>
                 <th className="px-3 py-2 text-left">Resource</th>
@@ -202,7 +202,7 @@ export function VmHistoryPage() {
                     <EventBadge kind={r.event_type} />
                   </td>
                   <td className="px-3 py-1.5 text-gray-200 font-mono truncate max-w-xs" title={r.resource_id}>
-                    {r.resource_name ?? <span className="text-gray-600">(unnamed)</span>}
+                    {r.resource_name ?? <span className="text-gray-500">(unnamed)</span>}
                   </td>
                   <td className="px-3 py-1.5">
                     <span className={`font-mono ${RESOURCE_BADGE[r.resource_type] ?? 'text-gray-400'}`}>
@@ -216,7 +216,7 @@ export function VmHistoryPage() {
                   <td className="px-3 py-1.5 text-gray-400 font-mono">
                     {r.vm_size ?? '—'}
                   </td>
-                  <td className="px-3 py-1.5 text-gray-500 font-mono truncate max-w-xs" title={r.vm_resource_id ?? undefined}>
+                  <td className="px-3 py-1.5 text-gray-400 font-mono truncate max-w-xs" title={r.vm_resource_id ?? undefined}>
                     {r.vm_name ?? '—'}
                   </td>
                 </tr>

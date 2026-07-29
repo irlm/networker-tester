@@ -67,7 +67,7 @@ export function ProjectSwitcher({ collapsed, connectionDot }: ProjectSwitcherPro
         >
           <div className="flex items-center gap-1 min-w-0">
             <span className="text-sm text-gray-200 truncate">{project.name}</span>
-            <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap">
+            <span className="text-[10px] text-gray-400 font-mono whitespace-nowrap">
               {zoneLabel(project.project_id)}
             </span>
           </div>
@@ -75,7 +75,7 @@ export function ProjectSwitcher({ collapsed, connectionDot }: ProjectSwitcherPro
         </button>
       ))}
       {projects.length === 0 && (
-        <div className="px-3 py-2 text-xs text-gray-600">No workspaces</div>
+        <div className="px-3 py-2 text-xs text-gray-500">No workspaces</div>
       )}
       {isPlatformAdmin && (
         <button
@@ -116,9 +116,9 @@ export function ProjectSwitcher({ collapsed, connectionDot }: ProjectSwitcherPro
           {displayName}
         </h1>
         {connectionDot}
-        <span className="text-gray-600 text-xs ml-auto">{open ? '\u25B4' : '\u25BE'}</span>
+        <span className="text-gray-500 text-xs ml-auto">{open ? '\u25B4' : '\u25BE'}</span>
       </button>
-      <p className="text-gray-600 text-xs mt-0.5">probe · network · full stack · application</p>
+      <p className="text-gray-500 text-xs mt-0.5">probe · network · full stack · application</p>
 
       {dropdown}
     </div>

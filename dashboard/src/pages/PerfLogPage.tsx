@@ -11,7 +11,7 @@ type Tab = 'logs' | 'stats';
 type Kind = 'all' | 'api' | 'render';
 
 function speedColor(ms: number | null | undefined): string {
-  if (ms === null || ms === undefined) return 'text-gray-500';
+  if (ms === null || ms === undefined) return 'text-gray-400';
   if (ms < 50) return 'text-green-400';
   if (ms < 200) return 'text-yellow-400';
   if (ms < 500) return 'text-orange-400';
@@ -19,7 +19,7 @@ function speedColor(ms: number | null | undefined): string {
 }
 
 function renderSpeedColor(ms: number | null | undefined): string {
-  if (ms === null || ms === undefined) return 'text-gray-500';
+  if (ms === null || ms === undefined) return 'text-gray-400';
   if (ms < 16) return 'text-green-400';
   if (ms < 50) return 'text-yellow-400';
   return 'text-red-400';
@@ -28,9 +28,9 @@ function renderSpeedColor(ms: number | null | undefined): string {
 function StatCard({ label, value, color, sub }: { label: string; value: string; color: string; sub?: string }) {
   return (
     <div className="bg-[var(--bg-surface)] border border-gray-800 rounded-lg p-4">
-      <p className="text-[10px] text-gray-500 tracking-wider uppercase mb-1">{label}</p>
+      <p className="text-[10px] text-gray-400 tracking-wider uppercase mb-1">{label}</p>
       <p className={`text-2xl font-mono font-bold ${color}`}>{value}</p>
-      {sub && <p className="text-xs text-gray-600 mt-1">{sub}</p>}
+      {sub && <p className="text-xs text-gray-500 mt-1">{sub}</p>}
     </div>
   );
 }
@@ -107,7 +107,7 @@ export function PerfLogPage() {
     return (
       <div className="p-4 md:p-6">
         <h2 className="text-lg md:text-xl font-bold text-gray-100 mb-6">Performance Log</h2>
-        <div className="text-gray-500 motion-safe:animate-pulse">Loading performance data...</div>
+        <div className="text-gray-400 motion-safe:animate-pulse">Loading performance data...</div>
       </div>
     );
   }
@@ -119,7 +119,7 @@ export function PerfLogPage() {
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
           <h3 className="text-red-400 font-bold mb-2">Failed to load performance logs</h3>
           <p className="text-red-300 text-sm font-mono">{loadError}</p>
-          <p className="text-gray-500 text-xs mt-2">Retrying automatically every 15 seconds.</p>
+          <p className="text-gray-400 text-xs mt-2">Retrying automatically every 15 seconds.</p>
         </div>
       </div>
     );
@@ -132,13 +132,13 @@ export function PerfLogPage() {
         <div className="flex items-center gap-2">
           <button
             onClick={() => setTab('logs')}
-            className={`px-3 py-1 text-xs rounded border ${tab === 'logs' ? 'border-cyan-500/30 text-cyan-400 bg-cyan-500/5' : 'border-gray-700 text-gray-500'}`}
+            className={`px-3 py-1 text-xs rounded border ${tab === 'logs' ? 'border-cyan-500/30 text-cyan-400 bg-cyan-500/5' : 'border-gray-700 text-gray-400'}`}
           >
             Logs ({logs.length})
           </button>
           <button
             onClick={() => setTab('stats')}
-            className={`px-3 py-1 text-xs rounded border ${tab === 'stats' ? 'border-cyan-500/30 text-cyan-400 bg-cyan-500/5' : 'border-gray-700 text-gray-500'}`}
+            className={`px-3 py-1 text-xs rounded border ${tab === 'stats' ? 'border-cyan-500/30 text-cyan-400 bg-cyan-500/5' : 'border-gray-700 text-gray-400'}`}
           >
             Stats
           </button>
@@ -178,7 +178,7 @@ export function PerfLogPage() {
           <div className="table-container mt-4">
             <table className="w-full text-sm font-mono">
               <thead>
-                <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
+                <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
                   <th className="px-3 py-2 text-left font-medium">Time</th>
                   <th className="px-3 py-2 text-left font-medium w-14">Kind</th>
                   <th className="px-3 py-2 text-left font-medium">Path / Component</th>
@@ -198,7 +198,7 @@ export function PerfLogPage() {
                   );
                   return (
                   <tr key={log.id} className="border-b border-gray-800/30 hover:bg-gray-800/20">
-                    <td className="px-3 py-2 text-gray-500 text-xs">{new Date(log.logged_at).toLocaleString()}</td>
+                    <td className="px-3 py-2 text-gray-400 text-xs">{new Date(log.logged_at).toLocaleString()}</td>
                     <td className="px-3 py-2">
                       <span className={`text-[10px] uppercase px-1.5 py-0.5 rounded border ${
                         log.kind === 'api'
@@ -210,9 +210,9 @@ export function PerfLogPage() {
                     </td>
                     <td className="px-3 py-2 text-gray-300 text-xs truncate max-w-[250px]" title={log.path || log.component || ''}>
                       {log.kind === 'api' ? (
-                        <><span className="text-gray-500">{log.method} </span>{displayPath}</>
+                        <><span className="text-gray-400">{log.method} </span>{displayPath}</>
                       ) : (
-                        <><span className="text-gray-400">{log.component}</span> <span className="text-gray-600">{log.trigger}</span></>
+                        <><span className="text-gray-400">{log.component}</span> <span className="text-gray-500">{log.trigger}</span></>
                       )}
                     </td>
                     <td className="px-3 py-2 text-xs">
@@ -221,7 +221,7 @@ export function PerfLogPage() {
                           {log.status || '-'}
                         </span>
                       ) : (
-                        <span className="text-gray-600">{log.item_count ?? '-'}</span>
+                        <span className="text-gray-500">{log.item_count ?? '-'}</span>
                       )}
                     </td>
                     <td className={`px-3 py-2 text-right text-xs ${log.kind === 'api' ? speedColor(log.total_ms) : renderSpeedColor(log.render_ms)}`}>
@@ -233,7 +233,7 @@ export function PerfLogPage() {
                     <td className="px-3 py-2 text-right text-xs text-purple-400">
                       {log.kind === 'api' ? formatMs(log.network_ms) : formatMs(log.render_ms)}
                     </td>
-                    <td className="px-3 py-2 text-xs text-gray-600 hidden lg:table-cell">
+                    <td className="px-3 py-2 text-xs text-gray-500 hidden lg:table-cell">
                       {log.source || '-'}
                     </td>
                   </tr>
@@ -242,12 +242,12 @@ export function PerfLogPage() {
               </tbody>
             </table>
             {logs.length === 0 && (
-              <div className="py-10 text-center text-gray-500 text-sm">
+              <div className="py-10 text-center text-gray-400 text-sm">
                 No performance logs recorded yet. Logs are flushed every 30 seconds.
               </div>
             )}
             {totalPages > 1 && (
-              <div className="flex items-center justify-between px-3 py-2 border-t border-gray-800/50 text-xs text-gray-500">
+              <div className="flex items-center justify-between px-3 py-2 border-t border-gray-800/50 text-xs text-gray-400">
                 <span>{logs.length} rows &middot; page {currentPage + 1} of {totalPages}</span>
                 <div className="flex items-center gap-1">
                   <button
@@ -337,11 +337,11 @@ export function PerfLogPage() {
           {/* Top slow paths */}
           {topSlowPaths.length > 0 && (
             <div>
-              <h3 className="text-xs text-gray-500 tracking-wider font-medium mb-3 uppercase">Slowest API Paths</h3>
+              <h3 className="text-xs text-gray-400 tracking-wider font-medium mb-3 uppercase">Slowest API Paths</h3>
               <div className="table-container">
                 <table className="w-full text-sm font-mono">
                   <thead>
-                    <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
+                    <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
                       <th className="px-3 py-2 text-left font-medium">Path</th>
                       <th className="px-3 py-2 text-right font-medium">Calls</th>
                       <th className="px-3 py-2 text-right font-medium">Avg</th>
@@ -354,7 +354,7 @@ export function PerfLogPage() {
                         <td className="px-3 py-2 text-gray-300 text-xs truncate max-w-[300px]" title={p.path}>
                           {p.path.replace(/\/projects\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, '/projects/…')}
                         </td>
-                        <td className="px-3 py-2 text-right text-gray-500 text-xs">{p.count}</td>
+                        <td className="px-3 py-2 text-right text-gray-400 text-xs">{p.count}</td>
                         <td className={`px-3 py-2 text-right text-xs ${speedColor(p.avgMs)}`}>{formatMs(p.avgMs)}</td>
                         <td className={`px-3 py-2 text-right text-xs ${speedColor(p.maxMs)}`}>{formatMs(p.maxMs)}</td>
                       </tr>

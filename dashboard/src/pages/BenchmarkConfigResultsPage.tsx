@@ -303,7 +303,7 @@ export function BenchmarkConfigResultsPage() {
 
   if (loading) {
     return (
-      <div className="px-6 py-8 text-sm text-gray-500 motion-safe:animate-pulse">
+      <div className="px-6 py-8 text-sm text-gray-400 motion-safe:animate-pulse">
         Loading benchmark results...
       </div>
     );
@@ -353,7 +353,7 @@ export function BenchmarkConfigResultsPage() {
       </div>
 
       {data.results.length === 0 && (
-        <div className="text-sm text-gray-500 py-8">
+        <div className="text-sm text-gray-400 py-8">
           No results yet. Results will appear here as benchmark languages complete.
         </div>
       )}
@@ -406,7 +406,7 @@ export function BenchmarkConfigResultsPage() {
               Language Comparison &mdash;{' '}
               {testbedMap.get(activeTestbed) ? testbedLabel(testbedMap.get(activeTestbed)!) : 'Unknown Testbed'}
             </h2>
-            <div className="flex items-center gap-3 text-xs text-gray-500">
+            <div className="flex items-center gap-3 text-xs text-gray-400">
               {allIncomplete && (
                 <span className="text-yellow-600">All results incomplete — showing all</span>
               )}
@@ -424,7 +424,7 @@ export function BenchmarkConfigResultsPage() {
           </div>
 
           {visibleResults.length === 0 && (
-            <div className="text-sm text-gray-500 py-4">
+            <div className="text-sm text-gray-400 py-4">
               No complete results yet.
             </div>
           )}
@@ -439,7 +439,7 @@ export function BenchmarkConfigResultsPage() {
                 onClickGroup={handleClickGroup}
                 expandedGroups={expandedSet}
               />
-              <p className="text-xs text-gray-600 mt-1 ml-[70px]">
+              <p className="text-xs text-gray-500 mt-1 ml-[70px]">
                 Click a language row to expand phase breakdown (max {MAX_EXPANDED} at a time).
               </p>
             </div>
@@ -476,7 +476,7 @@ export function BenchmarkConfigResultsPage() {
                       </span>
                       <button
                         onClick={() => handleClickGroup(lang)}
-                        className="text-xs text-gray-600 hover:text-gray-400 transition-colors"
+                        className="text-xs text-gray-500 hover:text-gray-400 transition-colors"
                       >
                         collapse
                       </button>
@@ -574,7 +574,7 @@ export function BenchmarkConfigResultsPage() {
       )}
 
       {activeTestbed === '__cross_testbed__' && crossTestbedRows.length === 0 && (
-        <div className="text-sm text-gray-500 py-4">
+        <div className="text-sm text-gray-400 py-4">
           Cross-testbed comparison requires results from at least two testbeds for the same language.
         </div>
       )}

@@ -88,7 +88,7 @@ export function SSOCompletePage() {
             <h1 className="text-[#4ade80] text-2xl font-bold tracking-tight mb-1">
               {PRODUCT_NAME}
             </h1>
-            <p className="text-gray-600 text-xs uppercase tracking-widest">
+            <p className="text-gray-500 text-xs uppercase tracking-widest">
               network diagnostics
             </p>
           </div>
@@ -98,7 +98,7 @@ export function SSOCompletePage() {
           </div>
           <a
             href="/login"
-            className="text-xs text-gray-500 hover:text-gray-300 transition-colors"
+            className="text-xs text-gray-400 hover:text-gray-300 transition-colors"
           >
             Return to login
           </a>
@@ -114,7 +114,7 @@ export function SSOCompletePage() {
           <h1 className="text-[#4ade80] text-2xl font-bold tracking-tight mb-1">
             {PRODUCT_NAME}
           </h1>
-          <p className="text-gray-600 text-xs uppercase tracking-widest">
+          <p className="text-gray-500 text-xs uppercase tracking-widest">
             network diagnostics
           </p>
         </div>

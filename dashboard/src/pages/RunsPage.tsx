@@ -27,7 +27,7 @@ const KIND_BADGE_CLASSES: Record<string, string> = {
 };
 
 function KindBadge({ kind }: { kind: string | null | undefined }) {
-  if (!kind) return <span className="text-gray-600">-</span>;
+  if (!kind) return <span className="text-gray-500">-</span>;
   const classes = KIND_BADGE_CLASSES[kind] || 'text-gray-400 bg-gray-500/10';
   return (
     <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${classes}`}>
@@ -223,7 +223,7 @@ export function RunsPage() {
         <div className="table-container">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
+              <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
                 <th className="px-3 py-2 text-left font-medium">Run</th>
                 <th className="px-3 py-2 text-left font-medium">Name</th>
                 <th className="px-3 py-2 text-left font-medium">Kind</th>
@@ -293,11 +293,11 @@ export function RunsPage() {
               className={`px-3 py-2 text-xs font-medium border-b-2 transition-colors ${
                 active
                   ? 'border-cyan-500 text-gray-100'
-                  : `border-transparent hover:text-gray-300 ${count === 0 ? 'text-gray-700' : 'text-gray-500'}`
+                  : `border-transparent hover:text-gray-300 ${count === 0 ? 'text-gray-700' : 'text-gray-400'}`
               }`}
             >
               {tab.label}
-              <span className={`ml-1.5 tabular-nums ${active ? 'text-cyan-400' : count === 0 ? 'text-gray-700' : 'text-gray-600'}`}>
+              <span className={`ml-1.5 tabular-nums ${active ? 'text-cyan-400' : count === 0 ? 'text-gray-700' : 'text-gray-500'}`}>
                 {count}
               </span>
             </button>
@@ -349,7 +349,7 @@ export function RunsPage() {
           ))}
         </select>
 
-        <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
+        <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer select-none">
           <input
             type="checkbox"
             checked={showQueued}
@@ -370,7 +370,7 @@ export function RunsPage() {
       <div className="md:hidden space-y-2 mt-4">
         {pageRuns.length === 0 ? (
           <div className="border border-gray-800 rounded p-8 text-center">
-            <p className="text-gray-500 text-sm">{activeFilterCount > 0 ? 'No runs match filters' : 'No runs yet'}</p>
+            <p className="text-gray-400 text-sm">{activeFilterCount > 0 ? 'No runs match filters' : 'No runs yet'}</p>
             {activeFilterCount === 0 && (
               <Link to={`/projects/${projectId}/tests/new`} className="text-cyan-400 text-xs mt-2 inline-block">
                 Start a network test
@@ -390,7 +390,7 @@ export function RunsPage() {
             <p className="text-gray-300 text-xs truncate mb-1">
               {run.config_name || run.test_config_id.slice(0, 8)}
             </p>
-            <div className="flex items-center gap-3 text-xs text-gray-500">
+            <div className="flex items-center gap-3 text-xs text-gray-400">
               {run.endpoint_kind && <KindBadge kind={run.endpoint_kind} />}
               {run.artifact_id && <span className="text-gray-400">benchmark</span>}
               <RunResult ok={run.success_count} fail={run.failure_count} />
@@ -404,7 +404,7 @@ export function RunsPage() {
       <div className="hidden md:block table-container mt-4">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
+            <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
               <th className="px-4 py-2.5 text-left font-medium">Run</th>
               <th className="px-4 py-2.5 text-left font-medium">Name</th>
               <th className="px-4 py-2.5 text-left font-medium hidden lg:table-cell">Type</th>
@@ -446,12 +446,12 @@ export function RunsPage() {
                   <RunResult ok={run.success_count} fail={run.failure_count} />
                 </td>
                 <td
-                  className="px-4 py-3 text-gray-500 text-xs hidden lg:table-cell truncate max-w-40"
+                  className="px-4 py-3 text-gray-400 text-xs hidden lg:table-cell truncate max-w-40"
                   title={run.modes?.join(', ') || undefined}
                 >
                   {run.modes?.join(', ') || '-'}
                 </td>
-                <td className="px-4 py-3 text-gray-500 text-xs" title={run._createdIso}>
+                <td className="px-4 py-3 text-gray-400 text-xs" title={run._createdIso}>
                   {run._createdAgo}
                 </td>
               </tr>
@@ -461,7 +461,7 @@ export function RunsPage() {
 
         {runsWithDates.length === 0 && (
           <div className="py-10 text-center">
-            <p className="text-gray-500 text-sm">{activeFilterCount > 0 ? 'No runs match the current filters' : 'No runs yet'}</p>
+            <p className="text-gray-400 text-sm">{activeFilterCount > 0 ? 'No runs match the current filters' : 'No runs yet'}</p>
             {activeFilterCount === 0 && (
               <Link to={`/projects/${projectId}/tests/new`} className="text-cyan-400 text-xs mt-1 inline-block">
                 Start a network test
@@ -473,7 +473,7 @@ export function RunsPage() {
 
       {/* Pagination footer */}
       {runsWithDates.length > 0 && (
-        <div className="flex items-center justify-between mt-4 text-xs text-gray-500">
+        <div className="flex items-center justify-between mt-4 text-xs text-gray-400">
           <span>
             Showing {pageStart + 1}-{pageEnd} of {runsWithDates.length} runs
           </span>

@@ -135,7 +135,7 @@ export function UsersPage() {
         <div className="mb-4 border border-gray-800 rounded bg-[var(--bg-card)] p-3">
           <div className="flex items-end gap-2 flex-wrap">
             <div className="flex-1 min-w-[200px]">
-              <label className="block text-xs text-gray-500 mb-1">Email</label>
+              <label className="block text-xs text-gray-400 mb-1">Email</label>
               <input
                 type="email"
                 value={inviteEmail}
@@ -146,7 +146,7 @@ export function UsersPage() {
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Role</label>
+              <label className="block text-xs text-gray-400 mb-1">Role</label>
               <select
                 value={inviteRole}
                 onChange={(e) => setInviteRole(e.target.value)}
@@ -166,7 +166,7 @@ export function UsersPage() {
             </button>
             <button
               onClick={() => { setShowInvite(false); setInviteEmail(''); }}
-              className="px-2 py-1.5 text-xs text-gray-500 hover:text-gray-300 transition-colors"
+              className="px-2 py-1.5 text-xs text-gray-400 hover:text-gray-300 transition-colors"
             >
               Cancel
             </button>
@@ -181,7 +181,7 @@ export function UsersPage() {
           className={`px-3 py-2 text-sm border-b-2 transition-colors ${
             tab === 'pending'
               ? 'border-yellow-500 text-yellow-400'
-              : 'border-transparent text-gray-500 hover:text-gray-300'
+              : 'border-transparent text-gray-400 hover:text-gray-300'
           }`}
         >
           Pending{pendingCount > 0 ? ` (${pendingCount})` : ''}
@@ -191,7 +191,7 @@ export function UsersPage() {
           className={`px-3 py-2 text-sm border-b-2 transition-colors ${
             tab === 'all'
               ? 'border-cyan-500 text-cyan-400'
-              : 'border-transparent text-gray-500 hover:text-gray-300'
+              : 'border-transparent text-gray-400 hover:text-gray-300'
           }`}
         >
           All ({allUsers.length})
@@ -202,7 +202,7 @@ export function UsersPage() {
       {tab === 'pending' && (
         <div className="space-y-2">
           {pendingUsers.length === 0 && (
-            <p className="text-gray-500 text-sm py-8 text-center">No pending approval requests. New users appear here after signing up.</p>
+            <p className="text-gray-400 text-sm py-8 text-center">No pending approval requests. New users appear here after signing up.</p>
           )}
           {pendingUsers.map((u) => (
             <div
@@ -215,7 +215,7 @@ export function UsersPage() {
                   <span className={`text-[10px] px-1.5 py-0.5 rounded ${providerBadge[u.auth_provider] || providerBadge.local}`}>
                     {u.auth_provider}
                   </span>
-                  <span className="text-xs text-gray-600">{timeAgo(u.created_at)}</span>
+                  <span className="text-xs text-gray-500">{timeAgo(u.created_at)}</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <select
@@ -268,7 +268,7 @@ export function UsersPage() {
                   </div>
                   <div className="flex items-center gap-2">
                     {u.last_login_at && (
-                      <span className="text-xs text-gray-600">{timeAgo(u.last_login_at)}</span>
+                      <span className="text-xs text-gray-500">{timeAgo(u.last_login_at)}</span>
                     )}
                     <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${roleBadge[u.role] || roleBadge.viewer}`}>
                       {u.role}
@@ -280,7 +280,7 @@ export function UsersPage() {
                     className="mt-3 pt-3 border-t border-gray-800 flex items-center gap-3 flex-wrap"
                     onClick={(e) => e.stopPropagation()}
                   >
-                    <label className="text-xs text-gray-500">Change role:</label>
+                    <label className="text-xs text-gray-400">Change role:</label>
                     <select
                       value={changeRoles[u.user_id] || u.role}
                       onChange={(e) => setChangeRoles((prev) => ({ ...prev, [u.user_id]: e.target.value }))}
@@ -312,7 +312,7 @@ export function UsersPage() {
           {/* Disabled / denied users */}
           {disabledUsers.length > 0 && (
             <>
-              <div className="text-xs text-gray-600 mt-4 mb-1 tracking-wide">inactive</div>
+              <div className="text-xs text-gray-500 mt-4 mb-1 tracking-wide">inactive</div>
               {disabledUsers.map((u) => (
                 <div
                   key={u.user_id}

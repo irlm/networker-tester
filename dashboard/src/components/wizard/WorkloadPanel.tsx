@@ -80,7 +80,7 @@ export function WorkloadPanel({
 
       {modeGroups.length > 0 && (
         <div>
-          <label className="text-xs text-gray-500 mb-2 block">Modes</label>
+          <label className="text-xs text-gray-400 mb-2 block">Modes</label>
           <ModeSelector
             modeGroups={modeGroups}
             selectedModes={selectedModes}
@@ -93,7 +93,7 @@ export function WorkloadPanel({
 
       <div className="grid grid-cols-3 gap-4">
         <div>
-          <label htmlFor="wl-runs" className="text-xs text-gray-500 mb-1 block">Runs</label>
+          <label htmlFor="wl-runs" className="text-xs text-gray-400 mb-1 block">Runs</label>
           <input
             id="wl-runs"
             type="number"
@@ -104,7 +104,7 @@ export function WorkloadPanel({
           />
         </div>
         <div>
-          <label htmlFor="wl-concurrency" className="text-xs text-gray-500 mb-1 block">Concurrency</label>
+          <label htmlFor="wl-concurrency" className="text-xs text-gray-400 mb-1 block">Concurrency</label>
           <input
             id="wl-concurrency"
             type="number"
@@ -115,7 +115,7 @@ export function WorkloadPanel({
           />
         </div>
         <div>
-          <label htmlFor="wl-timeout" className="text-xs text-gray-500 mb-1 block">Timeout (ms)</label>
+          <label htmlFor="wl-timeout" className="text-xs text-gray-400 mb-1 block">Timeout (ms)</label>
           <input
             id="wl-timeout"
             type="number"
@@ -129,7 +129,7 @@ export function WorkloadPanel({
 
       {hasThroughput && (
         <div>
-          <label className="text-xs text-gray-500 mb-2 block">Payload Sizes</label>
+          <label className="text-xs text-gray-400 mb-2 block">Payload Sizes</label>
           <PayloadSelector selected={selectedPayloads} onToggle={handlePayloadToggle} />
         </div>
       )}

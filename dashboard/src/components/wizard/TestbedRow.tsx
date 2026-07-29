@@ -74,12 +74,12 @@ export function TestbedRow({
     <div className="border border-gray-800 p-3">
       {/* ── Row 1: Cloud account combobox ──────────────────────────────── */}
       <div className="flex items-center gap-2 mb-2">
-        <span className="text-[10px] font-mono text-gray-600 w-3">{index + 1}</span>
-        <span className="text-[11px] text-gray-500">Cloud account</span>
+        <span className="text-[10px] font-mono text-gray-500 w-3">{index + 1}</span>
+        <span className="text-[11px] text-gray-400">Cloud account</span>
         <button
           type="button"
           onClick={() => onRemove(testbed.key)}
-          className="text-[11px] text-gray-600 hover:text-red-400 transition-colors ml-auto"
+          className="text-[11px] text-gray-500 hover:text-red-400 transition-colors ml-auto"
         >
           remove
         </button>
@@ -107,7 +107,7 @@ export function TestbedRow({
         <select
           value={testbed.topology}
           onChange={e => onUpdate(testbed.key, { topology: e.target.value })}
-          className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs text-gray-500 focus:outline-none focus:border-cyan-500"
+          className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs text-gray-400 focus:outline-none focus:border-cyan-500"
         >
           {TOPOLOGIES.map(t => <option key={t} value={t}>{t}</option>)}
         </select>
@@ -136,7 +136,7 @@ export function TestbedRow({
                   // One selection color per form — the green/blue split next to
                   // cyan proxy chips was audit finding §8.
                   ? 'bg-cyan-900/40 border-cyan-700 text-cyan-300 z-10'
-                  : 'border-gray-700 text-gray-500 hover:text-gray-300'
+                  : 'border-gray-700 text-gray-400 hover:text-gray-300'
               } ${os === 'linux' ? '' : '-ml-px'}`}
             >
               {os === 'linux' ? 'Linux' : 'Windows'}
@@ -169,7 +169,7 @@ export function TestbedRow({
 
       {/* ── Reverse Proxies toggle buttons ─────────────────────────────── */}
       <div className="mt-3">
-        <label className="block text-xs text-gray-500 mb-1.5">Reverse Proxies</label>
+        <label className="block text-xs text-gray-400 mb-1.5">Reverse Proxies</label>
         <div className="flex flex-wrap gap-2">
           {(testbed.os === 'windows'
             ? windowsProxiesFor(testbed.cloud)
@@ -217,7 +217,7 @@ export function TestbedRow({
       {/* ── Tester VM type toggle buttons (benchmark wizards only) ─────── */}
       {!hideTesterOs && (
         <div className="mt-3">
-          <label className="block text-xs text-gray-500 mb-1.5">Runner VM</label>
+          <label className="block text-xs text-gray-400 mb-1.5">Runner VM</label>
           <div className="flex gap-2">
             {TESTER_OS_OPTIONS.map(opt => (
               <button

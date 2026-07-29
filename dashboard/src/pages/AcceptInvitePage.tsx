@@ -94,14 +94,14 @@ export function AcceptInvitePage() {
           <h1 className="text-[#4ade80] text-2xl font-bold tracking-tight mb-1">
             {PRODUCT_NAME}
           </h1>
-          <p className="text-gray-600 text-xs uppercase tracking-widest">
+          <p className="text-gray-500 text-xs uppercase tracking-widest">
             network diagnostics
           </p>
         </div>
 
         {/* Loading */}
         {state === 'loading' && (
-          <p className="text-gray-500 text-sm text-center motion-safe:animate-pulse">
+          <p className="text-gray-400 text-sm text-center motion-safe:animate-pulse">
             Loading invitation...
           </p>
         )}
@@ -122,15 +122,15 @@ export function AcceptInvitePage() {
         {state === 'resolved' && invite && (
           <div>
             <div className="text-center mb-6">
-              <p className="text-gray-500 text-sm mb-1">You've been invited to join</p>
+              <p className="text-gray-400 text-sm mb-1">You've been invited to join</p>
               <p className="text-gray-100 text-lg font-medium">{invite.project_name}</p>
-              <p className="text-gray-500 text-xs mt-1">
+              <p className="text-gray-400 text-xs mt-1">
                 as <span className="text-cyan-400">{invite.role}</span>
               </p>
             </div>
 
             <form onSubmit={handleSubmit}>
-              <h3 className="text-xs text-gray-600 uppercase tracking-wider mb-4 text-center">
+              <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-4 text-center">
                 {invite.has_account ? 'Sign in to accept' : 'Create your account'}
               </h3>
 
@@ -143,7 +143,7 @@ export function AcceptInvitePage() {
 
               {/* Email (read-only) */}
               <div className="mb-4">
-                <label className="block text-xs text-gray-600 mb-1.5 uppercase tracking-wider">
+                <label className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">
                   Email
                 </label>
                 <div className="flex items-center border-b border-gray-700">
@@ -159,7 +159,7 @@ export function AcceptInvitePage() {
 
               {/* Password */}
               <div className="mb-4">
-                <label className="block text-xs text-gray-600 mb-1.5 uppercase tracking-wider">
+                <label className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">
                   Password
                 </label>
                 <div className="flex items-center border-b border-gray-700 focus-within:border-green-500/50 transition-colors">
@@ -178,7 +178,7 @@ export function AcceptInvitePage() {
               {/* Confirm password (new accounts only) */}
               {!invite.has_account && (
                 <div className="mb-4">
-                  <label className="block text-xs text-gray-600 mb-1.5 uppercase tracking-wider">
+                  <label className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">
                     Confirm Password
                   </label>
                   <div className="flex items-center border-b border-gray-700 focus-within:border-green-500/50 transition-colors">

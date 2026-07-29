@@ -116,7 +116,7 @@ export function RotateKeyDialog({
           <>
             <div className="space-y-4">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">
+                <label className="block text-xs text-gray-400 mb-1">
                   New agent api-key
                 </label>
                 <div className="flex gap-2">

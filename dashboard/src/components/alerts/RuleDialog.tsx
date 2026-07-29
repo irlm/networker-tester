@@ -114,7 +114,7 @@ export function RuleDialog({ projectId, channels, configs, existing, onClose, on
             <h3 id="alert-rule-dialog-title" className="text-lg font-bold text-gray-100">
               {existing ? 'Edit Alert Rule' : 'New Alert Rule'}
             </h3>
-            <button type="button" onClick={onClose} className="text-gray-500 hover:text-gray-300 text-sm" aria-label="Close">
+            <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-300 text-sm" aria-label="Close">
               &#x2715;
             </button>
           </div>
@@ -202,7 +202,7 @@ export function RuleDialog({ projectId, channels, configs, existing, onClose, on
               ))}
             </select>
             {scopeLocked && (
-              <p className="text-[11px] text-gray-600 mt-1">
+              <p className="text-[11px] text-gray-500 mt-1">
                 A config-scoped rule cannot be widened back to all configs — recreate it instead.
               </p>
             )}

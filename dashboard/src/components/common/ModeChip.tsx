@@ -30,7 +30,7 @@ export function ModeChip({ mode, label }: ModeChipProps) {
 /** Render a list of mode chips. Truncates after `max` with a "+N" overflow. */
 export function ModeChipList({ modes, max = 24 }: { modes: string[]; max?: number }) {
   if (modes.length === 0) {
-    return <span className="text-[10px] text-gray-600 font-mono">no modes</span>;
+    return <span className="text-[10px] text-gray-500 font-mono">no modes</span>;
   }
   const shown = modes.slice(0, max);
   const overflow = modes.length - shown.length;

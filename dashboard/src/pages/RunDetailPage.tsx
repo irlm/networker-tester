@@ -137,7 +137,7 @@ export function RunDetailPage() {
     return (
       <div className="p-4 md:p-6">
         <Breadcrumb items={[{ label: 'Runs', to: `/projects/${projectId}/runs` }, { label: `Run ${shortId}` }]} />
-        <div className="text-gray-500 motion-safe:animate-pulse">Loading run {shortId}...</div>
+        <div className="text-gray-400 motion-safe:animate-pulse">Loading run {shortId}...</div>
       </div>
     );
   }
@@ -187,7 +187,7 @@ export function RunDetailPage() {
               <span className="text-[10px] text-gray-300 bg-gray-500/10 px-1.5 py-0.5 rounded">benchmark</span>
             )}
           </div>
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-gray-400">
             {run?.config_name && <>Config: <span className="text-gray-300">{run.config_name}</span> · </>}
             {run?.modes && <>Modes: <span className="text-gray-300">{run.modes.join(', ')}</span> · </>}
             {attempts.length} attempts
@@ -237,16 +237,16 @@ export function RunDetailPage() {
 
       {/* Inline metrics */}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1 py-3 mb-6 text-xs border-b border-gray-800/50">
-        <span className="text-gray-500">
+        <span className="text-gray-400">
           Probes <span className="text-gray-200 font-mono font-semibold ml-1">{attempts.length}</span>
         </span>
-        <span className="text-gray-500">
+        <span className="text-gray-400">
           Success <span className="text-green-400 font-mono font-semibold ml-1">{successCount}</span>
         </span>
-        <span className="text-gray-500">
-          Failed <span className={`font-mono font-semibold ml-1 ${failureCount > 0 ? 'text-red-400' : 'text-gray-600'}`}>{failureCount}</span>
+        <span className="text-gray-400">
+          Failed <span className={`font-mono font-semibold ml-1 ${failureCount > 0 ? 'text-red-400' : 'text-gray-500'}`}>{failureCount}</span>
         </span>
-        <span className="text-gray-500">
+        <span className="text-gray-400">
           Rate <span className={`font-mono font-semibold ml-1 ${successRateClass(attempts.length > 0 ? (successCount / attempts.length) * 100 : 100)}`}>
             {attempts.length > 0 ? `${((successCount / attempts.length) * 100).toFixed(0)}%` : '-'}
           </span>
@@ -256,13 +256,13 @@ export function RunDetailPage() {
       {/* ── Timing Breakdown Table (mirrors HTML report) ── */}
       {timingBreakdown.length > 0 && (
         <div className="table-container mb-6">
-          <h3 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
+          <h3 className="px-4 py-2.5 text-xs text-gray-400 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
             timing breakdown by protocol
           </h3>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="border-b border-gray-800 text-gray-500">
+                <tr className="border-b border-gray-800 text-gray-400">
                   <th className="px-4 py-2 text-left">Protocol</th>
                   <th className="px-4 py-2 text-right">N</th>
                   <th className="px-4 py-2 text-right">Avg DNS</th>
@@ -286,13 +286,13 @@ export function RunDetailPage() {
       {/* ── Statistics Summary Table (mirrors HTML report) ── */}
       {protocolStats.length > 0 && (
         <div className="table-container mb-6">
-          <h3 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
+          <h3 className="px-4 py-2.5 text-xs text-gray-400 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
             statistics summary
           </h3>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="border-b border-gray-800 text-gray-500">
+                <tr className="border-b border-gray-800 text-gray-400">
                   <th className="px-4 py-2 text-left">Protocol</th>
                   <th className="px-4 py-2 text-left">Metric</th>
                   <th className="px-4 py-2 text-right">N</th>
@@ -319,7 +319,7 @@ export function RunDetailPage() {
       {/* ── Protocol Comparison Chart ── */}
       {protocolChartData.length > 1 && (
         <div className="mb-6">
-          <h3 className="text-xs text-gray-500 tracking-wider mb-3 font-medium">protocol comparison — p50 vs p95</h3>
+          <h3 className="text-xs text-gray-400 tracking-wider mb-3 font-medium">protocol comparison — p50 vs p95</h3>
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={protocolChartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2028" />
@@ -336,7 +336,7 @@ export function RunDetailPage() {
       {/* ── Box-and-Whisker Chart ── */}
       {protocolStats.length > 0 && (
         <div className="mb-6">
-          <h3 className="text-xs text-gray-500 tracking-wider mb-3 font-medium">latency distribution — box &amp; whisker</h3>
+          <h3 className="text-xs text-gray-400 tracking-wider mb-3 font-medium">latency distribution — box &amp; whisker</h3>
           <div className="border border-gray-800 rounded bg-[var(--bg-card)] p-4">
             <div className="space-y-3">
               {protocolStats.map((ps) => {
@@ -363,18 +363,18 @@ export function RunDetailPage() {
                       {/* Median line */}
                       <div className="absolute top-0 bottom-0 w-0.5 bg-cyan-400" style={{ left: `${median}%` }} />
                     </div>
-                    <div className="w-24 text-xs text-gray-500 font-mono shrink-0">
+                    <div className="w-24 text-xs text-gray-400 font-mono shrink-0">
                       {formatMs(s.min)}&ndash;{formatMs(s.max)}
                     </div>
                   </div>
                 );
               })}
             </div>
-            <div className="flex justify-between text-[10px] text-gray-600 mt-2 px-[calc(5rem+0.75rem)]">
+            <div className="flex justify-between text-[10px] text-gray-500 mt-2 px-[calc(5rem+0.75rem)]">
               <span>0ms</span>
               <span>{formatMs(Math.max(...protocolStats.map(p => p.stats.max)))}</span>
             </div>
-            <div className="flex items-center gap-4 mt-3 text-[10px] text-gray-600 px-[calc(5rem+0.75rem)]">
+            <div className="flex items-center gap-4 mt-3 text-[10px] text-gray-500 px-[calc(5rem+0.75rem)]">
               <span className="flex items-center gap-1"><span className="w-3 h-px bg-gray-500 inline-block" /> whisker (min/max)</span>
               <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm border border-cyan-600/60 bg-cyan-900/30 inline-block" /> IQR (p25–p75)</span>
               <span className="flex items-center gap-1"><span className="w-0.5 h-3 bg-cyan-400 inline-block" /> median (p50)</span>
@@ -386,7 +386,7 @@ export function RunDetailPage() {
       {/* ── TTFB Distribution ── */}
       {ttfbDistribution.length > 0 && (
         <div className="mb-6">
-          <h3 className="text-xs text-gray-500 tracking-wider mb-3 font-medium">TTFB distribution (ms)</h3>
+          <h3 className="text-xs text-gray-400 tracking-wider mb-3 font-medium">TTFB distribution (ms)</h3>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={ttfbDistribution}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2028" />
@@ -400,11 +400,11 @@ export function RunDetailPage() {
       )}
 
       {/* ── Attempts by Protocol (collapsible) ── */}
-      <h3 className="text-xs text-gray-500 tracking-wider mb-3 font-medium">probe details</h3>
+      <h3 className="text-xs text-gray-400 tracking-wider mb-3 font-medium">probe details</h3>
       {attemptsError && attempts.length === 0 && (
         <div className="border border-gray-800 rounded p-6 text-center mb-2">
           <p className="text-gray-400 text-sm mb-1">Attempt data unavailable</p>
-          <p className="text-gray-600 text-xs mb-3">{attemptsError}</p>
+          <p className="text-gray-500 text-xs mb-3">{attemptsError}</p>
           <button
             onClick={() => setRetryTick(t => t + 1)}
             className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
@@ -428,11 +428,11 @@ export function RunDetailPage() {
               aria-expanded={isExpanded}
             >
               <div className="flex items-center gap-3">
-                <span className="text-gray-500 text-xs transition-transform" style={{ transform: isExpanded ? 'rotate(90deg)' : '' }} aria-hidden="true">{'\u25B6'}</span>
+                <span className="text-gray-400 text-xs transition-transform" style={{ transform: isExpanded ? 'rotate(90deg)' : '' }} aria-hidden="true">{'\u25B6'}</span>
                 <span className="text-gray-200 font-medium text-sm">{protocol.toUpperCase()}</span>
-                <span className="text-gray-500 text-xs">{group.length} attempts</span>
+                <span className="text-gray-400 text-xs">{group.length} attempts</span>
                 {stats && (
-                  <span className="text-gray-600 text-xs">
+                  <span className="text-gray-500 text-xs">
                     p50: {formatMetricValue(protocol, stats.p50)} · p95: {formatMetricValue(protocol, stats.p95)}
                   </span>
                 )}
@@ -460,7 +460,7 @@ export function RunDetailPage() {
       {/* ── Live Progress (queued/running runs) ── */}
       {run && (run.status === 'queued' || run.status === 'running') && (
         <div className="table-container mb-6 mt-6">
-          <h3 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
+          <h3 className="px-4 py-2.5 text-xs text-gray-400 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
             live progress
           </h3>
           <div className="px-4 py-4 text-sm">
@@ -494,23 +494,23 @@ function ArtifactSection({ artifact }: { artifact: BenchmarkArtifact }) {
       {artifact.data_quality && (
         <div className="border border-gray-800 rounded p-4 mb-4 text-xs">
           <div className="flex flex-wrap gap-x-6 gap-y-2">
-            <span className="text-gray-500">
+            <span className="text-gray-400">
               Noise: <span className={artifact.data_quality.noise_level === 'low' ? 'text-green-400' : 'text-yellow-400'}>
                 {artifact.data_quality.noise_level}
               </span>
             </span>
-            <span className="text-gray-500">
+            <span className="text-gray-400">
               Sufficiency: <span className={artifact.data_quality.sufficiency === 'sufficient' ? 'text-green-400' : 'text-yellow-400'}>
                 {artifact.data_quality.sufficiency}
               </span>
             </span>
-            <span className="text-gray-500">
+            <span className="text-gray-400">
               Publication: <span className={artifact.data_quality.publication_ready ? 'text-green-400' : 'text-red-400'}>
                 {artifact.data_quality.publication_ready ? 'Ready' : 'Not Ready'}
               </span>
             </span>
             {artifact.data_quality.quality_tier && (
-              <span className="text-gray-500">
+              <span className="text-gray-400">
                 Tier: <span className="text-gray-300">{artifact.data_quality.quality_tier}</span>
               </span>
             )}
@@ -528,13 +528,13 @@ function ArtifactSection({ artifact }: { artifact: BenchmarkArtifact }) {
       {/* Case Summaries */}
       {artifact.summaries && artifact.summaries.length > 0 && (
         <div className="table-container mb-4">
-          <h4 className="px-4 py-2.5 text-xs text-gray-500 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
+          <h4 className="px-4 py-2.5 text-xs text-gray-400 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
             case summaries
           </h4>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="border-b border-gray-800 text-gray-500">
+                <tr className="border-b border-gray-800 text-gray-400">
                   <th className="px-4 py-2 text-left">Protocol</th>
                   <th className="px-4 py-2 text-left">Metric</th>
                   <th className="px-4 py-2 text-right">N</th>
@@ -555,7 +555,7 @@ function ArtifactSection({ artifact }: { artifact: BenchmarkArtifact }) {
                     <td className="px-4 py-2 text-yellow-400 text-right font-mono">{s.p95.toFixed(2)}</td>
                     <td className="px-4 py-2 text-orange-400 text-right font-mono">{s.p99.toFixed(2)}</td>
                     <td className="px-4 py-2 text-gray-300 text-right font-mono">{s.rps.toFixed(0)}</td>
-                    <td className="px-4 py-2 text-gray-500 text-right font-mono">{s.stddev.toFixed(2)}</td>
+                    <td className="px-4 py-2 text-gray-400 text-right font-mono">{s.stddev.toFixed(2)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -567,7 +567,7 @@ function ArtifactSection({ artifact }: { artifact: BenchmarkArtifact }) {
       {/* Methodology */}
       {artifact.methodology && (
         <div className="border border-gray-800 rounded p-4 text-xs text-gray-400 space-y-1">
-          <p className="text-gray-500 font-medium mb-2">Methodology</p>
+          <p className="text-gray-400 font-medium mb-2">Methodology</p>
           <p>Mode: {artifact.methodology.mode} | Phase model: {artifact.methodology.phase_model}</p>
           <p>Scenario: {artifact.methodology.scenario} | Sample phase: {artifact.methodology.sample_phase}</p>
           <p>Launches: {artifact.methodology.launch_count} | Phases: {artifact.methodology.phases_present?.join(', ')}</p>
@@ -603,9 +603,9 @@ function StatsRow({ ps }: { ps: ProtocolStats }) {
     <tr className="border-b border-gray-800/30 hover:bg-gray-800/10">
       <td className="px-4 py-2 text-gray-200 font-medium">
         {ps.protocol}
-        {ps.payloadBytes != null && <span className="text-gray-500 ml-1">({formatBytes(ps.payloadBytes)})</span>}
+        {ps.payloadBytes != null && <span className="text-gray-400 ml-1">({formatBytes(ps.payloadBytes)})</span>}
       </td>
-      <td className="px-4 py-2 text-gray-500">{ps.label}</td>
+      <td className="px-4 py-2 text-gray-400">{ps.label}</td>
       <td className="px-4 py-2 text-gray-400 text-right">{ps.stats.count}</td>
       <td className="px-4 py-2 text-gray-400 text-right font-mono">{fmt(ps.stats.min)}</td>
       <td className="px-4 py-2 text-gray-400 text-right font-mono">{fmt(ps.stats.mean)}</td>
@@ -613,7 +613,7 @@ function StatsRow({ ps }: { ps: ProtocolStats }) {
       <td className="px-4 py-2 text-yellow-400 text-right font-mono">{fmt(ps.stats.p95)}</td>
       <td className="px-4 py-2 text-orange-400 text-right font-mono">{fmt(ps.stats.p99)}</td>
       <td className="px-4 py-2 text-gray-400 text-right font-mono">{fmt(ps.stats.max)}</td>
-      <td className="px-4 py-2 text-gray-500 text-right font-mono">{fmt(ps.stats.stddev)}</td>
+      <td className="px-4 py-2 text-gray-400 text-right font-mono">{fmt(ps.stats.stddev)}</td>
       <td className={`px-4 py-2 text-right font-mono ${successRateClass(ps.successRate)}`}>
         {ps.successRate.toFixed(0)}%
       </td>
@@ -631,38 +631,38 @@ export function AttemptRow({ a }: { a: LiveAttempt }) {
   return (
     <div className="px-4 py-3 border-b border-gray-800/30 hover:bg-gray-800/10">
       <div className="flex items-center gap-4 mb-2">
-        <span className="text-gray-500 font-mono text-xs w-8">#{a.sequence_num}</span>
+        <span className="text-gray-400 font-mono text-xs w-8">#{a.sequence_num}</span>
         {a.success
           ? <span className="text-green-400 text-xs font-medium">OK</span>
           : <span className="text-red-400 text-xs font-medium">FAIL</span>
         }
-        {a.retry_count > 0 && <span className="text-gray-600 text-xs">{a.retry_count} retries</span>}
+        {a.retry_count > 0 && <span className="text-gray-500 text-xs">{a.retry_count} retries</span>}
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 text-xs">
         {a.dns && (
           <SubResult label="DNS" color="gray">
             <p className="text-gray-300">{formatMs(a.dns.duration_ms)}</p>
             {a.dns.resolved_ips?.length > 0 && (
-              <p className="text-gray-500 font-mono truncate">{a.dns.resolved_ips.join(', ')}</p>
+              <p className="text-gray-400 font-mono truncate">{a.dns.resolved_ips.join(', ')}</p>
             )}
           </SubResult>
         )}
         {a.tcp && (
           <SubResult label="TCP" color="gray">
             <p className="text-gray-300">{formatMs(a.tcp.connect_duration_ms)}</p>
-            <p className="text-gray-500 font-mono truncate">{a.tcp.remote_addr}</p>
+            <p className="text-gray-400 font-mono truncate">{a.tcp.remote_addr}</p>
             {(a.tcp.total_retrans != null || a.tcp.congestion_algorithm != null || a.tcp.rtt_estimate_ms != null) && (
               <p className="font-mono truncate">
                 {a.tcp.total_retrans != null && (
-                  <span className={a.tcp.total_retrans > 0 ? 'text-yellow-400' : 'text-gray-500'}>
+                  <span className={a.tcp.total_retrans > 0 ? 'text-yellow-400' : 'text-gray-400'}>
                     {a.tcp.total_retrans} retrans
                   </span>
                 )}
                 {a.tcp.congestion_algorithm != null && (
-                  <span className="text-gray-500">{a.tcp.total_retrans != null ? ' · ' : ''}{a.tcp.congestion_algorithm}</span>
+                  <span className="text-gray-400">{a.tcp.total_retrans != null ? ' · ' : ''}{a.tcp.congestion_algorithm}</span>
                 )}
                 {a.tcp.rtt_estimate_ms != null && (
-                  <span className="text-gray-500"> · rtt {formatMs(a.tcp.rtt_estimate_ms)}</span>
+                  <span className="text-gray-400"> · rtt {formatMs(a.tcp.rtt_estimate_ms)}</span>
                 )}
               </p>
             )}
@@ -671,16 +671,16 @@ export function AttemptRow({ a }: { a: LiveAttempt }) {
         {a.tls && (
           <SubResult label="TLS" color="gray">
             <p className="text-gray-300">{formatMs(a.tls.handshake_duration_ms)}</p>
-            <p className="text-gray-500 font-mono truncate">{a.tls.protocol_version} · {a.tls.cipher_suite}</p>
+            <p className="text-gray-400 font-mono truncate">{a.tls.protocol_version} · {a.tls.cipher_suite}</p>
             {(a.tls.handshake_kind != null || a.tls.resumed != null || a.tls.alpn_negotiated != null) && (
               <p className="font-mono truncate">
                 {(a.tls.handshake_kind != null || a.tls.resumed != null) && (
-                  <span className={(a.tls.resumed ?? a.tls.handshake_kind === 'resumed') ? 'text-cyan-400' : 'text-gray-500'}>
+                  <span className={(a.tls.resumed ?? a.tls.handshake_kind === 'resumed') ? 'text-cyan-400' : 'text-gray-400'}>
                     {a.tls.handshake_kind ?? (a.tls.resumed ? 'resumed' : 'full')}
                   </span>
                 )}
                 {a.tls.alpn_negotiated != null && (
-                  <span className="text-gray-500">
+                  <span className="text-gray-400">
                     {(a.tls.handshake_kind != null || a.tls.resumed != null) ? ' · ' : ''}alpn {a.tls.alpn_negotiated}
                   </span>
                 )}
@@ -694,7 +694,7 @@ export function AttemptRow({ a }: { a: LiveAttempt }) {
               <span className={a.http.status_code >= 400 ? 'text-red-400' : 'text-green-400'}>{a.http.status_code}</span>
               {' · '}TTFB {formatMs(a.http.ttfb_ms)} · Total {formatMs(a.http.total_duration_ms)}
             </p>
-            <p className="text-gray-500 font-mono truncate">
+            <p className="text-gray-400 font-mono truncate">
               {a.http.negotiated_version}
               {a.http.throughput_mbps != null && ` · ${a.http.throughput_mbps.toFixed(1)} MB/s`}
               {a.http.goodput_mbps != null && ` · goodput ${a.http.goodput_mbps.toFixed(1)} MB/s`}
@@ -708,7 +708,7 @@ export function AttemptRow({ a }: { a: LiveAttempt }) {
               RTT avg {formatMs(a.udp.rtt_avg_ms)} · Loss {a.udp.loss_percent.toFixed(1)}%
               {a.udp.jitter_ms != null && ` · Jitter ${formatMs(a.udp.jitter_ms)}`}
             </p>
-            <p className="text-gray-500">
+            <p className="text-gray-400">
               {a.udp.probe_count} probes
               {a.udp.rtt_p95_ms != null && ` · p95 ${formatMs(a.udp.rtt_p95_ms)}`}
             </p>
@@ -726,7 +726,7 @@ export function AttemptRow({ a }: { a: LiveAttempt }) {
                     <span className="text-yellow-400"> · split anomaly</span>
                   )}
                 </p>
-                {st.app_ms != null && <p className="text-gray-500 font-mono">app {formatMs(st.app_ms)}</p>}
+                {st.app_ms != null && <p className="text-gray-400 font-mono">app {formatMs(st.app_ms)}</p>}
               </>
             ) : (
               <p className="text-gray-300">
@@ -745,12 +745,12 @@ export function AttemptRow({ a }: { a: LiveAttempt }) {
             </p>
             <p className="font-mono truncate">
               {a.rpm.bufferbloat_factor != null && (
-                <span className={a.rpm.bufferbloat_factor >= 2 ? 'text-yellow-400' : 'text-gray-500'}>
+                <span className={a.rpm.bufferbloat_factor >= 2 ? 'text-yellow-400' : 'text-gray-400'}>
                   bufferbloat &times;{a.rpm.bufferbloat_factor.toFixed(2)}
                 </span>
               )}
               {a.rpm.load_throughput_mbps != null && (
-                <span className="text-gray-500">
+                <span className="text-gray-400">
                   {a.rpm.bufferbloat_factor != null ? ' · ' : ''}load {a.rpm.load_throughput_mbps.toFixed(1)} MB/s
                 </span>
               )}
@@ -762,7 +762,7 @@ export function AttemptRow({ a }: { a: LiveAttempt }) {
             <p className="text-gray-300">
               RTT avg {formatMs(a.ping.rtt_avg_ms)} · Jitter {formatMs(a.ping.jitter_ms)} · Loss {a.ping.loss_percent.toFixed(1)}%
             </p>
-            <p className="text-gray-500">
+            <p className="text-gray-400">
               {a.ping.probe_count} probes
               {a.ping.reply_ttl != null && ` · ttl ${a.ping.reply_ttl}`}
             </p>
@@ -778,9 +778,9 @@ export function AttemptRow({ a }: { a: LiveAttempt }) {
               </span>
               {a.path.destination_rtt_ms != null && ` · ${formatMs(a.path.destination_rtt_ms)}`}
             </p>
-            <p className="text-gray-500 font-mono truncate">{a.path.method}</p>
+            <p className="text-gray-400 font-mono truncate">{a.path.method}</p>
             {a.path.hops.length > 0 && (
-              <p className="text-gray-500 font-mono truncate">
+              <p className="text-gray-400 font-mono truncate">
                 {a.path.hops.map((h) => h.addr ?? '*').join(' → ')}
               </p>
             )}
@@ -791,11 +791,11 @@ export function AttemptRow({ a }: { a: LiveAttempt }) {
             <p className="text-gray-300">
               v4 {a.dualstack.ipv4.success && a.dualstack.ipv4.total_ms != null
                 ? formatMs(a.dualstack.ipv4.total_ms)
-                : <span className={a.dualstack.ipv4.attempted ? 'text-red-400' : 'text-gray-600'}>{a.dualstack.ipv4.attempted ? 'fail' : 'n/a'}</span>}
+                : <span className={a.dualstack.ipv4.attempted ? 'text-red-400' : 'text-gray-500'}>{a.dualstack.ipv4.attempted ? 'fail' : 'n/a'}</span>}
               {' · '}
               v6 {a.dualstack.ipv6.success && a.dualstack.ipv6.total_ms != null
                 ? formatMs(a.dualstack.ipv6.total_ms)
-                : <span className={a.dualstack.ipv6.attempted ? 'text-red-400' : 'text-gray-600'}>{a.dualstack.ipv6.attempted ? 'fail' : 'n/a'}</span>}
+                : <span className={a.dualstack.ipv6.attempted ? 'text-red-400' : 'text-gray-500'}>{a.dualstack.ipv6.attempted ? 'fail' : 'n/a'}</span>}
               {a.dualstack.faster_family != null && (
                 <span className="text-cyan-400">
                   {' · '}{a.dualstack.faster_family} faster
@@ -803,7 +803,7 @@ export function AttemptRow({ a }: { a: LiveAttempt }) {
                 </span>
               )}
             </p>
-            <p className="text-gray-500 font-mono truncate">{a.dualstack.happy_eyeballs_verdict}</p>
+            <p className="text-gray-400 font-mono truncate">{a.dualstack.happy_eyeballs_verdict}</p>
           </SubResult>
         )}
         {a.websocket && (
@@ -811,7 +811,7 @@ export function AttemptRow({ a }: { a: LiveAttempt }) {
             <p className="text-gray-300">
               Upgrade {formatMs(a.websocket.upgrade_ms)} · RTT avg {formatMs(a.websocket.msg_rtt_avg_ms)} · Loss {a.websocket.loss_percent.toFixed(1)}%
             </p>
-            <p className="text-gray-500">
+            <p className="text-gray-400">
               {a.websocket.echo_count}/{a.websocket.message_count} echoes
               {` · p95 ${formatMs(a.websocket.msg_rtt_p95_ms)}`}
             </p>
@@ -825,19 +825,19 @@ export function AttemptRow({ a }: { a: LiveAttempt }) {
                 : <span className="text-yellow-400">no MTU verdict</span>}
               {a.pmtud.local_mtu != null && ` · local ${a.pmtud.local_mtu}`}
             </p>
-            <p className="text-gray-500 font-mono truncate">{a.pmtud.method}</p>
+            <p className="text-gray-400 font-mono truncate">{a.pmtud.method}</p>
           </SubResult>
         )}
         {a.page_load && (
           <SubResult label="Page Load" color="blue">
             <p className="text-gray-300">Total {formatMs(a.page_load.total_ms)} · {a.page_load.assets_fetched}/{a.page_load.asset_count} assets</p>
-            {a.page_load.tls_setup_ms != null && <p className="text-gray-500">TLS setup: {formatMs(a.page_load.tls_setup_ms)}</p>}
+            {a.page_load.tls_setup_ms != null && <p className="text-gray-400">TLS setup: {formatMs(a.page_load.tls_setup_ms)}</p>}
           </SubResult>
         )}
         {a.browser && (
           <SubResult label="Browser" color="purple">
             <p className="text-gray-300">Load {formatMs(a.browser.load_ms)}</p>
-            {a.browser.dom_content_loaded_ms != null && <p className="text-gray-500">DCL: {formatMs(a.browser.dom_content_loaded_ms)}</p>}
+            {a.browser.dom_content_loaded_ms != null && <p className="text-gray-400">DCL: {formatMs(a.browser.dom_content_loaded_ms)}</p>}
           </SubResult>
         )}
         {a.error && (
@@ -854,7 +854,7 @@ export function AttemptRow({ a }: { a: LiveAttempt }) {
 function SubResult({ label, color, children }: { label: string; color: string; children: React.ReactNode }) {
   const borderColor = color === 'red' ? 'border-red-500/20' : color === 'cyan' ? 'border-gray-600' : color === 'blue' ? 'border-blue-500/20' : color === 'purple' ? 'border-purple-500/20' : 'border-gray-800';
   const bgColor = color === 'red' ? 'bg-red-500/5' : 'bg-[var(--bg-base)]';
-  const labelColor = color === 'red' ? 'text-red-400' : color === 'cyan' ? 'text-gray-300' : color === 'blue' ? 'text-blue-400' : color === 'purple' ? 'text-purple-400' : 'text-gray-500';
+  const labelColor = color === 'red' ? 'text-red-400' : color === 'cyan' ? 'text-gray-300' : color === 'blue' ? 'text-blue-400' : color === 'purple' ? 'text-purple-400' : 'text-gray-400';
   return (
     <div className={`${bgColor} border ${borderColor} rounded p-2`}>
       <p className={`${labelColor} tracking-wider mb-1 text-[11px] font-medium`}>{label}</p>

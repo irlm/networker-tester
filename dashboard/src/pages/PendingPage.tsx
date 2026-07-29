@@ -41,7 +41,7 @@ export function PendingPage() {
           <h1 className="text-[#4ade80] text-2xl font-bold tracking-tight mb-1">
             {PRODUCT_NAME}
           </h1>
-          <p className="text-gray-600 text-xs uppercase tracking-widest">
+          <p className="text-gray-500 text-xs uppercase tracking-widest">
             network diagnostics
           </p>
         </div>

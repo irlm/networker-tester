@@ -28,7 +28,7 @@ export function SettingsTabs() {
             className={`px-3 py-1.5 rounded text-sm transition-colors ${
               active
                 ? 'bg-gray-800/40 text-gray-100'
-                : 'text-gray-500 hover:text-gray-300'
+                : 'text-gray-400 hover:text-gray-300'
             }`}
           >
             {tab.label}

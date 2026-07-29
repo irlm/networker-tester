@@ -56,7 +56,7 @@ function ProgressBar({ label, value, max, unit }: { label: string; value: number
     <div className="mb-3">
       <div className="flex items-center justify-between mb-1">
         <span className="text-xs text-gray-400">{label}</span>
-        <span className="text-xs text-gray-500 font-mono">
+        <span className="text-xs text-gray-400 font-mono">
           {unit ? `${formatBytes(value)} / ${formatBytes(max)}` : `${pct.toFixed(1)}%`}
         </span>
       </div>
@@ -92,7 +92,7 @@ function OverviewTab({ system, db, version, userCount, workspaceCount }: {
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
       {/* Server Metrics */}
       <div className="border border-gray-800 rounded bg-[var(--bg-card)] p-4">
-        <div className="text-xs text-gray-500 tracking-wider font-medium mb-3">SERVER</div>
+        <div className="text-xs text-gray-400 tracking-wider font-medium mb-3">SERVER</div>
         {system ? (
           <>
             <ProgressBar label="CPU" value={system.cpu_usage_percent} max={100} />
@@ -104,13 +104,13 @@ function OverviewTab({ system, db, version, userCount, workspaceCount }: {
             </div>
           </>
         ) : (
-          <p className="text-sm text-gray-600">Loading...</p>
+          <p className="text-sm text-gray-500">Loading...</p>
         )}
       </div>
 
       {/* Database Metrics */}
       <div className="border border-gray-800 rounded bg-[var(--bg-card)] p-4">
-        <div className="text-xs text-gray-500 tracking-wider font-medium mb-3">DATABASE</div>
+        <div className="text-xs text-gray-400 tracking-wider font-medium mb-3">DATABASE</div>
         {db ? (
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -133,13 +133,13 @@ function OverviewTab({ system, db, version, userCount, workspaceCount }: {
             </div>
           </div>
         ) : (
-          <p className="text-sm text-gray-600">Loading...</p>
+          <p className="text-sm text-gray-500">Loading...</p>
         )}
       </div>
 
       {/* Application */}
       <div className="border border-gray-800 rounded bg-[var(--bg-card)] p-4 lg:col-span-2">
-        <div className="text-xs text-gray-500 tracking-wider font-medium mb-3">APPLICATION</div>
+        <div className="text-xs text-gray-400 tracking-wider font-medium mb-3">APPLICATION</div>
         <div className="grid grid-cols-3 gap-4">
           <div>
             <span className="text-xs text-gray-400 block">Version</span>
@@ -201,7 +201,7 @@ function UsageTab({ workspaces, onRefresh }: { workspaces: WorkspaceUsage[]; onR
     <div className="table-container">
       <table className="w-full text-sm">
         <thead>
-          <tr className="text-left text-xs text-gray-500 border-b border-gray-800">
+          <tr className="text-left text-xs text-gray-400 border-b border-gray-800">
             <th className="pb-2 pr-3 font-medium">Name</th>
             <th className="pb-2 pr-3 font-medium">Members</th>
             <th className="pb-2 pr-3 font-medium">Runners</th>
@@ -228,7 +228,7 @@ function UsageTab({ workspaces, onRefresh }: { workspaces: WorkspaceUsage[]; onR
                 <td className="py-2 pr-3 text-gray-400 font-mono">{ws.tester_count}</td>
                 <td className="py-2 pr-3 text-gray-400 font-mono">{ws.jobs_30d}</td>
                 <td className="py-2 pr-3 text-gray-400 font-mono">{ws.runs_30d}</td>
-                <td className="py-2 pr-3 text-gray-500 text-xs">
+                <td className="py-2 pr-3 text-gray-400 text-xs">
                   {ws.last_activity ? timeAgo(ws.last_activity) : 'never'}
                 </td>
                 <td className="py-2 pr-3">
@@ -258,7 +258,7 @@ function UsageTab({ workspaces, onRefresh }: { workspaces: WorkspaceUsage[]; onR
                       className={`px-1.5 py-1 text-xs rounded transition-colors ${
                         ws.delete_protection
                           ? 'text-yellow-500 hover:bg-yellow-500/20'
-                          : 'text-gray-500 hover:bg-gray-700/50 hover:text-gray-300'
+                          : 'text-gray-400 hover:bg-gray-700/50 hover:text-gray-300'
                       }`}
                       title={ws.delete_protection ? 'Remove delete protection' : 'Enable delete protection'}
                     >
@@ -280,7 +280,7 @@ function UsageTab({ workspaces, onRefresh }: { workspaces: WorkspaceUsage[]; onR
           })}
           {workspaces.length === 0 && (
             <tr>
-              <td colSpan={8} className="py-8 text-center text-gray-500 text-sm">No workspaces</td>
+              <td colSpan={8} className="py-8 text-center text-gray-400 text-sm">No workspaces</td>
             </tr>
           )}
         </tbody>
@@ -330,8 +330,8 @@ function LogsTab() {
     switch (l) {
       case 1: return 'text-red-400';
       case 2: return 'text-yellow-400';
-      case 4: return 'text-gray-500';
-      case 5: return 'text-gray-600';
+      case 4: return 'text-gray-400';
+      case 5: return 'text-gray-500';
       default: return 'text-gray-400';
     }
   };
@@ -396,15 +396,15 @@ function LogsTab() {
         className="max-h-[600px] overflow-y-auto border border-gray-800 rounded bg-[var(--bg-card)] p-3 font-mono text-xs leading-relaxed"
       >
         {logs.length === 0 && (
-          <p className="text-gray-600 text-center py-4">No log entries</p>
+          <p className="text-gray-500 text-center py-4">No log entries</p>
         )}
         {logs.map((entry, i) => {
           const levelStr = levelToString(entry.level);
           return (
             <div key={i} className={levelColor(entry.level)}>
-              <span className="text-gray-600">[{formatTime(entry.ts)}]</span>{' '}
+              <span className="text-gray-500">[{formatTime(entry.ts)}]</span>{' '}
               <span className="font-bold">{levelStr.padEnd(5)}</span>{' '}
-              <span className="text-gray-500">{entry.service}</span>{' '}
+              <span className="text-gray-400">{entry.service}</span>{' '}
               &mdash; {entry.message}
             </div>
           );
@@ -619,14 +619,14 @@ function AuthTab() {
     }
   };
 
-  if (loading) return <p className="text-sm text-gray-600">Loading...</p>;
+  if (loading) return <p className="text-sm text-gray-500">Loading...</p>;
 
   return (
     <div className="space-y-6">
       {/* Public URL */}
       <div className="border border-gray-800 rounded bg-[var(--bg-card)] p-4">
-        <div className="text-xs text-gray-500 tracking-wider font-medium mb-3">PUBLIC URL</div>
-        <p className="text-xs text-gray-500 mb-2">
+        <div className="text-xs text-gray-400 tracking-wider font-medium mb-3">PUBLIC URL</div>
+        <p className="text-xs text-gray-400 mb-2">
           Base URL for SSO redirect callbacks (e.g. https://dash.example.com).
         </p>
         <div className="flex items-center gap-2">
@@ -650,7 +650,7 @@ function AuthTab() {
       {/* Providers */}
       <div className="border border-gray-800 rounded bg-[var(--bg-card)] p-4">
         <div className="flex items-center justify-between mb-3">
-          <div className="text-xs text-gray-500 tracking-wider font-medium">SSO PROVIDERS</div>
+          <div className="text-xs text-gray-400 tracking-wider font-medium">SSO PROVIDERS</div>
           <button
             onClick={openCreate}
             className="px-3 py-1.5 text-xs rounded border border-cyan-700 text-cyan-400 hover:bg-cyan-500/10 transition-colors"
@@ -660,13 +660,13 @@ function AuthTab() {
         </div>
 
         {providers.length === 0 && !showForm && (
-          <p className="text-sm text-gray-600 py-4 text-center">No SSO providers configured</p>
+          <p className="text-sm text-gray-500 py-4 text-center">No SSO providers configured</p>
         )}
 
         {providers.length > 0 && (
           <table className="w-full text-sm mb-4">
             <thead>
-              <tr className="text-left text-xs text-gray-500 border-b border-gray-800">
+              <tr className="text-left text-xs text-gray-400 border-b border-gray-800">
                 <th className="pb-2 pr-3 font-medium">Name</th>
                 <th className="pb-2 pr-3 font-medium">Type</th>
                 <th className="pb-2 pr-3 font-medium">Client ID</th>
@@ -679,7 +679,7 @@ function AuthTab() {
                 <tr key={p.provider_id} className="border-b border-gray-800/50 hover:bg-gray-800/20">
                   <td className="py-2 pr-3 text-gray-200 font-mono text-xs">{p.name}</td>
                   <td className="py-2 pr-3 text-gray-400 text-xs">{p.provider_type}</td>
-                  <td className="py-2 pr-3 text-gray-500 font-mono text-xs truncate max-w-[200px]">{p.client_id}</td>
+                  <td className="py-2 pr-3 text-gray-400 font-mono text-xs truncate max-w-[200px]">{p.client_id}</td>
                   <td className="py-2 pr-3">
                     <span className={`text-[10px] px-1.5 py-0.5 rounded ${
                       p.enabled ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'
@@ -705,7 +705,7 @@ function AuthTab() {
                           </button>
                           <button
                             onClick={() => setConfirmDelete(null)}
-                            className="px-2 py-1 text-xs rounded text-gray-500 hover:text-gray-300 transition-colors"
+                            className="px-2 py-1 text-xs rounded text-gray-400 hover:text-gray-300 transition-colors"
                           >
                             Cancel
                           </button>
@@ -735,7 +735,7 @@ function AuthTab() {
 
             <div className="grid grid-cols-2 gap-4 mb-4">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Provider Type</label>
+                <label className="block text-xs text-gray-400 mb-1">Provider Type</label>
                 <select
                   value={formType}
                   onChange={e => handleTypeChange(e.target.value)}
@@ -748,7 +748,7 @@ function AuthTab() {
                 </select>
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Display Name</label>
+                <label className="block text-xs text-gray-400 mb-1">Display Name</label>
                 <input
                   value={formName}
                   onChange={e => setFormName(e.target.value)}
@@ -773,7 +773,7 @@ function AuthTab() {
 
             {(PROVIDER_FIELDS[formType] || []).map(f => (
               <div key={f.key} className="mb-3">
-                <label className="block text-xs text-gray-500 mb-1">
+                <label className="block text-xs text-gray-400 mb-1">
                   {f.label}
                   {f.required && <span className="text-red-400 ml-0.5">*</span>}
                 </label>
@@ -784,7 +784,7 @@ function AuthTab() {
                   placeholder={f.secret && editingId ? '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (leave empty to keep)' : ''}
                   className="w-full bg-transparent border-b border-gray-700 focus:border-cyan-500/50 py-1.5 text-sm text-gray-200 focus:outline-none font-mono"
                 />
-                {f.help && <p className="text-[10px] text-gray-600 mt-0.5">{f.help}</p>}
+                {f.help && <p className="text-[10px] text-gray-500 mt-0.5">{f.help}</p>}
               </div>
             ))}
 

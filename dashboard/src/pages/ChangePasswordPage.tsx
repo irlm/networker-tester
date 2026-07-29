@@ -56,7 +56,7 @@ export function ChangePasswordPage() {
           <h1 className="text-[#4ade80] text-2xl font-bold tracking-tight mb-1">
             {PRODUCT_NAME}
           </h1>
-          <p className="text-gray-600 text-xs uppercase tracking-widest">
+          <p className="text-gray-500 text-xs uppercase tracking-widest">
             network diagnostics
           </p>
         </div>
@@ -76,7 +76,7 @@ export function ChangePasswordPage() {
           )}
 
           <div className="mb-4">
-            <label htmlFor="current-password" className="block text-xs text-gray-600 mb-1.5 uppercase tracking-wider">
+            <label htmlFor="current-password" className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">
               Current password
             </label>
             <div className="flex items-center border-b border-gray-700 focus-within:border-green-500/50 transition-colors">
@@ -93,7 +93,7 @@ export function ChangePasswordPage() {
           </div>
 
           <div className="mb-4">
-            <label htmlFor="new-password" className="block text-xs text-gray-600 mb-1.5 uppercase tracking-wider">
+            <label htmlFor="new-password" className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">
               New password
             </label>
             <div className="flex items-center border-b border-gray-700 focus-within:border-green-500/50 transition-colors">
@@ -110,7 +110,7 @@ export function ChangePasswordPage() {
           </div>
 
           <div className="mb-8">
-            <label htmlFor="confirm-password" className="block text-xs text-gray-600 mb-1.5 uppercase tracking-wider">
+            <label htmlFor="confirm-password" className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">
               Confirm password
             </label>
             <div className="flex items-center border-b border-gray-700 focus-within:border-green-500/50 transition-colors">

@@ -257,7 +257,7 @@ export function ProjectMembersPage() {
       <div className="p-4 md:p-6">
         <PageHeader title="Settings" />
         <SettingsTabs />
-        <p className="text-gray-500 motion-safe:animate-pulse">Loading members...</p>
+        <p className="text-gray-400 motion-safe:animate-pulse">Loading members...</p>
       </div>
     );
   }
@@ -327,7 +327,7 @@ export function ProjectMembersPage() {
           {/* Invite URL copy section */}
           {inviteUrl && (
             <div className="mt-3 flex items-center gap-2 bg-gray-900/50 border border-gray-800 rounded px-3 py-2">
-              <span className="text-xs text-gray-500 shrink-0">Invite link:</span>
+              <span className="text-xs text-gray-400 shrink-0">Invite link:</span>
               <code className="text-xs text-gray-300 truncate flex-1">{inviteUrl}</code>
               <button
                 onClick={handleCopyUrl}
@@ -341,7 +341,7 @@ export function ProjectMembersPage() {
           <div className="mt-2">
             <button
               onClick={() => { setShowInvite(false); setShowAddExisting(true); setInviteUrl(null); }}
-              className="text-xs text-gray-600 hover:text-gray-400 transition-colors"
+              className="text-xs text-gray-500 hover:text-gray-400 transition-colors"
             >
               or add existing user directly
             </button>
@@ -385,7 +385,7 @@ export function ProjectMembersPage() {
           <div className="mt-2">
             <button
               onClick={() => { setShowAddExisting(false); setShowInvite(true); }}
-              className="text-xs text-gray-600 hover:text-gray-400 transition-colors"
+              className="text-xs text-gray-500 hover:text-gray-400 transition-colors"
             >
               or send an invite link instead
             </button>
@@ -396,11 +396,11 @@ export function ProjectMembersPage() {
       {/* Pending invites */}
       {pendingInvites.length > 0 && (
         <div className="mb-6">
-          <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-2">Pending Invites</h3>
+          <h3 className="text-xs text-gray-400 uppercase tracking-wider mb-2">Pending Invites</h3>
           <div className="table-container">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
+                <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
                   <th className="px-4 py-2.5 text-left font-medium">Email</th>
                   <th className="px-4 py-2.5 text-left font-medium">Role</th>
                   <th className="px-4 py-2.5 text-left font-medium">Invited By</th>
@@ -416,12 +416,12 @@ export function ProjectMembersPage() {
                       <RoleBadge role={invite.role} className="text-xs" />
                     </td>
                     <td className="px-4 py-3 text-gray-400 text-xs">{invite.invited_by_email}</td>
-                    <td className="px-4 py-3 text-gray-500 text-xs">{relativeTime(invite.expires_at)}</td>
+                    <td className="px-4 py-3 text-gray-400 text-xs">{relativeTime(invite.expires_at)}</td>
                     <td className="px-4 py-3">
                       {isProjectAdmin && (
                         <button
                           onClick={() => handleRevokeInvite(invite.invite_id, invite.email)}
-                          className="text-xs text-gray-600 hover:text-red-400 transition-colors"
+                          className="text-xs text-gray-500 hover:text-red-400 transition-colors"
                         >
                           Revoke
                         </button>
@@ -437,7 +437,7 @@ export function ProjectMembersPage() {
 
       {/* Filter bar + bulk actions */}
       <div className="flex items-center gap-3 mb-3">
-        <label className="text-xs text-gray-500">Filter:</label>
+        <label className="text-xs text-gray-400">Filter:</label>
         <div className="flex gap-1">
           {([
             ['all', 'All'],
@@ -451,7 +451,7 @@ export function ProjectMembersPage() {
               className={`px-2 py-1 text-xs rounded border transition-colors ${
                 statusFilter === value
                   ? 'border-cyan-700 text-cyan-400 bg-cyan-900/20'
-                  : 'border-gray-800 text-gray-500 hover:text-gray-300 hover:border-gray-700'
+                  : 'border-gray-800 text-gray-400 hover:text-gray-300 hover:border-gray-700'
               }`}
             >
               {label}
@@ -477,7 +477,7 @@ export function ProjectMembersPage() {
         <div className="table-container">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
+              <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
                 {isProjectAdmin && hasPendingInFilter && (
                   <th className="px-2 py-2.5 text-center font-medium w-8">
                     <input
@@ -534,7 +534,7 @@ export function ProjectMembersPage() {
                     <td className="px-4 py-3">
                       <StatusBadge status={member.status} />
                     </td>
-                    <td className="px-4 py-3 text-gray-500 text-xs">
+                    <td className="px-4 py-3 text-gray-400 text-xs">
                       {new Date(member.joined_at).toLocaleDateString()}
                     </td>
                     <td className="px-4 py-3">
@@ -551,7 +551,7 @@ export function ProjectMembersPage() {
                           {!isSelf && (
                             <button
                               onClick={() => handleRemove(member.user_id, member.email)}
-                              className="text-xs text-gray-600 hover:text-red-400 transition-colors"
+                              className="text-xs text-gray-500 hover:text-red-400 transition-colors"
                             >
                               Remove
                             </button>
@@ -590,7 +590,7 @@ export function ProjectMembersPage() {
 
                 {importPreview && (
                   <div className="mb-4">
-                    <p className="text-xs text-gray-500 mb-1">Preview (first {importPreview.length} rows):</p>
+                    <p className="text-xs text-gray-400 mb-1">Preview (first {importPreview.length} rows):</p>
                     <div className="border border-gray-800 rounded overflow-auto max-h-40">
                       <table className="w-full text-xs">
                         <tbody>
@@ -635,7 +635,7 @@ export function ProjectMembersPage() {
                     <div className="border border-gray-800 rounded overflow-auto max-h-48">
                       <table className="w-full text-xs">
                         <thead>
-                          <tr className="text-gray-500 bg-gray-900/50">
+                          <tr className="text-gray-400 bg-gray-900/50">
                             <th className="px-2 py-1 text-left font-medium">Email</th>
                             <th className="px-2 py-1 text-left font-medium">Result</th>
                             <th className="px-2 py-1 text-left font-medium">Message</th>
@@ -652,7 +652,7 @@ export function ProjectMembersPage() {
                                   'text-red-400'
                                 }>{d.result}</span>
                               </td>
-                              <td className="px-2 py-1 text-gray-500">{d.message}</td>
+                              <td className="px-2 py-1 text-gray-400">{d.message}</td>
                             </tr>
                           ))}
                         </tbody>

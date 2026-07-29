@@ -200,7 +200,7 @@ describe('AttemptRow — widened phase detail', () => {
       />
     );
 
-    expect(screen.getByText(/bufferbloat ×1\.10/)).toHaveClass('text-gray-500');
+    expect(screen.getByText(/bufferbloat ×1\.10/)).toHaveClass('text-gray-400');
   });
 
   it('renders the dualstack card with per-family totals and the faster family', () => {

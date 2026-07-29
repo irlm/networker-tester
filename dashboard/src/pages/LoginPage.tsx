@@ -160,7 +160,7 @@ export function LoginPage() {
           <h1 className="text-[var(--brand-purple)] text-2xl font-bold tracking-tight mb-1">
             {PRODUCT_NAME}
           </h1>
-          <p className="text-gray-600 text-xs uppercase tracking-widest">
+          <p className="text-gray-500 text-xs uppercase tracking-widest">
             network diagnostics
           </p>
         </div>
@@ -185,7 +185,7 @@ export function LoginPage() {
           {hasSso && (
             <div className="flex items-center gap-3 my-4">
               <div className="flex-1 h-px bg-[var(--border-default)]" />
-              <span className="text-xs text-gray-600 uppercase tracking-wider">or</span>
+              <span className="text-xs text-gray-500 uppercase tracking-wider">or</span>
               <div className="flex-1 h-px bg-[var(--border-default)]" />
             </div>
           )}
@@ -200,7 +200,7 @@ export function LoginPage() {
             )}
 
             <div className="mb-4">
-              <label htmlFor="login-email" className="block text-xs text-gray-600 mb-1.5 uppercase tracking-wider">
+              <label htmlFor="login-email" className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">
                 Email
               </label>
               <div className="flex items-center border-b border-gray-700 focus-within:border-cyan-500/50 transition-colors">
@@ -219,7 +219,7 @@ export function LoginPage() {
 
             {showPassword && (
               <div className="mb-4">
-                <label htmlFor="login-password" className="block text-xs text-gray-600 mb-1.5 uppercase tracking-wider">
+                <label htmlFor="login-password" className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">
                   Password
                 </label>
                 <div className="flex items-center border-b border-gray-700 focus-within:border-green-500/50 transition-colors">
@@ -246,7 +246,7 @@ export function LoginPage() {
             </button>
 
             <div className="mt-4 text-center">
-              <Link to="/forgot-password" className="text-xs text-gray-600 hover:text-gray-400 transition-colors">
+              <Link to="/forgot-password" className="text-xs text-gray-500 hover:text-gray-400 transition-colors">
                 Forgot password?
               </Link>
             </div>

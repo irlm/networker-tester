@@ -151,7 +151,7 @@ export function BoxWhiskerChart({ groups, title }: BoxWhiskerChartProps) {
                 x={LBL_W + BOX_AREA + 8}
                 y={cy}
                 dominantBaseline="middle"
-                fill="#6b7280"
+                fill="#9ca3af"
                 fontSize={10}
               >
                 p50={fmt(row.p50)}  p95={fmt(row.p95)}

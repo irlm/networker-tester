@@ -138,7 +138,7 @@ export function DeployDetailPage() {
   if (loading && !deployment) {
     return (
       <div className="p-4 md:p-6">
-        <p className="text-gray-500">Loading deployment...</p>
+        <p className="text-gray-400">Loading deployment...</p>
       </div>
     );
   }
@@ -160,7 +160,7 @@ export function DeployDetailPage() {
   return (
     <div className="p-4 md:p-6">
       {/* Breadcrumb */}
-      <div className="flex items-center gap-2 text-sm text-gray-500 mb-4">
+      <div className="flex items-center gap-2 text-sm text-gray-400 mb-4">
         <Link to={`/projects/${projectId}/vms`} className="hover:text-gray-300">
           Infrastructure
         </Link>
@@ -244,20 +244,20 @@ export function DeployDetailPage() {
 
       {/* Inline metrics */}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1 py-3 mb-6 text-xs border-b border-gray-800/50">
-        <span className="text-gray-500">
+        <span className="text-gray-400">
           Provider <span className="text-gray-200 ml-1">{deployment?.provider_summary || '\u2014'}</span>
         </span>
-        <span className="text-gray-500">
+        <span className="text-gray-400">
           Targets <span className="text-gray-200 font-mono ml-1">
             {hasEndpoints ? (deployment?.endpoint_ips || []).join(', ') : '\u2014'}
           </span>
         </span>
-        <span className="text-gray-500">
+        <span className="text-gray-400">
           Duration <span className="text-gray-200 font-mono ml-1">
             {deployment?.started_at ? formatDuration(deployment.started_at, deployment.finished_at) : '\u2014'}
           </span>
         </span>
-        <span className="text-gray-500">
+        <span className="text-gray-400">
           Started <span className="text-gray-200 ml-1">
             {deployment?.started_at ? new Date(deployment.started_at).toLocaleString() : '\u2014'}
           </span>
@@ -267,7 +267,7 @@ export function DeployDetailPage() {
       {/* Endpoint Health */}
       {endpointHealth.length > 0 && (
         <div className="mb-6">
-          <p className="text-xs text-gray-500 tracking-wider font-medium mb-2">target health</p>
+          <p className="text-xs text-gray-400 tracking-wider font-medium mb-2">target health</p>
           <div>
             {endpointHealth.map((ep, i) => (
               <div
@@ -280,7 +280,7 @@ export function DeployDetailPage() {
                   <span className={`text-xs font-mono ${ep.outdated ? 'text-yellow-400' : 'text-green-400'}`}>
                     v{ep.version || '?'}
                     {ep.outdated && versionInfo?.latest && (
-                      <span className="text-gray-600 ml-1">(latest: v{versionInfo.latest})</span>
+                      <span className="text-gray-500 ml-1">(latest: v{versionInfo.latest})</span>
                     )}
                   </span>
                 ) : (
@@ -302,7 +302,7 @@ export function DeployDetailPage() {
       {/* Log Output */}
       <div className="mb-6">
         <div className="flex items-center justify-between mb-2">
-          <p className="text-xs text-gray-500 tracking-wider font-medium">deploy log</p>
+          <p className="text-xs text-gray-400 tracking-wider font-medium">deploy log</p>
           {!autoScroll && (
             <button
               onClick={() => {
@@ -323,7 +323,7 @@ export function DeployDetailPage() {
           className="bg-[var(--bg-base)] border border-gray-800 rounded-lg p-4 h-[400px] overflow-y-auto font-mono text-xs leading-5"
         >
           {logLines.length === 0 ? (
-            <p className="text-gray-600">
+            <p className="text-gray-500">
               {isActive ? 'Waiting for output...' : 'No log output'}
             </p>
           ) : (

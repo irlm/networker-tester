@@ -170,7 +170,7 @@ export function HorizontalBoxWhiskerChart({
                 x={x}
                 y={PAD_TOP + rows.length * ROW_H + 13}
                 textAnchor="middle"
-                fill="#6b7280"
+                fill="#9ca3af"
                 fontSize={8}
               >
                 {fmt(t, unit)}
@@ -222,7 +222,7 @@ export function HorizontalBoxWhiskerChart({
                 y={cy - (row.sublabel ? 3 : 0)}
                 textAnchor="end"
                 dominantBaseline="middle"
-                fill="#6b7280"
+                fill="#9ca3af"
                 fontSize={9}
               >
                 {row.label}
@@ -233,7 +233,7 @@ export function HorizontalBoxWhiskerChart({
                   y={cy + 7}
                   textAnchor="end"
                   dominantBaseline="middle"
-                  fill="#4b5563"
+                  fill="#6b7280"
                   fontSize={7}
                 >
                   {row.sublabel}

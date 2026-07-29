@@ -68,7 +68,7 @@ export function ShareDialog({ projectId, resourceType, resourceId, onClose, onCr
           <>
             <div className="space-y-4">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Label (optional)</label>
+                <label className="block text-xs text-gray-400 mb-1">Label (optional)</label>
                 <input
                   type="text"
                   value={label}
@@ -79,7 +79,7 @@ export function ShareDialog({ projectId, resourceType, resourceId, onClose, onCr
               </div>
 
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Expires in</label>
+                <label className="block text-xs text-gray-400 mb-1">Expires in</label>
                 <select
                   value={expiresInDays}
                   onChange={e => setExpiresInDays(Number(e.target.value))}
@@ -92,7 +92,7 @@ export function ShareDialog({ projectId, resourceType, resourceId, onClose, onCr
                 </select>
               </div>
 
-              <p className="text-xs text-gray-600">
+              <p className="text-xs text-gray-500">
                 Sharing: {resourceType} {resourceId.slice(0, 8)}
               </p>
 
@@ -121,7 +121,7 @@ export function ShareDialog({ projectId, resourceType, resourceId, onClose, onCr
           <>
             <div className="space-y-4">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Share URL</label>
+                <label className="block text-xs text-gray-400 mb-1">Share URL</label>
                 <div className="flex gap-2">
                   <input
                     type="text"
@@ -144,7 +144,7 @@ export function ShareDialog({ projectId, resourceType, resourceId, onClose, onCr
                 </p>
               </div>
 
-              <p className="text-xs text-gray-600">
+              <p className="text-xs text-gray-500">
                 Expires: {new Date(result.expires_at).toLocaleDateString()}
               </p>
             </div>

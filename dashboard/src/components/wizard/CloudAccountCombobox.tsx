@@ -160,7 +160,7 @@ export function CloudAccountCombobox({
           aria-controls="cloud-account-listbox"
           aria-activedescendant={open && filtered.length > 0 ? `cloud-account-opt-${activeIdx}` : undefined}
         />
-        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-gray-500 pointer-events-none">
+        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-gray-400 pointer-events-none">
           {open ? '⌄' : '/'}
         </span>
       </div>
@@ -173,7 +173,7 @@ export function CloudAccountCombobox({
           className="absolute z-20 left-0 right-0 mt-1 border border-gray-700 bg-[var(--bg-surface)] max-h-60 overflow-y-auto"
         >
           {filtered.length === 0 ? (
-            <div className="px-3 py-3 text-xs text-gray-500 font-mono">No accounts match "{query}"</div>
+            <div className="px-3 py-3 text-xs text-gray-400 font-mono">No accounts match "{query}"</div>
           ) : (
             filtered.map((acct, idx) => {
               const isActive = idx === activeIdx;
@@ -204,10 +204,10 @@ export function CloudAccountCombobox({
                   <span className={`w-1.5 h-1.5 rounded-full ${dotClass(acct.provider)}`} aria-hidden="true" />
                   <span className="flex-1 truncate">
                     <HighlightedText text={acct.name} query={query} />
-                    <span className="text-gray-600"> · </span>
+                    <span className="text-gray-500"> · </span>
                     <HighlightedText text={acct.provider.toUpperCase()} query={query} />
                   </span>
-                  <span className="text-gray-500 text-[11px]">
+                  <span className="text-gray-400 text-[11px]">
                     <HighlightedText text={acct.region_default ?? '—'} query={query} />
                   </span>
                   <span className={`w-1.5 h-1.5 rounded-full ${statusDotClass(acct.status)}`} title={acct.status} aria-hidden="true" />
@@ -232,7 +232,7 @@ export function CloudAccountCombobox({
 
       {/* Keyboard hints */}
       {open && (
-        <div className="mt-1 flex gap-3 text-[10px] text-gray-600 font-mono">
+        <div className="mt-1 flex gap-3 text-[10px] text-gray-500 font-mono">
           <span><kbd className="px-1 py-0.5 border border-gray-700 rounded">↑↓</kbd> navigate</span>
           <span><kbd className="px-1 py-0.5 border border-gray-700 rounded">↵</kbd> select</span>
           <span><kbd className="px-1 py-0.5 border border-gray-700 rounded">esc</kbd> close</span>

@@ -32,10 +32,10 @@ function apiErrorMessage(err: unknown, fallback: string): string {
 }
 
 function deliveryStatusColor(status: string | null): string {
-  if (!status) return 'text-gray-600';
+  if (!status) return 'text-gray-500';
   if (status === 'delivered') return 'text-green-400';
   if (status.startsWith('failed')) return 'text-red-400';
-  if (status.startsWith('skipped')) return 'text-gray-500';
+  if (status.startsWith('skipped')) return 'text-gray-400';
   return 'text-yellow-400';
 }
 
@@ -238,7 +238,7 @@ export function AlertsPage() {
         <div className="flex items-center gap-3 min-w-0">
           <h2 className="text-lg md:text-xl font-bold text-gray-100">Alerts</h2>
           {rules.length > 0 && (
-            <span className="text-xs text-gray-600 hidden sm:inline">
+            <span className="text-xs text-gray-500 hidden sm:inline">
               <span className="text-green-400">{enabledRules}</span> active
               {enabledRules !== rules.length && <> · {rules.length} total</>}
             </span>
@@ -273,7 +273,7 @@ export function AlertsPage() {
             className={`px-3 py-2 text-sm capitalize border-b-2 -mb-px transition-colors ${
               tab === t
                 ? 'border-cyan-500 text-gray-100'
-                : 'border-transparent text-gray-500 hover:text-gray-300'
+                : 'border-transparent text-gray-400 hover:text-gray-300'
             }`}
           >
             {t}
@@ -282,7 +282,7 @@ export function AlertsPage() {
       </div>
 
       {loading ? (
-        <div className="py-10 text-center text-sm text-gray-500 motion-safe:animate-pulse">Loading alerts...</div>
+        <div className="py-10 text-center text-sm text-gray-400 motion-safe:animate-pulse">Loading alerts...</div>
       ) : tab === 'rules' ? (
         rules.length === 0 ? (
           <EmptyState
@@ -303,7 +303,7 @@ export function AlertsPage() {
           <div className="table-container">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
+                <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
                   <th className="px-4 py-2.5 text-left font-medium">Condition</th>
                   <th className="px-4 py-2.5 text-left font-medium">Window</th>
                   <th className="px-4 py-2.5 text-left font-medium">Scope</th>
@@ -329,7 +329,7 @@ export function AlertsPage() {
                     <td className="px-4 py-3 text-gray-300 text-xs">
                       {channelNames.get(r.channel_id) ?? r.channel_id.slice(0, 8)}
                     </td>
-                    <td className="px-4 py-3 text-gray-500 text-xs hidden lg:table-cell">{timeAgo(r.created_at)}</td>
+                    <td className="px-4 py-3 text-gray-400 text-xs hidden lg:table-cell">{timeAgo(r.created_at)}</td>
                     <td className="px-4 py-3 text-center">
                       {isOperator ? (
                         <Toggle
@@ -355,7 +355,7 @@ export function AlertsPage() {
                           <button
                             onClick={() => handleDeleteRule(r)}
                             className={`text-xs transition-colors ${
-                              confirmDelete === `rule:${r.rule_id}` ? 'text-red-400' : 'text-gray-600 hover:text-red-400'
+                              confirmDelete === `rule:${r.rule_id}` ? 'text-red-400' : 'text-gray-500 hover:text-red-400'
                             }`}
                             title={confirmDelete === `rule:${r.rule_id}` ? 'Click again to confirm' : 'Delete rule'}
                             aria-label={confirmDelete === `rule:${r.rule_id}` ? 'Confirm delete rule' : 'Delete rule'}
@@ -391,7 +391,7 @@ export function AlertsPage() {
           <div className="table-container">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
+                <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
                   <th className="px-4 py-2.5 text-left font-medium">Name</th>
                   <th className="px-4 py-2.5 text-left font-medium">Kind</th>
                   <th className="px-4 py-2.5 text-left font-medium">Destination</th>
@@ -469,7 +469,7 @@ export function AlertsPage() {
                           <button
                             onClick={() => handleDeleteChannel(c)}
                             className={`text-xs transition-colors ${
-                              confirmDelete === `channel:${c.channel_id}` ? 'text-red-400' : 'text-gray-600 hover:text-red-400'
+                              confirmDelete === `channel:${c.channel_id}` ? 'text-red-400' : 'text-gray-500 hover:text-red-400'
                             }`}
                             title={confirmDelete === `channel:${c.channel_id}` ? 'Click again to confirm' : 'Delete channel'}
                             aria-label={confirmDelete === `channel:${c.channel_id}` ? 'Confirm delete channel' : 'Delete channel'}
@@ -502,7 +502,7 @@ export function AlertsPage() {
                 </option>
               ))}
             </select>
-            <span className="text-xs text-gray-600">newest first</span>
+            <span className="text-xs text-gray-500">newest first</span>
           </div>
 
           {events.length === 0 && eventsOffset === 0 ? (
@@ -514,7 +514,7 @@ export function AlertsPage() {
             <div className="table-container">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-gray-800/50 text-gray-500 text-xs bg-[var(--bg-surface)]">
+                  <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
                     <th className="px-4 py-2.5 text-left font-medium">Time</th>
                     <th className="px-4 py-2.5 text-left font-medium">State</th>
                     <th className="px-4 py-2.5 text-left font-medium">Rule</th>
@@ -542,7 +542,7 @@ export function AlertsPage() {
                       <td className="px-4 py-2.5 text-gray-400 text-xs hidden lg:table-cell">
                         {scopeLabel(e.test_config_id)}
                       </td>
-                      <td className="px-4 py-2.5 text-gray-500 text-xs hidden md:table-cell max-w-[24rem] truncate" title={e.message ?? undefined}>
+                      <td className="px-4 py-2.5 text-gray-400 text-xs hidden md:table-cell max-w-[24rem] truncate" title={e.message ?? undefined}>
                         {e.message ?? '--'}
                       </td>
                       <td
@@ -559,11 +559,11 @@ export function AlertsPage() {
           )}
 
           {(eventsOffset > 0 || events.length === EVENTS_PAGE_SIZE) && (
-            <div className="flex items-center justify-between mt-3 text-xs text-gray-500">
+            <div className="flex items-center justify-between mt-3 text-xs text-gray-400">
               <button
                 onClick={() => changeEventsPage(Math.max(0, eventsOffset - EVENTS_PAGE_SIZE))}
                 disabled={eventsOffset === 0}
-                className="px-3 py-1.5 border border-gray-800 rounded hover:text-gray-300 hover:border-gray-700 disabled:opacity-40 disabled:hover:text-gray-500"
+                className="px-3 py-1.5 border border-gray-800 rounded hover:text-gray-300 hover:border-gray-700 disabled:opacity-40 disabled:hover:text-gray-400"
               >
                 &#x2190; Newer
               </button>
@@ -573,7 +573,7 @@ export function AlertsPage() {
               <button
                 onClick={() => changeEventsPage(eventsOffset + EVENTS_PAGE_SIZE)}
                 disabled={events.length < EVENTS_PAGE_SIZE}
-                className="px-3 py-1.5 border border-gray-800 rounded hover:text-gray-300 hover:border-gray-700 disabled:opacity-40 disabled:hover:text-gray-500"
+                className="px-3 py-1.5 border border-gray-800 rounded hover:text-gray-300 hover:border-gray-700 disabled:opacity-40 disabled:hover:text-gray-400"
               >
                 Older &#x2192;
               </button>

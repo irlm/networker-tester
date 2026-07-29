@@ -220,7 +220,7 @@ export function BenchTokensPage() {
         <div className="flex items-center gap-3">
           <h1 className="text-lg font-bold text-gray-100">Active Tokens</h1>
           {!loading && !error && (
-            <span className="text-xs text-gray-500">
+            <span className="text-xs text-gray-400">
               {totalRuns} run{totalRuns !== 1 ? 's' : ''} &middot; {totalVms} VM{totalVms !== 1 ? 's' : ''}
             </span>
           )}
@@ -254,25 +254,25 @@ export function BenchTokensPage() {
       {/* Loading state */}
       {loading && (
         <div className="py-16 text-center">
-          <span className="text-gray-500 text-sm motion-safe:animate-pulse">Loading tokens...</span>
+          <span className="text-gray-400 text-sm motion-safe:animate-pulse">Loading tokens...</span>
         </div>
       )}
 
       {/* Error state */}
       {!loading && error && (
         <div className="py-16 text-center">
-          <p className="text-gray-500 text-sm">{error}</p>
+          <p className="text-gray-400 text-sm">{error}</p>
         </div>
       )}
 
       {/* Empty state */}
       {!loading && !error && activeTokens.length === 0 && (
         <div className="py-16 text-center">
-          <p className="text-gray-500 text-sm">No active benchmark tokens</p>
+          <p className="text-gray-400 text-sm">No active benchmark tokens</p>
           {tokens.length > 0 && (
             <Link
               to="/bench-tokens/history"
-              className="text-xs text-gray-500 hover:text-cyan-400 transition-colors mt-2 inline-block"
+              className="text-xs text-gray-400 hover:text-cyan-400 transition-colors mt-2 inline-block"
             >
               View {tokens.length} historical token{tokens.length !== 1 ? 's' : ''} &rarr;
             </Link>
@@ -310,7 +310,7 @@ export function BenchTokensPage() {
                         />
                       ))}
                     </div>
-                    <span className="text-gray-600">{run.tokens.length}</span>
+                    <span className="text-gray-500">{run.tokens.length}</span>
                   </button>
                 );
               })}
@@ -333,10 +333,10 @@ export function BenchTokensPage() {
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className={`font-mono text-xs truncate ${run.configId === 'unknown' ? 'text-gray-500 italic' : 'text-cyan-400'}`}>
+                        <span className={`font-mono text-xs truncate ${run.configId === 'unknown' ? 'text-gray-400 italic' : 'text-cyan-400'}`}>
                           {label}
                         </span>
-                        <span className="text-[10px] text-gray-600 ml-2 shrink-0">
+                        <span className="text-[10px] text-gray-500 ml-2 shrink-0">
                           {run.tokens.length}
                         </span>
                       </div>
@@ -358,17 +358,17 @@ export function BenchTokensPage() {
             {/* Detail panel — VM table */}
             <div className={`${filteredRuns.length >= 4 ? 'w-[75%]' : 'w-full'} overflow-y-auto`}>
             {!selectedRunData && (
-              <div className="p-8 text-center text-gray-500 text-sm">Select a run</div>
+              <div className="p-8 text-center text-gray-400 text-sm">Select a run</div>
             )}
             {selectedRunData && (
               <>
                 {/* Detail header */}
                 <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800 bg-gray-800/20">
                   <div className="flex items-center gap-3">
-                    <span className={`font-mono text-sm ${selectedRunData.configId === 'unknown' ? 'text-gray-500 italic' : 'text-cyan-400'}`}>
+                    <span className={`font-mono text-sm ${selectedRunData.configId === 'unknown' ? 'text-gray-400 italic' : 'text-cyan-400'}`}>
                       {selectedRunData.configId === 'unknown' ? 'Ungrouped' : selectedRunData.configId}
                     </span>
-                    <span className="text-xs text-gray-500">
+                    <span className="text-xs text-gray-400">
                       {selectedRunData.tokens.length} VM{selectedRunData.tokens.length !== 1 ? 's' : ''}
                     </span>
                   </div>
@@ -387,7 +387,7 @@ export function BenchTokensPage() {
                 {/* VM table */}
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="border-b border-gray-800 text-left text-[10px] text-gray-500 uppercase tracking-wider">
+                    <tr className="border-b border-gray-800 text-left text-[10px] text-gray-400 uppercase tracking-wider">
                       <th className="px-4 py-2">VM</th>
                       <th className="px-4 py-2">User</th>
                       <th className="px-4 py-2">Created</th>
@@ -410,10 +410,10 @@ export function BenchTokensPage() {
                           <td className="px-4 py-2.5 font-mono text-xs text-gray-300" title={t.name}>
                             {t.testbed_id || t.name.replace(/^bench-[^-]+-vm-/, '')}
                           </td>
-                          <td className="px-4 py-2.5 text-xs text-gray-500 truncate max-w-[140px]" title={t.user ?? undefined}>
+                          <td className="px-4 py-2.5 text-xs text-gray-400 truncate max-w-[140px]" title={t.user ?? undefined}>
                             {t.user ?? '\u2014'}
                           </td>
-                          <td className="px-4 py-2.5 text-xs text-gray-500 whitespace-nowrap">
+                          <td className="px-4 py-2.5 text-xs text-gray-400 whitespace-nowrap">
                             {relativeDate(t.created)}
                           </td>
                           <td className="px-4 py-2.5 whitespace-nowrap">
@@ -457,7 +457,7 @@ export function BenchTokensPage() {
         const s = Math.floor((Date.now() - lastRefresh) / 1000);
 
         return (
-          <div className="mt-3 flex items-center justify-between text-[10px] text-gray-600 border-t border-gray-800/50 pt-2">
+          <div className="mt-3 flex items-center justify-between text-[10px] text-gray-500 border-t border-gray-800/50 pt-2">
             <div className="flex items-center gap-4">
               {healthy > 0 && <span><span className="text-green-400">{healthy}</span> healthy</span>}
               {warning > 0 && <span><span className="text-yellow-400">{warning}</span> expiring &lt;1h</span>}

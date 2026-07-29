@@ -111,10 +111,13 @@ body {
 .input:focus { border-color: oklch(0.609 0.126 221.723); /* cyan-500 */ }
 .input::placeholder { color: #4b5563; /* gray-600 */ }
 
-/* Section heading — compact label for data sections */
+/* Section heading — compact label for data sections.
+   gray-400: the muted-text role sits one step up from its original gray-500 —
+   #6b7280 on #0a0b0f was 4.07:1 (fails WCAG AA for the 12px it's set at);
+   #9ca3af is ~7:1. Placeholders/disabled states stay dim (exempt). */
 .section-label {
   font-size: 0.75rem;
-  color: #6b7280; /* gray-500 */
+  color: #9ca3af; /* gray-400 */
   letter-spacing: 0.05em;
   font-weight: 500;
 }

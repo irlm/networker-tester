@@ -27,7 +27,7 @@ function rankColor(index: number): string {
   if (index === 0) return 'text-yellow-400';
   if (index === 1) return 'text-gray-300';
   if (index === 2) return 'text-orange-400';
-  return 'text-gray-500';
+  return 'text-gray-400';
 }
 
 /** Format a group slug like "azure-eastus-loopback" → "Azure / eastus / loopback" */
@@ -99,7 +99,7 @@ function GroupedTab() {
 
   if (loading) {
     return (
-      <div className="text-center text-gray-500 py-16 motion-safe:animate-pulse">
+      <div className="text-center text-gray-400 py-16 motion-safe:animate-pulse">
         Loading benchmark data...
       </div>
     );
@@ -117,7 +117,7 @@ function GroupedTab() {
     <div className="space-y-4">
       {/* Group selector */}
       <div className="flex items-center gap-3">
-        <span className="text-xs text-gray-500 uppercase tracking-wider">Group</span>
+        <span className="text-xs text-gray-400 uppercase tracking-wider">Group</span>
         <select
           value={selectedGroup}
           onChange={e => handleGroupChange(e.target.value)}
@@ -139,7 +139,7 @@ function GroupedTab() {
 
       {/* Chart */}
       {hboxGroups.length === 0 ? (
-        <div className="text-center text-gray-500 py-16">
+        <div className="text-center text-gray-400 py-16">
           No benchmark data yet
         </div>
       ) : (
@@ -157,7 +157,7 @@ function GroupedTab() {
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-800 text-right text-gray-500 text-xs uppercase tracking-wider">
+              <tr className="border-b border-gray-800 text-right text-gray-400 text-xs uppercase tracking-wider">
                 <th className="py-2 px-3 text-left">Language</th>
                 <th className="py-2 px-3">Mean</th>
                 <th className="py-2 px-3">p50</th>
@@ -188,15 +188,15 @@ function GroupedTab() {
                     <td className="py-2.5 px-3 text-right font-mono text-gray-400">
                       {formatMs(lang.p95)}
                     </td>
-                    <td className="py-2.5 px-3 text-right font-mono text-gray-500">
+                    <td className="py-2.5 px-3 text-right font-mono text-gray-400">
                       --
                     </td>
                     <td className="py-2.5 px-3 text-right font-mono text-gray-400">
                       {lang.rps > 0 ? lang.rps.toFixed(0) : '--'}
                     </td>
-                    <td className={`py-2.5 px-3 text-right font-mono ${limited ? 'text-amber-500' : 'text-gray-500'}`}>
+                    <td className={`py-2.5 px-3 text-right font-mono ${limited ? 'text-amber-500' : 'text-gray-400'}`}>
                       {lang.run_count}
-                      {limited && <span className="text-gray-600 text-xs ml-1">*</span>}
+                      {limited && <span className="text-gray-500 text-xs ml-1">*</span>}
                     </td>
                   </tr>
                 );
@@ -204,7 +204,7 @@ function GroupedTab() {
             </tbody>
           </table>
           {sortedForTable.some(l => l.run_count < 3) && (
-            <p className="text-xs text-gray-600 mt-2 px-3">
+            <p className="text-xs text-gray-500 mt-2 px-3">
               * fewer than 3 runs — limited data, interpret with caution
             </p>
           )}
@@ -217,7 +217,7 @@ function GroupedTab() {
 function LeaderboardTab({ entries }: { entries: BenchmarkLeaderboardEntry[] }) {
   if (entries.length === 0) {
     return (
-      <div className="text-center text-gray-500 py-16">
+      <div className="text-center text-gray-400 py-16">
         <p className="text-lg">No leaderboard data yet</p>
         <p className="text-sm mt-2">Upload benchmark results to populate the leaderboard.</p>
       </div>
@@ -228,7 +228,7 @@ function LeaderboardTab({ entries }: { entries: BenchmarkLeaderboardEntry[] }) {
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b border-gray-800 text-left text-gray-500 text-xs uppercase tracking-wider">
+          <tr className="border-b border-gray-800 text-left text-gray-400 text-xs uppercase tracking-wider">
             <th className="py-2 px-3 w-12">Rank</th>
             <th className="py-2 px-3">Language</th>
             <th className="py-2 px-3">Runtime</th>
@@ -267,9 +267,9 @@ function LeaderboardTab({ entries }: { entries: BenchmarkLeaderboardEntry[] }) {
               <td className="py-2.5 px-3 text-right font-mono text-gray-400">
                 {entry.metrics?.requests_per_sec?.toFixed(0) ?? '--'}
               </td>
-              <td className="py-2.5 px-3 text-gray-500">{entry.cloud ?? '--'}</td>
-              <td className="py-2.5 px-3 text-gray-500">{entry.phase ?? '--'}</td>
-              <td className="py-2.5 px-3 text-right text-gray-500">{entry.concurrency ?? '--'}</td>
+              <td className="py-2.5 px-3 text-gray-400">{entry.cloud ?? '--'}</td>
+              <td className="py-2.5 px-3 text-gray-400">{entry.phase ?? '--'}</td>
+              <td className="py-2.5 px-3 text-right text-gray-400">{entry.concurrency ?? '--'}</td>
             </tr>
           ))}
         </tbody>
@@ -281,7 +281,7 @@ function LeaderboardTab({ entries }: { entries: BenchmarkLeaderboardEntry[] }) {
 function ComparisonTab({ entries }: { entries: BenchmarkLeaderboardEntry[] }) {
   if (entries.length === 0) {
     return (
-      <div className="text-center text-gray-500 py-16">
+      <div className="text-center text-gray-400 py-16">
         No data to compare.
       </div>
     );
@@ -299,7 +299,7 @@ function ComparisonTab({ entries }: { entries: BenchmarkLeaderboardEntry[] }) {
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-xs uppercase tracking-wider text-gray-500 mb-3">Mean Latency (lower is better)</h3>
+        <h3 className="text-xs uppercase tracking-wider text-gray-400 mb-3">Mean Latency (lower is better)</h3>
         <div className="space-y-2">
           {entries.map((entry) => {
             const val = entry.metrics?.latency_mean_ms ?? 0;
@@ -324,7 +324,7 @@ function ComparisonTab({ entries }: { entries: BenchmarkLeaderboardEntry[] }) {
       </div>
 
       <div>
-        <h3 className="text-xs uppercase tracking-wider text-gray-500 mb-3">Throughput (higher is better)</h3>
+        <h3 className="text-xs uppercase tracking-wider text-gray-400 mb-3">Throughput (higher is better)</h3>
         <div className="space-y-2">
           {entries.map((entry) => {
             const val = entry.metrics?.requests_per_sec ?? 0;
@@ -375,7 +375,7 @@ function TimelineTab({ runs }: { runs: BenchmarkRun[] }) {
 
   if (runs.length === 0) {
     return (
-      <div className="text-center text-gray-500 py-16">
+      <div className="text-center text-gray-400 py-16">
         No benchmark runs yet.
       </div>
     );
@@ -392,7 +392,7 @@ function TimelineTab({ runs }: { runs: BenchmarkRun[] }) {
               onClick={() => toggleRun(run.run_id)}
               className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-800/30 transition-colors"
             >
-              <span className="text-gray-500 text-xs">{expanded ? '\u25BC' : '\u25B6'}</span>
+              <span className="text-gray-400 text-xs">{expanded ? '\u25BC' : '\u25B6'}</span>
               <span className="text-sm text-gray-200 font-medium flex-1">{run.name}</span>
               <span className={`text-xs px-1.5 py-0.5 rounded ${
                 run.status === 'completed'
@@ -403,7 +403,7 @@ function TimelineTab({ runs }: { runs: BenchmarkRun[] }) {
               }`}>
                 {run.status}
               </span>
-              <span className="text-xs text-gray-600 font-mono">
+              <span className="text-xs text-gray-500 font-mono">
                 {new Date(run.started_at).toLocaleDateString()}
               </span>
             </button>
@@ -411,7 +411,7 @@ function TimelineTab({ runs }: { runs: BenchmarkRun[] }) {
               <div className="border-t border-gray-800 px-3 py-2 bg-gray-900/30">
                 <table className="w-full text-xs">
                   <thead>
-                    <tr className="text-gray-600 text-left">
+                    <tr className="text-gray-500 text-left">
                       <th className="py-1 pr-3">Language</th>
                       <th className="py-1 pr-3">Runtime</th>
                       <th className="py-1 pr-3 text-right">Mean Latency</th>
@@ -434,7 +434,7 @@ function TimelineTab({ runs }: { runs: BenchmarkRun[] }) {
                         <td className="py-1 pr-3 text-right font-mono text-gray-400">
                           {r.metrics?.requests_per_sec?.toFixed(0) ?? '--'}
                         </td>
-                        <td className="py-1 pr-3 text-gray-500">{r.cloud ?? '--'}</td>
+                        <td className="py-1 pr-3 text-gray-400">{r.cloud ?? '--'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -442,12 +442,12 @@ function TimelineTab({ runs }: { runs: BenchmarkRun[] }) {
               </div>
             )}
             {expanded && detail?.results && detail.results.length === 0 && (
-              <div className="border-t border-gray-800 px-3 py-3 text-xs text-gray-500 bg-gray-900/30">
+              <div className="border-t border-gray-800 px-3 py-3 text-xs text-gray-400 bg-gray-900/30">
                 No results in this run.
               </div>
             )}
             {expanded && !detail && (
-              <div className="border-t border-gray-800 px-3 py-3 text-xs text-gray-500 bg-gray-900/30 motion-safe:animate-pulse">
+              <div className="border-t border-gray-800 px-3 py-3 text-xs text-gray-400 bg-gray-900/30 motion-safe:animate-pulse">
                 Loading...
               </div>
             )}
@@ -503,12 +503,12 @@ export function LeaderboardPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-lg font-semibold text-gray-100">Leaderboard</h1>
-          <p className="text-xs text-gray-500 mt-1">
+          <p className="text-xs text-gray-400 mt-1">
             Language performance rankings from benchmark runs
           </p>
         </div>
         {tab !== 'grouped' && entries.length > 0 && (
-          <span className="text-xs text-gray-600 font-mono">
+          <span className="text-xs text-gray-500 font-mono">
             {entries.length} {entries.length === 1 ? 'entry' : 'entries'}
           </span>
         )}
@@ -523,7 +523,7 @@ export function LeaderboardPage() {
             className={`px-3 py-2 text-sm border-b-2 transition-colors ${
               tab === t.key
                 ? 'border-cyan-500 text-cyan-400'
-                : 'border-transparent text-gray-500 hover:text-gray-300'
+                : 'border-transparent text-gray-400 hover:text-gray-300'
             }`}
           >
             {t.label}
@@ -536,7 +536,7 @@ export function LeaderboardPage() {
       {tab !== 'grouped' && (
         <>
           {loading ? (
-            <div className="text-center text-gray-500 py-16 motion-safe:animate-pulse">
+            <div className="text-center text-gray-400 py-16 motion-safe:animate-pulse">
               Loading leaderboard...
             </div>
           ) : error ? (

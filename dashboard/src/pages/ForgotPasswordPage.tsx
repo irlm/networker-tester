@@ -27,7 +27,7 @@ export function ForgotPasswordPage() {
           <h1 className="text-[#4ade80] text-2xl font-bold tracking-tight mb-1">
             {PRODUCT_NAME}
           </h1>
-          <p className="text-gray-600 text-xs uppercase tracking-widest">
+          <p className="text-gray-500 text-xs uppercase tracking-widest">
             network diagnostics
           </p>
         </div>
@@ -38,7 +38,7 @@ export function ForgotPasswordPage() {
               <span className="text-green-500">ok</span>
               <span>If that email is registered, a reset link has been sent.</span>
             </div>
-            <p className="text-gray-500 text-xs mb-6">
+            <p className="text-gray-400 text-xs mb-6">
               Check your inbox and spam folder. The link expires in 1 hour.
               If SMTP is not configured, the reset link is in the server logs.
             </p>
@@ -53,7 +53,7 @@ export function ForgotPasswordPage() {
             </p>
 
             <div className="mb-6">
-              <label htmlFor="reset-email" className="block text-xs text-gray-600 mb-1.5 uppercase tracking-wider">
+              <label htmlFor="reset-email" className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">
                 Email
               </label>
               <div className="flex items-center border-b border-gray-700 focus-within:border-green-500/50 transition-colors">
@@ -79,7 +79,7 @@ export function ForgotPasswordPage() {
             </button>
 
             <div className="mt-4 text-center">
-              <Link to="/login" className="text-xs text-gray-600 hover:text-gray-400 transition-colors">
+              <Link to="/login" className="text-xs text-gray-500 hover:text-gray-400 transition-colors">
                 Back to login
               </Link>
             </div>
