@@ -268,9 +268,12 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
     /// filter that could hit another tester. If <c>vm_name</c> is null/empty we
     /// can't derive the names safely, so we SKIP entirely rather than guess.</para>
     ///
-    /// <para><b>Order:</b> IP before NSG. The NIC (which references the NSG) is
-    /// already gone with the VM cascade, so neither strictly blocks the other, but
-    /// IP-then-NSG is the conventionally safe order.</para>
+    /// <para><b>Order:</b> NIC → IP → NSG. The per-VM NIC (<c>&lt;vm&gt;VMNic</c>)
+    /// references both the public IP and the NSG, and — because <c>install.sh</c>'s
+    /// <c>az vm create</c> sets no <c>--nic-delete-option</c> — <c>az vm delete</c>
+    /// does NOT remove it, so the IP/NSG deletes fail "in use" until the NIC is
+    /// gone. Delete the NIC first to free both (confirmed live 2026-07-28: without
+    /// it, the IP + NSG leaked to the reaper on every deploy teardown).</para>
     ///
     /// <para>Never throws and never fails the tester delete: a not-found /
     /// already-deleted resource (the reaper or a partial cascade may have gotten
@@ -311,7 +314,14 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         }
         var env = new Dictionary<string, string> { ["PYTHONWARNINGS"] = "ignore" };
 
-        // IP first, then NSG (see method summary).
+        // NIC FIRST, then IP, then NSG (see method summary). install.sh's
+        // `az vm create` sets no --nic-delete-option, so `az vm delete` leaves the
+        // `<vm>VMNic` behind; while it exists the IP and NSG deletes both fail
+        // "in use" and leak to the reaper (confirmed live on every deploy
+        // teardown, 2026-07-28). Deleting the NIC frees both.
+        await RunAzureNetworkDeleteAsync(
+            file, BuildAzureNicDeleteArgs(vmName, sub, rg), env, "NIC", $"{vmName}VMNic", ct)
+            .ConfigureAwait(false);
         await RunAzureNetworkDeleteAsync(
             file, BuildAzurePublicIpDeleteArgs(vmName, sub, rg), env, "public IP", $"{vmName}PublicIP", ct)
             .ConfigureAwait(false);
@@ -432,6 +442,24 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
             "--subscription", subscription,
             "--resource-group", resourceGroup,
             "--name", $"{vmName}NSG",
+        };
+
+    /// <summary>
+    /// Pure argv builder for deleting the per-VM NIC by its <b>exact</b> Azure
+    /// default name (<c>&lt;vmName&gt;VMNic</c>, what <c>az vm create</c> makes).
+    /// The NIC references BOTH the public IP and the NSG, and <c>install.sh</c>'s
+    /// <c>az vm create</c> sets no <c>--nic-delete-option</c>, so <c>az vm delete</c>
+    /// leaves it behind — and while it exists the IP/NSG deletes fail "in use"
+    /// (confirmed live: both leaked to the reaper on every deploy teardown). So the
+    /// NIC must be deleted FIRST. Uses <c>--name</c> (never a list/filter).
+    /// </summary>
+    public static List<string> BuildAzureNicDeleteArgs(string vmName, string subscription, string resourceGroup) =>
+        new()
+        {
+            "network", "nic", "delete",
+            "--subscription", subscription,
+            "--resource-group", resourceGroup,
+            "--name", $"{vmName}VMNic",
         };
 
     /// <summary>

@@ -96,7 +96,7 @@ public sealed class CliProvisionerDeleteCascadeTests : IDisposable
         new("azure", SubscriptionId: "sub-123", ResourceGroup: "networker-testers");
 
     [Fact]
-    public async Task AzureDelete_success_deletes_vm_then_publicIp_then_nsg()
+    public async Task AzureDelete_success_deletes_vm_then_nic_then_publicIp_then_nsg()
     {
         if (OperatingSystem.IsWindows())
         {
@@ -111,25 +111,32 @@ public sealed class CliProvisionerDeleteCascadeTests : IDisposable
         Assert.True(result.Success);
 
         var lines = InvocationLines();
-        Assert.Equal(3, lines.Count);
+        Assert.Equal(4, lines.Count);
 
-        // 1. VM delete (releases the NIC/IP association).
+        // 1. VM delete.
         Assert.Contains("vm delete", lines[0]);
         Assert.Contains("--yes", lines[0]);
 
-        // 2. public IP BEFORE nsg, both by exact name + rg + subscription.
-        Assert.Contains("network public-ip delete", lines[1]);
-        Assert.Contains("--name tester-eastus-5cab8PublicIP", lines[1]);
+        // 2. NIC FIRST (install.sh sets no --nic-delete-option, so az vm delete
+        //    leaves it and it blocks the IP/NSG deletes "in use").
+        Assert.Contains("network nic delete", lines[1]);
+        Assert.Contains("--name tester-eastus-5cab8VMNic", lines[1]);
         Assert.Contains("--resource-group networker-testers", lines[1]);
         Assert.Contains("--subscription sub-123", lines[1]);
 
-        Assert.Contains("network nsg delete", lines[2]);
-        Assert.Contains("--name tester-eastus-5cab8NSG", lines[2]);
+        // 3. public IP BEFORE nsg, both by exact name + rg + subscription.
+        Assert.Contains("network public-ip delete", lines[2]);
+        Assert.Contains("--name tester-eastus-5cab8PublicIP", lines[2]);
         Assert.Contains("--resource-group networker-testers", lines[2]);
         Assert.Contains("--subscription sub-123", lines[2]);
 
+        Assert.Contains("network nsg delete", lines[3]);
+        Assert.Contains("--name tester-eastus-5cab8NSG", lines[3]);
+        Assert.Contains("--resource-group networker-testers", lines[3]);
+        Assert.Contains("--subscription sub-123", lines[3]);
+
         // Never a list/filter that could hit another tester (#419 safety).
-        Assert.DoesNotContain(lines, l => l.Contains("nsg list") || l.Contains("public-ip list"));
+        Assert.DoesNotContain(lines, l => l.Contains("nsg list") || l.Contains("public-ip list") || l.Contains("nic list"));
     }
 
     [Fact]
@@ -148,11 +155,11 @@ public sealed class CliProvisionerDeleteCascadeTests : IDisposable
         Assert.True(result.Success);
 
         var lines = InvocationLines();
-        // Only the VM delete ran — no NSG/IP calls, because we can't derive the
+        // Only the VM delete ran — no NIC/NSG/IP calls, because we can't derive the
         // exact names without a vm_name (never guess).
         Assert.Single(lines);
         Assert.Contains("vm delete", lines[0]);
-        Assert.DoesNotContain(lines, l => l.Contains("nsg") || l.Contains("public-ip"));
+        Assert.DoesNotContain(lines, l => l.Contains("nsg") || l.Contains("public-ip") || l.Contains("nic delete"));
     }
 
     [Fact]
@@ -174,7 +181,7 @@ public sealed class CliProvisionerDeleteCascadeTests : IDisposable
         Assert.True(result.Success);
 
         var lines = InvocationLines();
-        Assert.Equal(3, lines.Count); // VM + IP + NSG all attempted, all tolerated.
+        Assert.Equal(4, lines.Count); // VM + NIC + IP + NSG all attempted, all tolerated.
     }
 
     [Fact]
@@ -387,13 +394,13 @@ public sealed class CliProvisionerDeleteCascadeTests : IDisposable
 
         Assert.True(result.Success);
         var lines = InvocationLines();
-        Assert.Equal(3, lines.Count);
+        Assert.Equal(4, lines.Count);
 
-        // The NSG (line 2) + IP (line 1) deletes carry the sub + rg parsed from the
-        // resource id — never blank. (The vm delete on line 0 legitimately uses
-        // empty --subscription/--resource-group because it targets by self-
-        // describing --ids.)
-        foreach (var line in new[] { lines[1], lines[2] })
+        // The NIC (line 1) + IP (line 2) + NSG (line 3) deletes carry the sub + rg
+        // parsed from the resource id — never blank. (The vm delete on line 0
+        // legitimately uses empty --subscription/--resource-group because it
+        // targets by self-describing --ids.)
+        foreach (var line in new[] { lines[1], lines[2], lines[3] })
         {
             Assert.Contains("--subscription sub-123", line);
             Assert.Contains("--resource-group networker-testers", line);
