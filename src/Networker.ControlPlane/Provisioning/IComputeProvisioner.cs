@@ -81,7 +81,34 @@ public interface IComputeProvisioner
     /// </summary>
     Task<VmCreateResult> CreateVmAsync(
         VmCreateRequest request, ProviderCredentials? credentials, CancellationToken ct = default);
+
+    /// <summary>
+    /// Reverse-resolve a live VM from a deployment's captured public endpoint
+    /// (an IP or a cloudapp/…-FQDN) to its cloud <b>resource id + name</b> — the
+    /// piece a deploy row is missing (E2E pass 2026-07-28 P1-16). Deploy VMs are
+    /// created by <c>install.sh</c>, not <see cref="CreateVmAsync"/>, so unlike a
+    /// tester the <c>deployment</c> row never stored a <c>vm_resource_id</c>; all
+    /// it has is the endpoint IP/FQDN. This looks the VM up by that endpoint so
+    /// the delete handler can tear it down via <see cref="DeleteAsync"/> instead
+    /// of orphaning it to bill until the reaper.
+    ///
+    /// <para>Total, like the rest of the interface: a missing CLI, an unsupported
+    /// provider, or no match returns <c>null</c> (never throws). Matching is on
+    /// the <b>exact</b> public IP / FQDN — an IP maps to exactly one VM — so this
+    /// can never select the wrong VM the way a name-prefix/list filter could (the
+    /// #419 reaper-incident rule).</para>
+    /// </summary>
+    Task<ResolvedVm?> ResolveByEndpointAsync(
+        string cloud, ProviderCredentials? credentials, string endpoint, CancellationToken ct = default);
 }
+
+/// <summary>
+/// A VM located by <see cref="IComputeProvisioner.ResolveByEndpointAsync"/> — the
+/// cloud <see cref="ResourceId"/> (self-describing ARM id / AWS instance id / GCP
+/// self-link) plus its <see cref="Name"/> (needed to derive the per-VM Azure
+/// NSG/IP cascade names on delete).
+/// </summary>
+public sealed record ResolvedVm(string ResourceId, string Name);
 
 /// <summary>
 /// Inputs for <see cref="IComputeProvisioner.CreateVmAsync"/> — the C# port of

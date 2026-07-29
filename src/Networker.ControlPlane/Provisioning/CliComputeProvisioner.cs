@@ -80,6 +80,128 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         ProjectTester tester, ProviderCredentials? credentials, CancellationToken ct) =>
         DispatchAsync(tester, credentials, LifecycleOp.Show, ct);
 
+    /// <summary>
+    /// Reverse-resolve a deploy VM by its captured public endpoint (E2E P1-16).
+    /// Azure only for now (prod is Azure); AWS/GCP return null (logged) so their
+    /// deploy deletes keep today's DB-only behaviour rather than risk a wrong
+    /// termination. Never throws.
+    /// </summary>
+    public async Task<ResolvedVm?> ResolveByEndpointAsync(
+        string cloud, ProviderCredentials? creds, string endpoint, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint))
+        {
+            return null;
+        }
+
+        if (!string.Equals(cloud, "azure", StringComparison.OrdinalIgnoreCase))
+        {
+            logger.LogInformation(
+                "Endpoint reverse-lookup not implemented for cloud '{Cloud}'; skipping VM teardown for {Endpoint}",
+                cloud, endpoint);
+            return null;
+        }
+
+        // `az vm list -d` returns publicIps + fqdns (comma-joined strings) per VM.
+        // Scope to the creds' resource group when known (cheap + tenant-safe);
+        // otherwise a subscription-wide list is still safe because the match is on
+        // the EXACT public IP/FQDN, which is unique to one VM.
+        var args = new List<string> { "vm", "list", "-d", "--output", "json" };
+        if (!string.IsNullOrEmpty(creds?.SubscriptionId))
+        {
+            args.Add("--subscription");
+            args.Add(creds!.SubscriptionId!);
+        }
+        if (!string.IsNullOrEmpty(creds?.ResourceGroup))
+        {
+            args.Add("--resource-group");
+            args.Add(creds!.ResourceGroup!);
+        }
+        var env = new Dictionary<string, string> { ["PYTHONWARNINGS"] = "ignore" };
+
+        var res = await RunAsync(CloudCli.AzBin(), args, env, ct).ConfigureAwait(false);
+        if (!res.Success)
+        {
+            logger.LogInformation(
+                "Endpoint reverse-lookup for {Endpoint} could not list VMs ({Err}); skipping teardown",
+                endpoint, res.Error ?? res.StdErr);
+            return null;
+        }
+
+        var match = MatchAzureVmByEndpoint(res.StdOut, endpoint);
+        if (match is null)
+        {
+            logger.LogInformation(
+                "Endpoint reverse-lookup found no VM owning {Endpoint}; nothing to tear down (already deleted?)",
+                endpoint);
+        }
+        return match;
+    }
+
+    /// <summary>
+    /// Pure matcher (unit-testable, no process spawn) over <c>az vm list -d</c>
+    /// JSON: return the id+name of the VM whose <c>publicIps</c> or <c>fqdns</c>
+    /// (comma-joined) contains <paramref name="endpoint"/> as an exact,
+    /// comma-delimited entry. Exact-entry matching (not substring) avoids a
+    /// prefix like <c>20.1.2.3</c> spuriously matching <c>20.1.2.30</c>.
+    /// </summary>
+    internal static ResolvedVm? MatchAzureVmByEndpoint(string listJson, string endpoint)
+    {
+        var target = endpoint.Trim();
+        if (target.Length == 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(listJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+            foreach (var vm in doc.RootElement.EnumerateArray())
+            {
+                if (EndpointFieldContains(vm, "publicIps", target)
+                    || EndpointFieldContains(vm, "fqdns", target))
+                {
+                    var id = vm.TryGetProperty("id", out var idEl) ? idEl.GetString() : null;
+                    var name = vm.TryGetProperty("name", out var nameEl) ? nameEl.GetString() : null;
+                    if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name))
+                    {
+                        return new ResolvedVm(id, name);
+                    }
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            // Non-JSON (az warning leaked to stdout, etc.) — treat as no match.
+        }
+        return null;
+    }
+
+    private static bool EndpointFieldContains(JsonElement vm, string field, string target)
+    {
+        if (!vm.TryGetProperty(field, out var el) || el.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+        var joined = el.GetString();
+        if (string.IsNullOrEmpty(joined))
+        {
+            return false;
+        }
+        foreach (var part in joined.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (string.Equals(part, target, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private enum LifecycleOp { Start, Stop, Delete, Show }
 
     private async Task<ProvisionResult> DispatchAsync(

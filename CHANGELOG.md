@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.101] — 2026-07-28
+
+### Fixed
+- **P1-16: deleting a deployment orphaned its cloud VM** — the DELETE handler
+  dropped only the `deployment` DB row, leaving the endpoint VM (and its NSG /
+  public IP) billing until the orphan reaper caught it, or forever if it was
+  never reaper-eligible (E2E pass 2026-07-28). Deploy VMs are created by
+  `install.sh`, not the C# provisioner, so — unlike a tester — the row never
+  stored a `vm_resource_id`; all it has is the endpoint IP/FQDN. Delete now
+  **reverse-resolves** the owning VM from that endpoint (`az vm list -d`, matched
+  on the exact public IP / FQDN — unique to one VM, so it can never select the
+  wrong one) and tears it down via the provisioner (cascading the per-VM Azure
+  NSG + public IP). Endpoint list + provider are captured before the row is
+  deleted; the cloud delete is backgrounded and fully best-effort (failures are
+  logged and left to the reaper). Azure only for now (prod); AWS/GCP deploys keep
+  today's DB-only delete. No schema or installer change — works against VMs
+  already provisioned by the shipped installer.
+
+---
+
 ## [0.28.100] — 2026-07-28
 
 ### Fixed
