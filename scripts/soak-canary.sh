@@ -210,7 +210,11 @@ note "PHASE 1 PASS"
 # A network probe can't catch a proxy-routing regression: apibench's /api/*
 # workloads only reach the backend if the stack forwards them (v0.28.112 shipped
 # with /api absent from every stack's allowlist → 404 on all attempts). The
-# PRIMARY signal is: attempts return 2xx and ZERO return 404.
+# PRIMARY signal is: attempts return 2xx and ZERO return 404 — plus LANGUAGE
+# AUTHENTICITY: the deploy log must show the cell's reference-API install and
+# the /api reroute, or apibench silently measured the built-in endpoint /api
+# (v0.28.114 class: `languages` written by the orchestrator, dropped on the
+# install path — invisible to the 2xx assert).
 #
 # Endpoint provisioning (a fresh VM + install.sh bootstrap each night) has real
 # transient-failure risk (apt/download/cert hiccups → "install.sh exited 1"),
@@ -226,6 +230,15 @@ if [ "$APIBENCH" != "1" ]; then
   exit 0
 fi
 
+# deploy_log_of <group-id> — print the group's endpoint deploy log (empty if none).
+deploy_log_of() {
+  local g8="${1:0:8}" dep
+  dep=$(api GET "/api/projects/$PID/deployments?limit=30" \
+    | jq -r --arg g "cg-$g8" '[ (if type=="array" then . else (.deployments // .items // []) end)[]? | select((.name // "")|contains($g)) ][0] | (.id // .deployment_id // .deploymentId) // empty')
+  [ -n "$dep" ] || return 0
+  api GET "/api/projects/$PID/deployments/$dep" | jq -r '.log // ""'
+}
+
 # capture_deploy_log <group-id> — dump the endpoint deploy-log tail to the summary.
 capture_deploy_log() {
   local g8="${1:0:8}" dep log
@@ -240,6 +253,9 @@ capture_deploy_log() {
 
 AB_ATTEMPTS=2
 AB_PASS=0
+# The cell's reference-API language. Keep in sync with the cell JSON below —
+# the authenticity assert greps the deploy log for THIS language's install.
+AB_LANG="rust"
 for try in $(seq 1 "$AB_ATTEMPTS"); do
   CG_NAME="soak-canary-apibench-$(date -u +%Y%m%dT%H%M%SZ)-t${try}"
   CG_CREATE=$(api POST "/api/v2/projects/$PID/comparison-groups" \
@@ -293,8 +309,27 @@ for try in $(seq 1 "$AB_ATTEMPTS"); do
     summary "- status: **$AB_STATUS**  ·  attempts: **$AB_TOTAL**  ·  2xx-ok: **$AB_OK**  ·  proxy-404s: **$AB_404**"
     [ "$AB_404" -eq 0 ] || { capture_deploy_log "$CG"; fail "apibench had $AB_404/$AB_TOTAL attempts return HTTP 404 — the proxy stack is NOT forwarding /api/* to the backend (v0.28.112 regression class)"; }
     [ "$AB_OK" -gt 0 ] || { capture_deploy_log "$CG"; fail "apibench completed with 0 successful (2xx) attempts — /api/* never reached the backend"; }
+
+    # ── language authenticity ────────────────────────────────────────────
+    # 2xx alone can't prove WHO served /api: networker-endpoint's built-in
+    # /api answers 200 even when the cell's language server was silently
+    # never installed (the v0.28.114 class — `languages` written by the
+    # orchestrator but dropped on the install path). The target's ports are
+    # NSG-blocked from CI, so the in-band evidence is the deploy log: the
+    # language install + /api reroute both log unconditionally on success.
+    AB_LOG=$(deploy_log_of "$CG")
+    if ! grep -q "${AB_LANG} reference API running on" <<<"$AB_LOG"; then
+      capture_deploy_log "$CG"
+      fail "deploy log has no '${AB_LANG} reference API running' marker — the language server was never installed; apibench measured the built-in endpoint /api (v0.28.114 languages-wire regression class)"
+    fi
+    if ! grep -qE '/api (now|already) routed to the language server' <<<"$AB_LOG"; then
+      capture_deploy_log "$CG"
+      fail "deploy log has no '/api routed to the language server' marker — apibench measured the built-in endpoint /api, not the ${AB_LANG} reference server"
+    fi
+    summary "- language authenticity: **${AB_LANG} reference API installed + /api rerouted** (deploy-log markers present)"
+
     AB_PASS=1
-    summary "✅ phase 2 (apibench through nginx): $AB_OK/$AB_TOTAL attempts 2xx, zero proxy-404s."
+    summary "✅ phase 2 (apibench through nginx): $AB_OK/$AB_TOTAL attempts 2xx, zero proxy-404s, served by the ${AB_LANG} reference API."
     break
   fi
 
