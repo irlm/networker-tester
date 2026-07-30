@@ -356,8 +356,15 @@ mod real {
         // before the handshake completes. Bounded by the probe's remaining
         // deadline so a stalled peer cannot extend the attempt.
         let early_request = async {
-            let (mut driver, mut send_req) =
-                h3::client::new(QuinnH3Connection::new(conn)).await.ok()?;
+            let (mut driver, mut send_req) = h3::client::builder()
+                // nginx's proxied-request body reader (<=1.31) aborts on
+                // the GREASE frame h3 emits on a connection's first
+                // request — spec-legal to omit (RFC 9114 §9), required
+                // for nginx interop (pageload3 failed 100% via proxies).
+                .send_grease(false)
+                .build::<_, _, bytes::Bytes>(QuinnH3Connection::new(conn))
+                .await
+                .ok()?;
             tokio::spawn(async move {
                 let _ = futures::future::poll_fn(|cx| driver.poll_close(cx)).await;
             });
@@ -544,7 +551,12 @@ mod real {
         let conn_handle = conn.clone();
 
         // Build h3 connection
-        let h3_conn = match h3::client::new(QuinnH3Connection::new(conn)).await {
+        // send_grease(false): nginx-proxied h3 interop — see the 0-RTT site.
+        let h3_conn = match h3::client::builder()
+            .send_grease(false)
+            .build(QuinnH3Connection::new(conn))
+            .await
+        {
             Ok((driver, send_req)) => (driver, send_req),
             Err(e) => {
                 return h3_failed(

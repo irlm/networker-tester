@@ -68,7 +68,9 @@ public static class PlatformEndpoints
         new("dns", "DNS", "Resolve", "DNS resolution timing for the target hostname", "Network", "any"),
         new("tls", "TLS", "Handshake", "TLS handshake via rustls — reports version, cipher, ALPN, cert chain", "Network", "any"),
         new("tlsresume", "TLS Resume", "Warm handshake", "Two fresh TLS handshakes with a real HTTP request; the second should resume", "Network", "any"),
-        new("native", "Native TLS", "OS TLS stack", "Uses SChannel (Win), SecureTransport (macOS), or OpenSSL (Linux)", "Network", "any"),
+        // "native" is catalog:false — release tester binaries ship without the
+        // `native` feature, so pickers offering it produced guaranteed-failing
+        // attempts ("recompile to enable"). RequirementOf still resolves it.
         new("udp", "UDP", "Round-trip", "UDP echo probe — measures RTT, jitter, and packet loss", "Network", "any"),
         new("rpm", "RPM", "Latency under load", "Bufferbloat probe — UDP echo RTT idle vs during a sustained download; reports RPM (round-trips per minute) and bufferbloat factor", "Network", "networker-endpoint"),
         new("responsiveness", "Responsiveness", "RPM under load", "Working-conditions responsiveness per draft-ietf-ippm-responsiveness — ramps parallel HTTP/2 load connections to saturation while probing latency on new and on the loaded connections; reports RPM per direction and capacity", "Network", "networker-endpoint"),

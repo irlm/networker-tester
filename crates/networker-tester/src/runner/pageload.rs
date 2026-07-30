@@ -1601,7 +1601,14 @@ pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
     let conn_handle = conn.clone();
 
     // ── H3 client ─────────────────────────────────────────────────────────────
-    let (mut driver, mut send_req) = match h3::client::new(QuinnH3Connection::new(conn)).await {
+    // send_grease(false): nginx's proxied-request body reader aborts on the
+    // GREASE frame h3 emits on each connection's first request (RFC 9114 §9
+    // says ignore; nginx <=1.31 doesn't) — pageload3 via proxies failed 100%.
+    let (mut driver, mut send_req) = match h3::client::builder()
+        .send_grease(false)
+        .build::<_, _, bytes::Bytes>(QuinnH3Connection::new(conn))
+        .await
+    {
         Ok(pair) => pair,
         Err(e) => {
             return error_attempt_proto(
@@ -2707,7 +2714,12 @@ pub async fn warmup_pageload3(
     let handshake_ms = t_handshake.elapsed().as_secs_f64() * 1000.0;
 
     // ── H3 client ──
-    let (mut driver, send_req) = match h3::client::new(QuinnH3Connection::new(conn)).await {
+    // send_grease(false): nginx-proxied h3 interop — see pageload3 above.
+    let (mut driver, send_req) = match h3::client::builder()
+        .send_grease(false)
+        .build(QuinnH3Connection::new(conn))
+        .await
+    {
         Ok(pair) => pair,
         Err(e) => {
             return (
