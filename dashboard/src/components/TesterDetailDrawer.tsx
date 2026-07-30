@@ -61,10 +61,37 @@ type ActionState = 'idle' | 'busy';
 
 export function TesterDetailDrawer({
   projectId,
-  tester,
+  tester: row,
   onClose,
   onChanged,
 }: TesterDetailDrawerProps) {
+  // The list endpoint is a slim projection (no vm_name/public_ip/ssh_user/
+  // created_by/installer_version/OS facts) — fetch the full detail record and
+  // render it merged with the freshest polled row (row wins for live status,
+  // detail supplies the identity fields the list never carries). Refetches
+  // when the row meaningfully changes (updated_at bumps after actions).
+  const [detail, setDetail] = useState<TesterRow | null>(null);
+  // Primitive deps: the polled list returns a NEW row object every tick — a
+  // dep on `row` itself would refetch the detail every 5s. tester_id +
+  // updated_at capture "different runner or meaningfully changed".
+  const rowId = row?.tester_id;
+  const rowUpdatedAt = row?.updated_at;
+  useEffect(() => {
+    if (!rowId) return;
+    let cancelled = false;
+    testersApi
+      .getTester(projectId, rowId)
+      .then((d) => { if (!cancelled) setDetail(d); })
+      .catch(() => { /* slim row remains the fallback */ });
+    return () => { cancelled = true; };
+  }, [projectId, rowId, rowUpdatedAt]);
+  const tester: TesterRow | null = useMemo(
+    () => (row
+      ? { ...(detail && detail.tester_id === row.tester_id ? detail : {}), ...row }
+      : null),
+    [row, detail],
+  );
+
   const [costEstimate, setCostEstimate] = useState<CostEstimate | null>(null);
   const [costError, setCostError] = useState<string | null>(null);
   const [actionState, setActionState] = useState<ActionState>('idle');
