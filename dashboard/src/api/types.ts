@@ -593,14 +593,28 @@ export interface DeployConfig {
   test?: JobConfig;
 }
 
+/** Per-provider VM facts — cloud deploys nest region/vm_size/os here, NOT at
+ * the endpoint top level (the shape the wizard + provisioning orchestrator
+ * write). Resolve with `endpointField` which checks top level then this. */
+export interface DeployProviderBlock {
+  region?: string | null;
+  zone?: string | null;
+  vm_size?: string | null;
+  instance_type?: string | null;
+  machine_type?: string | null;
+  os?: string | null;
+  vm_name?: string | null;
+  instance_name?: string | null;
+}
+
 export interface DeployEndpoint {
   provider: string;
-  region?: string;
-  zone?: string;
-  vm_size?: string;
-  instance_type?: string;
-  machine_type?: string;
-  os?: string;
+  region?: string | null;
+  zone?: string | null;
+  vm_size?: string | null;
+  instance_type?: string | null;
+  machine_type?: string | null;
+  os?: string | null;
   resource_group?: string;
   label?: string;
   ip?: string;
@@ -609,7 +623,11 @@ export interface DeployEndpoint {
   http_stacks?: string[];
   /** Reference-API languages installed on the target (apibench measures these). */
   languages?: string[];
+  azure?: DeployProviderBlock;
+  aws?: DeployProviderBlock;
+  gcp?: DeployProviderBlock;
 }
+
 
 /** GET /deployments/{id}/cost_estimate — priced by the same CostEstimation
  * helpers as the runner cost endpoint. Endpoints without a VM size

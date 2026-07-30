@@ -30,6 +30,46 @@ public class DeploymentEndpointSpecTests
     }
 
     [Fact]
+    public void Falls_back_to_the_provider_block_for_cloud_configs()
+    {
+        // The REAL shape the deploy wizard + provisioning orchestrator write:
+        // region/vm_size/os/vm_name nested under ep.<provider>, top level null.
+        // (Copied from a prod deployment that rendered Region/VM size/OS as "—".)
+        var specs = DeploymentsEndpoints.ParseEndpointSpecs("""
+            { "endpoints": [
+                { "provider": "azure", "region": null, "vm_size": null, "os": null,
+                  "http_stacks": ["nginx", "caddy"],
+                  "azure": { "os": "linux", "region": "eastus", "vm_name": "nwk-ep-ubuntu-edne", "vm_size": "Standard_B2s" } },
+                { "provider": "aws",
+                  "aws": { "region": "us-east-1", "instance_type": "t3.small", "os": "linux", "instance_name": "nwk-ep-aws-1" } },
+                { "provider": "gcp",
+                  "gcp": { "zone": "us-central1-a", "machine_type": "e2-small", "os": "linux" } }
+            ] }
+            """);
+
+        Assert.Equal(3, specs.Count);
+        Assert.Equal(("eastus", "Standard_B2s", "linux", "nwk-ep-ubuntu-edne"),
+            (specs[0].Region, specs[0].VmSize, specs[0].Os, specs[0].VmName));
+        Assert.Equal(("us-east-1", "t3.small", "nwk-ep-aws-1"), (specs[1].Region, specs[1].VmSize, specs[1].VmName));
+        Assert.Equal(("us-central1-a", "e2-small"), (specs[2].Region, specs[2].VmSize));
+    }
+
+    [Fact]
+    public void Top_level_wins_over_the_provider_block()
+    {
+        var specs = DeploymentsEndpoints.ParseEndpointSpecs("""
+            { "endpoints": [
+                { "provider": "azure", "region": "westus2",
+                  "azure": { "region": "eastus", "vm_size": "Standard_B2s" } }
+            ] }
+            """);
+
+        var s = Assert.Single(specs);
+        Assert.Equal("westus2", s.Region);          // explicit top-level beats nested
+        Assert.Equal("Standard_B2s", s.VmSize);     // nested fills the gap
+    }
+
+    [Fact]
     public void Ssh_target_has_no_vm_size_and_gets_default_label()
     {
         var specs = DeploymentsEndpoints.ParseEndpointSpecs("""
