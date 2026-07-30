@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.115] — 2026-07-30
+
+### Fixed
+- **Runner drawer showed "—" for OS, VM name, public IP, SSH user, created-by,
+  and installed version** on existing runners. The testers LIST endpoint is a
+  slim projection that never carried those fields; the drawer rendered the
+  list row without fetching the full record. It now fetches
+  `GET /testers/{id}` on open and renders the detail merged with the freshest
+  polled row (row wins for live status; detail supplies the identity fields),
+  refetching when the row's `updated_at` changes. Two tests pin the merge and
+  the requested-OS fallback.
+
+---
+
 ## [0.28.114] — 2026-07-30
 
 ### Added
