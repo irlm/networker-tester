@@ -233,8 +233,39 @@ pub async fn dispatch_once(
     }
 }
 
+/// True when the embedding process (the C# agent) asked for per-attempt NDJSON
+/// events via `NETWORKER_ATTEMPT_STREAM=1`. Env-gated so the versioned
+/// `--json-stdout` single-artifact contract is untouched by default and OLD
+/// tester binaries degrade gracefully (they simply ignore the env var).
+fn attempt_stream_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("NETWORKER_ATTEMPT_STREAM").is_ok_and(|v| v == "1"))
+}
+
+/// One NDJSON attempt-event line: `{"event":"attempt","attempt":{…}}`.
+/// Emitted on stdout AHEAD of the final `--json-stdout` artifact so the agent
+/// can stream attempts live instead of waiting for process exit. The final
+/// artifact line has no `"event"` key, so readers separate them by shape.
+pub fn format_attempt_event(a: &RequestAttempt) -> Option<String> {
+    serde_json::to_string(a)
+        .ok()
+        .map(|json| format!("{{\"event\":\"attempt\",\"attempt\":{json}}}"))
+}
+
+fn emit_attempt_event(a: &RequestAttempt) {
+    if !attempt_stream_enabled() {
+        return;
+    }
+    if let Some(line) = format_attempt_event(a) {
+        // Rust's stdout is a LineWriter — the newline flushes the event
+        // immediately, which is the whole point of streaming.
+        println!("{line}");
+    }
+}
+
 pub fn log_attempt(a: &RequestAttempt) {
     use crate::metrics::Protocol::*;
+    emit_attempt_event(a);
     let status = if a.success { "✓" } else { "✗" };
     let retry_suffix = if a.retry_count > 0 {
         format!(" (retry #{})", a.retry_count)
@@ -818,4 +849,27 @@ pub fn log_attempt(a: &RequestAttempt) {
 
 pub fn published_logical_attempts(attempts: Vec<RequestAttempt>) -> Vec<RequestAttempt> {
     attempts.into_iter().last().into_iter().collect()
+}
+
+#[cfg(test)]
+mod attempt_stream_tests {
+    use super::format_attempt_event;
+    use crate::output::db::test_fixtures::bare_attempt;
+    use uuid::Uuid;
+
+    /// The NDJSON event line must be (a) one line, (b) shaped
+    /// {"event":"attempt","attempt":{…}} so the agent can split events from
+    /// the final --json-stdout artifact (which has no "event" key), and (c)
+    /// round-trippable into the same attempt JSON the artifact carries.
+    #[test]
+    fn event_line_shape_round_trips() {
+        let a = bare_attempt(Uuid::nil());
+        let line = format_attempt_event(&a).expect("serializes");
+        assert!(!line.contains('\n'), "must be a single NDJSON line");
+
+        let v: serde_json::Value = serde_json::from_str(&line).expect("valid JSON");
+        assert_eq!(v["event"], "attempt");
+        assert_eq!(v["attempt"]["attempt_id"], a.attempt_id.to_string());
+        assert_eq!(v["attempt"]["success"], a.success);
+    }
 }
