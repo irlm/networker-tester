@@ -324,7 +324,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.111"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.112"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -4611,10 +4611,11 @@ server {
         proxy_set_header Host $host;
     }
 
-    # Throughput + server-info routes (download/upload/info) proxied to the
-    # endpoint. Buffering off so throughput measures the proxy path, not
-    # nginx disk buffers; body size uncapped for upload payloads.
-    location ~ ^/(download|upload|info) {
+    # Throughput + server-info + apibench routes (download/upload/info/api/health)
+    # proxied to the endpoint. apibench's /api/* workloads MUST be forwarded or
+    # they hit nginx's static-file catch-all and 404. Buffering off so throughput
+    # measures the proxy path, not nginx disk buffers; body size uncapped.
+    location ~ ^/(download|upload|info|api|health) {
         proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host $host;
         proxy_buffering off;
@@ -4659,8 +4660,8 @@ server {
         proxy_set_header Host $host;
     }
 
-    # Throughput + server-info routes — see HTTP server block above.
-    location ~ ^/(download|upload|info) {
+    # Throughput + server-info + apibench routes — see HTTP server block above.
+    location ~ ^/(download|upload|info|api|health) {
         proxy_pass https://127.0.0.1:8443;
         proxy_ssl_verify off;
         proxy_set_header Host $host;
@@ -4805,6 +4806,8 @@ step_setup_caddy() {
     handle /download* { reverse_proxy 127.0.0.1:8080 }
     handle /upload* { reverse_proxy 127.0.0.1:8080 }
     handle /info { reverse_proxy 127.0.0.1:8080 }
+    handle /api* { reverse_proxy 127.0.0.1:8080 }
+    handle /health { reverse_proxy 127.0.0.1:8080 }
 }
 
 :8454 {
@@ -4816,6 +4819,8 @@ step_setup_caddy() {
     handle /download* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
     handle /upload* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
     handle /info { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
+    handle /api* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
+    handle /health { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
     header Alt-Svc "h3=\":8454\"; ma=86400"
 }
 CADDY_CONF
@@ -4927,6 +4932,10 @@ Listen 8457
     ProxyPassReverse /upload http://127.0.0.1:8080/upload
     ProxyPass        /info http://127.0.0.1:8080/info
     ProxyPassReverse /info http://127.0.0.1:8080/info
+    ProxyPass        /api  http://127.0.0.1:8080/api
+    ProxyPassReverse /api  http://127.0.0.1:8080/api
+    ProxyPass        /health http://127.0.0.1:8080/health
+    ProxyPassReverse /health http://127.0.0.1:8080/health
 </VirtualHost>
 
 <VirtualHost *:8457>
@@ -4954,6 +4963,10 @@ Listen 8457
     ProxyPassReverse /upload https://127.0.0.1:8443/upload
     ProxyPass        /info https://127.0.0.1:8443/info
     ProxyPassReverse /info https://127.0.0.1:8443/info
+    ProxyPass        /api  https://127.0.0.1:8443/api
+    ProxyPassReverse /api  https://127.0.0.1:8443/api
+    ProxyPass        /health https://127.0.0.1:8443/health
+    ProxyPassReverse /health https://127.0.0.1:8443/health
 </VirtualHost>
 APACHE_CONF
 
@@ -5295,8 +5308,8 @@ $webConfig = @"
           </conditions>
           <action type="Rewrite" url="http://127.0.0.1:8080/asset?{C:0}" appendQueryString="false" />
         </rule>
-        <rule name="Proxy throughput + info to endpoint" stopProcessing="true">
-          <match url="^(download|upload|info)(.*)" />
+        <rule name="Proxy throughput + info + apibench to endpoint" stopProcessing="true">
+          <match url="^(download|upload|info|api|health)(.*)" />
           <action type="Rewrite" url="http://127.0.0.1:8080/{R:1}{R:2}" />
         </rule>
       </rules>
@@ -5305,7 +5318,7 @@ $webConfig = @"
 </configuration>
 "@
 $webConfig | Out-File "$siteRoot\web.config" -Encoding UTF8
-Write-Host "web.config created (with reverse-proxy rules for /page, /asset, /download, /upload, /info)"
+Write-Host "web.config created (with reverse-proxy rules for /page, /asset, /download, /upload, /info, /api, /health)"
 
 # 4. Generate self-signed certificate (include FQDN in SAN for SNI/H3)
 Write-Host "Creating self-signed certificate…"
@@ -5458,7 +5471,7 @@ server {
     location / { try_files $uri $uri/ =404; }
     location /page { proxy_pass http://127.0.0.1:8080; proxy_set_header Host $host; }
     location /asset { proxy_pass http://127.0.0.1:8080; proxy_set_header Host $host; }
-    location ~ ^/(download|upload|info) { proxy_pass http://127.0.0.1:8080; proxy_set_header Host $host; proxy_buffering off; proxy_request_buffering off; client_max_body_size 0; }
+    location ~ ^/(download|upload|info|api|health) { proxy_pass http://127.0.0.1:8080; proxy_set_header Host $host; proxy_buffering off; proxy_request_buffering off; client_max_body_size 0; }
     location ~* \.bin$ { default_type application/octet-stream; }
 }
 server {
@@ -5475,7 +5488,7 @@ server {
     location / { try_files $uri $uri/ =404; }
     location /page { proxy_pass https://127.0.0.1:8443; proxy_ssl_verify off; proxy_set_header Host $host; }
     location /asset { proxy_pass https://127.0.0.1:8443; proxy_ssl_verify off; proxy_set_header Host $host; }
-    location ~ ^/(download|upload|info) { proxy_pass https://127.0.0.1:8443; proxy_ssl_verify off; proxy_set_header Host $host; proxy_buffering off; proxy_request_buffering off; client_max_body_size 0; }
+    location ~ ^/(download|upload|info|api|health) { proxy_pass https://127.0.0.1:8443; proxy_ssl_verify off; proxy_set_header Host $host; proxy_buffering off; proxy_request_buffering off; client_max_body_size 0; }
     location ~* \.bin$ { default_type application/octet-stream; }
 }
 EOF
@@ -5763,7 +5776,7 @@ server {
     location / { try_files $uri $uri/ =404; }
     location /page { proxy_pass http://127.0.0.1:8080; proxy_set_header Host $host; }
     location /asset { proxy_pass http://127.0.0.1:8080; proxy_set_header Host $host; }
-    location ~ ^/(download|upload|info) { proxy_pass http://127.0.0.1:8080; proxy_set_header Host $host; proxy_buffering off; proxy_request_buffering off; client_max_body_size 0; }
+    location ~ ^/(download|upload|info|api|health) { proxy_pass http://127.0.0.1:8080; proxy_set_header Host $host; proxy_buffering off; proxy_request_buffering off; client_max_body_size 0; }
     location ~* \.bin$ { default_type application/octet-stream; }
 }
 server {
@@ -5779,7 +5792,7 @@ server {
     location / { try_files $uri $uri/ =404; }
     location /page { proxy_pass https://127.0.0.1:8443; proxy_ssl_verify off; proxy_set_header Host $host; }
     location /asset { proxy_pass https://127.0.0.1:8443; proxy_ssl_verify off; proxy_set_header Host $host; }
-    location ~ ^/(download|upload|info) { proxy_pass https://127.0.0.1:8443; proxy_ssl_verify off; proxy_set_header Host $host; proxy_buffering off; proxy_request_buffering off; client_max_body_size 0; }
+    location ~ ^/(download|upload|info|api|health) { proxy_pass https://127.0.0.1:8443; proxy_ssl_verify off; proxy_set_header Host $host; proxy_buffering off; proxy_request_buffering off; client_max_body_size 0; }
     location ~* \.bin$ { default_type application/octet-stream; }
 }
 EOF

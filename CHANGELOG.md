@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.112] — 2026-07-29
+
+### Fixed
+- **apibench attempts 404'd through every proxy stack.** The nginx / caddy /
+  apache / IIS benchmark proxy configs (`install.sh`) forwarded only `/page`,
+  `/asset`, `/download`, `/upload`, `/info` to the backend endpoint; every
+  apibench `/api/*` workload (`/api/users`, `/api/transform`, `/api/aggregate`,
+  `/api/search`, `/api/upload/process`) fell through to the proxy's static-file
+  catch-all and returned the proxy's **own 404** — the backend never saw the
+  request. Persisted attempt data proved it: DNS/TCP/TLS all ✓, HTTP 404 with a
+  constant 153-byte (nginx default) body, on the proxy port. Added `/api` and
+  `/health` proxy routes to all four stacks (nginx HTTP+HTTPS, caddy HTTP+HTTPS,
+  apache HTTP+HTTPS, and the Windows IIS `web.config` rewrite). Throughput/
+  page-load benchmarks were unaffected because their paths were already in the
+  allowlist.
+
+---
+
 ## [0.28.111] — 2026-07-29
 
 ### Fixed
