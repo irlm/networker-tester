@@ -10,7 +10,11 @@ name: Prod run-execution canary
 # rust endpoint behind nginx and runs apibench THROUGH the proxy, asserting the
 # /api/* attempts return 2xx and zero proxy-404s (v0.28.112 shipped with /api
 # absent from every proxy stack's allowlist → 404 on all attempts, invisible to
-# a network probe). Both the runner and the endpoint are torn down after.
+# a network probe) AND language authenticity — the deploy log must show the
+# cell's reference-API install + /api reroute, or apibench silently measured
+# the built-in endpoint /api (v0.28.114 class: languages written but dropped
+# on the install path; returns 200s either way, so only the log can tell).
+# Both the runner and the endpoint are torn down after.
 #
 # A red run = the run-execution path regressed. Alerting mirrors the soak check
 # (a pinned issue, create-or-comment-or-close). Driven entirely through the
