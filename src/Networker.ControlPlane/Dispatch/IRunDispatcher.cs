@@ -69,4 +69,15 @@ public interface IRunDispatcher
     /// <c>cancel_handler</c>.
     /// </summary>
     Task CancelAsync(Guid runId, CancellationToken ct);
+
+    /// <summary>
+    /// Resolve the concrete probe target (host, port) a run launched from
+    /// <paramref name="testConfigId"/> would hit — network endpoints from their
+    /// own host/port, proxy endpoints via the deployment's IP + stack port.
+    /// Returns null when the kind has no static target (pending is provisioned
+    /// on demand; sdk targets are probed by URL). Used by the launch-time
+    /// reachability gate so a run against a stopped target fails fast with an
+    /// actionable error instead of silently burning per-attempt timeouts.
+    /// </summary>
+    Task<(string Host, int Port)?> ResolveLaunchTargetAsync(Guid testConfigId, CancellationToken ct);
 }

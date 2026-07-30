@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.117] — 2026-07-30
+
+### Added
+- **Launch-time target reachability gate.** Launching a test against a stopped
+  target (e.g. an auto-shutdown deallocated VM whose DNS still resolves) used
+  to silently grind through every mode × run burning full per-attempt
+  timeouts. The launch endpoint now TCP-probes the exact host:port dispatch
+  would hand the tester (network endpoints directly; proxy endpoints via the
+  deployment IP + stack port) and fails fast with an actionable 409 —
+  "target unreachable … start it and retry, or pass force:true".
+- **Live mid-run progress.** Attempts and success/failure counts now stream to
+  the run page during execution instead of arriving in a burst at completion.
+  The tester (with `NETWORKER_ATTEMPT_STREAM=1`, set by the agent) emits one
+  NDJSON event line per completed attempt ahead of the final `--json-stdout`
+  artifact — the versioned single-artifact contract is untouched by default,
+  and older tester binaries simply ignore the env var. The agent classifies
+  stdout lines, forwards attempt events + progress counts live, and skips the
+  exit-time re-emit when it streamed (no double counting). Server and run page
+  already handled the frames; they now arrive in real time.
+
+---
+
 ## [0.28.116] — 2026-07-30
 
 ### Fixed

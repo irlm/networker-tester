@@ -285,6 +285,44 @@ public sealed class RunDispatcher : IRunDispatcher
         _bus.Publish(new JobUpdate(runId, StatusCancelled, targetAgentId, null, DateTimeOffset.UtcNow));
     }
 
+    /// <inheritdoc />
+    public async Task<(string Host, int Port)?> ResolveLaunchTargetAsync(Guid testConfigId, CancellationToken ct)
+    {
+        var cfg = await _db.TestConfigs
+            .AsNoTracking()
+            .Where(c => c.Id == testConfigId)
+            .Select(c => new { c.EndpointKind, c.EndpointRef })
+            .FirstOrDefaultAsync(ct);
+        if (cfg is null)
+        {
+            return null;
+        }
+
+        if (string.Equals(cfg.EndpointKind, "network", StringComparison.OrdinalIgnoreCase))
+        {
+            return Provisioning.ProvisioningOrchestrator.TryParseNetworkHostPort(cfg.EndpointRef, out var host, out var port)
+                ? (host, port)
+                : null;
+        }
+
+        if (string.Equals(cfg.EndpointKind, EndpointKindProxy, StringComparison.OrdinalIgnoreCase))
+        {
+            // Same resolution dispatch uses (deployment IP + stack port), so the
+            // gate probes exactly what the tester will hit.
+            if (await ResolveProxyEndpointAsync(cfg.EndpointRef, ct) is JsonElement resolved
+                && resolved.TryGetProperty("host", out var h) && h.ValueKind == JsonValueKind.String
+                && resolved.TryGetProperty("port", out var p) && p.TryGetInt32(out var port)
+                && h.GetString() is { Length: > 0 } host)
+            {
+                return (host, port);
+            }
+            return null;
+        }
+
+        // pending (provisioned on demand — has its own readiness gate) / sdk / unknown.
+        return null;
+    }
+
     // ── Core assignment ──────────────────────────────────────────────────────
 
     /// <summary>

@@ -266,6 +266,25 @@ public static class TestConfigWriteEndpoints
                 }
             }
 
+            // Launch-time reachability gate: a run against a stopped target
+            // (deallocated VM, dead host) would otherwise grind through every
+            // mode burning full per-attempt timeouts with nothing to show.
+            // Probe the exact host:port dispatch will hand the tester; fail
+            // fast with an actionable 409. `force: true` bypasses (the target
+            // may be intentionally mid-restart).
+            if (req?.Force != true
+                && await dispatcher.ResolveLaunchTargetAsync(id, ct) is { } target
+                && !await Dispatch.TargetReachability.TcpReachableAsync(
+                        target.Host, target.Port, Dispatch.TargetReachability.ProbeTimeout, ct))
+            {
+                return Results.Conflict(new
+                {
+                    error = $"target unreachable: TCP connect to {target.Host}:{target.Port} "
+                        + "timed out — the target may be stopped or deallocated. Start it and "
+                        + "retry, or pass force:true to launch anyway.",
+                });
+            }
+
             Guid runId;
             try
             {
@@ -336,7 +355,8 @@ public static class TestConfigWriteEndpoints
     /// the run.</summary>
     public sealed record LaunchRequest(
         [property: JsonPropertyName("tester_id")] Guid? TesterId,
-        [property: JsonPropertyName("comparison_group_id")] Guid? ComparisonGroupId);
+        [property: JsonPropertyName("comparison_group_id")] Guid? ComparisonGroupId,
+        [property: JsonPropertyName("force")] bool? Force = null);
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 

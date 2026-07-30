@@ -341,6 +341,12 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        // Ask the tester (>= 0.28.117) to emit per-attempt NDJSON event lines
+        // on stdout ahead of the final artifact so attempts stream LIVE instead
+        // of arriving in a burst at process exit (the "no updates mid-run" gap,
+        // E2E 2026-07-30). Older testers ignore the env var — the read loop
+        // then simply sees no event lines and falls back to parse-at-exit.
+        psi.EnvironmentVariables["NETWORKER_ATTEMPT_STREAM"] = "1";
         foreach (var a in args)
             psi.ArgumentList.Add(a);
 
@@ -377,6 +383,7 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         // Read stdout into memory with a hard cap.
         var stdoutBuilder = new StringBuilder();
         long stdoutBytes = 0;
+        uint streamedAttempts = 0;
         bool overflow = false;
         bool cancelled = false;
         bool deadlineExpired = false;
@@ -386,6 +393,24 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             string? line;
             while ((line = await process.StandardOutput.ReadLineAsync(invocationToken).ConfigureAwait(false)) is not null)
             {
+                // Streamed attempt event (NETWORKER_ATTEMPT_STREAM): forward it
+                // live and keep it OUT of the artifact buffer. A line that has
+                // the prefix but fails to parse is treated as artifact content
+                // so no tester output is ever lost.
+                if (line.StartsWith("{\"event\":\"attempt\"", StringComparison.Ordinal)
+                    && TryParseAttemptEvent(line) is JsonElement streamed)
+                {
+                    var okNow = streamed.TryGetProperty("success", out var sv) && sv.ValueKind == JsonValueKind.True;
+                    uint totalNow;
+                    if (okNow) { successCount++; totalNow = successCount; }
+                    else { failureCount++; totalNow = failureCount; }
+                    streamedAttempts++;
+                    sink.TrySend(new AttemptEventMessage(runId, streamed));
+                    if (totalNow % 10 == 0)
+                        sink.TrySend(new RunProgressMessage(runId, successCount, failureCount));
+                    continue;
+                }
+
                 stdoutBytes += line.Length + 1;
                 if (stdoutBytes > MaxStdoutBytes)
                 {
@@ -497,7 +522,11 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             envelope = ExtractRunEnvelope(root);
 
             // Stream per-attempt events + progress counts (every 10 + final).
-            if (root.TryGetProperty("attempts", out var attempts) && attempts.ValueKind == JsonValueKind.Array)
+            // Skipped when the tester already streamed them live (>=0.28.117,
+            // NETWORKER_ATTEMPT_STREAM) — re-emitting here would double both
+            // the persisted attempts pipeline input and the counts.
+            if (streamedAttempts == 0
+                && root.TryGetProperty("attempts", out var attempts) && attempts.ValueKind == JsonValueKind.Array)
             {
                 foreach (var attempt in attempts.EnumerateArray())
                 {
@@ -533,6 +562,34 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
     }
 
     // ── endpoint_to_target (Rust parity) ─────────────────────────────────────────
+    /// <summary>Parse one streamed NDJSON attempt-event line
+    /// (<c>{"event":"attempt","attempt":{…}}</c>, tester >= 0.28.117 with
+    /// NETWORKER_ATTEMPT_STREAM=1) into the inner attempt element, or null if
+    /// the line is not a well-formed event (caller then treats it as artifact
+    /// content so tester output is never lost).</summary>
+    internal static JsonElement? TryParseAttemptEvent(string line)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            if (root.ValueKind == JsonValueKind.Object
+                && root.TryGetProperty("event", out var ev)
+                && ev.ValueKind == JsonValueKind.String
+                && ev.GetString() == "attempt"
+                && root.TryGetProperty("attempt", out var attempt)
+                && attempt.ValueKind == JsonValueKind.Object)
+            {
+                return attempt.Clone();
+            }
+        }
+        catch (JsonException)
+        {
+            // Fall through — not an event line.
+        }
+        return null;
+    }
+
     internal static string? EndpointToTarget(TestConfigView config)
     {
         if (config.EndpointKind != "network" || config.Network is null)
