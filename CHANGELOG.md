@@ -11,6 +11,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.118] — 2026-07-31
+
+### Fixed
+- **pageload3 / any HTTP/3 probe through a proxy failed 100%** (`Remote reset:
+  H3_INTERNAL_ERROR`). nginx's proxied-request body reader aborts on the GREASE
+  frame the `h3` crate emits on each connection's first request — and every
+  tester attempt is a fresh connection. Static h3 paths never read the body,
+  which is why plain `http3` sometimes passed. Client grease is now disabled
+  (spec-legal per RFC 9114 §9; nginx ≤1.31 doesn't ignore unknown frames there).
+  Root-caused via nginx-debug frame traces; curl/HTTP-3 against the same
+  proxied route returned 200, proving the server side healthy.
+- **websocket mode 404'd through proxies** — the proxy configs never forwarded
+  `/ws` (same allowlist class as the v0.28.112 `/api` gap). Added `/ws` routes
+  with the Upgrade handshake to nginx (local + remote variants), caddy, and
+  apache (`proxy_wstunnel` enabled).
+- **ping mode failed on every provisioned runner** (`OS denied the unprivileged
+  ICMP datagram socket`). Ubuntu ships `ping_group_range` disabled; the runner
+  cloud-init bootstrap and install.sh now set
+  `net.ipv4.ping_group_range = 0 2147483647` (best-effort, persisted).
+- **`native` mode removed from the catalog** (`catalog:false`, the browser
+  precedent): release binaries ship without `--features native`, so pickers
+  offering it produced guaranteed-failing attempts. The Protocol variant,
+  Display/FromStr, and source builds with the feature keep working; removed
+  from `Protocol::all_modes()`, the C# mirror, and the URL scenario preset.
+
+### Notes
+- `path` mode failing against Azure targets is environmental: Azure's fabric
+  filters ICMP TTL-exceeded, so hop discovery reports honestly that the path
+  is blocked. Not a defect.
+
+---
+
 ## [0.28.117] — 2026-07-30
 
 ### Added

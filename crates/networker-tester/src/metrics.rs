@@ -1388,13 +1388,12 @@ impl Protocol {
                 "Two fresh TLS handshakes with a real HTTP request; the second should resume",
                 "Network",
             ),
-            m(
-                "native",
-                "Native TLS",
-                "OS TLS stack",
-                "Uses SChannel (Win), SecureTransport (macOS), or OpenSSL (Linux)",
-                "Network",
-            ),
+            // "native" is deliberately NOT in the catalog: release binaries
+            // ship without the `native` feature (musl + OS-TLS linkage), so
+            // offering it in pickers produced guaranteed-failing attempts
+            // ("recompile to enable", E2E 2026-07-30). The Protocol variant,
+            // Display, and FromStr all remain — a source-built tester with
+            // --features native can still run it by explicit mode name.
             m(
                 "udp",
                 "UDP",

@@ -202,6 +202,13 @@ elif [ -x /usr/sbin/dumpcap ]; then
     setcap cap_net_raw,cap_net_admin=eip /usr/sbin/dumpcap || true
 fi
 
+# 2b. Allow unprivileged ICMP echo sockets for the ping probe. Ubuntu ships
+# ping_group_range "1 0" (disabled), which made every ping-mode attempt fail
+# with "OS denied the unprivileged ICMP datagram socket" (EACCES). Soft-fail:
+# a locked-down sysctl must not abort the bootstrap.
+echo 'net.ipv4.ping_group_range = 0 2147483647' > /etc/sysctl.d/99-networker-ping.conf || true
+sysctl -p /etc/sysctl.d/99-networker-ping.conf || true
+
 # 3. Resolve the latest release tag. Uses `grep -m1` instead of `| head -1`
 #    because `set -o pipefail` + `head -1` races grep and trips SIGPIPE (exit
 #    141) on small responses -- an intermittent failure mode that silently

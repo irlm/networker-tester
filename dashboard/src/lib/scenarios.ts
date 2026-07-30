@@ -76,7 +76,8 @@ const application = (pid: string, template: string) =>
 // Mode sets mirror DiagnosticsPage.DIAG_PRESETS so the card preview matches what
 // the probe page selects. Kept in lockstep by scenarios.test.ts (all `any`).
 const URL_QUICK = ['dns', 'tcp', 'tls', 'http2'];
-const URL_STANDARD = ['dns', 'tcp', 'tls', 'tlsresume', 'native', 'http1', 'http2', 'http3', 'udp'];
+// 'native' removed: catalog:false — release binaries lack --features native.
+const URL_STANDARD = ['dns', 'tcp', 'tls', 'tlsresume', 'http1', 'http2', 'http3', 'udp'];
 const URL_FULL = [...URL_STANDARD, 'curl', 'pageload', 'pageload2', 'pageload3', 'browser1', 'browser2', 'browser3'];
 const URL_ROUTE = ['ping', 'path', 'dualstack', 'pmtud'];
 

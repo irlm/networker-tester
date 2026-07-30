@@ -327,7 +327,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.117"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.118"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -3094,6 +3094,14 @@ step_install_packet_capture_tools() {
         fi
     fi
 
+    # Allow unprivileged ICMP echo sockets for the ping probe. Ubuntu ships
+    # ping_group_range "1 0" (disabled) -> every ping-mode attempt fails with
+    # "OS denied the unprivileged ICMP datagram socket" (EACCES). Best-effort.
+    if [[ "$SYS_OS" == "Linux" ]]; then
+        echo 'net.ipv4.ping_group_range = 0 2147483647'             | sudo tee /etc/sysctl.d/99-networker-ping.conf > /dev/null 2>&1 || true
+        sudo sysctl -p /etc/sysctl.d/99-networker-ping.conf > /dev/null 2>&1 || true
+    fi
+
     if detect_tshark >/dev/null 2>&1; then
         print_ok "tshark ready: $(detect_tshark)"
     else
@@ -4620,6 +4628,17 @@ server {
         proxy_set_header Host $host;
     }
 
+    # WebSocket probe route — the Upgrade handshake must be forwarded or the
+    # websocket mode 404s through the proxy (same allowlist class as /api).
+    location /ws {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 300s;
+    }
+
     # Throughput + server-info + apibench routes (download/upload/info/api/health)
     # proxied to the endpoint. apibench's /api/* workloads MUST be forwarded or
     # they hit nginx's static-file catch-all and 404. Buffering off so throughput
@@ -4667,6 +4686,17 @@ server {
         proxy_pass https://127.0.0.1:8443;
         proxy_ssl_verify off;
         proxy_set_header Host $host;
+    }
+
+    # WebSocket probe route — see HTTP server block above.
+    location /ws {
+        proxy_pass https://127.0.0.1:8443;
+        proxy_ssl_verify off;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 300s;
     }
 
     # Throughput + server-info + apibench routes — see HTTP server block above.
@@ -4812,6 +4842,7 @@ step_setup_caddy() {
     file_server
     handle /page* { reverse_proxy 127.0.0.1:8080 }
     handle /asset* { reverse_proxy 127.0.0.1:8080 }
+    handle /ws* { reverse_proxy 127.0.0.1:8080 }
     handle /download* { reverse_proxy 127.0.0.1:8080 }
     handle /upload* { reverse_proxy 127.0.0.1:8080 }
     handle /info { reverse_proxy 127.0.0.1:8080 }
@@ -4825,6 +4856,7 @@ step_setup_caddy() {
     file_server
     handle /page* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
     handle /asset* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
+    handle /ws* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
     handle /download* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
     handle /upload* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
     handle /info { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
@@ -4889,7 +4921,7 @@ step_setup_apache() {
         apt-get)
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq apache2 < /dev/null
             # Enable modules we need; a2enmod is idempotent.
-            sudo a2enmod ssl headers proxy proxy_http http2 rewrite >/dev/null 2>&1 || true
+            sudo a2enmod ssl headers proxy proxy_http proxy_wstunnel http2 rewrite >/dev/null 2>&1 || true
             ;;
         dnf)
             sudo dnf install -y httpd mod_ssl mod_http2 < /dev/null
@@ -4935,6 +4967,8 @@ Listen 8457
     ProxyPassReverse /page  http://127.0.0.1:8080/page
     ProxyPass        /asset http://127.0.0.1:8080/asset
     ProxyPassReverse /asset http://127.0.0.1:8080/asset
+    ProxyPass        /ws ws://127.0.0.1:8080/ws
+    ProxyPassReverse /ws ws://127.0.0.1:8080/ws
     ProxyPass        /download http://127.0.0.1:8080/download
     ProxyPassReverse /download http://127.0.0.1:8080/download
     ProxyPass        /upload http://127.0.0.1:8080/upload
@@ -4966,6 +5000,8 @@ Listen 8457
     ProxyPassReverse /page  https://127.0.0.1:8443/page
     ProxyPass        /asset https://127.0.0.1:8443/asset
     ProxyPassReverse /asset https://127.0.0.1:8443/asset
+    ProxyPass        /ws wss://127.0.0.1:8443/ws
+    ProxyPassReverse /ws wss://127.0.0.1:8443/ws
     ProxyPass        /download https://127.0.0.1:8443/download
     ProxyPassReverse /download https://127.0.0.1:8443/download
     ProxyPass        /upload https://127.0.0.1:8443/upload
@@ -5480,6 +5516,7 @@ server {
     location / { try_files $uri $uri/ =404; }
     location /page { proxy_pass http://127.0.0.1:8080; proxy_set_header Host $host; }
     location /asset { proxy_pass http://127.0.0.1:8080; proxy_set_header Host $host; }
+    location /ws { proxy_pass http://127.0.0.1:8080; proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_set_header Host $host; proxy_read_timeout 300s; }
     location ~ ^/(download|upload|info|api|health) { proxy_pass http://127.0.0.1:8080; proxy_set_header Host $host; proxy_buffering off; proxy_request_buffering off; client_max_body_size 0; }
     location ~* \.bin$ { default_type application/octet-stream; }
 }
@@ -5497,6 +5534,7 @@ server {
     location / { try_files $uri $uri/ =404; }
     location /page { proxy_pass https://127.0.0.1:8443; proxy_ssl_verify off; proxy_set_header Host $host; }
     location /asset { proxy_pass https://127.0.0.1:8443; proxy_ssl_verify off; proxy_set_header Host $host; }
+    location /ws { proxy_pass https://127.0.0.1:8443; proxy_ssl_verify off; proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade"; proxy_set_header Host $host; proxy_read_timeout 300s; }
     location ~ ^/(download|upload|info|api|health) { proxy_pass https://127.0.0.1:8443; proxy_ssl_verify off; proxy_set_header Host $host; proxy_buffering off; proxy_request_buffering off; client_max_body_size 0; }
     location ~* \.bin$ { default_type application/octet-stream; }
 }
