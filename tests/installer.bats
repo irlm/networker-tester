@@ -1070,6 +1070,84 @@ JSON
     [ "${DEPLOY_EP_HTTP_STACKS[2]}" = "" ]
 }
 
+# ── languages in deploy config (reference-API servers for apibench) ────────
+
+@test "_deploy_parse_config: parses per-endpoint languages" {
+    local cfg="$TEST_TMPDIR/parse-ep-langs.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [
+    { "provider": "azure", "http_stacks": ["nginx"], "languages": ["rust"], "azure": { "os": "linux" } },
+    { "provider": "azure", "languages": ["go", "python"], "azure": { "os": "linux" } },
+    { "provider": "local" }
+  ]
+}
+JSON
+    _deploy_parse_config "$cfg"
+    [ "${DEPLOY_EP_LANGUAGES[0]}" = "rust" ]
+    [ "${DEPLOY_EP_LANGUAGES[1]}" = "go,python" ]
+    [ "${DEPLOY_EP_LANGUAGES[2]}" = "" ]
+}
+
+@test "_deploy_validate_config: accepts valid languages on Linux endpoint" {
+    local cfg="$TEST_TMPDIR/val-langs-ok.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{
+    "provider": "azure",
+    "http_stacks": ["nginx"],
+    "languages": ["go"],
+    "azure": { "os": "linux", "region": "eastus" }
+  }]
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -eq 0 ]
+}
+
+@test "_deploy_validate_config: rejects unknown language" {
+    local cfg="$TEST_TMPDIR/val-langs-bad.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{
+    "provider": "azure",
+    "languages": ["cobol"],
+    "azure": { "os": "linux", "region": "eastus" }
+  }]
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -gt 0 ]
+}
+
+@test "_deploy_validate_config: rejects languages on Windows endpoint" {
+    local cfg="$TEST_TMPDIR/val-langs-win.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{
+    "provider": "azure",
+    "languages": ["go"],
+    "azure": { "os": "windows", "region": "eastus" }
+  }]
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -gt 0 ]
+}
+
+@test "parse_args: --benchmark-port sets BENCHMARK_PORT_OVERRIDE" {
+    parse_args --benchmark-port 8085
+    [ "$BENCHMARK_PORT_OVERRIDE" = "8085" ]
+}
+
 @test "_deploy_parse_config: parses tests.http_stacks" {
     local cfg="$TEST_TMPDIR/parse-test-stacks.json"
     cat > "$cfg" <<'JSON'

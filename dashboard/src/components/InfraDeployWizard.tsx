@@ -18,6 +18,7 @@ import {
   LINUX_PROXIES,
   WINDOWS_PROXIES,
   PROXY_LABELS,
+  LANGUAGE_GROUPS,
 } from './wizard/testbed-constants';
 import { useToast } from '../hooks/useToast';
 
@@ -37,6 +38,8 @@ export interface InfraDeployWizardProps {
     os: 'linux' | 'windows';
     existingVmIp: string;
     installedProxies: string[];
+    /** Reference-API languages already on the target (pre-checked in the picker). */
+    installedLanguages?: string[];
   };
   onClose: () => void;
   onCreated: (kind: Kind, id: string) => void;
@@ -50,6 +53,18 @@ function providerToCloud(p: string): 'Azure' | 'AWS' | 'GCP' {
   if (lp === 'gcp') return 'GCP';
   return 'Azure';
 }
+
+// Reference-API languages install.sh can deploy on a target endpoint
+// (apibench then measures the LANGUAGE server behind the proxy instead of
+// networker-endpoint's built-in /api). Must match install.sh's valid_langs;
+// 'nginx' (static stack) and the AOT variants it doesn't ship are excluded.
+const APIBENCH_LANG_IDS = new Set([
+  'rust', 'go', 'cpp', 'java', 'nodejs', 'python', 'ruby', 'php',
+  'csharp-net8', 'csharp-net8-aot', 'csharp-net9', 'csharp-net10', 'csharp-net48',
+]);
+const APIBENCH_LANGS = LANGUAGE_GROUPS
+  .flatMap(g => g.entries)
+  .filter(e => APIBENCH_LANG_IDS.has(e.id));
 
 const STEPS = ['Kind', 'Cloud', 'Region & OS', 'Configure', 'Review'] as const;
 
@@ -78,6 +93,7 @@ export function InfraDeployWizard({
 
   // Target-specific
   const [proxies, setProxies] = useState<string[]>(prefillUpgrade?.installedProxies ?? ['nginx']);
+  const [languages, setLanguages] = useState<string[]>(prefillUpgrade?.installedLanguages ?? []);
   const [useExistingVm, setUseExistingVm] = useState(!!prefillUpgrade);
   const [existingVmIp, setExistingVmIp] = useState(prefillUpgrade?.existingVmIp ?? '');
 
@@ -193,26 +209,31 @@ export function InfraDeployWizard({
           tester: { provider: 'local' },
           cloud_account_id: accountId,
           endpoints: [
-            useExistingVm
-              ? {
+            (() => {
+              // languages ride the endpoint only on Linux (install.sh rejects
+              // them on Windows) and only when picked.
+              const langs = os === 'linux' && languages.length > 0 ? { languages } : {};
+              if (useExistingVm) {
+                return {
                   provider: 'lan',
                   lan: { ip: existingVmIp.trim(), user: 'azureuser', port: 22 },
                   http_stacks: proxies,
+                  ...langs,
                   label: `upgrade-${existingVmIp.trim()}`,
-                }
-              : (() => {
-                  const provider = cloud.toLowerCase();
-                  const osSuffix = os === 'windows' ? 'win' : 'ubuntu';
-                  const suffix = Math.random().toString(36).slice(2, 6);
-                  const vmName = `nwk-ep-${osSuffix}-${suffix}`;
-                  if (provider === 'azure') {
-                    return { provider, http_stacks: proxies, azure: { region, vm_size: vmSize, os, vm_name: vmName } };
-                  }
-                  if (provider === 'aws') {
-                    return { provider, http_stacks: proxies, aws: { region, instance_type: vmSize, os, instance_name: vmName } };
-                  }
-                  return { provider, http_stacks: proxies, gcp: { region, zone: `${region}-a`, machine_type: vmSize, os, instance_name: vmName } };
-                })(),
+                };
+              }
+              const provider = cloud.toLowerCase();
+              const osSuffix = os === 'windows' ? 'win' : 'ubuntu';
+              const suffix = Math.random().toString(36).slice(2, 6);
+              const vmName = `nwk-ep-${osSuffix}-${suffix}`;
+              if (provider === 'azure') {
+                return { provider, http_stacks: proxies, ...langs, azure: { region, vm_size: vmSize, os, vm_name: vmName } };
+              }
+              if (provider === 'aws') {
+                return { provider, http_stacks: proxies, ...langs, aws: { region, instance_type: vmSize, os, instance_name: vmName } };
+              }
+              return { provider, http_stacks: proxies, ...langs, gcp: { region, zone: `${region}-a`, machine_type: vmSize, os, instance_name: vmName } };
+            })(),
           ],
           tests: { run_tests: false },
         };
@@ -459,6 +480,37 @@ export function InfraDeployWizard({
                 <p className="text-xs text-yellow-500 mb-3">At least one proxy is required</p>
               )}
 
+              {os === 'linux' && (
+                <>
+                  <label className="block text-xs text-gray-400 mb-1">
+                    Reference APIs <span className="text-gray-500">(apibench targets — optional)</span>
+                  </label>
+                  <p className="text-[11px] text-gray-500 mb-2">
+                    Installs the language&apos;s reference API on the target; apibench then
+                    measures it behind the proxy instead of the built-in endpoint /api.
+                  </p>
+                  <div className="flex flex-wrap gap-2 mb-4">
+                    {APIBENCH_LANGS.map(l => {
+                      const active = languages.includes(l.id);
+                      return (
+                        <button
+                          key={l.id}
+                          type="button"
+                          onClick={() => setLanguages(prev => active ? prev.filter(x => x !== l.id) : [...prev, l.id])}
+                          className={`px-3 py-1 text-xs border transition-colors ${
+                            active
+                              ? 'bg-cyan-900/40 border-cyan-700 text-cyan-300'
+                              : 'border-gray-700 text-gray-400 hover:border-gray-600'
+                          }`}
+                        >
+                          {l.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+
               <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer mb-2">
                 <input
                   type="checkbox"
@@ -555,6 +607,12 @@ export function InfraDeployWizard({
                   { k: 'Operating system', v: os === 'linux' ? 'Linux (Ubuntu)' : 'Windows Server' },
                   ...(kind === 'target' ? [
                     { k: 'Reverse proxies', v: <span className="text-cyan-400">{proxies.map(p => PROXY_LABELS[p] ?? p).join(', ')}</span> },
+                    {
+                      k: 'Reference APIs',
+                      v: os === 'linux' && languages.length > 0
+                        ? <span className="text-cyan-400">{APIBENCH_LANGS.filter(l => languages.includes(l.id)).map(l => l.label).join(', ')}</span>
+                        : <span className="text-gray-400">none — apibench uses the built-in endpoint /api</span>,
+                    },
                     { k: 'Existing VM', v: useExistingVm ? <span className="font-mono text-cyan-400">{existingVmIp}</span> : <span className="text-gray-400">no — provisioning new</span> },
                   ] : [
                     { k: 'Name', v: <span className="font-mono">{runnerName}</span> },

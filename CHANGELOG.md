@@ -11,6 +11,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.114] — 2026-07-30
+
+### Added
+- **Upgrade a target's test support from the dashboard.** Targets can be a
+  subset (network-only → +throughput/page-load → +stack comparison →
+  +apibench-per-language); the deploy wizard's existing-VM path now covers
+  **reference-API language servers** alongside proxy stacks, and the target
+  detail page shows a per-endpoint **Test support** line plus an "Upgrade test
+  support" action (operator-only, completed Linux targets).
+
+### Fixed
+- **Deploy-config `languages` was written but never read** — the provisioning
+  orchestrator has emitted `endpoints[].languages` since the matrix feature,
+  but `install.sh` ignored it: a go/python comparison cell silently got the
+  built-in (Rust) endpoint `/api` instead of its language's reference server,
+  so cross-language application benchmarks measured the wrong backend.
+  `install.sh --deploy` now installs each requested language's reference API
+  in application mode on port 8085 (networker-endpoint keeps 8080/8443) via
+  the orchestrator-proven `--benchmark-server` path (new `--benchmark-port`
+  flag), and points the nginx `/api` route at it — apibench measures the
+  LANGUAGE behind the proxy while throughput/page-load keep measuring
+  networker-endpoint. azure/aws/lan/local providers; GCP + Windows warn-skip.
+
+---
+
 ## [0.28.113] — 2026-07-30
 
 ### Changed

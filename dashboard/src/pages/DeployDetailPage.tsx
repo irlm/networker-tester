@@ -5,6 +5,7 @@ import { stripAnsi } from '../lib/ansi';
 import type { Deployment, DeploymentCostEstimate } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { DetailList } from '../components/common/DetailList';
+import { InfraDeployWizard, type InfraDeployWizardProps } from '../components/InfraDeployWizard';
 import { formatDuration } from '../lib/format';
 import { usePolling } from '../hooks/usePolling';
 import { useLiveStore } from '../stores/liveStore';
@@ -32,6 +33,7 @@ export function DeployDetailPage() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [versionInfo, setVersionInfo] = useState<{ latest: string | null; endpointVersion: string | null } | null>(null);
   const [costEstimate, setCostEstimate] = useState<DeploymentCostEstimate | null>(null);
+  const [upgradePrefill, setUpgradePrefill] = useState<InfraDeployWizardProps['prefillUpgrade'] | null>(null);
   const logContainerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const addToast = useToast();
@@ -282,7 +284,33 @@ export function DeployDetailPage() {
           existed as raw JSON inside the collapsed config block. */}
       {(deployment?.config?.endpoints?.length ?? 0) > 0 && (
         <div className="mb-6">
-          <p className="text-xs text-gray-400 tracking-wider font-medium mb-2">infrastructure</p>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs text-gray-400 tracking-wider font-medium">infrastructure</p>
+            {isOperator && deployment?.status === 'completed'
+              && (deployment?.endpoint_ips?.length ?? 0) > 0
+              && deployment?.config?.endpoints?.[0]?.os !== 'windows' && (
+              <button
+                onClick={() => {
+                  const ep = deployment?.config?.endpoints?.[0];
+                  const ip = deployment?.endpoint_ips?.[0];
+                  if (!ep || !ip) return;
+                  const p = (ep.provider || '').toLowerCase();
+                  setUpgradePrefill({
+                    cloud: p === 'aws' ? 'AWS' : p === 'gcp' ? 'GCP' : 'Azure',
+                    cloudAccountId: '',
+                    region: ep.region ?? '',
+                    os: ep.os === 'windows' ? 'windows' : 'linux',
+                    existingVmIp: ip,
+                    installedProxies: ep.http_stacks ?? [],
+                    installedLanguages: ep.languages ?? [],
+                  });
+                }}
+                className="text-xs text-cyan-400 hover:text-cyan-300"
+              >
+                + Upgrade test support
+              </button>
+            )}
+          </div>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {(deployment?.config?.endpoints ?? []).map((ep, i) => {
               const cost = costEstimate?.endpoints[i];
@@ -301,6 +329,19 @@ export function DeployDetailPage() {
                       ...(ep.http_stacks?.length
                         ? [{ label: 'Stacks', value: ep.http_stacks.join(', ') }]
                         : []),
+                      // What this target can honestly serve: base endpoint modes,
+                      // stack comparison when proxied, and WHOSE /api apibench
+                      // measures (a language server vs the built-in endpoint).
+                      {
+                        label: 'Test support',
+                        value: [
+                          'network · throughput · page-load',
+                          ep.http_stacks?.length ? 'stack comparison' : null,
+                          ep.languages?.length
+                            ? `apibench: ${ep.languages.join(', ')}`
+                            : 'apibench: built-in /api',
+                        ].filter(Boolean).join(' · '),
+                      },
                       ...(cost?.hourly_usd != null
                         ? [
                             { label: 'Hourly', value: `$${cost.hourly_usd.toFixed(3)}` },
@@ -406,6 +447,22 @@ export function DeployDetailPage() {
           {JSON.stringify(deployment?.config, null, 2)}
         </pre>
       </details>
+
+      {/* Upgrade test support — reuses the deploy wizard's existing-VM path;
+          the new deployment installs additional stacks/reference APIs over SSH. */}
+      {upgradePrefill && (
+        <InfraDeployWizard
+          projectId={projectId}
+          prefillUpgrade={upgradePrefill}
+          onClose={() => setUpgradePrefill(null)}
+          onCreated={(kindCreated, id) => {
+            setUpgradePrefill(null);
+            if (kindCreated === 'target') {
+              navigate(`/projects/${projectId}/deploy/${id}`);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -251,6 +251,7 @@ export function InfrastructurePage() {
       os: (ep.os === 'windows' ? 'windows' : 'linux'),
       existingVmIp: ip,
       installedProxies: ep.http_stacks ?? [],
+      installedLanguages: ep.languages ?? [],
     });
     setShowWizard(true);
   }, []);
