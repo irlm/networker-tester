@@ -31,6 +31,12 @@ export type TesterRow = {
   vm_size: string;
   requested_os?: string | null;
   requested_variant?: string | null;
+  /** Discovered OS facts, reported by the agent after provisioning. */
+  os_distro?: string | null;
+  os_version?: string | null;
+  os_variant?: string | null;
+  os_arch?: string | null;
+  os_kernel?: string | null;
   vm_name: string | null;
   public_ip: string | null;
   ssh_user: string;

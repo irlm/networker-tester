@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.113] — 2026-07-30
+
+### Changed
+- **Runner and target detail views consolidated around one identity core**
+  (cloud · region · VM size · OS · IP · created · cost), rendered by a shared
+  `DetailList` component so the two views can't drift apart.
+  - **Runner drawer now shows the OS** — the agent-reported distro/version/arch
+    (kernel on hover), falling back to the requested OS. The API returned all of
+    it; the UI dropped it.
+  - **Target (deployment) detail gains an Infrastructure section** — per
+    endpoint: cloud, region, VM size, OS, IP, HTTP stacks, and cost. Previously
+    this only existed as raw JSON inside the collapsed config block.
+  - **New `GET /deployments/{id}/cost_estimate`** — per-endpoint VM pricing via
+    the same `CostEstimation` helpers as the runner cost endpoint (extracted
+    shared class), so the two views can never disagree on a price. ssh/lan
+    targets price as null rather than a made-up number; deploy VMs have no
+    auto-shutdown, so monthly figures are always-on.
+  - Deliberately NOT surfaced after review: `vm_resource_id`,
+    `cloud_connection_id`, `cloud_account_id` (raw GUIDs/resource paths — noise,
+    not signal for operators).
+
+---
+
 ## [0.28.112] — 2026-07-29
 
 ### Fixed

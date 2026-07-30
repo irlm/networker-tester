@@ -2,8 +2,9 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { useParams, Link, useNavigate } from 'react-router';
 import { api } from '../api/client';
 import { stripAnsi } from '../lib/ansi';
-import type { Deployment } from '../api/types';
+import type { Deployment, DeploymentCostEstimate } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
+import { DetailList } from '../components/common/DetailList';
 import { formatDuration } from '../lib/format';
 import { usePolling } from '../hooks/usePolling';
 import { useLiveStore } from '../stores/liveStore';
@@ -30,6 +31,7 @@ export function DeployDetailPage() {
   const [healthLoading, setHealthLoading] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [versionInfo, setVersionInfo] = useState<{ latest: string | null; endpointVersion: string | null } | null>(null);
+  const [costEstimate, setCostEstimate] = useState<DeploymentCostEstimate | null>(null);
   const logContainerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const addToast = useToast();
@@ -74,6 +76,17 @@ export function DeployDetailPage() {
       loadDeployment();
     }
   }, [sseComplete, loadDeployment]);
+
+  // Cost estimate — static per config, so fetch once per deployment. A miss
+  // (older server, transient error) just hides the cost rows.
+  useEffect(() => {
+    if (!deploymentId) return;
+    let cancelled = false;
+    api.getDeploymentCostEstimate(projectId, deploymentId)
+      .then((ce) => { if (!cancelled) setCostEstimate(ce); })
+      .catch(() => { /* cost is optional decoration on this page */ });
+    return () => { cancelled = true; };
+  }, [projectId, deploymentId]);
 
   // Auto-scroll log container when new lines arrive or DB log loads
   useEffect(() => {
@@ -263,6 +276,54 @@ export function DeployDetailPage() {
           </span>
         </span>
       </div>
+
+      {/* Infrastructure — same identity core as the runner drawer:
+          cloud · region · VM size · OS · IP · cost. Previously this only
+          existed as raw JSON inside the collapsed config block. */}
+      {(deployment?.config?.endpoints?.length ?? 0) > 0 && (
+        <div className="mb-6">
+          <p className="text-xs text-gray-400 tracking-wider font-medium mb-2">infrastructure</p>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {(deployment?.config?.endpoints ?? []).map((ep, i) => {
+              const cost = costEstimate?.endpoints[i];
+              return (
+                <div key={i} className="border border-gray-800 rounded-lg p-3">
+                  <p className="text-xs text-gray-200 font-medium mb-2">
+                    {ep.label ?? cost?.label ?? `endpoint ${i + 1}`}
+                  </p>
+                  <DetailList
+                    rows={[
+                      { label: 'Cloud', value: ep.provider },
+                      { label: 'Region', value: ep.region ?? ep.zone },
+                      { label: 'VM size', value: ep.vm_size ?? ep.instance_type ?? ep.machine_type },
+                      { label: 'OS', value: ep.os },
+                      { label: 'IP', value: ep.ip ?? deployment?.endpoint_ips?.[i] },
+                      ...(ep.http_stacks?.length
+                        ? [{ label: 'Stacks', value: ep.http_stacks.join(', ') }]
+                        : []),
+                      ...(cost?.hourly_usd != null
+                        ? [
+                            { label: 'Hourly', value: `$${cost.hourly_usd.toFixed(3)}` },
+                            { label: 'Monthly (always-on)', value: `$${(cost.monthly_usd ?? 0).toFixed(2)}`, accent: true },
+                          ]
+                        : []),
+                    ]}
+                  />
+                </div>
+              );
+            })}
+          </div>
+          {costEstimate && costEstimate.priced_endpoint_count > 1 && (
+            <p className="text-xs text-gray-400 mt-2">
+              Total{' '}
+              <span className="text-cyan-400 font-mono">
+                ${costEstimate.total_hourly_usd.toFixed(3)}/h · ${costEstimate.total_monthly_usd.toFixed(2)}/mo
+              </span>{' '}
+              across {costEstimate.priced_endpoint_count} VMs (always-on)
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Endpoint Health */}
       {endpointHealth.length > 0 && (
