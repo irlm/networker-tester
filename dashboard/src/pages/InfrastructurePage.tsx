@@ -9,6 +9,7 @@ import { PageHeader } from '../components/common/PageHeader';
 import { TesterRegionGroup } from '../components/TesterRegionGroup';
 import { CreateTesterModal } from '../components/CreateTesterModal';
 import { TesterDetailDrawer } from '../components/TesterDetailDrawer';
+import { TargetDetailDrawer } from '../components/targets/TargetDetailDrawer';
 import { InfraDeployWizard } from '../components/InfraDeployWizard';
 import type { DeployWizardPrefill } from '../components/DeployWizard';
 import { usePolling } from '../hooks/usePolling';
@@ -170,6 +171,7 @@ export function InfrastructurePage() {
   const RUNNER_PAGE_SIZE = 25;
   const [testersLoading, setTestersLoading] = useState(true);
   const [selectedTester, setSelectedTester] = useState<TesterRow | null>(null);
+  const [selectedDeployment, setSelectedDeployment] = useState<Deployment | null>(null);
   const [showCreateTester, setShowCreateTester] = useState(false);
   const [createDefaults, setCreateDefaults] = useState<CreateDefaults | null>(null);
   const [refreshingVersion, setRefreshingVersion] = useState(false);
@@ -720,9 +722,15 @@ export function InfrastructurePage() {
                 {completedDeps.map(d => (
                   <tr key={d.deployment_id} className="border-b border-gray-800/30 hover:bg-gray-800/10">
                     <td className="px-4 py-3">
-                      <Link to={`/projects/${projectId}/deploy/${d.deployment_id}`} className="text-cyan-400 hover:text-cyan-300">
+                      {/* Select-to-inspect, same as runners: the name opens the
+                          drawer; the full page (log/config) is linked inside. */}
+                      <button
+                        type="button"
+                        onClick={() => setSelectedDeployment(d)}
+                        className="text-cyan-400 hover:text-cyan-300 text-left"
+                      >
                         {d.name}
-                      </Link>
+                      </button>
                     </td>
                     <td className="px-4 py-3 text-gray-400 text-xs">{d.provider_summary || '\u2014'}</td>
                     <td className="px-4 py-3"><StatusBadge status={d.status} /></td>
@@ -845,6 +853,19 @@ export function InfrastructurePage() {
           onClose={() => setSelectedTester(null)}
           onChanged={() => {
             void loadAll();
+          }}
+        />
+      )}
+
+      {selectedDeployment && (
+        <TargetDetailDrawer
+          projectId={projectId}
+          deployment={selectedDeployment}
+          isOperator={isOperator}
+          onClose={() => setSelectedDeployment(null)}
+          onUpgrade={(d) => {
+            setSelectedDeployment(null);
+            openAddStack(d);
           }}
         />
       )}

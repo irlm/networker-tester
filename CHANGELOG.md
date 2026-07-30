@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.116] — 2026-07-30
+
+### Fixed
+- **Target infrastructure showed "—" for Region / VM size / OS on cloud
+  deploys.** Cloud configs nest those facts in the per-provider block
+  (`endpoints[].azure.region` …), not at the endpoint top level; both the
+  detail card and the cost endpoint read only top level. Both now resolve
+  top-level-then-provider-block (shared `endpointField` on the frontend,
+  `ParseEndpointSpecs` on the server — pinned by tests copied from the exact
+  prod config that rendered em dashes). Cost estimates now also price cloud
+  deploys, and a VM name row was added.
+
+### Changed
+- **Targets now open a detail drawer on select, matching runners.** Clicking a
+  target on Infrastructure slides over the same identity core (cloud · region
+  · VM size · OS · VM name · IP · stacks · test support · cost) via a shared
+  endpoint card; the full page (deploy log + raw config) is linked from the
+  drawer, along with ↗ Runs and Upgrade test support.
+
+---
+
 ## [0.28.115] — 2026-07-30
 
 ### Fixed

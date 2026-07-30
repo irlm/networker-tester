@@ -91,6 +91,7 @@ public static class DeploymentsEndpoints
                     region = s.Region,
                     vm_size = s.VmSize,
                     os = s.Os,
+                    vm_name = s.VmName,
                     hourly_usd = hourly,
                     monthly_usd = hourly.HasValue ? 24.0 * 30.0 * hourly.Value : (double?)null,
                 });
@@ -161,8 +162,11 @@ public static class DeploymentsEndpoints
     /// <summary>One deployment-config endpoint resolved for costing/identity.
     /// The VM size field name is provider-specific in the config JSON:
     /// azure <c>vm_size</c>, aws <c>instance_type</c>, gcp <c>machine_type</c> —
-    /// the first present wins. Region falls back to <c>zone</c> (gcp).</summary>
-    internal sealed record EndpointSpec(string Label, string Provider, string? Region, string? VmSize, string? Os);
+    /// the first present wins. Region falls back to <c>zone</c> (gcp).
+    /// Cloud deploys nest these inside the per-provider block
+    /// (<c>ep.azure.region</c> …), not at the endpoint top level — top level is
+    /// checked first, then the provider block.</summary>
+    internal sealed record EndpointSpec(string Label, string Provider, string? Region, string? VmSize, string? Os, string? VmName);
 
     /// <summary>Parse a deployment's raw config JSON into per-endpoint specs.
     /// Tolerant by design: bad JSON, a missing <c>endpoints</c> array, or
@@ -199,15 +203,30 @@ public static class DeploymentsEndpoints
                 continue;
             }
 
-            string? Str(string key) =>
+            string? Top(string key) =>
                 ep[key] is JsonValue v && v.TryGetValue<string>(out var s) && !string.IsNullOrWhiteSpace(s) ? s : null;
 
+            var provider = Top("provider") ?? "unknown";
+
+            // Cloud configs nest region/vm_size/os inside the provider block
+            // (mirrors BuildProviderSummary's "try both" rule).
+            var block = ep[provider] as JsonObject;
+            string? Nested(string key) =>
+                block?[key] is JsonValue v && v.TryGetValue<string>(out var s) && !string.IsNullOrWhiteSpace(s) ? s : null;
+            string? Field(params string[] keys)
+            {
+                foreach (var k in keys) { if (Top(k) is { } t) return t; }
+                foreach (var k in keys) { if (Nested(k) is { } n) return n; }
+                return null;
+            }
+
             list.Add(new EndpointSpec(
-                Label: Str("label") ?? $"endpoint {i}",
-                Provider: Str("provider") ?? "unknown",
-                Region: Str("region") ?? Str("zone"),
-                VmSize: Str("vm_size") ?? Str("instance_type") ?? Str("machine_type"),
-                Os: Str("os")));
+                Label: Top("label") ?? $"endpoint {i}",
+                Provider: provider,
+                Region: Field("region", "zone"),
+                VmSize: Field("vm_size", "instance_type", "machine_type"),
+                Os: Field("os"),
+                VmName: Field("vm_name", "instance_name")));
         }
 
         return list;

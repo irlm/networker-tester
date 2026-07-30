@@ -4,7 +4,7 @@ import { api } from '../api/client';
 import { stripAnsi } from '../lib/ansi';
 import type { Deployment, DeploymentCostEstimate } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
-import { DetailList } from '../components/common/DetailList';
+import { TargetEndpointCard } from '../components/targets/TargetEndpointCard';
 import { InfraDeployWizard, type InfraDeployWizardProps } from '../components/InfraDeployWizard';
 import { formatDuration } from '../lib/format';
 import { usePolling } from '../hooks/usePolling';
@@ -312,47 +312,15 @@ export function DeployDetailPage() {
             )}
           </div>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {(deployment?.config?.endpoints ?? []).map((ep, i) => {
-              const cost = costEstimate?.endpoints[i];
-              return (
-                <div key={i} className="border border-gray-800 rounded-lg p-3">
-                  <p className="text-xs text-gray-200 font-medium mb-2">
-                    {ep.label ?? cost?.label ?? `endpoint ${i + 1}`}
-                  </p>
-                  <DetailList
-                    rows={[
-                      { label: 'Cloud', value: ep.provider },
-                      { label: 'Region', value: ep.region ?? ep.zone },
-                      { label: 'VM size', value: ep.vm_size ?? ep.instance_type ?? ep.machine_type },
-                      { label: 'OS', value: ep.os },
-                      { label: 'IP', value: ep.ip ?? deployment?.endpoint_ips?.[i] },
-                      ...(ep.http_stacks?.length
-                        ? [{ label: 'Stacks', value: ep.http_stacks.join(', ') }]
-                        : []),
-                      // What this target can honestly serve: base endpoint modes,
-                      // stack comparison when proxied, and WHOSE /api apibench
-                      // measures (a language server vs the built-in endpoint).
-                      {
-                        label: 'Test support',
-                        value: [
-                          'network · throughput · page-load',
-                          ep.http_stacks?.length ? 'stack comparison' : null,
-                          ep.languages?.length
-                            ? `apibench: ${ep.languages.join(', ')}`
-                            : 'apibench: built-in /api',
-                        ].filter(Boolean).join(' · '),
-                      },
-                      ...(cost?.hourly_usd != null
-                        ? [
-                            { label: 'Hourly', value: `$${cost.hourly_usd.toFixed(3)}` },
-                            { label: 'Monthly (always-on)', value: `$${(cost.monthly_usd ?? 0).toFixed(2)}`, accent: true },
-                          ]
-                        : []),
-                    ]}
-                  />
-                </div>
-              );
-            })}
+            {(deployment?.config?.endpoints ?? []).map((ep, i) => (
+              <TargetEndpointCard
+                key={i}
+                ep={ep}
+                index={i}
+                ip={deployment?.endpoint_ips?.[i]}
+                cost={costEstimate?.endpoints[i]}
+              />
+            ))}
           </div>
           {costEstimate && costEstimate.priced_endpoint_count > 1 && (
             <p className="text-xs text-gray-400 mt-2">
