@@ -294,6 +294,9 @@ Benchmark server (used by orchestrator):
                            Supported: rust, nginx, go, nodejs, python, java, cpp, ruby, php,
                            csharp-net8, csharp-net8-aot, csharp-net9, csharp-net10, csharp-net48.
                            Non-interactive. Installs runtime, clones reference API, starts server.
+  --benchmark-port N       Override the benchmark server port (implies app mode, no TLS).
+                           Used by the deploy path to run a language server on 8085
+                           alongside networker-endpoint; the proxy's /api routes to it.
 
   -h, --help               Show this help message
 
@@ -324,7 +327,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.113"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.114"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -438,6 +441,9 @@ CONFIG_FILE_PATH=""
 BENCHMARK_SERVER_LANG=""        # language to deploy as benchmark server (--benchmark-server)
 BENCHMARK_PROXY=""              # reverse proxy to deploy (--benchmark-proxy)
 BENCHMARK_PROXY_SWAP=""         # swap to this proxy (--benchmark-proxy-swap)
+BENCHMARK_PORT_OVERRIDE=""      # explicit bench port (--benchmark-port) — set when a
+                                # language server must coexist with networker-endpoint
+                                # (endpoint owns 8080/8443; language server takes 8085)
 
 # ── Deploy-config state ──────────────────────────────────────────────────
 DEPLOY_CONFIG_PATH=""           # path to deploy.json (--deploy flag)
@@ -475,6 +481,7 @@ DEPLOY_EP_PROVIDERS=()
 DEPLOY_EP_LABELS=()
 DEPLOY_EP_IPS=()               # populated after deploy (result IPs)
 DEPLOY_EP_FQDNS=()             # populated after deploy (cloud DNS hostnames)
+DEPLOY_EP_LANGUAGES=()         # comma-joined reference-API languages per endpoint
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 parse_args() {
@@ -574,6 +581,8 @@ parse_args() {
             --benchmark-proxy-swap)
                 shift; BENCHMARK_PROXY_SWAP="${1:-}"
                 AUTO_YES=1 ;;
+            --benchmark-port)
+                shift; BENCHMARK_PORT_OVERRIDE="${1:-}" ;;
             # Deploy config
             --deploy)
                 shift; DEPLOY_CONFIG_PATH="${1:-}"
@@ -5523,6 +5532,119 @@ NGINX_SSH
     fi
 }
 
+# ── Reference-API language servers on a deployed endpoint ────────────────────
+# The deploy config's per-endpoint `languages` array requests reference-API
+# servers for apibench. Each installs in APPLICATION mode on port 8085
+# (networker-endpoint owns 8080/8443) by piping this installer over SSH with
+# --benchmark-server LANG --benchmark-port 8085, then the nginx /api route is
+# pointed at the language server: apibench measures the LANGUAGE behind the
+# proxy while throughput/pageload keep measuring networker-endpoint.
+BENCH_LANG_PORT=8085
+
+_remote_setup_languages() {
+    local ip="$1" ssh_user="$2" langs_csv="$3"
+    [[ -z "$langs_csv" ]] && return 0
+
+    # Resolve a script to pipe remotely: the on-disk file when invoked via
+    # --deploy (the dashboard path), else the pinned raw installer.
+    local self="${BASH_SOURCE[0]:-}"
+    local tmp_self=""
+    if [[ ! -r "$self" ]]; then
+        tmp_self="$(mktemp)"
+        if ! curl -fsSL "https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh" \
+                -o "$tmp_self" < /dev/null; then
+            rm -f "$tmp_self"
+            print_warn "Could not fetch installer for remote language setup — skipping languages: $langs_csv"
+            return 1
+        fi
+        self="$tmp_self"
+    fi
+
+    local lang installed_any=0
+    IFS=',' read -ra _rl_langs <<< "$langs_csv"
+    for lang in "${_rl_langs[@]}"; do
+        [[ -z "$lang" ]] && continue
+        if [[ "$lang" == "nginx" ]]; then
+            print_warn "language 'nginx' is a static-stack reference — not applicable behind a proxy endpoint; skipping"
+            continue
+        fi
+        next_step "Install $lang reference API on ${ip} (port ${BENCH_LANG_PORT}, app mode)"
+        # shellcheck disable=SC2029
+        if ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 "${ssh_user}@${ip}" \
+            "export DEBIAN_FRONTEND=noninteractive && sudo -E bash -s -- --benchmark-server $lang --benchmark-port ${BENCH_LANG_PORT}" \
+            < "$self"; then
+            print_ok "$lang reference API running on ${ip}:${BENCH_LANG_PORT}"
+            installed_any=1
+        else
+            print_warn "$lang reference API install failed on ${ip} — apibench against this target will not measure $lang"
+        fi
+    done
+    [[ -n "$tmp_self" ]] && rm -f "$tmp_self"
+
+    [[ "$installed_any" -eq 1 ]] && _remote_reroute_api_to_lang "$ip" "$ssh_user"
+    return 0
+}
+
+# Point the networker nginx /api route at the language server (port 8085) so
+# apibench traffic reaches the reference API instead of networker-endpoint's
+# built-in /api implementation. A `location ^~ /api` prefix match beats the
+# throughput regex location, so download/upload/info/health keep going to the
+# endpoint. Idempotent; reloads nginx only on change.
+_remote_reroute_api_to_lang() {
+    local ip="$1" ssh_user="$2"
+    ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 "${ssh_user}@${ip}" bash -s <<'REROUTE_SSH'
+set -e
+conf=/etc/nginx/conf.d/networker.conf
+if [ ! -f "$conf" ]; then
+    echo ">> no networker nginx config — /api stays direct (language server reachable on :8085)"
+    exit 0
+fi
+if grep -q 'location \^~ /api' "$conf"; then
+    echo ">> /api already routed to the language server"
+    exit 0
+fi
+sudo sed -i 's#^    location ~ \^/(download|upload|info|api|health) {.*#    location ^~ /api { proxy_pass http://127.0.0.1:8085; proxy_set_header Host $host; }\n&#' "$conf"
+sudo nginx -t && sudo systemctl reload nginx
+echo ">> /api now routed to the language server on 8085"
+REROUTE_SSH
+}
+
+# Local-provider variant: run deploy_benchmark_server directly, then apply the
+# same /api reroute to the local nginx config.
+_local_setup_languages() {
+    local langs_csv="$1"
+    [[ -z "$langs_csv" ]] && return 0
+
+    local lang installed_any=0
+    local saved_proxy="$BENCHMARK_PROXY" saved_port="$BENCHMARK_PORT_OVERRIDE"
+    IFS=',' read -ra _ll_langs <<< "$langs_csv"
+    for lang in "${_ll_langs[@]}"; do
+        [[ -z "$lang" ]] && continue
+        if [[ "$lang" == "nginx" ]]; then
+            print_warn "language 'nginx' is a static-stack reference — not applicable behind a proxy endpoint; skipping"
+            continue
+        fi
+        next_step "Install $lang reference API locally (port ${BENCH_LANG_PORT}, app mode)"
+        BENCHMARK_PROXY=""
+        BENCHMARK_PORT_OVERRIDE="$BENCH_LANG_PORT"
+        if deploy_benchmark_server "$lang"; then
+            installed_any=1
+        else
+            print_warn "$lang reference API install failed — apibench against this target will not measure $lang"
+        fi
+    done
+    BENCHMARK_PROXY="$saved_proxy"
+    BENCHMARK_PORT_OVERRIDE="$saved_port"
+
+    if [[ "$installed_any" -eq 1 && -f /etc/nginx/conf.d/networker.conf ]] \
+        && ! grep -q 'location \^~ /api' /etc/nginx/conf.d/networker.conf; then
+        sudo sed -i 's#^    location ~ \^/(download|upload|info|api|health) {.*#    location ^~ /api { proxy_pass http://127.0.0.1:8085; proxy_set_header Host $host; }\n&#' /etc/nginx/conf.d/networker.conf
+        sudo nginx -t && { sudo systemctl reload nginx 2>/dev/null || sudo nginx -s reload; }
+        print_ok "/api now routed to the language server on ${BENCH_LANG_PORT}"
+    fi
+    return 0
+}
+
 # Set up IIS on an Azure Windows VM via az vm run-command.
 # Installs IIS + URL Rewrite + ARR, enables HTTP/3, reboots if needed,
 # then waits for the VM to come back and verifies IIS is serving.
@@ -8885,6 +9007,25 @@ _deploy_validate_config() {
                         fi
                     done
                 fi
+
+                # Validate languages per endpoint (reference-API servers for
+                # apibench; must match deploy_benchmark_server's case arms)
+                local langs_count; langs_count="$(jq ".endpoints[$i].languages | length // 0" "$cfg" 2>/dev/null)"
+                if [[ "${langs_count:-0}" -gt 0 ]]; then
+                    local valid_langs="rust nginx go nodejs python java cpp ruby php csharp-net8 csharp-net8-aot csharp-net9 csharp-net10 csharp-net48"
+                    local l
+                    for l in $(seq 0 $((langs_count - 1))); do
+                        local lname; lname="$(jq -r ".endpoints[$i].languages[$l]" "$cfg")"
+                        if ! echo "$valid_langs" | grep -qw "$lname"; then
+                            print_err "endpoints[$i].languages[$l]: unknown language '$lname' (valid: $valid_langs)"
+                            errors=$((errors + 1))
+                        fi
+                    done
+                    if [[ "$ep_os" == "windows" ]]; then
+                        print_err "endpoints[$i]: reference-API languages require a Linux endpoint (os is 'windows')"
+                        errors=$((errors + 1))
+                    fi
+                fi
             fi
         done
     fi
@@ -9120,9 +9261,11 @@ _deploy_parse_config() {
         local ep_prov; ep_prov="$(jq -r ".endpoints[$i].provider" "$cfg")"
         local ep_label; ep_label="$(jq -r ".endpoints[$i].label // \"endpoint-$((i+1))\"" "$cfg")"
         local ep_stacks; ep_stacks="$(jq -r '(.endpoints['"$i"'].http_stacks // []) | join(",")' "$cfg")"
+        local ep_langs; ep_langs="$(jq -r '(.endpoints['"$i"'].languages // []) | join(",")' "$cfg")"
         DEPLOY_EP_PROVIDERS+=("$ep_prov")
         DEPLOY_EP_LABELS+=("$ep_label")
         DEPLOY_EP_HTTP_STACKS+=("$ep_stacks")
+        DEPLOY_EP_LANGUAGES+=("$ep_langs")
         DEPLOY_EP_IPS+=("")  # placeholder, filled after deploy
     done
 
@@ -9979,6 +10122,15 @@ deploy_from_config() {
                         esac
                     done
                 fi
+                # Reference-API language servers (apibench measures these)
+                local ep_langs="${DEPLOY_EP_LANGUAGES[$i]:-}"
+                if [[ -n "$ep_langs" ]]; then
+                    if [[ "$SYS_OS" == "Linux" ]]; then
+                        _local_setup_languages "$ep_langs"
+                    else
+                        print_warn "Skipping language servers ($ep_langs): only supported on Linux (detected $SYS_OS)"
+                    fi
+                fi
                 DEPLOY_EP_IPS[$i]="127.0.0.1"
                 ;;
             lan)
@@ -10023,6 +10175,15 @@ deploy_from_config() {
                         esac
                     done
                 fi
+                # Reference-API language servers (apibench measures these)
+                local ep_langs="${DEPLOY_EP_LANGUAGES[$i]:-}"
+                if [[ -n "$ep_langs" ]]; then
+                    if [[ "$os" != "windows" ]]; then
+                        _remote_setup_languages "$LAN_ENDPOINT_IP" "${LAN_ENDPOINT_USER:-$(whoami)}" "$ep_langs"
+                    else
+                        print_warn "Skipping language servers ($ep_langs) on $label: only supported on Linux"
+                    fi
+                fi
                 DEPLOY_EP_IPS[$i]="$LAN_ENDPOINT_IP"
                 ;;
             azure)
@@ -10064,6 +10225,15 @@ deploy_from_config() {
                         esac
                     done
                 fi
+                # Reference-API language servers (apibench measures these)
+                local ep_langs="${DEPLOY_EP_LANGUAGES[$i]:-}"
+                if [[ -n "$ep_langs" ]]; then
+                    if [[ "$AZURE_ENDPOINT_OS" != "windows" ]]; then
+                        _remote_setup_languages "$AZURE_ENDPOINT_IP" "azureuser" "$ep_langs"
+                    else
+                        print_warn "Skipping language servers ($ep_langs) on Azure Windows: only supported on Linux"
+                    fi
+                fi
                 ;;
             aws)
                 step_aws_deploy_endpoint
@@ -10095,6 +10265,15 @@ deploy_from_config() {
                         esac
                     done
                 fi
+                # Reference-API language servers (apibench measures these)
+                local ep_langs="${DEPLOY_EP_LANGUAGES[$i]:-}"
+                if [[ -n "$ep_langs" ]]; then
+                    if [[ "${AWS_ENDPOINT_OS:-linux}" != "windows" ]]; then
+                        _remote_setup_languages "$AWS_ENDPOINT_IP" "ubuntu" "$ep_langs"
+                    else
+                        print_warn "Skipping language servers ($ep_langs) on AWS Windows: only supported on Linux"
+                    fi
+                fi
                 ;;
             gcp)
                 step_gcp_deploy_endpoint
@@ -10125,6 +10304,12 @@ deploy_from_config() {
                                 ;;
                         esac
                     done
+                fi
+                # GCP uses gcloud-ssh helpers, not raw ssh — language install
+                # needs its own helper there (planned follow-up).
+                local ep_langs="${DEPLOY_EP_LANGUAGES[$i]:-}"
+                if [[ -n "$ep_langs" ]]; then
+                    print_warn "Language servers ($ep_langs) on GCP endpoints are not yet supported — apibench will measure the built-in endpoint /api"
                 fi
                 ;;
         esac
@@ -10549,6 +10734,18 @@ deploy_benchmark_server() {
         echo ">> Deploying benchmark server: $lang (application mode: localhost:$BENCH_PORT, no TLS)"
     else
         echo ">> Deploying benchmark server: $lang (full-stack mode: port $BENCH_PORT, TLS)"
+    fi
+    # Explicit port override (--benchmark-port): used when the language server
+    # must coexist with networker-endpoint on the same VM (endpoint owns
+    # 8080/8443, so language servers run on 8085 behind the proxy's /api
+    # route). Implies application mode — plain HTTP, TLS terminates at the
+    # already-installed proxy; deliberately does NOT trigger the
+    # --benchmark-proxy deploy path, which would overwrite the networker
+    # proxy config.
+    if [[ -n "$BENCHMARK_PORT_OVERRIDE" ]]; then
+        BENCH_PORT="$BENCHMARK_PORT_OVERRIDE"
+        BENCH_USE_TLS=0
+        echo ">> Bench port overridden: $BENCH_PORT (application mode, no TLS)"
     fi
     export BENCH_PORT BENCH_USE_TLS
     export BENCH_CERT_DIR="$BENCH_DIR"

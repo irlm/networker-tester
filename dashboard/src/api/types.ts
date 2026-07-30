@@ -607,6 +607,8 @@ export interface DeployEndpoint {
   ssh_user?: string;
   ssh_port?: number;
   http_stacks?: string[];
+  /** Reference-API languages installed on the target (apibench measures these). */
+  languages?: string[];
 }
 
 /** GET /deployments/{id}/cost_estimate — priced by the same CostEstimation

@@ -24,6 +24,8 @@ export interface DeployWizardPrefill {
   existingVmIp: string;
   /** Already-installed stacks — pre-selected so the user can see what's there. */
   installedProxies: string[];
+  /** Reference-API languages already on the target (apibench measures these). */
+  installedLanguages?: string[];
 }
 
 interface DeployWizardProps {
