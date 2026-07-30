@@ -7,6 +7,7 @@ import {
 import { useTesterSubscription } from '../hooks/useTesterSubscription';
 import { useProjectStore } from '../stores/projectStore';
 import { StatusBadge } from './common/StatusBadge';
+import { DetailList } from './common/DetailList';
 import { RotateKeyDialog } from './RotateKeyDialog';
 
 interface TesterDetailDrawerProps {
@@ -305,24 +306,29 @@ export function TesterDetailDrawer({
           {/* ── Identity ───────────────────────────────────────────────── */}
           <section>
             <h4 className="text-xs uppercase tracking-wide text-gray-400 mb-2">Identity</h4>
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-              <dt className="text-gray-400">Cloud</dt>
-              <dd className="text-gray-300 font-mono">{tester.cloud}</dd>
-              <dt className="text-gray-400">Region</dt>
-              <dd className="text-gray-300 font-mono">{tester.region}</dd>
-              <dt className="text-gray-400">VM size</dt>
-              <dd className="text-gray-300 font-mono">{tester.vm_size}</dd>
-              <dt className="text-gray-400">VM name</dt>
-              <dd className="text-gray-300 font-mono">{tester.vm_name ?? '—'}</dd>
-              <dt className="text-gray-400">Public IP</dt>
-              <dd className="text-gray-300 font-mono">{tester.public_ip ?? '—'}</dd>
-              <dt className="text-gray-400">SSH user</dt>
-              <dd className="text-gray-300 font-mono">{tester.ssh_user}</dd>
-              <dt className="text-gray-400">Created by</dt>
-              <dd className="text-gray-300 font-mono">{tester.created_by}</dd>
-              <dt className="text-gray-400">Created at</dt>
-              <dd className="text-gray-300 font-mono">{formatDate(tester.created_at)}</dd>
-            </dl>
+            <DetailList
+              rows={[
+                { label: 'Cloud', value: tester.cloud },
+                { label: 'Region', value: tester.region },
+                { label: 'VM size', value: tester.vm_size },
+                // Discovered OS facts win (agent-reported post-provision);
+                // fall back to what was requested at creation.
+                {
+                  label: 'OS',
+                  value: tester.os_distro
+                    ? `${`${tester.os_distro} ${tester.os_version ?? ''}`.trim()}${tester.os_arch ? ` (${tester.os_arch})` : ''}`
+                    : tester.requested_os
+                      ? `${tester.requested_os}${tester.requested_variant ? ` · ${tester.requested_variant}` : ''} (requested)`
+                      : null,
+                  title: tester.os_kernel ? `kernel ${tester.os_kernel}` : undefined,
+                },
+                { label: 'VM name', value: tester.vm_name },
+                { label: 'Public IP', value: tester.public_ip },
+                { label: 'SSH user', value: tester.ssh_user },
+                { label: 'Created by', value: tester.created_by },
+                { label: 'Created at', value: formatDate(tester.created_at) },
+              ]}
+            />
           </section>
 
           {/* ── Version ────────────────────────────────────────────────── */}
@@ -370,20 +376,13 @@ export function TesterDetailDrawer({
               <p className="text-xs text-gray-400">Loading…</p>
             )}
             {costEstimate && (
-              <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-                <dt className="text-gray-400">Hourly</dt>
-                <dd className="text-gray-300 font-mono">
-                  ${costEstimate.hourly_usd.toFixed(3)}
-                </dd>
-                <dt className="text-gray-400">Monthly (always-on)</dt>
-                <dd className="text-gray-300 font-mono">
-                  ${costEstimate.monthly_always_on_usd.toFixed(2)}
-                </dd>
-                <dt className="text-gray-400">Monthly (with schedule)</dt>
-                <dd className="text-cyan-400 font-mono">
-                  ${costEstimate.monthly_with_schedule_usd.toFixed(2)}
-                </dd>
-              </dl>
+              <DetailList
+                rows={[
+                  { label: 'Hourly', value: `$${costEstimate.hourly_usd.toFixed(3)}` },
+                  { label: 'Monthly (always-on)', value: `$${costEstimate.monthly_always_on_usd.toFixed(2)}` },
+                  { label: 'Monthly (with schedule)', value: `$${costEstimate.monthly_with_schedule_usd.toFixed(2)}`, accent: true },
+                ]}
+              />
             )}
           </section>
 

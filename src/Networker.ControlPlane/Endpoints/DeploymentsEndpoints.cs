@@ -51,6 +51,61 @@ public static class DeploymentsEndpoints
         })
         .RequireAuthorization(AuthPolicies.ProjectMember);
 
+        // GET /api/projects/{projectId}/deployments/{deploymentId}/cost_estimate
+        // Per-endpoint VM cost, priced by the same CostEstimation helpers the
+        // tester cost endpoint uses so the two views can never disagree.
+        // Deploy VMs have no auto-shutdown schedule → monthly is always-on.
+        // Endpoints whose config carries no VM size (ssh/lan targets) are
+        // listed with null cost rather than a made-up number.
+        app.MapGet("/api/projects/{projectId}/deployments/{deploymentId:guid}/cost_estimate", async (
+            string projectId, Guid deploymentId, NetworkerDbContext db) =>
+        {
+            var d = await db.Deployments
+                .AsNoTracking()
+                .Where(x => x.ProjectId == projectId && x.DeploymentId == deploymentId)
+                .Select(x => new { x.Config })
+                .FirstOrDefaultAsync();
+
+            if (d is null)
+            {
+                return Results.NotFound();
+            }
+
+            var specs = ParseEndpointSpecs(d.Config);
+            var shaped = new List<object>(specs.Count);
+            var totalHourly = 0.0;
+            var priced = 0;
+            foreach (var s in specs)
+            {
+                double? hourly = null;
+                if (s.VmSize is not null)
+                {
+                    hourly = await CostEstimation.HourlyUsdAsync(db, s.Provider, s.VmSize, s.Region);
+                    totalHourly += hourly.Value;
+                    priced++;
+                }
+                shaped.Add(new
+                {
+                    label = s.Label,
+                    provider = s.Provider,
+                    region = s.Region,
+                    vm_size = s.VmSize,
+                    os = s.Os,
+                    hourly_usd = hourly,
+                    monthly_usd = hourly.HasValue ? 24.0 * 30.0 * hourly.Value : (double?)null,
+                });
+            }
+
+            return Results.Ok(new
+            {
+                endpoints = shaped,
+                priced_endpoint_count = priced,
+                total_hourly_usd = totalHourly,
+                total_monthly_usd = 24.0 * 30.0 * totalHourly,
+            });
+        })
+        .RequireAuthorization(AuthPolicies.ProjectMember);
+
         // GET /api/projects/{projectId}/cloud/status — aggregate cloud infra
         // status. Mirrors api/cloud.rs: reads cloud_account rows for the
         // project, grouped by provider. Never exposes credentials. SSH/LAN is
@@ -102,6 +157,61 @@ public static class DeploymentsEndpoints
 
     private static object Unavailable() =>
         new { available = false, authenticated = false, account = (string?)null };
+
+    /// <summary>One deployment-config endpoint resolved for costing/identity.
+    /// The VM size field name is provider-specific in the config JSON:
+    /// azure <c>vm_size</c>, aws <c>instance_type</c>, gcp <c>machine_type</c> —
+    /// the first present wins. Region falls back to <c>zone</c> (gcp).</summary>
+    internal sealed record EndpointSpec(string Label, string Provider, string? Region, string? VmSize, string? Os);
+
+    /// <summary>Parse a deployment's raw config JSON into per-endpoint specs.
+    /// Tolerant by design: bad JSON, a missing <c>endpoints</c> array, or
+    /// non-object entries yield an empty/partial list, never a throw.</summary>
+    internal static List<EndpointSpec> ParseEndpointSpecs(string? rawConfig)
+    {
+        var list = new List<EndpointSpec>();
+        if (string.IsNullOrWhiteSpace(rawConfig))
+        {
+            return list;
+        }
+
+        JsonNode? root;
+        try
+        {
+            root = JsonNode.Parse(rawConfig);
+        }
+        catch (JsonException)
+        {
+            return list;
+        }
+
+        if (root?["endpoints"] is not JsonArray endpoints)
+        {
+            return list;
+        }
+
+        var i = 0;
+        foreach (var node in endpoints)
+        {
+            i++;
+            if (node is not JsonObject ep)
+            {
+                continue;
+            }
+
+            string? Str(string key) =>
+                ep[key] is JsonValue v && v.TryGetValue<string>(out var s) && !string.IsNullOrWhiteSpace(s) ? s : null;
+
+            list.Add(new EndpointSpec(
+                Label: Str("label") ?? $"endpoint {i}",
+                Provider: Str("provider") ?? "unknown",
+                Region: Str("region") ?? Str("zone"),
+                VmSize: Str("vm_size") ?? Str("instance_type") ?? Str("machine_type"),
+                Os: Str("os")));
+        }
+
+        return list;
+    }
 
     /// <summary>Shape a <see cref="Data.Entities.Deployment"/> to the snake_case
     /// DeploymentRow JSON contract, decoding the JSON-text columns (config,

@@ -609,6 +609,25 @@ export interface DeployEndpoint {
   http_stacks?: string[];
 }
 
+/** GET /deployments/{id}/cost_estimate — priced by the same CostEstimation
+ * helpers as the runner cost endpoint. Endpoints without a VM size
+ * (ssh/lan targets) carry null cost. Deploy VMs have no auto-shutdown →
+ * monthly figures are always-on. */
+export interface DeploymentCostEstimate {
+  endpoints: {
+    label: string;
+    provider: string;
+    region: string | null;
+    vm_size: string | null;
+    os: string | null;
+    hourly_usd: number | null;
+    monthly_usd: number | null;
+  }[];
+  priced_endpoint_count: number;
+  total_hourly_usd: number;
+  total_monthly_usd: number;
+}
+
 export interface ModeInfo {
   id: string;
   name: string;

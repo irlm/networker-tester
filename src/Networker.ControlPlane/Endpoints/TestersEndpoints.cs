@@ -183,8 +183,8 @@ public static class TestersEndpoints
             return ApiError.NotFound("Tester not found");
         }
 
-        var hourly = await HourlyUsdAsync(db, tester.Cloud, tester.VmSize, tester.Region);
-        var (alwaysOn, withSchedule) = CostEstimate(hourly, tester.AutoShutdownEnabled);
+        var hourly = await CostEstimation.HourlyUsdAsync(db, tester.Cloud, tester.VmSize, tester.Region);
+        var (alwaysOn, withSchedule) = CostEstimation.MonthlyEstimate(hourly, tester.AutoShutdownEnabled);
 
         return Results.Ok(new CostEstimateResponse(
             tester.VmSize,
@@ -320,58 +320,8 @@ public static class TestersEndpoints
     private static bool IsValidResourceType(string s) =>
         s is "tester" or "endpoint" or "benchmark";
 
-    // ── Cost helpers ─────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Resolve the hourly USD rate for a VM size. Prefers a matching
-    /// <c>cost_rate</c> row (cloud + vm_size, effective now, region-specific
-    /// beating region-agnostic); falls back to the Rust hardcoded Azure rates
-    /// when no row applies.
-    /// </summary>
-    private static async Task<double> HourlyUsdAsync(
-        NetworkerDbContext db, string cloud, string vmSize, string? region)
-    {
-        var now = DateTime.UtcNow;
-        var rate = await db.CostRates
-            .AsNoTracking()
-            .Where(r => r.Cloud == cloud
-                        && r.VmSize == vmSize
-                        && r.EffectiveFrom <= now
-                        && (r.EffectiveTo == null || r.EffectiveTo > now)
-                        && (r.Region == null || r.Region == region))
-            // Region-specific match wins over a region-agnostic one; newest
-            // effective_from breaks further ties.
-            .OrderByDescending(r => r.Region != null)
-            .ThenByDescending(r => r.EffectiveFrom)
-            .Select(r => (decimal?)r.RatePerHourUsd)
-            .FirstOrDefaultAsync();
-
-        return rate.HasValue ? (double)rate.Value : HardcodedHourlyUsd(vmSize);
-    }
-
-    /// <summary>
-    /// Hardcoded hourly USD lookup — mirrors the Rust <c>hourly_usd</c>.
-    /// Unknown sizes fall back to the Standard_D2s_v3 rate.
-    /// </summary>
-    private static double HardcodedHourlyUsd(string vmSize) => vmSize switch
-    {
-        "Standard_D2s_v3" => 0.096,
-        "Standard_D4s_v3" => 0.192,
-        "Standard_D8s_v3" => 0.384,
-        _ => 0.096,
-    };
-
-    /// <summary>
-    /// (always_on, with_schedule) monthly USD. Mirrors the Rust
-    /// <c>cost_estimate</c>: 24h×30d always-on, 15h×30d when auto-shutdown is
-    /// enabled (business-day approximation), else equal to always-on.
-    /// </summary>
-    private static (double AlwaysOn, double WithSchedule) CostEstimate(double hourly, bool autoShutdownEnabled)
-    {
-        var alwaysOn = 24.0 * 30.0 * hourly;
-        var withSchedule = autoShutdownEnabled ? 15.0 * 30.0 * hourly : alwaysOn;
-        return (alwaysOn, withSchedule);
-    }
+    // Cost helpers live in the shared CostEstimation class so the tester and
+    // deployment cost endpoints can never disagree on a price.
 
     /// <summary>
     /// Per-cloud region catalog — mirrors the Rust
