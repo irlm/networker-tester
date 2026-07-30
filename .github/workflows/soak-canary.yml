@@ -6,7 +6,11 @@ name: Prod run-execution canary
 # silently broken for weeks (E2E pass 2026-07-28: P0-1 runs `failed` ~10ms after
 # spawn; P0-2 attempts never persisted; P1-14 benchmarks never worked). This
 # canary provisions an ephemeral runner, drives a probe run, asserts it reached
-# `completed` with persisted + successful attempts, and tears the runner down.
+# `completed` with persisted + successful attempts, then (phase 2) provisions a
+# rust endpoint behind nginx and runs apibench THROUGH the proxy, asserting the
+# /api/* attempts return 2xx and zero proxy-404s (v0.28.112 shipped with /api
+# absent from every proxy stack's allowlist → 404 on all attempts, invisible to
+# a network probe). Both the runner and the endpoint are torn down after.
 #
 # A red run = the run-execution path regressed. Alerting mirrors the soak check
 # (a pinned issue, create-or-comment-or-close). Driven entirely through the
@@ -21,6 +25,10 @@ on:
     inputs:
       reuse_runner:
         description: 'Reuse an existing idle runner instead of provisioning (1/0)'
+        required: false
+        default: '1'
+      apibench:
+        description: 'Also run the proxy-fronted apibench phase (1/0)'
         required: false
         default: '1'
 
@@ -44,6 +52,7 @@ jobs:
         env:
           DASHBOARD_ADMIN_PASSWORD: ${{ secrets.DASHBOARD_ADMIN_PASSWORD }}
           CANARY_REUSE_RUNNER: ${{ github.event.inputs.reuse_runner || '1' }}
+          CANARY_APIBENCH: ${{ github.event.inputs.apibench || '1' }}
         run: bash scripts/soak-canary.sh
 
       # ── Failure alerting (mirrors the soak check's pinned-issue pattern) ──
@@ -64,10 +73,12 @@ jobs:
             echo "- Failing step(s): ${FAILED}"
             echo ""
             echo "This asserts what /health cannot: a real run reaching \`completed\` with"
-            echo "persisted + successful attempts. A failure means the run-execution path"
-            echo "regressed (P0-1 stderr-relay-fails-runs / P0-2 attempts-not-persisted /"
-            echo "dispatch / provisioning). See scripts/soak-canary.sh and"
-            echo "docs/analysis/e2e-pass-2026-07-28.md."
+            echo "persisted + successful attempts (phase 1), AND a proxy-fronted apibench"
+            echo "run whose /api/* attempts return 2xx with zero proxy-404s (phase 2). A"
+            echo "failure means the run-execution path regressed (P0-1 stderr-relay-fails-runs"
+            echo "/ P0-2 attempts-not-persisted / dispatch / provisioning) OR a proxy stack"
+            echo "stopped forwarding /api/* to the backend (v0.28.112 class). See"
+            echo "scripts/soak-canary.sh and docs/analysis/e2e-pass-2026-07-28.md."
           } > /tmp/canary-issue-body.md
           NUM=$(gh issue list --state open --json number,title \
             --jq "first(.[] | select(.title==\"${TITLE}\")).number // empty")
