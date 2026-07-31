@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.125] — 2026-07-31
+
+### Added
+- **Infrastructure advisor — right-sizing suggestions with real prices.** The
+  `/infra` route now returns each side's effective hourly price (DB
+  `cost_rates` → curated `cloud-costs.json`; never the hardcoded D2s_v3
+  fallback, which would fabricate advice economics) plus a same-cloud
+  alternative-size pool (catalog specs joined with prices). The envelope panel
+  derives at most one suggestion per side: `upsize` when a direction is
+  network-bound (cheapest size clearing 1.5× the current egress ceiling, with
+  the hourly delta — e.g. a capped B2s target reads "Standard_D2s_v3
+  (+$0.054/h) lifts the ceiling to ~1 Gbps"), `downsize` when every carried
+  direction runs under 40% of its cap (cheapest size still clearing measured
+  ×1.5, with the savings). Missing prices render "price unknown" — the advisor
+  never invents a number.
+
+---
+
 ## [0.28.124] — 2026-07-31
 
 ### Added

@@ -1,5 +1,6 @@
 import type { LiveAttempt, RunEnvelope, RunInfra, RunInfraSide } from '../api/types';
 import { assessRun, formatMbps, verdictLabel, type DirectionAssessment } from '../lib/infra';
+import { adviseRun } from '../lib/advisor';
 import { formatBytes } from '../lib/analysis';
 
 /**
@@ -26,6 +27,7 @@ export function InfraEnvelope({
   if (!infra || (!infra.runner && !infra.target)) return null;
 
   const assessments = assessRun(attempts, infra, envelope);
+  const suggestions = adviseRun(assessments, infra);
 
   const cores = envelope?.client_info?.cpu_cores;
   const peakLoad = Math.max(
@@ -57,6 +59,32 @@ export function InfraEnvelope({
               cores) while a direction sat at its egress cap — the network, not
               compute, is the binding constraint of this infrastructure.
             </p>
+          )}
+          {suggestions.length > 0 && (
+            <div className="pt-1 space-y-1">
+              {suggestions.map((s) => (
+                <div
+                  key={`${s.side}:${s.to}`}
+                  className="flex items-baseline gap-2 text-[11px] font-mono"
+                >
+                  <span
+                    className={`shrink-0 px-1.5 py-0.5 rounded-sm border text-[10px] ${
+                      s.kind === 'upsize'
+                        ? 'border-cyan-600/60 bg-cyan-900/30 text-cyan-300'
+                        : 'border-green-700/60 bg-green-900/20 text-green-300'
+                    }`}
+                  >
+                    {s.kind}
+                  </span>
+                  <span className="text-gray-400">{s.text}</span>
+                </div>
+              ))}
+              <p className="text-[10px] text-gray-600">
+                prices: db cost_rates → curated cloud-costs table (list,
+                on-demand) — deltas are hourly, verify in your billing before
+                acting.
+              </p>
+            </div>
           )}
           <p className="text-[10px] text-gray-600">
             expected = sending side&apos;s egress expectation per the VM-size

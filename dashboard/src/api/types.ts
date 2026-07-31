@@ -914,11 +914,26 @@ export interface VmNetSpec {
   accelerated_networking: boolean;
 }
 
+/** One same-cloud alternative size: specs joined with an effective hourly
+ * price (null = price unknown — DB cost_rates and the curated table both
+ * missed; the advisor must say so, never invent). */
+export interface AltVmSize {
+  vm_size: string;
+  vcpus: number;
+  memory_gb: number;
+  egress_mbps: number;
+  confidence: 'documented' | 'estimated';
+  accelerated_networking: boolean;
+  hourly_usd: number | null;
+}
+
 export interface RunInfraSide {
   cloud: string;
   vm_size: string | null;
   region: string | null;
   specs: VmNetSpec | null;
+  hourly_usd?: number | null;
+  alternatives?: AltVmSize[];
 }
 
 export interface RunInfra {
