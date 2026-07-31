@@ -18,6 +18,7 @@ import type { LiveAttempt } from '../api/types';
 import {
   computeStats,
   primaryMetricValue,
+  latencyMetricValue,
   primaryMetricLabel,
   isThroughputProtocol,
   attemptPayloadBytes,
@@ -116,6 +117,17 @@ describe('primaryMetricValue — per-protocol field selection', () => {
   it('returns null when the relevant sub-result is absent', () => {
     expect(primaryMetricValue(mk({ protocol: 'http1' }))).toBeNull();
     expect(primaryMetricValue(mk({ protocol: 'tcp' }))).toBeNull();
+  });
+
+  it('latencyMetricValue reports transfer-time ms for throughput modes (box plot)', () => {
+    // The "latency distribution" box plot must ladder by transfer time so a big
+    // payload reads slower than a small one — NOT throughput MB/s (which the
+    // primary metric returns). A swap here regresses the payload-labelled chart.
+    const a = mk({ protocol: 'upload', http: { status_code: 200, ttfb_ms: 5, total_duration_ms: 903, negotiated_version: 'h2', throughput_mbps: 116, payload_bytes: 104857600 } });
+    expect(latencyMetricValue(a)).toBe(903);      // transfer time, not 116 MB/s
+    expect(primaryMetricValue(a)).toBe(116);      // primary metric unchanged
+    // Non-throughput modes delegate to the primary metric (already ms).
+    expect(latencyMetricValue(mk({ protocol: 'tcp', tcp: { connect_duration_ms: 11, remote_addr: 'x' } }))).toBe(11);
   });
 
   it('PINNED drift: udp does NOT exclude a fully-lost (0.0 RTT) attempt', () => {

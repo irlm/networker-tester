@@ -81,6 +81,21 @@ export function primaryMetricValue(a: LiveAttempt): number | null {
   }
 }
 
+/**
+ * Latency (ms) for the "latency distribution" box-and-whisker chart. Identical
+ * to primaryMetricValue except throughput modes (download/upload/web/udp
+ * transfer) report their transfer time in ms rather than throughput MB/s — so
+ * every mode shares one millisecond axis and the per-payload rows ladder by
+ * transfer time (a 100 MB upload is visibly slower than a 1 KB one). Every other
+ * mode already has a millisecond primary metric, so we delegate.
+ */
+export function latencyMetricValue(a: LiveAttempt): number | null {
+  if (isThroughputProtocol(a.protocol)) {
+    return a.http?.total_duration_ms ?? null;
+  }
+  return primaryMetricValue(a);
+}
+
 export function primaryMetricLabel(protocol: string): string {
   switch (protocol) {
     case 'tcp': return 'Connect ms';

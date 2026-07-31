@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.121] — 2026-07-31
+
+### Fixed
+- **Run report "latency distribution" box plot now labels each payload size and
+  reads in one unit.** Throughput modes (`download`/`upload`/web/udp transfer)
+  run once per configured payload size, so the chart already drew a separate box
+  per payload — but every row was labelled just `upload`/`download` with no way
+  to tell them apart, and the boxes were positioned by throughput MB/s on a
+  millisecond axis (mislabelled as ms). The chart now uses transfer-time ms for
+  every mode, so all rows share one coherent axis; each throughput row is
+  labelled with its payload size (`upload · 100 MB`) and the rows ladder
+  ascending (1 KB → 100 MB), making the payload/latency relationship obvious.
+
+---
+
 ## [0.28.120] — 2026-07-31
 
 ### Changed
