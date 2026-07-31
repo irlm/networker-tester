@@ -572,6 +572,40 @@ public static class TestRunsEndpoints
     private static async Task<List<AttemptView>> LoadAttemptsAsync(
         NpgsqlDataSource dataSource, Guid runId, CancellationToken ct)
     {
+        // V005 tier: everything in richSql PLUS ServerTimingResult.SrvCpuMs
+        // and the MthroughputResult capacity columns (appended, so the shared
+        // reader ordinals are a strict prefix). Testers on pre-V005 schemas
+        // make this fail with UndefinedColumn/UndefinedTable → richSql tier.
+        const string richSqlV005 = """
+            SELECT a.AttemptId, a.Protocol, a.SequenceNum, a.StartedAt, a.FinishedAt,
+                   a.Success, a.ErrorMessage, a.RetryCount,
+                   d.DurationMs, d.Success, d.QueryName, d.ResolvedIPs,
+                   t.ConnectDurationMs, t.RemoteAddr, t.MssBytesEstimate, t.RttEstimateMs,
+                   t.Retransmits, t.TotalRetrans, t.SndCwnd, t.CongestionAlgorithm,
+                   t.DeliveryRateBps, t.MinRttMs,
+                   s.HandshakeDurationMs, s.ProtocolVersion, s.CipherSuite,
+                   s.AlpnNegotiated, s.CertExpiry,
+                   h.StatusCode, h.NegotiatedVersion, h.TtfbMs, h.TotalDurationMs,
+                   h.BodySizeBytes, h.RedirectCount, h.PayloadBytes, h.ThroughputMbps,
+                   u.RttAvgMs, u.RttMinMs, u.RttP95Ms, u.JitterMs, u.LossPercent,
+                   u.ProbeCount, u.SuccessCount,
+                   st.ProcessingMs, st.RecvBodyMs, st.TotalServerMs,
+                   st.SrvCpuMs,
+                   mt.CapacityDownMbps, mt.CapacityUpMbps, mt.ConnsDown, mt.ConnsUp,
+                   mt.FairShareSpreadDownPct, mt.FairShareSpreadUpPct
+            FROM RequestAttempt a
+            LEFT JOIN LATERAL (SELECT * FROM DnsResult  x WHERE x.AttemptId = a.AttemptId LIMIT 1) d  ON TRUE
+            LEFT JOIN LATERAL (SELECT * FROM TcpResult  x WHERE x.AttemptId = a.AttemptId LIMIT 1) t  ON TRUE
+            LEFT JOIN LATERAL (SELECT * FROM TlsResult  x WHERE x.AttemptId = a.AttemptId LIMIT 1) s  ON TRUE
+            LEFT JOIN LATERAL (SELECT * FROM HttpResult x WHERE x.AttemptId = a.AttemptId LIMIT 1) h  ON TRUE
+            LEFT JOIN LATERAL (SELECT * FROM UdpResult  x WHERE x.AttemptId = a.AttemptId LIMIT 1) u  ON TRUE
+            LEFT JOIN LATERAL (SELECT * FROM ServerTimingResult x WHERE x.AttemptId = a.AttemptId LIMIT 1) st ON TRUE
+            LEFT JOIN LATERAL (SELECT * FROM MthroughputResult x WHERE x.AttemptId = a.AttemptId LIMIT 1) mt ON TRUE
+            WHERE a.RunId = $1
+            ORDER BY a.SequenceNum, a.StartedAt
+            LIMIT 10000
+            """;
+
         const string richSql = """
             SELECT a.AttemptId, a.Protocol, a.SequenceNum, a.StartedAt, a.FinishedAt,
                    a.Success, a.ErrorMessage, a.RetryCount,
@@ -612,7 +646,21 @@ public static class TestRunsEndpoints
 
         try
         {
-            return await QueryAttemptsAsync(dataSource, richSql, runId, rich: true, ct);
+            return await QueryAttemptsAsync(
+                dataSource, richSqlV005, runId, tier: AttemptSchemaTier.RichV005, ct);
+        }
+        catch (PostgresException ex) when (
+            ex.SqlState == PostgresErrorCodes.UndefinedTable ||
+            ex.SqlState == PostgresErrorCodes.UndefinedColumn)
+        {
+            // Pre-V005 tester schema (no MthroughputResult table and/or no
+            // SrvCpuMs column) — fall through to the V001-phase-table tier.
+        }
+
+        try
+        {
+            return await QueryAttemptsAsync(
+                dataSource, richSql, runId, tier: AttemptSchemaTier.Rich, ct);
         }
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
         {
@@ -622,7 +670,8 @@ public static class TestRunsEndpoints
 
         try
         {
-            return await QueryAttemptsAsync(dataSource, flatSql, runId, rich: false, ct);
+            return await QueryAttemptsAsync(
+                dataSource, flatSql, runId, tier: AttemptSchemaTier.Flat, ct);
         }
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
         {
@@ -632,9 +681,17 @@ public static class TestRunsEndpoints
         }
     }
 
+    /// <summary>Which attempt-schema generation a query targets: V005 (adds
+    /// SrvCpuMs + MthroughputResult), the V001 phase tables, or the flat
+    /// pre-phase-table fallback. The V005 columns are appended after the
+    /// V001 ordinals so the phase readers are tier-agnostic.</summary>
+    private enum AttemptSchemaTier { Flat, Rich, RichV005 }
+
     private static async Task<List<AttemptView>> QueryAttemptsAsync(
-        NpgsqlDataSource dataSource, string sql, Guid runId, bool rich, CancellationToken ct)
+        NpgsqlDataSource dataSource, string sql, Guid runId, AttemptSchemaTier tier, CancellationToken ct)
     {
+        var rich = tier != AttemptSchemaTier.Flat;
+        var v005 = tier == AttemptSchemaTier.RichV005;
         var attempts = new List<AttemptView>();
         await using var cmd = dataSource.CreateCommand(sql);
         cmd.Parameters.AddWithValue(runId);
@@ -658,7 +715,8 @@ public static class TestRunsEndpoints
                 Tls: rich ? ReadTls(reader) : null,
                 Http: rich ? ReadHttp(reader) : null,
                 Udp: rich ? ReadUdp(reader) : null,
-                ServerTiming: rich ? ReadServerTiming(reader) : null));
+                ServerTiming: rich ? ReadServerTiming(reader, v005) : null,
+                Mthroughput: v005 ? ReadMthroughput(reader) : null));
         }
         return attempts;
     }
@@ -719,7 +777,7 @@ public static class TestRunsEndpoints
             ProbeCount: r.GetInt32(40),
             SuccessCount: r.GetInt32(41));
 
-    private static AttemptServerTimingView? ReadServerTiming(NpgsqlDataReader r)
+    private static AttemptServerTimingView? ReadServerTiming(NpgsqlDataReader r, bool v005)
     {
         // Every ServerTimingResult column is nullable — treat an all-NULL row
         // (or no row) as "no server timing" rather than emitting an empty
@@ -727,9 +785,28 @@ public static class TestRunsEndpoints
         double? processing = r.IsDBNull(42) ? null : r.GetDouble(42);
         double? recvBody = r.IsDBNull(43) ? null : r.GetDouble(43);
         double? totalServer = r.IsDBNull(44) ? null : r.GetDouble(44);
-        return processing is null && recvBody is null && totalServer is null
+        double? srvCpu = v005 && !r.IsDBNull(45) ? r.GetDouble(45) : null;
+        return processing is null && recvBody is null && totalServer is null && srvCpu is null
             ? null
-            : new AttemptServerTimingView(processing, recvBody, totalServer);
+            : new AttemptServerTimingView(processing, recvBody, totalServer, srvCpu);
+    }
+
+    // V005 columns are appended after SrvCpuMs (45): 46-51. ConnsDown is the
+    // NOT NULL "row exists" marker for the LEFT JOIN.
+    private static AttemptMthroughputView? ReadMthroughput(NpgsqlDataReader r)
+    {
+        if (r.IsDBNull(48))
+        {
+            return null;
+        }
+
+        return new AttemptMthroughputView(
+            CapacityDownMbps: r.IsDBNull(46) ? null : r.GetDouble(46),
+            CapacityUpMbps: r.IsDBNull(47) ? null : r.GetDouble(47),
+            ConnsDown: r.GetInt32(48),
+            ConnsUp: r.IsDBNull(49) ? null : r.GetInt32(49),
+            FairShareSpreadDownPct: r.IsDBNull(50) ? null : r.GetDouble(50),
+            FairShareSpreadUpPct: r.IsDBNull(51) ? null : r.GetDouble(51));
     }
 }
 
@@ -777,7 +854,10 @@ public sealed record AttemptView(
     AttemptUdpView? Udp = null,
     [property: JsonPropertyName("server_timing"),
      JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    AttemptServerTimingView? ServerTiming = null);
+    AttemptServerTimingView? ServerTiming = null,
+    [property: JsonPropertyName("mthroughput"),
+     JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    AttemptMthroughputView? Mthroughput = null);
 
 /// <summary>DNS phase of one attempt (tester <c>DnsResult</c> table).</summary>
 public sealed record AttemptDnsView(
@@ -873,4 +953,32 @@ public sealed record AttemptServerTimingView(
     double? RecvBodyMs,
     [property: JsonPropertyName("total_server_ms"),
      JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    double? TotalServerMs);
+    double? TotalServerMs,
+    [property: JsonPropertyName("srv_cpu_ms"),
+     JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    double? SrvCpuMs = null);
+
+/// <summary>
+/// Multi-connection capacity probe result (tester <c>MthroughputResult</c>
+/// table, V005). Field names match the tester's live JSON (Rust
+/// <c>metrics.rs::MthroughputResult</c> headline fields); note the
+/// <c>capacity_*_mbps</c> values carry MB/s (decimal), mirroring the struct.
+/// This is the infrastructure envelope's EMPIRICAL ceiling source.
+/// </summary>
+public sealed record AttemptMthroughputView(
+    [property: JsonPropertyName("capacity_down_mbps"),
+     JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    double? CapacityDownMbps,
+    [property: JsonPropertyName("capacity_up_mbps"),
+     JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    double? CapacityUpMbps,
+    [property: JsonPropertyName("conns_down")] int ConnsDown,
+    [property: JsonPropertyName("conns_up"),
+     JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? ConnsUp,
+    [property: JsonPropertyName("fair_share_spread_down_pct"),
+     JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    double? FairShareSpreadDownPct,
+    [property: JsonPropertyName("fair_share_spread_up_pct"),
+     JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    double? FairShareSpreadUpPct);

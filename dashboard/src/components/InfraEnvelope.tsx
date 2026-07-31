@@ -1,5 +1,11 @@
 import type { LiveAttempt, RunEnvelope, RunInfra, RunInfraSide } from '../api/types';
-import { assessRun, formatMbps, verdictLabel, type DirectionAssessment } from '../lib/infra';
+import {
+  assessRun,
+  formatMbps,
+  verdictLabel,
+  wouldBenefitFromCeilingProbe,
+  type DirectionAssessment,
+} from '../lib/infra';
 import { adviseRun } from '../lib/advisor';
 import { formatBytes } from '../lib/analysis';
 
@@ -86,11 +92,19 @@ export function InfraEnvelope({
               </p>
             </div>
           )}
+          {wouldBenefitFromCeilingProbe(assessments) && (
+            <p className="text-[10px] text-cyan-600/80 pt-1">
+              ceiling is an estimate — add the <span className="text-cyan-400">Multi-Conn
+              (mthroughput)</span> mode to this config to measure the path&apos;s true
+              multi-stream capacity; the envelope then uses the measured ceiling instead.
+            </p>
+          )}
           <p className="text-[10px] text-gray-600">
             expected = sending side&apos;s egress expectation per the VM-size
             catalog (doc = provider size table · est = size&apos;s bandwidth not
-            guaranteed by the provider). steady-state = p50 at the largest
-            payload.
+            guaranteed by the provider), superseded by the measured multi-stream
+            capacity when the run includes mthroughput. steady-state = p50 at
+            the largest payload.
           </p>
         </div>
       )}
@@ -159,7 +173,11 @@ function DirectionRow({ a }: { a: DirectionAssessment }) {
         {a.expectedMbps != null && (
           <>
             {' / '}
-            <span className="text-gray-500">
+            <span
+              className={
+                a.confidence === 'measured' ? 'text-cyan-400' : 'text-gray-500'
+              }
+            >
               {a.confidence === 'estimated' ? '~' : ''}
               {formatMbps(a.expectedMbps)}
             </span>

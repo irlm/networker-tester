@@ -92,6 +92,9 @@ impl DatabaseBackend for MssqlBackend {
                 if let Some(st) = &attempt.server_timing {
                     insert_server_timing_result(attempt, st, &mut c).await?;
                 }
+                if let Some(mt) = &attempt.mthroughput {
+                    insert_mthroughput_result(attempt, mt, &mut c).await?;
+                }
             }
 
             if benchmark_schema_ready {
@@ -798,12 +801,40 @@ async fn insert_server_timing_result(
     let attempt_id = a.attempt_id.to_string();
     let server_ts = st.server_timestamp.map(|t| t.naive_utc());
 
-    let mut q = Query::new(
-        "INSERT INTO dbo.ServerTimingResult (
-            ServerId, AttemptId, RequestId, ServerTimestamp,
-            ClockSkewMs, RecvBodyMs, ProcessingMs, TotalServerMs
-         ) VALUES (@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8)",
-    );
+    // SQL Server schema is applied via external sqlcmd scripts, so an older
+    // database may not have run sql/10_Mthroughput.sql yet — probe for the
+    // SrvCpuMs column and fall back to the 8-column shape (dropping only the
+    // new field) instead of failing the whole run save.
+    let has_cpu_col = c
+        .query(
+            "SELECT CASE WHEN COL_LENGTH(N'dbo.ServerTimingResult', N'SrvCpuMs')
+                IS NOT NULL THEN 1 ELSE 0 END",
+            &[],
+        )
+        .await
+        .context("probe ServerTimingResult.SrvCpuMs")?
+        .into_row()
+        .await
+        .context("read SrvCpuMs probe row")?
+        .and_then(|row| row.get::<i32, _>(0))
+        .unwrap_or(0)
+        == 1;
+
+    let mut q = if has_cpu_col {
+        Query::new(
+            "INSERT INTO dbo.ServerTimingResult (
+                ServerId, AttemptId, RequestId, ServerTimestamp,
+                ClockSkewMs, RecvBodyMs, ProcessingMs, TotalServerMs, SrvCpuMs
+             ) VALUES (@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9)",
+        )
+    } else {
+        Query::new(
+            "INSERT INTO dbo.ServerTimingResult (
+                ServerId, AttemptId, RequestId, ServerTimestamp,
+                ClockSkewMs, RecvBodyMs, ProcessingMs, TotalServerMs
+             ) VALUES (@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8)",
+        )
+    };
     q.bind(id.as_str());
     q.bind(attempt_id.as_str());
     q.bind(st.request_id.as_deref());
@@ -812,7 +843,63 @@ async fn insert_server_timing_result(
     q.bind(st.recv_body_ms);
     q.bind(st.processing_ms);
     q.bind(st.total_server_ms);
+    if has_cpu_col {
+        q.bind(st.srv_cpu_ms);
+    }
     q.execute(c).await.context("INSERT ServerTimingResult")?;
+    Ok(())
+}
+
+/// V005 counterpart for SQL Server (schema from sql/10_Mthroughput.sql).
+/// Table-existence-gated like the benchmark tables: an older external schema
+/// simply skips persistence rather than failing the save.
+async fn insert_mthroughput_result(
+    a: &RequestAttempt,
+    mt: &crate::metrics::MthroughputResult,
+    c: &mut SqlClient,
+) -> anyhow::Result<()> {
+    let installed = c
+        .query(
+            "SELECT CASE WHEN OBJECT_ID(N'dbo.MthroughputResult') IS NOT NULL
+                THEN 1 ELSE 0 END",
+            &[],
+        )
+        .await
+        .context("probe dbo.MthroughputResult")?
+        .into_row()
+        .await
+        .context("read MthroughputResult probe row")?
+        .and_then(|row| row.get::<i32, _>(0))
+        .unwrap_or(0)
+        == 1;
+    if !installed {
+        tracing::debug!(
+            "dbo.MthroughputResult missing (run sql/10_Mthroughput.sql); skipping persistence"
+        );
+        return Ok(());
+    }
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let attempt_id = a.attempt_id.to_string();
+    let conns_down = mt.conns_down as i32;
+    let conns_up = mt.conns_up.map(|v| v as i32);
+
+    let mut q = Query::new(
+        "INSERT INTO dbo.MthroughputResult (
+            ServerId, AttemptId, RemoteAddr, CapacityDownMbps, CapacityUpMbps,
+            ConnsDown, ConnsUp, FairShareSpreadDownPct, FairShareSpreadUpPct
+         ) VALUES (@P1,@P2,@P3,@P4,@P5,@P6,@P7,@P8,@P9)",
+    );
+    q.bind(id.as_str());
+    q.bind(attempt_id.as_str());
+    q.bind(mt.remote_addr.as_str());
+    q.bind(mt.capacity_down_mbps);
+    q.bind(mt.capacity_up_mbps);
+    q.bind(conns_down);
+    q.bind(conns_up);
+    q.bind(mt.fair_share_spread_down_pct);
+    q.bind(mt.fair_share_spread_up_pct);
+    q.execute(c).await.context("INSERT MthroughputResult")?;
     Ok(())
 }
 

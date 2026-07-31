@@ -766,7 +766,12 @@ export interface LiveAttempt {
    *  server_ms/network_ms/app_ms/split_anomaly arrive via the live stream only
    *  (not persisted in the tester DB schema); processing/recv/total also come
    *  back from GET /test-runs/{id}/attempts. */
-  server_timing?: { server_ms?: number; network_ms?: number; app_ms?: number; split_anomaly?: boolean; processing_ms?: number; recv_body_ms?: number; total_server_ms?: number; clock_skew_ms?: number };
+  server_timing?: { server_ms?: number; network_ms?: number; app_ms?: number; split_anomaly?: boolean; processing_ms?: number; recv_body_ms?: number; total_server_ms?: number; clock_skew_ms?: number; srv_cpu_ms?: number };
+  /** Multi-connection capacity probe (`mthroughput` mode; persisted since
+   *  tester schema V005). NOTE: capacity_*_mbps carries MB/s (decimal),
+   *  mirroring the Rust struct — multiply by 8 for Mbps. The infrastructure
+   *  envelope's EMPIRICAL ceiling source. */
+  mthroughput?: { capacity_down_mbps?: number; capacity_up_mbps?: number; conns_down: number; conns_up?: number; fair_share_spread_down_pct?: number; fair_share_spread_up_pct?: number };
   error?: { category: string; message: string; detail?: string };
   page_load?: { total_ms: number; ttfb_ms?: number; asset_count: number; assets_fetched: number; total_bytes?: number; connections_opened?: number; tls_setup_ms?: number; tls_overhead_ratio?: number; cpu_time_ms?: number; connection_reused?: boolean };
   browser?: { load_ms: number; dom_content_loaded_ms?: number; ttfb_ms?: number; resource_count?: number; transferred_bytes?: number; protocol?: string };

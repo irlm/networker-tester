@@ -1301,6 +1301,7 @@ mod tests {
                 server_version: Some("0.11.3".into()),
                 srv_csw_voluntary: Some(1),
                 srv_csw_involuntary: Some(0),
+                srv_cpu_ms: None,
                 ..Default::default()
             }),
             udp_throughput: None,

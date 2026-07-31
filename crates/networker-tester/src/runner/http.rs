@@ -1148,6 +1148,7 @@ fn parse_server_timing(
         server_version,
         srv_csw_voluntary: parsed_st.csw_v,
         srv_csw_involuntary: parsed_st.csw_i,
+        srv_cpu_ms: parsed_st.cpu_ms,
     })
 }
 
@@ -1164,6 +1165,8 @@ struct ParsedServerTiming {
     csw_v: Option<u64>,
     /// Server-side involuntary context switches (csw-i;dur=N).
     csw_i: Option<u64>,
+    /// Endpoint process-CPU ms across the measured window (cpu;dur=X).
+    cpu_ms: Option<f64>,
 }
 
 /// Parse `Server-Timing: recv;dur=X, proc;dur=Y, total;dur=Z, csw-v;dur=A, csw-i;dur=B`.
@@ -1190,6 +1193,7 @@ fn parse_server_timing_header(value: &str) -> ParsedServerTiming {
             "app" => parsed.app_ms = dur,
             "csw-v" => parsed.csw_v = dur.map(|d| d as u64),
             "csw-i" => parsed.csw_i = dur.map(|d| d as u64),
+            "cpu" => parsed.cpu_ms = dur,
             _ => {}
         }
     }
