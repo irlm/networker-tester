@@ -118,6 +118,36 @@ public class AttemptExtractTests
     }
 
     [Fact]
+    public void Mthroughput_and_srv_cpu_extract_for_v005_persistence()
+    {
+        // The live-verification gap of v0.28.126: the streamed-attempt ingest
+        // dropped these on the floor, so /attempts served nulls. Pin the parse.
+        var a = AttemptExtract.Parse(Guid.NewGuid(), Json("""
+            {
+              "attempt_id": "55555555-5555-5555-5555-555555555555",
+              "protocol": "mthroughput",
+              "success": true,
+              "mthroughput": {
+                "remote_addr": "https://target:8444",
+                "capacity_down_mbps": 73.9, "capacity_up_mbps": 112.4,
+                "conns_down": 4, "conns_up": 3,
+                "fair_share_spread_down_pct": 8.2
+              },
+              "server_timing": { "recv_body_ms": 901.8, "srv_cpu_ms": 89.9 }
+            }
+            """))!;
+
+        Assert.NotNull(a.Mthroughput);
+        Assert.Equal(73.9, a.Mthroughput!.CapacityDownMbps);
+        Assert.Equal(112.4, a.Mthroughput.CapacityUpMbps);
+        Assert.Equal(4, a.Mthroughput.ConnsDown);
+        Assert.Equal(3, a.Mthroughput.ConnsUp);
+        Assert.Equal(8.2, a.Mthroughput.FairShareSpreadDownPct);
+        Assert.Null(a.Mthroughput.FairShareSpreadUpPct);
+        Assert.Equal(89.9, a.ServerTiming!.SrvCpuMs);
+    }
+
+    [Fact]
     public void Tolerates_wrong_kinds_and_defaults_sanely()
     {
         // sequence_num as string, success absent, dns wrong kind — must not throw.
