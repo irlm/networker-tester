@@ -360,6 +360,15 @@ export function RunDetailPage() {
               </tbody>
             </table>
           </div>
+          {protocolStats.some((ps) => ps.payloadBytes != null) && (
+            <p className="px-4 py-2 text-[10px] text-gray-500 border-t border-gray-800/50 leading-relaxed">
+              throughput is measured per direction — download over the body-receive window, upload over
+              the send window (cross-checked against the server&apos;s Server-Timing clock). upload and
+              download legitimately differ on asymmetric paths: cloud VMs cap egress, so a small target
+              serves downloads slower than it accepts uploads. small payloads reflect TCP slow-start
+              burst, not steady-state bandwidth.
+            </p>
+          )}
         </div>
       )}
 
@@ -387,7 +396,7 @@ export function RunDetailPage() {
           <div className="border border-gray-800 rounded bg-[var(--bg-card)] p-4">
             <div className="relative">
               {/* Decade gridlines behind the bars, aligned to the bar column */}
-              <div className="absolute inset-y-0 pointer-events-none" style={{ left: 'calc(8rem + 0.75rem)', right: 'calc(6rem + 0.75rem)' }}>
+              <div className="absolute inset-y-0 pointer-events-none" style={{ left: 'calc(10rem + 0.75rem)', right: 'calc(6rem + 0.75rem)' }}>
                 {latencyAxis.decades.map((t) => (
                   <div key={t} className="absolute top-0 bottom-0 w-px bg-gray-800" style={{ left: `${latencyAxis.scale(t)}%` }} />
                 ))}
@@ -403,7 +412,7 @@ export function RunDetailPage() {
                   const whiskerRight = scale(s.max);
                   return (
                     <div key={`${r.protocol}:${r.payloadBytes ?? ''}`} className="flex items-center gap-3">
-                      <div className="w-32 text-xs font-mono text-right shrink-0 truncate">
+                      <div className="w-40 text-xs font-mono text-right shrink-0 truncate">
                         <span className="text-gray-300">{r.protocol}</span>
                         {r.payloadBytes != null && <span className="text-gray-500"> · {formatBytes(r.payloadBytes)}</span>}
                       </div>
@@ -428,12 +437,12 @@ export function RunDetailPage() {
               </div>
             </div>
             {/* Log-scale decade tick labels */}
-            <div className="relative h-4 mt-2 text-[10px] text-gray-500" style={{ marginLeft: 'calc(8rem + 0.75rem)', marginRight: 'calc(6rem + 0.75rem)' }}>
+            <div className="relative h-4 mt-2 text-[10px] text-gray-500" style={{ marginLeft: 'calc(10rem + 0.75rem)', marginRight: 'calc(6rem + 0.75rem)' }}>
               {latencyAxis.decades.map((t) => (
                 <span key={t} className="absolute -translate-x-1/2 whitespace-nowrap" style={{ left: `${latencyAxis.scale(t)}%` }}>{formatMs(t)}</span>
               ))}
             </div>
-            <div className="flex items-center gap-4 mt-3 text-[10px] text-gray-500 px-[calc(8rem+0.75rem)]">
+            <div className="flex items-center gap-4 mt-3 text-[10px] text-gray-500 px-[calc(10rem+0.75rem)]">
               <span className="flex items-center gap-1"><span className="w-3 h-px bg-gray-500 inline-block" /> whisker (min/max)</span>
               <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm border border-cyan-600/60 bg-cyan-900/30 inline-block" /> IQR (p25–p75)</span>
               <span className="flex items-center gap-1"><span className="w-0.5 h-3 bg-cyan-400 inline-block" /> median (p50)</span>
