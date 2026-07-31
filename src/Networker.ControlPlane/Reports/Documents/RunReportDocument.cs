@@ -21,7 +21,8 @@ public sealed record RunReportInput(
     int SuccessCount,
     int FailureCount,
     string? ErrorMessage,
-    IReadOnlyList<AttemptView> Attempts);
+    IReadOnlyList<AttemptView> Attempts,
+    ReportRunInfra? Infra = null);
 
 /// <summary>
 /// Builds the "Test Run Report": a summary KPI strip, a per-protocol latency
@@ -68,7 +69,19 @@ public static class RunReportDocument
         // ── By protocol ──
         if (total > 0)
         {
+            var envelope = InfraEnvelopeBlocks(run);
+            if (envelope is not null)
+            {
+                sections.Add(new ReportSection("Infrastructure envelope", envelope));
+            }
+
             sections.Add(new ReportSection("Latency by protocol", ByProtocolBlocks(run.Attempts)));
+
+            var throughput = ThroughputBlocks(run.Attempts);
+            if (throughput is not null)
+            {
+                sections.Add(new ReportSection("Throughput", throughput));
+            }
 
             var phases = PhaseTimings(run.Attempts);
             if (phases is not null)
@@ -125,17 +138,45 @@ public static class RunReportDocument
             : new CalloutBlock($"{failed} of {total} attempts failed.", ReportTone.Bad);
     }
 
+    /// <summary>Modes whose primary "duration" is the probe's own runtime, not
+    /// a latency (mthroughput's ramp, rpm's load cycle) — they'd read as absurd
+    /// multi-second latencies and stretch the shared axis.</summary>
+    private static readonly string[] NonLatencyProtocols = ["mthroughput", "rpm", "responsiveness"];
+
+    private static readonly string[] ThroughputProtocols =
+        ["download", "webdownload", "udpdownload", "upload", "webupload", "udpupload"];
+
+    private static bool IsThroughput(string protocol) =>
+        ThroughputProtocols.Contains(protocol, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Row key: throughput modes get one row PER PAYLOAD SIZE
+    /// ("DOWNLOAD · 100 MB") — a single row would mix a 1 KB transfer with a
+    /// 100 MB one and show payload size as fake latency spread (the dashboard's
+    /// v0.28.121 box-plot fix, mirrored).</summary>
+    private static string RowLabel(AttemptView a) =>
+        IsThroughput(a.Protocol) && a.Http?.PayloadBytes is { } pb
+            ? $"{a.Protocol.ToUpperInvariant()} · {Bytes(pb)}"
+            : a.Protocol.ToUpperInvariant();
+
     private static IReadOnlyList<ReportBlock> ByProtocolBlocks(IReadOnlyList<AttemptView> attempts)
     {
         var agg = attempts
-            .GroupBy(a => a.Protocol, StringComparer.OrdinalIgnoreCase)
-            .OrderBy(g => g.Key, StringComparer.Ordinal)
+            .GroupBy(RowLabel, StringComparer.Ordinal)
             .Select(g =>
             {
-                var lat = g.Select(PrimaryLatencyMs).Where(x => x is not null).Select(x => x!.Value).ToList();
+                // Latency stats over SUCCESSFUL attempts only — a failed
+                // attempt's duration is its timeout (ping on an Azure public
+                // IP reads 50 s), which is failure evidence, not latency.
+                var lat = g.Where(a => a.Success)
+                    .Select(PrimaryLatencyMs)
+                    .Where(x => x is not null)
+                    .Select(x => x!.Value)
+                    .ToList();
                 return new
                 {
-                    Name = g.Key.ToUpperInvariant(),
+                    Name = g.Key,
+                    Protocol = g.First().Protocol,
+                    PayloadBytes = g.First().Http?.PayloadBytes ?? -1,
                     Count = g.Count(),
                     Ok = g.Count(a => a.Success),
                     Min = lat.Count > 0 ? lat.Min() : (double?)null,
@@ -146,6 +187,8 @@ public static class RunReportDocument
                     Max = lat.Count > 0 ? lat.Max() : (double?)null,
                 };
             })
+            .OrderBy(a => a.Protocol, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(a => a.PayloadBytes)
             .ToList();
 
         var rows = agg
@@ -169,18 +212,171 @@ public static class RunReportDocument
                 ColumnAlign.Right, ColumnAlign.Right, ColumnAlign.Right,
             });
 
-        // A latency distribution ("candle" / box-plot) per protocol — min→max
-        // whisker, p25→p75 box, median tick, p95 tail marker. Latency is a
-        // distribution; the tail is what diagnostics care about, so this beats
-        // a single-value bar. Only protocols with a measured latency appear.
+        // A latency distribution ("candle" / box-plot) per row — min→max
+        // whisker, p25→p75 box, median tick, p95 tail marker, on a LOG axis
+        // (values legitimately span µs probes to second-scale 100 MB
+        // transfers; linear crushed everything small into slivers). Probe-
+        // duration modes (mthroughput/rpm) are excluded — their "latency" is
+        // the probe's own runtime.
         var candles = agg
-            .Where(a => a.P50 is not null)
+            .Where(a => a.P50 is not null
+                        && !NonLatencyProtocols.Contains(a.Protocol, StringComparer.OrdinalIgnoreCase))
             .Select(a => new CandlePoint(a.Name, a.Min, a.P25, a.P50, a.P75, a.P95, a.Max, ReportTone.Info))
             .ToList();
 
         return candles.Count > 0
-            ? new ReportBlock[] { new CandleBlock("Latency distribution by protocol", candles, "ms"), table }
+            ? new ReportBlock[]
+            {
+                new CandleBlock(
+                    "Latency distribution (log scale · successful attempts · throughput modes shown as transfer time per payload)",
+                    candles, "ms", LogScale: true),
+                table,
+            }
             : new ReportBlock[] { table };
+    }
+
+    /// <summary>Throughput by direction × payload (MB/s, successful attempts) —
+    /// the numbers the latency view intentionally does not carry, plus the
+    /// per-direction measurement note.</summary>
+    private static IReadOnlyList<ReportBlock>? ThroughputBlocks(IReadOnlyList<AttemptView> attempts)
+    {
+        var rows = attempts
+            .Where(a => a.Success && IsThroughput(a.Protocol)
+                        && a.Http?.ThroughputMbps is not null && a.Http?.PayloadBytes is not null)
+            .GroupBy(a => (Protocol: a.Protocol.ToUpperInvariant(), Payload: a.Http!.PayloadBytes!.Value))
+            .OrderBy(g => g.Key.Protocol, StringComparer.Ordinal)
+            .ThenBy(g => g.Key.Payload)
+            .Select(g =>
+            {
+                var v = g.Select(a => a.Http!.ThroughputMbps!.Value).ToList();
+                return (IReadOnlyList<string>)new[]
+                {
+                    g.Key.Protocol,
+                    Bytes(g.Key.Payload),
+                    g.Count().ToString(CultureInfo.InvariantCulture),
+                    MBs(v.Min()),
+                    MBs(Percentile(v, 0.50)!.Value),
+                    MBs(Percentile(v, 0.95)!.Value),
+                    MBs(v.Max()),
+                };
+            })
+            .ToList();
+
+        if (rows.Count == 0)
+        {
+            return null;
+        }
+
+        return new ReportBlock[]
+        {
+            new TableBlock(
+                Headers: new[] { "Direction", "Payload", "N", "Min", "p50", "p95", "Max" },
+                Rows: rows,
+                Aligns: new[]
+                {
+                    ColumnAlign.Left, ColumnAlign.Right, ColumnAlign.Right, ColumnAlign.Right,
+                    ColumnAlign.Right, ColumnAlign.Right, ColumnAlign.Right,
+                }),
+            new ProseBlock(
+                "Throughput is measured per direction — download over the body-receive window, upload "
+                + "over the send window (cross-checked against the server's Server-Timing clock). Upload "
+                + "and download legitimately differ on asymmetric paths: cloud VMs cap egress. Small "
+                + "payloads reflect TCP slow-start burst, not steady-state bandwidth."),
+        };
+    }
+
+    /// <summary>The infrastructure envelope: hardware identity, per-direction
+    /// expected-vs-measured with verdicts (measured multi-stream ceiling when
+    /// the run includes mthroughput), the CPU-idle callout, and right-sizing
+    /// suggestions. Mirrors the dashboard panel via the shared
+    /// <see cref="RunInfraAssessment"/> port.</summary>
+    private static IReadOnlyList<ReportBlock>? InfraEnvelopeBlocks(RunReportInput run)
+    {
+        var infra = run.Infra;
+        if (infra is null || (infra.Runner is null && infra.Target is null))
+        {
+            return null;
+        }
+
+        var blocks = new List<ReportBlock>();
+
+        var idRows = new List<IReadOnlyList<string>>();
+        void SideRow(string label, ReportInfraSide? s)
+        {
+            if (s is null)
+            {
+                return;
+            }
+            var hw = s.Specs is { } sp
+                ? $"{sp.Vcpus} vCPU / {sp.MemoryGb.ToString("0.#", CultureInfo.InvariantCulture)} GB · "
+                  + $"{(sp.Confidence == "estimated" ? "~" : "")}{RunInfraAssessment.FmtMbps(sp.EgressMbps)} egress "
+                  + $"({(sp.Confidence == "documented" ? "doc" : "est")})"
+                  + (sp.AcceleratedNetworking ? "" : " · no accel-net")
+                : "no spec in catalog";
+            idRows.Add(new[]
+            {
+                label,
+                s.VmSize ?? "unknown size",
+                s.Cloud + (s.Region is { Length: > 0 } r ? " " + r : ""),
+                hw,
+            });
+        }
+        SideRow("runner", infra.Runner);
+        SideRow("target", infra.Target);
+        blocks.Add(new TableBlock(
+            Headers: new[] { "Side", "VM size", "Cloud", "Hardware / expected egress" },
+            Rows: idRows,
+            Aligns: new[] { ColumnAlign.Left, ColumnAlign.Left, ColumnAlign.Left, ColumnAlign.Left }));
+
+        var assessments = RunInfraAssessment.Assess(run.Attempts, infra);
+        if (assessments.Count > 0)
+        {
+            blocks.Add(new TableBlock(
+                Headers: new[] { "Direction", "Measured", "Ceiling", "Utilization", "Verdict" },
+                Rows: assessments.Select(a => (IReadOnlyList<string>)new[]
+                {
+                    a.Direction,
+                    RunInfraAssessment.FmtMbps(a.MeasuredMbps) + $" @ {Bytes(a.PayloadBytes)}",
+                    a.ExpectedMbps is { } e
+                        ? $"{(a.Confidence == "estimated" ? "~" : "")}{RunInfraAssessment.FmtMbps(e)}"
+                          + $" ({a.Confidence})"
+                        : "—",
+                    a.Utilization is { } u
+                        ? Math.Round(u * 100).ToString("0", CultureInfo.InvariantCulture) + "%"
+                        : "—",
+                    a.Verdict,
+                }).ToList(),
+                Aligns: new[]
+                {
+                    ColumnAlign.Left, ColumnAlign.Right, ColumnAlign.Right,
+                    ColumnAlign.Right, ColumnAlign.Left,
+                }));
+
+            var cpuIdle = infra is { CpuCores: > 0, PeakLoad1m: { } load }
+                && load < infra.CpuCores.Value * 0.5;
+            if (cpuIdle && assessments.Any(a => a.Verdict == "network-bound"))
+            {
+                blocks.Add(new CalloutBlock(
+                    $"Runner CPU stayed idle (peak load {infra.PeakLoad1m!.Value.ToString("0.00", CultureInfo.InvariantCulture)} "
+                    + $"/ {infra.CpuCores} cores) while a direction sat at its egress cap — the network, "
+                    + "not compute, is the binding constraint of this infrastructure.",
+                    ReportTone.Info));
+            }
+
+            foreach (var s in RunInfraAssessment.Advise(assessments, infra))
+            {
+                blocks.Add(new CalloutBlock($"{s.Kind}: {s.Text}",
+                    s.Kind == "upsize" ? ReportTone.Info : ReportTone.Good));
+            }
+        }
+
+        blocks.Add(new ProseBlock(
+            "Ceiling = the sending side's egress expectation per the VM-size catalog (doc = provider "
+            + "size table · est = bandwidth not guaranteed by the provider), superseded by the measured "
+            + "multi-stream capacity when the run includes the Multi-Conn (mthroughput) mode. "
+            + "Steady-state = p50 at the largest payload."));
+
+        return blocks;
     }
 
     private static IReadOnlyList<ReportBlock>? PhaseTimings(IReadOnlyList<AttemptView> attempts)
@@ -251,6 +447,22 @@ public static class RunReportDocument
         {
             return Truncate(a.ErrorMessage!, 60);
         }
+        if (a.Mthroughput is { } mt)
+        {
+            var caps = new List<string>();
+            if (mt.CapacityDownMbps is { } cd)
+            {
+                caps.Add($"↓ {MBs(cd)} ({mt.ConnsDown} conns)");
+            }
+            if (mt.CapacityUpMbps is { } cu)
+            {
+                caps.Add($"↑ {MBs(cu)}" + (mt.ConnsUp is { } cc ? $" ({cc} conns)" : ""));
+            }
+            if (caps.Count > 0)
+            {
+                return "capacity " + string.Join(" · ", caps);
+            }
+        }
         if (a.Http is { } h)
         {
             var parts = new List<string> { "HTTP " + h.StatusCode };
@@ -258,9 +470,11 @@ public static class RunReportDocument
             {
                 parts.Add(h.NegotiatedVersion);
             }
-            if (h.ThroughputMbps is { } mbps)
+            // ThroughputMbps carries MB/s (decimal) despite the field name —
+            // mirrors the tester struct; the old " Mbps" label was a units bug.
+            if (h.ThroughputMbps is { } mbs)
             {
-                parts.Add(mbps.ToString("0.#", CultureInfo.InvariantCulture) + " Mbps");
+                parts.Add(MBs(mbs));
             }
             return string.Join(" · ", parts);
         }
@@ -323,6 +537,19 @@ public static class RunReportDocument
 
     private static string Ms(double? v) =>
         v is { } d ? d.ToString(d >= 100 ? "0" : "0.0", CultureInfo.InvariantCulture) + " ms" : "—";
+
+    /// <summary>MB/s formatting for http.throughput_mbps (which carries
+    /// decimal megabytes/second, matching the tester struct).</summary>
+    private static string MBs(double v) =>
+        v.ToString(v >= 100 ? "0" : "0.#", CultureInfo.InvariantCulture) + " MB/s";
+
+    private static string Bytes(long bytes) => bytes switch
+    {
+        >= 1024L * 1024 * 1024 => (bytes / (1024.0 * 1024 * 1024)).ToString("0.#", CultureInfo.InvariantCulture) + " GB",
+        >= 1024L * 1024 => (bytes / (1024.0 * 1024)).ToString("0.#", CultureInfo.InvariantCulture) + " MB",
+        >= 1024L => (bytes / 1024.0).ToString("0.#", CultureInfo.InvariantCulture) + " KB",
+        _ => bytes.ToString(CultureInfo.InvariantCulture) + " B",
+    };
 
     private static string? Duration(DateTime? start, DateTime? end)
     {

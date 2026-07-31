@@ -244,7 +244,7 @@ public sealed class PdfReportExporter : IReportExporter
                 {
                     row.ConstantItem(90).AlignRight().PaddingRight(8).AlignMiddle()
                         .Text(p.Label).FontSize(8.5f);
-                    row.RelativeItem().Height(16).Svg(CandleSvg(p, c.AxisMax));
+                    row.RelativeItem().Height(16).Svg(CandleSvg(p, c));
                     row.ConstantItem(210).PaddingLeft(8).AlignMiddle()
                         .Text(CandleAscii.Summary(p, c.Unit)).FontSize(7.5f).FontColor(Hex(ReportBranding.Muted));
                 });
@@ -255,10 +255,10 @@ public sealed class PdfReportExporter : IReportExporter
     /// <summary>A shapes-only (no text) SVG box-plot for one candle, fed to
     /// QuestPDF's <c>.Svg()</c> — the same font-free rendering path the logo
     /// glyph uses, so it needs no font resolution on the server.</summary>
-    private static string CandleSvg(CandlePoint p, double axisMax)
+    private static string CandleSvg(CandlePoint p, CandleBlock c)
     {
         const double w = 200, h = 16;
-        double X(double v) => Math.Clamp(v / axisMax, 0, 1) * (w - 2) + 1;
+        double X(double v) => c.Fraction(v) * (w - 2) + 1;
         const double mid = h / 2;
         var tone = BarHex(p.Tone);
 

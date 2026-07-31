@@ -11,6 +11,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.128] — 2026-07-31
+
+### Fixed
+- **Exported run reports (HTML/MD/DOCX/PDF) brought to parity with the run
+  page.** The report engine predated this week's analytics and showed the old
+  presentation (user report, run ebd1a684's PDF): one merged latency row per
+  protocol (payload sizes read as fake spread), failed-attempt timeouts inside
+  the latency stats (ping's 50 s rows stretched the whole linear axis into
+  slivers), probe-duration modes (mthroughput/rpm) rendered as absurd
+  multi-second "latencies", `throughput_mbps` labeled **Mbps** when it carries
+  MB/s, and a raw `{"kind":"proxy",…}` JSON blob as the target. Now: one
+  latency row per (protocol · payload), success-only stats, a **log-scale**
+  candle axis (CandleBlock.LogScale, shared by all four exporters), probe
+  modes excluded from the chart, MB/s everywhere, and a friendly target
+  ("target <deployment> (proxied)" / host:port).
+
+### Added
+- **Report sections: Throughput and Infrastructure envelope.** Throughput
+  by direction × payload (MB/s, with the per-direction measurement note), and
+  the envelope — hardware identity, per-direction measured-vs-ceiling with
+  verdicts (measured multi-stream capacity superseding catalog estimates),
+  the CPU-idle callout, and priced right-sizing suggestions — via
+  `RunInfraAssessment`, a C# port of the dashboard's lib/infra.ts +
+  lib/advisor.ts pinned to the same B2s test vectors so page and export
+  cannot disagree.
+
+---
+
 ## [0.28.127] — 2026-07-31
 
 ### Fixed

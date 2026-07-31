@@ -147,7 +147,7 @@ public sealed class DocxReportExporter : IReportExporter
                         new RunFonts { Ascii = "Consolas", HighAnsi = "Consolas" },
                         new Color { Val = BarHex(p.Tone) },
                         new FontSize { Val = "18" }),
-                    Text(CandleAscii.Track(p, c.AxisMax))));
+                    Text(CandleAscii.Track(p, c))));
 
             table.Append(new TableRow(
                 new TableCell(Para(p.Label, sizeHalfPt: 18, color: Ink)),

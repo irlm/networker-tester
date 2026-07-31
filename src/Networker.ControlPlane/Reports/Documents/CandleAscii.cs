@@ -13,12 +13,22 @@ public static class CandleAscii
     /// <summary>Track width in characters.</summary>
     public const int Cells = 30;
 
-    public static string Track(CandlePoint p, double axisMax)
+    /// <summary>Linear-axis overload — kept for callers/tests that scale
+    /// against a bare upper bound.</summary>
+    public static string Track(CandlePoint p, double axisMax) =>
+        Track(p, v => Math.Clamp(v / Math.Max(1e-9, axisMax), 0, 1));
+
+    /// <summary>Render against the block's shared axis — linear or log per
+    /// <see cref="CandleBlock.LogScale"/> (the block owns the scale so all four
+    /// exporters agree).</summary>
+    public static string Track(CandlePoint p, CandleBlock c) => Track(p, c.Fraction);
+
+    private static string Track(CandlePoint p, Func<double, double> fraction)
     {
         var buf = new char[Cells];
         Array.Fill(buf, ' ');
 
-        int Cell(double v) => Math.Clamp((int)Math.Round(v / axisMax * (Cells - 1)), 0, Cells - 1);
+        int Cell(double v) => Math.Clamp((int)Math.Round(fraction(v) * (Cells - 1)), 0, Cells - 1);
 
         var lo = p.Min ?? p.P25 ?? p.Median;
         var hi = p.High ?? p.P95 ?? p.Median;

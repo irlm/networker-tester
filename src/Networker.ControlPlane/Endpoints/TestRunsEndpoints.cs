@@ -361,8 +361,9 @@ public static class TestRunsEndpoints
                 .Select(r => new
                 {
                     r.Id, r.ProjectId, r.TestConfigId, r.Status, r.StartedAt, r.FinishedAt,
-                    r.SuccessCount, r.FailureCount, r.ErrorMessage,
+                    r.SuccessCount, r.FailureCount, r.ErrorMessage, r.TesterId, r.ClientEnvelope,
                     ConfigName = r.TestConfig.Name,
+                    EndpointKind = r.TestConfig.EndpointKind,
                     Target = r.TestConfig.EndpointRef,
                 })
                 .FirstOrDefaultAsync(ct);
@@ -375,11 +376,31 @@ public static class TestRunsEndpoints
 
             var attempts = await LoadAttemptsAsync(dataSource, id, ct);
 
+            // Friendly target for the header: a kind=proxy ref resolves to its
+            // deployment's name (the raw {"kind":"proxy","proxy_endpoint_id":…}
+            // JSON is not a target a reader can recognize); kind=network to
+            // host:port. Raw ref stays as the fallback.
+            var target = header.Target;
+            string? targetDeploymentName = null;
+            if (header.EndpointKind == "proxy" &&
+                TryProxyDeploymentId(header.Target, out var reportDeploymentId))
+            {
+                targetDeploymentName = await db.Deployments
+                    .AsNoTracking()
+                    .Where(d => d.DeploymentId == reportDeploymentId)
+                    .Select(d => d.Name)
+                    .FirstOrDefaultAsync(ct);
+            }
+            target = FriendlyTarget(header.EndpointKind, header.Target, targetDeploymentName);
+
+            var infra = await LoadReportInfraAsync(
+                db, header.TesterId, header.EndpointKind, header.Target, header.ClientEnvelope, ct);
+
             var input = new RunReportInput(
                 RunId: header.Id,
                 ProjectId: header.ProjectId,
                 ConfigName: header.ConfigName,
-                Target: header.Target,
+                Target: target,
                 Status: header.Status,
                 StartedAt: header.StartedAt,
                 FinishedAt: header.FinishedAt,
@@ -390,7 +411,8 @@ public static class TestRunsEndpoints
                 // a legal XML character — it 500'd the DOCX export (found by
                 // clicking the live export button on a 2026-07-19 run).
                 ErrorMessage: header.ErrorMessage is null ? null : AnsiText.Strip(header.ErrorMessage),
-                Attempts: attempts);
+                Attempts: attempts,
+                Infra: infra);
 
             return ReportExport.Deliver(exporters, fmt, RunReportDocument.Build(input),
                 fileBase: $"test-run-{id.ToString("N")[..8]}", requested: format);
@@ -489,41 +511,179 @@ public static class TestRunsEndpoints
     private static object? RawJsonOrNull(string? value)
         => value is null ? null : RawJson(value);
 
-    /// <summary>One side of the /infra payload: identity + catalog specs +
-    /// effective hourly price + the same-cloud alternative-size pool (specs
-    /// joined with prices) the advisor derives upsize/downsize suggestions
-    /// from. Prices resolve DB cost_rates → curated CloudCostTable → null
-    /// ("price unknown" — never the D2s_v3 hardcoded fallback, which would
-    /// fabricate advice economics).</summary>
-    internal static async Task<object> BuildInfraSideAsync(
+    /// <summary>One side of the run's infrastructure, typed
+    /// (<see cref="Reports.ReportInfraSide"/>): identity + catalog specs +
+    /// effective hourly price + the same-cloud alternative-size pool. Prices
+    /// resolve DB cost_rates → curated CloudCostTable → null ("price unknown"
+    /// — never the D2s_v3 hardcoded fallback, which would fabricate advice
+    /// economics). Shared by the /infra wire route and the report builder so
+    /// the two can never disagree.</summary>
+    internal static async Task<Reports.ReportInfraSide> LoadInfraSideAsync(
         NetworkerDbContext db, string cloud, string? vmSize, string? region, CancellationToken ct)
     {
         var price = await Infra.InfraPricing.ResolverAsync(db, cloud, region, ct);
         var alternatives = Infra.VmNetworkSpecs.ForCloud(cloud)
             .Where(e => !string.Equals(e.VmSize, vmSize, StringComparison.OrdinalIgnoreCase))
-            .Select(e => new
-            {
-                vm_size = e.VmSize,
-                vcpus = e.Spec.Vcpus,
-                memory_gb = e.Spec.MemoryGb,
-                egress_mbps = e.Spec.EgressMbps,
-                confidence = e.Spec.Confidence,
-                accelerated_networking = e.Spec.AcceleratedNetworking,
-                hourly_usd = price(e.VmSize),
-            })
-            .OrderBy(a => a.egress_mbps)
-            .ThenBy(a => a.hourly_usd ?? double.MaxValue)
+            .Select(e => new Reports.ReportAltSize(
+                e.VmSize, e.Spec.EgressMbps, e.Spec.Confidence,
+                e.Spec.AcceleratedNetworking, price(e.VmSize)))
+            .OrderBy(a => a.EgressMbps)
+            .ThenBy(a => a.HourlyUsd ?? double.MaxValue)
             .ToList();
 
+        return new Reports.ReportInfraSide(
+            cloud, vmSize, region,
+            Infra.VmNetworkSpecs.Lookup(cloud, vmSize),
+            vmSize is null ? null : price(vmSize),
+            alternatives);
+    }
+
+    /// <summary>The /infra wire projection of a typed side. Alternatives on
+    /// the wire additionally carry vcpus/memory for the dashboard's rendering.</summary>
+    internal static async Task<object> BuildInfraSideAsync(
+        NetworkerDbContext db, string cloud, string? vmSize, string? region, CancellationToken ct)
+    {
+        var side = await LoadInfraSideAsync(db, cloud, vmSize, region, ct);
+        var specsByName = Infra.VmNetworkSpecs.ForCloud(cloud)
+            .ToDictionary(e => e.VmSize, e => e.Spec, StringComparer.OrdinalIgnoreCase);
         return new
         {
-            cloud,
-            vm_size = vmSize,
-            region,
-            specs = Infra.VmNetworkSpecs.ToWire(Infra.VmNetworkSpecs.Lookup(cloud, vmSize)),
-            hourly_usd = vmSize is null ? null : price(vmSize),
-            alternatives,
+            cloud = side.Cloud,
+            vm_size = side.VmSize,
+            region = side.Region,
+            specs = Infra.VmNetworkSpecs.ToWire(side.Specs),
+            hourly_usd = side.HourlyUsd,
+            alternatives = side.Alternatives.Select(a => new
+            {
+                vm_size = a.VmSize,
+                vcpus = specsByName[a.VmSize].Vcpus,
+                memory_gb = specsByName[a.VmSize].MemoryGb,
+                egress_mbps = a.EgressMbps,
+                confidence = a.Confidence,
+                accelerated_networking = a.AcceleratedNetworking,
+                hourly_usd = a.HourlyUsd,
+            }).ToList(),
         };
+    }
+
+    /// <summary>Compose the report's infrastructure input: runner side from
+    /// the bound tester, target side from a kind=proxy deployment's config,
+    /// runner load/cores from the stored run envelope. Null when neither side
+    /// resolves (the report simply omits the envelope section).</summary>
+    internal static async Task<Reports.ReportRunInfra?> LoadReportInfraAsync(
+        NetworkerDbContext db, Guid? testerId, string endpointKind, string? endpointRef,
+        string? clientEnvelope, CancellationToken ct)
+    {
+        Reports.ReportInfraSide? runner = null;
+        if (testerId is { } tid)
+        {
+            var t = await db.ProjectTesters
+                .AsNoTracking()
+                .Where(pt => pt.TesterId == tid)
+                .Select(pt => new { pt.Cloud, pt.VmSize, pt.Region })
+                .FirstOrDefaultAsync(ct);
+            if (t is not null)
+            {
+                runner = await LoadInfraSideAsync(db, t.Cloud, t.VmSize, t.Region, ct);
+            }
+        }
+
+        Reports.ReportInfraSide? targetSide = null;
+        if (endpointKind == "proxy" && TryProxyDeploymentId(endpointRef, out var depId))
+        {
+            var depConfig = await db.Deployments
+                .AsNoTracking()
+                .Where(d => d.DeploymentId == depId)
+                .Select(d => d.Config)
+                .FirstOrDefaultAsync(ct);
+            var spec = DeploymentsEndpoints.ParseEndpointSpecs(depConfig).FirstOrDefault();
+            if (spec is not null)
+            {
+                targetSide = await LoadInfraSideAsync(db, spec.Provider, spec.VmSize, spec.Region, ct);
+            }
+        }
+
+        if (runner is null && targetSide is null)
+        {
+            return null;
+        }
+
+        var (peakLoad, cores) = ParseEnvelopeLoad(clientEnvelope);
+        return new Reports.ReportRunInfra(runner, targetSide, peakLoad, cores);
+    }
+
+    /// <summary>Peak 1-minute load + core count from the stored run envelope
+    /// (V046 JSON). Tolerant: missing/malformed → (null, null).</summary>
+    internal static (double? PeakLoad1m, int? CpuCores) ParseEnvelopeLoad(string? clientEnvelope)
+    {
+        if (string.IsNullOrWhiteSpace(clientEnvelope))
+        {
+            return (null, null);
+        }
+        try
+        {
+            using var doc = JsonDocument.Parse(clientEnvelope);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return (null, null);
+            }
+            double? Load(string field) =>
+                doc.RootElement.TryGetProperty(field, out var o)
+                && o.ValueKind == JsonValueKind.Object
+                && o.TryGetProperty("load_avg_1m", out var v)
+                && v.ValueKind == JsonValueKind.Number
+                    ? v.GetDouble() : null;
+            var before = Load("client_load_before");
+            var after = Load("client_load_after");
+            double? peak = before is null && after is null
+                ? null
+                : Math.Max(before ?? 0, after ?? 0);
+            int? cores =
+                doc.RootElement.TryGetProperty("client_info", out var ci)
+                && ci.ValueKind == JsonValueKind.Object
+                && ci.TryGetProperty("cpu_cores", out var cc)
+                && cc.ValueKind == JsonValueKind.Number
+                    ? cc.GetInt32() : null;
+            return (peak, cores);
+        }
+        catch (JsonException)
+        {
+            return (null, null);
+        }
+    }
+
+    /// <summary>Human target for the report header: proxy → the deployment's
+    /// name, network → host[:port]; anything unparseable keeps the raw ref.</summary>
+    internal static string? FriendlyTarget(string endpointKind, string? endpointRef, string? deploymentName)
+    {
+        if (endpointKind == "proxy")
+        {
+            return deploymentName is { Length: > 0 } ? $"target {deploymentName} (proxied)" : endpointRef;
+        }
+        if (string.IsNullOrWhiteSpace(endpointRef))
+        {
+            return endpointRef;
+        }
+        try
+        {
+            using var doc = JsonDocument.Parse(endpointRef);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("host", out var h)
+                && h.ValueKind == JsonValueKind.String)
+            {
+                var host = h.GetString();
+                var port = doc.RootElement.TryGetProperty("port", out var p)
+                           && p.ValueKind == JsonValueKind.Number
+                    ? ":" + p.GetInt32().ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    : "";
+                return host + port;
+            }
+        }
+        catch (JsonException)
+        {
+            // Not JSON — a plain URL/host ref; keep as-is.
+        }
+        return endpointRef;
     }
 
     /// <summary>Extract <c>proxy_endpoint_id</c> (a Deployment id) from a
