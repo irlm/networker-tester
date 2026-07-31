@@ -2,7 +2,8 @@ import { useState, useMemo } from 'react';
 import { Link, useParams } from 'react-router';
 import { api, errorMessage } from '../api/client';
 import { stripAnsi } from '../lib/ansi';
-import type { TestRun, LiveAttempt, BenchmarkArtifact } from '../api/types';
+import type { TestRun, LiveAttempt, BenchmarkArtifact, RunInfra } from '../api/types';
+import { InfraEnvelope } from '../components/InfraEnvelope';
 import { useProject } from '../hooks/useProject';
 import { Breadcrumb } from '../components/common/Breadcrumb';
 import { ExportMenu } from '../components/common/ExportMenu';
@@ -47,6 +48,7 @@ export function RunDetailPage() {
   const [run, setRun] = useState<TestRun | null>(null);
   const [attempts, setAttempts] = useState<LiveAttempt[]>([]);
   const [artifact, setArtifact] = useState<BenchmarkArtifact | null>(null);
+  const [infra, setInfra] = useState<RunInfra | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Attempts failing must never dead-end the page when the run itself loaded
@@ -79,6 +81,11 @@ export function RunDetailPage() {
           // Fetch artifact if present and not already loaded
           if (data.artifact_id && !artifact) {
             api.getTestRunArtifact(runId).then(setArtifact).catch(() => {});
+          }
+          // Infra facts are static per run — fetch once, degrade silently
+          // (old control planes without the route → panel simply absent).
+          if (!infra) {
+            api.getTestRunInfra(runId).then(setInfra).catch(() => {});
           }
         })
         .catch((e) => { setError(errorMessage(e)); setLoading(false); });
@@ -299,6 +306,9 @@ export function RunDetailPage() {
           </span>
         </span>
       </div>
+
+      {/* ── Infrastructure Envelope (expected vs measured + verdict) ── */}
+      <InfraEnvelope infra={infra} attempts={attempts} envelope={run?.envelope} />
 
       {/* ── Timing Breakdown Table (mirrors HTML report) ── */}
       {timingBreakdown.length > 0 && (

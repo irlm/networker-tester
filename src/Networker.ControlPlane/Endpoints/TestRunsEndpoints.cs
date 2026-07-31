@@ -256,6 +256,90 @@ public static class TestRunsEndpoints
             });
         }).RequireAuthorization();
 
+        // GET /api/v2/test-runs/{id}/infra — runner/target VM identity plus
+        // catalog network expectations, backing the run report's
+        // "infrastructure envelope" (expected-vs-measured throughput + the
+        // bottleneck verdict). A separate route rather than a detail-payload
+        // field so the pinned run-detail contract stays byte-identical.
+        //
+        // runner: the run's bound ProjectTester (null for standalone agents).
+        // target: only resolvable for kind=proxy configs — the deployment the
+        // config points at, specs parsed from its config JSON (same
+        // ParseEndpointSpecs seam the cost endpoint uses). Arbitrary network
+        // URLs have no known VM behind them → target null.
+        // Same row-level authz / non-oracle 404 rule as the detail route.
+        app.MapGet("/api/v2/test-runs/{id:guid}/infra", async (
+            Guid id,
+            HttpContext ctx,
+            ProjectAccessChecker access,
+            NetworkerDbContext db,
+            CancellationToken ct) =>
+        {
+            var run = await db.TestRuns
+                .AsNoTracking()
+                .Where(r => r.Id == id)
+                .Select(r => new { r.ProjectId, r.TesterId, r.TestConfigId })
+                .FirstOrDefaultAsync(ct);
+
+            if (run is null ||
+                !await access.HasRoleAsync(ctx, run.ProjectId, ProjectRole.Viewer, ct))
+            {
+                return Results.NotFound();
+            }
+
+            object? runner = null;
+            if (run.TesterId is { } testerId)
+            {
+                var t = await db.ProjectTesters
+                    .AsNoTracking()
+                    .Where(pt => pt.TesterId == testerId)
+                    .Select(pt => new { pt.Cloud, pt.VmSize, pt.Region })
+                    .FirstOrDefaultAsync(ct);
+                if (t is not null)
+                {
+                    runner = new
+                    {
+                        cloud = t.Cloud,
+                        vm_size = t.VmSize,
+                        region = t.Region,
+                        specs = Infra.VmNetworkSpecs.ToWire(
+                            Infra.VmNetworkSpecs.Lookup(t.Cloud, t.VmSize)),
+                    };
+                }
+            }
+
+            object? target = null;
+            var cfg = await db.TestConfigs
+                .AsNoTracking()
+                .Where(c => c.Id == run.TestConfigId)
+                .Select(c => new { c.EndpointKind, c.EndpointRef })
+                .FirstOrDefaultAsync(ct);
+            if (cfg is { EndpointKind: "proxy" } &&
+                TryProxyDeploymentId(cfg.EndpointRef, out var deploymentId))
+            {
+                var depConfig = await db.Deployments
+                    .AsNoTracking()
+                    .Where(d => d.DeploymentId == deploymentId)
+                    .Select(d => d.Config)
+                    .FirstOrDefaultAsync(ct);
+                var spec = DeploymentsEndpoints.ParseEndpointSpecs(depConfig)
+                    .FirstOrDefault();
+                if (spec is not null)
+                {
+                    target = new
+                    {
+                        cloud = spec.Provider,
+                        vm_size = spec.VmSize,
+                        region = spec.Region,
+                        specs = Infra.VmNetworkSpecs.ToWire(
+                            Infra.VmNetworkSpecs.Lookup(spec.Provider, spec.VmSize)),
+                    };
+                }
+            }
+
+            return Results.Ok(new { runner, target });
+        }).RequireAuthorization();
+
         // GET /api/v2/test-runs/{id}/report?format=html|md|docx — the run's
         // results as a branded, downloadable document (LagHound logo, KPI
         // summary, per-protocol latency chart + table, phase timings, capped
@@ -417,6 +501,32 @@ public static class TestRunsEndpoints
 
     private static object? RawJsonOrNull(string? value)
         => value is null ? null : RawJson(value);
+
+    /// <summary>Extract <c>proxy_endpoint_id</c> (a Deployment id) from a
+    /// kind=proxy config's <c>endpoint_ref</c> JSON. Tolerant: bad JSON or a
+    /// missing/invalid id → false, never a throw (mirrors the dispatcher's
+    /// ResolveProxyEndpointAsync parse rule).</summary>
+    internal static bool TryProxyDeploymentId(string? endpointRef, out Guid deploymentId)
+    {
+        deploymentId = Guid.Empty;
+        if (string.IsNullOrWhiteSpace(endpointRef))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(endpointRef);
+            return doc.RootElement.ValueKind == JsonValueKind.Object &&
+                   doc.RootElement.TryGetProperty("proxy_endpoint_id", out var idProp) &&
+                   idProp.ValueKind == JsonValueKind.String &&
+                   Guid.TryParse(idProp.GetString(), out deploymentId);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
 
     /// <summary>
     /// Read the RequestAttempt rows the networker-tester engine persisted for
