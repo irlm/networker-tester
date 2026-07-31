@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.122] — 2026-07-31
+
+### Fixed
+- **Run report "latency distribution" box plot is now log-scaled.** v0.28.121
+  labelled each payload row but kept a linear axis — so a 100 MB transfer
+  (~1500 ms) dominated the scale and crushed every sub-100 ms row (all the small
+  download payloads, tcp, dns, http, tls) into an invisible sliver at the left
+  edge. The axis is now log10 with 1/10/100/1000 ms decade gridlines, so every
+  row gets visible width and the payload ladder reads as evenly-spaced steps.
+
+---
+
 ## [0.28.121] — 2026-07-31
 
 ### Fixed
