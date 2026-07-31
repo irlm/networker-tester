@@ -420,8 +420,13 @@ public sealed class ControlPlaneIntegrationTests : IClassFixture<ControlPlaneFix
     }
 
     [Fact]
-    public async Task Tester_upgrade_refuses_honestly_with_501_and_mutates_nothing()
+    public async Task Tester_upgrade_rejects_a_non_idle_runner_and_mutates_nothing()
     {
+        // v0.28.119: upgrade is now IMPLEMENTED (Azure run-command reinstall —
+        // was an honest 501, F23). It guards to a running+idle runner with no
+        // in-flight benchmarks; the seeded runner is running but
+        // allocation='on-demand' (not idle), so this rejects with 409 BEFORE any
+        // state change — proving the guard and that a rejected upgrade is inert.
         var client = _fixture.CreateAdminClient();
 
         Guid testerId;
@@ -436,15 +441,16 @@ public sealed class ControlPlaneIntegrationTests : IClassFixture<ControlPlaneFix
             $"/api/projects/{ControlPlaneFixture.SeededProjectId}/testers/{testerId}/upgrade",
             new { confirm = true });
 
-        Assert.Equal(HttpStatusCode.NotImplemented, resp.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, resp.StatusCode);
         var body = await resp.Content.ReadAsStringAsync();
-        Assert.Contains("not implemented", body);
+        Assert.Contains("must be idle", body);
 
-        // No state transition, no fake status message — the row is untouched.
+        // Rejected before any transition — no 'upgrading', no status message.
         await using (var verify = _fixture.NewDbContext())
         {
             var tester = await verify.ProjectTesters.FirstAsync(t => t.TesterId == testerId);
             Assert.Equal("on-demand", tester.Allocation);
+            Assert.Equal("running", tester.PowerState);
             Assert.Null(tester.StatusMessage);
         }
     }

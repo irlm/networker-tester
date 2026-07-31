@@ -69,6 +69,16 @@ public interface IComputeProvisioner
     Task<ProvisionResult> ShowAsync(
         ProjectTester tester, ProviderCredentials? credentials, CancellationToken ct = default);
 
+    /// <summary>Run a shell script on the VM without SSH (Azure
+    /// <c>vm run-command invoke --command-id RunShellScript</c>). Used by the
+    /// tester upgrade path to re-fetch + reinstall the agent/tester binaries in
+    /// place. Azure only today; AWS/GCP return
+    /// <see cref="ProvisionResult.Unsupported"/> (needs SSM / gcloud ssh) so the
+    /// caller falls back to delete+redeploy. The script MUST be ASCII — Azure
+    /// latin-1-encodes run-command payloads (the em-dash incident, v0.28.26).</summary>
+    Task<ProvisionResult> RunCommandAsync(
+        ProjectTester tester, ProviderCredentials? credentials, string script, CancellationToken ct = default);
+
     /// <summary>
     /// Create a brand-new VM — the C# port of the Rust
     /// <c>CloudProvider::create_vm</c> ("the heavy call"): Azure

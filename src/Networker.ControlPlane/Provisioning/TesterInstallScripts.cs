@@ -302,4 +302,57 @@ public static class TesterInstallScripts
             user, ip, command);
         return Task.FromResult(string.Empty);
     }
+
+    /// <summary>
+    /// In-place reinstall of the tester + agent binaries at <paramref name="tag"/>,
+    /// run over Azure <c>vm run-command</c> (no SSH). Re-fetches the release,
+    /// installs both binaries, applies the ping sysctl, and restarts the systemd
+    /// agent -- the control-plane-driven equivalent of the manual upgrade, and
+    /// what the tester <c>/upgrade</c> endpoint now runs. Agent asset first (C#),
+    /// Rust-agent fallback for older tags, mirroring the cloud-init bootstrap.
+    /// Idempotent and safe to re-run. MUST be ASCII (Azure latin-1-encodes
+    /// run-command payloads -- the v0.28.26 em-dash incident); IsAsciiOnly guards
+    /// it and the arg-shape test asserts it.
+    /// </summary>
+    public static string ReinstallScript(string tag, string testerTarget)
+    {
+        return string.Join('\n',
+            "#!/usr/bin/env bash",
+            "set -euo pipefail",
+            "TAG=" + tag,
+            "TARGET=" + testerTarget,
+            "BASE=https://github.com/irlm/networker-tester/releases/download/${TAG}",
+            "cd /tmp",
+            "curl -fsSL \"${BASE}/networker-tester-${TARGET}.tar.gz\" -o nwt.tgz",
+            "tar xzf nwt.tgz",
+            "sudo install -m 0755 networker-tester /usr/local/bin/networker-tester",
+            "if curl -fsSL \"${BASE}/networker-agent-cs-linux-x64.tar.gz\" -o nwa.tgz; then",
+            "  tar xzf nwa.tgz",
+            "  sudo install -m 0755 networker-agent /usr/local/bin/networker-agent",
+            "elif curl -fsSL \"${BASE}/networker-agent-${TARGET}.tar.gz\" -o nwa.tgz; then",
+            "  tar xzf nwa.tgz",
+            "  sudo install -m 0755 networker-agent /usr/local/bin/networker-agent",
+            "fi",
+            "echo 'net.ipv4.ping_group_range = 0 2147483647' | sudo tee /etc/sysctl.d/99-networker-ping.conf >/dev/null || true",
+            "sudo sysctl -p /etc/sysctl.d/99-networker-ping.conf >/dev/null 2>&1 || true",
+            "rm -f /tmp/nwt.tgz /tmp/nwa.tgz",
+            "sudo systemctl restart networker-agent",
+            "/usr/local/bin/networker-tester --version");
+    }
+
+    /// <summary>Every char is ASCII (&lt;= 0x7F) -- the invariant Azure run-command
+    /// / custom-data require (they latin-1-encode the payload, so a stray
+    /// non-ASCII byte aborts the whole invocation).</summary>
+    public static bool IsAsciiOnly(string s)
+    {
+        foreach (var c in s)
+        {
+            if (c > '\u007F')
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 }

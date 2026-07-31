@@ -374,6 +374,26 @@ public sealed class AgentMessageProcessor
                         .SetProperty(t => t.UpdatedAt, DateTime.UtcNow), ct);
             }
         }
+
+        // A live heartbeat is ground truth that the VM + agent are up. After an
+        // Azure auto-shutdown+restart (schedule or manual), the VM returns and
+        // the systemd agent reconnects, but nothing flipped power_state off the
+        // stale 'stopped' the AutoShutdownService wrote — so the UI showed a
+        // running runner as stopped and the upgrade path no-op'd (2026-07-31).
+        // Reconcile ONLY from a settled 'stopped'/'stopping' (never fight an
+        // in-flight start/provision, which converges via its own FinishAsync)
+        // and clear the now-false auto-shutdown status message.
+        if (agent.TesterId is { } reconTesterId)
+        {
+            await _db.ProjectTesters
+                .Where(t => t.TesterId == reconTesterId
+                            && (t.PowerState == "stopped" || t.PowerState == "stopping"))
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(t => t.PowerState, "running")
+                    .SetProperty(t => t.StatusMessage, (string?)null)
+                    .SetProperty(t => t.UpdatedAt, DateTime.UtcNow), ct);
+        }
+
         await _db.SaveChangesAsync(ct);
     }
 
