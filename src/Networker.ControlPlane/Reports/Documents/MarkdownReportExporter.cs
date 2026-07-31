@@ -106,7 +106,7 @@ public sealed class MarkdownReportExporter : IReportExporter
         foreach (var p in c.Points)
         {
             sb.Append(p.Label.PadRight(labelW)).Append("  ")
-              .Append(CandleAscii.Track(p, c.AxisMax)).Append("  ")
+              .Append(CandleAscii.Track(p, c)).Append("  ")
               .Append(CandleAscii.Summary(p, c.Unit)).Append('\n');
         }
         sb.Append("```\n");

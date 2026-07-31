@@ -112,7 +112,8 @@ public sealed record ChartPoint(string Label, double Value, string Display, Repo
 /// box-plot in Markdown/DOCX. All bounds are optional so partial data still
 /// draws what it has; every candle scales to the shared <see cref="AxisMax"/>.
 /// </summary>
-public sealed record CandleBlock(string? Caption, IReadOnlyList<CandlePoint> Points, string Unit = "ms") : ReportBlock
+public sealed record CandleBlock(
+    string? Caption, IReadOnlyList<CandlePoint> Points, string Unit = "ms", bool LogScale = false) : ReportBlock
 {
     /// <summary>Shared upper axis bound — the largest max/p95/median across all
     /// candles (floored above zero).</summary>
@@ -120,8 +121,37 @@ public sealed record CandleBlock(string? Caption, IReadOnlyList<CandlePoint> Poi
         ? 0
         : Points.Max(p => p.High ?? p.P95 ?? p.Median ?? 0));
 
-    /// <summary>Position in [0,1] along the axis for a value.</summary>
-    public double Fraction(double value) => Math.Clamp(value / AxisMax, 0, 1);
+    /// <summary>Shared lower axis bound for the log scale — the smallest
+    /// positive bound across all candles. 1e-9 floor keeps the math total.</summary>
+    public double AxisMin => Math.Max(1e-9, Points.Count == 0
+        ? 1e-9
+        : Points.Min(p =>
+            new[] { p.Min, p.P25, p.Median, p.P75, p.P95, p.High }
+                .Where(v => v is > 0)
+                .Select(v => v!.Value)
+                .DefaultIfEmpty(AxisMax)
+                .Min()));
+
+    /// <summary>Position in [0,1] along the axis for a value. With
+    /// <see cref="LogScale"/> the axis is log10 between AxisMin and AxisMax —
+    /// the right presentation when values span orders of magnitude (a 1 ms TCP
+    /// connect next to a 1.4 s 100 MB transfer), where a linear axis crushes
+    /// every small candle into an unreadable sliver at the left edge.</summary>
+    public double Fraction(double value)
+    {
+        if (!LogScale)
+        {
+            return Math.Clamp(value / AxisMax, 0, 1);
+        }
+        var min = AxisMin;
+        var max = AxisMax;
+        if (value <= 0 || max <= min)
+        {
+            return 0;
+        }
+        var span = Math.Log10(max) - Math.Log10(min);
+        return span <= 0 ? 1 : Math.Clamp((Math.Log10(value) - Math.Log10(min)) / span, 0, 1);
+    }
 }
 
 /// <summary>One candle: the five-number summary of a distribution (plus p95,
