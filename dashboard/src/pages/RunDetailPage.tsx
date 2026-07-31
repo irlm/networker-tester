@@ -19,12 +19,15 @@ import {
   computeTimingBreakdown,
   computeStats,
   primaryMetricValue,
+  latencyMetricValue,
+  groupByProtocolAndPayload,
   formatMs,
   formatMetricValue,
   formatBytes,
   successRateClass,
   type ProtocolStats,
   type TimingBreakdown,
+  type Stats,
 } from '../lib/analysis';
 import { TOOLTIP_STYLE } from '../lib/chart';
 import {
@@ -124,6 +127,29 @@ export function RunDetailPage() {
       mean: Number(ps.stats.mean.toFixed(2)),
     }));
   }, [protocolStats]);
+
+  // Latency distribution rows (one per protocol × payload) for the box plot.
+  // Uses transfer-time ms for throughput modes so every row shares one ms axis
+  // and per-payload rows ladder by transfer time. Sorted so each mode's payloads
+  // read ascending (1 KB → 100 MB).
+  const latencyDist = useMemo(() => {
+    const groups = groupByProtocolAndPayload(attempts.filter((a) => a.success));
+    const rows: { protocol: string; payloadBytes: number | null; stats: Stats }[] = [];
+    for (const [key, atts] of groups) {
+      const values = atts.map(latencyMetricValue).filter((v): v is number => v != null);
+      const stats = computeStats(values);
+      if (!stats) continue;
+      const protocol = key.split(':')[0];
+      const payloadStr = key.includes(':') ? key.split(':')[1] : null;
+      rows.push({ protocol, payloadBytes: payloadStr ? parseInt(payloadStr, 10) : null, stats });
+    }
+    rows.sort((a, b) =>
+      a.protocol === b.protocol
+        ? (a.payloadBytes ?? 0) - (b.payloadBytes ?? 0)
+        : a.protocol.localeCompare(b.protocol)
+    );
+    return rows;
+  }, [attempts]);
 
   const toggleProtocol = (protocol: string) => {
     setExpandedProtocols((prev) => {
@@ -334,14 +360,14 @@ export function RunDetailPage() {
       )}
 
       {/* ── Box-and-Whisker Chart ── */}
-      {protocolStats.length > 0 && (
+      {latencyDist.length > 0 && (
         <div className="mb-6">
           <h3 className="text-xs text-gray-400 tracking-wider mb-3 font-medium">latency distribution — box &amp; whisker</h3>
           <div className="border border-gray-800 rounded bg-[var(--bg-card)] p-4">
             <div className="space-y-3">
-              {protocolStats.map((ps) => {
-                const s = ps.stats;
-                const maxVal = Math.max(...protocolStats.map(p => p.stats.max));
+              {latencyDist.map((r) => {
+                const s = r.stats;
+                const maxVal = Math.max(...latencyDist.map(p => p.stats.max));
                 const scale = (v: number) => maxVal > 0 ? (v / maxVal) * 100 : 0;
                 const whiskerLeft = scale(s.min);
                 const boxLeft = scale(s.p25);
@@ -349,8 +375,11 @@ export function RunDetailPage() {
                 const boxRight = scale(s.p75);
                 const whiskerRight = scale(s.max);
                 return (
-                  <div key={ps.protocol} className="flex items-center gap-3">
-                    <div className="w-20 text-xs text-gray-400 font-mono text-right shrink-0">{ps.protocol}</div>
+                  <div key={`${r.protocol}:${r.payloadBytes ?? ''}`} className="flex items-center gap-3">
+                    <div className="w-32 text-xs font-mono text-right shrink-0 truncate">
+                      <span className="text-gray-300">{r.protocol}</span>
+                      {r.payloadBytes != null && <span className="text-gray-500"> · {formatBytes(r.payloadBytes)}</span>}
+                    </div>
                     <div className="flex-1 relative h-6">
                       {/* Whisker line (min to max) */}
                       <div className="absolute top-1/2 -translate-y-1/2 h-px bg-gray-600" style={{ left: `${whiskerLeft}%`, width: `${whiskerRight - whiskerLeft}%` }} />
@@ -370,14 +399,15 @@ export function RunDetailPage() {
                 );
               })}
             </div>
-            <div className="flex justify-between text-[10px] text-gray-500 mt-2 px-[calc(5rem+0.75rem)]">
+            <div className="flex justify-between text-[10px] text-gray-500 mt-2 px-[calc(8rem+0.75rem)]">
               <span>0ms</span>
-              <span>{formatMs(Math.max(...protocolStats.map(p => p.stats.max)))}</span>
+              <span>{formatMs(Math.max(...latencyDist.map(p => p.stats.max)))}</span>
             </div>
-            <div className="flex items-center gap-4 mt-3 text-[10px] text-gray-500 px-[calc(5rem+0.75rem)]">
+            <div className="flex items-center gap-4 mt-3 text-[10px] text-gray-500 px-[calc(8rem+0.75rem)]">
               <span className="flex items-center gap-1"><span className="w-3 h-px bg-gray-500 inline-block" /> whisker (min/max)</span>
               <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm border border-cyan-600/60 bg-cyan-900/30 inline-block" /> IQR (p25–p75)</span>
               <span className="flex items-center gap-1"><span className="w-0.5 h-3 bg-cyan-400 inline-block" /> median (p50)</span>
+              <span className="ml-auto text-gray-600">throughput modes shown as transfer time</span>
             </div>
           </div>
         </div>
