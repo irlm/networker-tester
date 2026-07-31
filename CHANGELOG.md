@@ -11,7 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.28.119] — 2026-07-31
+## [0.28.120] — 2026-07-31
+
+### Changed
+- **`native` mode no longer produces failing attempts on older configs.**
+  v0.28.118 removed `native` from the catalog (release binaries ship without
+  `--features native`), but configs created before that still list it and kept
+  failing every `native` attempt with "recompile to enable". Dispatch now
+  filters a config's `modes` to the runnable catalog before handing it to the
+  tester, dropping `catalog:false` modes (native, the bare `browser` stub).
+  Runner-level modes (apibench, sdkprobe) stay; a would-be-empty workload is
+  left untouched rather than stranding the run; the drop is logged.
+
+### Notes
+- **`ping` and `path` failing against Azure targets is environmental and not
+  fixable** — confirmed live: Azure's public-IP/load-balancer layer does not
+  forward ICMP to a VM's public IP (an NSG ICMP-allow rule was added and made
+  no difference), and the fabric strips ICMP TTL-exceeded. Both probes report
+  this honestly; against non-Azure or same-VNet targets they work.
 
 ### Fixed
 - **The "Reinstall runner" (upgrade) button now works** — it was an honest 501
