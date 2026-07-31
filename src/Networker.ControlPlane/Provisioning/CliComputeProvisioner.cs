@@ -80,6 +80,49 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         ProjectTester tester, ProviderCredentials? credentials, CancellationToken ct) =>
         DispatchAsync(tester, credentials, LifecycleOp.Show, ct);
 
+    /// <summary>Azure <c>vm run-command invoke --command-id RunShellScript</c> —
+    /// runs a script in-VM without SSH. AWS/GCP return Unsupported (SSM / gcloud
+    /// ssh not wired). Guards the ASCII invariant before spawning az (Azure
+    /// latin-1-encodes the payload — v0.28.26).</summary>
+    public async Task<ProvisionResult> RunCommandAsync(
+        ProjectTester tester, ProviderCredentials? credentials, string script, CancellationToken ct)
+    {
+        if (!string.Equals(tester.Cloud, "azure", StringComparison.OrdinalIgnoreCase))
+        {
+            return ProvisionResult.Unsupported(tester.Cloud ?? "(null)");
+        }
+
+        var resourceId = tester.VmResourceId;
+        if (string.IsNullOrEmpty(resourceId))
+        {
+            return ProvisionResult.SpawnError("tester has no vm_resource_id; nothing to run a command on");
+        }
+
+        if (!TesterInstallScripts.IsAsciiOnly(script))
+        {
+            return ProvisionResult.SpawnError("run-command script contains non-ASCII characters (Azure would latin-1-mangle it)");
+        }
+
+        var args = new List<string> { "vm", "run-command", "invoke", "--command-id", "RunShellScript" };
+        if (!string.IsNullOrEmpty(credentials?.SubscriptionId))
+        {
+            args.Add("--subscription");
+            args.Add(credentials!.SubscriptionId!);
+        }
+        if (!string.IsNullOrEmpty(credentials?.ResourceGroup))
+        {
+            args.Add("--resource-group");
+            args.Add(credentials!.ResourceGroup!);
+        }
+        args.Add("--ids");
+        args.Add(resourceId);
+        args.Add("--scripts");
+        args.Add(script);
+
+        var env = new Dictionary<string, string> { ["PYTHONWARNINGS"] = "ignore" };
+        return await RunAsync(CloudCli.AzBin(), args, env, ct).ConfigureAwait(false);
+    }
+
     /// <summary>
     /// Reverse-resolve a deploy VM by its captured public endpoint (E2E P1-16).
     /// Azure only for now (prod is Azure); AWS/GCP return null (logged) so their

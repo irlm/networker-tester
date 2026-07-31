@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.119] — 2026-07-31
+
+### Fixed
+- **The "Reinstall runner" (upgrade) button now works** — it was an honest 501
+  (fidelity audit F23: SSH re-install never ported). Implemented for Azure via
+  `az vm run-command` (no SSH): marks the runner `upgrading`, re-fetches the
+  release + installs the tester and agent binaries in place, applies the ping
+  sysctl, restarts the agent, and converges back to `running`; the agent's
+  reconnect heartbeat writes the new version through. Guarded to a running,
+  idle runner with no in-flight benchmarks; the reinstall script is
+  ASCII-validated before dispatch (Azure latin-1-encodes run-command payloads —
+  the v0.28.26 em-dash incident). AWS/GCP still return an honest 501
+  (run-command not wired → delete+redeploy).
+- **Runner `power_state` no longer gets stuck `stopped` while the agent is
+  live.** After an auto-shutdown+restart the VM returns and the systemd agent
+  reconnects, but nothing flipped the state the `AutoShutdownService` wrote — so
+  the UI showed a running runner as stopped and the upgrade path no-op'd. A live
+  heartbeat now reconciles a settled `stopped`/`stopping` back to `running` and
+  clears the stale auto-shutdown status (never fights an in-flight
+  start/provision).
+
+---
+
 ## [0.28.118] — 2026-07-31
 
 ### Fixed

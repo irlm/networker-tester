@@ -184,16 +184,15 @@ public static partial class TesterWriteEndpoints
 
     // ── upgrade ────────────────────────────────────────────────────────────────
 
-    /// <summary>POST /upgrade (Admin) — HONEST 501 (fidelity audit F23).
-    /// The Rust dashboard re-installed the tester binaries over SSH
-    /// (<c>services/tester_install.rs::install_tester</c>); that path has not
-    /// been ported. The previous C# behaviour marked the row
-    /// <c>upgrading</c>, ran a cloud state probe, and wrote "Upgrade
-    /// completed (state re-probed)" — a silent lie that left testers on old
-    /// versions while the UI reported success. Until the SSH re-install (or
-    /// an agent self-update command) is wired, this refuses loudly and
-    /// mutates nothing. Request validation (400/404) is kept so the route's
-    /// contract stays testable.</summary>
+    /// <summary>POST /upgrade (Admin) — in-place reinstall of the tester + agent
+    /// binaries to the control plane's current version via Azure
+    /// <c>vm run-command</c> (no SSH). Formerly an honest 501 (F23); now wired.
+    /// Marks the row <c>upgrading</c>, runs the reinstall in the background
+    /// (fetch release → install binaries → ping sysctl → restart the agent) and
+    /// converges back to <c>running</c>; the agent's reconnect heartbeat then
+    /// writes the new installer_version through. Only a running, idle runner with
+    /// no in-flight benchmarks is upgradeable; non-Azure providers get an honest
+    /// 501 (run-command not ported → delete+redeploy).</summary>
     private static async Task<IResult> UpgradeTester(
         string projectId,
         Guid testerId,
@@ -218,15 +217,49 @@ public static partial class TesterWriteEndpoints
             return ApiError.NotFound("Tester not found");
         }
 
-        logger.LogWarning(
-            "tester {TesterId} upgrade requested by {Actor} — refused with 501: SSH re-install not ported",
-            testerId, user?.Email);
+        if (!string.Equals(tester.Cloud, "azure", StringComparison.OrdinalIgnoreCase))
+        {
+            return ApiError.Status(
+                StatusCodes.Status501NotImplemented,
+                $"in-place upgrade is only implemented for Azure runners (this one is '{tester.Cloud}'); "
+                + "run-command is not wired for AWS/GCP. Workaround: delete and re-deploy the runner.");
+        }
+        if (tester.PowerState != "running")
+        {
+            return Conflict($"cannot upgrade tester in power_state={tester.PowerState}; expected 'running'");
+        }
+        if (tester.Allocation != "idle")
+        {
+            return Conflict($"cannot upgrade tester with allocation={tester.Allocation}; must be idle");
+        }
+        var inFlight = await InFlightRunCountAsync(db, testerId, ct);
+        if (inFlight > 0)
+        {
+            return Conflict($"cannot upgrade tester with {inFlight} benchmark(s) in flight");
+        }
 
-        return ApiError.Status(
-            StatusCodes.Status501NotImplemented,
-            "tester upgrade (SSH re-install) is not implemented in the C# control plane yet — "
-            + "no binaries were changed; tracked in the fidelity audit (F23). "
-            + "Workaround: delete and re-deploy the runner to get current binaries.");
+        var tag = TesterInstallScripts.PreferredReleaseTag(VersionEndpoints.DashboardVersion);
+        var target = TesterInstallScripts.ReleaseTarget(tester.OsArch ?? "x86_64");
+        var script = TesterInstallScripts.ReinstallScript(tag, target);
+
+        tester.PowerState = "upgrading";
+        tester.StatusMessage = $"Upgrade to {tag} requested";
+        tester.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+
+        logger.LogInformation(
+            "tester {TesterId} upgrade to {Tag} requested by {Actor} (run-command in background)",
+            testerId, tag, user?.Email);
+
+        FireAndForget(scopeFactory, loggerFactory, testerId, "upgrade", async (p, cred, t, l, token) =>
+        {
+            var res = await p.RunCommandAsync(t, cred, script, token);
+            // The VM stays running throughout — success and a failed reinstall
+            // both land 'running' (nothing was powered off).
+            await FinishAsync(scopeFactory, testerId, res, running: "running", failedTo: "running", "upgrade", l, token);
+        });
+
+        return Results.Accepted($"/api/projects/{projectId}/testers/{testerId}", ToDto(tester));
     }
 
     // ── probe ──────────────────────────────────────────────────────────────────
