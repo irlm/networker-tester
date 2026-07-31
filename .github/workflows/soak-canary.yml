@@ -14,6 +14,10 @@ name: Prod run-execution canary
 # cell's reference-API install + /api reroute, or apibench silently measured
 # the built-in endpoint /api (v0.28.114 class: languages written but dropped
 # on the install path; returns 200s either way, so only the log can tell).
+# Finally (phase 3) it reuses that same endpoint to run the full HTTP/TCP mode
+# matrix through the proxy, asserting every mode returns a successful attempt
+# (v0.28.118: pageload3/websocket were 0/N through nginx and reached prod
+# unflagged) and that dispatch drops the unrunnable `native` mode (v0.28.120).
 # Both the runner and the endpoint are torn down after.
 #
 # A red run = the run-execution path regressed. Alerting mirrors the soak check
@@ -33,6 +37,10 @@ on:
         default: '1'
       apibench:
         description: 'Also run the proxy-fronted apibench phase (1/0)'
+        required: false
+        default: '1'
+      mode_coverage:
+        description: 'Also run the full mode matrix through the proxy (1/0)'
         required: false
         default: '1'
 
@@ -57,6 +65,7 @@ jobs:
           DASHBOARD_ADMIN_PASSWORD: ${{ secrets.DASHBOARD_ADMIN_PASSWORD }}
           CANARY_REUSE_RUNNER: ${{ github.event.inputs.reuse_runner || '1' }}
           CANARY_APIBENCH: ${{ github.event.inputs.apibench || '1' }}
+          CANARY_MODE_COVERAGE: ${{ github.event.inputs.mode_coverage || '1' }}
         run: bash scripts/soak-canary.sh
 
       # ── Failure alerting (mirrors the soak check's pinned-issue pattern) ──
