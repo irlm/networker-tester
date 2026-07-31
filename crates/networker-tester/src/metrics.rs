@@ -2050,6 +2050,13 @@ pub struct ServerTimingResult {
     /// (from Server-Timing: csw-i;dur=N, where N is the count).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub srv_csw_involuntary: Option<u64>,
+    /// Endpoint process-CPU milliseconds consumed during this request's
+    /// measured window (from Server-Timing: cpu;dur=X — currently emitted for
+    /// the upload drain window). cpu/recv ratio ≈ server CPU utilization of
+    /// the transfer: the server-side "was the endpoint CPU-bound?" evidence
+    /// the infrastructure envelope's verdict uses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srv_cpu_ms: Option<f64>,
 }
 
 /// A single certificate in the peer's certificate chain.

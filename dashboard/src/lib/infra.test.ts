@@ -6,7 +6,7 @@
 
 import { describe, it, expect } from 'vitest';
 import type { LiveAttempt, RunEnvelope, RunInfra } from '../api/types';
-import { assessRun, formatMbps, verdictLabel } from './infra';
+import { assessRun, formatMbps, verdictLabel, wouldBenefitFromCeilingProbe } from './infra';
 
 function throughputAttempt(
   protocol: string,
@@ -154,6 +154,79 @@ describe('assessRun — verdicts', () => {
 
   it('runs without throughput modes assess to nothing (panel renders no bars)', () => {
     expect(assessRun([], B2S_INFRA, IDLE_ENVELOPE)).toEqual([]);
+  });
+});
+
+describe('assessRun — empirical ceiling (mthroughput, Phase 3)', () => {
+  // The tester's capacity fields carry MB/s; 73.9 MB/s ≈ 591 Mbps measured
+  // path capacity — the multi-stream truth that supersedes the ~600 estimate.
+  const mthroughputAttempt = {
+    attempt_id: 'mt',
+    run_id: 'r',
+    sequence_num: 99,
+    started_at: '2026-07-31T00:00:00Z',
+    finished_at: '2026-07-31T00:00:30Z',
+    success: true,
+    protocol: 'mthroughput',
+    mthroughput: {
+      capacity_down_mbps: 73.9,
+      capacity_up_mbps: 112.4,
+      conns_down: 4,
+      conns_up: 3,
+    },
+  } as unknown as LiveAttempt;
+
+  it('a measured capacity supersedes the catalog estimate', () => {
+    const [dl] = assessRun(
+      [throughputAttempt('download', 104857600, 73.2), mthroughputAttempt],
+      B2S_INFRA,
+      IDLE_ENVELOPE
+    );
+    expect(dl.confidence).toBe('measured');
+    expect(dl.expectedMbps).toBeCloseTo(73.9 * 8, 5);
+    expect(dl.limitingSide).toBeNull();       // path capacity, not one side
+    expect(dl.verdict).toBe('network-bound'); // 586/591 ≈ 99%
+    expect(verdictLabel(dl)).toContain('measured path capacity');
+  });
+
+  it('per-direction: upload uses capacity_up, independent of download', () => {
+    const [, ul] = assessRun(
+      [
+        throughputAttempt('download', 104857600, 73.2),
+        throughputAttempt('upload', 104857600, 110.8),
+        mthroughputAttempt,
+      ],
+      B2S_INFRA,
+      IDLE_ENVELOPE
+    );
+    expect(ul.expectedMbps).toBeCloseTo(112.4 * 8, 5);
+    expect(ul.confidence).toBe('measured');
+  });
+
+  it('no mthroughput data → falls back to the catalog spec ceiling', () => {
+    const [dl] = assessRun(
+      [throughputAttempt('download', 104857600, 73.2)],
+      B2S_INFRA,
+      IDLE_ENVELOPE
+    );
+    expect(dl.confidence).toBe('estimated');
+    expect(dl.expectedMbps).toBe(600);
+  });
+
+  it('hint fires only for estimate-capped runs without a measured ceiling', () => {
+    const capped = assessRun(
+      [throughputAttempt('download', 104857600, 73.2)],
+      B2S_INFRA,
+      IDLE_ENVELOPE
+    );
+    expect(wouldBenefitFromCeilingProbe(capped)).toBe(true);
+
+    const measured = assessRun(
+      [throughputAttempt('download', 104857600, 73.2), mthroughputAttempt],
+      B2S_INFRA,
+      IDLE_ENVELOPE
+    );
+    expect(wouldBenefitFromCeilingProbe(measured)).toBe(false);
   });
 });
 

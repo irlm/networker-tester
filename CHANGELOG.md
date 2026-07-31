@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.126] — 2026-07-31
+
+### Added
+- **Empirical ceiling for the infrastructure envelope (tester schema V005).**
+  The multi-connection capacity probe (`mthroughput`) is now persisted —
+  Postgres gets the V005 migration (new `MthroughputResult` table +
+  `ServerTimingResult.SrvCpuMs`), SQL Server the optional
+  `sql/10_Mthroughput.sql` (the tester degrades gracefully when it hasn't been
+  applied). The `/attempts` API serves the new fields via a tiered query
+  (V005 → V001 → flat fallback, additive wire shape). When a run includes the
+  Multi-Conn mode, the envelope's ceiling switches from the catalog *estimate*
+  to the **measured multi-stream path capacity** ("network-bound — at the
+  measured path capacity"), and a hint row tells estimate-capped runs to add
+  the mode. Fixes the honest-but-awkward ">100% of estimated cap" readings on
+  burstable sizes.
+- **Endpoint CPU evidence (`Server-Timing: cpu;dur`).** The endpoint now
+  reports process-CPU milliseconds consumed across the upload drain window
+  (getrusage user+system delta); the tester parses and persists it
+  (`server_timing.srv_cpu_ms`). cpu/recv ratio ≈ server CPU utilization of the
+  transfer — the server-side "was the endpoint CPU-bound?" evidence.
+
+---
+
 ## [0.28.125] — 2026-07-31
 
 ### Added

@@ -470,6 +470,37 @@ CREATE INDEX IF NOT EXISTS IX_BenchmarkLaunch_Phase
     ON BenchmarkLaunch (PrimaryPhase, Scenario, BenchmarkRunId);
 "#;
 
+const V005_MIGRATION: &str = r#"
+-- V005: Persist mthroughput capacity + endpoint CPU-time server timing.
+-- MthroughputResult previously existed only in the tester's JSON output and
+-- the live attempt stream, so a completed run's /attempts API lost the
+-- multi-stream capacity numbers the infrastructure envelope's EMPIRICAL
+-- ceiling is built from. Column names mirror the Rust struct fields —
+-- Capacity*Mbps carries MB/s (decimal), matching MthroughputResult.
+-- SrvCpuMs = endpoint process-CPU milliseconds across the upload drain
+-- window (Server-Timing `cpu;dur`), the server-side CPU-bound evidence.
+
+CREATE TABLE IF NOT EXISTS MthroughputResult (
+    ServerId               UUID              NOT NULL,
+    AttemptId              UUID              NOT NULL,
+    RemoteAddr             VARCHAR(256)      NOT NULL,
+    CapacityDownMbps       DOUBLE PRECISION  NULL,
+    CapacityUpMbps         DOUBLE PRECISION  NULL,
+    ConnsDown              INT               NOT NULL,
+    ConnsUp                INT               NULL,
+    FairShareSpreadDownPct DOUBLE PRECISION  NULL,
+    FairShareSpreadUpPct   DOUBLE PRECISION  NULL,
+    CONSTRAINT PK_MthroughputResult PRIMARY KEY (ServerId),
+    CONSTRAINT FK_MthroughputResult_Attempt FOREIGN KEY (AttemptId)
+        REFERENCES RequestAttempt (AttemptId)
+);
+
+CREATE INDEX IF NOT EXISTS IX_MthroughputResult_AttemptId
+    ON MthroughputResult (AttemptId);
+
+ALTER TABLE ServerTimingResult ADD COLUMN IF NOT EXISTS SrvCpuMs DOUBLE PRECISION NULL;
+"#;
+
 #[async_trait]
 impl DatabaseBackend for PostgresBackend {
     async fn migrate(&self) -> anyhow::Result<()> {
@@ -577,6 +608,26 @@ impl DatabaseBackend for PostgresBackend {
                     .context("record V004")?;
             }
 
+            let row = client
+                .query_opt("SELECT 1 FROM _schema_versions WHERE version = 'V005'", &[])
+                .await
+                .context("check V005")?;
+
+            if row.is_none() {
+                client
+                    .batch_execute(V005_MIGRATION)
+                    .await
+                    .context("apply V005 migration")?;
+
+                client
+                    .execute(
+                        "INSERT INTO _schema_versions (version) VALUES ('V005')",
+                        &[],
+                    )
+                    .await
+                    .context("record V005")?;
+            }
+
             Ok(())
         }
         .await;
@@ -626,6 +677,9 @@ impl DatabaseBackend for PostgresBackend {
                 }
                 if let Some(st) = &attempt.server_timing {
                     insert_server_timing_result(attempt, st, &client).await?;
+                }
+                if let Some(mt) = &attempt.mthroughput {
+                    insert_mthroughput_result(attempt, mt, &client).await?;
                 }
             }
 
@@ -1624,8 +1678,8 @@ async fn insert_server_timing_result(
     c.execute(
         "INSERT INTO ServerTimingResult (
             ServerId, AttemptId, RequestId, ServerTimestamp,
-            ClockSkewMs, RecvBodyMs, ProcessingMs, TotalServerMs
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+            ClockSkewMs, RecvBodyMs, ProcessingMs, TotalServerMs, SrvCpuMs
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
         &[
             &id,
             &a.attempt_id,
@@ -1635,10 +1689,46 @@ async fn insert_server_timing_result(
             &st.recv_body_ms,
             &st.processing_ms,
             &st.total_server_ms,
+            &st.srv_cpu_ms,
         ],
     )
     .await
     .context("INSERT ServerTimingResult")?;
+    Ok(())
+}
+
+/// V005: persist the multi-stream capacity numbers so a completed run's
+/// /attempts API can serve the infrastructure envelope's empirical ceiling
+/// (previously JSON/live-stream only). Capacity columns carry MB/s, matching
+/// the struct fields they mirror.
+async fn insert_mthroughput_result(
+    a: &crate::metrics::RequestAttempt,
+    mt: &crate::metrics::MthroughputResult,
+    c: &PgClient,
+) -> anyhow::Result<()> {
+    let id = uuid::Uuid::new_v4();
+    let conns_down = mt.conns_down as i32;
+    let conns_up = mt.conns_up.map(|v| v as i32);
+
+    c.execute(
+        "INSERT INTO MthroughputResult (
+            ServerId, AttemptId, RemoteAddr, CapacityDownMbps, CapacityUpMbps,
+            ConnsDown, ConnsUp, FairShareSpreadDownPct, FairShareSpreadUpPct
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+        &[
+            &id,
+            &a.attempt_id,
+            &mt.remote_addr,
+            &mt.capacity_down_mbps,
+            &mt.capacity_up_mbps,
+            &conns_down,
+            &conns_up,
+            &mt.fair_share_spread_down_pct,
+            &mt.fair_share_spread_up_pct,
+        ],
+    )
+    .await
+    .context("INSERT MthroughputResult")?;
     Ok(())
 }
 

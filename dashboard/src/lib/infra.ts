@@ -26,10 +26,13 @@ export interface DirectionAssessment {
   measuredMbps: number;
   /** The payload size the steady-state figure comes from. */
   payloadBytes: number;
-  /** Infrastructure ceiling in Mbps (sending side's egress), if known. */
+  /** Infrastructure ceiling in Mbps. When the run carried an mthroughput
+   * attempt this is the EMPIRICAL multi-stream capacity ('measured'); else
+   * the sending side's catalog egress expectation. */
   expectedMbps: number | null;
-  confidence: 'documented' | 'estimated' | null;
-  /** Which side's egress is the ceiling for this direction. */
+  confidence: 'measured' | 'documented' | 'estimated' | null;
+  /** Which side's egress is the ceiling for this direction (spec ceilings
+   * only; a measured path capacity isn't attributed to one side). */
   limitingSide: 'target' | 'runner' | null;
   /** measured / expected (0..1+), null when no ceiling is known. */
   utilization: number | null;
@@ -89,6 +92,26 @@ function pathLossSignal(attempts: LiveAttempt[], match: RegExp): boolean {
   return retrans || udpLoss;
 }
 
+/** Multi-stream measured capacity for a direction, in Mbps, from the run's
+ * newest successful mthroughput attempt (V005 persistence). The tester's
+ * capacity fields carry MB/s — ×8 here. Null when the run didn't include the
+ * mode or the direction's stage failed. */
+export function empiricalCapacityMbps(
+  attempts: LiveAttempt[],
+  direction: 'download' | 'upload'
+): number | null {
+  for (let i = attempts.length - 1; i >= 0; i--) {
+    const a = attempts[i];
+    if (!a.success || a.protocol !== 'mthroughput' || !a.mthroughput) continue;
+    const cap =
+      direction === 'download'
+        ? a.mthroughput.capacity_down_mbps
+        : a.mthroughput.capacity_up_mbps;
+    if (cap != null) return cap * 8; // MB/s → Mbps
+  }
+  return null;
+}
+
 function assessDirection(
   direction: 'download' | 'upload',
   attempts: LiveAttempt[],
@@ -101,9 +124,14 @@ function assessDirection(
 
   // Sending side per direction: download ← target egress, upload ← runner egress.
   const limiting = direction === 'download' ? infra?.target : infra?.runner;
-  const limitingSide = direction === 'download' ? ('target' as const) : ('runner' as const);
-  const expectedMbps = limiting?.specs?.egress_mbps ?? null;
-  const confidence = limiting?.specs?.confidence ?? null;
+  const specLimitingSide = direction === 'download' ? ('target' as const) : ('runner' as const);
+  // The empirical multi-stream capacity, when the run measured it, supersedes
+  // the catalog estimate — measured truth over spec sheet.
+  const empirical = empiricalCapacityMbps(attempts, direction);
+  const expectedMbps = empirical ?? limiting?.specs?.egress_mbps ?? null;
+  const confidence: DirectionAssessment['confidence'] =
+    empirical != null ? 'measured' : limiting?.specs?.confidence ?? null;
+  const limitingSide = empirical != null ? null : specLimitingSide;
   const utilization = expectedMbps ? steady.mbps / expectedMbps : null;
 
   let verdict: BottleneckKind;
@@ -131,6 +159,21 @@ function assessDirection(
   };
 }
 
+/** True when the run carried no mthroughput data but a direction sits on an
+ * ESTIMATED spec ceiling — the case where adding the Multi-Conn mode would
+ * replace guesswork with a measured capacity. Drives the panel's hint row. */
+export function wouldBenefitFromCeilingProbe(
+  assessments: DirectionAssessment[]
+): boolean {
+  return (
+    assessments.length > 0 &&
+    assessments.every((a) => a.confidence !== 'measured') &&
+    assessments.some(
+      (a) => a.verdict === 'network-bound' && a.confidence === 'estimated'
+    )
+  );
+}
+
 /** Assess every direction the run actually measured (empty when the run has
  * no throughput modes — the envelope panel renders nothing then). */
 export function assessRun(
@@ -146,7 +189,9 @@ export function assessRun(
 export function verdictLabel(a: DirectionAssessment): string {
   switch (a.verdict) {
     case 'network-bound':
-      return `network-bound — at ${a.limitingSide} egress cap`;
+      return a.confidence === 'measured'
+        ? 'network-bound — at the measured path capacity (multi-stream)'
+        : `network-bound — at ${a.limitingSide} egress cap`;
     case 'cpu-bound':
       return 'cpu-bound — runner CPU saturated';
     case 'path-bound':

@@ -571,6 +571,19 @@ fn csw_snapshot() -> (i64, i64) {
     (u.ru_nvcsw, u.ru_nivcsw)
 }
 
+/// Process CPU time (user + system) in milliseconds. Delta across the upload
+/// drain window feeds `Server-Timing: cpu;dur=X` — cpu/recv ratio ≈ how much
+/// of the transfer window this process spent on-CPU, the server-side
+/// "was the endpoint CPU-bound?" evidence for the infrastructure envelope.
+#[cfg(unix)]
+fn cpu_ms_snapshot() -> f64 {
+    let mut u: libc::rusage = unsafe { std::mem::zeroed() };
+    unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut u) };
+    let user_us = u.ru_utime.tv_sec as f64 * 1e6 + u.ru_utime.tv_usec as f64;
+    let sys_us = u.ru_stime.tv_sec as f64 * 1e6 + u.ru_stime.tv_usec as f64;
+    (user_us + sys_us) / 1000.0
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Handlers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -980,6 +993,8 @@ async fn upload(req: Request) -> impl IntoResponse {
     let t0 = Instant::now();
     #[cfg(unix)]
     let (csw_v0, csw_i0) = csw_snapshot();
+    #[cfg(unix)]
+    let cpu_ms0 = cpu_ms_snapshot();
     let mut received_bytes: usize = 0;
     let mut body = req.into_body();
     while let Some(Ok(frame)) = body.frame().await {
@@ -991,10 +1006,14 @@ async fn upload(req: Request) -> impl IntoResponse {
     #[cfg(unix)]
     let csw_part = {
         let (csw_v1, csw_i1) = csw_snapshot();
+        // cpu;dur = process-CPU ms this process burned while draining the
+        // body. Process-wide (concurrent requests share the counter), like
+        // the csw fields — single-probe traffic is the intended reading.
         format!(
-            ", csw-v;dur={}, csw-i;dur={}",
+            ", csw-v;dur={}, csw-i;dur={}, cpu;dur={:.3}",
             csw_v1 - csw_v0,
-            csw_i1 - csw_i0
+            csw_i1 - csw_i0,
+            cpu_ms_snapshot() - cpu_ms0
         )
     };
     #[cfg(not(unix))]
