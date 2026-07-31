@@ -1,4 +1,4 @@
-import type { Agent, Job, JobConfig, Attempt, Deployment, DeploymentCostEstimate, ModeGroup, PacketCaptureSummary, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, LogsResponse, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo, PerfLogRow, PerfLogStats, ImportResult, SendInviteResult, TestConfig, TestConfigListItem, TestConfigCreate, TestRun, TestSchedule, ComparisonReport, ComparisonGroup, ComparisonGroupCreate, AlertChannel, AlertChannelCreate, AlertRule, AlertRuleCreate, AlertEvent, RunGeoInfo, RunClockSync, RunLoadSample } from './types';
+import type { Agent, Job, JobConfig, Attempt, Deployment, DeploymentCostEstimate, ModeGroup, PacketCaptureSummary, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, LogsResponse, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo, PerfLogRow, PerfLogStats, ImportResult, SendInviteResult, TestConfig, TestConfigListItem, TestConfigCreate, TestRun, TestSchedule, ComparisonReport, ComparisonGroup, ComparisonGroupCreate, AlertChannel, AlertChannelCreate, AlertRule, AlertRuleCreate, AlertEvent, RunGeoInfo, RunClockSync, RunLoadSample, RunInfra } from './types';
 
 export type { Agent, Job, JobConfig, Attempt, Deployment, ModeGroup, PacketCaptureSummary, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, LogsResponse, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo, ImportResult, SendInviteResult, TestConfig, TestConfigListItem, TestConfigCreate, TestRun, TestSchedule, ComparisonReport, ComparisonGroup, ComparisonGroupCreate, AlertChannel, AlertChannelCreate, AlertRule, AlertRuleCreate, AlertEvent };
 export type { AlertMetric, AlertComparator, AlertChannelKind, AlertChannelConfig } from './types';
@@ -938,6 +938,9 @@ export const api = {
 
   getTestRunArtifact: (runId: string) =>
     request<BenchmarkArtifact>(`/v2/test-runs/${runId}/artifact`),
+
+  getTestRunInfra: (runId: string) =>
+    request<RunInfra>(`/v2/test-runs/${runId}/infra`),
 
   getTestRunAttempts: (runId: string) =>
     request<{ attempts: Attempt[] } | Attempt[]>(`/v2/test-runs/${runId}/attempts`).then((r) =>

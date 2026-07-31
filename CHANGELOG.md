@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.124] — 2026-07-31
+
+### Added
+- **Run report: infrastructure envelope — "expected vs measured" + bottleneck
+  verdict.** New `GET /api/v2/test-runs/{id}/infra` resolves the run's runner
+  (bound ProjectTester) and target (kind=proxy deployment) VM identity and
+  looks both up in a new per-(cloud, size) network-spec catalog
+  (`VmNetworkSpecs`: vCPUs, RAM, expected egress Mbps with honest
+  documented/estimated confidence, accelerated-networking support). The run
+  report gains an "infrastructure envelope" panel: each side's hardware line,
+  and per-direction utilization bars — steady-state measured (largest-payload
+  p50) against the *sending* side's egress ceiling (clouds cap egress, not
+  ingress) — with a bottleneck verdict chip: `network-bound` (≥80% of cap),
+  `cpu-bound` (runner load ≥ cores), `path-bound` (retransmissions/loss),
+  `headroom`, or `unknown` (size not in catalog — never invent a ceiling).
+  A network-bound direction with an idle runner CPU is called out explicitly —
+  the "paying for compute the network can't feed" case infra admins need.
+  B2s estimate calibrated against the live measurement (530–580 Mbps egress).
+
+---
+
 ## [0.28.123] — 2026-07-31
 
 ### Added

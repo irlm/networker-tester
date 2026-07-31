@@ -897,6 +897,35 @@ export interface RunEnvelope {
   server_info?: RunHostInfo | null;
 }
 
+/**
+ * GET /v2/test-runs/{id}/infra — runner/target VM identity + catalog network
+ * expectations for the infrastructure envelope. `specs` is null for sizes the
+ * catalog doesn't know (never invent a ceiling); `target` is null for
+ * arbitrary-URL configs (no known VM behind them); `runner` is null for
+ * standalone agents.
+ */
+export interface VmNetSpec {
+  vcpus: number;
+  memory_gb: number;
+  /** The cloud's *outbound* bandwidth expectation for the size. */
+  egress_mbps: number;
+  /** 'documented' (provider size table) or 'estimated' (unguaranteed sizes). */
+  confidence: 'documented' | 'estimated';
+  accelerated_networking: boolean;
+}
+
+export interface RunInfraSide {
+  cloud: string;
+  vm_size: string | null;
+  region: string | null;
+  specs: VmNetSpec | null;
+}
+
+export interface RunInfra {
+  runner: RunInfraSide | null;
+  target: RunInfraSide | null;
+}
+
 // Cloud account types
 export interface CloudAccountSummary {
   account_id: string;
