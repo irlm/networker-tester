@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.123] — 2026-07-31
+
+### Added
+- **Run report: per-direction throughput footnote.** When a run has throughput
+  rows, the statistics summary now explains that download and upload are
+  measured over direction-appropriate windows (upload cross-checked against the
+  server's `Server-Timing` clock), that up/down legitimately differ on
+  asymmetric paths (cloud VMs cap egress — a small target serves downloads
+  slower than it accepts uploads), and that small payloads reflect TCP
+  slow-start burst rather than steady-state bandwidth. Prompted by a real
+  investigation: upload 111 MB/s vs download 73 MB/s against a `Standard_B2s`
+  endpoint was verified to be the VM's egress cap, not a measurement artifact
+  (client and server clocks agree within 0.2%).
+
+---
+
 ## [0.28.122] — 2026-07-31
 
 ### Fixed

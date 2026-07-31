@@ -360,6 +360,15 @@ export function RunDetailPage() {
               </tbody>
             </table>
           </div>
+          {protocolStats.some((ps) => ps.payloadBytes != null) && (
+            <p className="px-4 py-2 text-[10px] text-gray-500 border-t border-gray-800/50 leading-relaxed">
+              throughput is measured per direction — download over the body-receive window, upload over
+              the send window (cross-checked against the server&apos;s Server-Timing clock). upload and
+              download legitimately differ on asymmetric paths: cloud VMs cap egress, so a small target
+              serves downloads slower than it accepts uploads. small payloads reflect TCP slow-start
+              burst, not steady-state bandwidth.
+            </p>
+          )}
         </div>
       )}
 
