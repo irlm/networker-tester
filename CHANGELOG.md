@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.129] — 2026-07-31
+
+### Fixed
+- **Comparison-group matrix launches no longer race to create one Azure VM.**
+  The auto-provisioned VM label was derived from the first 8 characters of the
+  test-config name, and every cell of a matrix shares that prefix
+  ("Azure/eastus …") — a 10-cell launch had all cells fight over a single VM
+  name (`nwk-auto-azuree`): nine failed with Azure `Conflict`, and the winner's
+  endpoint was stomped by the other cells' installers, failing the whole group.
+  VM labels are now derived from the run id (`nwk-a-<runid8>`) — unique per
+  cell and per re-launch, and correlatable with the deployment row, which
+  already carried the same suffix.
+- **Re-launching a comparison group works.** Cell config names were
+  deterministic per (group, cell index), so a retry of a failed group tripped
+  `UNIQUE(project_id, name)` on every cell; a per-launch nonce now keeps
+  retries distinct.
+- **Deploy wizard suggests a unique deployment name per open.** The suggested
+  name was a bare template (`target-azure-eastus-nginx`, `eastus-runner-01`) —
+  the second deploy of the same shape then failed on the already-taken name and
+  users had to hand-type fresh names. The suggestion now carries a short unique
+  suffix (`target-azure-eastus-nginx-x7k2`).
+
+---
+
 ## [0.28.128] — 2026-07-31
 
 ### Fixed

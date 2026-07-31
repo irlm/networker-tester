@@ -215,7 +215,7 @@ public sealed class ProvisioningOrchestrator : BackgroundService
             return false;
         }
 
-        var deployJson = BuildDeployJson(pending, provider, cfg.Name);
+        var deployJson = BuildDeployJson(pending, provider, cfg.Name, run.Id);
         var deployText = deployJson.ToJsonString();
         var providerSummary = BuildProviderSummary(deployJson);
 
@@ -611,11 +611,16 @@ public sealed class ProvisioningOrchestrator : BackgroundService
     /// Byte-shape-compatible with the Rust <c>build_deploy_json</c>: a
     /// per-provider endpoint block, <c>tester:{provider:"local"}</c>,
     /// <c>tests:{run_tests:false}</c>, <c>version:1</c>, and the concrete
-    /// <c>cloud_account_id</c>.</summary>
-    internal static JsonObject BuildDeployJson(PendingEndpoint p, string provider, string cfgName)
+    /// <c>cloud_account_id</c>.
+    /// The VM label is derived from the RUN id, never the config name: all
+    /// cells of a comparison group share a config-name prefix ("Azure/eastus
+    /// …"), so a name-prefix label made every cell race to create the SAME
+    /// Azure VM — nine lost with Conflict, the winner's endpoint was stomped
+    /// by the other cells' installers (10-cell matrix, 2026-07-31). The run-id
+    /// suffix matches the deployment row's name suffix for correlation.</summary>
+    internal static JsonObject BuildDeployJson(PendingEndpoint p, string provider, string cfgName, Guid runId)
     {
-        var suffix = ShortIdFromName(cfgName);
-        var vmLabel = SanitizeVmLabel($"nwk-auto-{suffix}");
+        var vmLabel = SanitizeVmLabel($"nwk-a-{ShortId(runId)}");
 
         JsonObject providerBlock = provider switch
         {
@@ -791,35 +796,16 @@ public sealed class ProvisioningOrchestrator : BackgroundService
 
     private static string ShortId(Guid id) => id.ToString("N")[..8];
 
-    private static string ShortIdFromName(string name)
-    {
-        var chars = new List<char>();
-        foreach (var c in name)
-        {
-            if (char.IsAsciiLetterOrDigit(c))
-            {
-                chars.Add(char.ToLowerInvariant(c));
-            }
-            else if (c is ' ' or '-' or '_')
-            {
-                chars.Add('-');
-            }
-            if (chars.Count >= 8)
-            {
-                break;
-            }
-        }
-        return new string(chars.ToArray());
-    }
-
     // Windows NetBIOS constraint (install.sh's strictest): ≤15 chars, alnum + '-'.
     // Azure VM names must start with a word char and — critically — Azure derives
     // the NIC ipconfig name as `ipconfig<vmName>`, which must END with a word char
     // or '_'. A trailing '-' fails VM creation with InvalidResourceName (E2E
-    // 2026-07-29: "rust @ nginx …" → ShortIdFromName "rust--ng" → truncated
-    // "nwk-auto-rust--" → ipconfig ended in '-' → whole deploy failed with
-    // install.sh exit 1). So: collapse dash-runs, forbid a leading dash, cap at
-    // 15, then trim any trailing dash left by the source or the truncation.
+    // 2026-07-29: the then config-name-derived label "nwk-auto-rust--ng" was
+    // truncated to "nwk-auto-rust--" → ipconfig ended in '-' → whole deploy
+    // failed with install.sh exit 1). So: collapse dash-runs, forbid a leading
+    // dash, cap at 15, then trim any trailing dash left by the source or the
+    // truncation. Labels are now run-id-derived, but this stays the last line
+    // of defense for any raw input.
     internal static string SanitizeVmLabel(string raw)
     {
         var sb = new System.Text.StringBuilder(16);

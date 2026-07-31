@@ -104,6 +104,11 @@ export function InfraDeployWizard({
 
   // Review
   const [deployName, setDeployName] = useState('');
+  // Per-open unique suffix for the suggested name: a bare template like
+  // "target-azure-eastus-nginx" repeats on every deploy, and the second
+  // deploy then dies on the name that already exists — the user had to
+  // hand-type a fresh name each time.
+  const [nameSuffix] = useState(() => Math.random().toString(36).slice(2, 6));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -191,11 +196,11 @@ export function InfraDeployWizard({
 
   // ── Compute the auto-suggested deployment name for the review step ─────
   const autoDeployName = useMemo(() => {
-    if (kind === 'runner') return runnerName || `${region}-runner-01`;
-    if (useExistingVm) return `upgrade-${existingVmIp.trim() || 'host'}`;
+    if (kind === 'runner') return runnerName || `${region}-runner-${nameSuffix}`;
+    if (useExistingVm) return `upgrade-${existingVmIp.trim() || 'host'}-${nameSuffix}`;
     const stacks = proxies.map(p => PROXY_LABELS[p] ?? p).join('-');
-    return `target-${cloud.toLowerCase()}-${region}-${stacks || 'nginx'}`;
-  }, [kind, runnerName, region, useExistingVm, existingVmIp, proxies, cloud]);
+    return `target-${cloud.toLowerCase()}-${region}-${stacks || 'nginx'}-${nameSuffix}`;
+  }, [kind, runnerName, region, useExistingVm, existingVmIp, proxies, cloud, nameSuffix]);
 
   // ── Submit ─────────────────────────────────────────────────────────────
   const submit = async () => {

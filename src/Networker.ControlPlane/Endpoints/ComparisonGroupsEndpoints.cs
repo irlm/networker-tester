@@ -182,6 +182,11 @@ public static class ComparisonGroupsEndpoints
             var now = DateTime.UtcNow;
             var launched = new List<Guid>(cells.Count);
             var failures = new List<string>();
+            // UNIQUE(project_id, name): the index keeps cells within one launch
+            // distinct, but a RE-launch of the same group regenerates the same
+            // (group, index) pairs — without a per-launch nonce every cell of a
+            // retry fails on the unique constraint before it can provision.
+            var launchNonce = Guid.NewGuid().ToString("N")[..4];
 
             for (var i = 0; i < cells.Count; i++)
             {
@@ -192,9 +197,7 @@ public static class ComparisonGroupsEndpoints
                     {
                         Id = Guid.NewGuid(),
                         ProjectId = group.ProjectId,
-                        // UNIQUE(project_id, name): the group id + index keep every
-                        // cell distinct and a re-launch from colliding.
-                        Name = $"{cell.Label} · cg-{id.ToString()[..8]}·{i}",
+                        Name = CellConfigName(cell.Label, id, i, launchNonce),
                         EndpointKind = cell.EndpointKind,
                         EndpointRef = cell.EndpointRaw,
                         Workload = group.BaseWorkload,
@@ -239,6 +242,12 @@ public static class ComparisonGroupsEndpoints
 
     /// <summary>A comparison-group cell resolved for launch.</summary>
     internal sealed record CellSpec(string Label, string EndpointRaw, string EndpointKind, Guid? RunnerId);
+
+    /// <summary>Per-cell test-config name: group id + cell index keep one
+    /// launch's cells distinct; the per-launch nonce keeps a re-launch of the
+    /// same group from tripping UNIQUE(project_id, name).</summary>
+    internal static string CellConfigName(string label, Guid groupId, int index, string launchNonce)
+        => $"{label} · cg-{groupId.ToString()[..8]}·{index}·{launchNonce}";
 
     /// <summary>Parse the group's <c>cells</c> JSON into launch specs. Each cell
     /// carries a <c>label</c>, a polymorphic <c>endpoint</c> (kind pending /
