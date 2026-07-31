@@ -130,6 +130,16 @@ public static class PlatformEndpoints
     public static string RequirementOf(string mode) =>
         !string.IsNullOrWhiteSpace(mode) && ModeRequirements.TryGetValue(mode, out var r) ? r : "any";
 
+    /// <summary>The ids of every mode a release tester binary can actually run
+    /// (the catalog — <c>catalog:false</c> modes like <c>native</c> and the
+    /// bare <c>browser</c> stub are excluded because release builds ship without
+    /// <c>--features native</c> etc.). Used at dispatch to drop unrunnable modes
+    /// a pre-v0.28.118 config may still carry so they don't produce
+    /// guaranteed-failing attempts. Includes runner-level modes (apibench,
+    /// sdkprobe) that the agent expands, so filtering never strips them.</summary>
+    public static readonly IReadOnlySet<string> RunnableModeIds =
+        AllModes.Select(m => m.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
     private static string GroupDetail(string label) => label switch
     {
         "Network" => "Low-level connection probes. Measures DNS resolution, TCP handshake, TLS negotiation, and UDP round-trip independently — isolates each layer of the network stack.",

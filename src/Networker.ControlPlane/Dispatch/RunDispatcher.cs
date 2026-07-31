@@ -655,7 +655,16 @@ public sealed class RunDispatcher : IRunDispatcher
         CancellationToken ct)
     {
         object endpointJson = RawJson(cfg.EndpointRef);
-        object workloadJson = RawJson(cfg.Workload);
+
+        // Drop modes a release tester binary can't run (catalog:false — native,
+        // bare browser) BEFORE building the wire workload, so a config created
+        // before v0.28.118 (which removed native from the catalog) stops
+        // producing guaranteed-failing "recompile to enable" attempts. Runner
+        // modes (apibench/sdkprobe) are in the catalog, so this never strips
+        // them; if filtering would empty the list, the original is kept so the
+        // run isn't silently stranded.
+        var workloadText = FilterToRunnableModes(cfg.Workload);
+        object workloadJson = RawJson(workloadText);
 
         if (string.Equals(cfg.EndpointKind, EndpointKindProxy, StringComparison.OrdinalIgnoreCase))
         {
@@ -663,7 +672,7 @@ public sealed class RunDispatcher : IRunDispatcher
             if (resolved is JsonElement resolvedEndpoint)
             {
                 endpointJson = resolvedEndpoint;
-                workloadJson = WithInsecure(cfg.Workload);
+                workloadJson = WithInsecure(workloadText);
             }
         }
 
@@ -742,6 +751,76 @@ public sealed class RunDispatcher : IRunDispatcher
     /// Copy of the workload JSON with <c>insecure: true</c> — the Rust
     /// <c>c.workload.insecure = true</c> applied to the wire clone only.
     /// </summary>
+    /// <summary>Return the workload JSON with its <c>modes</c> array filtered to
+    /// only modes a release tester binary can run
+    /// (<see cref="Endpoints.PlatformEndpoints.RunnableModeIds"/>) — drops
+    /// <c>catalog:false</c> modes (native, bare browser) that would otherwise
+    /// produce guaranteed-failing attempts on a pre-v0.28.118 config. Pure +
+    /// copy-on-write: the stored config is never mutated. If the config has no
+    /// parseable modes array, or filtering would remove EVERY mode, the original
+    /// text is returned unchanged (never strand a run with an empty workload).
+    /// Testable via <see cref="FilterModesText"/>.</summary>
+    internal string FilterToRunnableModes(string workloadText)
+    {
+        var (filtered, dropped) = FilterModesText(workloadText);
+        if (dropped.Count > 0)
+        {
+            _logger.LogInformation(
+                "Dispatch dropped {Count} unrunnable mode(s) from the workload (not in the release catalog): {Modes}",
+                dropped.Count, string.Join(", ", dropped));
+        }
+        return filtered;
+    }
+
+    /// <summary>Pure core of <see cref="FilterToRunnableModes"/>: returns the
+    /// (possibly rewritten) workload text and the list of dropped mode ids.</summary>
+    internal static (string Text, IReadOnlyList<string> Dropped) FilterModesText(string workloadText)
+    {
+        var none = (Text: workloadText, Dropped: (IReadOnlyList<string>)Array.Empty<string>());
+        JsonNode? node;
+        try
+        {
+            node = JsonNode.Parse(workloadText);
+        }
+        catch (JsonException)
+        {
+            return none;
+        }
+        if (node is not JsonObject obj || obj["modes"] is not JsonArray modes)
+        {
+            return none;
+        }
+
+        var kept = new JsonArray();
+        var dropped = new List<string>();
+        foreach (var m in modes)
+        {
+            var id = m?.GetValue<string>();
+            if (id is null)
+            {
+                continue;
+            }
+            if (Endpoints.PlatformEndpoints.RunnableModeIds.Contains(id))
+            {
+                kept.Add(id);
+            }
+            else
+            {
+                dropped.Add(id);
+            }
+        }
+
+        // Nothing to drop, or filtering emptied the list (a degenerate
+        // native-only config) — leave the workload untouched.
+        if (dropped.Count == 0 || kept.Count == 0)
+        {
+            return none;
+        }
+
+        obj["modes"] = kept;
+        return (obj.ToJsonString(), dropped);
+    }
+
     private static object WithInsecure(string workloadText)
     {
         try
