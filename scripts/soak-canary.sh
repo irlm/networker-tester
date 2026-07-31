@@ -20,8 +20,15 @@
 #      and that config regressed silently (v0.28.112: /api was never in the
 #      nginx/caddy/apache/IIS allowlist → 404 on every attempt). This phase
 #      exercises the DEPLOYED install.sh proxy config each night.
-#   5. tear the runner AND the apibench endpoint down (validates P1-16 teardown),
-#      ALWAYS — even on failure.
+#   5. PHASE 3 (mode coverage): reuse the SAME rust@nginx endpoint (it is a full
+#      networker-endpoint behind nginx) to run the deterministic HTTP/TCP mode
+#      matrix through the proxy and assert every mode returns a successful
+#      attempt — nothing else runs the full matrix against a proxied cloud
+#      target, which is why v0.28.118's pageload3 (h3-GREASE) and websocket
+#      (/ws not proxied) reached prod unflagged. Also asserts dispatch DROPS
+#      native (v0.28.120) rather than failing it.
+#   6. tear the runner AND the endpoint down (validates P1-16 teardown), ALWAYS
+#      — even on failure.
 #
 # Any assertion miss exits non-zero → the workflow goes red → watchers are
 # alerted. Self-contained: no standing infra, ~$0.03 of VM time per run.
@@ -38,6 +45,9 @@
 #   CANARY_APIBENCH        "1" → also drive the proxy-fronted apibench phase
 #                          (default "1"; set "0" to skip, e.g. to save the
 #                          endpoint VM cost during an incident)
+#   CANARY_MODE_COVERAGE   "1" → also run the full mode matrix through the proxy
+#                          (default "1"; requires the apibench phase since it
+#                          reuses that endpoint)
 set -uo pipefail
 
 BASE="${LAGHOUND_URL:-https://laghound.com}"
@@ -46,11 +56,22 @@ PROJECT_NAME="${CANARY_PROJECT_NAME:-Pre-Prod Testing}"
 TARGET_HOST="${CANARY_TARGET_HOST:-example.com}"
 REUSE_RUNNER="${CANARY_REUSE_RUNNER:-1}"
 APIBENCH="${CANARY_APIBENCH:-1}"
+MODE_COVERAGE="${CANARY_MODE_COVERAGE:-1}"
 
 PROVISION_TIMEOUT=480   # s to wait for a fresh runner to come online (~5-7 min)
 RUN_TIMEOUT=240         # s to wait for the run to reach a terminal state
 APIBENCH_TIMEOUT=720    # s for the apibench endpoint to provision (~5 min) + run
+MODE_TIMEOUT=420        # s for the full mode-matrix run against the endpoint
 POLL=10
+
+# Phase 3 exercises the FULL HTTP/TCP mode matrix through the proxy. These are
+# deterministic + proxy-reachable; each must return >0 successful attempts or a
+# mode regressed (v0.28.118: pageload3/websocket were 0/N through nginx and
+# nothing caught it until a user ran it). Deliberately excludes: path/ping
+# (Azure blocks ICMP to public IPs), udp/stamp/mthroughput (direct UDP ports,
+# not proxied), browser* (needs Chrome, flaky), rpm (UDP-timing). native is
+# added separately to prove dispatch DROPS it (v0.28.120 filter).
+MODE_MATRIX='["tcp","dns","tls","tlsresume","http1","http2","http3","curl","download","upload","pageload","pageload2","pageload3","websocket"]'
 
 fail() { echo "❌ CANARY FAIL: $*" >&2; exit 1; }
 note() { echo "→ $*"; }
@@ -239,6 +260,13 @@ deploy_log_of() {
   api GET "/api/projects/$PID/deployments/$dep" | jq -r '.log // ""'
 }
 
+# deployment_id_of <group-id> — the endpoint deployment id for the group.
+deployment_id_of() {
+  local g8="${1:0:8}"
+  api GET "/api/projects/$PID/deployments?limit=30" \
+    | jq -r --arg g "cg-$g8" '[ (if type=="array" then . else (.deployments // .items // []) end)[]? | select((.name // "")|contains($g)) ][0] | (.id // .deployment_id // .deploymentId) // empty'
+}
+
 # capture_deploy_log <group-id> — dump the endpoint deploy-log tail to the summary.
 capture_deploy_log() {
   local g8="${1:0:8}" dep log
@@ -345,4 +373,72 @@ for try in $(seq 1 "$AB_ATTEMPTS"); do
 done
 
 [ "$AB_PASS" = "1" ] || fail "apibench endpoint failed to provision+run after $AB_ATTEMPTS attempts (last status=$AB_STATUS) — provisioning regressed (see deploy log above)"
-note "CANARY PASS (phases 1 + 2)"
+note "PHASE 2 PASS"
+
+# ── PHASE 3: full mode-matrix coverage through the proxy ──────────────────────
+# The phase-2 rust@nginx endpoint IS a full networker-endpoint behind nginx (the
+# rust "language" == the endpoint binary), so it serves /download, /upload, /ws,
+# /page, /asset, HTTP/1-2-3, etc. Reuse that SAME VM (no extra provision): run
+# the deterministic HTTP/TCP mode matrix against it and assert every mode
+# returns >0 successful attempts. Nothing else runs the full matrix against a
+# proxied cloud target automatically — which is exactly why v0.28.118's
+# pageload3 (h3-GREASE) and websocket (/ws not proxied) reached prod unflagged.
+# Also proves dispatch DROPS native (v0.28.120) rather than failing it.
+if [ "$MODE_COVERAGE" != "1" ]; then
+  note "mode-coverage phase disabled (CANARY_MODE_COVERAGE=$MODE_COVERAGE) — skipping"
+  note "CANARY PASS (phases 1 + 2)"
+  exit 0
+fi
+
+# Target the phase-2 endpoint as a PROXY (its deployment id), NOT a raw network
+# host/port: the server's mode↔target gate treats kind=network as an arbitrary
+# URL and 422s the networker-endpoint modes (download/upload/rpm/websocket/
+# page-load); kind=proxy maps to the "endpoint" capability, and dispatch
+# resolves it to the endpoint IP + stack port and injects insecure (self-signed
+# cert). native is included so the assert can prove dispatch DROPS it.
+MC_DEP=$(deployment_id_of "$CG")
+[ -n "$MC_DEP" ] || { capture_deploy_log "$CG"; fail "phase 3: could not resolve the phase-2 endpoint deployment id"; }
+note "phase 3: mode matrix against the phase-2 endpoint (proxy deployment ${MC_DEP:0:8}, nginx)"
+
+MC_NAME="soak-canary-modes-$(date -u +%Y%m%dT%H%M%SZ)"
+MC_MODES=$(jq -nc --argjson m "$MODE_MATRIX" '$m + ["native"]')
+MC_CFG=$(api POST "/api/v2/projects/$PID/test-configs" \
+  "$(jq -nc --arg n "$MC_NAME" --arg d "$MC_DEP" --argjson modes "$MC_MODES" \
+     '{name:$n, endpoint:{kind:"proxy", proxy_endpoint_id:$d, proxy_stack:"nginx"},
+       workload:{modes:$modes, runs:2, concurrency:1, timeout_ms:8000, capture_mode:"headers-only", payload_sizes:[]}}')")
+MC_CFG_ID=$(jq -r '.id // empty' <<<"$MC_CFG")
+[ -n "$MC_CFG_ID" ] || fail "phase 3: mode-coverage config create failed: $(head -c 200 <<<"$MC_CFG")"
+
+MC_RUN=$(api POST "/api/v2/test-configs/$MC_CFG_ID/launch" '{}')
+MC_RUN_ID=$(jq -r '.run_id // .id // empty' <<<"$MC_RUN")
+[ -n "$MC_RUN_ID" ] || fail "phase 3: mode-coverage launch failed (gate?): $(head -c 200 <<<"$MC_RUN")"
+note "  mode-coverage run $MC_RUN_ID"
+
+deadline=$((SECONDS + MODE_TIMEOUT)); MC_STATUS=""
+while :; do
+  MC_STATUS=$(api GET "/api/v2/test-runs/$MC_RUN_ID" | jq -r '.status // empty')
+  note "    run: status=$MC_STATUS"
+  case "$MC_STATUS" in completed|failed|partial|cancelled|error) break;; esac
+  [ "$SECONDS" -ge "$deadline" ] && fail "phase 3 mode run did not reach a terminal state within ${MODE_TIMEOUT}s (last=$MC_STATUS)"
+  sleep "$POLL"
+done
+
+MC_ATT=$(api GET "/api/v2/test-runs/$MC_RUN_ID/attempts?limit=300")
+# Per-mode ok/total; identify any mode with ZERO successes (= regressed).
+MC_STATS=$(jq -c '(if type=="array" then . else (.attempts // .items // .data // []) end)
+  | group_by(.protocol) | map({m:.[0].protocol, ok:(map(select(.success==true))|length), n:length})' <<<"$MC_ATT")
+MC_LINE=$(jq -r 'map("\(.m) \(.ok)/\(.n)")|join(" · ")' <<<"$MC_STATS")
+MC_BROKEN=$(jq -r '[.[]|select(.ok==0)|.m]|join(", ")' <<<"$MC_STATS")
+MC_NATIVE=$(jq -r '[(if type=="array" then . else (.attempts // .items // .data // []) end)[]|select(.protocol=="native")]|length' <<<"$MC_ATT")
+
+summary "### Phase 3 (mode coverage through nginx) — run \`$MC_RUN_ID\` (proxy ${MC_DEP:0:8})"
+summary "- $MC_LINE"
+
+[ "$MC_STATUS" = "completed" ] || { capture_deploy_log "$CG"; fail "phase 3 mode run status is '$MC_STATUS', expected 'completed'"; }
+# native must be DROPPED at dispatch (v0.28.120), not attempted-and-failed.
+[ "$MC_NATIVE" -eq 0 ] || fail "phase 3: 'native' was attempted ($MC_NATIVE) — dispatch should filter catalog:false modes (v0.28.120 regression)"
+# every matrix mode must have produced at least one success through the proxy.
+[ -z "$MC_BROKEN" ] || { capture_deploy_log "$CG"; fail "phase 3: mode(s) returned ZERO successful attempts through nginx: ${MC_BROKEN} — a mode regressed (v0.28.118 pageload3/websocket class)"; }
+
+summary "✅ phase 3 (mode coverage): all matrix modes returned successful attempts through nginx; native correctly dropped at dispatch."
+note "CANARY PASS (phases 1 + 2 + 3)"
