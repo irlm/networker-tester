@@ -22,6 +22,77 @@ namespace Networker.ControlPlane.Realtime.RawWs;
 /// </summary>
 public static class AttemptPersister
 {
+    /// <summary>The V005 slice of the tester schema (MthroughputResult +
+    /// ServerTimingResult.SrvCpuMs), applied lazily by the INGEST because in
+    /// the streamed-attempt deployment the tester never touches the DB — its
+    /// own migrate() (postgres.rs V005) only runs for DB-backed testers.
+    /// Idempotent DDL, mirrors the tester's V005_MIGRATION exactly.
+    /// Discovered live: v0.28.126 shipped the tester/read sides but nothing
+    /// created the table on the streamed path, so mthroughput/srv_cpu_ms
+    /// silently degraded to null.</summary>
+    private const string V005Ddl = """
+        CREATE TABLE IF NOT EXISTS MthroughputResult (
+            ServerId               UUID              NOT NULL,
+            AttemptId              UUID              NOT NULL,
+            RemoteAddr             VARCHAR(256)      NOT NULL,
+            CapacityDownMbps       DOUBLE PRECISION  NULL,
+            CapacityUpMbps         DOUBLE PRECISION  NULL,
+            ConnsDown              INT               NOT NULL,
+            ConnsUp                INT               NULL,
+            FairShareSpreadDownPct DOUBLE PRECISION  NULL,
+            FairShareSpreadUpPct   DOUBLE PRECISION  NULL,
+            CONSTRAINT PK_MthroughputResult PRIMARY KEY (ServerId),
+            CONSTRAINT FK_MthroughputResult_Attempt FOREIGN KEY (AttemptId)
+                REFERENCES RequestAttempt (AttemptId)
+        );
+        CREATE INDEX IF NOT EXISTS IX_MthroughputResult_AttemptId
+            ON MthroughputResult (AttemptId);
+        ALTER TABLE ServerTimingResult ADD COLUMN IF NOT EXISTS SrvCpuMs DOUBLE PRECISION NULL;
+        """;
+
+    // 0 = unknown, 1 = V005 available, -1 = unavailable (pre-V001 schema
+    // absent or DDL denied) — probed once per process; the writes below are
+    // gated on it so a pre-V005 DB degrades exactly as before instead of
+    // aborting the whole attempt insert.
+    private static int _v005State;
+
+    private static async Task<bool> EnsureV005Async(NpgsqlConnection conn, CancellationToken ct)
+    {
+        var s = Volatile.Read(ref _v005State);
+        if (s != 0)
+        {
+            return s == 1;
+        }
+
+        try
+        {
+            await using var cmd = new NpgsqlCommand(V005Ddl, conn);
+            await cmd.ExecuteNonQueryAsync(ct);
+            // Record the version for the tester-side migrator's bookkeeping;
+            // best-effort (the table exists on any tester-created schema).
+            try
+            {
+                await using var rec = new NpgsqlCommand(
+                    "INSERT INTO _schema_versions (version) VALUES ('V005') ON CONFLICT DO NOTHING",
+                    conn);
+                await rec.ExecuteNonQueryAsync(ct);
+            }
+            catch (PostgresException)
+            {
+                // No _schema_versions table (schema bootstrapped by this
+                // ingest, not a tester) — the IF NOT EXISTS DDL above is the
+                // real idempotence guard.
+            }
+            Volatile.Write(ref _v005State, 1);
+            return true;
+        }
+        catch (PostgresException)
+        {
+            Volatile.Write(ref _v005State, -1);
+            return false;
+        }
+    }
+
     public static async Task PersistAsync(
         NpgsqlConnection conn, ParsedAttempt a, CancellationToken ct)
     {
@@ -29,6 +100,8 @@ public static class AttemptPersister
         {
             await conn.OpenAsync(ct);
         }
+
+        var v005 = await EnsureV005Async(conn, ct);
 
         await using var tx = await conn.BeginTransactionAsync(ct);
         try
@@ -79,7 +152,7 @@ public static class AttemptPersister
 
             if (inserted > 0)
             {
-                await WritePhasesAsync(conn, tx, a, ct);
+                await WritePhasesAsync(conn, tx, a, v005, ct);
             }
 
             await tx.CommitAsync(ct);
@@ -94,7 +167,7 @@ public static class AttemptPersister
     }
 
     private static async Task WritePhasesAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx, ParsedAttempt a, CancellationToken ct)
+        NpgsqlConnection conn, NpgsqlTransaction tx, ParsedAttempt a, bool v005, CancellationToken ct)
     {
         // Phase tables' StartedAt is NOT NULL; the attempt JSON doesn't carry a
         // per-phase start, so anchor them at the attempt's start (or now()).
@@ -201,9 +274,14 @@ public static class AttemptPersister
         }
         if (a.ServerTiming is { } st)
         {
-            await ExecAsync(conn, tx, ct,
-                "INSERT INTO ServerTimingResult (ServerId, AttemptId, RecvBodyMs, ProcessingMs, TotalServerMs) "
-                + "VALUES (@pk, @aid, @recv, @proc, @total)",
+            // SrvCpuMs only exists post-V005; use the narrow column set on a
+            // pre-V005 schema so the whole attempt isn't rolled back.
+            var sql = v005
+                ? "INSERT INTO ServerTimingResult (ServerId, AttemptId, RecvBodyMs, ProcessingMs, TotalServerMs, SrvCpuMs) "
+                  + "VALUES (@pk, @aid, @recv, @proc, @total, @cpu)"
+                : "INSERT INTO ServerTimingResult (ServerId, AttemptId, RecvBodyMs, ProcessingMs, TotalServerMs) "
+                  + "VALUES (@pk, @aid, @recv, @proc, @total)";
+            await ExecAsync(conn, tx, ct, sql,
                 p =>
                 {
                     p.AddWithValue("pk", Guid.NewGuid());
@@ -211,6 +289,29 @@ public static class AttemptPersister
                     AddNullable(p, "recv", st.RecvBodyMs);
                     AddNullable(p, "proc", st.ProcessingMs);
                     AddNullable(p, "total", st.TotalServerMs);
+                    if (v005)
+                    {
+                        AddNullable(p, "cpu", st.SrvCpuMs);
+                    }
+                });
+        }
+        if (v005 && a.Mthroughput is { } mt)
+        {
+            await ExecAsync(conn, tx, ct,
+                "INSERT INTO MthroughputResult (ServerId, AttemptId, RemoteAddr, CapacityDownMbps, CapacityUpMbps, "
+                + "ConnsDown, ConnsUp, FairShareSpreadDownPct, FairShareSpreadUpPct) "
+                + "VALUES (@pk, @aid, @ra, @cd, @cu, @nd, @nu, @sd, @su)",
+                p =>
+                {
+                    p.AddWithValue("pk", Guid.NewGuid());
+                    p.AddWithValue("aid", a.AttemptId);
+                    p.AddWithValue("ra", mt.RemoteAddr ?? a.TargetHost);
+                    AddNullable(p, "cd", mt.CapacityDownMbps);
+                    AddNullable(p, "cu", mt.CapacityUpMbps);
+                    p.AddWithValue("nd", mt.ConnsDown);
+                    AddNullable(p, "nu", mt.ConnsUp);
+                    AddNullable(p, "sd", mt.FairShareSpreadDownPct);
+                    AddNullable(p, "su", mt.FairShareSpreadUpPct);
                 });
         }
     }

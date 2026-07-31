@@ -27,7 +27,8 @@ public sealed record ParsedAttempt(
     ParsedTls? Tls,
     ParsedHttp? Http,
     ParsedUdp? Udp,
-    ParsedServerTiming? ServerTiming);
+    ParsedServerTiming? ServerTiming,
+    ParsedMthroughput? Mthroughput = null);
 
 public sealed record ParsedDns(string? QueryName, string? ResolvedIps, double? DurationMs, bool Success);
 
@@ -48,7 +49,19 @@ public sealed record ParsedUdp(
     int? ProbeCount, int? SuccessCount, double? LossPercent,
     double? RttMinMs, double? RttAvgMs, double? RttP95Ms, double? JitterMs);
 
-public sealed record ParsedServerTiming(double? RecvBodyMs, double? ProcessingMs, double? TotalServerMs);
+public sealed record ParsedServerTiming(
+    double? RecvBodyMs, double? ProcessingMs, double? TotalServerMs, double? SrvCpuMs = null);
+
+/// <summary>Multi-connection capacity probe headline (V005). The tester's
+/// capacity fields carry MB/s, mirroring the Rust struct.</summary>
+public sealed record ParsedMthroughput(
+    string? RemoteAddr,
+    double? CapacityDownMbps,
+    double? CapacityUpMbps,
+    int ConnsDown,
+    int? ConnsUp,
+    double? FairShareSpreadDownPct,
+    double? FairShareSpreadUpPct);
 
 /// <summary>Pure JSON → <see cref="ParsedAttempt"/> extraction (no I/O).</summary>
 public static class AttemptExtract
@@ -95,7 +108,8 @@ public static class AttemptExtract
             Tls: ParseTls(Child(attempt, "tls")),
             Http: ParseHttp(Child(attempt, "http")),
             Udp: ParseUdp(Child(attempt, "udp")),
-            ServerTiming: ParseServerTiming(Child(attempt, "server_timing")));
+            ServerTiming: ParseServerTiming(Child(attempt, "server_timing")),
+            Mthroughput: ParseMthroughput(Child(attempt, "mthroughput")));
     }
 
     private static ParsedDns? ParseDns(JsonElement? e) => e is { } d
@@ -125,7 +139,17 @@ public static class AttemptExtract
         : null;
 
     private static ParsedServerTiming? ParseServerTiming(JsonElement? e) => e is { } s
-        ? new ParsedServerTiming(Dbl(s, "recv_body_ms"), Dbl(s, "processing_ms"), Dbl(s, "total_server_ms"))
+        ? new ParsedServerTiming(
+            Dbl(s, "recv_body_ms"), Dbl(s, "processing_ms"), Dbl(s, "total_server_ms"),
+            Dbl(s, "srv_cpu_ms"))
+        : null;
+
+    private static ParsedMthroughput? ParseMthroughput(JsonElement? e) => e is { } m
+        ? new ParsedMthroughput(
+            Str(m, "remote_addr"),
+            Dbl(m, "capacity_down_mbps"), Dbl(m, "capacity_up_mbps"),
+            Int(m, "conns_down") ?? 0, Int(m, "conns_up"),
+            Dbl(m, "fair_share_spread_down_pct"), Dbl(m, "fair_share_spread_up_pct"))
         : null;
 
     // ── JSON accessors (tolerant: wrong-kind / missing → null) ───────────────

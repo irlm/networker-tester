@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.127] — 2026-07-31
+
+### Fixed
+- **Streamed-attempt ingest now persists the V005 fields (mthroughput +
+  srv_cpu_ms).** v0.28.126 shipped the tester-side V005 migration and the
+  /attempts read tier, but in the streamed-agent deployment the tester never
+  touches the DB — the C# ingest (AttemptPersister) writes the rows, and it
+  neither created the V005 schema nor extracted the new fields, so a live
+  verification run showed 10 mthroughput attempts with null capacities and
+  null srv_cpu_ms. The ingest now applies the V005 DDL lazily (idempotent,
+  probed once per process, mirrors the tester's V005_MIGRATION), extracts
+  `mthroughput` + `server_timing.srv_cpu_ms` from the live JSON, and writes
+  both — degrading to the old column set on a pre-V005 schema instead of
+  aborting the attempt insert.
+
+---
+
 ## [0.28.126] — 2026-07-31
 
 ### Added
