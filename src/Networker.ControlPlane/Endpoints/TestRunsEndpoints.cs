@@ -297,14 +297,7 @@ public static class TestRunsEndpoints
                     .FirstOrDefaultAsync(ct);
                 if (t is not null)
                 {
-                    runner = new
-                    {
-                        cloud = t.Cloud,
-                        vm_size = t.VmSize,
-                        region = t.Region,
-                        specs = Infra.VmNetworkSpecs.ToWire(
-                            Infra.VmNetworkSpecs.Lookup(t.Cloud, t.VmSize)),
-                    };
+                    runner = await BuildInfraSideAsync(db, t.Cloud, t.VmSize, t.Region, ct);
                 }
             }
 
@@ -326,14 +319,8 @@ public static class TestRunsEndpoints
                     .FirstOrDefault();
                 if (spec is not null)
                 {
-                    target = new
-                    {
-                        cloud = spec.Provider,
-                        vm_size = spec.VmSize,
-                        region = spec.Region,
-                        specs = Infra.VmNetworkSpecs.ToWire(
-                            Infra.VmNetworkSpecs.Lookup(spec.Provider, spec.VmSize)),
-                    };
+                    target = await BuildInfraSideAsync(
+                        db, spec.Provider, spec.VmSize, spec.Region, ct);
                 }
             }
 
@@ -501,6 +488,43 @@ public static class TestRunsEndpoints
 
     private static object? RawJsonOrNull(string? value)
         => value is null ? null : RawJson(value);
+
+    /// <summary>One side of the /infra payload: identity + catalog specs +
+    /// effective hourly price + the same-cloud alternative-size pool (specs
+    /// joined with prices) the advisor derives upsize/downsize suggestions
+    /// from. Prices resolve DB cost_rates → curated CloudCostTable → null
+    /// ("price unknown" — never the D2s_v3 hardcoded fallback, which would
+    /// fabricate advice economics).</summary>
+    internal static async Task<object> BuildInfraSideAsync(
+        NetworkerDbContext db, string cloud, string? vmSize, string? region, CancellationToken ct)
+    {
+        var price = await Infra.InfraPricing.ResolverAsync(db, cloud, region, ct);
+        var alternatives = Infra.VmNetworkSpecs.ForCloud(cloud)
+            .Where(e => !string.Equals(e.VmSize, vmSize, StringComparison.OrdinalIgnoreCase))
+            .Select(e => new
+            {
+                vm_size = e.VmSize,
+                vcpus = e.Spec.Vcpus,
+                memory_gb = e.Spec.MemoryGb,
+                egress_mbps = e.Spec.EgressMbps,
+                confidence = e.Spec.Confidence,
+                accelerated_networking = e.Spec.AcceleratedNetworking,
+                hourly_usd = price(e.VmSize),
+            })
+            .OrderBy(a => a.egress_mbps)
+            .ThenBy(a => a.hourly_usd ?? double.MaxValue)
+            .ToList();
+
+        return new
+        {
+            cloud,
+            vm_size = vmSize,
+            region,
+            specs = Infra.VmNetworkSpecs.ToWire(Infra.VmNetworkSpecs.Lookup(cloud, vmSize)),
+            hourly_usd = vmSize is null ? null : price(vmSize),
+            alternatives,
+        };
+    }
 
     /// <summary>Extract <c>proxy_endpoint_id</c> (a Deployment id) from a
     /// kind=proxy config's <c>endpoint_ref</c> JSON. Tolerant: bad JSON or a

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Networker.ControlPlane.Infra;
 
@@ -39,37 +40,59 @@ public static class VmNetworkSpecs
         string Confidence,
         bool AcceleratedNetworking);
 
-    // Keys are lowercase (cloud, size). Sizes cover what our provisioners offer
-    // plus the common neighbours an infra admin would compare against.
-    private static readonly Dictionary<(string Cloud, string Size), VmSpec> Catalog = new()
-    {
+    /// <summary>One catalog row: display-cased size + specs.</summary>
+    public sealed record Entry(string Cloud, string VmSize, VmSpec Spec);
+
+    // Display-cased entries; the lookup dictionary below is derived lowercase.
+    // Sizes cover what our provisioners offer plus the common neighbours an
+    // infra admin would compare against.
+    private static readonly Entry[] Entries =
+    [
         // ── azure · B-series burstable — bandwidth NOT guaranteed by Azure ──
-        [("azure", "standard_b1s")] = new(1, 1, 250, "estimated", false),
-        [("azure", "standard_b1ms")] = new(1, 2, 400, "estimated", false),
-        [("azure", "standard_b2s")] = new(2, 4, 600, "estimated", false),
-        [("azure", "standard_b2ms")] = new(2, 8, 800, "estimated", false),
-        [("azure", "standard_b4ms")] = new(4, 16, 1200, "estimated", false),
+        new("azure", "Standard_B1s", new(1, 1, 250, "estimated", false)),
+        new("azure", "Standard_B1ms", new(1, 2, 400, "estimated", false)),
+        new("azure", "Standard_B2s", new(2, 4, 600, "estimated", false)),
+        new("azure", "Standard_B2ms", new(2, 8, 800, "estimated", false)),
+        new("azure", "Standard_B4ms", new(4, 16, 1200, "estimated", false)),
         // ── azure · D-series general purpose ──
-        [("azure", "standard_d2s_v3")] = new(2, 8, 1000, "estimated", true),
-        [("azure", "standard_d2s_v4")] = new(2, 8, 5000, "estimated", true),
-        [("azure", "standard_d2s_v5")] = new(2, 8, 12500, "documented", true),
-        [("azure", "standard_d4s_v5")] = new(4, 16, 12500, "documented", true),
-        [("azure", "standard_d8s_v5")] = new(8, 32, 12500, "documented", true),
+        new("azure", "Standard_D2s_v3", new(2, 8, 1000, "estimated", true)),
+        new("azure", "Standard_D2s_v4", new(2, 8, 5000, "estimated", true)),
+        new("azure", "Standard_D2s_v5", new(2, 8, 12500, "documented", true)),
+        new("azure", "Standard_D4s_v5", new(4, 16, 12500, "documented", true)),
+        new("azure", "Standard_D8s_v5", new(8, 32, 12500, "documented", true)),
         // ── azure · E/F ──
-        [("azure", "standard_e2s_v5")] = new(2, 16, 12500, "documented", true),
-        [("azure", "standard_f2s_v2")] = new(2, 4, 875, "estimated", true),
+        new("azure", "Standard_E2s_v5", new(2, 16, 12500, "documented", true)),
+        new("azure", "Standard_F2s_v2", new(2, 4, 875, "estimated", true)),
         // ── aws — t-series numbers are the sustained BASELINE (bursts higher) ──
-        [("aws", "t3.micro")] = new(2, 1, 64, "estimated", false),
-        [("aws", "t3.small")] = new(2, 2, 128, "estimated", false),
-        [("aws", "t3.medium")] = new(2, 4, 256, "estimated", false),
-        [("aws", "m5.large")] = new(2, 8, 750, "estimated", true),
-        [("aws", "c5.large")] = new(2, 4, 750, "estimated", true),
+        new("aws", "t3.micro", new(2, 1, 64, "estimated", false)),
+        new("aws", "t3.small", new(2, 2, 128, "estimated", false)),
+        new("aws", "t3.medium", new(2, 4, 256, "estimated", false)),
+        new("aws", "t3.large", new(2, 8, 512, "estimated", false)),
+        new("aws", "m5.large", new(2, 8, 750, "estimated", true)),
+        new("aws", "m5.xlarge", new(4, 16, 1250, "estimated", true)),
+        new("aws", "c5.large", new(2, 4, 750, "estimated", true)),
         // ── gcp — egress scales with vCPU (≈2 Gbps/vCPU class rule) ──
-        [("gcp", "e2-micro")] = new(2, 1, 1000, "estimated", false),
-        [("gcp", "e2-small")] = new(2, 2, 1000, "estimated", false),
-        [("gcp", "e2-medium")] = new(2, 4, 2000, "estimated", false),
-        [("gcp", "n2-standard-2")] = new(2, 8, 4000, "estimated", true),
-    };
+        new("gcp", "e2-micro", new(2, 1, 1000, "estimated", false)),
+        new("gcp", "e2-small", new(2, 2, 1000, "estimated", false)),
+        new("gcp", "e2-medium", new(2, 4, 2000, "estimated", false)),
+        new("gcp", "e2-standard-2", new(2, 8, 4000, "estimated", false)),
+        new("gcp", "e2-standard-4", new(4, 16, 8000, "estimated", false)),
+        new("gcp", "e2-standard-8", new(8, 32, 16000, "estimated", false)),
+        new("gcp", "n2-standard-2", new(2, 8, 4000, "estimated", true)),
+    ];
+
+    private static readonly Dictionary<(string Cloud, string Size), VmSpec> Catalog =
+        BuildCatalog();
+
+    private static Dictionary<(string, string), VmSpec> BuildCatalog()
+    {
+        var dict = new Dictionary<(string, string), VmSpec>();
+        foreach (var e in Entries)
+        {
+            dict[(e.Cloud, e.VmSize.ToLowerInvariant())] = e.Spec;
+        }
+        return dict;
+    }
 
     /// <summary>Case-insensitive lookup; null when either key part is missing
     /// or the (cloud, size) pair is not in the catalog.</summary>
@@ -85,6 +108,19 @@ public static class VmNetworkSpecs
             out var spec)
             ? spec
             : null;
+    }
+
+    /// <summary>All catalog entries for a cloud (display casing preserved) —
+    /// the advisor's alternative-size pool. Empty for unknown clouds.</summary>
+    public static IReadOnlyList<Entry> ForCloud(string? cloud)
+    {
+        if (string.IsNullOrWhiteSpace(cloud))
+        {
+            return Array.Empty<Entry>();
+        }
+
+        var c = cloud.Trim().ToLowerInvariant();
+        return Entries.Where(e => e.Cloud == c).ToArray();
     }
 
     /// <summary>Wire shape for one side of the envelope (snake_case, null
