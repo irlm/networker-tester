@@ -327,7 +327,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.129"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.130"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -6341,7 +6341,22 @@ step_azure_create_vm() {
     next_step "Create Azure VM for $label ($vm in $AZURE_REGION)"
 
     print_info "Creating resource group '$rg' in ${AZURE_REGION}…"
-    az group create --name "$rg" --location "$AZURE_REGION" --output none
+    # az group create is idempotent, but N concurrent creates of the SAME rg
+    # (every cell of a comparison-group matrix shares one endpoint rg) can be
+    # interrupted with ConflictingConcurrentWriteNotAllowed — one loser per
+    # 10-cell launch in practice (2026-07-31). Retry: if a concurrent writer
+    # won, the rg now exists and the recheck succeeds immediately.
+    local rg_tries=0
+    until az group create --name "$rg" --location "$AZURE_REGION" --output none < /dev/null 2>/dev/null \
+          || [[ "$(az group exists --name "$rg" < /dev/null)" == "true" ]]; do
+        rg_tries=$((rg_tries + 1))
+        if [[ "$rg_tries" -ge 5 ]]; then
+            print_error "Could not create resource group '$rg' after ${rg_tries} attempts"
+            exit 1
+        fi
+        print_info "Resource group create conflicted (concurrent write) — retry ${rg_tries}/5…"
+        sleep $((rg_tries * 3))
+    done
     print_ok "Resource group: $rg"
 
     local image os_label
