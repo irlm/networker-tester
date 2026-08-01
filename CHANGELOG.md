@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.130] — 2026-08-01
+
+### Fixed
+- **install.sh retries the Azure resource-group create on concurrent-write
+  conflicts.** Every cell of a comparison-group matrix shares one endpoint
+  resource group, and N concurrent `az group create` calls on the same entity
+  can be interrupted with `ConflictingConcurrentWriteNotAllowed` — the
+  v0.28.129 relaunch verification lost exactly one cell of ten to this. The
+  create now retries (up to 5×, backing off), short-circuiting as soon as a
+  concurrent winner has made the group exist.
+
+---
+
 ## [0.28.129] — 2026-07-31
 
 ### Fixed
