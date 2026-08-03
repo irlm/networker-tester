@@ -281,6 +281,24 @@ public sealed class ProvisioningOrchestrator : BackgroundService
             .ToListAsync(ct)
             .ConfigureAwait(false);
 
+        if (candidates.Count == 0)
+        {
+            return 0;
+        }
+
+        // Active runs' endpoint refs, fetched ONCE and matched client-side.
+        // endpoint_ref is a JSONB column: a server-side Contains translates to
+        // `LIKE` and Postgres has no `jsonb ~~ jsonb` operator — the original
+        // per-host AnyAsync threw 42883 EVERY tick, which both killed teardown
+        // and (with stale rows counting toward capacity) starved all kicks
+        // (prod wedge, 2026-08-03). Active runs are bounded by the throttle +
+        // queue, so the client-side scan is small.
+        var activeRefs = await db.TestRuns
+            .Where(r => r.Status != "completed" && r.Status != "failed" && r.Status != "cancelled")
+            .Select(r => r.TestConfig.EndpointRef)
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
         var torn = 0;
         foreach (var c in candidates)
         {
@@ -289,18 +307,8 @@ public sealed class ProvisioningOrchestrator : BackgroundService
             // Defer while ANY active run's config references one of this
             // deployment's hosts — its endpoint is being reused as a target.
             var candidateHosts = Endpoints.DeploymentWriteEndpoints.ParseHosts(c.Dep.EndpointIps);
-            var referenced = false;
-            foreach (var h in candidateHosts)
-            {
-                if (await db.TestRuns
-                        .Where(r => r.Status != "completed" && r.Status != "failed" && r.Status != "cancelled")
-                        .AnyAsync(r => r.TestConfig.EndpointRef.Contains(h), ct)
-                        .ConfigureAwait(false))
-                {
-                    referenced = true;
-                    break;
-                }
-            }
+            var referenced = candidateHosts.Any(h => activeRefs.Any(er =>
+                er is not null && er.Contains(h, StringComparison.OrdinalIgnoreCase)));
             if (referenced)
             {
                 continue; // re-checked next tick; tears down once the reuse ends

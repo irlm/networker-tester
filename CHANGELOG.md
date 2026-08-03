@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.132] — 2026-08-03
+
+### Fixed
+- **Hotfix: the v0.28.131 teardown phase threw on Postgres every tick.** Its
+  endpoint-reuse defer did a server-side `Contains` on `endpoint_ref`, which
+  is a JSONB column — Postgres has no `jsonb ~~ jsonb` (LIKE) operator, so the
+  query failed with 42883, teardown never ran, stale deployments kept counting
+  toward the provisioning-capacity throttle, and every queued auto-provision
+  starved at "capacity". Active runs' endpoint refs are now fetched once and
+  matched client-side (they're bounded by the throttle + queue). Caught live
+  on the first post-deploy matrix relaunch; prod unwedged by hand-marking the
+  8 stale deployments `torn_down`.
+
+---
+
 ## [0.28.131] — 2026-08-03
 
 ### Fixed
