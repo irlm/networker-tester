@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.134] — 2026-08-03
+
+### Fixed
+- **Queued-run watchdog no longer kills runs that are waiting for a busy
+  runner or just finished provisioning.** Two flaws bit the same matrix
+  relaunch: (1) the "no runner claimed within 5 minutes" reaper never checked
+  agent liveness despite its own error text — runs queued behind a CONNECTED
+  but busy runner were killed at 5 minutes, starving any launch wider than
+  the runner's concurrency; it now only reaps when the registry has no online
+  agent at all. (2) Its age basis was `created_at`, but a promoted matrix
+  cell re-queues AFTER >5 minutes of provisioning (and promotion rewrites the
+  config kind away from `pending`, losing that exclusion) — cells with slower
+  proxy installs were reaped on the next tick before any agent could claim
+  them. The orchestrator now stamps `last_heartbeat` at re-queue and the
+  watchdog measures queued age from `COALESCE(last_heartbeat, created_at)` —
+  time since the run became claimable.
+
+---
+
 ## [0.28.133] — 2026-08-03
 
 ### Fixed

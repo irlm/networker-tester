@@ -599,7 +599,14 @@ public sealed class ProvisioningOrchestrator : BackgroundService
             }
             await db.TestRuns
                 .Where(r => r.Id == runId)
-                .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, RunQueued), ct)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(r => r.Status, RunQueued)
+                    // Claimability stamp: the watchdog's queued-age basis is
+                    // COALESCE(last_heartbeat, created_at). Without this a run
+                    // whose provisioning took >5min re-queues already past the
+                    // no-claim cutoff and is reaped before any agent can claim
+                    // it (2026-08-03 apache cell).
+                    .SetProperty(r => r.LastHeartbeat, DateTime.UtcNow), ct)
                 .ConfigureAwait(false);
             return;
         }
@@ -665,7 +672,10 @@ public sealed class ProvisioningOrchestrator : BackgroundService
 
         await db.TestRuns
             .Where(r => r.Id == runId)
-            .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, RunQueued), ct)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.Status, RunQueued)
+                // Claimability stamp — see the readiness-gate re-queue above.
+                .SetProperty(r => r.LastHeartbeat, DateTime.UtcNow), ct)
             .ConfigureAwait(false);
 
         _logger.LogInformation(
