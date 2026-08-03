@@ -202,7 +202,7 @@ public static class ComparisonGroupsEndpoints
                         EndpointRef = cell.EndpointRaw,
                         Workload = group.BaseWorkload,
                         Methodology = group.Methodology,
-                        MaxDurationSecs = DefaultMaxDurationSecs,
+                        MaxDurationSecs = CellMaxDurationSecs(group.BaseWorkload),
                         CreatedBy = user.UserId,
                         CreatedAt = now,
                         UpdatedAt = now,
@@ -279,6 +279,50 @@ public static class ComparisonGroupsEndpoints
     }
 
     private const int DefaultMaxDurationSecs = 900;
+
+    /// <summary>Ceiling for a workload-derived cell deadline — 6h guards
+    /// against a malformed workload producing an unbounded run.</summary>
+    private const int MaxCellDurationSecs = 6 * 3600;
+
+    /// <summary>
+    /// Derive a cell's <c>max_duration_secs</c> from the group's base workload.
+    /// The old fixed 900s deadline was IMPOSSIBLE for real matrix workloads —
+    /// runs=100 × 26 modes needs hours, so every cell that reached the runner
+    /// was killed at ~16 minutes (2026-08-03). Budget: ~4s per (run × mode)
+    /// attempt (mixes ms-scale dns/tcp with multi-second pageload/throughput)
+    /// plus a 10-minute fixed buffer for startup/report/upload, floored at the
+    /// old default and capped at <see cref="MaxCellDurationSecs"/>. An
+    /// unparseable workload falls back to the old default.
+    /// </summary>
+    internal static int CellMaxDurationSecs(string? baseWorkloadJson)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(baseWorkloadJson))
+            {
+                return DefaultMaxDurationSecs;
+            }
+            using var doc = JsonDocument.Parse(baseWorkloadJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return DefaultMaxDurationSecs;
+            }
+            var runs = doc.RootElement.TryGetProperty("runs", out var r)
+                       && r.ValueKind == JsonValueKind.Number && r.TryGetInt32(out var rv) && rv > 0
+                ? rv
+                : 10;
+            var modes = doc.RootElement.TryGetProperty("modes", out var m)
+                        && m.ValueKind == JsonValueKind.Array
+                ? m.GetArrayLength()
+                : 1;
+            var estimate = (long)runs * Math.Max(modes, 1) * 4 + 600;
+            return (int)Math.Clamp(estimate, DefaultMaxDurationSecs, MaxCellDurationSecs);
+        }
+        catch (JsonException)
+        {
+            return DefaultMaxDurationSecs;
+        }
+    }
 
     // Shape a ComparisonGroup entity into the snake_case wire DTO matching the Rust
     // networker_common::ComparisonGroup. base_workload / methodology / cells are

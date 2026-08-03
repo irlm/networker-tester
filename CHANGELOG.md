@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.136] — 2026-08-03
+
+### Fixed
+- **Matrix cell deadlines derive from the workload.** Every comparison-group
+  cell got a hardcoded 900-second `max_duration_secs` regardless of workload —
+  a full workload (runs=100 × 26 modes) needs hours, so every cell that
+  reached the runner was killed at ~16 minutes ("exceeded the overall run
+  deadline"). Cells now get `runs × modes × 4s + 10min`, floored at the old
+  900s and capped at 6 hours; malformed workloads keep the old default.
+
+---
+
 ## [0.28.135] — 2026-08-03
 
 ### Fixed
