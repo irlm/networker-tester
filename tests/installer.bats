@@ -1877,3 +1877,52 @@ JSON
     grep -q 'tcp:8454-8457' "$SCRIPT"
     grep -q 'udp:8454,' "$SCRIPT"
 }
+
+# ---------------------------------------------------------------------------
+# Stack service-start fixes (v0.28.133)
+# ---------------------------------------------------------------------------
+# Caddy: v2 rejects content after '{' on the same line — the one-line
+# `handle /x* { reverse_proxy … }` form NEVER validated, so networker-caddy
+# had never started anywhere. Apache: the stock 'Listen 80' + default site
+# collide with nginx on endpoint VMs (nginx installs first) → apache2 fails
+# "Address already in use".
+
+@test "caddy: no single-line handle blocks (caddy v2 syntax)" {
+    run grep -cE 'handle [^{]*\{ +[a-z]' "$SCRIPT"
+    [ "$output" -eq 0 ]
+}
+
+@test "caddy: config is validated before the service starts" {
+    grep -q 'caddy validate --config /etc/caddy/networker.Caddyfile' "$SCRIPT" || \
+        grep -q 'validate --config /etc/caddy/networker.Caddyfile' "$SCRIPT"
+}
+
+@test "apache: default site and Listen 80/443 disabled on apt systems" {
+    grep -q 'a2dissite 000-default' "$SCRIPT"
+    # The sed must tolerate the INDENTED Listen 443 inside <IfModule> blocks.
+    grep -q 'Listen (80|443)' "$SCRIPT"
+    grep -q '\[\[:space:\]\]\*)Listen' "$SCRIPT"
+}
+
+@test "apache: config goes to conf-available with a2enconf on Debian layout" {
+    # Debian apache2 never reads conf.d/ — the config must be enabled via
+    # a2enconf or apache starts "successfully" without our listeners.
+    grep -q 'conf-available/networker.conf' "$SCRIPT"
+    grep -q 'a2enconf networker' "$SCRIPT"
+}
+
+@test "apache and caddy: port verified after service start" {
+    grep -q 'http://127.0.0.1:8094/' "$SCRIPT"
+    grep -q 'http://127.0.0.1:8091/' "$SCRIPT"
+}
+
+@test "iis: total verification failure fails the deploy" {
+    grep -q 'IIS is not responding on any port after setup — failing deploy' "$SCRIPT"
+}
+
+@test "iis: run-command conflict is retried" {
+    local section
+    section=$(sed -n '/_azure_win_setup_iis()/,/^}/p' "$SCRIPT")
+    echo "$section" | grep -q 'grep -q "Conflict"'
+    echo "$section" | grep -q 'retrying IIS setup'
+}

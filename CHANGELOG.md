@@ -11,6 +11,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.133] — 2026-08-03
+
+### Fixed
+- **Caddy stack had never started: invalid Caddyfile syntax.** The generated
+  config used one-line `handle /x* { reverse_proxy … }` blocks; Caddy v2
+  rejects content after `{` on the same line, so `networker-caddy` failed at
+  config-adapt on every install since the stack existed (the bats tests only
+  grep the config text). Rewritten multi-line + `caddy validate` gate before
+  the service starts.
+- **Apache stack died on port 80 on endpoint VMs.** Stock apache2 ships
+  `Listen 80` + a default site; endpoint VMs already run nginx (installed
+  first, package-default server on 80), so apache2 failed "Address already in
+  use". The apt path now disables the default site and comments out
+  `Listen 80/443` — networker apache serves only 8094/8457.
+- **IIS matrix cells: wrong probe port + silent setup failure.** (1) The
+  orchestrator's proxy-port table said IIS serves 443 (legacy Rust constant),
+  but the Windows deploy binds HTTPS on 8445 — readiness probed 443 forever.
+  Now 8445. (2) `_azure_win_setup_iis`'s run-command was `|| true` with
+  warn-only verification — an Azure run-command Conflict (one at a time per
+  VM) left VMs with no IIS at all while the deploy "completed". Now: Conflict
+  retried once, and total verification failure fails the deploy.
+- **IP accounting: failed cells count toward provisioning capacity until the
+  reaper can sweep them.** Failed proxy-setups leave a full VM+IP behind with
+  no registered hosts; releasing their capacity slot immediately let the
+  rolling window overshoot the public-IP quota again (2 late windows cells
+  died `PublicIPCountLimitReached` on the 08-03 relaunch). Failed/cancelled
+  deployments now hold their slot for ~12 minutes (one reaper tick + margin)
+  before being marked `torn_down`.
+
+---
+
 ## [0.28.132] — 2026-08-03
 
 ### Fixed
