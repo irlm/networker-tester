@@ -331,7 +331,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.136"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.137"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -5941,8 +5941,14 @@ _azure_win_setup_iis() {
         # (ProxyHttpsPort iis=8445) — an IIS whose HTTPS binding is dead just
         # times out the gate downstream, so it MUST be fatal here.
         if ! $https_ok; then
-            print_err "IIS HTTPS (8445) is not responding after setup — failing deploy"
-            return 1
+            if [[ "${AZURE_ENDPOINT_WANTS_IIS:-1}" == "1" ]]; then
+                print_err "IIS HTTPS (8445) is not responding after setup — failing deploy"
+                return 1
+            fi
+            # This endpoint requested a DIFFERENT stack (caddy/traefik/…) —
+            # IIS is only the always-installed default here, so its failure
+            # must not take the cell down before the requested stack installs.
+            print_warn "IIS (8445) not responding — continuing (this endpoint's requested stack is not IIS)"
         fi
         $ok || print_warn "IIS HTTP endpoints failed — HTTP/3 may need a reboot to activate"
     fi
@@ -10463,6 +10469,17 @@ deploy_from_config() {
                 ;;
             azure)
                 step_check_azure_prereqs
+                # Tell the Windows endpoint deploy whether this endpoint
+                # actually requested IIS: its always-run IIS setup is fatal on
+                # verify failure ONLY then — a broken IIS must not take down a
+                # caddy/traefik/haproxy cell that never needed it (2026-08-03:
+                # every Windows matrix cell died at the unconditional IIS step).
+                # No stacks requested = IIS is the default Windows stack = fatal.
+                AZURE_ENDPOINT_WANTS_IIS=0
+                case ",${DEPLOY_EP_HTTP_STACKS[$i]}," in
+                    *,iis,*) AZURE_ENDPOINT_WANTS_IIS=1 ;;
+                    ,,)      AZURE_ENDPOINT_WANTS_IIS=1 ;;
+                esac
                 step_azure_deploy_endpoint
                 DEPLOY_EP_IPS[$i]="$AZURE_ENDPOINT_IP"
                 DEPLOY_EP_FQDNS[$i]="${AZURE_ENDPOINT_FQDN:-}"

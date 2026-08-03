@@ -1926,3 +1926,11 @@ JSON
     echo "$section" | grep -q 'grep -q "Conflict"'
     echo "$section" | grep -q 'retrying IIS setup'
 }
+
+@test "iis: verify failure fatal only when the endpoint requested iis" {
+    grep -q 'AZURE_ENDPOINT_WANTS_IIS' "$SCRIPT"
+    local section
+    section=$(sed -n '/_azure_win_setup_iis()/,/^}/p' "$SCRIPT")
+    echo "$section" | grep -q 'AZURE_ENDPOINT_WANTS_IIS'
+    echo "$section" | grep -q 'requested stack is not IIS'
+}
