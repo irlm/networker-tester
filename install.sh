@@ -297,6 +297,10 @@ Benchmark server (used by orchestrator):
   --benchmark-port N       Override the benchmark server port (implies app mode, no TLS).
                            Used by the deploy path to run a language server on 8085
                            alongside networker-endpoint; the proxy's /api routes to it.
+  --setup-stack STACK      Set up ONE HTTP stack (nginx, caddy, apache, haproxy, traefik)
+                           on this Linux host alongside networker-endpoint, then exit.
+                           Non-interactive; used by the deploy path over SSH to install
+                           comparison-matrix proxies on remote endpoint VMs.
 
   -h, --help               Show this help message
 
@@ -327,7 +331,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.130"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.131"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -439,6 +443,7 @@ CONFIG_FILE_PATH=""
 
 # ── Benchmark server mode ────────────────────────────────────────────────
 BENCHMARK_SERVER_LANG=""        # language to deploy as benchmark server (--benchmark-server)
+SETUP_STACK=""                  # single HTTP stack to set up locally, then exit (--setup-stack)
 BENCHMARK_PROXY=""              # reverse proxy to deploy (--benchmark-proxy)
 BENCHMARK_PROXY_SWAP=""         # swap to this proxy (--benchmark-proxy-swap)
 BENCHMARK_PORT_OVERRIDE=""      # explicit bench port (--benchmark-port) — set when a
@@ -583,6 +588,10 @@ parse_args() {
                 AUTO_YES=1 ;;
             --benchmark-port)
                 shift; BENCHMARK_PORT_OVERRIDE="${1:-}" ;;
+            # Single-stack setup mode (used by the deploy path over SSH)
+            --setup-stack)
+                shift; SETUP_STACK="${1:-}"
+                AUTO_YES=1 ;;
             # Deploy config
             --deploy)
                 shift; DEPLOY_CONFIG_PATH="${1:-}"
@@ -5570,6 +5579,48 @@ NGINX_SSH
     fi
 }
 
+# ── Comparison HTTP stacks on a deployed Linux endpoint ──────────────────────
+# Installs one of caddy/apache/haproxy/traefik on a remote Linux VM by piping
+# this installer over SSH with --setup-stack (the exact mechanism
+# _remote_setup_languages uses, and the bash mirror of install.ps1 -Setup).
+# The local step_setup_<stack> functions do the real work, so remote and local
+# installs cannot drift. Returns non-zero on failure — the deploy path treats
+# that as fatal: a matrix cell whose proxy is missing would otherwise sit
+# unreachable until the readiness gate times out (2026-08-01 failure class).
+_remote_setup_stack() {
+    local ip="$1" ssh_user="$2" stack="$3"
+
+    next_step "Set up $stack on remote VM (${ip})"
+
+    # Resolve a script to pipe remotely: the on-disk file when invoked via
+    # --deploy (the dashboard path), else the pinned raw installer.
+    local self="${BASH_SOURCE[0]:-}"
+    local tmp_self=""
+    if [[ ! -r "$self" ]]; then
+        tmp_self="$(mktemp)"
+        if ! curl -fsSL "https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh" \
+                -o "$tmp_self" < /dev/null; then
+            rm -f "$tmp_self"
+            print_err "Could not fetch installer for remote $stack setup"
+            return 1
+        fi
+        self="$tmp_self"
+    fi
+
+    local rc=0
+    # shellcheck disable=SC2029
+    if ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 "${ssh_user}@${ip}" \
+        "export DEBIAN_FRONTEND=noninteractive && sudo -E bash -s -- --setup-stack $stack" \
+        < "$self"; then
+        print_ok "$stack set up on ${ip}"
+    else
+        rc=1
+        print_err "$stack setup failed on ${ip}"
+    fi
+    [[ -n "$tmp_self" ]] && rm -f "$tmp_self"
+    return $rc
+}
+
 # ── Reference-API language servers on a deployed endpoint ────────────────────
 # The deploy config's per-endpoint `languages` array requests reference-API
 # servers for apibench. Each installs in APPLICATION mode on port 8085
@@ -6574,7 +6625,11 @@ step_azure_open_endpoint_ports() {
         return 0
     fi
 
-    print_info "Opening TCP 80, 443, 8080-8082, 8443-8445…"
+    # 8091-8094 / 8454-8457 are the HTTP-stack comparison ports (caddy/traefik/
+    # haproxy/apache HTTP + HTTPS) — without them a matrix cell's proxy installs
+    # fine but the readiness probe and the runner can never reach it (the whole
+    # 2026-08-01 comparison-group failure class). UDP 8454 = Caddy's h3.
+    print_info "Opening TCP 80, 443, 8080-8082, 8091-8094, 8443-8445, 8454-8457…"
     az network nsg rule create \
         --resource-group "$rg" \
         --nsg-name "$nsg_name" \
@@ -6582,12 +6637,12 @@ step_azure_open_endpoint_ports() {
         --protocol Tcp \
         --direction Inbound \
         --priority 1100 \
-        --destination-port-ranges 80 443 8080-8082 8443-8445 \
+        --destination-port-ranges 80 443 8080-8082 8091-8094 8443-8445 8454-8457 \
         --access Allow \
         --output none
-    print_ok "TCP 80, 443, 8080-8082, 8443-8445 open"
+    print_ok "TCP 80, 443, 8080-8082, 8091-8094, 8443-8445, 8454-8457 open"
 
-    print_info "Opening UDP 8443, 9998, 9999…"
+    print_info "Opening UDP 8443-8445, 8454, 9998, 9999…"
     az network nsg rule create \
         --resource-group "$rg" \
         --nsg-name "$nsg_name" \
@@ -6595,10 +6650,10 @@ step_azure_open_endpoint_ports() {
         --protocol Udp \
         --direction Inbound \
         --priority 1110 \
-        --destination-port-ranges 8443-8445 9998 9999 \
+        --destination-port-ranges 8443-8445 8454 9998 9999 \
         --access Allow \
         --output none
-    print_ok "UDP 8443-8445, 9998, 9999 open"
+    print_ok "UDP 8443-8445, 8454, 9998, 9999 open"
 }
 
 # Set Azure auto-shutdown policy (04:00 UTC = 11 PM EST).
@@ -7226,10 +7281,22 @@ _aws_create_security_group() {
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$_sg_created" \
             --protocol tcp --port 8443-8445 --cidr 0.0.0.0/0 --output text >/dev/null
-        # UDP 8443-8445 (QUIC for endpoint + nginx + IIS), 9998, 9999
+        # HTTP-stack comparison ports: 8091-8094 HTTP + 8454-8457 HTTPS
+        # (caddy/traefik/haproxy/apache) — matrix cells are unreachable without
+        # them even when the proxy installs fine.
+        aws ec2 authorize-security-group-ingress \
+            --region "$AWS_REGION" --group-id "$_sg_created" \
+            --protocol tcp --port 8091-8094 --cidr 0.0.0.0/0 --output text >/dev/null
+        aws ec2 authorize-security-group-ingress \
+            --region "$AWS_REGION" --group-id "$_sg_created" \
+            --protocol tcp --port 8454-8457 --cidr 0.0.0.0/0 --output text >/dev/null
+        # UDP 8443-8445 (QUIC for endpoint + nginx + IIS), 8454 (Caddy h3), 9998, 9999
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$_sg_created" \
             --protocol udp --port 8443-8445 --cidr 0.0.0.0/0 --output text >/dev/null
+        aws ec2 authorize-security-group-ingress \
+            --region "$AWS_REGION" --group-id "$_sg_created" \
+            --protocol udp --port 8454 --cidr 0.0.0.0/0 --output text >/dev/null
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$_sg_created" \
             --protocol udp --port 9998 --cidr 0.0.0.0/0 --output text >/dev/null
@@ -7672,11 +7739,11 @@ _gcp_create_firewall_rule() {
         --priority=1000 \
         --network=default \
         --action=ALLOW \
-        --rules=tcp:22,tcp:80,tcp:443,tcp:3389,tcp:8080-8082,tcp:8443-8445,udp:8443-8445,udp:9998,udp:9999 \
+        --rules=tcp:22,tcp:80,tcp:443,tcp:3389,tcp:8080-8082,tcp:8091-8094,tcp:8443-8445,tcp:8454-8457,udp:8443-8445,udp:8454,udp:9998,udp:9999 \
         --source-ranges=0.0.0.0/0 \
         --target-tags=networker-endpoint \
         --quiet
-    print_ok "Firewall rule created: TCP 22/80/443/3389/8080-8082/8443-8445, UDP 8443-8445/9998/9999"
+    print_ok "Firewall rule created: TCP 22/80/443/3389/8080-8082/8091-8094/8443-8445/8454-8457, UDP 8443-8445/8454/9998/9999"
 }
 
 # Create a GCE instance.
@@ -10216,7 +10283,14 @@ deploy_from_config() {
                                 fi
                                 ;;
                             caddy|apache|haproxy|traefik)
-                                print_warn "Remote $_ls setup on LAN endpoints is not yet supported — use nginx or pre-install the proxy manually."
+                                if [[ "$os" != "windows" ]]; then
+                                    _remote_setup_stack "$LAN_ENDPOINT_IP" "$ssh_user" "$_ls" || {
+                                        print_err "Deploy failed: could not set up $_ls on LAN endpoint"
+                                        exit 1
+                                    }
+                                else
+                                    print_warn "Skipping $_ls setup on $label: only supported on Linux"
+                                fi
                                 ;;
                             iis)
                                 if [[ "$os" == "windows" ]]; then
@@ -10265,7 +10339,12 @@ deploy_from_config() {
                                         "$AZURE_ENDPOINT_RG" "$AZURE_ENDPOINT_VM" \
                                         "$AZURE_ENDPOINT_IP" "$_ls"
                                 else
-                                    print_warn "Remote $_ls setup on Azure Linux endpoints is not yet supported (planned follow-up)."
+                                    # Fatal on failure: a matrix cell without its
+                                    # proxy just times out the readiness gate.
+                                    _remote_setup_stack "$AZURE_ENDPOINT_IP" "azureuser" "$_ls" || {
+                                        print_err "Deploy failed: could not set up $_ls on Azure endpoint"
+                                        exit 1
+                                    }
                                 fi
                                 ;;
                             iis)
@@ -10306,7 +10385,14 @@ deploy_from_config() {
                                 fi
                                 ;;
                             caddy|apache|haproxy|traefik)
-                                print_warn "Remote $_ls setup on AWS endpoints is not yet supported (planned follow-up). Deployment continues but this stack will not be installed."
+                                if [[ "${AWS_ENDPOINT_OS:-linux}" != "windows" ]]; then
+                                    _remote_setup_stack "$AWS_ENDPOINT_IP" "ubuntu" "$_ls" || {
+                                        print_err "Deploy failed: could not set up $_ls on AWS endpoint"
+                                        exit 1
+                                    }
+                                else
+                                    print_warn "Skipping $_ls setup on AWS Windows (use IIS or the Windows proxy path)"
+                                fi
                                 ;;
                             iis)
                                 if [[ "${AWS_ENDPOINT_OS:-linux}" == "windows" ]]; then
@@ -11107,6 +11193,22 @@ main() {
     if [[ -n "$BENCHMARK_PROXY_SWAP" ]]; then
         stop_benchmark_proxy
         deploy_benchmark_proxy "$BENCHMARK_PROXY_SWAP"
+        return $?
+    fi
+
+    # Single-stack setup mode: install one comparison proxy locally, then exit.
+    # Piped over SSH by _remote_setup_stack (mirror of install.ps1 -Setup).
+    if [[ -n "$SETUP_STACK" ]]; then
+        case "$SETUP_STACK" in
+            nginx)   step_setup_nginx ;;
+            caddy)   step_setup_caddy ;;
+            apache)  step_setup_apache ;;
+            haproxy) step_setup_haproxy ;;
+            traefik) step_setup_traefik ;;
+            *)
+                print_err "--setup-stack: unknown stack '$SETUP_STACK' (valid: nginx, caddy, apache, haproxy, traefik)"
+                return 1 ;;
+        esac
         return $?
     fi
 

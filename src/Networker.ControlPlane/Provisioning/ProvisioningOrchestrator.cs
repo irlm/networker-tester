@@ -63,7 +63,28 @@ public sealed class ProvisioningOrchestrator : BackgroundService
     private const string DeploymentFailed = "failed";
     private const string DeploymentCancelled = "cancelled";
 
+    /// <summary>Terminal state for a run-linked deployment whose cloud VM has
+    /// been (or is being) torn down after its run finished. The row is KEPT —
+    /// the deploy log is the primary diagnostic for failed provisions — but a
+    /// torn-down deployment no longer counts toward the provisioning-capacity
+    /// throttle.</summary>
+    internal const string DeploymentTornDown = "torn_down";
+
     private const int KickBatchLimit = 25;
+
+    /// <summary>Max auto-provision deployments in flight at once. Each holds a
+    /// public IP, and Azure's default quota is 10 per region — a 10-cell
+    /// comparison matrix plus the standing runner/target/control-plane VMs blew
+    /// straight through it (PublicIPCountLimitReached, 2026-08-01). Queued runs
+    /// past the cap stay queued and kick as slots free (each finished cell's
+    /// teardown releases its IP). Overridable via
+    /// NETWORKER_MAX_CONCURRENT_PROVISIONS for subscriptions with raised quota.</summary>
+    internal static int MaxConcurrentAutoProvisions =
+        int.TryParse(
+            Environment.GetEnvironmentVariable("NETWORKER_MAX_CONCURRENT_PROVISIONS"),
+            out var cap) && cap > 0
+            ? cap
+            : 6;
 
     // ── Readiness gate (E2E pass 2026-07-28 P1-3) ────────────────────────────
     // A freshly-provisioned VM's deployment flips to `completed` the moment
@@ -145,11 +166,12 @@ public sealed class ProvisioningOrchestrator : BackgroundService
 
         var kicked = await KickPendingRunsAsync(db, ct).ConfigureAwait(false);
         var resolved = await PromoteProvisioningRunsAsync(db, ct).ConfigureAwait(false);
+        var torn = await TeardownFinishedRunsAsync(db, ct).ConfigureAwait(false);
 
         _monitor.ReportTick(
             OpsServiceNames.ProvisioningOrchestrator,
-            kicked + resolved,
-            $"kicked={kicked} resolved={resolved}");
+            kicked + resolved + torn,
+            $"kicked={kicked} resolved={resolved} torn_down={torn}");
     }
 
     // ── Kick: queued + Pending + no deployment ⇒ start provisioning ──────────
@@ -157,13 +179,43 @@ public sealed class ProvisioningOrchestrator : BackgroundService
     /// <returns>Number of runs whose provisioning was actually kicked off.</returns>
     private async Task<int> KickPendingRunsAsync(NetworkerDbContext db, CancellationToken ct)
     {
+        // Concurrency throttle: what actually holds a public IP is a run-linked
+        // deployment whose VM hasn't been torn down yet — a cell keeps its IP
+        // through provisioning AND the run itself, until the teardown phase
+        // releases it. Failed/cancelled deployments hold no IP (they die before
+        // or at VM create).
+        var active = await db.TestRuns
+            .Where(r => r.ProvisioningDeploymentId != null)
+            .Join(db.Deployments,
+                r => r.ProvisioningDeploymentId, d => d.DeploymentId, (r, d) => d.Status)
+            .CountAsync(s => s != DeploymentFailed
+                             && s != DeploymentCancelled
+                             && s != DeploymentTornDown, ct)
+            .ConfigureAwait(false);
+        var capacity = MaxConcurrentAutoProvisions - active;
+        if (capacity <= 0)
+        {
+            var waiting = await db.TestRuns
+                .CountAsync(r => r.Status == RunQueued
+                                 && r.ProvisioningDeploymentId == null
+                                 && r.TestConfig.EndpointKind == EndpointKindPending, ct)
+                .ConfigureAwait(false);
+            if (waiting > 0)
+            {
+                _logger.LogInformation(
+                    "Provisioning at capacity ({Active}/{Cap}) — {Waiting} queued run(s) waiting for a slot",
+                    active, MaxConcurrentAutoProvisions, waiting);
+            }
+            return 0;
+        }
+
         // queued runs, config endpoint is Pending, not yet linked to a deployment.
         var candidates = await db.TestRuns
             .Where(r => r.Status == RunQueued
                         && r.ProvisioningDeploymentId == null
                         && r.TestConfig.EndpointKind == EndpointKindPending)
             .OrderBy(r => r.CreatedAt)
-            .Take(KickBatchLimit)
+            .Take(Math.Min(KickBatchLimit, capacity))
             .Select(r => new { Run = r, r.TestConfig })
             .ToListAsync(ct);
 
@@ -185,6 +237,119 @@ public sealed class ProvisioningOrchestrator : BackgroundService
         }
 
         return kicked;
+    }
+
+    // ── Teardown: terminal run + live deployment ⇒ release the cloud VM ──────
+
+    /// <summary>Wait this long after a run finishes before tearing its endpoint
+    /// down. Chained consumers re-target a just-finished cell's endpoint with a
+    /// NEW config within seconds (the soak canary's phase 3 reuses phase 2's
+    /// rust@nginx endpoint); an immediate teardown would race that hand-off.
+    /// Static (not const) so tests can shrink it.</summary>
+    internal static TimeSpan TeardownGrace = TimeSpan.FromMinutes(3);
+
+    /// <summary>
+    /// Tear down the cloud VM of every auto-provisioned deployment whose run has
+    /// reached a terminal state. Without this, every matrix cell's VM (and its
+    /// public IP) lived until someone deleted it by hand — ten cells leaked ten
+    /// B2s VMs per launch (2026-08-01), and the IP quota starved later launches.
+    /// The deployment ROW is kept (status → <see cref="DeploymentTornDown"/>):
+    /// its log is the primary diagnostic for failed provisions. The claim is an
+    /// atomic status-guarded update so overlapping ticks can't double-spawn, and
+    /// a deployment with no registered endpoint IPs (died before install
+    /// registered them) is still marked torn down — its partial resources are
+    /// the orphan reaper's job. Two defers protect endpoint reuse: the
+    /// <see cref="TeardownGrace"/> window after the run finishes, and any
+    /// non-terminal run whose config still points at one of the deployment's
+    /// hosts (the canary's phase-3 pattern; also a user re-running a promoted
+    /// cell config).
+    /// </summary>
+    private async Task<int> TeardownFinishedRunsAsync(NetworkerDbContext db, CancellationToken ct)
+    {
+        var graceCutoff = DateTime.UtcNow - TeardownGrace;
+        var candidates = await db.TestRuns
+            .Where(r => r.ProvisioningDeploymentId != null
+                        && (r.Status == "completed" || r.Status == "failed" || r.Status == "cancelled")
+                        && r.FinishedAt != null && r.FinishedAt < graceCutoff)
+            .Join(db.Deployments,
+                r => r.ProvisioningDeploymentId, d => d.DeploymentId,
+                (r, d) => new { RunId = r.Id, Dep = d })
+            .Where(x => x.Dep.Status != DeploymentFailed
+                        && x.Dep.Status != DeploymentCancelled
+                        && x.Dep.Status != DeploymentTornDown)
+            .Take(KickBatchLimit)
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        var torn = 0;
+        foreach (var c in candidates)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            // Defer while ANY active run's config references one of this
+            // deployment's hosts — its endpoint is being reused as a target.
+            var candidateHosts = Endpoints.DeploymentWriteEndpoints.ParseHosts(c.Dep.EndpointIps);
+            var referenced = false;
+            foreach (var h in candidateHosts)
+            {
+                if (await db.TestRuns
+                        .Where(r => r.Status != "completed" && r.Status != "failed" && r.Status != "cancelled")
+                        .AnyAsync(r => r.TestConfig.EndpointRef.Contains(h), ct)
+                        .ConfigureAwait(false))
+                {
+                    referenced = true;
+                    break;
+                }
+            }
+            if (referenced)
+            {
+                continue; // re-checked next tick; tears down once the reuse ends
+            }
+
+            var priorStatus = c.Dep.Status;
+            var claimed = await db.Deployments
+                .Where(d => d.DeploymentId == c.Dep.DeploymentId && d.Status == priorStatus)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(d => d.Status, DeploymentTornDown)
+                    .SetProperty(d => d.FinishedAt, d => d.FinishedAt ?? DateTime.UtcNow), ct)
+                .ConfigureAwait(false);
+            if (claimed == 0)
+            {
+                continue; // another tick / an explicit API delete got here first
+            }
+
+            string? provider = null;
+            string? region = null;
+            if (c.Dep.CloudAccountId is { } accountId)
+            {
+                var acct = await db.CloudAccounts.AsNoTracking()
+                    .Where(a => a.AccountId == accountId)
+                    .Select(a => new { a.Provider, a.RegionDefault })
+                    .FirstOrDefaultAsync(ct)
+                    .ConfigureAwait(false);
+                provider = acct?.Provider;
+                region = acct?.RegionDefault;
+            }
+            provider ??= Endpoints.DeploymentWriteEndpoints.FirstProviderFromConfig(c.Dep.Config);
+
+            if (!string.IsNullOrEmpty(provider) && candidateHosts.Count > 0)
+            {
+                Endpoints.DeploymentWriteEndpoints.SpawnVmTeardown(
+                    _scopeFactory, _logger, c.Dep.DeploymentId, provider!, region, candidateHosts);
+                _logger.LogInformation(
+                    "Run {RunId} finished — tearing down deployment {DeploymentId} ({HostCount} endpoint(s))",
+                    c.RunId, c.Dep.DeploymentId, candidateHosts.Count);
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "Run {RunId} finished — deployment {DeploymentId} marked torn_down (no registered endpoints; reaper will sweep partial resources)",
+                    c.RunId, c.Dep.DeploymentId);
+            }
+            torn++;
+        }
+
+        return torn;
     }
 
     /// <returns><c>true</c> when this call kicked off the deployment.</returns>
