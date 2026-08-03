@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.137] — 2026-08-03
+
+### Fixed
+- **A broken IIS no longer takes down non-IIS Windows cells.** The Windows
+  endpoint deploy always installs IIS (the default Windows stack, like nginx
+  on Linux), and v0.28.135's verify made its failure fatal — which killed
+  every Windows matrix cell at the IIS step, including caddy/traefik/haproxy
+  cells that never requested IIS. Fatality is now gated on the endpoint's
+  requested stacks: IIS-requested (or no stacks specified) → fatal;
+  otherwise a warning and the requested stack's setup proceeds.
+
+---
+
 ## [0.28.136] — 2026-08-03
 
 ### Fixed
