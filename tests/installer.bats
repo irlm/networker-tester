@@ -1822,3 +1822,58 @@ JSON
     route_ct=$(grep -c 'location ~ \^/(download|upload|info)' "$SCRIPT")
     [ "$blocks" -eq "$route_ct" ]
 }
+
+# ---------------------------------------------------------------------------
+# Matrix stack support (v0.28.131): --setup-stack + remote wiring + firewall
+# ---------------------------------------------------------------------------
+# The 2026-08-01 comparison-matrix failure class: Azure Linux cells silently
+# got only nginx ("not yet supported" warn-and-continue) while the readiness
+# gate probed the requested stack's port, and the NSG never opened the stack
+# comparison ports at all — every non-nginx cell timed out unreachable.
+
+@test "parse_args: --setup-stack sets SETUP_STACK and auto-yes" {
+    parse_args --setup-stack caddy
+    [ "$SETUP_STACK" = "caddy" ]
+    [ "$AUTO_YES" -eq 1 ]
+}
+
+@test "setup-stack: linux deploy paths wire non-nginx stacks to _remote_setup_stack" {
+    # The warn-and-continue arms must be gone from the azure/aws/lan branches…
+    ! grep -q 'Remote \$_ls setup on Azure Linux endpoints is not yet supported' "$SCRIPT"
+    ! grep -q 'Remote \$_ls setup on AWS endpoints is not yet supported' "$SCRIPT"
+    ! grep -q 'Remote \$_ls setup on LAN endpoints is not yet supported' "$SCRIPT"
+    # …replaced by the remote stack helper, failure-fatal in deploy mode.
+    grep -q '_remote_setup_stack "\$AZURE_ENDPOINT_IP" "azureuser" "\$_ls"' "$SCRIPT"
+    grep -q '_remote_setup_stack "\$AWS_ENDPOINT_IP" "ubuntu" "\$_ls"' "$SCRIPT"
+    grep -q '_remote_setup_stack "\$LAN_ENDPOINT_IP" "\$ssh_user" "\$_ls"' "$SCRIPT"
+}
+
+@test "setup-stack: remote helper pipes the installer with --setup-stack" {
+    grep -q -- '--setup-stack \$stack' "$SCRIPT"
+}
+
+@test "setup-stack: main dispatches each stack and rejects unknown" {
+    # The dispatch case must cover all five and error out otherwise.
+    local dispatch
+    dispatch=$(sed -n '/if \[\[ -n "\$SETUP_STACK" \]\]/,/^    fi$/p' "$SCRIPT")
+    echo "$dispatch" | grep -q 'step_setup_nginx'
+    echo "$dispatch" | grep -q 'step_setup_caddy'
+    echo "$dispatch" | grep -q 'step_setup_apache'
+    echo "$dispatch" | grep -q 'step_setup_haproxy'
+    echo "$dispatch" | grep -q 'step_setup_traefik'
+    echo "$dispatch" | grep -q 'unknown stack'
+}
+
+@test "firewall: stack comparison ports opened on azure, aws and gcp" {
+    # Azure NSG: TCP list includes 8091-8094 + 8454-8457; UDP includes 8454 (Caddy h3).
+    grep -q -- '--destination-port-ranges 80 443 8080-8082 8091-8094 8443-8445 8454-8457' "$SCRIPT"
+    grep -q -- '--destination-port-ranges 8443-8445 8454 9998 9999' "$SCRIPT"
+    # AWS security group
+    grep -q -- '--protocol tcp --port 8091-8094' "$SCRIPT"
+    grep -q -- '--protocol tcp --port 8454-8457' "$SCRIPT"
+    grep -q -- '--protocol udp --port 8454 ' "$SCRIPT"
+    # GCP firewall rule
+    grep -q 'tcp:8091-8094' "$SCRIPT"
+    grep -q 'tcp:8454-8457' "$SCRIPT"
+    grep -q 'udp:8454,' "$SCRIPT"
+}

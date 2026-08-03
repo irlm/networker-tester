@@ -11,6 +11,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.131] — 2026-08-03
+
+### Fixed
+- **Comparison-matrix cells on Azure/AWS/LAN Linux now actually get their
+  proxy stack.** install.sh's remote path supported only nginx — for
+  caddy/apache/haproxy/traefik it printed "not yet supported" and continued,
+  so the deployment "succeeded" with the wrong proxy and the readiness gate
+  probed the requested stack's port for 6 minutes against nothing. New
+  `--setup-stack` mode runs the existing local `step_setup_<stack>` functions
+  remotely (installer piped over SSH, same mechanism as the reference-API
+  languages), and an unsupported/failed stack install now FAILS the deploy
+  instead of warning.
+- **Firewall openings for the stack comparison ports.** Azure NSG / AWS SG /
+  GCP firewall rules never included TCP 8091-8094 + 8454-8457 (and UDP 8454
+  for Caddy h3) — even a correctly installed proxy was unreachable from the
+  readiness probe and the runner. This is why the Windows proxy cells failed
+  too (their proxies installed fine).
+- **Auto-provisioned cell VMs are torn down when their run finishes.** Nothing
+  released matrix-cell VMs — ten cells leaked ten B2s VMs (and their public
+  IPs) per launch. The orchestrator now tears down the cloud VM of every
+  run-linked deployment on run completion/failure, keeping the deployment row
+  (status `torn_down`) so failed provisions keep their diagnostic log.
+- **Provisioning throttled to the public-IP quota.** Azure's default quota is
+  10 public IPs per region; a 10-cell concurrent matrix blew through it
+  (`PublicIPCountLimitReached` on cells 9-10). Auto-provision kicks are now
+  capped at 6 in flight (override: `NETWORKER_MAX_CONCURRENT_PROVISIONS`);
+  queued cells start as finished cells' teardowns free their IPs.
+- **The orphan reaper can finally see cell VMs.** Its prefix allow-list
+  (`tester-`, `ab-`, `nwk-ep-`) never covered auto-provisioned cells and it
+  never swept the endpoint resource group — leaked cell resources were
+  invisible to it. Now: `nwk-a-`/`nwk-auto-` prefixes added, every Azure
+  subscription scope also sweeps `networker-rg-endpoint`, and live deployment
+  rows guard their VM's children by name (without that guard the sweep would
+  have identified the standing wizard target as an orphan).
+
+---
+
 ## [0.28.130] — 2026-08-01
 
 ### Fixed
