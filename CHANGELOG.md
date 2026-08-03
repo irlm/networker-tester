@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.138] — 2026-08-03
+
+### Fixed
+- **In-flight runs survive control-plane restarts (deploys).** The agent
+  socket's disconnect handler eagerly failed every running/queued run owned
+  by the disconnecting agent — but a disconnect happens on every deploy and
+  on transient blips, while the runner's tester processes keep executing and
+  the agent reconnects within seconds. Four matrix cells ~1000 attempts deep
+  were destroyed by exactly this when a deploy restarted the control plane.
+  The handler now only marks the agent offline; dead-agent reaping stays with
+  the watchdog (120s heartbeat silence + still absent from the registry).
+- **Provisioning throttle default lowered 6 → 5.** Stray public IPs from
+  reaper-pending failed cells are invisible to the run-linked capacity count;
+  the slot of headroom prevents PublicIpAddress-quota deploy failures (three
+  cells lost to that on 08-03). `NETWORKER_MAX_CONCURRENT_PROVISIONS` still
+  overrides.
+
+---
+
 ## [0.28.137] — 2026-08-03
 
 ### Fixed

@@ -78,13 +78,17 @@ public sealed class ProvisioningOrchestrator : BackgroundService
     /// straight through it (PublicIPCountLimitReached, 2026-08-01). Queued runs
     /// past the cap stay queued and kick as slots free (each finished cell's
     /// teardown releases its IP). Overridable via
-    /// NETWORKER_MAX_CONCURRENT_PROVISIONS for subscriptions with raised quota.</summary>
+    /// NETWORKER_MAX_CONCURRENT_PROVISIONS for subscriptions with raised quota.
+    /// Default 5, not 6: stray IPs from reaper-pending failed cells are
+    /// invisible to the run-linked count, and that slot of headroom is the
+    /// difference between a queued cell and PublicIpAddress-quota deploy
+    /// failures (three cells lost to exactly that, 2026-08-03).</summary>
     internal static int MaxConcurrentAutoProvisions =
         int.TryParse(
             Environment.GetEnvironmentVariable("NETWORKER_MAX_CONCURRENT_PROVISIONS"),
             out var cap) && cap > 0
             ? cap
-            : 6;
+            : 5;
 
     // ── Readiness gate (E2E pass 2026-07-28 P1-3) ────────────────────────────
     // A freshly-provisioned VM's deployment flips to `completed` the moment
