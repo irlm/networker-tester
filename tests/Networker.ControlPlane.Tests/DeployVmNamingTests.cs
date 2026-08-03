@@ -78,3 +78,33 @@ public class DeployVmNamingTests
         Assert.Equal(10, names.Count);
     }
 }
+
+/// <summary>Pins the workload-derived cell deadline (v0.28.136): the fixed
+/// 900s deadline was impossible for real matrix workloads — every cell that
+/// reached the runner was killed at ~16 minutes (2026-08-03).</summary>
+public class CellMaxDurationTests
+{
+    [Fact]
+    public void Full_matrix_workload_gets_hours_not_minutes()
+        // runs=100 × 26 modes → 100*26*4 + 600 = 11000s ≈ 3h.
+        => Assert.Equal(11000, ComparisonGroupsEndpoints.CellMaxDurationSecs(
+            """{"runs":100,"modes":["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z"]}"""));
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("not json")]
+    [InlineData("[]")]
+    public void Missing_or_malformed_workload_falls_back_to_default(string? json)
+        => Assert.Equal(900, ComparisonGroupsEndpoints.CellMaxDurationSecs(json));
+
+    [Fact]
+    public void Small_workloads_keep_the_original_floor()
+        => Assert.Equal(900, ComparisonGroupsEndpoints.CellMaxDurationSecs(
+            """{"runs":10,"modes":["download","upload"]}"""));
+
+    [Fact]
+    public void Estimate_is_capped_at_six_hours()
+        => Assert.Equal(21600, ComparisonGroupsEndpoints.CellMaxDurationSecs(
+            """{"runs":100000,"modes":["a","b","c"]}"""));
+}
