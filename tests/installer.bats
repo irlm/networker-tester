@@ -1899,7 +1899,21 @@ JSON
 
 @test "apache: default site and Listen 80/443 disabled on apt systems" {
     grep -q 'a2dissite 000-default' "$SCRIPT"
-    grep -qE "sed -i -E 's/\^Listen \(80\|443\)" "$SCRIPT"
+    # The sed must tolerate the INDENTED Listen 443 inside <IfModule> blocks.
+    grep -q 'Listen (80|443)' "$SCRIPT"
+    grep -q '\[\[:space:\]\]\*)Listen' "$SCRIPT"
+}
+
+@test "apache: config goes to conf-available with a2enconf on Debian layout" {
+    # Debian apache2 never reads conf.d/ — the config must be enabled via
+    # a2enconf or apache starts "successfully" without our listeners.
+    grep -q 'conf-available/networker.conf' "$SCRIPT"
+    grep -q 'a2enconf networker' "$SCRIPT"
+}
+
+@test "apache and caddy: port verified after service start" {
+    grep -q 'http://127.0.0.1:8094/' "$SCRIPT"
+    grep -q 'http://127.0.0.1:8091/' "$SCRIPT"
 }
 
 @test "iis: total verification failure fails the deploy" {

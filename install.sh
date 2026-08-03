@@ -4980,10 +4980,18 @@ CADDY_UNIT
 
     sudo systemctl daemon-reload
     sudo systemctl enable networker-caddy 2>/dev/null || true
-    if sudo systemctl restart networker-caddy; then
+    if ! sudo systemctl restart networker-caddy; then
+        print_warn "networker-caddy service failed to start — check journalctl -u networker-caddy"
+        return 1
+    fi
+
+    # Verify the port actually serves (service-active with an unloaded or
+    # wrong config is the failure mode that hid the apache conf.d bug).
+    sleep 2
+    if curl -sf --max-time 5 "http://127.0.0.1:8091/" -o /dev/null; then
         print_ok "Caddy serving test page on ports 8091 (HTTP) / 8454 (HTTPS+H3)"
     else
-        print_warn "networker-caddy service failed to start — check journalctl -u networker-caddy"
+        print_warn "Caddy is running but port 8091 is not serving"
         return 1
     fi
 }
@@ -5013,10 +5021,12 @@ step_setup_apache() {
             # We serve ONLY on 8094/8457 — the stock 'Listen 80' + default site
             # collide with nginx's package-default server on endpoint VMs where
             # nginx is installed first, and apache2 then fails to start with
-            # "Address already in use" (matrix cell failure, 2026-08-03).
+            # "Address already in use" (matrix cell failure, 2026-08-03). The
+            # 443 Listens hide INDENTED inside <IfModule ssl_module> blocks, so
+            # the pattern must tolerate leading whitespace.
             sudo a2dissite 000-default >/dev/null 2>&1 || true
-            if [[ -f /etc/apache2/ports.conf ]] && grep -qE '^Listen (80|443)$' /etc/apache2/ports.conf; then
-                sudo sed -i -E 's/^Listen (80|443)$/# Listen \1 — disabled by networker (ports 8094\/8457 only)/' /etc/apache2/ports.conf
+            if [[ -f /etc/apache2/ports.conf ]]; then
+                sudo sed -i -E 's/^([[:space:]]*)Listen (80|443)$/\1# Listen \2 disabled by networker (8094\/8457 only)/' /etc/apache2/ports.conf
             fi
             ;;
         dnf)
@@ -5043,8 +5053,17 @@ step_setup_apache() {
         return 1
     fi
 
-    sudo mkdir -p "$apache_dir/conf.d"
-    sudo tee "$apache_dir/conf.d/networker.conf" > /dev/null <<'APACHE_CONF'
+    # Debian/Ubuntu apache2 does NOT read conf.d/ — that's the RHEL httpd
+    # layout. Writing there produced a service that started "successfully"
+    # with our config never loaded and no 8094/8457 listeners (2026-08-03
+    # diag). Debian's mechanism is conf-available/ + a2enconf.
+    local apache_conf_target="$apache_dir/conf.d/networker.conf"
+    if [[ -d "$apache_dir/conf-available" ]]; then
+        apache_conf_target="$apache_dir/conf-available/networker.conf"
+    else
+        sudo mkdir -p "$apache_dir/conf.d"
+    fi
+    sudo tee "$apache_conf_target" > /dev/null <<'APACHE_CONF'
 # Networker HTTP stack comparison — Apache
 # Non-standard ports (8094/8457) so we don't collide with any existing site.
 
@@ -5111,17 +5130,30 @@ Listen 8457
 </VirtualHost>
 APACHE_CONF
 
+    # Debian: activate the conf via a2enconf (symlinks into conf-enabled).
+    if [[ "$apache_conf_target" == *"conf-available"* ]]; then
+        sudo a2enconf networker >/dev/null 2>&1 || true
+    fi
+
     # Resolve systemd unit name
     local unit="apache2"
     if [[ ! -f /lib/systemd/system/apache2.service && ! -f /etc/systemd/system/apache2.service ]]; then
         unit="httpd"
     fi
 
-    if sudo systemctl enable "$unit" 2>/dev/null && sudo systemctl restart "$unit"; then
+    if ! sudo systemctl enable "$unit" 2>/dev/null || ! sudo systemctl restart "$unit"; then
+        print_warn "Apache failed to start — check journalctl -u $unit"
+        sudo rm -f "$apache_conf_target"
+        return 1
+    fi
+
+    # Service-active is NOT enough — a config that never loads starts
+    # "successfully" with zero networker listeners. Verify the HTTP port.
+    sleep 2
+    if curl -sf --max-time 5 "http://127.0.0.1:8094/" -o /dev/null; then
         print_ok "Apache serving test page on ports 8094 (HTTP) / 8457 (HTTPS+H2)"
     else
-        print_warn "Apache failed to start — check journalctl -u $unit"
-        sudo rm -f "$apache_dir/conf.d/networker.conf"
+        print_warn "Apache is running but port 8094 is not serving — config not loaded?"
         return 1
     fi
 }
