@@ -331,7 +331,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.134"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.135"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -5924,24 +5924,27 @@ _azure_win_setup_iis() {
     # fail the deploy here with the real cause instead. A partial miss (e.g.
     # the H3-flavored path pre-reboot) stays a warning.
     if [[ -n "$ip" ]]; then
-        local ok=true any_ok=false
+        local ok=true https_ok=false
         for url in "http://${ip}:8082/" "http://${ip}:8082/health" "https://${ip}:8445/"; do
             local scheme="${url%%://*}"
             local curl_flags="--max-time 5 -sf"
             [[ "$scheme" == "https" ]] && curl_flags="$curl_flags -k"
             if curl $curl_flags "$url" -o /dev/null; then
                 print_ok "  $url → OK"
-                any_ok=true
+                [[ "$scheme" == "https" ]] && https_ok=true
             else
                 print_warn "  $url → FAILED"
                 ok=false
             fi
         done
-        if ! $any_ok; then
-            print_err "IIS is not responding on any port after setup — failing deploy"
+        # 8445 is what the readiness gate and the runner actually probe
+        # (ProxyHttpsPort iis=8445) — an IIS whose HTTPS binding is dead just
+        # times out the gate downstream, so it MUST be fatal here.
+        if ! $https_ok; then
+            print_err "IIS HTTPS (8445) is not responding after setup — failing deploy"
             return 1
         fi
-        $ok || print_warn "Some IIS endpoints failed — HTTP/3 may need a reboot to activate"
+        $ok || print_warn "IIS HTTP endpoints failed — HTTP/3 may need a reboot to activate"
     fi
 }
 
@@ -6951,9 +6954,14 @@ _azure_deploy_one_endpoint() {
         _azure_win_install_binary "networker-endpoint" "$rg" "$vm" "${NETWORKER_VERSION:-latest}"
         next_step "Create networker-endpoint service ($label)"
         _azure_win_create_endpoint_service "$rg" "$vm"
-        # IIS HTTP stack comparison setup
+        # IIS HTTP stack comparison setup. Pass ip + fqdn: they're OPTIONAL
+        # params ($3/$4) and this call site omitted them — which silently
+        # disabled the already-responding pre-check, the FQDN SNI binding AND
+        # the post-setup port verification, so "IIS configured" was an
+        # unverified claim (matrix IIS cell failed readiness on a VM whose
+        # verify never ran, 2026-08-03).
         next_step "Set up IIS for HTTP stack comparison ($label)"
-        _azure_win_setup_iis "$rg" "$vm"
+        _azure_win_setup_iis "$rg" "$vm" "$ip" "${AZURE_ENDPOINT_FQDN:-}"
     else
         _wait_for_ssh "$ip" "azureuser" "$label"
         _remote_install_binary "networker-endpoint" "$ip" "azureuser"

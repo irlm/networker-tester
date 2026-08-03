@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.135] — 2026-08-03
+
+### Fixed
+- **IIS verification actually runs now.** `_azure_win_setup_iis` takes ip/fqdn
+  as optional params and the Windows endpoint deploy passed neither — which
+  silently skipped the already-responding pre-check, the FQDN SNI binding AND
+  the entire post-setup port verification, making "IIS configured" an
+  unverified claim (the v0.28.133 hard-verify never executed; the matrix IIS
+  cell failed readiness downstream). The call site now passes both, and the
+  HTTPS port 8445 — the one the readiness gate and runner actually probe — is
+  fatal when unresponsive.
+
+---
+
 ## [0.28.134] — 2026-08-03
 
 ### Fixed
