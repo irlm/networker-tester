@@ -182,15 +182,17 @@ public sealed class ProvisioningOrchestrator : BackgroundService
         // Concurrency throttle: what actually holds a public IP is a run-linked
         // deployment whose VM hasn't been torn down yet — a cell keeps its IP
         // through provisioning AND the run itself, until the teardown phase
-        // releases it. Failed/cancelled deployments hold no IP (they die before
-        // or at VM create).
+        // releases it. Failed deployments COUNT TOO: a proxy-setup failure dies
+        // AFTER the VM+IP exist, and excluding those rows let the rolling
+        // window overshoot the quota (PublicIPCountLimitReached on the
+        // 2026-08-03 relaunch — 2 failed-not-yet-swept cells + 6 in flight + 3
+        // standing = 11 > 10). Only torn_down rows are known-released; the
+        // teardown phase now processes failed/cancelled rows promptly.
         var active = await db.TestRuns
             .Where(r => r.ProvisioningDeploymentId != null)
             .Join(db.Deployments,
                 r => r.ProvisioningDeploymentId, d => d.DeploymentId, (r, d) => d.Status)
-            .CountAsync(s => s != DeploymentFailed
-                             && s != DeploymentCancelled
-                             && s != DeploymentTornDown, ct)
+            .CountAsync(s => s != DeploymentTornDown, ct)
             .ConfigureAwait(false);
         var capacity = MaxConcurrentAutoProvisions - active;
         if (capacity <= 0)
@@ -248,6 +250,15 @@ public sealed class ProvisioningOrchestrator : BackgroundService
     /// Static (not const) so tests can shrink it.</summary>
     internal static TimeSpan TeardownGrace = TimeSpan.FromMinutes(3);
 
+    /// <summary>How long a FAILED/CANCELLED deployment keeps counting toward
+    /// provisioning capacity before being marked torn down. Failed deploys
+    /// usually have no registered hosts (registration happens at completion),
+    /// so their VM+IP — if any survived the failure — are released by the
+    /// orphan reaper's ~10-min sweep, not by a host-based teardown. Marking
+    /// them torn_down immediately made the throttle undercount real IP usage.
+    /// One reaper tick + margin.</summary>
+    internal static TimeSpan FailedReleaseAllowance = TimeSpan.FromMinutes(12);
+
     /// <summary>
     /// Tear down the cloud VM of every auto-provisioned deployment whose run has
     /// reached a terminal state. Without this, every matrix cell's VM (and its
@@ -273,10 +284,12 @@ public sealed class ProvisioningOrchestrator : BackgroundService
                         && r.FinishedAt != null && r.FinishedAt < graceCutoff)
             .Join(db.Deployments,
                 r => r.ProvisioningDeploymentId, d => d.DeploymentId,
-                (r, d) => new { RunId = r.Id, Dep = d })
-            .Where(x => x.Dep.Status != DeploymentFailed
-                        && x.Dep.Status != DeploymentCancelled
-                        && x.Dep.Status != DeploymentTornDown)
+                (r, d) => new { RunId = r.Id, RunFinishedAt = r.FinishedAt, Dep = d })
+            // Failed/cancelled deployments are candidates too: a proxy-setup
+            // failure leaves a full VM+IP behind (only creation-time failures
+            // leave nothing), and those IPs must release promptly for the
+            // quota throttle to be truthful. Hostless rows just get marked.
+            .Where(x => x.Dep.Status != DeploymentTornDown)
             .Take(KickBatchLimit)
             .ToListAsync(ct)
             .ConfigureAwait(false);
@@ -303,6 +316,15 @@ public sealed class ProvisioningOrchestrator : BackgroundService
         foreach (var c in candidates)
         {
             ct.ThrowIfCancellationRequested();
+
+            // Failed/cancelled deploys have no hosts to tear down — hold them
+            // (counting toward capacity) until the reaper's sweep has had a
+            // chance to release whatever the failure left behind.
+            if ((c.Dep.Status == DeploymentFailed || c.Dep.Status == DeploymentCancelled)
+                && c.RunFinishedAt > DateTime.UtcNow - FailedReleaseAllowance)
+            {
+                continue;
+            }
 
             // Defer while ANY active run's config references one of this
             // deployment's hosts — its endpoint is being reused as a target.
@@ -955,7 +977,12 @@ public sealed class ProvisioningOrchestrator : BackgroundService
     // ── Proxy port + label helpers (port of test_config.rs) ───────────────────
 
     /// <summary>HTTPS listener port for a proxy stack after a standard deploy.
-    /// Ported verbatim from <c>networker_common::test_config::proxy_https_port</c>.</summary>
+    /// Ported from <c>networker_common::test_config::proxy_https_port</c>, with
+    /// one correction: the legacy constant said IIS serves 443, but the actual
+    /// Windows endpoint deploy (<c>_iis_setup_powershell</c>) binds HTTPS on
+    /// <b>8445</b> — the readiness gate probed 443 forever and every IIS matrix
+    /// cell failed "never became reachable" (2026-08-03). 8445 also sits inside
+    /// the NSG/SG 8443-8445 openings; 443 was never opened in-guest either.</summary>
     internal static int ProxyHttpsPort(string stack) => stack switch
     {
         "nginx" => 8444,
@@ -963,7 +990,7 @@ public sealed class ProvisioningOrchestrator : BackgroundService
         "traefik" => 8455,
         "haproxy" => 8456,
         "apache" => 8457,
-        "iis" => 443,
+        "iis" => 8445,
         _ => 443,
     };
 

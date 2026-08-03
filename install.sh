@@ -331,7 +331,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.132"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.133"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -4846,31 +4846,99 @@ step_setup_caddy() {
     }
 }
 
+# NOTE: Caddy v2 REJECTS content after '{' on the same line — the previous
+# one-line `handle /x* { reverse_proxy … }` form failed `caddy validate` with
+# "Unexpected next token after '{'", so this service had never started
+# (2026-08-03, matrix cell diagnosis). Blocks must be multi-line.
 :8091 {
     root * /var/www/networker
     file_server
-    handle /page* { reverse_proxy 127.0.0.1:8080 }
-    handle /asset* { reverse_proxy 127.0.0.1:8080 }
-    handle /ws* { reverse_proxy 127.0.0.1:8080 }
-    handle /download* { reverse_proxy 127.0.0.1:8080 }
-    handle /upload* { reverse_proxy 127.0.0.1:8080 }
-    handle /info { reverse_proxy 127.0.0.1:8080 }
-    handle /api* { reverse_proxy 127.0.0.1:8080 }
-    handle /health { reverse_proxy 127.0.0.1:8080 }
+    handle /page* {
+        reverse_proxy 127.0.0.1:8080
+    }
+    handle /asset* {
+        reverse_proxy 127.0.0.1:8080
+    }
+    handle /ws* {
+        reverse_proxy 127.0.0.1:8080
+    }
+    handle /download* {
+        reverse_proxy 127.0.0.1:8080
+    }
+    handle /upload* {
+        reverse_proxy 127.0.0.1:8080
+    }
+    handle /info {
+        reverse_proxy 127.0.0.1:8080
+    }
+    handle /api* {
+        reverse_proxy 127.0.0.1:8080
+    }
+    handle /health {
+        reverse_proxy 127.0.0.1:8080
+    }
 }
 
 :8454 {
     tls /etc/networker/ssl/networker.crt /etc/networker/ssl/networker.key
     root * /var/www/networker
     file_server
-    handle /page* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
-    handle /asset* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
-    handle /ws* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
-    handle /download* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
-    handle /upload* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
-    handle /info { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
-    handle /api* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
-    handle /health { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
+    handle /page* {
+        reverse_proxy https://127.0.0.1:8443 {
+            transport http {
+                tls_insecure_skip_verify
+            }
+        }
+    }
+    handle /asset* {
+        reverse_proxy https://127.0.0.1:8443 {
+            transport http {
+                tls_insecure_skip_verify
+            }
+        }
+    }
+    handle /ws* {
+        reverse_proxy https://127.0.0.1:8443 {
+            transport http {
+                tls_insecure_skip_verify
+            }
+        }
+    }
+    handle /download* {
+        reverse_proxy https://127.0.0.1:8443 {
+            transport http {
+                tls_insecure_skip_verify
+            }
+        }
+    }
+    handle /upload* {
+        reverse_proxy https://127.0.0.1:8443 {
+            transport http {
+                tls_insecure_skip_verify
+            }
+        }
+    }
+    handle /info {
+        reverse_proxy https://127.0.0.1:8443 {
+            transport http {
+                tls_insecure_skip_verify
+            }
+        }
+    }
+    handle /api* {
+        reverse_proxy https://127.0.0.1:8443 {
+            transport http {
+                tls_insecure_skip_verify
+            }
+        }
+    }
+    handle /health {
+        reverse_proxy https://127.0.0.1:8443 {
+            transport http {
+                tls_insecure_skip_verify
+            }
+        }
+    }
     header Alt-Svc "h3=\":8454\"; ma=86400"
 }
 CADDY_CONF
@@ -4897,6 +4965,17 @@ CADDY_UNIT
     # Some distros install caddy at /usr/local/bin instead of /usr/bin.
     if ! [[ -x /usr/bin/caddy ]] && [[ -x /usr/local/bin/caddy ]]; then
         sudo sed -i 's|/usr/bin/caddy|/usr/local/bin/caddy|g' /etc/systemd/system/networker-caddy.service
+    fi
+
+    # Validate BEFORE touching the service — a config-syntax error then fails
+    # with the parser's message instead of an opaque systemd "control process
+    # exited" (the caddy binary path may differ, so resolve it like the unit).
+    local caddy_bin="/usr/bin/caddy"
+    [[ -x "$caddy_bin" ]] || caddy_bin="/usr/local/bin/caddy"
+    if ! sudo "$caddy_bin" validate --config /etc/caddy/networker.Caddyfile --adapter caddyfile >/dev/null 2>&1; then
+        print_warn "Caddyfile failed validation:"
+        sudo "$caddy_bin" validate --config /etc/caddy/networker.Caddyfile --adapter caddyfile 2>&1 | tail -3
+        return 1
     fi
 
     sudo systemctl daemon-reload
@@ -4931,6 +5010,14 @@ step_setup_apache() {
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq apache2 < /dev/null
             # Enable modules we need; a2enmod is idempotent.
             sudo a2enmod ssl headers proxy proxy_http proxy_wstunnel http2 rewrite >/dev/null 2>&1 || true
+            # We serve ONLY on 8094/8457 — the stock 'Listen 80' + default site
+            # collide with nginx's package-default server on endpoint VMs where
+            # nginx is installed first, and apache2 then fails to start with
+            # "Address already in use" (matrix cell failure, 2026-08-03).
+            sudo a2dissite 000-default >/dev/null 2>&1 || true
+            if [[ -f /etc/apache2/ports.conf ]] && grep -qE '^Listen (80|443)$' /etc/apache2/ports.conf; then
+                sudo sed -i -E 's/^Listen (80|443)$/# Listen \1 — disabled by networker (ports 8094\/8457 only)/' /etc/apache2/ports.conf
+            fi
             ;;
         dnf)
             sudo dnf install -y httpd mod_ssl mod_http2 < /dev/null
@@ -5761,6 +5848,19 @@ _azure_win_setup_iis() {
         --command-id RunPowerShellScript \
         --scripts "$ps_script" 2>&1)" || true
 
+    # Azure allows ONE run-command at a time per VM; a straggler from the
+    # previous step surfaces as a Conflict here and — swallowed — left VMs
+    # with NO IIS at all while the deploy "completed" (matrix IIS cell,
+    # 2026-08-03). Wait for the other execution and retry once.
+    if echo "$output" | grep -q "Conflict"; then
+        print_info "Run-command busy on $vm — waiting 60s and retrying IIS setup…"
+        sleep 60
+        output="$(az vm run-command invoke \
+            --resource-group "$rg" --name "$vm" \
+            --command-id RunPowerShellScript \
+            --scripts "$ps_script" 2>&1)" || true
+    fi
+
     if echo "$output" | grep -q "REBOOT_NEEDED"; then
         print_info "HTTP/3 registry changed — rebooting VM…"
         az vm restart --resource-group "$rg" --name "$vm" --no-wait 2>/dev/null || true
@@ -5787,20 +5887,28 @@ _azure_win_setup_iis() {
         print_ok "IIS configured: HTTP=8082, HTTPS=8445"
     fi
 
-    # Verify all endpoints
+    # Verify all endpoints. TOTAL failure is fatal: an IIS matrix cell whose
+    # proxy never answers just times out the readiness gate downstream, so
+    # fail the deploy here with the real cause instead. A partial miss (e.g.
+    # the H3-flavored path pre-reboot) stays a warning.
     if [[ -n "$ip" ]]; then
-        local ok=true
+        local ok=true any_ok=false
         for url in "http://${ip}:8082/" "http://${ip}:8082/health" "https://${ip}:8445/"; do
             local scheme="${url%%://*}"
             local curl_flags="--max-time 5 -sf"
             [[ "$scheme" == "https" ]] && curl_flags="$curl_flags -k"
             if curl $curl_flags "$url" -o /dev/null; then
                 print_ok "  $url → OK"
+                any_ok=true
             else
                 print_warn "  $url → FAILED"
                 ok=false
             fi
         done
+        if ! $any_ok; then
+            print_err "IIS is not responding on any port after setup — failing deploy"
+            return 1
+        fi
         $ok || print_warn "Some IIS endpoints failed — HTTP/3 may need a reboot to activate"
     fi
 }

@@ -1877,3 +1877,38 @@ JSON
     grep -q 'tcp:8454-8457' "$SCRIPT"
     grep -q 'udp:8454,' "$SCRIPT"
 }
+
+# ---------------------------------------------------------------------------
+# Stack service-start fixes (v0.28.133)
+# ---------------------------------------------------------------------------
+# Caddy: v2 rejects content after '{' on the same line — the one-line
+# `handle /x* { reverse_proxy … }` form NEVER validated, so networker-caddy
+# had never started anywhere. Apache: the stock 'Listen 80' + default site
+# collide with nginx on endpoint VMs (nginx installs first) → apache2 fails
+# "Address already in use".
+
+@test "caddy: no single-line handle blocks (caddy v2 syntax)" {
+    run grep -cE 'handle [^{]*\{ +[a-z]' "$SCRIPT"
+    [ "$output" -eq 0 ]
+}
+
+@test "caddy: config is validated before the service starts" {
+    grep -q 'caddy validate --config /etc/caddy/networker.Caddyfile' "$SCRIPT" || \
+        grep -q 'validate --config /etc/caddy/networker.Caddyfile' "$SCRIPT"
+}
+
+@test "apache: default site and Listen 80/443 disabled on apt systems" {
+    grep -q 'a2dissite 000-default' "$SCRIPT"
+    grep -qE "sed -i -E 's/\^Listen \(80\|443\)" "$SCRIPT"
+}
+
+@test "iis: total verification failure fails the deploy" {
+    grep -q 'IIS is not responding on any port after setup — failing deploy' "$SCRIPT"
+}
+
+@test "iis: run-command conflict is retried" {
+    local section
+    section=$(sed -n '/_azure_win_setup_iis()/,/^}/p' "$SCRIPT")
+    echo "$section" | grep -q 'grep -q "Conflict"'
+    echo "$section" | grep -q 'retrying IIS setup'
+}
