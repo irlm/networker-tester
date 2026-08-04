@@ -191,6 +191,16 @@ public static class ComparisonGroupsEndpoints
             for (var i = 0; i < cells.Count; i++)
             {
                 var cell = cells[i];
+                if (UnsupportedComboReason(cell) is { } why)
+                {
+                    // Fail the cell at LAUNCH with the real reason instead of
+                    // provisioning a VM whose proxy can never install (a
+                    // windows·haproxy cell burned a full provision + readiness
+                    // timeout every matrix round — HAProxy has no native
+                    // Windows build).
+                    failures.Add($"{cell.Label}: {why}");
+                    continue;
+                }
                 try
                 {
                     var cfg = new Data.Entities.TestConfig
@@ -248,6 +258,31 @@ public static class ComparisonGroupsEndpoints
     /// same group from tripping UNIQUE(project_id, name).</summary>
     internal static string CellConfigName(string label, Guid groupId, int index, string launchNonce)
         => $"{label} · cg-{groupId.ToString()[..8]}·{index}·{launchNonce}";
+
+    /// <summary>Combos the installers can never satisfy — failed at launch
+    /// with the real reason instead of a doomed provision. Currently only
+    /// windows·haproxy (no native Windows build exists).</summary>
+    internal static string? UnsupportedComboReason(CellSpec cell)
+    {
+        if (cell.EndpointKind != "pending")
+        {
+            return null;
+        }
+        var pending = Provisioning.ProvisioningOrchestrator.ParsePending(cell.EndpointRaw);
+        if (pending is { Os: "windows", ProxyStack: "haproxy" })
+        {
+            return "HAProxy has no native Windows build — this combination cannot be provisioned (use a Linux HAProxy cell)";
+        }
+        if (pending is { Os: "windows", ProxyStack: "apache" })
+        {
+            // Apache Lounge (the de-facto Windows binary source) serves an HTML
+            // decoy to every scripted download — verified from both Azure and
+            // residential networks 2026-08-04 — and httpd.apache.org ships no
+            // Windows binaries. Only a manually pre-installed Apache24 works.
+            return "Apache httpd has no scriptable Windows binary source — pre-install it manually on an existing VM or use a Linux Apache cell";
+        }
+        return null;
+    }
 
     /// <summary>Parse the group's <c>cells</c> JSON into launch specs. Each cell
     /// carries a <c>label</c>, a polymorphic <c>endpoint</c> (kind pending /
