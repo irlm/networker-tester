@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.140] — 2026-08-04
+
+### Added
+- **Runners auto-wake for queued work.** The auto-shutdown policy is now
+  symmetric: idle runners still deallocate on schedule (never while any run
+  references them — the existing drain check), and a stopped/deallocated
+  runner with QUEUED runs assigned is now started automatically by the same
+  sweep (power_state `starting` → heartbeat reconcile completes the flip).
+  Before this, a matrix launched after the nightly shutdown just sat queued
+  until someone started the VM by hand. The queued-run watchdog also holds
+  its no-agent reaping while a wake is in flight (boot + agent connect takes
+  a few minutes).
+
+---
+
 ## [0.28.139] — 2026-08-04
 
 ### Fixed

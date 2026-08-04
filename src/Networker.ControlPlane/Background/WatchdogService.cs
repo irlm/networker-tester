@@ -243,8 +243,15 @@ public sealed class WatchdogService : BackgroundService
         // provisioning orchestrator, not an agent.
         var reapedQueued = 0;
         var anyAgentOnline = _registry.OnlineAgents().Count > 0;
+        // A runner being auto-woken for queued work (power_state 'starting')
+        // takes a few minutes to boot + connect — no agent is online during
+        // that window, but the queued runs are about to be claimable. Don't
+        // reap while a wake is in flight.
+        var anyWaking = !anyAgentOnline
+            && await db.ProjectTesters.AnyAsync(t => t.PowerState == "starting", ct)
+                .ConfigureAwait(false);
         var queuedCutoff = now - QueuedCutoff;
-        var stuckQueued = anyAgentOnline
+        var stuckQueued = anyAgentOnline || anyWaking
             ? new List<Guid>()
             : await db.TestRuns
                 .Where(r => r.Status == "queued"
