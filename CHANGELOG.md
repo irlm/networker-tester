@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.145] — 2026-08-04
+
+### Added
+- **The IIS setup's PowerShell output is logged in the deploy log.** The
+  retry-4 in-guest autopsy showed W3SVC absent — the setup script errors
+  early on real cells — but install.sh only grepped its output for
+  REBOOT_NEEDED and then claimed "IIS configured" regardless, swallowing the
+  actual error. The output tail is now always logged.
+
+---
+
 ## [0.28.144] — 2026-08-04
 
 ### Added
