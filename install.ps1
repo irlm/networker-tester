@@ -2131,7 +2131,13 @@ function Invoke-SetupCaddy {
     Start-Process -FilePath $nssm -WindowStyle Hidden -Wait -ArgumentList @("set","networker-caddy","Start","SERVICE_AUTO_START")
     # Validate BEFORE starting — a config-syntax error otherwise surfaces
     # only as an nssm crash-loop ("Paused" service) with no message.
+    # EAP must be Continue around the call: caddy logs INFO to stderr, and
+    # under Stop the 2>&1 redirect turns the first info line into a
+    # terminating exception (native-stderr ErrorRecord gotcha).
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     $validation = & $caddyExe validate --config $caddyfile --adapter caddyfile 2>&1
+    $ErrorActionPreference = $prevEAP
     if ($LASTEXITCODE -ne 0) {
         Write-Err "Caddyfile failed validation:"
         $validation | Select-Object -Last 3 | ForEach-Object { Write-Err "  $_" }
