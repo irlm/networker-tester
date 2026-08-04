@@ -2083,19 +2083,39 @@ function Invoke-SetupCaddy {
     }
 }
 
+# NOTE: Caddy v2 rejects content after '{' on the same line -- one-line
+# handle blocks failed `caddy validate` and the service never started
+# (identical to the Linux Caddyfile bug fixed in v0.28.133; found on the
+# Windows path 2026-08-04). Blocks must be multi-line.
 :8091 {
     root * $siteRoot
     file_server
-    handle /page* { reverse_proxy 127.0.0.1:8080 }
-    handle /asset* { reverse_proxy 127.0.0.1:8080 }
+    handle /page* {
+        reverse_proxy 127.0.0.1:8080
+    }
+    handle /asset* {
+        reverse_proxy 127.0.0.1:8080
+    }
 }
 
 :8454 {
     tls internal
     root * $siteRoot
     file_server
-    handle /page* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
-    handle /asset* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
+    handle /page* {
+        reverse_proxy https://127.0.0.1:8443 {
+            transport http {
+                tls_insecure_skip_verify
+            }
+        }
+    }
+    handle /asset* {
+        reverse_proxy https://127.0.0.1:8443 {
+            transport http {
+                tls_insecure_skip_verify
+            }
+        }
+    }
 }
 "@
     [IO.File]::WriteAllText($caddyfile, $cfg, [Text.Encoding]::UTF8)
@@ -2109,12 +2129,30 @@ function Invoke-SetupCaddy {
     Start-Process -FilePath $nssm -WindowStyle Hidden -Wait -ArgumentList @("install","networker-caddy",$caddyExe,"run","--config",$caddyfile,"--adapter","caddyfile")
     Start-Process -FilePath $nssm -WindowStyle Hidden -Wait -ArgumentList @("set","networker-caddy","AppDirectory",$stackDir)
     Start-Process -FilePath $nssm -WindowStyle Hidden -Wait -ArgumentList @("set","networker-caddy","Start","SERVICE_AUTO_START")
+    # Validate BEFORE starting — a config-syntax error otherwise surfaces
+    # only as an nssm crash-loop ("Paused" service) with no message.
+    $validation = & $caddyExe validate --config $caddyfile --adapter caddyfile 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "Caddyfile failed validation:"
+        $validation | Select-Object -Last 3 | ForEach-Object { Write-Err "  $_" }
+        throw "caddy install failed: invalid Caddyfile"
+    }
+
     Start-Process -FilePath "sc.exe" -WindowStyle Hidden -Wait -ArgumentList @("start","networker-caddy")
 
     Invoke-EnsureFirewallRule "Networker-Caddy-HTTP"  "TCP" @(8091)
     Invoke-EnsureFirewallRule "Networker-Caddy-HTTPS" "TCP" @(8454)
     Invoke-EnsureFirewallRule "Networker-Caddy-QUIC"  "UDP" @(8454)
-    Write-Ok "Caddy serving test page on ports 8091 (HTTP) / 8454 (HTTPS+H3)"
+
+    # Port-serving check — service-active or registered is NOT success.
+    Start-Sleep -Seconds 3
+    try {
+        $probe = Invoke-WebRequest -Uri "http://localhost:8091/" -UseBasicParsing -TimeoutSec 8
+        Write-Ok "Caddy serving test page on ports 8091 (HTTP) / 8454 (HTTPS+H3)"
+    } catch {
+        Write-Err "Caddy service registered but port 8091 is not serving."
+        throw "caddy install failed: port not serving after start"
+    }
 }
 
 # ── Traefik (ports 8092 / 8455) ──────────────────────────────────────────────
