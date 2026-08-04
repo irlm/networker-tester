@@ -2049,17 +2049,19 @@ function Invoke-SetupCaddy {
         $caddyCmd = Get-Command caddy -ErrorAction SilentlyContinue
     }
     if (-not $caddyCmd) {
-        # Fallback: direct download from GitHub releases
+        # Fallback: Caddy's official build service returns the bare exe.
+        # (The old GitHub "latest/download/caddy_windows_amd64.zip" shortcut
+        # 404s — release assets are version-named — so this fallback had never
+        # actually worked; 2026-08-04 diag VM.)
         $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
-        $caddyZip = Join-Path $env:TEMP "caddy.zip"
         $caddyExe = Join-Path $stackDir "caddy.exe"
+        Write-Info "Downloading Caddy from caddyserver.com..."
         Invoke-WebRequest -UseBasicParsing `
-            -Uri "https://github.com/caddyserver/caddy/releases/latest/download/caddy_windows_${arch}.zip" `
-            -OutFile $caddyZip
-        Expand-Archive -Path $caddyZip -DestinationPath $stackDir -Force
-        if (-not (Test-Path $caddyExe)) {
+            -Uri "https://caddyserver.com/api/download?os=windows&arch=${arch}" `
+            -OutFile $caddyExe -TimeoutSec 120
+        if (-not (Test-Path $caddyExe) -or (Get-Item $caddyExe).Length -lt 1MB) {
             Write-Err "Caddy download failed -- skipping."
-            return
+            throw "caddy install failed: download unavailable"
         }
     } else {
         $caddyExe = $caddyCmd.Source
