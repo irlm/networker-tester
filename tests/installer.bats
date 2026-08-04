@@ -1934,3 +1934,11 @@ JSON
     echo "$section" | grep -q 'AZURE_ENDPOINT_WANTS_IIS'
     echo "$section" | grep -q 'requested stack is not IIS'
 }
+
+@test "iis powershell: generated script is pure ASCII (az run-command mangles UTF-8)" {
+    # An em-dash inside a string became a stray quote under run-command's
+    # encoding, failing the ENTIRE script at parse — no IIS was ever installed
+    # by the deploy path (2026-08-04 diag). Guard the whole generated script.
+    run bash -c "source '$SCRIPT' >/dev/null 2>&1; _iis_setup_powershell 'x.example.com' | LC_ALL=C grep -c '[^\x00-\x7F]'"
+    [ "$output" = "0" ]
+}

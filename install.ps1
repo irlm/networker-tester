@@ -2034,7 +2034,10 @@ function Invoke-SetupCaddy {
     New-Item -ItemType Directory -Force $stackDir | Out-Null
 
     $caddyCmd = Get-Command caddy -ErrorAction SilentlyContinue
-    if (-not $caddyCmd) {
+    # winget does not exist on Windows Server SKUs — calling it there throws
+    # under -Setup's strict error mode BEFORE the GitHub fallback below could
+    # run, which is why no matrix Caddy cell ever served (2026-08-04 diag VM).
+    if (-not $caddyCmd -and (Get-Command winget -ErrorAction SilentlyContinue)) {
         Write-Info "Installing Caddy via winget..."
         $prevErr = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
@@ -2306,17 +2309,32 @@ function Invoke-SetupApache {
         # URLs are not stable across versions; we use the versioned path and
         # fall back to a TODO warning when the download fails.
         Write-Info "Downloading Apache httpd from Apache Lounge..."
-        $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "win64-VS17" } else { "win64-VS17" }
         $zipPath = Join-Path $env:TEMP "apache.zip"
-        $url = "https://www.apachelounge.com/download/VS17/binaries/httpd-2.4.62-240904-${arch}.zip"
-        try {
-            Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing -TimeoutSec 60
-            Expand-Archive -Path $zipPath -DestinationPath $stackDir -Force
-        } catch {
-            Write-Warn "Apache download failed from Apache Lounge (URL changes with each release)."
-            Write-Warn "TODO: Apache httpd on Windows -- manually download from https://www.apachelounge.com/"
-            Write-Warn "  and extract to $stackDir\Apache24, then re-run installer with -HttpStacks apache."
-            return
+        # Apache Lounge's URLs are version-pinned and rotate with each release
+        # (the pinned 2.4.62 build 404'd by 2026-08 and every Windows Apache
+        # cell died on it). Try a candidate list, newest first, with a browser
+        # UA (their CDN rejects bare clients).
+        $urls = @(
+            "https://www.apachelounge.com/download/VS17/binaries/httpd-2.4.65-250724-win64-VS17.zip",
+            "https://www.apachelounge.com/download/VS17/binaries/httpd-2.4.63-250207-win64-VS17.zip",
+            "https://www.apachelounge.com/download/VS17/binaries/httpd-2.4.62-240904-win64-VS17.zip"
+        )
+        $got = $false
+        foreach ($url in $urls) {
+            try {
+                Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing -TimeoutSec 60 `
+                    -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) networker-installer"
+                Expand-Archive -Path $zipPath -DestinationPath $stackDir -Force
+                $got = $true
+                break
+            } catch {
+                Write-Info "  candidate failed: $url"
+            }
+        }
+        if (-not $got) {
+            Write-Err "Apache download failed from all Apache Lounge candidates."
+            Write-Err "Manually download from https://www.apachelounge.com/ and extract to $stackDir\Apache24."
+            throw "apache install failed: no downloadable Windows binary"
         }
     }
 

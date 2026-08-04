@@ -110,3 +110,36 @@ public class CellMaxDurationTests
         => Assert.Equal(28800, ComparisonGroupsEndpoints.CellMaxDurationSecs(
             """{"runs":100000,"modes":["a","b","c"]}"""));
 }
+
+/// <summary>Pins the launch-time unsupported-combo gate (v0.28.141).</summary>
+public class UnsupportedComboTests
+{
+    private static ComparisonGroupsEndpoints.CellSpec Cell(string os, string stack) => new(
+        $"Azure/eastus {os} · {stack}",
+        $$"""{"kind":"pending","cloud_account_id":"{{Guid.NewGuid()}}","region":"eastus","vm_size":"Standard_B2s","os":"{{os}}","proxy_stack":"{{stack}}"}""",
+        "pending",
+        null);
+
+    [Fact]
+    public void Windows_haproxy_is_rejected_with_reason()
+    {
+        var why = ComparisonGroupsEndpoints.UnsupportedComboReason(Cell("windows", "haproxy"));
+        Assert.NotNull(why);
+        Assert.Contains("no native Windows build", why);
+    }
+
+    [Theory]
+    [InlineData("linux", "haproxy")]
+    [InlineData("windows", "iis")]
+    [InlineData("windows", "traefik")]
+    [InlineData("windows", "caddy")]
+    [InlineData("windows", "apache")]
+    [InlineData("linux", "nginx")]
+    public void Supported_combos_pass(string os, string stack)
+        => Assert.Null(ComparisonGroupsEndpoints.UnsupportedComboReason(Cell(os, stack)));
+
+    [Fact]
+    public void Non_pending_cells_are_never_gated()
+        => Assert.Null(ComparisonGroupsEndpoints.UnsupportedComboReason(
+            new ComparisonGroupsEndpoints.CellSpec("net", """{"kind":"network","host":"h","port":1}""", "network", null)));
+}

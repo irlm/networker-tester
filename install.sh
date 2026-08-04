@@ -5364,23 +5364,23 @@ _iis_setup_powershell() {
     local fqdn="${1:-}"  # FQDN for hostname-based binding (enables HTTP/3 via SNI)
     local site_root="C:\\networker-static"
     cat <<IIS_PS1_HEADER
-# ── IIS setup for HTTP stack comparison ──────────────────────────────────────
+# -- IIS setup for HTTP stack comparison --------------------------------------
 \$ErrorActionPreference = 'Stop'
 \$fqdn = "${fqdn}"
 
 # 1. Install IIS + URL Rewrite + ARR (for reverse-proxy of /page, /asset)
-Write-Host "Installing IIS…"
+Write-Host "Installing IIS..."
 Install-WindowsFeature -Name Web-Server -IncludeManagementTools | Out-Null
 IIS_PS1_HEADER
     cat <<'IIS_PS1'
 
-Write-Host "Installing URL Rewrite Module…"
+Write-Host "Installing URL Rewrite Module..."
 $urlRewriteUrl = "https://download.microsoft.com/download/1/2/8/128E2E22-C1B9-44A4-BE2A-5859ED1D4592/rewrite_amd64_en-US.msi"
 $urlRewriteMsi = "$env:TEMP\urlrewrite.msi"
 Invoke-WebRequest -Uri $urlRewriteUrl -OutFile $urlRewriteMsi -UseBasicParsing
 Start-Process msiexec.exe -ArgumentList "/i $urlRewriteMsi /quiet /norestart" -Wait -NoNewWindow
 
-Write-Host "Installing ARR…"
+Write-Host "Installing ARR..."
 $arrUrl = "https://download.microsoft.com/download/E/9/8/E9849D6A-020E-47E4-9FD0-A023E99B54EB/requestRouter_amd64.msi"
 $arrMsi = "$env:TEMP\arr.msi"
 Invoke-WebRequest -Uri $arrUrl -OutFile $arrMsi -UseBasicParsing
@@ -5391,8 +5391,8 @@ Import-Module WebAdministration
 Set-WebConfigurationProperty -pspath "MACHINE/WEBROOT/APPHOST" `
     -filter "system.webServer/proxy" -name "enabled" -value "True"
 
-# 2. Enable HTTP/3 (Windows Server 2022+) — requires reboot to take effect
-Write-Host "Enabling HTTP/3 via registry…"
+# 2. Enable HTTP/3 (Windows Server 2022+) -- requires reboot to take effect
+Write-Host "Enabling HTTP/3 via registry..."
 $httpParams = "HKLM:\SYSTEM\CurrentControlSet\Services\HTTP\Parameters"
 if (-not (Test-Path $httpParams)) { New-Item -Path $httpParams -Force | Out-Null }
 $needsReboot = $false
