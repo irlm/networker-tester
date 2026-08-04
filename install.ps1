@@ -2000,18 +2000,23 @@ function Invoke-EnsureNssm {
     # have no native --install-service flag (caddy on some versions, traefik).
     $nssmCmd = Get-Command nssm -ErrorAction SilentlyContinue
     if ($nssmCmd) { return $nssmCmd.Source }
-    Write-Info "Installing nssm via winget..."
-    $prevErr = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    & winget install --id NSSM.NSSM -e --source winget `
-        --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
-    $ErrorActionPreference = $prevErr
+    # winget is absent on Windows Server SKUs — calling it there throws before
+    # the download fallback below can run (same class as the caddy install;
+    # 2026-08-04 diag VM).
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        Write-Info "Installing nssm via winget..."
+        $prevErr = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        & winget install --id NSSM.NSSM -e --source winget `
+            --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
+        $ErrorActionPreference = $prevErr
 
-    $machinePath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
-    $userPath    = [System.Environment]::GetEnvironmentVariable("PATH", "User")
-    $env:PATH    = "$machinePath;$userPath"
-    $nssmCmd = Get-Command nssm -ErrorAction SilentlyContinue
-    if ($nssmCmd) { return $nssmCmd.Source }
+        $machinePath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
+        $userPath    = [System.Environment]::GetEnvironmentVariable("PATH", "User")
+        $env:PATH    = "$machinePath;$userPath"
+        $nssmCmd = Get-Command nssm -ErrorAction SilentlyContinue
+        if ($nssmCmd) { return $nssmCmd.Source }
+    }
 
     # Fallback: direct download (choco mirror)
     $nssmZip = Join-Path $env:TEMP "nssm.zip"
