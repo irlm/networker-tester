@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.144] — 2026-08-04
+
+### Added
+- **IIS verify failures now embed an in-guest diagnostic in the deploy log**
+  (W3SVC state, local port probes, listeners, firewall rules) — a failed
+  Windows deploy deletes its VM, so the log is the only forensic window;
+  three IIS rounds died externally-unreachable with the in-guest state
+  unknown.
+
+---
+
 ## [0.28.143] — 2026-08-04
 
 ### Fixed
