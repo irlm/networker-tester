@@ -331,7 +331,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.144"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.145"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -5892,6 +5892,14 @@ _azure_win_setup_iis() {
             --command-id RunPowerShellScript \
             --scripts "$ps_script" 2>&1)" || true
     fi
+
+    # The PS script's own output is the primary diagnostic — a script that
+    # errors early (feature install, MSI download, run-command conflict) used
+    # to be invisible: install.sh only grepped for REBOOT_NEEDED and then
+    # CLAIMED "IIS configured" regardless (retry-4 autopsy: W3SVC absent
+    # in-guest while the deploy log showed the claim).
+    print_info "IIS setup output (tail):"
+    echo "$output" | tail -12 | sed 's/^/    | /'
 
     if echo "$output" | grep -q "REBOOT_NEEDED"; then
         print_info "HTTP/3 registry changed — rebooting VM…"
