@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.139] — 2026-08-04
+
+### Fixed
+- **Matrix cell deadline budget corrected from live measurement.** The first
+  completed cells showed real attempt counts run ~1.7× runs×modes (payload
+  sizes multiply the throughput modes) and the slower proxies need >4.2s per
+  unit on a shared runner — HAProxy and Traefik hit the old deadline at 85%
+  and 78% complete while nginx/Caddy finished. Budget is now 8s per
+  (run × mode) with the ceiling raised 6h → 8h.
+
+---
+
 ## [0.28.138] — 2026-08-03
 
 ### Fixed

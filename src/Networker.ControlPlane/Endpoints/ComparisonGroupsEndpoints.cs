@@ -280,9 +280,11 @@ public static class ComparisonGroupsEndpoints
 
     private const int DefaultMaxDurationSecs = 900;
 
-    /// <summary>Ceiling for a workload-derived cell deadline — 6h guards
-    /// against a malformed workload producing an unbounded run.</summary>
-    private const int MaxCellDurationSecs = 6 * 3600;
+    /// <summary>Ceiling for a workload-derived cell deadline — guards against
+    /// a malformed workload producing an unbounded run. 8h (was 6h): the full
+    /// matrix workload legitimately estimates past 6h under the corrected
+    /// per-unit budget.</summary>
+    private const int MaxCellDurationSecs = 8 * 3600;
 
     /// <summary>
     /// Derive a cell's <c>max_duration_secs</c> from the group's base workload.
@@ -315,7 +317,12 @@ public static class ComparisonGroupsEndpoints
                         && m.ValueKind == JsonValueKind.Array
                 ? m.GetArrayLength()
                 : 1;
-            var estimate = (long)runs * Math.Max(modes, 1) * 4 + 600;
+            // 8s per (run × mode), not 4s: measured live (2026-08-04, 4 cells
+            // sharing one runner), the real attempt count runs ~1.7× runs×modes
+            // (payload sizes multiply throughput modes) and the slower proxies
+            // (haproxy/traefik) needed >4.2s per unit — both hit the old
+            // deadline at 78-85% complete while nginx/caddy squeaked through.
+            var estimate = (long)runs * Math.Max(modes, 1) * 8 + 600;
             return (int)Math.Clamp(estimate, DefaultMaxDurationSecs, MaxCellDurationSecs);
         }
         catch (JsonException)
