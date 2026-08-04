@@ -59,7 +59,7 @@ $ErrorActionPreference = "Stop"
 $RepoHttps     = "https://github.com/irlm/networker-tester"
 $RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"
-$InstallerVersion = "v0.28.141"  # fallback when gh is unavailable
+$InstallerVersion = "v0.28.142"  # fallback when gh is unavailable
 
 # ── Print helpers ──────────────────────────────────────────────────────────────
 function Write-Ok   ($msg) { Write-Host "  v " -NoNewline -ForegroundColor Green;   Write-Host $msg }
@@ -2153,7 +2153,7 @@ function Invoke-SetupCaddy {
     # Port-serving check — service-active or registered is NOT success.
     Start-Sleep -Seconds 3
     try {
-        $probe = Invoke-WebRequest -Uri "http://localhost:8091/" -UseBasicParsing -TimeoutSec 8
+        $null = Invoke-WebRequest -Uri "http://localhost:8091/" -UseBasicParsing -TimeoutSec 8
         Write-Ok "Caddy serving test page on ports 8091 (HTTP) / 8454 (HTTPS+H3)"
     } catch {
         Write-Err "Caddy service registered but port 8091 is not serving."

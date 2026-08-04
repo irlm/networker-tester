@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.142] — 2026-08-04
+
+### Fixed
+- PSScriptAnalyzer warning in the caddy port-verify (unused `$probe`
+  assignment) — the v0.28.141 merge went past the red installer-lint gate
+  (admin-merge process slip, recorded); this restores a green board.
+
+---
+
 ## [0.28.141] — 2026-08-04
 
 ### Fixed
