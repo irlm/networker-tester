@@ -86,8 +86,10 @@ public class CellMaxDurationTests
 {
     [Fact]
     public void Full_matrix_workload_gets_hours_not_minutes()
-        // runs=100 × 26 modes → 100*26*4 + 600 = 11000s ≈ 3h.
-        => Assert.Equal(11000, ComparisonGroupsEndpoints.CellMaxDurationSecs(
+        // runs=100 × 26 modes → 100*26*8 + 600 = 21400s ≈ 6h (8s/unit after the
+        // live 2026-08-04 measurement: real attempts ≈ 1.7× runs×modes and the
+        // slower proxies overshot the 4s budget at 78-85% complete).
+        => Assert.Equal(21400, ComparisonGroupsEndpoints.CellMaxDurationSecs(
             """{"runs":100,"modes":["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z"]}"""));
 
     [Theory]
@@ -104,7 +106,7 @@ public class CellMaxDurationTests
             """{"runs":10,"modes":["download","upload"]}"""));
 
     [Fact]
-    public void Estimate_is_capped_at_six_hours()
-        => Assert.Equal(21600, ComparisonGroupsEndpoints.CellMaxDurationSecs(
+    public void Estimate_is_capped_at_eight_hours()
+        => Assert.Equal(28800, ComparisonGroupsEndpoints.CellMaxDurationSecs(
             """{"runs":100000,"modes":["a","b","c"]}"""));
 }
