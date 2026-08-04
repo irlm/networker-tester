@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.143] — 2026-08-04
+
+### Fixed
+- **IIS post-setup verification tolerates cold-start.** IIS spins its app
+  pool up on the first request and the probe ran once, seconds after
+  configuration — a healthy IIS was false-failed while the identical script
+  verified fine minutes later on the diagnosis VM. The probe set now retries
+  for up to ~90 seconds before judging (HTTPS 8445 remains the fatal
+  criterion).
+
+---
+
 ## [0.28.142] — 2026-08-04
 
 ### Fixed
