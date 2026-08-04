@@ -11,6 +11,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.141] — 2026-08-04
+
+### Fixed
+- **Windows proxy stacks actually install now** (all diagnosed and re-proven
+  on a scratch Windows Server VM):
+  - **IIS**: an em-dash inside the generated setup PowerShell became a stray
+    quote under az run-command's encoding — the ENTIRE script failed to parse,
+    so IIS was never installed while the deploy printed "configured". The
+    generated script is now pure ASCII (bats-pinned), and verified serving.
+  - **Caddy**: four stacked defects — winget doesn't exist on Server SKUs
+    (guarded; official caddyserver.com download is now the Server path), the
+    GitHub "latest" asset shortcut never existed (404), the Windows Caddyfile
+    used one-line handle blocks Caddy v2 rejects (the v0.28.133 Linux bug's
+    twin), and caddy's stderr INFO logging became a terminating exception
+    under strict mode. All fixed; setup now validates the config and verifies
+    the port serves before claiming success.
+  - **nssm**: same winget guard (service wrapper used by caddy).
+- **windows·apache and windows·haproxy are rejected at launch with honest
+  reasons.** HAProxy has no native Windows build; Apache Lounge serves an
+  HTML decoy to every scripted download (verified from two networks) and no
+  other Windows httpd binary source exists. Cells for these combos fail
+  instantly with guidance instead of burning a VM + readiness timeout.
+
+---
+
 ## [0.28.140] — 2026-08-04
 
 ### Added

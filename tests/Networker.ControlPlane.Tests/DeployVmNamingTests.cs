@@ -128,12 +128,22 @@ public class UnsupportedComboTests
         Assert.Contains("no native Windows build", why);
     }
 
+    [Fact]
+    public void Windows_apache_is_rejected_with_reason()
+    {
+        // Apache Lounge serves an HTML decoy to every scripted download and no
+        // other Windows httpd binary source exists (verified 2026-08-04).
+        var why = ComparisonGroupsEndpoints.UnsupportedComboReason(Cell("windows", "apache"));
+        Assert.NotNull(why);
+        Assert.Contains("no scriptable Windows binary source", why);
+    }
+
     [Theory]
     [InlineData("linux", "haproxy")]
+    [InlineData("linux", "apache")]
     [InlineData("windows", "iis")]
     [InlineData("windows", "traefik")]
     [InlineData("windows", "caddy")]
-    [InlineData("windows", "apache")]
     [InlineData("linux", "nginx")]
     public void Supported_combos_pass(string os, string stack)
         => Assert.Null(ComparisonGroupsEndpoints.UnsupportedComboReason(Cell(os, stack)));

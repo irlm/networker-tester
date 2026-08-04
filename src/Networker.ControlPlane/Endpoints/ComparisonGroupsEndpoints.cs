@@ -273,6 +273,14 @@ public static class ComparisonGroupsEndpoints
         {
             return "HAProxy has no native Windows build — this combination cannot be provisioned (use a Linux HAProxy cell)";
         }
+        if (pending is { Os: "windows", ProxyStack: "apache" })
+        {
+            // Apache Lounge (the de-facto Windows binary source) serves an HTML
+            // decoy to every scripted download — verified from both Azure and
+            // residential networks 2026-08-04 — and httpd.apache.org ships no
+            // Windows binaries. Only a manually pre-installed Apache24 works.
+            return "Apache httpd has no scriptable Windows binary source — pre-install it manually on an existing VM or use a Linux Apache cell";
+        }
         return null;
     }
 
