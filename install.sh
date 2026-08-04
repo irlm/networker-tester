@@ -331,7 +331,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.143"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.144"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -5960,6 +5960,11 @@ _azure_win_setup_iis() {
         # (ProxyHttpsPort iis=8445) — an IIS whose HTTPS binding is dead just
         # times out the gate downstream, so it MUST be fatal here.
         if ! $https_ok; then
+            # Capture in-guest state INTO the deploy log before failing: the
+            # failed VM is deleted with the deploy, so this is the only
+            # diagnostic window (three IIS rounds died unexplained without it).
+            print_info "IIS verify failed — capturing in-guest diagnostics…"
+            az vm run-command invoke                 --resource-group "$rg" --name "$vm"                 --command-id RunPowerShellScript                 --scripts "(Get-Service W3SVC -EA SilentlyContinue).Status; 'local8082: ' + \$(try { (Invoke-WebRequest -Uri 'http://localhost:8082/' -UseBasicParsing -TimeoutSec 8).StatusCode } catch { 'down' }); 'local8445: ' + \$(try { \$r=[System.Net.HttpWebRequest]::Create('https://localhost:8445/'); \$r.ServerCertificateValidationCallback={\$true}; \$r.Timeout=8000; [int]([System.Net.HttpWebResponse]\$r.GetResponse()).StatusCode } catch { 'down' }); (netstat -an | Select-String 'LISTENING' | Select-String ':8082|:8445').Line -join ' / '; (Get-NetFirewallRule -Direction Inbound -Enabled True -EA SilentlyContinue | Where-Object DisplayName -like '*Networker*').DisplayName -join ','"                 --query "value[0].message" -o tsv 2>&1 | head -10 || true
             if [[ "${AZURE_ENDPOINT_WANTS_IIS:-1}" == "1" ]]; then
                 print_err "IIS HTTPS (8445) is not responding after setup — failing deploy"
                 return 1
