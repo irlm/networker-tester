@@ -331,7 +331,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.142"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.143"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -5924,17 +5924,36 @@ _azure_win_setup_iis() {
     # fail the deploy here with the real cause instead. A partial miss (e.g.
     # the H3-flavored path pre-reboot) stays a warning.
     if [[ -n "$ip" ]]; then
-        local ok=true https_ok=false
+        # IIS cold-starts its app pool on the FIRST request and NSG/HTTP.sys
+        # take a beat after setup — probing once, seconds after configure,
+        # false-failed a cell whose IIS was fine minutes later (retry-2,
+        # 2026-08-04). Retry the probe set for up to ~90s before judging.
+        local ok=true https_ok=false attempt
+        for attempt in 1 2 3 4 5 6; do
+            ok=true; https_ok=false
+            for url in "http://${ip}:8082/" "http://${ip}:8082/health" "https://${ip}:8445/"; do
+                local scheme="${url%%://*}"
+                local curl_flags="--max-time 8 -sf"
+                [[ "$scheme" == "https" ]] && curl_flags="$curl_flags -k"
+                if curl $curl_flags "$url" -o /dev/null; then
+                    [[ "$scheme" == "https" ]] && https_ok=true
+                else
+                    ok=false
+                fi
+            done
+            if $https_ok; then
+                break
+            fi
+            [[ "$attempt" -lt 6 ]] && sleep 15
+        done
         for url in "http://${ip}:8082/" "http://${ip}:8082/health" "https://${ip}:8445/"; do
             local scheme="${url%%://*}"
-            local curl_flags="--max-time 5 -sf"
+            local curl_flags="--max-time 8 -sf"
             [[ "$scheme" == "https" ]] && curl_flags="$curl_flags -k"
             if curl $curl_flags "$url" -o /dev/null; then
                 print_ok "  $url → OK"
-                [[ "$scheme" == "https" ]] && https_ok=true
             else
                 print_warn "  $url → FAILED"
-                ok=false
             fi
         done
         # 8445 is what the readiness gate and the runner actually probe
