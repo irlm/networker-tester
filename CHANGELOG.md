@@ -34,6 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   other assertion meaningless), and a coverage test fails when `testersApi`
   gains a function with no contract case.
 
+- **Shipped frontend code is now barred from importing node builtins.**
+  Letting the route-contract guard read the C# sources required adding the
+  `node` types to `tsconfig.app.json`, which applies to the whole project — so
+  a shipped module could import `node:fs` and still type-check. Vite does not
+  catch it: it emits "Module node:fs has been externalized for browser
+  compatibility" and **builds successfully** (verified, not assumed), leaving
+  the failure for the browser at runtime. `no-node-builtins.test.ts` enforces
+  the rule instead, and fails on an injected import.
+
 ### Changed
 - The **Dashboard frontend** CI job now also runs when
   `src/Networker.ControlPlane/` changes, not only `dashboard/`. The

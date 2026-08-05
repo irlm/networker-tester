@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { testersApi } from './testers';
 
@@ -19,7 +20,10 @@ import { testersApi } from './testers';
  * ends. This repo has been bitten repeatedly by written-but-never-read seams.
  */
 
-const REPO_ROOT = resolve(__dirname, '../../..');
+// `__dirname` is a CommonJS global; this project type-checks as ESM, so the
+// build (tsc) rejects it even though vitest would have run fine.
+const HERE = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = resolve(HERE, '../../..');
 const CONTROL_PLANE = join(REPO_ROOT, 'src/Networker.ControlPlane');
 
 /** Every `.cs` file under the control plane. */
