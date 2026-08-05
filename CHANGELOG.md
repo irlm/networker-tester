@@ -33,6 +33,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   genuine and that the select-then-match-in-memory pattern still works. The
   static scan needs no Docker, so it runs on every machine.
 
+## [0.28.150] — 2026-08-05
+
+### Fixed
+- **Windows Traefik never started when Caddy was installed alongside it.** Its
+  generated static config declared a vestigial `web: ":8091"` entrypoint
+  ("unused, kept for doc parity") — but Traefik binds every declared
+  entrypoint eagerly, and 8091 is Caddy's HTTP listener, so on any host with
+  both stacks Traefik exited at startup with `bind: Only one usage of each
+  socket address`. Every Windows matrix cell pairing the two hit this. The
+  entrypoint is removed; CI proved the failure and the fix.
+- **Windows Traefik claimed success while serving nothing** — caught by this
+  release's own new `windows-exec` job on its first run: nssm reports a
+  service "started" even when the process exits immediately, so the setup
+  printed "✓ Traefik serving" while both ports refused connections. The
+  setup now port-verifies (and dumps nssm status) before claiming success —
+  the same guard Caddy and Apache already got.
+
+### Added
+- **Audit P0-3 + P0-4 — the installer's proxy stacks are now EXECUTED in CI,
+  not grepped.** Two new jobs in Installer Tests:
+  - `stack-exec` (ubuntu): boots a real networker-endpoint, runs
+    `install.sh --setup-stack` for **all five Linux stacks** (nginx, caddy,
+    traefik, haproxy, apache) and asserts each proxy actually serves
+    `/health` and `/download` over both its HTTP and HTTPS listeners.
+  - `windows-exec` (windows): runs the orphaned `tests/test_install_ps1.ps1`
+    unit suite (161 assertions that were wired to no workflow), then
+    installs the Caddy and Traefik Windows stacks via `install.ps1 -Setup`
+    and asserts each serves through the proxy.
+  This is the direct fix for the class where Caddy and Apache shipped broken
+  for weeks while grep-tier tests stayed green — a config that never starts
+  is textually indistinguishable from one that does.
+
 ---
 
 ## [0.28.149] — 2026-08-05
