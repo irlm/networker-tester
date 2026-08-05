@@ -30,12 +30,33 @@ public class BenchmarkRegressionPipelineTests : IClassFixture<ControlPlaneFixtur
     private const string Pid = ControlPlaneFixture.SeededProjectId;
 
     /// <summary>Summaries JSON in the shape RegressionAnalyzer.ParseSummaries
-    /// reads (verified against the analyzer): case_id + p50 + counts.</summary>
+    /// reads (verified against the analyzer): case_id + p50 + counts.
+    ///
+    /// <para><c>included_sample_count</c> is REQUIRED, not decorative. The
+    /// analyzer's small-n guard skips every p50 comparison unless BOTH sides
+    /// report at least <c>RegressionAnalyzer.MinSamples</c> measured samples,
+    /// and a missing key parses as 0 — so omitting it makes this whole suite
+    /// pass vacuously: the detector runs, compares nothing, flags nothing, and
+    /// "no regression" looks exactly like a healthy pipeline.</para></summary>
     private static string Summaries(double p50) => $$"""
         [{"case_id":"api-users","metric_unit":"ms","higher_is_better":false,
           "p50":{{p50.ToString(System.Globalization.CultureInfo.InvariantCulture)}},
-          "success_count":100,"failure_count":0}]
+          "success_count":100,"failure_count":0,"included_sample_count":100}]
         """;
+
+    [Fact]
+    public void The_seeded_summaries_clear_the_analyzer_small_n_guard()
+    {
+        // Guards the guard. Every test below is a no-op if the analyzer rejects
+        // the fixture data for small-n, and it fails SILENTLY — which is how
+        // the first version of this suite went red.
+        var stats = Assert.Single(RegressionAnalyzer.ParseSummaries(Summaries(100.0)));
+        Assert.True(stats.IncludedSampleCount >= RegressionAnalyzer.MinSamples,
+            $"fixture summaries report {stats.IncludedSampleCount} included samples, below the "
+            + $"analyzer's MinSamples={RegressionAnalyzer.MinSamples} floor — every comparison "
+            + "below would be skipped and this suite would prove nothing");
+        Assert.Equal(100.0, stats.P50);
+    }
 
     private async Task<Guid> SeedRunWithSummariesAsync(Guid configId, double p50, DateTime finishedAt)
     {

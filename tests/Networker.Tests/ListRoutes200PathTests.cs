@@ -82,7 +82,9 @@ public class ListRoutes200PathTests : IClassFixture<ControlPlaneFixture>
         $"/api/projects/{Pid}/testers",
         $"/api/projects/{Pid}/inventory",
         "/api/projects",
-        "/api/agents",
+        // Agents are project-scoped — there is no flat /api/agents route
+        // (verified against AgentsEndpoints).
+        $"/api/projects/{Pid}/agents",
         "/api/modes",
         "/api/zones",
     };
