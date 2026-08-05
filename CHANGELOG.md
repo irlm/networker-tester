@@ -70,6 +70,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Rust `deterministic_rng_empty_array` test asserted only "does not
   panic"; a generator degenerated to a constant passed it. It now pins
   non-zero state, non-constant output, and in-bounds indices.
+- **The sweep found an entire installer test that could never have passed its
+  own premise.** The `gh` stub packed `networker-tester-x86_64-unknown-linux-musl`
+  inside the tarball, but a real release tarball contains the BARE binary name
+  (`release.yml`: `tar czf networker-tester-${TARGET}.tar.gz -C "$SRC"
+  networker-tester`). So `step_download_release`'s
+  `chmod +x "$tmp/networker-tester"` always failed and the function always
+  returned 1 — every assertion about a *successful* download was unreachable.
+  Nobody noticed because those assertions were non-final and inert. The stub
+  now matches what the release ships, and the concurrent-install test exercises
+  a real success path for the first time.
+- **`step_download_release` no longer fails a concurrent install that lost a
+  harmless race.** The reuse-the-sibling's-binary branch only ran when the
+  freshly extracted binary could report `--version`; when it could not (a
+  cross-arch build), the loser returned 1 even though a sibling had installed
+  the identical bytes, and the caller then "fell back" to a source compile for
+  nothing. Byte equality (`cmp -s`) is now the fallback test — exact, and a
+  stale or unrelated binary still correctly fails.
 - The rest of the sweep came back clean: no assertion-free tests in the C#,
   frontend (44 files) or Rust estates, no `assert!(true)`, no
   `toBeDefined()`-only tests, and the one remaining `status < 500` catch-all
