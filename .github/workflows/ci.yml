@@ -65,9 +65,15 @@ jobs:
             echo "rust-relevant files:"; echo "$NON_SAFE" | sed 's/^/  /'
           fi
 
-          # Frontend runs iff dashboard/ changed (or push, handled above).
+          # Frontend runs iff dashboard/ changed (or push, handled above) —
+          # OR the control plane's endpoints changed. The frontend suite now
+          # carries the route-contract guard (audit P1-12), which checks the
+          # api client's URLs against the routes the C# control plane actually
+          # registers. Route drift usually originates on the SERVER side, so
+          # gating that guard on dashboard/ alone would let exactly the change
+          # it exists to catch skip it.
           FRONTEND=false
-          if echo "$CHANGED" | grep -qE '^dashboard/'; then
+          if echo "$CHANGED" | grep -qE '^(dashboard/|src/Networker\.ControlPlane/)'; then
             FRONTEND=true
           fi
 

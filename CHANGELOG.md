@@ -11,6 +11,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.158] — 2026-08-05
+
+### Added
+- **Audit P1-12 — the frontend's API calls are checked against the routes the
+  server actually registers.** Every frontend test mocks `../api/client`, so
+  they prove what a component does with a *stubbed* client and nothing proves
+  the client talks to routes that exist. Rename a route on either side and all
+  44 test files stay green while the feature 404s in the browser.
+  `route-contract.test.ts` is the check MSW would give us without the
+  dependency: the REAL api functions run against a spied `fetch`, and every URL
+  they build is matched against routes parsed from the C# sources at test time.
+  Server routes are matched by SHAPE (each `{param}` spans one path segment),
+  and interpolated registrations (`MapPost($"{basePath}/start", …)`) are
+  resolved through their file-local `const string` — without that the parser
+  silently misses them and reports the frontend as broken.
+  Verified in both directions: renaming the client's `/testers` path to
+  `/runners` turns 14 assertions red.
+  Two guards keep it from rotting: the route scan must find a plausible number
+  of routes and its matcher must accept a known-good URL while rejecting an
+  obviously wrong one (a matcher that accepted everything would make every
+  other assertion meaningless), and a coverage test fails when `testersApi`
+  gains a function with no contract case.
+
+### Changed
+- The **Dashboard frontend** CI job now also runs when
+  `src/Networker.ControlPlane/` changes, not only `dashboard/`. The
+  route-contract guard lives in that suite, and route drift usually originates
+  on the SERVER side — gating it on `dashboard/` alone would let exactly the
+  change it exists to catch skip it.
+
+---
+
 ## [0.28.157] — 2026-08-05
 
 ### Fixed
