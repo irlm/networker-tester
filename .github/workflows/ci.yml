@@ -480,6 +480,9 @@ jobs:
 
       - run: npm test
       - run: npm run build
+      # Audit P1-11: the bundle budget is enforced, not merely warned about
+      # (vite's chunkSizeWarningLimit has never failed a build).
+      - run: npm run check:bundle-size
       - run: npx tsc -b
 
   # ──────────────────────────────────────────────────────────────────────────
