@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.148] — 2026-08-05
+
+### Removed
+- **The retired Rust control-plane crates are decommissioned:**
+  `crates/networker-dashboard`, `crates/networker-agent`, and
+  `crates/networker-common` are deleted (workspace trimmed to
+  networker-tester / networker-endpoint / networker-log). The C# control
+  plane has served production exclusively since the phase-2 cutover; the
+  soak criterion (14 consecutive clean nightly checks) was executed at day
+  13 by owner decision after prod additionally survived 19 deploys in five
+  days. Rollback remains available via the `legacy/rust` branch and
+  `rust-legacy-*` tag. The nightly soak check now tolerates purged systemd
+  units (not-found == fine; only active/activating fail).
+
+---
+
 ## [0.28.147] — 2026-08-05
 
 ### Fixed
