@@ -118,7 +118,7 @@ jobs:
           tar czf "../dist/dashboard-frontend.tar.gz" -C dist .
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist-x86_64-unknown-linux-musl
           path: dist/
@@ -253,7 +253,7 @@ jobs:
       # created once with every platform's assets (immutable releases forbid
       # attaching anything after publish).
       - name: Upload build artifacts
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist-${{ matrix.target }}
           path: dist/
@@ -314,7 +314,7 @@ jobs:
           (cd publish/agent-win && zip -q "$GITHUB_WORKSPACE/dist/networker-agent-cs-win-x64.zip" networker-agent.exe)
 
       - name: Upload C# artifact
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist-csharp
           path: dist/
