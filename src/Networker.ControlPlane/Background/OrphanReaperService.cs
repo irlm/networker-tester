@@ -83,7 +83,18 @@ public sealed class OrphanReaperService : BackgroundService
     /// in a shared subscription / resource group. Mirrors the Rust
     /// <c>OWNED_NAME_PREFIXES</c>.
     /// </summary>
-    internal static readonly string[] OwnedNamePrefixes = ["tester-", "ab-", "nwk-ep-"];
+    /// <para><c>nwk-a-</c> / <c>nwk-auto-</c> are the auto-provisioned matrix
+    /// cell endpoint VMs (current and pre-v0.28.129 naming): their normal
+    /// lifecycle is the orchestrator's teardown-after-run, and the reaper is the
+    /// backstop for partial creates that died before registering endpoints.
+    /// Live ones are protected by the deployment vm-name guard, exactly like
+    /// live testers' children.</para>
+    internal static readonly string[] OwnedNamePrefixes = ["tester-", "ab-", "nwk-ep-", "nwk-a-", "nwk-auto-"];
+
+    /// <summary>The fixed resource group install.sh deploys endpoint VMs into.
+    /// Auto-provisioned cells live (and leak) here, so every resolved Azure
+    /// subscription also gets this RG as a sweep scope.</summary>
+    internal const string EndpointResourceGroup = "networker-rg-endpoint";
 
     /// <summary>Delete order: a VM delete releases its NIC lease; deleting the
     /// NIC releases the IP and frees any NSG that referenced the NIC; the disk is
@@ -177,8 +188,30 @@ public sealed class OrphanReaperService : BackgroundService
             .Select(t => t.VmName!)
             .ToListAsync(ct)
             .ConfigureAwait(false);
+
+        // Same guard for DEPLOYMENT-owned VMs (standing wizard targets like
+        // nwk-ep-* and in-flight matrix cells nwk-a-*): a live deployment row —
+        // pending/running/completed, i.e. anything not explicitly released
+        // (torn_down) or dead-before-VM (failed/cancelled) — protects its
+        // vm_name and thereby its NIC/IP/NSG/disk children. Without this,
+        // adding the endpoint RG to the sweep scopes would make the reaper
+        // identify the user's standing target as an orphan (its id is in no
+        // tester row) and delete it — the exact #419 disaster class.
+        var liveDeploymentConfigs = await db.Deployments
+            .Where(d => d.Status != "torn_down" && d.Status != "failed" && d.Status != "cancelled")
+            .Select(d => d.Config)
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+        var deploymentVmNames = liveDeploymentConfigs
+            .Select(VmNameFromDeployConfig)
+            .Where(n => !string.IsNullOrEmpty(n))
+            .Select(n => n!)
+            .ToList();
+
         var knownNamePrefixes = knownVmNames
+            .Concat(deploymentVmNames)
             .Where(n => n.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         // Resolve every distinct Azure (subscription, resource-group) scope from
@@ -327,7 +360,60 @@ public sealed class OrphanReaperService : BackgroundService
             }
         }
 
+        // Every subscription also sweeps the fixed endpoint RG: matrix cells
+        // provision (and leak partial resources) there, not in the tester RG.
+        // Same credentials work — it's the same subscription; live standing
+        // targets there are protected by the deployment vm-name guard.
+        foreach (var scope in byScope.Values.ToList())
+        {
+            var epKey = (scope.Subscription, EndpointResourceGroup);
+            byScope.TryAdd(epKey, scope with
+            {
+                ResourceGroup = EndpointResourceGroup,
+                Source = scope.Source + "+endpoint-rg",
+            });
+        }
+
         return byScope.Values.ToList();
+    }
+
+    /// <summary>Extract the VM name from a deployment's deploy.json config —
+    /// <c>endpoints[0].azure.vm_name</c> / <c>aws.instance_name</c> /
+    /// <c>gcp.instance_name</c>. Null when absent/unparseable (LAN/local
+    /// deployments have no VM name; they're simply not guarded).</summary>
+    internal static string? VmNameFromDeployConfig(string? config)
+    {
+        if (string.IsNullOrEmpty(config))
+        {
+            return null;
+        }
+        try
+        {
+            using var doc = JsonDocument.Parse(config);
+            if (!doc.RootElement.TryGetProperty("endpoints", out var eps)
+                || eps.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+            foreach (var ep in eps.EnumerateArray())
+            {
+                foreach (var (block, key) in new[] { ("azure", "vm_name"), ("aws", "instance_name"), ("gcp", "instance_name") })
+                {
+                    if (ep.TryGetProperty(block, out var b)
+                        && b.ValueKind == JsonValueKind.Object
+                        && b.TryGetProperty(key, out var n)
+                        && n.ValueKind == JsonValueKind.String)
+                    {
+                        return n.GetString();
+                    }
+                }
+            }
+            return null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     /// <summary>Case-insensitive comparer for (subscription, resource-group) scope

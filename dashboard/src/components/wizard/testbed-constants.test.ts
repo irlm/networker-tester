@@ -3,6 +3,8 @@ import {
   DEFAULT_METHODOLOGY,
   METHODOLOGY_PRESETS,
   methodologyForPreset,
+  windowsProxiesFor,
+  WINDOWS_PROXIES_AZURE,
 } from './testbed-constants';
 
 describe('methodologyForPreset (audit F14 — Review must match Methodology)', () => {
@@ -38,5 +40,25 @@ describe('methodologyForPreset (audit F14 — Review must match Methodology)', (
 
   it('falls back to defaults for unknown preset ids', () => {
     expect(methodologyForPreset('nope')).toEqual(DEFAULT_METHODOLOGY);
+  });
+});
+
+// ── Windows stack support ⇄ server launch gate (v0.28.147) ──────────────────
+// The server rejects windows·haproxy and windows·apache at launch
+// (ComparisonGroupsEndpoints.UnsupportedComboReason — no native/scriptable
+// Windows binary sources, verified 2026-08-04). The UI must not offer what
+// the server will refuse. C# pins the same pairs from its side
+// (UnsupportedComboTests) — change either list only together.
+describe('windows proxy support mirrors the server launch gate', () => {
+  it('never offers haproxy or apache on any windows cloud', () => {
+    for (const cloud of ['Azure', 'AWS', 'GCP']) {
+      const offered = windowsProxiesFor(cloud);
+      expect(offered).not.toContain('haproxy');
+      expect(offered).not.toContain('apache');
+    }
+  });
+
+  it('azure windows offers exactly the supported trio', () => {
+    expect([...WINDOWS_PROXIES_AZURE].sort()).toEqual(['caddy', 'iis', 'traefik']);
   });
 });

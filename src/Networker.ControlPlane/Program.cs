@@ -14,6 +14,7 @@ using Networker.ControlPlane.Observability;
 using Networker.ControlPlane.Provisioning;
 using Networker.ControlPlane.Security;
 using Networker.ControlPlane.Sso;
+using Networker.ControlPlane.Startup;
 using Networker.Contracts;
 using Networker.Data;
 using Networker.Data.Migrations;
@@ -137,6 +138,14 @@ if (builder.Configuration["NETWORKER_RUN_MIGRATIONS"] != "0")
     app.Logger.LogInformation(
         "Schema migrations: {Applied} applied, {Existing} already recorded (latest V{Latest:D3})",
         migrationResult.Applied.Count, migrationResult.AlreadyApplied.Count, SchemaMigrator.LatestVersion);
+
+    // First-admin bootstrap — immediately after migrations, so dash_user exists.
+    // There is no signup route: a fresh self-hosted install would otherwise come
+    // up with an empty dash_user and no way to log in. Seeds ONE admin, and only
+    // when the table is completely empty and DASHBOARD_ADMIN_PASSWORD is set, so
+    // an existing deployment (prod has users) is a permanent no-op.
+    var bootstrapStatus = await AdminBootstrap.EnsureBootstrapAdminAsync(connString, app.Logger);
+    app.Logger.LogInformation("Bootstrap admin: {Status}", bootstrapStatus);
 
     // One-shot: encrypt any legacy plaintext alert-webhook secret still in
     // alert_channel.config (secrets audit 2026-07). Idempotent + best-effort —

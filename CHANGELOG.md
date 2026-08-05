@@ -11,6 +11,808 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.161] — 2026-08-05
+
+### Added
+- **Audit P2 — the first browser E2E coverage this app has had.** Every
+  existing frontend test mounts components with `../api/client` mocked, which
+  is fine for component logic and useless for the failures a user meets first:
+  a lazy chunk that 404s only in the production bundle, a router
+  misconfiguration, a hook that throws during the real mount and leaves a blank
+  page. None of those can occur in a jsdom test that never loads the built
+  bundle. Playwright now drives `vite preview` serving **dist/** — the bundle
+  that actually ships, code-split chunks included — with the API intercepted at
+  the network layer. Five specs: the login form renders, an authenticated route
+  mounts and shows real data, a deep link is served by the SPA fallback (the
+  failure the nginx `try_files … /index.html` line prevents, which only appears
+  on a fresh load of a nested path), an unauthenticated deep link redirects,
+  and a guard proving the console-error collector still catches anything.
+  **Verified against a real regression:** an injected render crash in
+  `ProjectsPage` turns the shell test red.
+  Chromium only, `@playwright/test` is a dev dependency (so the blocking
+  production `npm audit` is unaffected), and `e2e/**` is excluded from vitest —
+  vitest's default include matches `**/*.spec.ts` and would otherwise load the
+  Playwright runner and report a red suite unrelated to the app.
+
+---
+
+## [0.28.160] — 2026-08-05
+
+### Added
+- **Audit P2 — the tester reinstall script is EXECUTED, not just inspected.**
+  `ReinstallScript` is shipped to Azure VMs via `vm run-command` and was only
+  checked for ASCII purity and a few expected substrings. That leaves the
+  failures it is most likely to have — a bash syntax error, a renamed release
+  asset, a changed tarball layout — all of which look fine to a grep and all of
+  which fail on a customer's VM mid-upgrade, with the agent already stopped.
+  It is the same class the decommission produced in `install.sh`. Now: `bash -n`
+  parses the generated script everywhere, a dedicated CI job runs it for real
+  against real release assets (installing a stub `networker-agent` unit first,
+  since the script restarts one), and its asset names are cross-referenced
+  against `release.yml`. A fourth test fails if no workflow sets the execution
+  env var — an opt-in test that nothing opts into is coverage that only looks
+  like coverage.
+- **Audit P2 — the cell-deadline budget is calibrated against its evidence.**
+  The 8s-per-(run × mode) constant came from a real incident: at 4s, haproxy and
+  traefik cells were killed at 78-85% complete after hours of work. That
+  evidence lived only in a code comment, so the number was safe exactly as long
+  as someone remembered it. `DeadlineBudgetCalibrationTests` turns the
+  measurements into assertions — the budget must clear the measured worst case
+  (4.2s/unit at 78% ⇒ ≈5.4s/unit needed) with a 1.3× safety factor, must not be
+  so loose that a wedged cell holds a runner for hours, and the largest
+  legitimate workload must fit *under* the 8h cap rather than be clamped by it.
+  Verified in both directions: reverting the constant to 4s fails with the
+  arithmetic spelled out. `scripts/deadline-calibration.sql` re-derives the
+  distribution from real completed runs, so the constant can be checked against
+  production instead of memory — excluding runs killed by a deadline, since
+  including them would ratchet the budget down toward the very failure it
+  prevents.
+- **Audit P2 — a multi-hour endurance soak.** The nightly `Prod soak check` is
+  a POINT check: "is everything healthy right now?", answered in two minutes.
+  Every defect that needs TIME is invisible to it — a memory leak, a
+  connection-pool leak, a loop that degrades after N ticks, latency drifting as
+  tables grow. `scripts/soak-endurance.sh` samples background-loop health,
+  process memory and server-reported latency for hours and judges the TREND,
+  comparing the last quarter of samples against the first (single points are
+  noisy, and a process is still warming up early on). It is strictly read-only
+  against production — no runs launched, no VMs created — which is the point: a
+  leak only reproduces on a process that has been up for days. Weekly, plus
+  manual dispatch with a validated duration. The trend maths was exercised
+  against both a healthy series and a synthetic leak.
+
+---
+
+## [0.28.159] — 2026-08-05
+
+### Fixed
+- **`scripts/deploy-dashboard.sh` now refuses to run instead of failing
+  halfway.** It installs the retired Rust control plane and downloads
+  `networker-dashboard-<target>.tar.gz`, an asset unpublished since the
+  v0.28.148 decommission — so a run 404s *after* creating a VM, a database and
+  DNS records. The warning existed only in `docs/setup-guide.md`, which nobody
+  reads while pasting a command. The script now fails fast with a pointer to
+  `install.sh dashboard` (repaired in v0.28.156) and an explicit
+  `ALLOW_LEGACY_RUST_DEPLOY=1` opt-out for its still-useful infrastructure
+  steps. The setup guide's Quick Deploy now leads with the installer.
+
+### Added
+- **Audit P2 — leader election is tested for the behaviour it exists for.**
+  `PgAdvisoryLeaderLock` is what stops two control-plane replicas running the
+  same background tick concurrently (duplicate schedule fan-out, double VM
+  deallocation, racing reapers), and it was covered only by a test of its
+  FNV-1a key derivation — a pure function. `LeaderElectionFailoverTests` pins
+  the real contract against real Postgres: a second replica is refused **and
+  its tick body does not run**; the key is released after success, after the
+  tick throws, and after cancellation (a leak silently disables that loop and
+  looks exactly like "nothing to do"); a killed backend hands leadership to a
+  survivor, which is the claim "the DB session IS the lease" actually resting
+  on Postgres behaviour rather than on a comment; and distinct services do not
+  block each other. Verified in both directions — removing the unlock turns
+  three of the seven red.
+- **Audit P2 — the benchmark workflow now reports whether anything got
+  slower.** It ran the suite, printed OK/EMPTY per file and uploaded an
+  artifact — so it told you the benchmark EXECUTED, never whether latency
+  moved. A regression could ride for weeks with every run green. The workflow
+  now downloads the previous successful run's artifact and prints a per-workload
+  trend table (previous p50, current p50, delta) into the run summary, flagging
+  anything ≥20% slower. Median rather than mean, because shared CI runners have
+  a long right tail and a mean tracks the worst outlier instead of the typical
+  request; workloads with fewer than 5 successful attempts are reported as such
+  rather than given a meaningless percentage. **Informational, not blocking**:
+  a hard threshold on shared-runner numbers produces false alarms, and a check
+  that cries wolf gets muted — which is worse than no check. `actions: read`
+  was added to the workflow because `gh run download` needs it; without it the
+  comparison would silently degrade to "no baseline" every run.
+- **Audit P2 — hand-written test schemas are checked against the EF model.**
+  Several SQLite suites build tables from DDL that is a hand copy of the model,
+  and copies drift; EF's INSERT names every mapped column, so a missing one
+  surfaces as a raw SQLite error inside an unrelated test, while a
+  read-only column drifts with no error at all. `TestSchemaDriftTests` creates
+  each suite's schema for real and requires every mapped column to exist.
+  Tables that are deliberately one-column foreign-key stubs are out of scope —
+  comparing a stub against the full model reports drift that isn't there.
+  The audit's suggested fix, `Database.GenerateCreateScript()`, **does not
+  work here** and the reason is now recorded rather than left as an open
+  suggestion: the model declares Postgres sequences and the SQLite provider
+  throws `NotSupportedException: SQLite does not support sequences`.
+
+---
+
+## [0.28.158] — 2026-08-05
+
+### Added
+- **Audit P1-12 — the frontend's API calls are checked against the routes the
+  server actually registers.** Every frontend test mocks `../api/client`, so
+  they prove what a component does with a *stubbed* client and nothing proves
+  the client talks to routes that exist. Rename a route on either side and all
+  44 test files stay green while the feature 404s in the browser.
+  `route-contract.test.ts` is the check MSW would give us without the
+  dependency: the REAL api functions run against a spied `fetch`, and every URL
+  they build is matched against routes parsed from the C# sources at test time.
+  Server routes are matched by SHAPE (each `{param}` spans one path segment),
+  and interpolated registrations (`MapPost($"{basePath}/start", …)`) are
+  resolved through their file-local `const string` — without that the parser
+  silently misses them and reports the frontend as broken.
+  Verified in both directions: renaming the client's `/testers` path to
+  `/runners` turns 14 assertions red.
+  Two guards keep it from rotting: the route scan must find a plausible number
+  of routes and its matcher must accept a known-good URL while rejecting an
+  obviously wrong one (a matcher that accepted everything would make every
+  other assertion meaningless), and a coverage test fails when `testersApi`
+  gains a function with no contract case.
+
+- **Shipped frontend code is now barred from importing node builtins.**
+  Letting the route-contract guard read the C# sources required adding the
+  `node` types to `tsconfig.app.json`, which applies to the whole project — so
+  a shipped module could import `node:fs` and still type-check. Vite does not
+  catch it: it emits "Module node:fs has been externalized for browser
+  compatibility" and **builds successfully** (verified, not assumed), leaving
+  the failure for the browser at runtime. `no-node-builtins.test.ts` enforces
+  the rule instead, and fails on an injected import.
+
+### Changed
+- The **Dashboard frontend** CI job now also runs when
+  `src/Networker.ControlPlane/` changes, not only `dashboard/`. The
+  route-contract guard lives in that suite, and route drift usually originates
+  on the SERVER side — gating it on `dashboard/` alone would let exactly the
+  change it exists to catch skip it.
+
+---
+
+## [0.28.157] — 2026-08-05
+
+### Fixed
+- **`install.sh` could hang the LAN endpoint deploy forever.** A
+  `systemctl start networker-endpoint` inside an SSH heredoc (install.sh:1390)
+  had no `</dev/null >/dev/null 2>&1`, so the started service inherited the SSH
+  pipe's file descriptors and `ssh` waited for it to exit — which it never
+  does. There is a test named exactly for this regression; it found the
+  violation, printed it, and reported PASS anyway (see P1-13 below).
+
+### Added
+- **Audit P1-14 — the agent connect/drop/reconnect lifecycle is driven over
+  real WebSockets.** This is the flow that broke on 2026-08-03, when a deploy
+  restarted the control plane and the eager fail-on-disconnect destroyed four
+  in-flight matrix cells of ~1000 attempts each. Existing coverage called
+  `HandleDisconnectAsync` directly on SQLite, which pins the method but never
+  opens a socket — so it could not see the registry's compare-and-remove, the
+  supersede-on-reconnect branch, or whether a reconnected agent can still
+  finish the run it was carrying. `AgentReconnectLifecycleTests` drives all
+  four against the real `/ws/agent` endpoint and real Postgres: a drop marks
+  the agent offline while leaving its run running with its progress intact; a
+  reconnected agent's `run_finished` is still accepted; a stale socket closing
+  *after* a reconnect must not knock the live agent offline; and a reconnect
+  with a tampered key is still refused. **Verified in both directions** — with
+  the historical bug reintroduced, two of the four go red with the intended
+  diagnostic.
+- **Audit P1-10 — API latency budgets, plus the timing contract underneath
+  them.** Two different guarantees: (1) every response must carry
+  `X-Process-Time-Ms`, which the frontend reads to split server from network
+  time — the control plane didn't emit it for months and every `perf_log`
+  row's `server_ms` was null; (2) six read endpoints are driven against 300
+  seeded runs and their own reported server time must stay under a
+  deliberately generous ceiling. The budget is a blow-up detector for an N+1
+  or a missing index, not a microbenchmark — measured times are 1.2–3.5ms
+  against a 1500ms budget, so ordinary CI noise cannot reach it while an
+  order-of-magnitude regression still trips it. A third test compares 20× the
+  rows by ratio rather than absolute time, which is the signature an N+1
+  leaves. Both halves verified in both directions.
+
+### Changed
+- **Audit P1-13 (vacuous-assertion sweep) — 143 assertions in the installer
+  suite were inert.** bats' helper cleared `errexit` for every test, and with
+  `set +e` only a test's LAST command decides pass/fail. 56 of 141 installer
+  tests carry more than one bare `[ ... ]`, so every earlier assertion in them
+  was decorative: it could fail, print nothing, and the test still passed.
+  That is not theoretical — it is how the FD-safety hang bug above shipped and
+  survived. Each non-final assertion is now `… || { echo …; exit 1; }`, which
+  fails the test regardless of errexit; this is a pure strengthening, and the
+  suite stays green. (Restoring `set -e` globally was tried first and rejected:
+  it changes the behaviour of the installer functions under test, which is a
+  different and larger change.)
+- The SSH-heredoc FD-safety test now extracts heredoc bodies precisely with
+  awk and **asserts** the violation list is empty, instead of echoing it. It
+  also guards the guard — if the extraction stops matching heredocs it fails
+  rather than silently reporting zero — and its meaningful assertion is placed
+  last so it stays decisive. Verified red on an injected violation.
+- The Rust `deterministic_rng_empty_array` test asserted only "does not
+  panic"; a generator degenerated to a constant passed it. It now pins
+  non-zero state, non-constant output, and in-bounds indices.
+- **The sweep found an entire installer test that could never have passed its
+  own premise.** The `gh` stub packed `networker-tester-x86_64-unknown-linux-musl`
+  inside the tarball, but a real release tarball contains the BARE binary name
+  (`release.yml`: `tar czf networker-tester-${TARGET}.tar.gz -C "$SRC"
+  networker-tester`). So `step_download_release`'s
+  `chmod +x "$tmp/networker-tester"` always failed and the function always
+  returned 1 — every assertion about a *successful* download was unreachable.
+  Nobody noticed because those assertions were non-final and inert. The stub
+  now matches what the release ships, and the concurrent-install test exercises
+  a real success path for the first time.
+- **`step_download_release` no longer fails a concurrent install that lost a
+  harmless race.** The reuse-the-sibling's-binary branch only ran when the
+  freshly extracted binary could report `--version`; when it could not (a
+  cross-arch build), the loser returned 1 even though a sibling had installed
+  the identical bytes, and the caller then "fell back" to a source compile for
+  nothing. Byte equality (`cmp -s`) is now the fallback test — exact, and a
+  stale or unrelated binary still correctly fails.
+- The rest of the sweep came back clean: no assertion-free tests in the C#,
+  frontend (44 files) or Rust estates, no `assert!(true)`, no
+  `toBeDefined()`-only tests, and the one remaining `status < 500` catch-all
+  in `EndpointSmokeTests` is already covered by the P1-3 200-path suite.
+
+---
+
+## [0.28.156] — 2026-08-05
+
+### Fixed
+- **The self-hosted install (`install.sh dashboard`) was dead since v0.28.148
+  — repointed at the C# artefacts.** The decommission deleted the
+  `networker-dashboard` and `networker-agent` Rust crates, and their release
+  assets went with them, but the installer still asked for
+  `networker-dashboard-<target>.tar.gz` and then "fell back to source compile"
+  with `cargo install networker-dashboard`. Both arms fail on every release
+  from v0.28.148 onward: the download 404s and the fallback reports a
+  confusing "crate not found". Anyone self-hosting since that release got a
+  broken install with no usable diagnosis. Now the component installs what the
+  release actually ships — `networker-controlplane-linux-x64.tar.gz` (a
+  self-contained .NET publish directory, so no runtime is needed on the host),
+  `networker-agent-cs-linux-x64.tar.gz`, and the prebuilt
+  `dashboard-frontend.tar.gz` (which also removes the Node.js toolchain and
+  the git clone + `npm run build` from the install path). There is deliberately
+  no source fallback: the crates are gone, and failing with an actionable
+  message beats failing with a misleading one.
+- **The self-host environment file wrote the Rust contract to a C# app.**
+  `DASHBOARD_DB_URL=postgres://…` is a URI, and Npgsql does not parse URI form
+  — the value was silently ignored and the control plane connected to its
+  built-in default database instead of the one the installer had just created
+  and seeded. Now written as `DASHBOARD_DB_URL_NPGSQL` in Npgsql keyword
+  syntax, alongside `ASPNETCORE_URLS` (replacing `DASHBOARD_PORT` /
+  `DASHBOARD_BIND_ADDR`) and `DASHBOARD_PUBLIC_URL`. `DASHBOARD_STATIC_DIR` is
+  dropped because the C# control plane serves no static files at all.
+- **nginx proxied every path to the control plane, which serves no HTML.**
+  The Rust dashboard served the SPA itself; the C# one does not, so `/` 404'd
+  for every page load. nginx now serves `/opt/networker/dashboard` directly
+  with `try_files … /index.html` (so deep links survive a hard refresh) and
+  proxies only `/api/` and `/ws/`. `/share/{token}` is a client-side route, so
+  it is deliberately NOT proxied — its data comes from `/api/share/{token}`.
+- **The systemd unit copied a self-contained .NET entrypoint to
+  `/usr/local/bin`**, stranding its runtime. It now runs in place from the
+  publish directory with a `WorkingDirectory`, a `PATH` carrying
+  `/usr/local/bin` and `/snap/bin` (cloud CLIs, snap gcloud), and no
+  `RUST_LOG`.
+
+### Added
+- **A fresh self-hosted install can now actually be logged into.** The C#
+  control plane has no signup route and no admin bootstrap — production's
+  admin rows were inherited from the Rust-era database, so nobody noticed that
+  a brand-new deployment comes up with an empty `dash_user` table and no
+  possible way in. `AdminBootstrap` seeds one platform admin at startup from
+  `DASHBOARD_ADMIN_PASSWORD` (+ optional `DASHBOARD_ADMIN_EMAIL`, default
+  `admin@localhost`) with `must_change_password` set. It is heavily
+  fail-safe: it seeds **only** when `dash_user` is completely empty, via a
+  single `INSERT … WHERE NOT EXISTS` under an advisory lock, so it can never
+  touch, overwrite or race an existing deployment, and any failure is logged
+  and swallowed rather than blocking startup. Seven tests cover it against
+  real Postgres, the load-bearing one asserting that an existing install's
+  password hashes come through byte-identical.
+- **Guards so this class of breakage cannot recur silently.** New installer
+  tests fail if the dashboard path ever again references a retired Rust crate,
+  and — the check that was actually missing — cross-reference the installer's
+  asset names against `.github/workflows/release.yml`, so renaming an asset in
+  one place without the other breaks CI instead of self-hosting. Others pin
+  the Npgsql keyword format (by executing the generator, not grepping it), the
+  systemd unit shape, and the nginx SPA/API split.
+- **Audit P1-15 — the 42 orphaned cloud integration tests are watched again.**
+  `tests/integration/{aws,azure}` holds six real-VM bats suites that no
+  workflow has referenced since 2026-03, so they could have stopped parsing
+  and nobody would have learned of it until someone ran them by hand. CI can't
+  execute them (they create billable cloud resources), but it now parses every
+  suite and checks that the `install.sh` component names they invoke still
+  exist, on every PR that touches the installer. `tests/integration/README.md`
+  records why the AWS suites can never run in CI — there are no AWS
+  credentials — instead of leaving that as folklore.
+
+---
+
+## [0.28.155] — 2026-08-05
+
+### Added
+- **Audit P0-1 — the comparison-group matrix launch is executed in a test.**
+  `ComparisonMatrixLaunchTests` drives the real HTTP route against real
+  Postgres: a 6-cell mixed-OS matrix creates one config + one run per cell
+  with distinct names; a RE-launch of the same group succeeds with a fresh
+  set (the v0.28.129 unique-name regression); unsupported Windows combos fail
+  at launch with real reasons while the supported cells still launch (per-cell
+  isolation, zero VMs burned); and a large workload gets a workload-scaled
+  cell deadline rather than the old hardcoded 900s. This flow previously had
+  only 4 JSON-parsing tests and was excluded from the write-endpoint sweep as
+  a "202 shell with no DB effect" — which was factually wrong.
+- **Audit P1-3 — list routes now execute their real queries in a test.**
+  `EndpointSmokeTests` asserts only `status < 500` and points ~20 of its routes
+  at a deliberately-not-found GUID, so the handler short-circuits on the 404
+  arm and the query never runs — a broken EF translation or a Postgres-only
+  SQL error in a list endpoint sails straight through (the 2026-07 members-page
+  500 was exactly that: an `OrderBy` after a `Join` EF couldn't translate).
+  `ListRoutes200PathTests` drives 11 list routes against SEEDED rows and
+  requires 200 + well-formed JSON, plus a guard that fails if seeding ever
+  stops producing content, so the suite can't pass on an empty set.
+- **Audit P1-9 — the benchmark-regression pipeline is exercised end to end.**
+  `BenchmarkRegressionDetector` was registered and invoked on run completion,
+  but nothing proved a genuinely slower run produces a persisted regression
+  that reaches the API. Now: a 60% p50 slowdown must be detected, persisted,
+  and visible on `GET /api/projects/{id}/benchmark-regressions`; a +2% run must
+  produce nothing (the false-positive direction); and re-delivery must not
+  duplicate. A fourth test pins that the fixture clears the analyzer's
+  small-n floor — without it the other three pass vacuously, which is exactly
+  how the first version of this suite went red in CI.
+
+## [0.28.154] — 2026-08-05
+
+### Added
+- **Audit P1-1/P1-2/P1-4 — three user-facing surfaces are now executed at the
+  HTTP layer.** `ReportAndShareHttpTests` (real Postgres, real routes): the
+  run report renders in **all four document formats** with the right content
+  type and verified magic bytes (`%PDF`, `PK` for DOCX) over a non-trivial
+  body — previously only the document *builders* were unit-tested, which is
+  how a DOCX 500 reached production once; an unknown format 400s instead of
+  500ing; `/infra` returns 200 for a real run (it reads `deployment.Config`
+  jsonb); the integrated project report renders; and the **share-link
+  lifecycle** is exercised end-to-end — create, fetch **unauthenticated** via
+  the public token, then revoke and prove the same token stops working. The
+  smoke suite previously only hit `/api/share/{unknown}`, whose 404 arm
+  short-circuits before the real query.
+- **Audit P1-11 — the dashboard bundle has a real budget.** `npm run
+  check:bundle-size` asserts a total and per-chunk budget over the built
+  output and fails CI when exceeded (vite's `chunkSizeWarningLimit` is only a
+  warning and has never failed a build). Current: 1.38 MB across 75 chunks
+  against a 1.80 MB budget; largest chunk 355 kB against 450 kB. It also
+  refuses to pass on an empty `dist/assets` (no vacuous green).
+
+- **Audit P1-6/P1-7/P1-8 — three unexercised enforcement surfaces.**
+  `RbacRouteMatrixTests` drives (role × route) against the real routes:
+  viewer and anonymous denied on six project writes, viewer still able to
+  read (guarding the over-tightening direction), admin-only routes denied to
+  viewer and operator, operator positively able to create a config, and
+  cross-project access denied for every role — the dashboard's `*.rbac`
+  tests mock the API client, so they only ever proved what the UI hides.
+  `SchedulerAndThrottleLoopTests` executes the scheduler loop body for the
+  first time (no test referenced `SchedulerService` at all): the
+  skip-and-advance guard creates ZERO dead queued rows when no agent is
+  online, first-fire seeding, disabled/future schedules untouched, and a
+  second tick that doesn't re-fire; plus the provisioning throttle's
+  capacity accounting, which had no test despite being the guard against
+  Azure's public-IP quota.
+
+- **Audit P1-12 — the matrix wizard finally has tests.** `FullStackPage` (the
+  feature whose end-to-end path was broken for the whole v0.28.129-147
+  campaign) had no test file at all. Its cell-fan-out logic is extracted to
+  `lib/matrix-cells.ts` and pinned by 11 tests: one cell per (testbed ×
+  proxy), fan-out across testbeds, **every cell of a matrix gets a distinct
+  label** (the v0.28.129 collision class), every cell marked `pending` so the
+  orchestrator provisions it, the runner pinned only when explicitly chosen,
+  and the matrix-vs-single-run boundary.
+
+### Fixed
+- **`npm test` no longer passes when it discovers zero tests.**
+  `--passWithNoTests` meant a config or glob mistake would exit green with
+  the frontend suite silently not running.
+
+---
+
+## [0.28.153] — 2026-08-05
+
+### Added
+- **Audit P0-5 — the prod canary finally exercises the MULTI-CELL matrix
+  flow.** Phases 1-3 all drive a single cell, so the concurrent path — where
+  the entire v0.28.129-147 campaign's bugs lived (VM-name collisions,
+  public-IP quota exhaustion, relaunch unique-name failures, cross-cell
+  contention) — had never been exercised automatically. New phase 4 launches
+  a 3-cell mixed-stack matrix and asserts the flow-level invariants: all 3
+  cells launch, each gets its OWN test config (the v0.28.129 shared-name
+  collision), and at least 2 of 3 reach `completed` — one cell lost to cloud
+  flake is tolerable, but a systemic break takes them all down together,
+  which is exactly what this catches. It provisions ~3 VMs, so it runs on a
+  new **weekly** cron (Sundays 08:17 UTC) rather than nightly, and its groups
+  register for the existing bulletproof teardown before launching.
+
+## [0.28.152] — 2026-08-05
+
+### Added
+- **Audit P0-8 — a measurement-accuracy benchmark. The product's core claim is
+  now validated against known ground truth for the first time.** Every other
+  test proves the code runs; this proves the code *measures*.
+  `scripts/measurement-accuracy.sh` shapes the loopback with `tc netem` to a
+  known delay + rate, runs the tester against a local networker-endpoint over
+  that path, and requires the reported RTT to land within ±8 ms of 2×the
+  imposed one-way delay and the reported throughput to land inside a band
+  around the imposed link cap — including an upper bound, because a figure
+  ABOVE the cap means the shaping was bypassed or the math is wrong. Results
+  are written to `benchmarks/baselines/measurement-accuracy.json` and uploaded
+  as a CI artifact. New `measurement-accuracy` job in CI (Rust-gated).
+  Methodology note: the two phases shape differently on purpose — latency
+  under `delay`, throughput under `rate` with NO added delay, because a single
+  TCP flow over a high-RTT path is bounded by the bandwidth-delay product
+  rather than the link rate (measuring under 50 ms RTT reads ~31 Mbps on a
+  100 Mbit link — correct TCP physics, not a measurement error). First green
+  run: **RTT 50.31 ms measured against 50.0 ms imposed — 0.31 ms error.**
+
+---
+
+## [0.28.150] — 2026-08-05
+
+### Fixed
+- **Windows Traefik never started when Caddy was installed alongside it.** Its
+  generated static config declared a vestigial `web: ":8091"` entrypoint
+  ("unused, kept for doc parity") — but Traefik binds every declared
+  entrypoint eagerly, and 8091 is Caddy's HTTP listener, so on any host with
+  both stacks Traefik exited at startup with `bind: Only one usage of each
+  socket address`. Every Windows matrix cell pairing the two hit this. The
+  entrypoint is removed; CI proved the failure and the fix.
+- **Windows Traefik claimed success while serving nothing** — caught by this
+  release's own new `windows-exec` job on its first run: nssm reports a
+  service "started" even when the process exits immediately, so the setup
+  printed "✓ Traefik serving" while both ports refused connections. The
+  setup now port-verifies (and dumps nssm status) before claiming success —
+  the same guard Caddy and Apache already got.
+
+### Added
+- **Audit P0-3 + P0-4 — the installer's proxy stacks are now EXECUTED in CI,
+  not grepped.** Two new jobs in Installer Tests:
+  - `stack-exec` (ubuntu): boots a real networker-endpoint, runs
+    `install.sh --setup-stack` for **all five Linux stacks** (nginx, caddy,
+    traefik, haproxy, apache) and asserts each proxy actually serves
+    `/health` and `/download` over both its HTTP and HTTPS listeners.
+  - `windows-exec` (windows): runs the orphaned `tests/test_install_ps1.ps1`
+    unit suite (161 assertions that were wired to no workflow), then
+    installs the Caddy and Traefik Windows stacks via `install.ps1 -Setup`
+    and asserts each serves through the proxy.
+  This is the direct fix for the class where Caddy and Apache shipped broken
+  for weeks while grep-tier tests stayed green — a config that never starts
+  is textually indistinguishable from one that does.
+
+---
+
+## [0.28.149] — 2026-08-05
+
+### Added
+- **Audit P0 wave 1 — the two highest-leverage test gaps closed + the
+  supply-chain hole plugged:**
+  - **P0-2:** `BackgroundLoopHealthTests` (real-Postgres fixture) seeds a
+    forcing row for every fast background loop (teardown candidate with real
+    jsonb config, stopped tester + queued run, stale running run, due
+    schedule), waits for each loop to tick, and requires `last_error == null`
+    across the board plus real domain outcomes (deployment `torn_down`, stale
+    run reaped, schedule advanced, wake attempted). The 2026-08-03 `jsonb ~~
+    jsonb` tick-wedge class is now permanently caught in CI.
+  - **P0-6:** `AutoWakeSweepTests` pin the v0.28.140 auto-wake state machine
+    end-to-end with a fake provisioner: wake claim (`starting`), rollback on
+    genuine CLI failure, CLI-less soft-success convergence, and the
+    no-work/running no-touch guards.
+  - **P0-9:** the Gist sync workflow now verifies the round-trip — it
+    re-downloads both raw installer files after the PATCH and requires
+    byte-for-byte equality with the repo copies (deployed Windows VMs fetch
+    install.ps1 from that Gist; a partial sync used to be silent).
+
+---
+
+## [0.28.148] — 2026-08-05
+
+### Removed
+- **The retired Rust control-plane crates are decommissioned:**
+  `crates/networker-dashboard`, `crates/networker-agent`, and
+  `crates/networker-common` are deleted (workspace trimmed to
+  networker-tester / networker-endpoint / networker-log). The C# control
+  plane has served production exclusively since the phase-2 cutover; the
+  soak criterion (14 consecutive clean nightly checks) was executed at day
+  13 by owner decision after prod additionally survived 19 deploys in five
+  days. Rollback remains available via the `legacy/rust` branch and
+  `rust-legacy-*` tag. The nightly soak check now tolerates purged systemd
+  units (not-found == fine; only active/activating fail).
+
+---
+
+## [0.28.147] — 2026-08-05
+
+### Fixed
+- **The wizards no longer offer Windows proxy combos the server rejects.**
+  HAProxy and Apache are gone from the Windows proxy pickers (both the
+  matrix testbed rows and the target deploy wizard, via the shared
+  constants): HAProxy ships no native Windows build and Apache has no
+  scriptable Windows binary source — the v0.28.141 launch gate refuses them
+  with the same reasons. UI and server lists are pinned against each other
+  from both sides (vitest + xUnit).
+
+---
+
+## [0.28.146] — 2026-08-04
+
+### Fixed
+- **The IIS em-dash is actually dead this time.** v0.28.141's ASCII cleanup
+  only covered a truncated span of `_iis_setup_powershell` (the span search
+  stopped at a PowerShell `}` inside the embedded heredoc), leaving the
+  original parse-killing em-dash at generated-script line 180 — retry-5's
+  logged PS output named it exactly. The full 8.7 KB function is now clean
+  (9 non-ASCII chars), and the bats guard — which previously passed
+  VACUOUSLY when generation failed — now asserts real generation (>100
+  lines) before ascii-purity.
+
+---
+
+## [0.28.145] — 2026-08-04
+
+### Added
+- **The IIS setup's PowerShell output is logged in the deploy log.** The
+  retry-4 in-guest autopsy showed W3SVC absent — the setup script errors
+  early on real cells — but install.sh only grepped its output for
+  REBOOT_NEEDED and then claimed "IIS configured" regardless, swallowing the
+  actual error. The output tail is now always logged.
+
+---
+
+## [0.28.144] — 2026-08-04
+
+### Added
+- **IIS verify failures now embed an in-guest diagnostic in the deploy log**
+  (W3SVC state, local port probes, listeners, firewall rules) — a failed
+  Windows deploy deletes its VM, so the log is the only forensic window;
+  three IIS rounds died externally-unreachable with the in-guest state
+  unknown.
+
+---
+
+## [0.28.143] — 2026-08-04
+
+### Fixed
+- **IIS post-setup verification tolerates cold-start.** IIS spins its app
+  pool up on the first request and the probe ran once, seconds after
+  configuration — a healthy IIS was false-failed while the identical script
+  verified fine minutes later on the diagnosis VM. The probe set now retries
+  for up to ~90 seconds before judging (HTTPS 8445 remains the fatal
+  criterion).
+
+---
+
+## [0.28.142] — 2026-08-04
+
+### Fixed
+- PSScriptAnalyzer warning in the caddy port-verify (unused `$probe`
+  assignment) — the v0.28.141 merge went past the red installer-lint gate
+  (admin-merge process slip, recorded); this restores a green board.
+
+---
+
+## [0.28.141] — 2026-08-04
+
+### Fixed
+- **Windows proxy stacks actually install now** (all diagnosed and re-proven
+  on a scratch Windows Server VM):
+  - **IIS**: an em-dash inside the generated setup PowerShell became a stray
+    quote under az run-command's encoding — the ENTIRE script failed to parse,
+    so IIS was never installed while the deploy printed "configured". The
+    generated script is now pure ASCII (bats-pinned), and verified serving.
+  - **Caddy**: four stacked defects — winget doesn't exist on Server SKUs
+    (guarded; official caddyserver.com download is now the Server path), the
+    GitHub "latest" asset shortcut never existed (404), the Windows Caddyfile
+    used one-line handle blocks Caddy v2 rejects (the v0.28.133 Linux bug's
+    twin), and caddy's stderr INFO logging became a terminating exception
+    under strict mode. All fixed; setup now validates the config and verifies
+    the port serves before claiming success.
+  - **nssm**: same winget guard (service wrapper used by caddy).
+- **windows·apache and windows·haproxy are rejected at launch with honest
+  reasons.** HAProxy has no native Windows build; Apache Lounge serves an
+  HTML decoy to every scripted download (verified from two networks) and no
+  other Windows httpd binary source exists. Cells for these combos fail
+  instantly with guidance instead of burning a VM + readiness timeout.
+
+---
+
+## [0.28.140] — 2026-08-04
+
+### Added
+- **Runners auto-wake for queued work.** The auto-shutdown policy is now
+  symmetric: idle runners still deallocate on schedule (never while any run
+  references them — the existing drain check), and a stopped/deallocated
+  runner with QUEUED runs assigned is now started automatically by the same
+  sweep (power_state `starting` → heartbeat reconcile completes the flip).
+  Before this, a matrix launched after the nightly shutdown just sat queued
+  until someone started the VM by hand. The queued-run watchdog also holds
+  its no-agent reaping while a wake is in flight (boot + agent connect takes
+  a few minutes).
+
+---
+
+## [0.28.139] — 2026-08-04
+
+### Fixed
+- **Matrix cell deadline budget corrected from live measurement.** The first
+  completed cells showed real attempt counts run ~1.7× runs×modes (payload
+  sizes multiply the throughput modes) and the slower proxies need >4.2s per
+  unit on a shared runner — HAProxy and Traefik hit the old deadline at 85%
+  and 78% complete while nginx/Caddy finished. Budget is now 8s per
+  (run × mode) with the ceiling raised 6h → 8h.
+
+---
+
+## [0.28.138] — 2026-08-03
+
+### Fixed
+- **In-flight runs survive control-plane restarts (deploys).** The agent
+  socket's disconnect handler eagerly failed every running/queued run owned
+  by the disconnecting agent — but a disconnect happens on every deploy and
+  on transient blips, while the runner's tester processes keep executing and
+  the agent reconnects within seconds. Four matrix cells ~1000 attempts deep
+  were destroyed by exactly this when a deploy restarted the control plane.
+  The handler now only marks the agent offline; dead-agent reaping stays with
+  the watchdog (120s heartbeat silence + still absent from the registry).
+- **Provisioning throttle default lowered 6 → 5.** Stray public IPs from
+  reaper-pending failed cells are invisible to the run-linked capacity count;
+  the slot of headroom prevents PublicIpAddress-quota deploy failures (three
+  cells lost to that on 08-03). `NETWORKER_MAX_CONCURRENT_PROVISIONS` still
+  overrides.
+
+---
+
+## [0.28.137] — 2026-08-03
+
+### Fixed
+- **A broken IIS no longer takes down non-IIS Windows cells.** The Windows
+  endpoint deploy always installs IIS (the default Windows stack, like nginx
+  on Linux), and v0.28.135's verify made its failure fatal — which killed
+  every Windows matrix cell at the IIS step, including caddy/traefik/haproxy
+  cells that never requested IIS. Fatality is now gated on the endpoint's
+  requested stacks: IIS-requested (or no stacks specified) → fatal;
+  otherwise a warning and the requested stack's setup proceeds.
+
+---
+
+## [0.28.136] — 2026-08-03
+
+### Fixed
+- **Matrix cell deadlines derive from the workload.** Every comparison-group
+  cell got a hardcoded 900-second `max_duration_secs` regardless of workload —
+  a full workload (runs=100 × 26 modes) needs hours, so every cell that
+  reached the runner was killed at ~16 minutes ("exceeded the overall run
+  deadline"). Cells now get `runs × modes × 4s + 10min`, floored at the old
+  900s and capped at 6 hours; malformed workloads keep the old default.
+
+---
+
+## [0.28.135] — 2026-08-03
+
+### Fixed
+- **IIS verification actually runs now.** `_azure_win_setup_iis` takes ip/fqdn
+  as optional params and the Windows endpoint deploy passed neither — which
+  silently skipped the already-responding pre-check, the FQDN SNI binding AND
+  the entire post-setup port verification, making "IIS configured" an
+  unverified claim (the v0.28.133 hard-verify never executed; the matrix IIS
+  cell failed readiness downstream). The call site now passes both, and the
+  HTTPS port 8445 — the one the readiness gate and runner actually probe — is
+  fatal when unresponsive.
+
+---
+
+## [0.28.134] — 2026-08-03
+
+### Fixed
+- **Queued-run watchdog no longer kills runs that are waiting for a busy
+  runner or just finished provisioning.** Two flaws bit the same matrix
+  relaunch: (1) the "no runner claimed within 5 minutes" reaper never checked
+  agent liveness despite its own error text — runs queued behind a CONNECTED
+  but busy runner were killed at 5 minutes, starving any launch wider than
+  the runner's concurrency; it now only reaps when the registry has no online
+  agent at all. (2) Its age basis was `created_at`, but a promoted matrix
+  cell re-queues AFTER >5 minutes of provisioning (and promotion rewrites the
+  config kind away from `pending`, losing that exclusion) — cells with slower
+  proxy installs were reaped on the next tick before any agent could claim
+  them. The orchestrator now stamps `last_heartbeat` at re-queue and the
+  watchdog measures queued age from `COALESCE(last_heartbeat, created_at)` —
+  time since the run became claimable.
+
+---
+
+## [0.28.133] — 2026-08-03
+
+### Fixed
+- **Caddy stack had never started: invalid Caddyfile syntax.** The generated
+  config used one-line `handle /x* { reverse_proxy … }` blocks; Caddy v2
+  rejects content after `{` on the same line, so `networker-caddy` failed at
+  config-adapt on every install since the stack existed (the bats tests only
+  grep the config text). Rewritten multi-line + `caddy validate` gate before
+  the service starts.
+- **Apache stack died on port 80 on endpoint VMs.** Stock apache2 ships
+  `Listen 80` + a default site; endpoint VMs already run nginx (installed
+  first, package-default server on 80), so apache2 failed "Address already in
+  use". The apt path now disables the default site and comments out
+  `Listen 80/443` — networker apache serves only 8094/8457.
+- **IIS matrix cells: wrong probe port + silent setup failure.** (1) The
+  orchestrator's proxy-port table said IIS serves 443 (legacy Rust constant),
+  but the Windows deploy binds HTTPS on 8445 — readiness probed 443 forever.
+  Now 8445. (2) `_azure_win_setup_iis`'s run-command was `|| true` with
+  warn-only verification — an Azure run-command Conflict (one at a time per
+  VM) left VMs with no IIS at all while the deploy "completed". Now: Conflict
+  retried once, and total verification failure fails the deploy.
+- **IP accounting: failed cells count toward provisioning capacity until the
+  reaper can sweep them.** Failed proxy-setups leave a full VM+IP behind with
+  no registered hosts; releasing their capacity slot immediately let the
+  rolling window overshoot the public-IP quota again (2 late windows cells
+  died `PublicIPCountLimitReached` on the 08-03 relaunch). Failed/cancelled
+  deployments now hold their slot for ~12 minutes (one reaper tick + margin)
+  before being marked `torn_down`.
+
+---
+
+## [0.28.132] — 2026-08-03
+
+### Fixed
+- **Hotfix: the v0.28.131 teardown phase threw on Postgres every tick.** Its
+  endpoint-reuse defer did a server-side `Contains` on `endpoint_ref`, which
+  is a JSONB column — Postgres has no `jsonb ~~ jsonb` (LIKE) operator, so the
+  query failed with 42883, teardown never ran, stale deployments kept counting
+  toward the provisioning-capacity throttle, and every queued auto-provision
+  starved at "capacity". Active runs' endpoint refs are now fetched once and
+  matched client-side (they're bounded by the throttle + queue). Caught live
+  on the first post-deploy matrix relaunch; prod unwedged by hand-marking the
+  8 stale deployments `torn_down`.
+
+---
+
+## [0.28.131] — 2026-08-03
+
+### Fixed
+- **Comparison-matrix cells on Azure/AWS/LAN Linux now actually get their
+  proxy stack.** install.sh's remote path supported only nginx — for
+  caddy/apache/haproxy/traefik it printed "not yet supported" and continued,
+  so the deployment "succeeded" with the wrong proxy and the readiness gate
+  probed the requested stack's port for 6 minutes against nothing. New
+  `--setup-stack` mode runs the existing local `step_setup_<stack>` functions
+  remotely (installer piped over SSH, same mechanism as the reference-API
+  languages), and an unsupported/failed stack install now FAILS the deploy
+  instead of warning.
+- **Firewall openings for the stack comparison ports.** Azure NSG / AWS SG /
+  GCP firewall rules never included TCP 8091-8094 + 8454-8457 (and UDP 8454
+  for Caddy h3) — even a correctly installed proxy was unreachable from the
+  readiness probe and the runner. This is why the Windows proxy cells failed
+  too (their proxies installed fine).
+- **Auto-provisioned cell VMs are torn down when their run finishes.** Nothing
+  released matrix-cell VMs — ten cells leaked ten B2s VMs (and their public
+  IPs) per launch. The orchestrator now tears down the cloud VM of every
+  run-linked deployment on run completion/failure, keeping the deployment row
+  (status `torn_down`) so failed provisions keep their diagnostic log.
+- **Provisioning throttled to the public-IP quota.** Azure's default quota is
+  10 public IPs per region; a 10-cell concurrent matrix blew through it
+  (`PublicIPCountLimitReached` on cells 9-10). Auto-provision kicks are now
+  capped at 6 in flight (override: `NETWORKER_MAX_CONCURRENT_PROVISIONS`);
+  queued cells start as finished cells' teardowns free their IPs.
+- **The orphan reaper can finally see cell VMs.** Its prefix allow-list
+  (`tester-`, `ab-`, `nwk-ep-`) never covered auto-provisioned cells and it
+  never swept the endpoint resource group — leaked cell resources were
+  invisible to it. Now: `nwk-a-`/`nwk-auto-` prefixes added, every Azure
+  subscription scope also sweeps `networker-rg-endpoint`, and live deployment
+  rows guard their VM's children by name (without that guard the sweep would
+  have identified the standing wizard target as an orphan).
+
+---
+
 ## [0.28.130] — 2026-08-01
 
 ### Fixed

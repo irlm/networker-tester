@@ -70,7 +70,7 @@ public sealed class RunDispatcherTesterFkTests
         return sp;
     }
 
-    private static void CreateMinimalSchema(Microsoft.Data.Sqlite.SqliteConnection conn)
+    internal static void CreateMinimalSchema(Microsoft.Data.Sqlite.SqliteConnection conn)
     {
         Exec(conn, "PRAGMA foreign_keys = ON;");
         Exec(conn, """
@@ -213,7 +213,7 @@ public sealed class RunDispatcherTesterFkTests
             """);
     }
 
-    private static void Exec(Microsoft.Data.Sqlite.SqliteConnection conn, string sql)
+    internal static void Exec(Microsoft.Data.Sqlite.SqliteConnection conn, string sql)
     {
         using var cmd = conn.CreateCommand();
         cmd.CommandText = sql;
@@ -420,9 +420,9 @@ public sealed class RunDispatcherTesterFkTests
     // ── 3. Disconnect orphan-fail keys on worker_id ──────────────────────────
 
     [Fact]
-    public async Task Disconnect_fails_runs_by_worker_id_not_tester_id()
+    public async Task Disconnect_leaves_runs_alive_for_the_watchdog()
     {
-        using var sp = BuildHost(nameof(Disconnect_fails_runs_by_worker_id_not_tester_id));
+        using var sp = BuildHost(nameof(Disconnect_leaves_runs_alive_for_the_watchdog));
         var db = Db(sp);
 
         SeedProject(db);
@@ -471,8 +471,13 @@ public sealed class RunDispatcherTesterFkTests
         var owned = await db.TestRuns.AsNoTracking().FirstAsync(r => r.Id == ownedRun);
         var other = await db.TestRuns.AsNoTracking().FirstAsync(r => r.Id == otherWorkersRun);
 
-        Assert.Equal("failed", owned.Status);
-        Assert.Equal("running", other.Status); // untouched — different worker
+        // A disconnect happens on EVERY control-plane restart (deploys) and on
+        // transient blips while the tester keeps executing — runs must survive
+        // and be reaped only by the watchdog after real heartbeat silence
+        // (2026-08-03: an eager fail-on-disconnect destroyed four in-flight
+        // matrix cells when a deploy restarted the control plane).
+        Assert.Equal("running", owned.Status);
+        Assert.Equal("running", other.Status);
     }
 
     // ── 4. Watchdog maps run→agent via worker_id ─────────────────────────────

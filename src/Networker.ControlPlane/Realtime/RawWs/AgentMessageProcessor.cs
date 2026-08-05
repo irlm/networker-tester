@@ -266,23 +266,20 @@ public sealed class AgentMessageProcessor
             await _db.SaveChangesAsync(ct);
         }
 
-        // Fail orphaned runs (running/queued) owned by this agent. Ownership is
-        // keyed on worker_id (agent_id as text) — the reliable, FK-free key —
-        // NOT tester_id (a project_tester FK). Set-based UPDATE.
-        var workerId = agentId.ToString();
-        var affected = await _db.TestRuns
-            .Where(r => r.WorkerId == workerId
-                && (r.Status == "running" || r.Status == "queued"))
-            .ExecuteUpdateAsync(s => s
-                .SetProperty(r => r.Status, "failed")
-                .SetProperty(r => r.ErrorMessage, "Agent disconnected during execution")
-                .SetProperty(r => r.FinishedAt, DateTime.UtcNow), ct);
-
+        // Do NOT fail this agent's runs here. A WS disconnect happens on every
+        // control-plane restart (i.e. every deploy) and on transient network
+        // blips — while the agent's tester processes keep executing and the
+        // agent reconnects seconds later. Eagerly failing runs here destroyed
+        // four in-flight matrix cells (~1000 attempts each) when a deploy
+        // restarted the control plane (2026-08-03). Dead-agent reaping belongs
+        // to the WatchdogService, which requires 120s of heartbeat silence AND
+        // the agent still absent from the registry — a reconnect within that
+        // window keeps the runs alive, exactly as designed.
         _bus.Publish(new AgentStatus(agentId, "offline", null));
 
         _logger.LogInformation(
-            "Agent disconnected: {AgentId}; failed {Count} orphaned run(s)",
-            agentId, affected);
+            "Agent disconnected: {AgentId}; in-flight runs left to the watchdog (reconnect grace)",
+            agentId);
     }
 
     // ── Inbound AgentMessage dispatch ────────────────────────────────────────
