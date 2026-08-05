@@ -238,7 +238,7 @@ Usage: install.sh [OPTIONS] [tester|endpoint|dashboard|both]
 
   tester      Install networker-tester (the diagnostic CLI client)
   endpoint    Install networker-endpoint (the target test server)
-  dashboard   Install networker-dashboard (control plane + web UI + agent)
+  dashboard   Install the control plane (C# API + web UI + local agent)
   both        Install tester + endpoint  [default]
 
 Install location (interactive; can also be set via flags):
@@ -297,6 +297,10 @@ Benchmark server (used by orchestrator):
   --benchmark-port N       Override the benchmark server port (implies app mode, no TLS).
                            Used by the deploy path to run a language server on 8085
                            alongside networker-endpoint; the proxy's /api routes to it.
+  --setup-stack STACK      Set up ONE HTTP stack (nginx, caddy, apache, haproxy, traefik)
+                           on this Linux host alongside networker-endpoint, then exit.
+                           Non-interactive; used by the deploy path over SSH to install
+                           comparison-matrix proxies on remote endpoint VMs.
 
   -h, --help               Show this help message
 
@@ -327,7 +331,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.130"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.161"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -439,6 +443,7 @@ CONFIG_FILE_PATH=""
 
 # ── Benchmark server mode ────────────────────────────────────────────────
 BENCHMARK_SERVER_LANG=""        # language to deploy as benchmark server (--benchmark-server)
+SETUP_STACK=""                  # single HTTP stack to set up locally, then exit (--setup-stack)
 BENCHMARK_PROXY=""              # reverse proxy to deploy (--benchmark-proxy)
 BENCHMARK_PROXY_SWAP=""         # swap to this proxy (--benchmark-proxy-swap)
 BENCHMARK_PORT_OVERRIDE=""      # explicit bench port (--benchmark-port) — set when a
@@ -583,6 +588,10 @@ parse_args() {
                 AUTO_YES=1 ;;
             --benchmark-port)
                 shift; BENCHMARK_PORT_OVERRIDE="${1:-}" ;;
+            # Single-stack setup mode (used by the deploy path over SSH)
+            --setup-stack)
+                shift; SETUP_STACK="${1:-}"
+                AUTO_YES=1 ;;
             # Deploy config
             --deploy)
                 shift; DEPLOY_CONFIG_PATH="${1:-}"
@@ -946,7 +955,7 @@ display_plan() {
     # ── Dashboard ─────────────────────────────────────────────────────────────
     if [[ $DO_INSTALL_DASHBOARD -eq 1 ]]; then
         echo ""
-        printf "    ${BOLD}networker-dashboard:${RESET}  Local install\n"
+        printf "    ${BOLD}control plane:${RESET}        Local install\n"
         printf "    %-22s %s\n" "PostgreSQL:"  "auto-install + configure"
         printf "    %-22s %s\n" "Frontend:"    "Node.js build → /opt/networker/dashboard"
         printf "    %-22s %s\n" "Service:"     "systemd (networker-dashboard.service)"
@@ -1378,7 +1387,7 @@ UNIT
 
 sudo systemctl daemon-reload
 sudo systemctl enable networker-endpoint
-sudo systemctl start networker-endpoint
+sudo systemctl start networker-endpoint </dev/null >/dev/null 2>&1
 
 if command -v iptables &>/dev/null; then
     sudo iptables -t nat -C PREROUTING -p tcp --dport 80  -j REDIRECT --to-port 8080 2>/dev/null || \
@@ -2569,7 +2578,7 @@ prompt_component_selection() {
         3) COMPONENT="endpoint"; DO_INSTALL_TESTER=0; DO_INSTALL_ENDPOINT=1
            print_ok "Installing: networker-endpoint only" ;;
         4) COMPONENT="dashboard"; DO_INSTALL_TESTER=0; DO_INSTALL_ENDPOINT=0; DO_INSTALL_DASHBOARD=1
-           print_ok "Installing: networker-dashboard (control plane + web UI)" ;;
+           print_ok "Installing: control plane (C# API + web UI)" ;;
         *) COMPONENT="both";     DO_INSTALL_TESTER=1; DO_INSTALL_ENDPOINT=1
            print_ok "Installing: networker-tester + networker-endpoint" ;;
     esac
@@ -2891,6 +2900,18 @@ step_download_release() {
         # One more attempt after the brief pause.
         if mv -f "${tmp_dir}/${binary}" "${INSTALL_DIR}/${binary}" 2>/dev/null; then
             mv_ok=1
+        elif cmp -s "${tmp_dir}/${binary}" "${INSTALL_DIR}/${binary}" 2>/dev/null; then
+            # The version-match branch above only runs when the extracted binary
+            # can report --version. When it cannot (a cross-arch build, or a
+            # stub), a loser of the race used to return 1 even though a sibling
+            # had already installed the very same bytes — and the caller then
+            # "fell back" to a source compile for nothing. Byte equality is the
+            # exact test: identical content means the concurrent writer
+            # installed this same release, so reusing it is correct. A stale or
+            # unrelated binary differs and still fails, as it should.
+            print_ok "$binary already installed by a concurrent run (identical bytes) → ${INSTALL_DIR}/${binary}"
+            rm -rf "$tmp_dir"
+            return 0
         fi
     fi
     rm -rf "$tmp_dir"
@@ -3319,7 +3340,7 @@ check_for_updates() {
     local latest="${NETWORKER_VERSION#v}"
     local outdated=()
 
-    for binary in networker-tester networker-endpoint networker-dashboard networker-agent; do
+    for binary in networker-tester networker-endpoint networker-agent; do
         local bin_path
         bin_path="$(command -v "$binary" 2>/dev/null || echo "")"
         [[ -z "$bin_path" || ! -x "$bin_path" ]] && continue
@@ -4140,6 +4161,170 @@ ENDJSON
     echo ""
 }
 
+# ── Self-hosted control plane (C#) ──────────────────────────────────────────
+#
+# The `dashboard` component installs the CONTROL PLANE. Until v0.28.148 that
+# meant the Rust networker-dashboard + networker-agent binaries; the Rust
+# crates were decommissioned then, and their release assets went with them, so
+# every path below had to be repointed at the C# artefacts the release
+# actually ships:
+#
+#   networker-controlplane-linux-x64.tar.gz  — self-contained .NET publish DIR
+#                                              (no runtime needed on the host)
+#   networker-agent-cs-linux-x64.tar.gz      — single-file `networker-agent`
+#   dashboard-frontend.tar.gz                — prebuilt React bundle
+#
+# The control-plane tarball is a directory, not a bare binary, so it cannot go
+# through step_download_release (which assumes one executable named after the
+# component). These helpers exist for that shape.
+
+CONTROLPLANE_DIR="${CONTROLPLANE_DIR:-/opt/networker-controlplane}"
+CONTROLPLANE_PORT="${CONTROLPLANE_PORT:-5030}"
+
+# _fetch_release_asset <archive-filename> <dest-dir>
+# Downloads one named release asset. gh CLI when authenticated (works for
+# `latest` and for private repos), otherwise curl. Returns non-zero on failure
+# so callers can decide whether that is fatal.
+_fetch_release_asset() {
+    local archive="$1" dest="$2"
+    local ver="${NETWORKER_VERSION:-latest}"
+
+    mkdir -p "$dest"
+
+    if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
+        if gh release download --repo "$REPO_GH" "$ver" \
+                --pattern "$archive" --dir "$dest" --clobber 2>/dev/null; then
+            return 0
+        fi
+    fi
+
+    if command -v curl &>/dev/null; then
+        local url
+        if [[ "$ver" == "latest" ]]; then
+            url="https://github.com/${REPO_GH}/releases/latest/download/${archive}"
+        else
+            url="https://github.com/${REPO_GH}/releases/download/${ver}/${archive}"
+        fi
+        print_dim "Downloading from ${url}"
+        if curl -fsSL --connect-timeout 15 -o "${dest}/${archive}" "$url" 2>/dev/null; then
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+# Install the self-contained C# control plane into CONTROLPLANE_DIR.
+step_install_controlplane() {
+    next_step "Install control plane (C#)"
+
+    local archive="networker-controlplane-linux-x64.tar.gz"
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+
+    print_info "Fetching ${archive} (${NETWORKER_VERSION:-latest})…"
+    if ! _fetch_release_asset "$archive" "$tmp_dir"; then
+        rm -rf "$tmp_dir"
+        # No source fallback exists on purpose: the Rust control plane was
+        # removed in v0.28.148 and `cargo install networker-dashboard` would
+        # fail with a confusing "crate not found" instead of this message.
+        print_err "Could not download ${archive}."
+        print_dim  "  The control plane ships only as a prebuilt release asset."
+        print_dim  "  Check network access to github.com, or pin a version with"
+        print_dim  "  NETWORKER_VERSION=vX.Y.Z (releases before v0.28.148 are not supported)."
+        return 1
+    fi
+
+    # Keep the previous build for a manual rollback, then replace atomically
+    # enough for a service that is stopped around the swap.
+    if systemctl is-active networker-dashboard &>/dev/null; then
+        sudo systemctl stop networker-dashboard
+    fi
+    sudo rm -rf "${CONTROLPLANE_DIR}.prevbuild"
+    if [[ -d "$CONTROLPLANE_DIR" ]]; then
+        sudo mv "$CONTROLPLANE_DIR" "${CONTROLPLANE_DIR}.prevbuild"
+    fi
+    sudo mkdir -p "$CONTROLPLANE_DIR"
+    sudo tar xzf "${tmp_dir}/${archive}" -C "$CONTROLPLANE_DIR"
+    rm -rf "$tmp_dir"
+
+    if [[ ! -f "${CONTROLPLANE_DIR}/Networker.ControlPlane" ]]; then
+        print_err "Extracted archive has no Networker.ControlPlane executable."
+        return 1
+    fi
+    sudo chmod +x "${CONTROLPLANE_DIR}/Networker.ControlPlane"
+    # DeployRunner shells out to install.sh for testbed provisioning; the
+    # tarball carries it, and INSTALL_SH_PATH (written below) pins resolution.
+    [[ -f "${CONTROLPLANE_DIR}/install.sh" ]] && sudo chmod 755 "${CONTROLPLANE_DIR}/install.sh"
+
+    print_ok "Control plane installed → ${CONTROLPLANE_DIR}"
+}
+
+# Install the C# agent binary (drop-in replacement for the retired Rust one).
+step_install_agent_cs() {
+    next_step "Install agent (C#)"
+
+    local archive="networker-agent-cs-linux-x64.tar.gz"
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+
+    print_info "Fetching ${archive} (${NETWORKER_VERSION:-latest})…"
+    if ! _fetch_release_asset "$archive" "$tmp_dir"; then
+        rm -rf "$tmp_dir"
+        print_warn "Could not download ${archive} — local agent not installed."
+        return 1
+    fi
+
+    tar xzf "${tmp_dir}/${archive}" -C "$tmp_dir"
+    if [[ ! -f "${tmp_dir}/networker-agent" ]]; then
+        rm -rf "$tmp_dir"
+        print_warn "Archive did not contain a networker-agent binary."
+        return 1
+    fi
+
+    mkdir -p "$INSTALL_DIR"
+    chmod +x "${tmp_dir}/networker-agent"
+    mv -f "${tmp_dir}/networker-agent" "${INSTALL_DIR}/networker-agent"
+    rm -rf "$tmp_dir"
+
+    print_ok "networker-agent installed → ${INSTALL_DIR}/networker-agent"
+}
+
+# Install the prebuilt frontend bundle. Falls back to a source build only if
+# the asset is unavailable — the release bundle needs no Node.js on the host.
+step_install_frontend_release() {
+    next_step "Install dashboard frontend"
+
+    local archive="dashboard-frontend.tar.gz"
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+
+    print_info "Fetching ${archive} (${NETWORKER_VERSION:-latest})…"
+    if ! _fetch_release_asset "$archive" "$tmp_dir"; then
+        rm -rf "$tmp_dir"
+        print_warn "Prebuilt frontend unavailable — falling back to a source build."
+        step_build_frontend
+        return $?
+    fi
+
+    sudo mkdir -p /opt/networker/dashboard
+    sudo rm -rf /opt/networker/dashboard/*
+    sudo tar xzf "${tmp_dir}/${archive}" -C /opt/networker/dashboard
+    rm -rf "$tmp_dir"
+    # macOS-authored tarballs can carry AppleDouble sidecars; nginx would serve
+    # them as 200s of garbage.
+    sudo find /opt/networker/dashboard -name '._*' -delete 2>/dev/null || true
+    sudo chmod -R a+rX /opt/networker/dashboard
+
+    if [[ ! -f /opt/networker/dashboard/index.html ]]; then
+        print_warn "Frontend bundle has no index.html — falling back to a source build."
+        step_build_frontend
+        return $?
+    fi
+
+    print_ok "Frontend installed → /opt/networker/dashboard"
+}
+
 # Build the React frontend and copy to /opt/networker/dashboard.
 step_build_frontend() {
     next_step "Build dashboard frontend"
@@ -4192,7 +4377,7 @@ step_write_dashboard_env() {
         DASHBOARD_TEMP_PASSWORD="$admin_pw"
     fi
 
-    local dashboard_port="${DASHBOARD_PORT:-3000}"
+    local dashboard_port="${DASHBOARD_PORT:-$CONTROLPLANE_PORT}"
     local jwt_secret
     jwt_secret="$(head -c 32 /dev/urandom | base64 | tr -d '=/+' | head -c 32)"
 
@@ -4200,15 +4385,36 @@ step_write_dashboard_env() {
     credential_key="$(head -c 32 /dev/urandom | xxd -p | tr -d '\n' | head -c 64)"
 
     local db_pw="${DASHBOARD_DB_PASSWORD:-networker}"
+    local public_url="${DASHBOARD_PUBLIC_URL:-}"
+    if [[ -z "$public_url" ]]; then
+        if [[ -n "${DASHBOARD_FQDN:-}" ]]; then
+            public_url="https://${DASHBOARD_FQDN}"
+        else
+            public_url="http://localhost"
+        fi
+    fi
+
+    # NOTE (v0.28.148 decommission follow-up): these names and formats are the
+    # C# control plane's contract, NOT the retired Rust dashboard's.
+    #   * DASHBOARD_DB_URL_NPGSQL — Npgsql KEYWORD syntax, not a postgres:// URL.
+    #     Npgsql does not parse URI form; the old value silently fell through to
+    #     the built-in default and connected to the wrong database.
+    #   * ASPNETCORE_URLS replaces DASHBOARD_PORT/DASHBOARD_BIND_ADDR.
+    #   * DASHBOARD_STATIC_DIR is gone — the control plane serves no static
+    #     files at all; nginx serves /opt/networker/dashboard directly.
+    # DASHBOARD_PORT is still written because the nginx template reads it to
+    # decide where to proxy.
     sudo tee /etc/networker-dashboard.env > /dev/null <<ENVFILE
-DASHBOARD_DB_URL=postgres://networker:${db_pw}@127.0.0.1:5432/networker_dashboard
+DASHBOARD_DB_URL_NPGSQL=Host=127.0.0.1;Port=5432;Database=networker_dashboard;Username=networker;Password=${db_pw}
 DASHBOARD_ADMIN_PASSWORD=${admin_pw}
+DASHBOARD_ADMIN_EMAIL=${DASHBOARD_ADMIN_EMAIL:-admin@localhost}
 DASHBOARD_JWT_SECRET=${jwt_secret}
 DASHBOARD_CREDENTIAL_KEY=${credential_key}
+DASHBOARD_PUBLIC_URL=${public_url}
+ASPNETCORE_URLS=http://127.0.0.1:${dashboard_port}
+ASPNETCORE_ENVIRONMENT=Production
 DASHBOARD_PORT=${dashboard_port}
-DASHBOARD_BIND_ADDR=127.0.0.1
-DASHBOARD_STATIC_DIR=/opt/networker/dashboard
-INSTALL_SH_PATH=/opt/networker/install.sh
+INSTALL_SH_PATH=${CONTROLPLANE_DIR}/install.sh
 ENVFILE
 
     sudo chmod 600 /etc/networker-dashboard.env
@@ -4233,7 +4439,7 @@ step_setup_dashboard_service() {
     fi
     if [[ "$SYS_OS" != "Linux" ]]; then
         print_info "Systemd service setup is Linux-only — skipping."
-        print_dim  "  On macOS: run networker-dashboard manually."
+        print_dim  "  On macOS: run ${CONTROLPLANE_DIR}/Networker.ControlPlane manually."
         return 0
     fi
     if ! command -v systemctl &>/dev/null; then
@@ -4241,20 +4447,13 @@ step_setup_dashboard_service() {
         return 0
     fi
 
-    # Locate the binary
-    local binary_path="${INSTALL_DIR}/networker-dashboard"
+    # The control plane is a self-contained .NET publish DIRECTORY — it runs
+    # in place from CONTROLPLANE_DIR and must not be copied to /usr/local/bin
+    # as a lone file (it would leave its runtime behind and fail to start).
+    local binary_path="${CONTROLPLANE_DIR}/Networker.ControlPlane"
     if [[ ! -x "$binary_path" ]]; then
-        binary_path="/usr/local/bin/networker-dashboard"
-    fi
-
-    # Copy to /usr/local/bin
-    if [[ "$binary_path" != "/usr/local/bin/networker-dashboard" && -x "$binary_path" ]]; then
-        if systemctl is-active networker-dashboard &>/dev/null; then
-            sudo systemctl stop networker-dashboard
-        fi
-        sudo cp "$binary_path" /usr/local/bin/networker-dashboard
-        sudo chmod 755 /usr/local/bin/networker-dashboard
-        binary_path="/usr/local/bin/networker-dashboard"
+        print_err "Control plane not found at ${binary_path} — cannot create the service."
+        return 1
     fi
 
     # Also install the agent binary
@@ -4273,19 +4472,27 @@ step_setup_dashboard_service() {
 
     sudo useradd --system --no-create-home --shell /usr/sbin/nologin networker 2>/dev/null || true
 
+    # User= must be a REAL login user with a home directory, not the `networker`
+    # nologin account: the provisioner reads ~/.ssh/id_rsa.pub and writes
+    # ~/.ssh/*.pem when it creates testbeds (prod audit F3/F4). WorkingDirectory
+    # is the publish dir so the app finds its own content files. PATH carries
+    # /usr/local/bin (cloud CLIs, networker-tester) and /snap/bin (snap gcloud),
+    # neither of which is in systemd's default PATH (F12).
     sudo tee /etc/systemd/system/networker-dashboard.service > /dev/null <<UNIT
 [Unit]
-Description=Networker Dashboard
-After=network.target postgresql.service
+Description=Networker control plane
+After=network-online.target postgresql.service
+Wants=network-online.target
 
 [Service]
+Type=simple
 User=$(whoami)
-WorkingDirectory=/tmp
+WorkingDirectory=${CONTROLPLANE_DIR}
 EnvironmentFile=/etc/networker-dashboard.env
 ExecStart=${binary_path}
-Restart=always
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
+Restart=on-failure
 RestartSec=5
-Environment=RUST_LOG=info
 
 [Install]
 WantedBy=multi-user.target
@@ -4298,7 +4505,7 @@ UNIT
     # Open firewall for dashboard port
     local dashboard_port
     dashboard_port="$(grep DASHBOARD_PORT /etc/networker-dashboard.env 2>/dev/null | cut -d= -f2)"
-    dashboard_port="${dashboard_port:-3000}"
+    dashboard_port="${dashboard_port:-$CONTROLPLANE_PORT}"
 
     if command -v ufw &>/dev/null; then
         sudo ufw allow "$dashboard_port"/tcp 2>/dev/null || true
@@ -4343,13 +4550,13 @@ step_setup_nginx_proxy() {
     fi
 
     if ! command -v nginx &>/dev/null; then
-        print_warn "nginx installation failed — dashboard available on port 3000 only."
+        print_warn "nginx installation failed — control plane reachable on port ${CONTROLPLANE_PORT} only."
         return 0
     fi
 
     local dashboard_port
     dashboard_port="$(grep DASHBOARD_PORT /etc/networker-dashboard.env 2>/dev/null | cut -d= -f2)"
-    dashboard_port="${dashboard_port:-3000}"
+    dashboard_port="${dashboard_port:-$CONTROLPLANE_PORT}"
     local server_name="${DASHBOARD_FQDN:-_}"
 
     # Write reverse proxy config
@@ -4364,12 +4571,22 @@ server {
         default_type "text/plain";
     }
 
+    # The C# control plane serves NO static files (the Rust one did), so nginx
+    # owns the SPA bundle and proxies only the API and WebSocket paths.
+    # try_files ... /index.html is what makes client-side routes survive a
+    # hard refresh — without it every deep link 404s.
     location / {
+        root /opt/networker/dashboard;
+        try_files \$uri \$uri/ /index.html;
+    }
+
+    location /api/ {
         proxy_pass http://127.0.0.1:${dashboard_port};
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 300;
     }
 
     location /ws/ {
@@ -4461,7 +4678,7 @@ step_setup_letsencrypt() {
     local server_name="${DASHBOARD_FQDN:-_}"
     local dashboard_port
     dashboard_port="$(grep DASHBOARD_PORT /etc/networker-dashboard.env 2>/dev/null | cut -d= -f2)"
-    dashboard_port="${dashboard_port:-3000}"
+    dashboard_port="${dashboard_port:-$CONTROLPLANE_PORT}"
 
     # Add SSL server block
     sudo tee -a /etc/nginx/conf.d/networker-dashboard.conf > /dev/null <<SSLCONF
@@ -4474,12 +4691,20 @@ server {
     ssl_certificate_key /etc/nginx/ssl/dashboard.key;
     ssl_protocols TLSv1.2 TLSv1.3;
 
+    # Same split as the :80 block — nginx serves the SPA, the control
+    # plane gets only /api and /ws.
     location / {
+        root /opt/networker/dashboard;
+        try_files \$uri \$uri/ /index.html;
+    }
+
+    location /api/ {
         proxy_pass http://127.0.0.1:${dashboard_port};
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 300;
     }
 
     location /ws/ {
@@ -4837,31 +5062,99 @@ step_setup_caddy() {
     }
 }
 
+# NOTE: Caddy v2 REJECTS content after '{' on the same line — the previous
+# one-line `handle /x* { reverse_proxy … }` form failed `caddy validate` with
+# "Unexpected next token after '{'", so this service had never started
+# (2026-08-03, matrix cell diagnosis). Blocks must be multi-line.
 :8091 {
     root * /var/www/networker
     file_server
-    handle /page* { reverse_proxy 127.0.0.1:8080 }
-    handle /asset* { reverse_proxy 127.0.0.1:8080 }
-    handle /ws* { reverse_proxy 127.0.0.1:8080 }
-    handle /download* { reverse_proxy 127.0.0.1:8080 }
-    handle /upload* { reverse_proxy 127.0.0.1:8080 }
-    handle /info { reverse_proxy 127.0.0.1:8080 }
-    handle /api* { reverse_proxy 127.0.0.1:8080 }
-    handle /health { reverse_proxy 127.0.0.1:8080 }
+    handle /page* {
+        reverse_proxy 127.0.0.1:8080
+    }
+    handle /asset* {
+        reverse_proxy 127.0.0.1:8080
+    }
+    handle /ws* {
+        reverse_proxy 127.0.0.1:8080
+    }
+    handle /download* {
+        reverse_proxy 127.0.0.1:8080
+    }
+    handle /upload* {
+        reverse_proxy 127.0.0.1:8080
+    }
+    handle /info {
+        reverse_proxy 127.0.0.1:8080
+    }
+    handle /api* {
+        reverse_proxy 127.0.0.1:8080
+    }
+    handle /health {
+        reverse_proxy 127.0.0.1:8080
+    }
 }
 
 :8454 {
     tls /etc/networker/ssl/networker.crt /etc/networker/ssl/networker.key
     root * /var/www/networker
     file_server
-    handle /page* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
-    handle /asset* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
-    handle /ws* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
-    handle /download* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
-    handle /upload* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
-    handle /info { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
-    handle /api* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
-    handle /health { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
+    handle /page* {
+        reverse_proxy https://127.0.0.1:8443 {
+            transport http {
+                tls_insecure_skip_verify
+            }
+        }
+    }
+    handle /asset* {
+        reverse_proxy https://127.0.0.1:8443 {
+            transport http {
+                tls_insecure_skip_verify
+            }
+        }
+    }
+    handle /ws* {
+        reverse_proxy https://127.0.0.1:8443 {
+            transport http {
+                tls_insecure_skip_verify
+            }
+        }
+    }
+    handle /download* {
+        reverse_proxy https://127.0.0.1:8443 {
+            transport http {
+                tls_insecure_skip_verify
+            }
+        }
+    }
+    handle /upload* {
+        reverse_proxy https://127.0.0.1:8443 {
+            transport http {
+                tls_insecure_skip_verify
+            }
+        }
+    }
+    handle /info {
+        reverse_proxy https://127.0.0.1:8443 {
+            transport http {
+                tls_insecure_skip_verify
+            }
+        }
+    }
+    handle /api* {
+        reverse_proxy https://127.0.0.1:8443 {
+            transport http {
+                tls_insecure_skip_verify
+            }
+        }
+    }
+    handle /health {
+        reverse_proxy https://127.0.0.1:8443 {
+            transport http {
+                tls_insecure_skip_verify
+            }
+        }
+    }
     header Alt-Svc "h3=\":8454\"; ma=86400"
 }
 CADDY_CONF
@@ -4890,12 +5183,31 @@ CADDY_UNIT
         sudo sed -i 's|/usr/bin/caddy|/usr/local/bin/caddy|g' /etc/systemd/system/networker-caddy.service
     fi
 
+    # Validate BEFORE touching the service — a config-syntax error then fails
+    # with the parser's message instead of an opaque systemd "control process
+    # exited" (the caddy binary path may differ, so resolve it like the unit).
+    local caddy_bin="/usr/bin/caddy"
+    [[ -x "$caddy_bin" ]] || caddy_bin="/usr/local/bin/caddy"
+    if ! sudo "$caddy_bin" validate --config /etc/caddy/networker.Caddyfile --adapter caddyfile >/dev/null 2>&1; then
+        print_warn "Caddyfile failed validation:"
+        sudo "$caddy_bin" validate --config /etc/caddy/networker.Caddyfile --adapter caddyfile 2>&1 | tail -3
+        return 1
+    fi
+
     sudo systemctl daemon-reload
     sudo systemctl enable networker-caddy 2>/dev/null || true
-    if sudo systemctl restart networker-caddy; then
+    if ! sudo systemctl restart networker-caddy; then
+        print_warn "networker-caddy service failed to start — check journalctl -u networker-caddy"
+        return 1
+    fi
+
+    # Verify the port actually serves (service-active with an unloaded or
+    # wrong config is the failure mode that hid the apache conf.d bug).
+    sleep 2
+    if curl -sf --max-time 5 "http://127.0.0.1:8091/" -o /dev/null; then
         print_ok "Caddy serving test page on ports 8091 (HTTP) / 8454 (HTTPS+H3)"
     else
-        print_warn "networker-caddy service failed to start — check journalctl -u networker-caddy"
+        print_warn "Caddy is running but port 8091 is not serving"
         return 1
     fi
 }
@@ -4922,6 +5234,16 @@ step_setup_apache() {
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq apache2 < /dev/null
             # Enable modules we need; a2enmod is idempotent.
             sudo a2enmod ssl headers proxy proxy_http proxy_wstunnel http2 rewrite >/dev/null 2>&1 || true
+            # We serve ONLY on 8094/8457 — the stock 'Listen 80' + default site
+            # collide with nginx's package-default server on endpoint VMs where
+            # nginx is installed first, and apache2 then fails to start with
+            # "Address already in use" (matrix cell failure, 2026-08-03). The
+            # 443 Listens hide INDENTED inside <IfModule ssl_module> blocks, so
+            # the pattern must tolerate leading whitespace.
+            sudo a2dissite 000-default >/dev/null 2>&1 || true
+            if [[ -f /etc/apache2/ports.conf ]]; then
+                sudo sed -i -E 's/^([[:space:]]*)Listen (80|443)$/\1# Listen \2 disabled by networker (8094\/8457 only)/' /etc/apache2/ports.conf
+            fi
             ;;
         dnf)
             sudo dnf install -y httpd mod_ssl mod_http2 < /dev/null
@@ -4947,8 +5269,17 @@ step_setup_apache() {
         return 1
     fi
 
-    sudo mkdir -p "$apache_dir/conf.d"
-    sudo tee "$apache_dir/conf.d/networker.conf" > /dev/null <<'APACHE_CONF'
+    # Debian/Ubuntu apache2 does NOT read conf.d/ — that's the RHEL httpd
+    # layout. Writing there produced a service that started "successfully"
+    # with our config never loaded and no 8094/8457 listeners (2026-08-03
+    # diag). Debian's mechanism is conf-available/ + a2enconf.
+    local apache_conf_target="$apache_dir/conf.d/networker.conf"
+    if [[ -d "$apache_dir/conf-available" ]]; then
+        apache_conf_target="$apache_dir/conf-available/networker.conf"
+    else
+        sudo mkdir -p "$apache_dir/conf.d"
+    fi
+    sudo tee "$apache_conf_target" > /dev/null <<'APACHE_CONF'
 # Networker HTTP stack comparison — Apache
 # Non-standard ports (8094/8457) so we don't collide with any existing site.
 
@@ -5015,17 +5346,30 @@ Listen 8457
 </VirtualHost>
 APACHE_CONF
 
+    # Debian: activate the conf via a2enconf (symlinks into conf-enabled).
+    if [[ "$apache_conf_target" == *"conf-available"* ]]; then
+        sudo a2enconf networker >/dev/null 2>&1 || true
+    fi
+
     # Resolve systemd unit name
     local unit="apache2"
     if [[ ! -f /lib/systemd/system/apache2.service && ! -f /etc/systemd/system/apache2.service ]]; then
         unit="httpd"
     fi
 
-    if sudo systemctl enable "$unit" 2>/dev/null && sudo systemctl restart "$unit"; then
+    if ! sudo systemctl enable "$unit" 2>/dev/null || ! sudo systemctl restart "$unit"; then
+        print_warn "Apache failed to start — check journalctl -u $unit"
+        sudo rm -f "$apache_conf_target"
+        return 1
+    fi
+
+    # Service-active is NOT enough — a config that never loads starts
+    # "successfully" with zero networker listeners. Verify the HTTP port.
+    sleep 2
+    if curl -sf --max-time 5 "http://127.0.0.1:8094/" -o /dev/null; then
         print_ok "Apache serving test page on ports 8094 (HTTP) / 8457 (HTTPS+H2)"
     else
-        print_warn "Apache failed to start — check journalctl -u $unit"
-        sudo rm -f "$apache_dir/conf.d/networker.conf"
+        print_warn "Apache is running but port 8094 is not serving — config not loaded?"
         return 1
     fi
 }
@@ -5236,23 +5580,23 @@ _iis_setup_powershell() {
     local fqdn="${1:-}"  # FQDN for hostname-based binding (enables HTTP/3 via SNI)
     local site_root="C:\\networker-static"
     cat <<IIS_PS1_HEADER
-# ── IIS setup for HTTP stack comparison ──────────────────────────────────────
+# -- IIS setup for HTTP stack comparison --------------------------------------
 \$ErrorActionPreference = 'Stop'
 \$fqdn = "${fqdn}"
 
 # 1. Install IIS + URL Rewrite + ARR (for reverse-proxy of /page, /asset)
-Write-Host "Installing IIS…"
+Write-Host "Installing IIS..."
 Install-WindowsFeature -Name Web-Server -IncludeManagementTools | Out-Null
 IIS_PS1_HEADER
     cat <<'IIS_PS1'
 
-Write-Host "Installing URL Rewrite Module…"
+Write-Host "Installing URL Rewrite Module..."
 $urlRewriteUrl = "https://download.microsoft.com/download/1/2/8/128E2E22-C1B9-44A4-BE2A-5859ED1D4592/rewrite_amd64_en-US.msi"
 $urlRewriteMsi = "$env:TEMP\urlrewrite.msi"
 Invoke-WebRequest -Uri $urlRewriteUrl -OutFile $urlRewriteMsi -UseBasicParsing
 Start-Process msiexec.exe -ArgumentList "/i $urlRewriteMsi /quiet /norestart" -Wait -NoNewWindow
 
-Write-Host "Installing ARR…"
+Write-Host "Installing ARR..."
 $arrUrl = "https://download.microsoft.com/download/E/9/8/E9849D6A-020E-47E4-9FD0-A023E99B54EB/requestRouter_amd64.msi"
 $arrMsi = "$env:TEMP\arr.msi"
 Invoke-WebRequest -Uri $arrUrl -OutFile $arrMsi -UseBasicParsing
@@ -5263,8 +5607,8 @@ Import-Module WebAdministration
 Set-WebConfigurationProperty -pspath "MACHINE/WEBROOT/APPHOST" `
     -filter "system.webServer/proxy" -name "enabled" -value "True"
 
-# 2. Enable HTTP/3 (Windows Server 2022+) — requires reboot to take effect
-Write-Host "Enabling HTTP/3 via registry…"
+# 2. Enable HTTP/3 (Windows Server 2022+) -- requires reboot to take effect
+Write-Host "Enabling HTTP/3 via registry..."
 $httpParams = "HKLM:\SYSTEM\CurrentControlSet\Services\HTTP\Parameters"
 if (-not (Test-Path $httpParams)) { New-Item -Path $httpParams -Force | Out-Null }
 $needsReboot = $false
@@ -5286,14 +5630,14 @@ $epExe = "C:\networker\networker-endpoint.exe"
 if (Test-Path $epExe) {
     $genSiteHelp = & $epExe --help 2>&1
     if ($genSiteHelp -match 'generate-site') {
-        Write-Host "Generating static test site via endpoint…"
+        Write-Host "Generating static test site via endpoint..."
         & $epExe generate-site $siteRoot --preset mixed --stack iis
     } else {
-        Write-Host "Endpoint does not support generate-site — creating static test page…"
+        Write-Host "Endpoint does not support generate-site -- creating static test page..."
         $genSite = $false
     }
 } else {
-    Write-Host "Endpoint binary not found at $epExe — creating static test page…"
+    Write-Host "Endpoint binary not found at $epExe -- creating static test page..."
     $genSite = $false
 }
 if ($genSite -eq $false -or -not (Test-Path "$siteRoot\index.html")) {
@@ -5322,7 +5666,7 @@ IIS_PS1_GENSITE
 
     cat <<'IIS_PS1_REST'
 
-# 3b. Create web.config — default doc, MIME types, and reverse-proxy rules
+# 3b. Create web.config -- default doc, MIME types, and reverse-proxy rules
 # for /page and /asset (pageload probes use dynamic endpoints on the backing server)
 $webConfig = @"
 <?xml version="1.0" encoding="UTF-8"?>
@@ -5366,7 +5710,7 @@ $webConfig | Out-File "$siteRoot\web.config" -Encoding UTF8
 Write-Host "web.config created (with reverse-proxy rules for /page, /asset, /download, /upload, /info, /api, /health)"
 
 # 4. Generate self-signed certificate (include FQDN in SAN for SNI/H3)
-Write-Host "Creating self-signed certificate…"
+Write-Host "Creating self-signed certificate..."
 $dnsNames = @("localhost", $env:COMPUTERNAME)
 if ($fqdn -and $fqdn -ne "") { $dnsNames += $fqdn }
 $cert = New-SelfSignedCertificate `
@@ -5392,7 +5736,7 @@ New-Website -Name "networker-iis" `
     -Port 8082 `
     -Force | Out-Null
 
-# Add HTTPS bindings — hostname-based with SNI (required for HTTP/3) + IP fallback
+# Add HTTPS bindings -- hostname-based with SNI (required for HTTP/3) + IP fallback
 if ($fqdn -and $fqdn -ne "") {
     New-WebBinding -Name "networker-iis" -Protocol "https" -Port 8445 -HostHeader $fqdn -SslFlags 1
     $sniBinding = Get-WebBinding -Name "networker-iis" -Protocol "https" -Port 8445 | Where-Object { $_.sslFlags -eq 1 }
@@ -5423,7 +5767,7 @@ Write-Host "IIS configured: HTTP=8082, HTTPS=8445"
 if ($needsReboot) {
     Write-Host "REBOOT_NEEDED"
 } else {
-    Write-Host "HTTP/3 registry already set — no reboot needed"
+    Write-Host "HTTP/3 registry already set -- no reboot needed"
 }
 IIS_PS1_REST
 }
@@ -5570,6 +5914,48 @@ NGINX_SSH
     fi
 }
 
+# ── Comparison HTTP stacks on a deployed Linux endpoint ──────────────────────
+# Installs one of caddy/apache/haproxy/traefik on a remote Linux VM by piping
+# this installer over SSH with --setup-stack (the exact mechanism
+# _remote_setup_languages uses, and the bash mirror of install.ps1 -Setup).
+# The local step_setup_<stack> functions do the real work, so remote and local
+# installs cannot drift. Returns non-zero on failure — the deploy path treats
+# that as fatal: a matrix cell whose proxy is missing would otherwise sit
+# unreachable until the readiness gate times out (2026-08-01 failure class).
+_remote_setup_stack() {
+    local ip="$1" ssh_user="$2" stack="$3"
+
+    next_step "Set up $stack on remote VM (${ip})"
+
+    # Resolve a script to pipe remotely: the on-disk file when invoked via
+    # --deploy (the dashboard path), else the pinned raw installer.
+    local self="${BASH_SOURCE[0]:-}"
+    local tmp_self=""
+    if [[ ! -r "$self" ]]; then
+        tmp_self="$(mktemp)"
+        if ! curl -fsSL "https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh" \
+                -o "$tmp_self" < /dev/null; then
+            rm -f "$tmp_self"
+            print_err "Could not fetch installer for remote $stack setup"
+            return 1
+        fi
+        self="$tmp_self"
+    fi
+
+    local rc=0
+    # shellcheck disable=SC2029
+    if ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 "${ssh_user}@${ip}" \
+        "export DEBIAN_FRONTEND=noninteractive && sudo -E bash -s -- --setup-stack $stack" \
+        < "$self"; then
+        print_ok "$stack set up on ${ip}"
+    else
+        rc=1
+        print_err "$stack setup failed on ${ip}"
+    fi
+    [[ -n "$tmp_self" ]] && rm -f "$tmp_self"
+    return $rc
+}
+
 # ── Reference-API language servers on a deployed endpoint ────────────────────
 # The deploy config's per-endpoint `languages` array requests reference-API
 # servers for apibench. Each installs in APPLICATION mode on port 8085
@@ -5710,6 +6096,27 @@ _azure_win_setup_iis() {
         --command-id RunPowerShellScript \
         --scripts "$ps_script" 2>&1)" || true
 
+    # Azure allows ONE run-command at a time per VM; a straggler from the
+    # previous step surfaces as a Conflict here and — swallowed — left VMs
+    # with NO IIS at all while the deploy "completed" (matrix IIS cell,
+    # 2026-08-03). Wait for the other execution and retry once.
+    if echo "$output" | grep -q "Conflict"; then
+        print_info "Run-command busy on $vm — waiting 60s and retrying IIS setup…"
+        sleep 60
+        output="$(az vm run-command invoke \
+            --resource-group "$rg" --name "$vm" \
+            --command-id RunPowerShellScript \
+            --scripts "$ps_script" 2>&1)" || true
+    fi
+
+    # The PS script's own output is the primary diagnostic — a script that
+    # errors early (feature install, MSI download, run-command conflict) used
+    # to be invisible: install.sh only grepped for REBOOT_NEEDED and then
+    # CLAIMED "IIS configured" regardless (retry-4 autopsy: W3SVC absent
+    # in-guest while the deploy log showed the claim).
+    print_info "IIS setup output (tail):"
+    echo "$output" | tail -12 | sed 's/^/    | /'
+
     if echo "$output" | grep -q "REBOOT_NEEDED"; then
         print_info "HTTP/3 registry changed — rebooting VM…"
         az vm restart --resource-group "$rg" --name "$vm" --no-wait 2>/dev/null || true
@@ -5736,21 +6143,62 @@ _azure_win_setup_iis() {
         print_ok "IIS configured: HTTP=8082, HTTPS=8445"
     fi
 
-    # Verify all endpoints
+    # Verify all endpoints. TOTAL failure is fatal: an IIS matrix cell whose
+    # proxy never answers just times out the readiness gate downstream, so
+    # fail the deploy here with the real cause instead. A partial miss (e.g.
+    # the H3-flavored path pre-reboot) stays a warning.
     if [[ -n "$ip" ]]; then
-        local ok=true
+        # IIS cold-starts its app pool on the FIRST request and NSG/HTTP.sys
+        # take a beat after setup — probing once, seconds after configure,
+        # false-failed a cell whose IIS was fine minutes later (retry-2,
+        # 2026-08-04). Retry the probe set for up to ~90s before judging.
+        local ok=true https_ok=false attempt
+        for attempt in 1 2 3 4 5 6; do
+            ok=true; https_ok=false
+            for url in "http://${ip}:8082/" "http://${ip}:8082/health" "https://${ip}:8445/"; do
+                local scheme="${url%%://*}"
+                local curl_flags="--max-time 8 -sf"
+                [[ "$scheme" == "https" ]] && curl_flags="$curl_flags -k"
+                if curl $curl_flags "$url" -o /dev/null; then
+                    [[ "$scheme" == "https" ]] && https_ok=true
+                else
+                    ok=false
+                fi
+            done
+            if $https_ok; then
+                break
+            fi
+            [[ "$attempt" -lt 6 ]] && sleep 15
+        done
         for url in "http://${ip}:8082/" "http://${ip}:8082/health" "https://${ip}:8445/"; do
             local scheme="${url%%://*}"
-            local curl_flags="--max-time 5 -sf"
+            local curl_flags="--max-time 8 -sf"
             [[ "$scheme" == "https" ]] && curl_flags="$curl_flags -k"
             if curl $curl_flags "$url" -o /dev/null; then
                 print_ok "  $url → OK"
             else
                 print_warn "  $url → FAILED"
-                ok=false
             fi
         done
-        $ok || print_warn "Some IIS endpoints failed — HTTP/3 may need a reboot to activate"
+        # 8445 is what the readiness gate and the runner actually probe
+        # (ProxyHttpsPort iis=8445) — an IIS whose HTTPS binding is dead just
+        # times out the gate downstream, so it MUST be fatal here.
+        if ! $https_ok; then
+            # Capture in-guest state INTO the deploy log before failing: the
+            # failed VM is deleted with the deploy, so this is the only
+            # diagnostic window (three IIS rounds died unexplained without it).
+            print_info "IIS verify failed — capturing in-guest diagnostics…"
+            az vm run-command invoke                 --resource-group "$rg" --name "$vm"                 --command-id RunPowerShellScript                 --scripts "(Get-Service W3SVC -EA SilentlyContinue).Status; 'local8082: ' + \$(try { (Invoke-WebRequest -Uri 'http://localhost:8082/' -UseBasicParsing -TimeoutSec 8).StatusCode } catch { 'down' }); 'local8445: ' + \$(try { \$r=[System.Net.HttpWebRequest]::Create('https://localhost:8445/'); \$r.ServerCertificateValidationCallback={\$true}; \$r.Timeout=8000; [int]([System.Net.HttpWebResponse]\$r.GetResponse()).StatusCode } catch { 'down' }); (netstat -an | Select-String 'LISTENING' | Select-String ':8082|:8445').Line -join ' / '; (Get-NetFirewallRule -Direction Inbound -Enabled True -EA SilentlyContinue | Where-Object DisplayName -like '*Networker*').DisplayName -join ','"                 --query "value[0].message" -o tsv 2>&1 | head -10 || true
+            if [[ "${AZURE_ENDPOINT_WANTS_IIS:-1}" == "1" ]]; then
+                print_err "IIS HTTPS (8445) is not responding after setup — failing deploy"
+                return 1
+            fi
+            # This endpoint requested a DIFFERENT stack (caddy/traefik/…) —
+            # IIS is only the always-installed default here, so its failure
+            # must not take the cell down before the requested stack installs.
+            print_warn "IIS (8445) not responding — continuing (this endpoint's requested stack is not IIS)"
+        fi
+        $ok || print_warn "IIS HTTP endpoints failed — HTTP/3 may need a reboot to activate"
     fi
 }
 
@@ -6574,7 +7022,11 @@ step_azure_open_endpoint_ports() {
         return 0
     fi
 
-    print_info "Opening TCP 80, 443, 8080-8082, 8443-8445…"
+    # 8091-8094 / 8454-8457 are the HTTP-stack comparison ports (caddy/traefik/
+    # haproxy/apache HTTP + HTTPS) — without them a matrix cell's proxy installs
+    # fine but the readiness probe and the runner can never reach it (the whole
+    # 2026-08-01 comparison-group failure class). UDP 8454 = Caddy's h3.
+    print_info "Opening TCP 80, 443, 8080-8082, 8091-8094, 8443-8445, 8454-8457…"
     az network nsg rule create \
         --resource-group "$rg" \
         --nsg-name "$nsg_name" \
@@ -6582,12 +7034,12 @@ step_azure_open_endpoint_ports() {
         --protocol Tcp \
         --direction Inbound \
         --priority 1100 \
-        --destination-port-ranges 80 443 8080-8082 8443-8445 \
+        --destination-port-ranges 80 443 8080-8082 8091-8094 8443-8445 8454-8457 \
         --access Allow \
         --output none
-    print_ok "TCP 80, 443, 8080-8082, 8443-8445 open"
+    print_ok "TCP 80, 443, 8080-8082, 8091-8094, 8443-8445, 8454-8457 open"
 
-    print_info "Opening UDP 8443, 9998, 9999…"
+    print_info "Opening UDP 8443-8445, 8454, 9998, 9999…"
     az network nsg rule create \
         --resource-group "$rg" \
         --nsg-name "$nsg_name" \
@@ -6595,10 +7047,10 @@ step_azure_open_endpoint_ports() {
         --protocol Udp \
         --direction Inbound \
         --priority 1110 \
-        --destination-port-ranges 8443-8445 9998 9999 \
+        --destination-port-ranges 8443-8445 8454 9998 9999 \
         --access Allow \
         --output none
-    print_ok "UDP 8443-8445, 9998, 9999 open"
+    print_ok "UDP 8443-8445, 8454, 9998, 9999 open"
 }
 
 # Set Azure auto-shutdown policy (04:00 UTC = 11 PM EST).
@@ -6756,9 +7208,14 @@ _azure_deploy_one_endpoint() {
         _azure_win_install_binary "networker-endpoint" "$rg" "$vm" "${NETWORKER_VERSION:-latest}"
         next_step "Create networker-endpoint service ($label)"
         _azure_win_create_endpoint_service "$rg" "$vm"
-        # IIS HTTP stack comparison setup
+        # IIS HTTP stack comparison setup. Pass ip + fqdn: they're OPTIONAL
+        # params ($3/$4) and this call site omitted them — which silently
+        # disabled the already-responding pre-check, the FQDN SNI binding AND
+        # the post-setup port verification, so "IIS configured" was an
+        # unverified claim (matrix IIS cell failed readiness on a VM whose
+        # verify never ran, 2026-08-03).
         next_step "Set up IIS for HTTP stack comparison ($label)"
-        _azure_win_setup_iis "$rg" "$vm"
+        _azure_win_setup_iis "$rg" "$vm" "$ip" "${AZURE_ENDPOINT_FQDN:-}"
     else
         _wait_for_ssh "$ip" "azureuser" "$label"
         _remote_install_binary "networker-endpoint" "$ip" "azureuser"
@@ -7226,10 +7683,22 @@ _aws_create_security_group() {
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$_sg_created" \
             --protocol tcp --port 8443-8445 --cidr 0.0.0.0/0 --output text >/dev/null
-        # UDP 8443-8445 (QUIC for endpoint + nginx + IIS), 9998, 9999
+        # HTTP-stack comparison ports: 8091-8094 HTTP + 8454-8457 HTTPS
+        # (caddy/traefik/haproxy/apache) — matrix cells are unreachable without
+        # them even when the proxy installs fine.
+        aws ec2 authorize-security-group-ingress \
+            --region "$AWS_REGION" --group-id "$_sg_created" \
+            --protocol tcp --port 8091-8094 --cidr 0.0.0.0/0 --output text >/dev/null
+        aws ec2 authorize-security-group-ingress \
+            --region "$AWS_REGION" --group-id "$_sg_created" \
+            --protocol tcp --port 8454-8457 --cidr 0.0.0.0/0 --output text >/dev/null
+        # UDP 8443-8445 (QUIC for endpoint + nginx + IIS), 8454 (Caddy h3), 9998, 9999
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$_sg_created" \
             --protocol udp --port 8443-8445 --cidr 0.0.0.0/0 --output text >/dev/null
+        aws ec2 authorize-security-group-ingress \
+            --region "$AWS_REGION" --group-id "$_sg_created" \
+            --protocol udp --port 8454 --cidr 0.0.0.0/0 --output text >/dev/null
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$_sg_created" \
             --protocol udp --port 9998 --cidr 0.0.0.0/0 --output text >/dev/null
@@ -7672,11 +8141,11 @@ _gcp_create_firewall_rule() {
         --priority=1000 \
         --network=default \
         --action=ALLOW \
-        --rules=tcp:22,tcp:80,tcp:443,tcp:3389,tcp:8080-8082,tcp:8443-8445,udp:8443-8445,udp:9998,udp:9999 \
+        --rules=tcp:22,tcp:80,tcp:443,tcp:3389,tcp:8080-8082,tcp:8091-8094,tcp:8443-8445,tcp:8454-8457,udp:8443-8445,udp:8454,udp:9998,udp:9999 \
         --source-ranges=0.0.0.0/0 \
         --target-tags=networker-endpoint \
         --quiet
-    print_ok "Firewall rule created: TCP 22/80/443/3389/8080-8082/8443-8445, UDP 8443-8445/9998/9999"
+    print_ok "Firewall rule created: TCP 22/80/443/3389/8080-8082/8091-8094/8443-8445/8454-8457, UDP 8443-8445/8454/9998/9999"
 }
 
 # Create a GCE instance.
@@ -8474,8 +8943,8 @@ display_completion() {
     if [[ $DO_INSTALL_DASHBOARD -eq 1 ]]; then
         local dashboard_port
         dashboard_port="$(grep DASHBOARD_PORT /etc/networker-dashboard.env 2>/dev/null | cut -d= -f2)"
-        dashboard_port="${dashboard_port:-3000}"
-        echo "  ${BOLD}networker-dashboard${RESET}:"
+        dashboard_port="${dashboard_port:-$CONTROLPLANE_PORT}"
+        echo "  ${BOLD}control plane${RESET}:"
         if [[ -n "${DASHBOARD_FQDN:-}" && ${DASHBOARD_NGINX_CONFIGURED:-0} -eq 1 ]]; then
             echo "    Web UI:   https://${DASHBOARD_FQDN}"
         elif [[ ${DASHBOARD_NGINX_CONFIGURED:-0} -eq 1 ]]; then
@@ -8493,7 +8962,10 @@ display_completion() {
             echo "  ╔══════════════════════════════════════════════════════════╗"
             echo "  ║  ${BOLD}Login credentials${RESET}                                      ║"
             echo "  ║                                                          ║"
-            printf "  ║  Username:  ${BOLD}admin${RESET}%*s║\n" 37 ""
+            # Login is by EMAIL — the control plane's bootstrap seeds
+            # DASHBOARD_ADMIN_EMAIL (default admin@localhost), and "admin"
+            # alone will not authenticate.
+            printf "  ║  Email:     ${BOLD}%-16s${RESET}%*s║\n" "${DASHBOARD_ADMIN_EMAIL:-admin@localhost}" 21 ""
             printf "  ║  Password:  ${BOLD}%-16s${RESET}%*s║\n" "$DASHBOARD_TEMP_PASSWORD" 21 ""
             echo "  ║                                                          ║"
             echo "  ║  ${DIM}You will be asked to change the password on first login.${RESET} ║"
@@ -10216,7 +10688,14 @@ deploy_from_config() {
                                 fi
                                 ;;
                             caddy|apache|haproxy|traefik)
-                                print_warn "Remote $_ls setup on LAN endpoints is not yet supported — use nginx or pre-install the proxy manually."
+                                if [[ "$os" != "windows" ]]; then
+                                    _remote_setup_stack "$LAN_ENDPOINT_IP" "$ssh_user" "$_ls" || {
+                                        print_err "Deploy failed: could not set up $_ls on LAN endpoint"
+                                        exit 1
+                                    }
+                                else
+                                    print_warn "Skipping $_ls setup on $label: only supported on Linux"
+                                fi
                                 ;;
                             iis)
                                 if [[ "$os" == "windows" ]]; then
@@ -10241,6 +10720,17 @@ deploy_from_config() {
                 ;;
             azure)
                 step_check_azure_prereqs
+                # Tell the Windows endpoint deploy whether this endpoint
+                # actually requested IIS: its always-run IIS setup is fatal on
+                # verify failure ONLY then — a broken IIS must not take down a
+                # caddy/traefik/haproxy cell that never needed it (2026-08-03:
+                # every Windows matrix cell died at the unconditional IIS step).
+                # No stacks requested = IIS is the default Windows stack = fatal.
+                AZURE_ENDPOINT_WANTS_IIS=0
+                case ",${DEPLOY_EP_HTTP_STACKS[$i]}," in
+                    *,iis,*) AZURE_ENDPOINT_WANTS_IIS=1 ;;
+                    ,,)      AZURE_ENDPOINT_WANTS_IIS=1 ;;
+                esac
                 step_azure_deploy_endpoint
                 DEPLOY_EP_IPS[$i]="$AZURE_ENDPOINT_IP"
                 DEPLOY_EP_FQDNS[$i]="${AZURE_ENDPOINT_FQDN:-}"
@@ -10265,7 +10755,12 @@ deploy_from_config() {
                                         "$AZURE_ENDPOINT_RG" "$AZURE_ENDPOINT_VM" \
                                         "$AZURE_ENDPOINT_IP" "$_ls"
                                 else
-                                    print_warn "Remote $_ls setup on Azure Linux endpoints is not yet supported (planned follow-up)."
+                                    # Fatal on failure: a matrix cell without its
+                                    # proxy just times out the readiness gate.
+                                    _remote_setup_stack "$AZURE_ENDPOINT_IP" "azureuser" "$_ls" || {
+                                        print_err "Deploy failed: could not set up $_ls on Azure endpoint"
+                                        exit 1
+                                    }
                                 fi
                                 ;;
                             iis)
@@ -10306,7 +10801,14 @@ deploy_from_config() {
                                 fi
                                 ;;
                             caddy|apache|haproxy|traefik)
-                                print_warn "Remote $_ls setup on AWS endpoints is not yet supported (planned follow-up). Deployment continues but this stack will not be installed."
+                                if [[ "${AWS_ENDPOINT_OS:-linux}" != "windows" ]]; then
+                                    _remote_setup_stack "$AWS_ENDPOINT_IP" "ubuntu" "$_ls" || {
+                                        print_err "Deploy failed: could not set up $_ls on AWS endpoint"
+                                        exit 1
+                                    }
+                                else
+                                    print_warn "Skipping $_ls setup on AWS Windows (use IIS or the Windows proxy path)"
+                                fi
                                 ;;
                             iis)
                                 if [[ "${AWS_ENDPOINT_OS:-linux}" == "windows" ]]; then
@@ -10384,29 +10886,20 @@ deploy_from_config() {
 
         # Read dashboard-specific config
         DASHBOARD_ADMIN_PASSWORD="$(jq -r '.dashboard.admin_password // "admin"' "$cfg")"
-        DASHBOARD_PORT="$(jq -r '.dashboard.port // 3000' "$cfg")"
+        DASHBOARD_PORT="$(jq -r ".dashboard.port // ${CONTROLPLANE_PORT}" "$cfg")"
         export DASHBOARD_ADMIN_PASSWORD DASHBOARD_PORT
 
         step_install_postgresql
-        step_install_nodejs
         step_install_cloud_clis
         step_configure_cloud_identity
 
-        if [[ "$INSTALL_METHOD" == "release" ]]; then
-            mkdir -p "$INSTALL_DIR"
-            step_download_release "networker-dashboard" || {
-                step_ensure_cargo_env
-                step_cargo_install "networker-dashboard"
-            }
-            step_download_release "networker-agent" || {
-                step_ensure_cargo_env
-                step_cargo_install "networker-agent"
-            }
-        else
-            step_ensure_cargo_env
-            step_cargo_install "networker-dashboard"
-            step_cargo_install "networker-agent"
+        # C# release artefacts — see the interactive path for why there is no
+        # cargo fallback (the Rust crates were removed in v0.28.148).
+        if ! step_install_controlplane; then
+            print_err "Control-plane install failed — aborting dashboard setup."
+            return 1
         fi
+        step_install_agent_cs || true
 
         # Dashboard also needs tester + endpoint binaries, browser, and capture tools
         if [[ "$INSTALL_METHOD" == "release" ]]; then
@@ -10422,7 +10915,8 @@ deploy_from_config() {
             fi
         fi
 
-        step_build_frontend
+        # Prebuilt bundle from the release — no Node.js toolchain needed here.
+        step_install_frontend_release
         step_write_dashboard_env
         step_setup_dashboard_service
 
@@ -11110,6 +11604,22 @@ main() {
         return $?
     fi
 
+    # Single-stack setup mode: install one comparison proxy locally, then exit.
+    # Piped over SSH by _remote_setup_stack (mirror of install.ps1 -Setup).
+    if [[ -n "$SETUP_STACK" ]]; then
+        case "$SETUP_STACK" in
+            nginx)   step_setup_nginx ;;
+            caddy)   step_setup_caddy ;;
+            apache)  step_setup_apache ;;
+            haproxy) step_setup_haproxy ;;
+            traefik) step_setup_traefik ;;
+            *)
+                print_err "--setup-stack: unknown stack '$SETUP_STACK' (valid: nginx, caddy, apache, haproxy, traefik)"
+                return 1 ;;
+        esac
+        return $?
+    fi
+
     # Benchmark server mode: deploy a reference API server, then exit
     if [[ -n "$BENCHMARK_SERVER_LANG" ]]; then
         deploy_benchmark_server "$BENCHMARK_SERVER_LANG"
@@ -11227,30 +11737,19 @@ main() {
         fi
 
         step_install_postgresql
-        step_install_nodejs
         step_install_cloud_clis
         step_configure_cloud_identity
 
-        if [[ "$INSTALL_METHOD" == "release" ]]; then
-            mkdir -p "$INSTALL_DIR"
-            local dashboard_dl_ok=1
-            if ! step_download_release "networker-dashboard"; then
-                dashboard_dl_ok=0
-            fi
-            if ! step_download_release "networker-agent"; then
-                dashboard_dl_ok=0
-            fi
-            if [[ $dashboard_dl_ok -eq 0 ]]; then
-                print_info "Falling back to source compile for dashboard…"
-                step_ensure_cargo_env
-                step_cargo_install "networker-dashboard"
-                step_cargo_install "networker-agent"
-            fi
-        else
-            step_ensure_cargo_env
-            step_cargo_install "networker-dashboard"
-            step_cargo_install "networker-agent"
+        # The control plane and agent are C# release artefacts. There is no
+        # source-compile fallback: the Rust networker-dashboard/networker-agent
+        # crates were removed in v0.28.148, so `cargo install` here would fail
+        # with "crate not found" — which is exactly the trap this install path
+        # sat in between v0.28.148 and this release.
+        if ! step_install_controlplane; then
+            print_err "Control-plane install failed — aborting dashboard setup."
+            return 1
         fi
+        step_install_agent_cs || true
 
         # Dashboard also needs tester + endpoint binaries, browser, and capture tools
         if [[ "$INSTALL_METHOD" == "release" ]]; then
@@ -11266,7 +11765,8 @@ main() {
             fi
         fi
 
-        step_build_frontend
+        # Prebuilt bundle from the release — no Node.js toolchain needed here.
+        step_install_frontend_release
         step_write_dashboard_env
         step_setup_dashboard_service
 

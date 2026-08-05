@@ -32,6 +32,10 @@ on:
 
 permissions:
   contents: read
+  # `gh run download` in the trend step reads the previous run's artifact.
+  # Without this the download fails and the comparison silently degrades to
+  # "no baseline" on every run.
+  actions: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -203,6 +207,43 @@ jobs:
               echo "| $lang | EMPTY | $f |" >> "$GITHUB_STEP_SUMMARY"
             fi
           done
+
+      # ── Audit P2: trend vs the previous run ────────────────────────────────
+      # The summary above says a benchmark EXECUTED; it never said whether
+      # anything got SLOWER. A regression could ride for weeks with every run
+      # green. This pulls the last successful run's artifact and diffs median
+      # latencies. Informational by design — see scripts/benchmark-trend.py for
+      # why a blocking threshold on shared-runner numbers is a bad trade.
+      - name: Compare against the previous run
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          mkdir -p /tmp/bench-prev
+
+          PREV_RUN=$(gh run list \
+            --workflow "${{ github.workflow }}" \
+            --branch main --status success \
+            --limit 1 --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null || true)
+
+          if [ -n "${PREV_RUN:-}" ]; then
+            echo "Comparing against run ${PREV_RUN}"
+            gh run download "$PREV_RUN" --dir /tmp/bench-prev 2>/dev/null || \
+              echo "::notice::previous run ${PREV_RUN} had no downloadable artifact"
+          else
+            echo "::notice::no previous successful run on main — this run is the baseline"
+          fi
+
+          # `gh run download` nests each artifact in its own directory.
+          PREV_DIR=$(find /tmp/bench-prev -type d -name 'benchmark-results-*' | head -1)
+
+          {
+            echo ""
+            echo "## Latency trend vs previous run"
+            echo ""
+            python3 scripts/benchmark-trend.py benchmarks/results "${PREV_DIR:-}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload results artifact
         if: always()

@@ -256,7 +256,10 @@ public static class DeploymentWriteEndpoints
 
             if (!string.IsNullOrEmpty(provider) && endpoints.Count > 0)
             {
-                SpawnVmTeardown(scopeFactory, loggerFactory, deploymentId, provider!, region, endpoints);
+                SpawnVmTeardown(
+                    scopeFactory,
+                    loggerFactory.CreateLogger("DeploymentWriteEndpoints.teardown"),
+                    deploymentId, provider!, region, endpoints);
             }
 
             return Results.Ok(new { deleted = true });
@@ -331,15 +334,14 @@ public static class DeploymentWriteEndpoints
     /// orphan reaper, never surfaced. Runs in its own DI scope (the request's
     /// DbContext is already disposed with the response).
     /// </summary>
-    private static void SpawnVmTeardown(
+    internal static void SpawnVmTeardown(
         IServiceScopeFactory scopeFactory,
-        ILoggerFactory loggerFactory,
+        ILogger logger,
         Guid deploymentId,
         string provider,
         string? region,
         IReadOnlyList<string> endpoints)
     {
-        var logger = loggerFactory.CreateLogger("DeploymentWriteEndpoints.teardown");
         _ = Task.Run(async () =>
         {
             try
@@ -421,7 +423,7 @@ public static class DeploymentWriteEndpoints
         return parts.Count == 0 ? null : string.Join(" + ", parts);
     }
 
-    private static List<string> ParseHosts(string? endpointIps)
+    internal static List<string> ParseHosts(string? endpointIps)
     {
         var hosts = new List<string>();
         if (string.IsNullOrWhiteSpace(endpointIps))

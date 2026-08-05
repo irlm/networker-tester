@@ -5,7 +5,14 @@
     "useDefineForClassFields": true,
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "module": "ESNext",
-    "types": ["vite/client"],
+    /* "node" is here for TEST files only: the route-contract drift guard
+       (src/api/route-contract.test.ts) reads the C# sources off disk to learn
+       which routes the control plane registers. Relaxing types for the whole
+       project would otherwise let SHIPPED code import a node builtin and still
+       type-check — and vite only WARNS about that ("externalized for browser
+       compatibility"), it does not fail. src/api/no-node-builtins.test.ts
+       enforces it instead. */
+    "types": ["vite/client", "node"],
     "skipLibCheck": true,
     /* shared/modes.json drift guard (src/lib/modes-manifest.test.ts) imports
        the repo-root manifest directly. */
