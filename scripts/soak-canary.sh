@@ -57,11 +57,15 @@ TARGET_HOST="${CANARY_TARGET_HOST:-example.com}"
 REUSE_RUNNER="${CANARY_REUSE_RUNNER:-1}"
 APIBENCH="${CANARY_APIBENCH:-1}"
 MODE_COVERAGE="${CANARY_MODE_COVERAGE:-1}"
+# Phase 4 (matrix flow) is OFF by default: it provisions several VMs at once,
+# so it runs on the weekly schedule, not nightly. CANARY_MATRIX=1 enables it.
+MATRIX="${CANARY_MATRIX:-0}"
 
 PROVISION_TIMEOUT=480   # s to wait for a fresh runner to come online (~5-7 min)
 RUN_TIMEOUT=240         # s to wait for the run to reach a terminal state
 APIBENCH_TIMEOUT=720    # s for the apibench endpoint to provision (~5 min) + run
 MODE_TIMEOUT=420        # s for the full mode-matrix run against the endpoint
+MATRIX_TIMEOUT=1500     # s for a multi-cell matrix to provision concurrently
 POLL=10
 
 # Phase 3 exercises the FULL HTTP/TCP mode matrix through the proxy. These are
@@ -441,4 +445,74 @@ summary "- $MC_LINE"
 [ -z "$MC_BROKEN" ] || { capture_deploy_log "$CG"; fail "phase 3: mode(s) returned ZERO successful attempts through nginx: ${MC_BROKEN} — a mode regressed (v0.28.118 pageload3/websocket class)"; }
 
 summary "✅ phase 3 (mode coverage): all matrix modes returned successful attempts through nginx; native correctly dropped at dispatch."
-note "CANARY PASS (phases 1 + 2 + 3)"
+
+# ── Phase 4: MULTI-CELL MATRIX FLOW (audit P0-5) ─────────────────────────────
+# Phases 1-3 all drive ONE cell. The entire v0.28.129-147 campaign — VM-name
+# collisions, IP-quota exhaustion, relaunch unique-name failures, cross-cell
+# contention — lives in the CONCURRENT multi-cell path, which no automated
+# check has ever exercised. This phase launches a small mixed matrix and
+# asserts the flow-level invariants: every cell gets its own config, its own
+# VM name, and reaches a terminal state without the group aborting.
+if [ "$MATRIX" != "1" ]; then
+  note "matrix-flow phase disabled (CANARY_MATRIX=$MATRIX) — skipping"
+  note "CANARY PASS (phases 1 + 2 + 3)"
+  exit 0
+fi
+
+note "phase 4: multi-cell matrix flow (concurrent provisioning)"
+MX_NAME="soak-canary-matrix-$(date -u +%Y%m%dT%H%M%SZ)"
+# 3 linux cells across DIFFERENT stacks: enough to exercise concurrency, the
+# IP-quota throttle and per-cell naming without a large cloud bill.
+MX_CELLS=$(jq -nc --arg acct "$ACCOUNT_ID" '[
+  {label:"canary linux · nginx",   endpoint:{kind:"pending", cloud_account_id:$acct, region:"eastus", vm_size:"Standard_B2s", os:"linux", proxy_stack:"nginx",   language:"rust"}},
+  {label:"canary linux · caddy",   endpoint:{kind:"pending", cloud_account_id:$acct, region:"eastus", vm_size:"Standard_B2s", os:"linux", proxy_stack:"caddy",   language:"rust"}},
+  {label:"canary linux · traefik", endpoint:{kind:"pending", cloud_account_id:$acct, region:"eastus", vm_size:"Standard_B2s", os:"linux", proxy_stack:"traefik", language:"rust"}}
+]')
+MX_CG=$(api POST "/api/v2/projects/$PID/comparison-groups" \
+  "$(jq -nc --arg n "$MX_NAME" --argjson cells "$MX_CELLS" \
+     '{name:$n, base_workload:{modes:["http1","download"], runs:2, concurrency:1, timeout_ms:8000, payload_sizes:[]}, cells:$cells}')")
+MX_CG_ID=$(jq -r '.id // empty' <<<"$MX_CG")
+[ -n "$MX_CG_ID" ] || fail "phase 4: matrix group create failed: $(head -c 200 <<<"$MX_CG")"
+# Register for teardown BEFORE launching, so a mid-provision failure still reaps.
+APIBENCH_CGS="${APIBENCH_CGS:-} ${MX_CG_ID}"
+
+MX_LAUNCH=$(api POST "/api/v2/comparison-groups/$MX_CG_ID/launch" '{}')
+MX_TOTAL=$(jq -r '.total // 0' <<<"$MX_LAUNCH")
+MX_OK=$(jq -r '.launched // 0' <<<"$MX_LAUNCH")
+MX_FAILED=$(jq -r '.failed // 0' <<<"$MX_LAUNCH")
+note "  matrix ${MX_CG_ID:0:8}: launched=${MX_OK}/${MX_TOTAL} failed=${MX_FAILED}"
+[ "$MX_TOTAL" = "3" ] || fail "phase 4: expected 3 cells, group reports ${MX_TOTAL}"
+[ "$MX_OK" = "3" ] || fail "phase 4: only ${MX_OK}/3 cells launched — errors: $(jq -c '.errors // []' <<<"$MX_LAUNCH")"
+
+# Every cell must get its OWN config (the v0.28.129 shared-name collision).
+MX_RUNS=$(api GET "/api/v2/test-runs?comparison_group_id=$MX_CG_ID&limit=20")
+MX_CFG_COUNT=$(jq -r '[ (if type=="array" then . else (.runs // .items // .data // []) end)[]? | (.test_config_id // empty) ] | unique | length' <<<"$MX_RUNS")
+[ "$MX_CFG_COUNT" = "3" ] || fail "phase 4: cells share configs (${MX_CFG_COUNT} distinct for 3 cells) — v0.28.129 collision class"
+
+# Poll to terminal. Cells provision CONCURRENTLY under the IP-quota throttle,
+# so this is the only automated check on that interaction.
+deadline=$((SECONDS + MATRIX_TIMEOUT))
+while :; do
+  MX_STATE=$(api GET "/api/v2/test-runs?comparison_group_id=$MX_CG_ID&limit=20" \
+    | jq -r '[ (if type=="array" then . else (.runs // .items // .data // []) end)[]? | (.status // "?") ] | join(",")')
+  note "    cells: $MX_STATE"
+  case "$MX_STATE" in *queued*|*provisioning*|*running*) : ;; *) break ;; esac
+  [ "$SECONDS" -ge "$deadline" ] && { note "phase 4: matrix did not settle within ${MATRIX_TIMEOUT}s (last=$MX_STATE)"; break; }
+  sleep 30
+done
+
+MX_FINAL=$(api GET "/api/v2/test-runs?comparison_group_id=$MX_CG_ID&limit=20")
+MX_DONE=$(jq -r '[ (if type=="array" then . else (.runs // .items // .data // []) end)[]? | select((.status // "")=="completed") ] | length' <<<"$MX_FINAL")
+MX_ERRS=$(jq -r '[ (if type=="array" then . else (.runs // .items // .data // []) end)[]? | select((.status // "")!="completed") | "\(.status // "?"): \((.error_message // "")[0:70])" ] | join(" | ")' <<<"$MX_FINAL")
+
+summary "### Phase 4 (multi-cell matrix flow) — group \`$MX_CG_ID\`"
+summary "- cells completed: ${MX_DONE}/3"
+[ -n "$MX_ERRS" ] && summary "- non-completed: ${MX_ERRS}"
+
+# At least 2 of 3 must complete: one cell lost to genuine cloud flake is
+# tolerable, but a systemic breakage (name collision, quota, dispatch) takes
+# them all down together — which is precisely what this phase exists to catch.
+[ "$MX_DONE" -ge 2 ] || fail "phase 4: only ${MX_DONE}/3 matrix cells completed — the multi-cell flow regressed: ${MX_ERRS}"
+
+summary "✅ phase 4 (matrix flow): ${MX_DONE}/3 concurrent cells completed with distinct configs."
+note "CANARY PASS (phases 1 + 2 + 3 + 4)"
