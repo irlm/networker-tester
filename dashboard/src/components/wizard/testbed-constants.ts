@@ -52,8 +52,14 @@ export function defaultInstanceType(cloud: string): string {
 
 export const LINUX_PROXIES = ['nginx', 'caddy', 'traefik', 'haproxy', 'apache'] as const;
 // Windows proxy support by cloud:
-//   - Azure: iis, caddy, traefik, haproxy, apache — install.sh 0.28.1+ invokes
-//     install.ps1 -Setup <proxy> over `az vm run-command` (_azure_win_setup_proxy).
+//   - Azure: iis, caddy, traefik — install.sh invokes install.ps1 -Setup
+//     <proxy> over `az vm run-command` (_azure_win_setup_proxy).
+//     haproxy/apache are NOT offered: HAProxy ships no native Windows build
+//     and Apache has no scriptable Windows binary source (Apache Lounge
+//     serves an HTML decoy to all automated downloads — verified 2026-08-04).
+//     The server launch gate (ComparisonGroupsEndpoints.UnsupportedComboReason)
+//     rejects them with the same reasons; keep BOTH lists in sync — each side
+//     has a pin test naming the other.
 //   - AWS:   iis only — install.sh 0.27.27+ bootstraps IIS via UserData
 //     PowerShell on Windows Server 2022 (_aws_win_endpoint_full_userdata).
 //     Non-IIS proxies would need AWS SSM RunPowerShellScript equivalent.
@@ -62,7 +68,7 @@ export const LINUX_PROXIES = ['nginx', 'caddy', 'traefik', 'haproxy', 'apache'] 
 //     "IIS setup for GCP Windows would need gcloud SSH — deferred for now").
 //     Restricted to [] here pending parity.
 // nginx is rejected by install.sh validation on any Windows endpoint.
-export const WINDOWS_PROXIES_AZURE = ['iis', 'caddy', 'traefik', 'haproxy', 'apache'] as const;
+export const WINDOWS_PROXIES_AZURE = ['iis', 'caddy', 'traefik'] as const;
 export const WINDOWS_PROXIES_AWS = ['iis'] as const;
 export const WINDOWS_PROXIES_GCP: readonly string[] = [];
 

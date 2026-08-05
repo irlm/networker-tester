@@ -223,22 +223,44 @@ public sealed class WatchdogService : BackgroundService
         }
 
         // ── Stale `queued` runs ─────────────────────────────────────────────
-        // LINQ: WHERE status = 'queued' AND created_at < now - 300s
-        //   AND config.endpoint_kind <> 'pending'.
-        // Pending-endpoint runs are waiting on the provisioning orchestrator
-        // (which flips them to `provisioning`, then back to `queued` with a
-        // concrete endpoint once the VM is live) — the "no runner claimed it"
-        // cutoff does not apply to them.
-        var queuedCutoff = now - QueuedCutoff;
-        var stuckQueued = await db.TestRuns
-            .Where(r => r.Status == "queued"
-                && r.CreatedAt < queuedCutoff
-                && r.TestConfig.EndpointKind != "pending")
-            .Select(r => r.Id)
-            .ToListAsync(ct)
-            .ConfigureAwait(false);
-
+        // Two guards beyond the Rust original (2026-08-03 matrix diagnosis —
+        // BOTH bit the same relaunch):
+        //
+        // 1. LIVENESS: the error text always said "check that an agent is
+        //    online", but nothing checked. A queued run behind a CONNECTED but
+        //    busy runner is legitimately waiting its turn — killing it at 5min
+        //    starves any launch wider than the runner's concurrency. Only reap
+        //    when the registry has no online agent at all.
+        // 2. CLOCK BASIS: created_at is wrong for promoted cells — provisioning
+        //    routinely takes >5min, promotion rewrites endpoint_kind away from
+        //    'pending' (losing that exclusion), and the run re-queues already
+        //    older than the cutoff → reaped on the next tick before the runner
+        //    could ever claim it. The orchestrator stamps last_heartbeat at
+        //    re-queue, so the queued-age basis is COALESCE(last_heartbeat,
+        //    created_at) — "time since it became claimable".
+        //
+        // Pending-endpoint runs are still excluded — they wait for the
+        // provisioning orchestrator, not an agent.
         var reapedQueued = 0;
+        var anyAgentOnline = _registry.OnlineAgents().Count > 0;
+        // A runner being auto-woken for queued work (power_state 'starting')
+        // takes a few minutes to boot + connect — no agent is online during
+        // that window, but the queued runs are about to be claimable. Don't
+        // reap while a wake is in flight.
+        var anyWaking = !anyAgentOnline
+            && await db.ProjectTesters.AnyAsync(t => t.PowerState == "starting", ct)
+                .ConfigureAwait(false);
+        var queuedCutoff = now - QueuedCutoff;
+        var stuckQueued = anyAgentOnline || anyWaking
+            ? new List<Guid>()
+            : await db.TestRuns
+                .Where(r => r.Status == "queued"
+                    && (r.LastHeartbeat ?? r.CreatedAt) < queuedCutoff
+                    && r.TestConfig.EndpointKind != "pending")
+                .Select(r => r.Id)
+                .ToListAsync(ct)
+                .ConfigureAwait(false);
+
         foreach (var runId in stuckQueued)
         {
             var affected = await db.TestRuns

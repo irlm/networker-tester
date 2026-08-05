@@ -169,10 +169,16 @@ public sealed class OrphanReaperScopeTests
 
         var scopes = await OrphanReaperService.ResolveAzureScopesAsync(db, cipher, default);
 
-        var s = Assert.Single(scopes);
+        // Base scope + the always-added endpoint-RG scope for the subscription.
+        Assert.Equal(2, scopes.Count);
+        var s = Assert.Single(scopes, x => x.ResourceGroup != OrphanReaperService.EndpointResourceGroup);
         Assert.Equal("sub-PROD", s.Subscription);
         Assert.Equal("ALETHEDASH-RG", s.ResourceGroup);
         Assert.Equal("cloud_account", s.Source);
+        var ep = Assert.Single(scopes, x => x.ResourceGroup == OrphanReaperService.EndpointResourceGroup);
+        Assert.Equal("sub-PROD", ep.Subscription);
+        // Endpoint sweep reuses the base scope's credentials.
+        Assert.Equal(s.ServicePrincipal, ep.ServicePrincipal);
         // SP creds were present → we'll log in with them, not the ambient identity.
         Assert.NotNull(s.ServicePrincipal);
         Assert.Equal("client-abc", s.ServicePrincipal!.Value.ClientId);
@@ -190,7 +196,7 @@ public sealed class OrphanReaperScopeTests
 
         var scopes = await OrphanReaperService.ResolveAzureScopesAsync(db, cipher, default);
 
-        var s = Assert.Single(scopes);
+        var s = Assert.Single(scopes, x => x.ResourceGroup != OrphanReaperService.EndpointResourceGroup);
         Assert.Equal(OrphanReaperService.DefaultAzureResourceGroup, s.ResourceGroup);
         Assert.Equal("networker-testers", s.ResourceGroup);
     }
@@ -209,11 +215,13 @@ public sealed class OrphanReaperScopeTests
 
         var scopes = await OrphanReaperService.ResolveAzureScopesAsync(db, cipher, default);
 
-        var s = Assert.Single(scopes);
+        var s = Assert.Single(scopes, x => x.ResourceGroup != OrphanReaperService.EndpointResourceGroup);
         // Connection is added first → it wins the de-dupe (ambient identity, no SP
         // login needed for a scope the ambient identity already covers).
         Assert.Equal("cloud_connection", s.Source);
         Assert.Null(s.ServicePrincipal);
+        // The endpoint-RG scope de-dupes across the two sources too.
+        Assert.Single(scopes, x => x.ResourceGroup == OrphanReaperService.EndpointResourceGroup);
     }
 
     [Fact]
@@ -251,7 +259,7 @@ public sealed class OrphanReaperScopeTests
 
         var scopes = await OrphanReaperService.ResolveAzureScopesAsync(db, cipher: null, default);
 
-        var s = Assert.Single(scopes);
+        var s = Assert.Single(scopes, x => x.ResourceGroup != OrphanReaperService.EndpointResourceGroup);
         Assert.Equal("cloud_connection", s.Source);
     }
 
@@ -262,6 +270,9 @@ public sealed class OrphanReaperScopeTests
     [InlineData("Tester-EastUS-01", true)] // case-insensitive
     [InlineData("ab-ubuntu-loop-01", true)]
     [InlineData("nwk-ep-eu-west-01", true)]
+    [InlineData("nwk-a-500c7ae4", true)]       // auto-provisioned matrix cell (v0.28.129+)
+    [InlineData("nwk-a-500c7ae4VMNic", true)]  // …and its child resources
+    [InlineData("nwk-auto-azuree", true)]      // pre-v0.28.129 cell naming
     [InlineData("prod-app-server", false)] // someone else's VM — never touched
     [InlineData("bastion-nic", false)]
     [InlineData("nwk-something-else", false)] // nwk- alone isn't an owned prefix

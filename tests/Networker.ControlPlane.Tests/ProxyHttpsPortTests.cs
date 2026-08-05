@@ -18,7 +18,10 @@ public class ProxyHttpsPortTests
     [InlineData("traefik", 8455)]
     [InlineData("haproxy", 8456)]
     [InlineData("apache", 8457)]
-    [InlineData("iis", 443)]
+    // The legacy Rust table said 443, but the actual Windows deploy
+    // (_iis_setup_powershell) binds HTTPS on 8445 — probing 443 failed every
+    // IIS matrix cell "never became reachable" (2026-08-03).
+    [InlineData("iis", 8445)]
     public void Known_stacks_map_to_their_listener_ports(string stack, int expected)
         => Assert.Equal(expected, RunDispatcher.ProxyHttpsPort(stack));
 

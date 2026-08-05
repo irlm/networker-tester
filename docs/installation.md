@@ -31,6 +31,49 @@ Install the endpoint:
 curl -fsSL https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh | bash -s -- endpoint
 ```
 
+### Self-hosting the control plane
+
+`install.sh dashboard` installs a complete single-VM deployment: PostgreSQL,
+the C# control plane, a local agent, the prebuilt frontend, and an nginx
+reverse proxy.
+
+```bash
+DASHBOARD_ADMIN_PASSWORD='choose-a-strong-one' \
+  curl -fsSL https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh \
+  | bash -s -- dashboard
+```
+
+Everything is fetched as prebuilt release assets — `networker-controlplane`
+is a self-contained .NET publish directory, so the host needs no .NET runtime,
+and the frontend ships prebuilt, so it needs no Node.js either. Requires
+**v0.28.156 or newer**: earlier releases still asked for the Rust
+`networker-dashboard` assets, which stopped being built at v0.28.148.
+
+**`DASHBOARD_ADMIN_PASSWORD` is how you get in.** The control plane has no
+signup page. On first start, if — and only if — the `dash_user` table is
+completely empty, it seeds one platform admin (`DASHBOARD_ADMIN_EMAIL`,
+default `admin@localhost`) with that password and requires a change at first
+login. If you omit the variable the installer generates a random one and
+prints it at the end. On an existing deployment this is a permanent no-op: it
+will never modify, reset, or overwrite an account that already exists.
+
+Useful knobs: `DASHBOARD_FQDN` (enables Let's Encrypt and sets
+`DASHBOARD_PUBLIC_URL`), `DASHBOARD_DB_PASSWORD`, `CONTROLPLANE_PORT`
+(default 5030), `NETWORKER_VERSION` to pin a release.
+
+Afterwards:
+
+```bash
+systemctl status networker-dashboard          # the control plane
+journalctl -u networker-dashboard -f          # logs
+sudo cat /etc/networker-dashboard.env         # config + secrets (mode 600)
+```
+
+`DASHBOARD_JWT_SECRET` and `DASHBOARD_CREDENTIAL_KEY` in that file are
+generated once at install. Back them up: the app fail-closes without them, and
+losing `DASHBOARD_CREDENTIAL_KEY` permanently orphans every stored cloud
+credential.
+
 ### Windows PowerShell
 
 ```powershell
