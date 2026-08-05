@@ -33,6 +33,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against a 1.80 MB budget; largest chunk 355 kB against 450 kB. It also
   refuses to pass on an empty `dist/assets` (no vacuous green).
 
+- **Audit P1-6/P1-7/P1-8 — three unexercised enforcement surfaces.**
+  `RbacRouteMatrixTests` drives (role × route) against the real routes:
+  viewer and anonymous denied on six project writes, viewer still able to
+  read (guarding the over-tightening direction), admin-only routes denied to
+  viewer and operator, operator positively able to create a config, and
+  cross-project access denied for every role — the dashboard's `*.rbac`
+  tests mock the API client, so they only ever proved what the UI hides.
+  `SchedulerAndThrottleLoopTests` executes the scheduler loop body for the
+  first time (no test referenced `SchedulerService` at all): the
+  skip-and-advance guard creates ZERO dead queued rows when no agent is
+  online, first-fire seeding, disabled/future schedules untouched, and a
+  second tick that doesn't re-fire; plus the provisioning throttle's
+  capacity accounting, which had no test despite being the guard against
+  Azure's public-IP quota.
+
 ### Fixed
 - **`npm test` no longer passes when it discovers zero tests.**
   `--passWithNoTests` meant a config or glob mistake would exit green with
