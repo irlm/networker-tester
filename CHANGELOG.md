@@ -11,6 +11,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.154] — 2026-08-05
+
+### Added
+- **Audit P1-1/P1-2/P1-4 — three user-facing surfaces are now executed at the
+  HTTP layer.** `ReportAndShareHttpTests` (real Postgres, real routes): the
+  run report renders in **all four document formats** with the right content
+  type and verified magic bytes (`%PDF`, `PK` for DOCX) over a non-trivial
+  body — previously only the document *builders* were unit-tested, which is
+  how a DOCX 500 reached production once; an unknown format 400s instead of
+  500ing; `/infra` returns 200 for a real run (it reads `deployment.Config`
+  jsonb); the integrated project report renders; and the **share-link
+  lifecycle** is exercised end-to-end — create, fetch **unauthenticated** via
+  the public token, then revoke and prove the same token stops working. The
+  smoke suite previously only hit `/api/share/{unknown}`, whose 404 arm
+  short-circuits before the real query.
+- **Audit P1-11 — the dashboard bundle has a real budget.** `npm run
+  check:bundle-size` asserts a total and per-chunk budget over the built
+  output and fails CI when exceeded (vite's `chunkSizeWarningLimit` is only a
+  warning and has never failed a build). Current: 1.38 MB across 75 chunks
+  against a 1.80 MB budget; largest chunk 355 kB against 450 kB. It also
+  refuses to pass on an empty `dist/assets` (no vacuous green).
+
+- **Audit P1-6/P1-7/P1-8 — three unexercised enforcement surfaces.**
+  `RbacRouteMatrixTests` drives (role × route) against the real routes:
+  viewer and anonymous denied on six project writes, viewer still able to
+  read (guarding the over-tightening direction), admin-only routes denied to
+  viewer and operator, operator positively able to create a config, and
+  cross-project access denied for every role — the dashboard's `*.rbac`
+  tests mock the API client, so they only ever proved what the UI hides.
+  `SchedulerAndThrottleLoopTests` executes the scheduler loop body for the
+  first time (no test referenced `SchedulerService` at all): the
+  skip-and-advance guard creates ZERO dead queued rows when no agent is
+  online, first-fire seeding, disabled/future schedules untouched, and a
+  second tick that doesn't re-fire; plus the provisioning throttle's
+  capacity accounting, which had no test despite being the guard against
+  Azure's public-IP quota.
+
+- **Audit P1-12 — the matrix wizard finally has tests.** `FullStackPage` (the
+  feature whose end-to-end path was broken for the whole v0.28.129-147
+  campaign) had no test file at all. Its cell-fan-out logic is extracted to
+  `lib/matrix-cells.ts` and pinned by 11 tests: one cell per (testbed ×
+  proxy), fan-out across testbeds, **every cell of a matrix gets a distinct
+  label** (the v0.28.129 collision class), every cell marked `pending` so the
+  orchestrator provisions it, the runner pinned only when explicitly chosen,
+  and the matrix-vs-single-run boundary.
+
+### Fixed
+- **`npm test` no longer passes when it discovers zero tests.**
+  `--passWithNoTests` meant a config or glob mistake would exit green with
+  the frontend suite silently not running.
+
+---
+
 ## [0.28.153] — 2026-08-05
 
 ### Added
