@@ -38,6 +38,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on Postgres behaviour rather than on a comment; and distinct services do not
   block each other. Verified in both directions — removing the unlock turns
   three of the seven red.
+- **Audit P2 — the benchmark workflow now reports whether anything got
+  slower.** It ran the suite, printed OK/EMPTY per file and uploaded an
+  artifact — so it told you the benchmark EXECUTED, never whether latency
+  moved. A regression could ride for weeks with every run green. The workflow
+  now downloads the previous successful run's artifact and prints a per-workload
+  trend table (previous p50, current p50, delta) into the run summary, flagging
+  anything ≥20% slower. Median rather than mean, because shared CI runners have
+  a long right tail and a mean tracks the worst outlier instead of the typical
+  request; workloads with fewer than 5 successful attempts are reported as such
+  rather than given a meaningless percentage. **Informational, not blocking**:
+  a hard threshold on shared-runner numbers produces false alarms, and a check
+  that cries wolf gets muted — which is worse than no check. `actions: read`
+  was added to the workflow because `gh run download` needs it; without it the
+  comparison would silently degrade to "no baseline" every run.
 - **Audit P2 — hand-written test schemas are checked against the EF model.**
   Several SQLite suites build tables from DDL that is a hand copy of the model,
   and copies drift; EF's INSERT names every mapped column, so a missing one
