@@ -331,7 +331,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.145"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.146"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -5414,14 +5414,14 @@ $epExe = "C:\networker\networker-endpoint.exe"
 if (Test-Path $epExe) {
     $genSiteHelp = & $epExe --help 2>&1
     if ($genSiteHelp -match 'generate-site') {
-        Write-Host "Generating static test site via endpoint…"
+        Write-Host "Generating static test site via endpoint..."
         & $epExe generate-site $siteRoot --preset mixed --stack iis
     } else {
-        Write-Host "Endpoint does not support generate-site — creating static test page…"
+        Write-Host "Endpoint does not support generate-site -- creating static test page..."
         $genSite = $false
     }
 } else {
-    Write-Host "Endpoint binary not found at $epExe — creating static test page…"
+    Write-Host "Endpoint binary not found at $epExe -- creating static test page..."
     $genSite = $false
 }
 if ($genSite -eq $false -or -not (Test-Path "$siteRoot\index.html")) {
@@ -5450,7 +5450,7 @@ IIS_PS1_GENSITE
 
     cat <<'IIS_PS1_REST'
 
-# 3b. Create web.config — default doc, MIME types, and reverse-proxy rules
+# 3b. Create web.config -- default doc, MIME types, and reverse-proxy rules
 # for /page and /asset (pageload probes use dynamic endpoints on the backing server)
 $webConfig = @"
 <?xml version="1.0" encoding="UTF-8"?>
@@ -5494,7 +5494,7 @@ $webConfig | Out-File "$siteRoot\web.config" -Encoding UTF8
 Write-Host "web.config created (with reverse-proxy rules for /page, /asset, /download, /upload, /info, /api, /health)"
 
 # 4. Generate self-signed certificate (include FQDN in SAN for SNI/H3)
-Write-Host "Creating self-signed certificate…"
+Write-Host "Creating self-signed certificate..."
 $dnsNames = @("localhost", $env:COMPUTERNAME)
 if ($fqdn -and $fqdn -ne "") { $dnsNames += $fqdn }
 $cert = New-SelfSignedCertificate `
@@ -5520,7 +5520,7 @@ New-Website -Name "networker-iis" `
     -Port 8082 `
     -Force | Out-Null
 
-# Add HTTPS bindings — hostname-based with SNI (required for HTTP/3) + IP fallback
+# Add HTTPS bindings -- hostname-based with SNI (required for HTTP/3) + IP fallback
 if ($fqdn -and $fqdn -ne "") {
     New-WebBinding -Name "networker-iis" -Protocol "https" -Port 8445 -HostHeader $fqdn -SslFlags 1
     $sniBinding = Get-WebBinding -Name "networker-iis" -Protocol "https" -Port 8445 | Where-Object { $_.sslFlags -eq 1 }
@@ -5551,7 +5551,7 @@ Write-Host "IIS configured: HTTP=8082, HTTPS=8445"
 if ($needsReboot) {
     Write-Host "REBOOT_NEEDED"
 } else {
-    Write-Host "HTTP/3 registry already set — no reboot needed"
+    Write-Host "HTTP/3 registry already set -- no reboot needed"
 }
 IIS_PS1_REST
 }

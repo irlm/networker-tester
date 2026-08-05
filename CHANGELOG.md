@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.146] — 2026-08-04
+
+### Fixed
+- **The IIS em-dash is actually dead this time.** v0.28.141's ASCII cleanup
+  only covered a truncated span of `_iis_setup_powershell` (the span search
+  stopped at a PowerShell `}` inside the embedded heredoc), leaving the
+  original parse-killing em-dash at generated-script line 180 — retry-5's
+  logged PS output named it exactly. The full 8.7 KB function is now clean
+  (9 non-ASCII chars), and the bats guard — which previously passed
+  VACUOUSLY when generation failed — now asserts real generation (>100
+  lines) before ascii-purity.
+
+---
+
 ## [0.28.145] — 2026-08-04
 
 ### Added

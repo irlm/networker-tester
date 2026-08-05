@@ -1938,7 +1938,15 @@ JSON
 @test "iis powershell: generated script is pure ASCII (az run-command mangles UTF-8)" {
     # An em-dash inside a string became a stray quote under run-command's
     # encoding, failing the ENTIRE script at parse — no IIS was ever installed
-    # by the deploy path (2026-08-04 diag). Guard the whole generated script.
-    run bash -c "source '$SCRIPT' >/dev/null 2>&1; _iis_setup_powershell 'x.example.com' | LC_ALL=C grep -c '[^\x00-\x7F]'"
-    [ "$output" = "0" ]
+    # by the deploy path (2026-08-04 diag). The first version of this test
+    # passed VACUOUSLY when generation failed (empty output → grep -c 0), and
+    # the v0.28.141 "cleanup" only covered a truncated span of the function —
+    # both slipped through. Assert real generation THEN ascii-purity.
+    local out lines nonascii
+    out=$(bash -c "source '$SCRIPT' >/dev/null 2>&1; _iis_setup_powershell 'x.example.com'")
+    [ -n "$out" ]
+    lines=$(printf '%s\n' "$out" | wc -l | tr -d ' ')
+    [ "$lines" -gt 100 ]
+    nonascii=$(printf '%s' "$out" | LC_ALL=C grep -c '[^\x00-\x7F]' || true)
+    [ "$nonascii" = "0" ]
 }
