@@ -118,10 +118,24 @@ main() {
     start_endpoint
     apply_netem
 
-    echo ">> measuring latency (tcp) under the shaped path…"
+    # ── Latency phase: delay shaping only ────────────────────────────────
+    echo ">> measuring latency (tcp) under delay shaping…"
     run_tester "tcp" "${OUT_DIR}/latency.json" 10
 
-    echo ">> measuring throughput (download) under the shaped path…"
+    # ── Throughput phase: RATE shaping WITHOUT added delay ────────────────
+    # A single TCP flow over a high-RTT path is bounded by the
+    # bandwidth-delay product (window/RTT), NOT by the link rate — measuring
+    # throughput under 50ms RTT reads ~31Mbps on a 100Mbit link, which is
+    # correct TCP physics, not a measurement error. To validate the reported
+    # figure against the RATE, the rate must be the binding constraint: shape
+    # rate only, no added delay.
+    echo ">> re-shaping: rate only (no added delay) for the throughput phase…"
+    tc qdisc del dev "$IFACE" root 2>/dev/null || true
+    if ! tc qdisc add dev "$IFACE" root netem rate "${IMPOSED_RATE_MBIT}mbit"; then
+        echo "ERROR: failed to re-apply netem for the throughput phase" >&2
+        exit 2
+    fi
+    echo ">> measuring throughput (download) under rate shaping…"
     run_tester "download" "${OUT_DIR}/throughput.json" 3
 
     python3 - "$OUT_DIR" "$IMPOSED_DELAY_MS" "$IMPOSED_RATE_MBIT" \

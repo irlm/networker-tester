@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ABOVE the cap means the shaping was bypassed or the math is wrong. Results
   are written to `benchmarks/baselines/measurement-accuracy.json` and uploaded
   as a CI artifact. New `measurement-accuracy` job in CI (Rust-gated).
+  Methodology note: the two phases shape differently on purpose — latency
+  under `delay`, throughput under `rate` with NO added delay, because a single
+  TCP flow over a high-RTT path is bounded by the bandwidth-delay product
+  rather than the link rate (measuring under 50 ms RTT reads ~31 Mbps on a
+  100 Mbit link — correct TCP physics, not a measurement error). First green
+  run: **RTT 50.31 ms measured against 50.0 ms imposed — 0.31 ms error.**
 
 ---
 
