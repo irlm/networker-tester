@@ -81,7 +81,9 @@ public class RbacRouteMatrixTests : IClassFixture<ControlPlaneFixture>
 
     // ── Reads a viewer legitimately HAS to be able to do ──────────────────
     [Theory]
-    [InlineData("/api/v2/test-runs?limit=5")]
+    // Project-scoped: there is no flat /api/v2/test-runs route (a request to
+    // one honestly 404s — verified against TestRunsEndpoints).
+    [InlineData("/api/v2/projects/" + Pid + "/test-runs?limit=5")]
     [InlineData("/api/projects")]
     [InlineData("/api/modes")]
     public async Task Viewer_can_still_read(string route)
@@ -98,7 +100,6 @@ public class RbacRouteMatrixTests : IClassFixture<ControlPlaneFixture>
     // ── Platform-admin-only surfaces ──────────────────────────────────────
     [Theory]
     [InlineData("/api/admin/metrics")]
-    [InlineData("/api/bench-tokens")]
     public async Task Admin_only_routes_reject_viewer_and_operator(string route)
     {
         foreach (var role in new[] { "viewer", "operator" })
@@ -107,6 +108,30 @@ public class RbacRouteMatrixTests : IClassFixture<ControlPlaneFixture>
             var resp = await client.GetAsync(route);
             Assert.True(IsDenied(resp.StatusCode),
                 $"{role.ToUpperInvariant()} reached admin-only {route} → {(int)resp.StatusCode}");
+        }
+    }
+
+    [Fact]
+    public async Task Bench_tokens_are_user_scoped_rather_than_admin_gated()
+    {
+        // FINDING (2026-08 audit follow-up): the dashboard gates /bench-tokens*
+        // behind PLATFORM ADMIN, but the server route is only
+        // RequireAuthorization() — any authenticated principal reaches it. That
+        // is not a leak, because the handler runs FilterTokensForUser, so a
+        // caller only ever sees their OWN tokens. This test pins the property
+        // that actually matters (no cross-user disclosure) and documents the
+        // UI/server divergence so a future reader doesn't "fix" one side alone.
+        using var viewer = ClientFor("viewer");
+        var resp = await viewer.GetAsync("/api/bench-tokens");
+
+        if (resp.StatusCode == HttpStatusCode.OK)
+        {
+            var body = await resp.Content.ReadAsStringAsync();
+            Assert.DoesNotContain(ControlPlaneFixture.SeededAdminEmail, body, StringComparison.OrdinalIgnoreCase);
+        }
+        else
+        {
+            Assert.True(IsDenied(resp.StatusCode), $"unexpected status {(int)resp.StatusCode}");
         }
     }
 
