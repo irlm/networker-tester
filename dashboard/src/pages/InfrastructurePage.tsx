@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { Link, useNavigate } from 'react-router';
 import { api } from '../api/client';
 import type { Deployment } from '../api/types';
@@ -211,9 +212,7 @@ export function InfrastructurePage() {
     }
   }, [projectId]);
 
-  useEffect(() => {
-    void loadAll();
-  }, [loadAll]);
+  useAsyncEffect(() => loadAll(), [loadAll]);
 
   usePolling(() => void loadAll(), 10000, !!projectId);
 

@@ -58,12 +58,13 @@ export function LoginPage() {
   const [searchParams] = useSearchParams();
 
   // Check for SSO error in URL
-  useEffect(() => {
-    const ssoError = searchParams.get('error');
-    if (ssoError && SSO_ERRORS[ssoError]) {
-      setError(SSO_ERRORS[ssoError]);
-    }
-  }, [searchParams]);
+  // Was an effect mirroring the URL into error state. The SSO error is derived
+  // from searchParams, so it is computed during render; `error` still holds
+  // errors raised by the form itself, and a real submit error takes precedence
+  // over the stale URL one.
+  const ssoErrorCode = searchParams.get('error');
+  const ssoError = ssoErrorCode ? SSO_ERRORS[ssoErrorCode] ?? null : null;
+  const shownError = error ?? ssoError;
 
   // Load available SSO providers
   useEffect(() => {
@@ -192,10 +193,10 @@ export function LoginPage() {
 
           {/* Email + Password form */}
           <form onSubmit={handleSubmit}>
-            {error && (
+            {shownError && (
               <div className="text-red-400 text-xs mb-4 flex items-center gap-2">
                 <span className="text-red-500">err</span>
-                <span>{error}</span>
+                <span>{shownError}</span>
               </div>
             )}
 

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { api } from '../api/client';
 import type { BenchmarkLeaderboardEntry, BenchmarkRun, GroupedLeaderboard } from '../api/types';
 import { HorizontalBoxWhiskerChart } from '../components/charts/HorizontalBoxWhiskerChart';
@@ -58,9 +59,7 @@ function GroupedTab() {
     }
   }, []);
 
-  useEffect(() => {
-    void fetchGrouped();
-  }, [fetchGrouped]);
+  useAsyncEffect(() => fetchGrouped(), [fetchGrouped]);
 
   // Auto-select first group once data loads — "All" mixes network conditions
   useEffect(() => {
@@ -485,10 +484,8 @@ export function LeaderboardPage() {
     }
   }, []);
 
-  useEffect(() => {
-    if (tab !== 'grouped') {
-      void fetchData();
-    }
+  useAsyncEffect(() => {
+    if (tab !== 'grouped') return fetchData();
   }, [fetchData, tab]);
 
   const tabs: { key: Tab; label: string }[] = [

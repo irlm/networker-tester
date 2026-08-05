@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef } from 'react';
+import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { api } from '../api/client';
 import type { ProjectMember, WorkspaceInvite, ImportResult } from '../api/types';
 import { useProject } from '../hooks/useProject';
@@ -85,7 +86,7 @@ export function ProjectMembersPage() {
     }
   }, [projectId, addToast]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useAsyncEffect(() => loadData(), [loadData]);
 
   const handleInvite = async () => {
     if (!projectId || !newEmail.trim()) return;

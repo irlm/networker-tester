@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useAsyncEffect } from '../hooks/useAsyncEffect';
+import { useNow } from '../hooks/useNow';
 import {
   testersApi,
   type TesterRow,
@@ -122,33 +124,37 @@ export function TesterDetailDrawer({
   const queueMap = useTesterSubscription(projectId, testerIds);
   const queueState = tester ? queueMap[tester.tester_id] : undefined;
 
-  useEffect(() => {
+  // The three resets ran synchronously in the effect body. Deferring them with
+  // the fetch keeps the same visible behaviour — at most one extra frame of the
+  // previous tester's cost — without the cascading render. useAsyncEffect owns
+  // the cancellation flag this effect used to hand-roll.
+  useAsyncEffect((cancelled) => {
     if (!tester) return;
-    let cancelled = false;
     setCostEstimate(null);
     setCostError(null);
     setEditingSchedule(false);
-    testersApi
+
+    const cost = testersApi
       .getCostEstimate(projectId, tester.tester_id)
       .then((c) => {
-        if (!cancelled) setCostEstimate(c);
+        if (!cancelled()) setCostEstimate(c);
       })
       .catch((e) => {
-        if (!cancelled)
+        if (!cancelled())
           setCostError(e instanceof Error ? e.message : 'Cost unavailable');
       });
+
     // Latest released version — served from the dashboard's server-side cache.
-    testersApi
+    const version = testersApi
       .refreshLatestVersion(projectId)
       .then((r) => {
-        if (!cancelled) setLatestVersion(r.latest_version ?? null);
+        if (!cancelled()) setLatestVersion(r.latest_version ?? null);
       })
       .catch(() => {
         // Non-fatal — leave "Latest known" as an em dash.
       });
-    return () => {
-      cancelled = true;
-    };
+
+    return Promise.all([cost, version]);
   }, [projectId, tester]);
 
   // Escape closes the drawer — unless a confirm dialog is open (it handles
@@ -180,6 +186,10 @@ export function TesterDetailDrawer({
     [onChanged],
   );
 
+  // Clock from state, not read during render (react-hooks/purity). Called
+  // before the early return so hook order stays stable.
+  const now = useNow();
+
   if (!tester) return null;
 
   const isError = tester.power_state === 'error';
@@ -188,7 +198,7 @@ export function TesterDetailDrawer({
   const keyExpiry = {
     expired: Boolean(
       tester.api_key_expires_at &&
-        new Date(tester.api_key_expires_at).getTime() <= Date.now(),
+        new Date(tester.api_key_expires_at).getTime() <= now,
     ),
   };
   const isRunningOrQueued =

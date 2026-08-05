@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useNow } from '../hooks/useNow';
+import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { useProject } from '../hooks/useProject';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useApprovalSSE } from '../hooks/useSSE';
@@ -15,9 +17,11 @@ const statusBadge: Record<string, string> = {
   expired: 'bg-gray-500/20 text-gray-400 border border-gray-500/30',
 };
 
-function computeRelativeTime(iso: string): string {
+// `now` is passed in rather than read from the clock so these stay pure
+// functions of their arguments — the component supplies it from state.
+function computeRelativeTime(iso: string, now: number): string {
   const d = new Date(iso);
-  const diff = Date.now() - d.getTime();
+  const diff = now - d.getTime();
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return 'just now';
   if (mins < 60) return `${mins}m ago`;
@@ -26,9 +30,9 @@ function computeRelativeTime(iso: string): string {
   return d.toLocaleDateString();
 }
 
-function computeTimeUntil(iso: string): string | null {
+function computeTimeUntil(iso: string, now: number): string | null {
   const d = new Date(iso);
-  const diff = d.getTime() - Date.now();
+  const diff = d.getTime() - now;
   if (diff <= 0) return null;
   const mins = Math.floor(diff / 60000);
   if (mins < 60) return `${mins}m`;
@@ -38,15 +42,17 @@ function computeTimeUntil(iso: string): string | null {
   return `${days}d`;
 }
 
+// The label is fully derived from (iso, now) — mirroring it into state and
+// re-syncing with an effect was the "you might not need an effect" pattern, and
+// the effect's setState cascaded a render on every prop change.
 function RelativeTime({ iso }: { iso: string }) {
-  const [label, setLabel] = useState(() => computeRelativeTime(iso));
-  useEffect(() => { setLabel(computeRelativeTime(iso)); }, [iso]);
-  return <span>{label}</span>;
+  const now = useNow(60_000);
+  return <span>{computeRelativeTime(iso, now)}</span>;
 }
 
 function TimeUntil({ iso }: { iso: string }) {
-  const [label, setLabel] = useState(() => computeTimeUntil(iso));
-  useEffect(() => { setLabel(computeTimeUntil(iso)); }, [iso]);
+  const now = useNow(60_000);
+  const label = computeTimeUntil(iso, now);
   if (label === null) return <span className="text-red-400">expired</span>;
   return <span>{label}</span>;
 }
@@ -74,9 +80,7 @@ export function CommandApprovalsPage() {
     }
   }, [projectId]);
 
-  useEffect(() => {
-    fetchPending();
-  }, [fetchPending]);
+  useAsyncEffect(() => fetchPending(), [fetchPending]);
 
   // Refresh on SSE events
   useApprovalSSE(() => {

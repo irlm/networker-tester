@@ -81,12 +81,19 @@ export function BenchTokensPage() {
   const [revoking, setRevoking] = useState<string | null>(null);
   const [revokingAll, setRevokingAll] = useState(false);
   const [revokingRun, setRevokingRun] = useState<string | null>(null);
-  const [lastRefresh, setLastRefresh] = useState<number>(Date.now());
-  const [, setTick] = useState(0); // force re-render for relative time
+  // Lazy initialisers: `useState(Date.now())` evaluates Date.now() on EVERY
+  // render and throws the value away, which is impure (react-hooks/purity).
+  const [lastRefresh, setLastRefresh] = useState(() => Date.now());
+  // `now` replaces a bare tick counter. The counter existed only to force a
+  // re-render so a render-time Date.now() would be re-read — reading the clock
+  // during render is the impurity itself. Holding the timestamp in state makes
+  // render a pure function of props+state, and the relative label still updates
+  // every 5s.
+  const [now, setNow] = useState(() => Date.now());
 
   // Tick every 5s so "refreshed Xs ago" updates
   useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 5000);
+    const id = setInterval(() => setNow(Date.now()), 5000);
     return () => clearInterval(id);
   }, []);
 
@@ -454,7 +461,7 @@ export function BenchTokensPage() {
         const warning = activeTokens.filter(t => { const ms = ttlMs(t.expires); return ms >= 1800_000 && ms < 3600_000; }).length;
         const healthy = activeTokens.length - critical - warning;
         const nextExpiry = Math.min(...activeTokens.map(t => ttlMs(t.expires)).filter(ms => ms > 0));
-        const s = Math.floor((Date.now() - lastRefresh) / 1000);
+        const s = Math.floor((now - lastRefresh) / 1000);
 
         return (
           <div className="mt-3 flex items-center justify-between text-[10px] text-gray-500 border-t border-gray-800/50 pt-2">

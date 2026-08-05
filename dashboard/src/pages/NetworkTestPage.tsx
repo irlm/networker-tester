@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { useNavigate, useSearchParams } from 'react-router';
 import { api } from '../api/client';
 import { testersApi, type TesterRow } from '../api/testers';
@@ -178,15 +179,16 @@ export function NetworkTestPage() {
 
   // ── Data loading ─────────────────────────────────────────────────────
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    Promise.all([
+  // `loading` starts true, so the removed synchronous setLoading(true) only
+  // mattered on a projectId change — where the list now stays visible until the
+  // new data lands instead of flashing a spinner. useAsyncEffect owns the
+  // cancellation flag this effect used to hand-roll.
+  useAsyncEffect((cancelled) => Promise.all([
       api.getDeployments(projectId, { limit: 50 }).catch(() => [] as Deployment[]),
       testersApi.listTesters(projectId).catch(() => [] as TesterRow[]),
       api.listTestRuns(projectId, { endpoint_kind: 'network', limit: 5 }).catch(() => [] as TestRun[]),
     ]).then(([deps, rnrs, runs]) => {
-      if (cancelled) return;
+      if (cancelled()) return;
       // Only COMPLETED deployments are runnable targets — failed/cancelled ones
       // have no live endpoint and used to be listed (and selectable!) here,
       // producing guaranteed-failing runs (E2E P2-9).
@@ -194,9 +196,7 @@ export function NetworkTestPage() {
       setTesters(rnrs);
       setRecentRuns(runs);
       setLoading(false);
-    });
-    return () => { cancelled = true; };
-  }, [projectId]);
+    }), [projectId]);
 
   // ── Derived ──────────────────────────────────────────────────────────
 

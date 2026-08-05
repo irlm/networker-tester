@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { PageHeader } from '../components/common/PageHeader';
 import { useProject } from '../hooks/useProject';
 import { usePageTitle } from '../hooks/usePageTitle';
@@ -85,9 +86,7 @@ export function VmHistoryPage() {
     }
   }, [projectId, typeFilter]);
 
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  useAsyncEffect(() => refresh(), [refresh]);
 
   const loadMore = useCallback(async () => {
     if (!projectId || rows.length === 0) return;
