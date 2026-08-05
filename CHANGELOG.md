@@ -11,6 +11,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.162] — 2026-08-05
+
+### Changed
+- **Frontend dev-tooling majors: ESLint 9 → 10 and TypeScript 5.9 → 6
+  (issue #574).** The stale dependabot PRs failed with `ERESOLVE` because they
+  were opened before the plugin ecosystem caught up. It has: `typescript-eslint`
+  8.66, `eslint-plugin-react-hooks` 7.1.1 and `eslint-plugin-react-refresh`
+  0.5.3 all declare `eslint ^10` support now, so the upgrade goes through
+  cleanly with no peer overrides.
+- **TypeScript 7 is NOT included, and the reason is upstream, not effort.**
+  `tsc` itself is fine — the build passes on 7.0.2 — but `eslint .` dies with
+  *"typescript-eslint does not support TS 7.0"*, tracked at
+  typescript-eslint#10940 for TS ≥7.1. Microsoft's suggested workaround is to
+  run typescript-eslint against a side-by-side TS 6 API, which means carrying
+  two TypeScript installs to satisfy a linter. TypeScript **6.0.3** was taken
+  instead: it is inside typescript-eslint's supported range (`>=4.8.4 <6.1.0`),
+  it is a full major step, and it leaves exactly one version to cover when
+  typescript-eslint ships 7.x support.
+
+### Added
+- **ESLint 10 enforces two `react-hooks` rules that ESLint 9 was not**, which
+  surfaced **33 pre-existing findings** (the plugin is unchanged at 7.1.1 —
+  only the ESLint major moved):
+  `react-hooks/set-state-in-effect` (29) flags the codebase's standard
+  data-loading shape, where an effect calls a `useCallback` that sets state
+  synchronously before awaiting; `react-hooks/purity` (4) flags `Date.now()`
+  read during render to compute relative times. Both criticisms are legitimate
+  and both need behavioural refactors across ~15 components. They are set to
+  **warn** rather than silenced: visible on every lint run, not blocking, and
+  not bundled into a toolchain upgrade whose risk would then have nothing to do
+  with the upgrade. Tracked for a dedicated pass.
+
+---
+
 ## [0.28.161] — 2026-08-05
 
 ### Added
