@@ -59,7 +59,7 @@ $ErrorActionPreference = "Stop"
 $RepoHttps     = "https://github.com/irlm/networker-tester"
 $RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"
-$InstallerVersion = "v0.28.130"  # fallback when gh is unavailable
+$InstallerVersion = "v0.28.161"  # fallback when gh is unavailable
 
 # ── Print helpers ──────────────────────────────────────────────────────────────
 function Write-Ok   ($msg) { Write-Host "  v " -NoNewline -ForegroundColor Green;   Write-Host $msg }
@@ -2000,18 +2000,23 @@ function Invoke-EnsureNssm {
     # have no native --install-service flag (caddy on some versions, traefik).
     $nssmCmd = Get-Command nssm -ErrorAction SilentlyContinue
     if ($nssmCmd) { return $nssmCmd.Source }
-    Write-Info "Installing nssm via winget..."
-    $prevErr = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    & winget install --id NSSM.NSSM -e --source winget `
-        --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
-    $ErrorActionPreference = $prevErr
+    # winget is absent on Windows Server SKUs — calling it there throws before
+    # the download fallback below can run (same class as the caddy install;
+    # 2026-08-04 diag VM).
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        Write-Info "Installing nssm via winget..."
+        $prevErr = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        & winget install --id NSSM.NSSM -e --source winget `
+            --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
+        $ErrorActionPreference = $prevErr
 
-    $machinePath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
-    $userPath    = [System.Environment]::GetEnvironmentVariable("PATH", "User")
-    $env:PATH    = "$machinePath;$userPath"
-    $nssmCmd = Get-Command nssm -ErrorAction SilentlyContinue
-    if ($nssmCmd) { return $nssmCmd.Source }
+        $machinePath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
+        $userPath    = [System.Environment]::GetEnvironmentVariable("PATH", "User")
+        $env:PATH    = "$machinePath;$userPath"
+        $nssmCmd = Get-Command nssm -ErrorAction SilentlyContinue
+        if ($nssmCmd) { return $nssmCmd.Source }
+    }
 
     # Fallback: direct download (choco mirror)
     $nssmZip = Join-Path $env:TEMP "nssm.zip"
@@ -2034,7 +2039,10 @@ function Invoke-SetupCaddy {
     New-Item -ItemType Directory -Force $stackDir | Out-Null
 
     $caddyCmd = Get-Command caddy -ErrorAction SilentlyContinue
-    if (-not $caddyCmd) {
+    # winget does not exist on Windows Server SKUs — calling it there throws
+    # under -Setup's strict error mode BEFORE the GitHub fallback below could
+    # run, which is why no matrix Caddy cell ever served (2026-08-04 diag VM).
+    if (-not $caddyCmd -and (Get-Command winget -ErrorAction SilentlyContinue)) {
         Write-Info "Installing Caddy via winget..."
         $prevErr = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
@@ -2046,17 +2054,19 @@ function Invoke-SetupCaddy {
         $caddyCmd = Get-Command caddy -ErrorAction SilentlyContinue
     }
     if (-not $caddyCmd) {
-        # Fallback: direct download from GitHub releases
+        # Fallback: Caddy's official build service returns the bare exe.
+        # (The old GitHub "latest/download/caddy_windows_amd64.zip" shortcut
+        # 404s — release assets are version-named — so this fallback had never
+        # actually worked; 2026-08-04 diag VM.)
         $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
-        $caddyZip = Join-Path $env:TEMP "caddy.zip"
         $caddyExe = Join-Path $stackDir "caddy.exe"
+        Write-Info "Downloading Caddy from caddyserver.com..."
         Invoke-WebRequest -UseBasicParsing `
-            -Uri "https://github.com/caddyserver/caddy/releases/latest/download/caddy_windows_${arch}.zip" `
-            -OutFile $caddyZip
-        Expand-Archive -Path $caddyZip -DestinationPath $stackDir -Force
-        if (-not (Test-Path $caddyExe)) {
+            -Uri "https://caddyserver.com/api/download?os=windows&arch=${arch}" `
+            -OutFile $caddyExe -TimeoutSec 120
+        if (-not (Test-Path $caddyExe) -or (Get-Item $caddyExe).Length -lt 1MB) {
             Write-Err "Caddy download failed -- skipping."
-            return
+            throw "caddy install failed: download unavailable"
         }
     } else {
         $caddyExe = $caddyCmd.Source
@@ -2073,19 +2083,39 @@ function Invoke-SetupCaddy {
     }
 }
 
+# NOTE: Caddy v2 rejects content after '{' on the same line -- one-line
+# handle blocks failed `caddy validate` and the service never started
+# (identical to the Linux Caddyfile bug fixed in v0.28.133; found on the
+# Windows path 2026-08-04). Blocks must be multi-line.
 :8091 {
     root * $siteRoot
     file_server
-    handle /page* { reverse_proxy 127.0.0.1:8080 }
-    handle /asset* { reverse_proxy 127.0.0.1:8080 }
+    handle /page* {
+        reverse_proxy 127.0.0.1:8080
+    }
+    handle /asset* {
+        reverse_proxy 127.0.0.1:8080
+    }
 }
 
 :8454 {
     tls internal
     root * $siteRoot
     file_server
-    handle /page* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
-    handle /asset* { reverse_proxy https://127.0.0.1:8443 { transport http { tls_insecure_skip_verify } } }
+    handle /page* {
+        reverse_proxy https://127.0.0.1:8443 {
+            transport http {
+                tls_insecure_skip_verify
+            }
+        }
+    }
+    handle /asset* {
+        reverse_proxy https://127.0.0.1:8443 {
+            transport http {
+                tls_insecure_skip_verify
+            }
+        }
+    }
 }
 "@
     [IO.File]::WriteAllText($caddyfile, $cfg, [Text.Encoding]::UTF8)
@@ -2099,12 +2129,36 @@ function Invoke-SetupCaddy {
     Start-Process -FilePath $nssm -WindowStyle Hidden -Wait -ArgumentList @("install","networker-caddy",$caddyExe,"run","--config",$caddyfile,"--adapter","caddyfile")
     Start-Process -FilePath $nssm -WindowStyle Hidden -Wait -ArgumentList @("set","networker-caddy","AppDirectory",$stackDir)
     Start-Process -FilePath $nssm -WindowStyle Hidden -Wait -ArgumentList @("set","networker-caddy","Start","SERVICE_AUTO_START")
+    # Validate BEFORE starting — a config-syntax error otherwise surfaces
+    # only as an nssm crash-loop ("Paused" service) with no message.
+    # EAP must be Continue around the call: caddy logs INFO to stderr, and
+    # under Stop the 2>&1 redirect turns the first info line into a
+    # terminating exception (native-stderr ErrorRecord gotcha).
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $validation = & $caddyExe validate --config $caddyfile --adapter caddyfile 2>&1
+    $ErrorActionPreference = $prevEAP
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "Caddyfile failed validation:"
+        $validation | Select-Object -Last 3 | ForEach-Object { Write-Err "  $_" }
+        throw "caddy install failed: invalid Caddyfile"
+    }
+
     Start-Process -FilePath "sc.exe" -WindowStyle Hidden -Wait -ArgumentList @("start","networker-caddy")
 
     Invoke-EnsureFirewallRule "Networker-Caddy-HTTP"  "TCP" @(8091)
     Invoke-EnsureFirewallRule "Networker-Caddy-HTTPS" "TCP" @(8454)
     Invoke-EnsureFirewallRule "Networker-Caddy-QUIC"  "UDP" @(8454)
-    Write-Ok "Caddy serving test page on ports 8091 (HTTP) / 8454 (HTTPS+H3)"
+
+    # Port-serving check — service-active or registered is NOT success.
+    Start-Sleep -Seconds 3
+    try {
+        $null = Invoke-WebRequest -Uri "http://localhost:8091/" -UseBasicParsing -TimeoutSec 8
+        Write-Ok "Caddy serving test page on ports 8091 (HTTP) / 8454 (HTTPS+H3)"
+    } catch {
+        Write-Err "Caddy service registered but port 8091 is not serving."
+        throw "caddy install failed: port not serving after start"
+    }
 }
 
 # ── Traefik (ports 8092 / 8455) ──────────────────────────────────────────────
@@ -2146,9 +2200,13 @@ function Invoke-SetupTraefik {
     # treatment used on Linux for haproxy). Dynamic /page and /asset also
     # forward to the endpoint.
     $staticYaml = @"
+# NOTE: declare ONLY the entrypoints this stack owns. Traefik binds every
+# declared entrypoint eagerly at startup, so a vestigial ":8091" (which was
+# kept here "for doc parity") collides with CADDY's HTTP listener on any host
+# running both — traefik then exits instantly and nssm reports SERVICE_PAUSED.
+# Proven in CI 2026-08-05: "error while building entryPoint web: listen tcp
+# :8091: bind: Only one usage of each socket address".
 entryPoints:
-  web:
-    address: ":8091" # unused, kept for doc parity
   weblocal:
     address: ":8092"
   websecure:
@@ -2207,7 +2265,20 @@ tls:
     Invoke-EnsureFirewallRule "Networker-Traefik-HTTP"  "TCP" @(8092)
     Invoke-EnsureFirewallRule "Networker-Traefik-HTTPS" "TCP" @(8455)
     Invoke-EnsureFirewallRule "Networker-Traefik-QUIC"  "UDP" @(8455)
-    Write-Ok "Traefik serving test page on ports 8092 (HTTP) / 8455 (HTTPS+H3)"
+
+    # Port-serving check — nssm reports "started" for a process that exits
+    # immediately, so the service being registered proves nothing. The v0.28.150
+    # windows-exec job caught exactly this: "OK Traefik serving" printed while
+    # BOTH ports refused connections (same class as the caddy fixes).
+    Start-Sleep -Seconds 3
+    try {
+        $null = Invoke-WebRequest -Uri "http://localhost:8092/" -UseBasicParsing -TimeoutSec 8
+        Write-Ok "Traefik serving test page on ports 8092 (HTTP) / 8455 (HTTPS+H3)"
+    } catch {
+        Write-Err "Traefik service registered but port 8092 is not serving."
+        Write-Err "  nssm status: $(& $nssm status networker-traefik 2>&1)"
+        throw "traefik install failed: port not serving after start"
+    }
 }
 
 # ── HAProxy (ports 8093 / 8456) ──────────────────────────────────────────────
@@ -2306,17 +2377,32 @@ function Invoke-SetupApache {
         # URLs are not stable across versions; we use the versioned path and
         # fall back to a TODO warning when the download fails.
         Write-Info "Downloading Apache httpd from Apache Lounge..."
-        $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "win64-VS17" } else { "win64-VS17" }
         $zipPath = Join-Path $env:TEMP "apache.zip"
-        $url = "https://www.apachelounge.com/download/VS17/binaries/httpd-2.4.62-240904-${arch}.zip"
-        try {
-            Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing -TimeoutSec 60
-            Expand-Archive -Path $zipPath -DestinationPath $stackDir -Force
-        } catch {
-            Write-Warn "Apache download failed from Apache Lounge (URL changes with each release)."
-            Write-Warn "TODO: Apache httpd on Windows -- manually download from https://www.apachelounge.com/"
-            Write-Warn "  and extract to $stackDir\Apache24, then re-run installer with -HttpStacks apache."
-            return
+        # Apache Lounge's URLs are version-pinned and rotate with each release
+        # (the pinned 2.4.62 build 404'd by 2026-08 and every Windows Apache
+        # cell died on it). Try a candidate list, newest first, with a browser
+        # UA (their CDN rejects bare clients).
+        $urls = @(
+            "https://www.apachelounge.com/download/VS17/binaries/httpd-2.4.65-250724-win64-VS17.zip",
+            "https://www.apachelounge.com/download/VS17/binaries/httpd-2.4.63-250207-win64-VS17.zip",
+            "https://www.apachelounge.com/download/VS17/binaries/httpd-2.4.62-240904-win64-VS17.zip"
+        )
+        $got = $false
+        foreach ($url in $urls) {
+            try {
+                Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing -TimeoutSec 60 `
+                    -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) networker-installer"
+                Expand-Archive -Path $zipPath -DestinationPath $stackDir -Force
+                $got = $true
+                break
+            } catch {
+                Write-Info "  candidate failed: $url"
+            }
+        }
+        if (-not $got) {
+            Write-Err "Apache download failed from all Apache Lounge candidates."
+            Write-Err "Manually download from https://www.apachelounge.com/ and extract to $stackDir\Apache24."
+            throw "apache install failed: no downloadable Windows binary"
         }
     }
 

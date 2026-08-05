@@ -61,18 +61,31 @@ az account set --subscription <subscription-id>
 
 ## 2. Quick Deploy
 
-> **[LEGACY — script installs the retired Rust stack]**
-> `scripts/deploy-dashboard.sh` predates the C# cutover: it still downloads
-> the `networker-dashboard` binary (no longer published in current releases)
-> and creates the Rust-era `alethedash` service. Its infrastructure steps
-> (VM, PostgreSQL, nginx, SSL, SSO app registration, ACS) remain a useful
-> reference, but for the control plane itself follow
-> [Manual Setup](#3-manual-setup) below.
-
-The one-command path — creates everything in ~5 minutes:
+The one-command path is the installer, which deploys PostgreSQL, the C#
+control plane, a local agent, the prebuilt frontend and an nginx reverse proxy:
 
 ```bash
-./scripts/deploy-dashboard.sh \
+DASHBOARD_ADMIN_PASSWORD='choose-a-strong-one' \
+  curl -fsSL https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh \
+  | bash -s -- dashboard
+```
+
+`DASHBOARD_ADMIN_PASSWORD` is how you get in: the control plane has no signup
+page, and on first start it seeds one admin **only if** the user table is
+empty. Requires v0.28.156 or newer. Full details and the available knobs are in
+[`installation.md`](installation.md#self-hosting-the-control-plane).
+
+> **[LEGACY — `scripts/deploy-dashboard.sh` installs the retired Rust stack]**
+> It predates the C# cutover and still downloads the `networker-dashboard`
+> binary, which has not been published since the v0.28.148 decommission — a run
+> 404s partway through, *after* creating a VM, a database and DNS records. The
+> script now refuses to run for that reason and points here. Its infrastructure
+> steps (VM, PostgreSQL, nginx, SSL, SSO app registration, ACS) remain a useful
+> reference; to run it anyway, set `ALLOW_LEGACY_RUST_DEPLOY=1`.
+
+```bash
+# Legacy — infrastructure reference only, does NOT install a working control plane
+ALLOW_LEGACY_RUST_DEPLOY=1 ./scripts/deploy-dashboard.sh \
   --domain alethedash.com \
   --admin-email admin@yourcompany.com \
   --location eastus \

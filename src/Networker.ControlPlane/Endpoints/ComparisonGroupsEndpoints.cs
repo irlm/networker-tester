@@ -191,6 +191,16 @@ public static class ComparisonGroupsEndpoints
             for (var i = 0; i < cells.Count; i++)
             {
                 var cell = cells[i];
+                if (UnsupportedComboReason(cell) is { } why)
+                {
+                    // Fail the cell at LAUNCH with the real reason instead of
+                    // provisioning a VM whose proxy can never install (a
+                    // windows·haproxy cell burned a full provision + readiness
+                    // timeout every matrix round — HAProxy has no native
+                    // Windows build).
+                    failures.Add($"{cell.Label}: {why}");
+                    continue;
+                }
                 try
                 {
                     var cfg = new Data.Entities.TestConfig
@@ -202,7 +212,7 @@ public static class ComparisonGroupsEndpoints
                         EndpointRef = cell.EndpointRaw,
                         Workload = group.BaseWorkload,
                         Methodology = group.Methodology,
-                        MaxDurationSecs = DefaultMaxDurationSecs,
+                        MaxDurationSecs = CellMaxDurationSecs(group.BaseWorkload),
                         CreatedBy = user.UserId,
                         CreatedAt = now,
                         UpdatedAt = now,
@@ -249,6 +259,31 @@ public static class ComparisonGroupsEndpoints
     internal static string CellConfigName(string label, Guid groupId, int index, string launchNonce)
         => $"{label} · cg-{groupId.ToString()[..8]}·{index}·{launchNonce}";
 
+    /// <summary>Combos the installers can never satisfy — failed at launch
+    /// with the real reason instead of a doomed provision. Currently only
+    /// windows·haproxy (no native Windows build exists).</summary>
+    internal static string? UnsupportedComboReason(CellSpec cell)
+    {
+        if (cell.EndpointKind != "pending")
+        {
+            return null;
+        }
+        var pending = Provisioning.ProvisioningOrchestrator.ParsePending(cell.EndpointRaw);
+        if (pending is { Os: "windows", ProxyStack: "haproxy" })
+        {
+            return "HAProxy has no native Windows build — this combination cannot be provisioned (use a Linux HAProxy cell)";
+        }
+        if (pending is { Os: "windows", ProxyStack: "apache" })
+        {
+            // Apache Lounge (the de-facto Windows binary source) serves an HTML
+            // decoy to every scripted download — verified from both Azure and
+            // residential networks 2026-08-04 — and httpd.apache.org ships no
+            // Windows binaries. Only a manually pre-installed Apache24 works.
+            return "Apache httpd has no scriptable Windows binary source — pre-install it manually on an existing VM or use a Linux Apache cell";
+        }
+        return null;
+    }
+
     /// <summary>Parse the group's <c>cells</c> JSON into launch specs. Each cell
     /// carries a <c>label</c>, a polymorphic <c>endpoint</c> (kind pending /
     /// network / proxy), and an optional <c>runner_id</c>.</summary>
@@ -279,6 +314,57 @@ public static class ComparisonGroupsEndpoints
     }
 
     private const int DefaultMaxDurationSecs = 900;
+
+    /// <summary>Ceiling for a workload-derived cell deadline — guards against
+    /// a malformed workload producing an unbounded run. 8h (was 6h): the full
+    /// matrix workload legitimately estimates past 6h under the corrected
+    /// per-unit budget.</summary>
+    private const int MaxCellDurationSecs = 8 * 3600;
+
+    /// <summary>
+    /// Derive a cell's <c>max_duration_secs</c> from the group's base workload.
+    /// The old fixed 900s deadline was IMPOSSIBLE for real matrix workloads —
+    /// runs=100 × 26 modes needs hours, so every cell that reached the runner
+    /// was killed at ~16 minutes (2026-08-03). Budget: ~4s per (run × mode)
+    /// attempt (mixes ms-scale dns/tcp with multi-second pageload/throughput)
+    /// plus a 10-minute fixed buffer for startup/report/upload, floored at the
+    /// old default and capped at <see cref="MaxCellDurationSecs"/>. An
+    /// unparseable workload falls back to the old default.
+    /// </summary>
+    internal static int CellMaxDurationSecs(string? baseWorkloadJson)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(baseWorkloadJson))
+            {
+                return DefaultMaxDurationSecs;
+            }
+            using var doc = JsonDocument.Parse(baseWorkloadJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return DefaultMaxDurationSecs;
+            }
+            var runs = doc.RootElement.TryGetProperty("runs", out var r)
+                       && r.ValueKind == JsonValueKind.Number && r.TryGetInt32(out var rv) && rv > 0
+                ? rv
+                : 10;
+            var modes = doc.RootElement.TryGetProperty("modes", out var m)
+                        && m.ValueKind == JsonValueKind.Array
+                ? m.GetArrayLength()
+                : 1;
+            // 8s per (run × mode), not 4s: measured live (2026-08-04, 4 cells
+            // sharing one runner), the real attempt count runs ~1.7× runs×modes
+            // (payload sizes multiply throughput modes) and the slower proxies
+            // (haproxy/traefik) needed >4.2s per unit — both hit the old
+            // deadline at 78-85% complete while nginx/caddy squeaked through.
+            var estimate = (long)runs * Math.Max(modes, 1) * 8 + 600;
+            return (int)Math.Clamp(estimate, DefaultMaxDurationSecs, MaxCellDurationSecs);
+        }
+        catch (JsonException)
+        {
+            return DefaultMaxDurationSecs;
+        }
+    }
 
     // Shape a ComparisonGroup entity into the snake_case wire DTO matching the Rust
     // networker_common::ComparisonGroup. base_workload / methodology / cells are

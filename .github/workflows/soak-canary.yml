@@ -29,6 +29,12 @@ name: Prod run-execution canary
 on:
   schedule:
     - cron: '17 7 * * *'   # daily 07:17 UTC (30 min after the soak check)
+    # Weekly MATRIX-FLOW run (audit P0-5): phases 1-3 all drive a single cell,
+    # so the concurrent multi-cell path — where the whole v0.28.129-147
+    # campaign's bugs lived (VM-name collisions, IP-quota exhaustion, relaunch
+    # unique-name failures) — has never been exercised automatically. It
+    # provisions several VMs at once, so it runs weekly rather than nightly.
+    - cron: '17 8 * * 0'   # Sundays 08:17 UTC
   workflow_dispatch:
     inputs:
       reuse_runner:
@@ -43,6 +49,10 @@ on:
         description: 'Also run the full mode matrix through the proxy (1/0)'
         required: false
         default: '1'
+      matrix_flow:
+        description: 'Also run the multi-cell matrix flow phase — provisions ~3 VMs (1/0)'
+        required: false
+        default: '0'
 
 permissions:
   contents: read
@@ -66,6 +76,9 @@ jobs:
           CANARY_REUSE_RUNNER: ${{ github.event.inputs.reuse_runner || '1' }}
           CANARY_APIBENCH: ${{ github.event.inputs.apibench || '1' }}
           CANARY_MODE_COVERAGE: ${{ github.event.inputs.mode_coverage || '1' }}
+          # Weekly cron (Sunday 08:17) turns the matrix phase on; the nightly
+          # cron leaves it off. Manual runs use the input (default off).
+          CANARY_MATRIX: ${{ github.event.inputs.matrix_flow || (github.event.schedule == '17 8 * * 0' && '1') || '0' }}
         run: bash scripts/soak-canary.sh
 
       # ── Failure alerting (mirrors the soak check's pinned-issue pattern) ──

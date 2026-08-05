@@ -82,12 +82,15 @@ jobs:
               echo \"stuck_queued=\$STUCK\"
               [ \"\$STUCK\" = \"0\" ] || FAIL=1
 
-              # 3. no Rust writers
-              RUST_DASH=\$(systemctl is-active networker-dashboard || true)
-              RUST_AGENT=\$(systemctl is-active networker-agent || true)
+              # 3. no Rust writers — the retired networker-dashboard/agent
+              # crates were DELETED at the post-soak decommission (runbook §7).
+              # An active unit would mean someone resurrected them; not-found
+              # and inactive are both fine once the units are purged.
+              RUST_DASH=\$(systemctl is-active networker-dashboard 2>/dev/null || true)
+              RUST_AGENT=\$(systemctl is-active networker-agent 2>/dev/null || true)
               echo \"rust_dashboard=\$RUST_DASH rust_agent=\$RUST_AGENT\"
-              [ \"\$RUST_DASH\" = \"inactive\" ] || FAIL=1
-              [ \"\$RUST_AGENT\" = \"inactive\" ] || FAIL=1
+              case \"\$RUST_DASH\" in active|activating) FAIL=1;; esac
+              case \"\$RUST_AGENT\" in active|activating) FAIL=1;; esac
 
               # 4. lingering advisory locks (transient 1 is fine mid-tick; >2 suspicious)
               LOCKS=\$(sudo -u postgres psql alethedash_core -tAc \"SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND granted;\")
