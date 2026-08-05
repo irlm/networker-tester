@@ -202,11 +202,11 @@ version = "0.5.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap]]
-version = "4.6.4"
+version = "4.6.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap_builder]]
-version = "4.6.2"
+version = "4.6.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap_derive]]
@@ -526,7 +526,7 @@ version = "0.4.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.http]]
-version = "1.4.2"
+version = "1.5.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.http-body]]
@@ -1042,7 +1042,7 @@ version = "0.21.12"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustls]]
-version = "0.23.42"
+version = "0.23.43"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustls-native-certs]]
