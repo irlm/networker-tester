@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.147] — 2026-08-05
+
+### Fixed
+- **The wizards no longer offer Windows proxy combos the server rejects.**
+  HAProxy and Apache are gone from the Windows proxy pickers (both the
+  matrix testbed rows and the target deploy wizard, via the shared
+  constants): HAProxy ships no native Windows build and Apache has no
+  scriptable Windows binary source — the v0.28.141 launch gate refuses them
+  with the same reasons. UI and server lists are pinned against each other
+  from both sides (vitest + xUnit).
+
+---
+
 ## [0.28.146] — 2026-08-04
 
 ### Fixed
