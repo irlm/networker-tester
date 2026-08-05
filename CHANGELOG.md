@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.155] — 2026-08-05
+
+### Added
+- **Audit P0-1 — the comparison-group matrix launch is executed in a test.**
+  `ComparisonMatrixLaunchTests` drives the real HTTP route against real
+  Postgres: a 6-cell mixed-OS matrix creates one config + one run per cell
+  with distinct names; a RE-launch of the same group succeeds with a fresh
+  set (the v0.28.129 unique-name regression); unsupported Windows combos fail
+  at launch with real reasons while the supported cells still launch (per-cell
+  isolation, zero VMs burned); and a large workload gets a workload-scaled
+  cell deadline rather than the old hardcoded 900s. This flow previously had
+  only 4 JSON-parsing tests and was excluded from the write-endpoint sweep as
+  a "202 shell with no DB effect" — which was factually wrong.
+
+---
+
 ## [0.28.153] — 2026-08-05
 
 ### Added
