@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.153] — 2026-08-05
+
+### Added
+- **Audit P0-5 — the prod canary finally exercises the MULTI-CELL matrix
+  flow.** Phases 1-3 all drive a single cell, so the concurrent path — where
+  the entire v0.28.129-147 campaign's bugs lived (VM-name collisions,
+  public-IP quota exhaustion, relaunch unique-name failures, cross-cell
+  contention) — had never been exercised automatically. New phase 4 launches
+  a 3-cell mixed-stack matrix and asserts the flow-level invariants: all 3
+  cells launch, each gets its OWN test config (the v0.28.129 shared-name
+  collision), and at least 2 of 3 reach `completed` — one cell lost to cloud
+  flake is tolerable, but a systemic break takes them all down together,
+  which is exactly what this catches. It provisions ~3 VMs, so it runs on a
+  new **weekly** cron (Sundays 08:17 UTC) rather than nightly, and its groups
+  register for the existing bulletproof teardown before launching.
+
+---
+
 ## [0.28.150] — 2026-08-05
 
 ### Fixed
