@@ -101,6 +101,27 @@ jobs:
       - name: Run installer tests
         run: bats --tap tests/installer.bats
 
+      # tests/integration/{aws,azure} drive REAL cloud VMs, so CI can't execute
+      # them — but nothing referenced them either, so for five months they
+      # could have stopped parsing and no one would know (audit P1-15). Counting
+      # the tests loads and parses each file without running any of them, which
+      # is the cheapest thing that turns silent rot into a red build.
+      - name: Parse cloud integration suites (no execution)
+        run: |
+          set -euo pipefail
+          total=0
+          for f in tests/integration/*/*.bats; do
+            n="$(bats --count "$f")"
+            echo "  $f → $n test(s)"
+            [ "$n" -gt 0 ] || { echo "::error file=$f::suite parses to 0 tests"; exit 1; }
+            total=$((total + n))
+          done
+          echo "parsed $total cloud integration tests across $(ls tests/integration/*/*.bats | wc -l) suites"
+          # These reference install.sh component names; a rename there silently
+          # breaks every one of them. Fail here instead of on someone's laptop.
+          grep -q 'endpoint)' install.sh
+          grep -q 'tester)' install.sh
+
   # ── shellcheck on Windows installer (PowerShell syntax is checked by PSScriptAnalyzer) ──
   psscriptanalyzer:
     name: PSScriptAnalyzer (install.ps1)

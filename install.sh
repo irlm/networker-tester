@@ -238,7 +238,7 @@ Usage: install.sh [OPTIONS] [tester|endpoint|dashboard|both]
 
   tester      Install networker-tester (the diagnostic CLI client)
   endpoint    Install networker-endpoint (the target test server)
-  dashboard   Install networker-dashboard (control plane + web UI + agent)
+  dashboard   Install the control plane (C# API + web UI + local agent)
   both        Install tester + endpoint  [default]
 
 Install location (interactive; can also be set via flags):
@@ -331,7 +331,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.155"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.156"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -955,7 +955,7 @@ display_plan() {
     # ── Dashboard ─────────────────────────────────────────────────────────────
     if [[ $DO_INSTALL_DASHBOARD -eq 1 ]]; then
         echo ""
-        printf "    ${BOLD}networker-dashboard:${RESET}  Local install\n"
+        printf "    ${BOLD}control plane:${RESET}        Local install\n"
         printf "    %-22s %s\n" "PostgreSQL:"  "auto-install + configure"
         printf "    %-22s %s\n" "Frontend:"    "Node.js build → /opt/networker/dashboard"
         printf "    %-22s %s\n" "Service:"     "systemd (networker-dashboard.service)"
@@ -2578,7 +2578,7 @@ prompt_component_selection() {
         3) COMPONENT="endpoint"; DO_INSTALL_TESTER=0; DO_INSTALL_ENDPOINT=1
            print_ok "Installing: networker-endpoint only" ;;
         4) COMPONENT="dashboard"; DO_INSTALL_TESTER=0; DO_INSTALL_ENDPOINT=0; DO_INSTALL_DASHBOARD=1
-           print_ok "Installing: networker-dashboard (control plane + web UI)" ;;
+           print_ok "Installing: control plane (C# API + web UI)" ;;
         *) COMPONENT="both";     DO_INSTALL_TESTER=1; DO_INSTALL_ENDPOINT=1
            print_ok "Installing: networker-tester + networker-endpoint" ;;
     esac
@@ -3328,7 +3328,7 @@ check_for_updates() {
     local latest="${NETWORKER_VERSION#v}"
     local outdated=()
 
-    for binary in networker-tester networker-endpoint networker-dashboard networker-agent; do
+    for binary in networker-tester networker-endpoint networker-agent; do
         local bin_path
         bin_path="$(command -v "$binary" 2>/dev/null || echo "")"
         [[ -z "$bin_path" || ! -x "$bin_path" ]] && continue
@@ -4149,6 +4149,170 @@ ENDJSON
     echo ""
 }
 
+# ── Self-hosted control plane (C#) ──────────────────────────────────────────
+#
+# The `dashboard` component installs the CONTROL PLANE. Until v0.28.148 that
+# meant the Rust networker-dashboard + networker-agent binaries; the Rust
+# crates were decommissioned then, and their release assets went with them, so
+# every path below had to be repointed at the C# artefacts the release
+# actually ships:
+#
+#   networker-controlplane-linux-x64.tar.gz  — self-contained .NET publish DIR
+#                                              (no runtime needed on the host)
+#   networker-agent-cs-linux-x64.tar.gz      — single-file `networker-agent`
+#   dashboard-frontend.tar.gz                — prebuilt React bundle
+#
+# The control-plane tarball is a directory, not a bare binary, so it cannot go
+# through step_download_release (which assumes one executable named after the
+# component). These helpers exist for that shape.
+
+CONTROLPLANE_DIR="${CONTROLPLANE_DIR:-/opt/networker-controlplane}"
+CONTROLPLANE_PORT="${CONTROLPLANE_PORT:-5030}"
+
+# _fetch_release_asset <archive-filename> <dest-dir>
+# Downloads one named release asset. gh CLI when authenticated (works for
+# `latest` and for private repos), otherwise curl. Returns non-zero on failure
+# so callers can decide whether that is fatal.
+_fetch_release_asset() {
+    local archive="$1" dest="$2"
+    local ver="${NETWORKER_VERSION:-latest}"
+
+    mkdir -p "$dest"
+
+    if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
+        if gh release download --repo "$REPO_GH" "$ver" \
+                --pattern "$archive" --dir "$dest" --clobber 2>/dev/null; then
+            return 0
+        fi
+    fi
+
+    if command -v curl &>/dev/null; then
+        local url
+        if [[ "$ver" == "latest" ]]; then
+            url="https://github.com/${REPO_GH}/releases/latest/download/${archive}"
+        else
+            url="https://github.com/${REPO_GH}/releases/download/${ver}/${archive}"
+        fi
+        print_dim "Downloading from ${url}"
+        if curl -fsSL --connect-timeout 15 -o "${dest}/${archive}" "$url" 2>/dev/null; then
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+# Install the self-contained C# control plane into CONTROLPLANE_DIR.
+step_install_controlplane() {
+    next_step "Install control plane (C#)"
+
+    local archive="networker-controlplane-linux-x64.tar.gz"
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+
+    print_info "Fetching ${archive} (${NETWORKER_VERSION:-latest})…"
+    if ! _fetch_release_asset "$archive" "$tmp_dir"; then
+        rm -rf "$tmp_dir"
+        # No source fallback exists on purpose: the Rust control plane was
+        # removed in v0.28.148 and `cargo install networker-dashboard` would
+        # fail with a confusing "crate not found" instead of this message.
+        print_err "Could not download ${archive}."
+        print_dim  "  The control plane ships only as a prebuilt release asset."
+        print_dim  "  Check network access to github.com, or pin a version with"
+        print_dim  "  NETWORKER_VERSION=vX.Y.Z (releases before v0.28.148 are not supported)."
+        return 1
+    fi
+
+    # Keep the previous build for a manual rollback, then replace atomically
+    # enough for a service that is stopped around the swap.
+    if systemctl is-active networker-dashboard &>/dev/null; then
+        sudo systemctl stop networker-dashboard
+    fi
+    sudo rm -rf "${CONTROLPLANE_DIR}.prevbuild"
+    if [[ -d "$CONTROLPLANE_DIR" ]]; then
+        sudo mv "$CONTROLPLANE_DIR" "${CONTROLPLANE_DIR}.prevbuild"
+    fi
+    sudo mkdir -p "$CONTROLPLANE_DIR"
+    sudo tar xzf "${tmp_dir}/${archive}" -C "$CONTROLPLANE_DIR"
+    rm -rf "$tmp_dir"
+
+    if [[ ! -f "${CONTROLPLANE_DIR}/Networker.ControlPlane" ]]; then
+        print_err "Extracted archive has no Networker.ControlPlane executable."
+        return 1
+    fi
+    sudo chmod +x "${CONTROLPLANE_DIR}/Networker.ControlPlane"
+    # DeployRunner shells out to install.sh for testbed provisioning; the
+    # tarball carries it, and INSTALL_SH_PATH (written below) pins resolution.
+    [[ -f "${CONTROLPLANE_DIR}/install.sh" ]] && sudo chmod 755 "${CONTROLPLANE_DIR}/install.sh"
+
+    print_ok "Control plane installed → ${CONTROLPLANE_DIR}"
+}
+
+# Install the C# agent binary (drop-in replacement for the retired Rust one).
+step_install_agent_cs() {
+    next_step "Install agent (C#)"
+
+    local archive="networker-agent-cs-linux-x64.tar.gz"
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+
+    print_info "Fetching ${archive} (${NETWORKER_VERSION:-latest})…"
+    if ! _fetch_release_asset "$archive" "$tmp_dir"; then
+        rm -rf "$tmp_dir"
+        print_warn "Could not download ${archive} — local agent not installed."
+        return 1
+    fi
+
+    tar xzf "${tmp_dir}/${archive}" -C "$tmp_dir"
+    if [[ ! -f "${tmp_dir}/networker-agent" ]]; then
+        rm -rf "$tmp_dir"
+        print_warn "Archive did not contain a networker-agent binary."
+        return 1
+    fi
+
+    mkdir -p "$INSTALL_DIR"
+    chmod +x "${tmp_dir}/networker-agent"
+    mv -f "${tmp_dir}/networker-agent" "${INSTALL_DIR}/networker-agent"
+    rm -rf "$tmp_dir"
+
+    print_ok "networker-agent installed → ${INSTALL_DIR}/networker-agent"
+}
+
+# Install the prebuilt frontend bundle. Falls back to a source build only if
+# the asset is unavailable — the release bundle needs no Node.js on the host.
+step_install_frontend_release() {
+    next_step "Install dashboard frontend"
+
+    local archive="dashboard-frontend.tar.gz"
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+
+    print_info "Fetching ${archive} (${NETWORKER_VERSION:-latest})…"
+    if ! _fetch_release_asset "$archive" "$tmp_dir"; then
+        rm -rf "$tmp_dir"
+        print_warn "Prebuilt frontend unavailable — falling back to a source build."
+        step_build_frontend
+        return $?
+    fi
+
+    sudo mkdir -p /opt/networker/dashboard
+    sudo rm -rf /opt/networker/dashboard/*
+    sudo tar xzf "${tmp_dir}/${archive}" -C /opt/networker/dashboard
+    rm -rf "$tmp_dir"
+    # macOS-authored tarballs can carry AppleDouble sidecars; nginx would serve
+    # them as 200s of garbage.
+    sudo find /opt/networker/dashboard -name '._*' -delete 2>/dev/null || true
+    sudo chmod -R a+rX /opt/networker/dashboard
+
+    if [[ ! -f /opt/networker/dashboard/index.html ]]; then
+        print_warn "Frontend bundle has no index.html — falling back to a source build."
+        step_build_frontend
+        return $?
+    fi
+
+    print_ok "Frontend installed → /opt/networker/dashboard"
+}
+
 # Build the React frontend and copy to /opt/networker/dashboard.
 step_build_frontend() {
     next_step "Build dashboard frontend"
@@ -4201,7 +4365,7 @@ step_write_dashboard_env() {
         DASHBOARD_TEMP_PASSWORD="$admin_pw"
     fi
 
-    local dashboard_port="${DASHBOARD_PORT:-3000}"
+    local dashboard_port="${DASHBOARD_PORT:-$CONTROLPLANE_PORT}"
     local jwt_secret
     jwt_secret="$(head -c 32 /dev/urandom | base64 | tr -d '=/+' | head -c 32)"
 
@@ -4209,15 +4373,36 @@ step_write_dashboard_env() {
     credential_key="$(head -c 32 /dev/urandom | xxd -p | tr -d '\n' | head -c 64)"
 
     local db_pw="${DASHBOARD_DB_PASSWORD:-networker}"
+    local public_url="${DASHBOARD_PUBLIC_URL:-}"
+    if [[ -z "$public_url" ]]; then
+        if [[ -n "${DASHBOARD_FQDN:-}" ]]; then
+            public_url="https://${DASHBOARD_FQDN}"
+        else
+            public_url="http://localhost"
+        fi
+    fi
+
+    # NOTE (v0.28.148 decommission follow-up): these names and formats are the
+    # C# control plane's contract, NOT the retired Rust dashboard's.
+    #   * DASHBOARD_DB_URL_NPGSQL — Npgsql KEYWORD syntax, not a postgres:// URL.
+    #     Npgsql does not parse URI form; the old value silently fell through to
+    #     the built-in default and connected to the wrong database.
+    #   * ASPNETCORE_URLS replaces DASHBOARD_PORT/DASHBOARD_BIND_ADDR.
+    #   * DASHBOARD_STATIC_DIR is gone — the control plane serves no static
+    #     files at all; nginx serves /opt/networker/dashboard directly.
+    # DASHBOARD_PORT is still written because the nginx template reads it to
+    # decide where to proxy.
     sudo tee /etc/networker-dashboard.env > /dev/null <<ENVFILE
-DASHBOARD_DB_URL=postgres://networker:${db_pw}@127.0.0.1:5432/networker_dashboard
+DASHBOARD_DB_URL_NPGSQL=Host=127.0.0.1;Port=5432;Database=networker_dashboard;Username=networker;Password=${db_pw}
 DASHBOARD_ADMIN_PASSWORD=${admin_pw}
+DASHBOARD_ADMIN_EMAIL=${DASHBOARD_ADMIN_EMAIL:-admin@localhost}
 DASHBOARD_JWT_SECRET=${jwt_secret}
 DASHBOARD_CREDENTIAL_KEY=${credential_key}
+DASHBOARD_PUBLIC_URL=${public_url}
+ASPNETCORE_URLS=http://127.0.0.1:${dashboard_port}
+ASPNETCORE_ENVIRONMENT=Production
 DASHBOARD_PORT=${dashboard_port}
-DASHBOARD_BIND_ADDR=127.0.0.1
-DASHBOARD_STATIC_DIR=/opt/networker/dashboard
-INSTALL_SH_PATH=/opt/networker/install.sh
+INSTALL_SH_PATH=${CONTROLPLANE_DIR}/install.sh
 ENVFILE
 
     sudo chmod 600 /etc/networker-dashboard.env
@@ -4242,7 +4427,7 @@ step_setup_dashboard_service() {
     fi
     if [[ "$SYS_OS" != "Linux" ]]; then
         print_info "Systemd service setup is Linux-only — skipping."
-        print_dim  "  On macOS: run networker-dashboard manually."
+        print_dim  "  On macOS: run ${CONTROLPLANE_DIR}/Networker.ControlPlane manually."
         return 0
     fi
     if ! command -v systemctl &>/dev/null; then
@@ -4250,20 +4435,13 @@ step_setup_dashboard_service() {
         return 0
     fi
 
-    # Locate the binary
-    local binary_path="${INSTALL_DIR}/networker-dashboard"
+    # The control plane is a self-contained .NET publish DIRECTORY — it runs
+    # in place from CONTROLPLANE_DIR and must not be copied to /usr/local/bin
+    # as a lone file (it would leave its runtime behind and fail to start).
+    local binary_path="${CONTROLPLANE_DIR}/Networker.ControlPlane"
     if [[ ! -x "$binary_path" ]]; then
-        binary_path="/usr/local/bin/networker-dashboard"
-    fi
-
-    # Copy to /usr/local/bin
-    if [[ "$binary_path" != "/usr/local/bin/networker-dashboard" && -x "$binary_path" ]]; then
-        if systemctl is-active networker-dashboard &>/dev/null; then
-            sudo systemctl stop networker-dashboard
-        fi
-        sudo cp "$binary_path" /usr/local/bin/networker-dashboard
-        sudo chmod 755 /usr/local/bin/networker-dashboard
-        binary_path="/usr/local/bin/networker-dashboard"
+        print_err "Control plane not found at ${binary_path} — cannot create the service."
+        return 1
     fi
 
     # Also install the agent binary
@@ -4282,19 +4460,27 @@ step_setup_dashboard_service() {
 
     sudo useradd --system --no-create-home --shell /usr/sbin/nologin networker 2>/dev/null || true
 
+    # User= must be a REAL login user with a home directory, not the `networker`
+    # nologin account: the provisioner reads ~/.ssh/id_rsa.pub and writes
+    # ~/.ssh/*.pem when it creates testbeds (prod audit F3/F4). WorkingDirectory
+    # is the publish dir so the app finds its own content files. PATH carries
+    # /usr/local/bin (cloud CLIs, networker-tester) and /snap/bin (snap gcloud),
+    # neither of which is in systemd's default PATH (F12).
     sudo tee /etc/systemd/system/networker-dashboard.service > /dev/null <<UNIT
 [Unit]
-Description=Networker Dashboard
-After=network.target postgresql.service
+Description=Networker control plane
+After=network-online.target postgresql.service
+Wants=network-online.target
 
 [Service]
+Type=simple
 User=$(whoami)
-WorkingDirectory=/tmp
+WorkingDirectory=${CONTROLPLANE_DIR}
 EnvironmentFile=/etc/networker-dashboard.env
 ExecStart=${binary_path}
-Restart=always
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
+Restart=on-failure
 RestartSec=5
-Environment=RUST_LOG=info
 
 [Install]
 WantedBy=multi-user.target
@@ -4307,7 +4493,7 @@ UNIT
     # Open firewall for dashboard port
     local dashboard_port
     dashboard_port="$(grep DASHBOARD_PORT /etc/networker-dashboard.env 2>/dev/null | cut -d= -f2)"
-    dashboard_port="${dashboard_port:-3000}"
+    dashboard_port="${dashboard_port:-$CONTROLPLANE_PORT}"
 
     if command -v ufw &>/dev/null; then
         sudo ufw allow "$dashboard_port"/tcp 2>/dev/null || true
@@ -4352,13 +4538,13 @@ step_setup_nginx_proxy() {
     fi
 
     if ! command -v nginx &>/dev/null; then
-        print_warn "nginx installation failed — dashboard available on port 3000 only."
+        print_warn "nginx installation failed — control plane reachable on port ${CONTROLPLANE_PORT} only."
         return 0
     fi
 
     local dashboard_port
     dashboard_port="$(grep DASHBOARD_PORT /etc/networker-dashboard.env 2>/dev/null | cut -d= -f2)"
-    dashboard_port="${dashboard_port:-3000}"
+    dashboard_port="${dashboard_port:-$CONTROLPLANE_PORT}"
     local server_name="${DASHBOARD_FQDN:-_}"
 
     # Write reverse proxy config
@@ -4373,12 +4559,22 @@ server {
         default_type "text/plain";
     }
 
+    # The C# control plane serves NO static files (the Rust one did), so nginx
+    # owns the SPA bundle and proxies only the API and WebSocket paths.
+    # try_files ... /index.html is what makes client-side routes survive a
+    # hard refresh — without it every deep link 404s.
     location / {
+        root /opt/networker/dashboard;
+        try_files \$uri \$uri/ /index.html;
+    }
+
+    location /api/ {
         proxy_pass http://127.0.0.1:${dashboard_port};
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 300;
     }
 
     location /ws/ {
@@ -4470,7 +4666,7 @@ step_setup_letsencrypt() {
     local server_name="${DASHBOARD_FQDN:-_}"
     local dashboard_port
     dashboard_port="$(grep DASHBOARD_PORT /etc/networker-dashboard.env 2>/dev/null | cut -d= -f2)"
-    dashboard_port="${dashboard_port:-3000}"
+    dashboard_port="${dashboard_port:-$CONTROLPLANE_PORT}"
 
     # Add SSL server block
     sudo tee -a /etc/nginx/conf.d/networker-dashboard.conf > /dev/null <<SSLCONF
@@ -4483,12 +4679,20 @@ server {
     ssl_certificate_key /etc/nginx/ssl/dashboard.key;
     ssl_protocols TLSv1.2 TLSv1.3;
 
+    # Same split as the :80 block — nginx serves the SPA, the control
+    # plane gets only /api and /ws.
     location / {
+        root /opt/networker/dashboard;
+        try_files \$uri \$uri/ /index.html;
+    }
+
+    location /api/ {
         proxy_pass http://127.0.0.1:${dashboard_port};
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 300;
     }
 
     location /ws/ {
@@ -8727,8 +8931,8 @@ display_completion() {
     if [[ $DO_INSTALL_DASHBOARD -eq 1 ]]; then
         local dashboard_port
         dashboard_port="$(grep DASHBOARD_PORT /etc/networker-dashboard.env 2>/dev/null | cut -d= -f2)"
-        dashboard_port="${dashboard_port:-3000}"
-        echo "  ${BOLD}networker-dashboard${RESET}:"
+        dashboard_port="${dashboard_port:-$CONTROLPLANE_PORT}"
+        echo "  ${BOLD}control plane${RESET}:"
         if [[ -n "${DASHBOARD_FQDN:-}" && ${DASHBOARD_NGINX_CONFIGURED:-0} -eq 1 ]]; then
             echo "    Web UI:   https://${DASHBOARD_FQDN}"
         elif [[ ${DASHBOARD_NGINX_CONFIGURED:-0} -eq 1 ]]; then
@@ -8746,7 +8950,10 @@ display_completion() {
             echo "  ╔══════════════════════════════════════════════════════════╗"
             echo "  ║  ${BOLD}Login credentials${RESET}                                      ║"
             echo "  ║                                                          ║"
-            printf "  ║  Username:  ${BOLD}admin${RESET}%*s║\n" 37 ""
+            # Login is by EMAIL — the control plane's bootstrap seeds
+            # DASHBOARD_ADMIN_EMAIL (default admin@localhost), and "admin"
+            # alone will not authenticate.
+            printf "  ║  Email:     ${BOLD}%-16s${RESET}%*s║\n" "${DASHBOARD_ADMIN_EMAIL:-admin@localhost}" 21 ""
             printf "  ║  Password:  ${BOLD}%-16s${RESET}%*s║\n" "$DASHBOARD_TEMP_PASSWORD" 21 ""
             echo "  ║                                                          ║"
             echo "  ║  ${DIM}You will be asked to change the password on first login.${RESET} ║"
@@ -10667,29 +10874,20 @@ deploy_from_config() {
 
         # Read dashboard-specific config
         DASHBOARD_ADMIN_PASSWORD="$(jq -r '.dashboard.admin_password // "admin"' "$cfg")"
-        DASHBOARD_PORT="$(jq -r '.dashboard.port // 3000' "$cfg")"
+        DASHBOARD_PORT="$(jq -r ".dashboard.port // ${CONTROLPLANE_PORT}" "$cfg")"
         export DASHBOARD_ADMIN_PASSWORD DASHBOARD_PORT
 
         step_install_postgresql
-        step_install_nodejs
         step_install_cloud_clis
         step_configure_cloud_identity
 
-        if [[ "$INSTALL_METHOD" == "release" ]]; then
-            mkdir -p "$INSTALL_DIR"
-            step_download_release "networker-dashboard" || {
-                step_ensure_cargo_env
-                step_cargo_install "networker-dashboard"
-            }
-            step_download_release "networker-agent" || {
-                step_ensure_cargo_env
-                step_cargo_install "networker-agent"
-            }
-        else
-            step_ensure_cargo_env
-            step_cargo_install "networker-dashboard"
-            step_cargo_install "networker-agent"
+        # C# release artefacts — see the interactive path for why there is no
+        # cargo fallback (the Rust crates were removed in v0.28.148).
+        if ! step_install_controlplane; then
+            print_err "Control-plane install failed — aborting dashboard setup."
+            return 1
         fi
+        step_install_agent_cs || true
 
         # Dashboard also needs tester + endpoint binaries, browser, and capture tools
         if [[ "$INSTALL_METHOD" == "release" ]]; then
@@ -10705,7 +10903,8 @@ deploy_from_config() {
             fi
         fi
 
-        step_build_frontend
+        # Prebuilt bundle from the release — no Node.js toolchain needed here.
+        step_install_frontend_release
         step_write_dashboard_env
         step_setup_dashboard_service
 
@@ -11526,30 +11725,19 @@ main() {
         fi
 
         step_install_postgresql
-        step_install_nodejs
         step_install_cloud_clis
         step_configure_cloud_identity
 
-        if [[ "$INSTALL_METHOD" == "release" ]]; then
-            mkdir -p "$INSTALL_DIR"
-            local dashboard_dl_ok=1
-            if ! step_download_release "networker-dashboard"; then
-                dashboard_dl_ok=0
-            fi
-            if ! step_download_release "networker-agent"; then
-                dashboard_dl_ok=0
-            fi
-            if [[ $dashboard_dl_ok -eq 0 ]]; then
-                print_info "Falling back to source compile for dashboard…"
-                step_ensure_cargo_env
-                step_cargo_install "networker-dashboard"
-                step_cargo_install "networker-agent"
-            fi
-        else
-            step_ensure_cargo_env
-            step_cargo_install "networker-dashboard"
-            step_cargo_install "networker-agent"
+        # The control plane and agent are C# release artefacts. There is no
+        # source-compile fallback: the Rust networker-dashboard/networker-agent
+        # crates were removed in v0.28.148, so `cargo install` here would fail
+        # with "crate not found" — which is exactly the trap this install path
+        # sat in between v0.28.148 and this release.
+        if ! step_install_controlplane; then
+            print_err "Control-plane install failed — aborting dashboard setup."
+            return 1
         fi
+        step_install_agent_cs || true
 
         # Dashboard also needs tester + endpoint binaries, browser, and capture tools
         if [[ "$INSTALL_METHOD" == "release" ]]; then
@@ -11565,7 +11753,8 @@ main() {
             fi
         fi
 
-        step_build_frontend
+        # Prebuilt bundle from the release — no Node.js toolchain needed here.
+        step_install_frontend_release
         step_write_dashboard_env
         step_setup_dashboard_service
 
