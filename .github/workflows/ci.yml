@@ -489,6 +489,31 @@ jobs:
       # Audit P1-11: the bundle budget is enforced, not merely warned about
       # (vite's chunkSizeWarningLimit has never failed a build).
       - run: npm run check:bundle-size
+
+      # ── Audit P2: browser E2E on the PRODUCTION BUILD ──────────────────────
+      # Every other frontend test mocks ../api/client, so none of them ever
+      # loads the built bundle. A lazy chunk that 404s only in prod, a router
+      # misconfiguration, or a hook that throws during the real mount all pass
+      # jsdom and fail the user. Playwright drives `vite preview` serving dist/
+      # with the API intercepted at the network layer.
+      #
+      # Chromium only, and --with-deps because the runner lacks the shared
+      # libraries the browser needs. npm's cache does not cover browsers, so
+      # this adds a ~100MB download per run.
+      - name: Install Chromium for Playwright
+        run: npx playwright install chromium --with-deps
+
+      - name: Browser E2E
+        run: npm run test:e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: playwright-report-${{ github.run_id }}
+          path: dashboard/playwright-report/
+          retention-days: 14
+          if-no-files-found: ignore
       - run: npx tsc -b
 
   # ──────────────────────────────────────────────────────────────────────────
