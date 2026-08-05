@@ -11,6 +11,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.157] — 2026-08-05
+
+### Fixed
+- **`install.sh` could hang the LAN endpoint deploy forever.** A
+  `systemctl start networker-endpoint` inside an SSH heredoc (install.sh:1390)
+  had no `</dev/null >/dev/null 2>&1`, so the started service inherited the SSH
+  pipe's file descriptors and `ssh` waited for it to exit — which it never
+  does. There is a test named exactly for this regression; it found the
+  violation, printed it, and reported PASS anyway (see P1-13 below).
+
+### Added
+- **Audit P1-14 — the agent connect/drop/reconnect lifecycle is driven over
+  real WebSockets.** This is the flow that broke on 2026-08-03, when a deploy
+  restarted the control plane and the eager fail-on-disconnect destroyed four
+  in-flight matrix cells of ~1000 attempts each. Existing coverage called
+  `HandleDisconnectAsync` directly on SQLite, which pins the method but never
+  opens a socket — so it could not see the registry's compare-and-remove, the
+  supersede-on-reconnect branch, or whether a reconnected agent can still
+  finish the run it was carrying. `AgentReconnectLifecycleTests` drives all
+  four against the real `/ws/agent` endpoint and real Postgres: a drop marks
+  the agent offline while leaving its run running with its progress intact; a
+  reconnected agent's `run_finished` is still accepted; a stale socket closing
+  *after* a reconnect must not knock the live agent offline; and a reconnect
+  with a tampered key is still refused. **Verified in both directions** — with
+  the historical bug reintroduced, two of the four go red with the intended
+  diagnostic.
+- **Audit P1-10 — API latency budgets, plus the timing contract underneath
+  them.** Two different guarantees: (1) every response must carry
+  `X-Process-Time-Ms`, which the frontend reads to split server from network
+  time — the control plane didn't emit it for months and every `perf_log`
+  row's `server_ms` was null; (2) six read endpoints are driven against 300
+  seeded runs and their own reported server time must stay under a
+  deliberately generous ceiling. The budget is a blow-up detector for an N+1
+  or a missing index, not a microbenchmark — measured times are 1.2–3.5ms
+  against a 1500ms budget, so ordinary CI noise cannot reach it while an
+  order-of-magnitude regression still trips it. A third test compares 20× the
+  rows by ratio rather than absolute time, which is the signature an N+1
+  leaves. Both halves verified in both directions.
+
+### Changed
+- **Audit P1-13 (vacuous-assertion sweep) — 143 assertions in the installer
+  suite were inert.** bats' helper cleared `errexit` for every test, and with
+  `set +e` only a test's LAST command decides pass/fail. 56 of 141 installer
+  tests carry more than one bare `[ ... ]`, so every earlier assertion in them
+  was decorative: it could fail, print nothing, and the test still passed.
+  That is not theoretical — it is how the FD-safety hang bug above shipped and
+  survived. Each non-final assertion is now `… || { echo …; exit 1; }`, which
+  fails the test regardless of errexit; this is a pure strengthening, and the
+  suite stays green. (Restoring `set -e` globally was tried first and rejected:
+  it changes the behaviour of the installer functions under test, which is a
+  different and larger change.)
+- The SSH-heredoc FD-safety test now extracts heredoc bodies precisely with
+  awk and **asserts** the violation list is empty, instead of echoing it. It
+  also guards the guard — if the extraction stops matching heredocs it fails
+  rather than silently reporting zero — and its meaningful assertion is placed
+  last so it stays decisive. Verified red on an injected violation.
+- The Rust `deterministic_rng_empty_array` test asserted only "does not
+  panic"; a generator degenerated to a constant passed it. It now pins
+  non-zero state, non-constant output, and in-bounds indices.
+- The rest of the sweep came back clean: no assertion-free tests in the C#,
+  frontend (44 files) or Rust estates, no `assert!(true)`, no
+  `toBeDefined()`-only tests, and the one remaining `status < 500` catch-all
+  in `EndpointSmokeTests` is already covered by the P1-3 200-path suite.
+
+---
+
 ## [0.28.156] — 2026-08-05
 
 ### Fixed
