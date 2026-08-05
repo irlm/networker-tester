@@ -48,6 +48,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capacity accounting, which had no test despite being the guard against
   Azure's public-IP quota.
 
+- **Audit P1-12 — the matrix wizard finally has tests.** `FullStackPage` (the
+  feature whose end-to-end path was broken for the whole v0.28.129-147
+  campaign) had no test file at all. Its cell-fan-out logic is extracted to
+  `lib/matrix-cells.ts` and pinned by 11 tests: one cell per (testbed ×
+  proxy), fan-out across testbeds, **every cell of a matrix gets a distinct
+  label** (the v0.28.129 collision class), every cell marked `pending` so the
+  orchestrator provisions it, the runner pinned only when explicitly chosen,
+  and the matrix-vs-single-run boundary.
+
 ### Fixed
 - **`npm test` no longer passes when it discovers zero tests.**
   `--passWithNoTests` meant a config or glob mistake would exit green with

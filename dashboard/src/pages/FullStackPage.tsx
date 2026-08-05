@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { api } from '../api/client';
 import type { Workload, Methodology, TestConfigCreate, ModeGroup, ComparisonCell, ComparisonGroupCreate } from '../api/types';
+import { buildComparisonCells as buildCells, countCells } from '../lib/matrix-cells';
 import { Breadcrumb } from '../components/common/Breadcrumb';
 import { WizardStepper } from '../components/wizard/WizardStepper';
 import { TestbedMatrix } from '../components/wizard/TestbedMatrix';
@@ -21,8 +22,6 @@ import {
   REGIONS,
   PROXY_LABELS,
   TESTER_OS_OPTIONS,
-  resolveVmSize,
-  resolveTopology,
 } from '../components/wizard/testbed-constants';
 
 // ── Constants ──────────────────────────────────────────────────────────
@@ -188,33 +187,13 @@ export function FullStackPage() {
   // [nginx, caddy] becomes 2 cells — the orchestrator deduplicates by
   // (cloud_account_id, region, vm_size, os) so they share one deployment
   // that installs both stacks side-by-side.
-  const buildComparisonCells = (): ComparisonCell[] => {
-    const cells: ComparisonCell[] = [];
-    for (const tb of testbeds) {
-      const vmSize = resolveVmSize(tb.cloud, tb.vmSize);
-      const topology = resolveTopology(tb.topology);
-      for (const proxy of tb.proxies) {
-        cells.push({
-          label: `${tb.cloud}/${tb.region} ${tb.os} · ${PROXY_LABELS[proxy] ?? proxy}`,
-          endpoint: {
-            kind: 'pending',
-            cloud_account_id: tb.cloudAccountId,
-            region: tb.region,
-            vm_size: vmSize,
-            os: tb.os,
-            proxy_stack: proxy,
-            topology,
-          },
-          ...(selectedTesterId ? { runner_id: selectedTesterId } : {}),
-        });
-      }
-    }
-    return cells;
-  };
+  // Extracted to lib/matrix-cells so it can be unit-tested (audit P1-12).
+  const buildComparisonCells = (): ComparisonCell[] =>
+    buildCells(testbeds, selectedTesterId);
 
   // Any combination that produces more than one cell is a matrix (multiple
   // testbeds, OR a single testbed with multiple proxies).
-  const totalCells = testbeds.reduce((n, tb) => n + tb.proxies.length, 0);
+  const totalCells = countCells(testbeds);
   const isMatrixRun = totalCells > 1;
 
   // Name defaults to the placeholder when left blank — requiring a retype of
