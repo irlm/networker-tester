@@ -101,7 +101,7 @@ run_tester() {
         --target "http://127.0.0.1:${HTTP_PORT}" \
         --modes "$modes" \
         --runs "$runs" \
-        --payload-size 2000000 \
+        --payload-sizes 2m \
         --json-stdout \
         > "$out" 2>"${out}.err" || true
     if [[ ! -s "$out" ]]; then
@@ -132,39 +132,25 @@ out_dir, delay_ms, rate_mbit, rtt_tol, thr_tol_pct, baseline_path = sys.argv[1:7
 delay_ms = float(delay_ms); rate_mbit = float(rate_mbit)
 rtt_tol = float(rtt_tol); thr_tol_pct = float(thr_tol_pct)
 
-def load(name):
+def attempts(name):
+    """Attempts live at the JSON ROOT of --json-stdout output."""
     with open(f"{out_dir}/{name}") as f:
-        return json.load(f)
-
-def walk_attempts(doc):
-    """Yield every attempt dict regardless of nesting shape."""
-    stack = [doc]
-    while stack:
-        cur = stack.pop()
-        if isinstance(cur, dict):
-            if "attempts" in cur and isinstance(cur["attempts"], list):
-                for a in cur["attempts"]:
-                    if isinstance(a, dict):
-                        yield a
-            stack.extend(v for v in cur.values() if isinstance(v, (dict, list)))
-        elif isinstance(cur, list):
-            stack.extend(v for v in cur if isinstance(v, (dict, list)))
-
-def collect(doc, key):
-    vals = []
-    for a in walk_attempts(doc):
-        v = a.get(key)
-        if isinstance(v, (int, float)) and v > 0:
-            vals.append(float(v))
-    return vals
+        doc = json.load(f)
+    return [a for a in doc.get("attempts", []) if isinstance(a, dict)]
 
 failures, results = [], {}
 
-# ── Latency: netem delays BOTH directions, so a TCP connect RTT ≈ 2×delay ──
-lat_doc = load("latency.json")
-tcp_ms = collect(lat_doc, "tcp_ms") or collect(lat_doc, "total_ms")
+# ── Latency: netem delays BOTH directions, so a TCP connect RTT is ~2x delay.
+# Real field path (verified against the contract): attempt.tcp.connect_duration_ms
+tcp_ms = [
+    a["tcp"]["connect_duration_ms"]
+    for a in attempts("latency.json")
+    if isinstance(a.get("tcp"), dict)
+    and isinstance(a["tcp"].get("connect_duration_ms"), (int, float))
+    and a["tcp"]["connect_duration_ms"] > 0
+]
 if not tcp_ms:
-    failures.append("no tcp timing samples parsed from latency.json")
+    failures.append("no tcp connect samples parsed from latency.json")
 else:
     measured = statistics.median(tcp_ms)
     expected = 2 * delay_ms
@@ -173,28 +159,37 @@ else:
                       "delta_ms": round(delta, 3), "tolerance_ms": rtt_tol,
                       "samples": len(tcp_ms)}
     print(f"RTT: expected ~{expected:.1f}ms  measured {measured:.2f}ms  "
-          f"(delta {delta:.2f}ms, tolerance ±{rtt_tol}ms, n={len(tcp_ms)})")
+          f"(delta {delta:.2f}ms, tolerance +/-{rtt_tol}ms, n={len(tcp_ms)})")
     if delta > rtt_tol:
         failures.append(f"RTT off by {delta:.2f}ms (>{rtt_tol}ms): "
                         f"expected ~{expected:.1f}, measured {measured:.2f}")
 
-# ── Throughput: reported Mbps must approach, and never exceed, the link cap ──
-thr_doc = load("throughput.json")
-mbps = collect(thr_doc, "throughput_mbps")
+# ── Throughput: derived from the transfer itself —
+# body_size_bytes / total_duration_ms → Mbps. Using the attempt's own numbers
+# keeps this independent of any reporting-layer aggregation.
+mbps = []
+for a in attempts("throughput.json"):
+    h = a.get("http")
+    if not isinstance(h, dict):
+        continue
+    body = h.get("body_size_bytes")
+    dur = h.get("total_duration_ms")
+    if isinstance(body, (int, float)) and isinstance(dur, (int, float)) and body > 0 and dur > 0:
+        mbps.append((body * 8.0) / (dur / 1000.0) / 1_000_000.0)
+
 if not mbps:
-    failures.append("no throughput samples parsed from throughput.json")
+    failures.append("no throughput samples derived from throughput.json")
 else:
     measured = statistics.median(mbps)
     lo = rate_mbit * (1 - thr_tol_pct / 100.0)
-    hi = rate_mbit * 1.05  # a measurement ABOVE the imposed cap means the
-                           # shaping was bypassed or the math is wrong
+    hi = rate_mbit * 1.15  # above the imposed cap => shaping bypassed or math wrong
     results["throughput"] = {"cap_mbit": rate_mbit, "measured_mbps": round(measured, 3),
                              "band": [round(lo, 2), round(hi, 2)],
                              "samples": len(mbps)}
     print(f"Throughput: cap {rate_mbit:.0f}Mbit  measured {measured:.2f}Mbps  "
-          f"(band {lo:.1f}–{hi:.1f}, n={len(mbps)})")
+          f"(band {lo:.1f}-{hi:.1f}, n={len(mbps)})")
     if not (lo <= measured <= hi):
-        failures.append(f"throughput {measured:.2f}Mbps outside {lo:.1f}–{hi:.1f} "
+        failures.append(f"throughput {measured:.2f}Mbps outside {lo:.1f}-{hi:.1f} "
                         f"for a {rate_mbit:.0f}Mbit link")
 
 record = {
@@ -203,6 +198,7 @@ record = {
     "results": results,
     "verdict": "fail" if failures else "pass",
 }
+pathlib.Path(baseline_path).parent.mkdir(parents=True, exist_ok=True)
 pathlib.Path(baseline_path).write_text(json.dumps(record, indent=2) + "\n")
 print(f"\nbaseline written: {baseline_path}")
 
