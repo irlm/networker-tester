@@ -2200,9 +2200,13 @@ function Invoke-SetupTraefik {
     # treatment used on Linux for haproxy). Dynamic /page and /asset also
     # forward to the endpoint.
     $staticYaml = @"
+# NOTE: declare ONLY the entrypoints this stack owns. Traefik binds every
+# declared entrypoint eagerly at startup, so a vestigial ":8091" (which was
+# kept here "for doc parity") collides with CADDY's HTTP listener on any host
+# running both — traefik then exits instantly and nssm reports SERVICE_PAUSED.
+# Proven in CI 2026-08-05: "error while building entryPoint web: listen tcp
+# :8091: bind: Only one usage of each socket address".
 entryPoints:
-  web:
-    address: ":8091" # unused, kept for doc parity
   weblocal:
     address: ":8092"
   websecure:

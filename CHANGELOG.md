@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.28.150] — 2026-08-05
 
 ### Fixed
+- **Windows Traefik never started when Caddy was installed alongside it.** Its
+  generated static config declared a vestigial `web: ":8091"` entrypoint
+  ("unused, kept for doc parity") — but Traefik binds every declared
+  entrypoint eagerly, and 8091 is Caddy's HTTP listener, so on any host with
+  both stacks Traefik exited at startup with `bind: Only one usage of each
+  socket address`. Every Windows matrix cell pairing the two hit this. The
+  entrypoint is removed; CI proved the failure and the fix.
 - **Windows Traefik claimed success while serving nothing** — caught by this
   release's own new `windows-exec` job on its first run: nssm reports a
   service "started" even when the process exits immediately, so the setup
