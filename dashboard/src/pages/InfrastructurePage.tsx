@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { Link, useNavigate } from 'react-router';
 import { api } from '../api/client';
@@ -171,7 +171,16 @@ export function InfrastructurePage() {
   const [runnerPage, setRunnerPage] = useState(0);
   const RUNNER_PAGE_SIZE = 25;
   const [testersLoading, setTestersLoading] = useState(true);
-  const [selectedTester, setSelectedTester] = useState<TesterRow | null>(null);
+  // Store the ID and DERIVE the row. Holding a snapshot of the row meant it
+  // went stale the moment the fleet reloaded, so an effect re-synced it — which
+  // is the "you might not need an effect" pattern and cascaded a render on
+  // every poll. Deriving handles both cases for free: a tester removed from the
+  // fleet resolves to null (drawer closes) and an updated one always reflects
+  // the latest power_state / status_message.
+  const [selectedTesterId, setSelectedTesterId] = useState<string | null>(null);
+  const selectedTester = selectedTesterId
+    ? testers.find(t => t.tester_id === selectedTesterId) ?? null
+    : null;
   const [selectedDeployment, setSelectedDeployment] = useState<Deployment | null>(null);
   const [showCreateTester, setShowCreateTester] = useState(false);
   const [createDefaults, setCreateDefaults] = useState<CreateDefaults | null>(null);
@@ -222,15 +231,7 @@ export function InfrastructurePage() {
   // (the drawer surfaces the Force-delete escape hatch). Without this the drawer
   // held stale "running" state and a failed background delete was invisible (the
   // P2-15 "delete does nothing / misleading" report).
-  useEffect(() => {
-    if (!selectedTester) return;
-    const live = testers.find(t => t.tester_id === selectedTester.tester_id) ?? null;
-    if (live === null) {
-      setSelectedTester(null); // removed from the fleet → close the drawer
-    } else if (live !== selectedTester) {
-      setSelectedTester(live); // reflect the latest power_state / status_message
-    }
-  }, [testers, selectedTester]);
+
 
   /* ── Open the wizard pre-filled to add stacks to an existing deployment.
         Pulls the cloud / region / OS / IP / installed proxies off the
@@ -580,7 +581,7 @@ export function InfrastructurePage() {
             region={g.region}
             testers={g.testers}
             queues={queueMap}
-            onSelect={setSelectedTester}
+            onSelect={(t: TesterRow) => setSelectedTesterId(t.tester_id)}
             onAdd={handleAddTester}
           />
         ))
@@ -849,7 +850,7 @@ export function InfrastructurePage() {
         <TesterDetailDrawer
           projectId={projectId}
           tester={selectedTester}
-          onClose={() => setSelectedTester(null)}
+          onClose={() => setSelectedTesterId(null)}
           onChanged={() => {
             void loadAll();
           }}

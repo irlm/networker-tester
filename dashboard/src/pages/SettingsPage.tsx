@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { api, errorMessage } from '../api/client';
 import type { Deployment, CloudConnection } from '../api/types';
 import { usePageTitle } from '../hooks/usePageTitle';
@@ -86,7 +87,7 @@ export function SettingsPage() {
 
   // Watch for deploy_complete events to know when update finished
   const events = useLiveStore(s => s.events);
-  useEffect(() => {
+  useAsyncEffect(() => {
     if (!activeUpdateId) return;
     const latest = events[events.length - 1];
     if (latest?.type === 'deploy_complete' && latest.deployment_id === activeUpdateId) {

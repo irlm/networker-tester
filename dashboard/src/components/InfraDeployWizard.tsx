@@ -7,6 +7,7 @@
 // with a top stepper, kind picker on step 1, then forks at step 4.
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { api } from '../api/client';
 import { testersApi, type CreateTesterBody } from '../api/testers';
 import type { CloudAccountSummary } from '../api/types';
@@ -155,7 +156,11 @@ export function InfraDeployWizard({
   }, []);
 
   // ── Suggest a runner name when entering step 4 (runner path) ───────────
-  useEffect(() => {
+  // Fills a default once the user reaches step 3 with a region chosen; it
+  // reacts to navigation rather than deriving a value (the field stays
+  // user-editable afterwards), so it remains an effect with the update moved
+  // off the synchronous body.
+  useAsyncEffect(() => {
     if (kind === 'runner' && step === 3 && !runnerName && region) {
       setRunnerName(`${region}-runner-01`);
     }

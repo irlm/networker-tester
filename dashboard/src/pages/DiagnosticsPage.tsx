@@ -822,8 +822,16 @@ export function DiagnosticsPage() {
     });
   };
 
-  // Reset page when filter changes
-  useEffect(() => { setPage(1); }, [filter, sort]);
+  // Reset the page when the filter/sort changes. Done DURING RENDER via the
+  // previous-value comparison React documents for this, rather than in an
+  // effect: the effect version rendered page N of the new filter first, then
+  // re-rendered at page 1 — a visible flash of the wrong slice.
+  const filterKey = `${filter}\u0000${sort}`;
+  const [prevFilterKey, setPrevFilterKey] = useState(filterKey);
+  if (filterKey !== prevFilterKey) {
+    setPrevFilterKey(filterKey);
+    setPage(1);
+  }
 
   // ── Render ────────────────────────────────────────────────────────
 
