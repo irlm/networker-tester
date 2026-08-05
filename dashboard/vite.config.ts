@@ -32,5 +32,10 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: './src/test/setup.ts',
     css: true,
+    // e2e/ holds Playwright specs. Vitest's default include matches
+    // `**/*.spec.ts`, so without this it loads them, fails to resolve
+    // @playwright/test's runner and reports a red suite that has nothing to do
+    // with the app. Playwright owns e2e/ via playwright.config.ts.
+    exclude: ['node_modules/**', 'dist/**', 'e2e/**'],
   },
 })

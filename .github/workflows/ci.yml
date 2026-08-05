@@ -65,9 +65,15 @@ jobs:
             echo "rust-relevant files:"; echo "$NON_SAFE" | sed 's/^/  /'
           fi
 
-          # Frontend runs iff dashboard/ changed (or push, handled above).
+          # Frontend runs iff dashboard/ changed (or push, handled above) —
+          # OR the control plane's endpoints changed. The frontend suite now
+          # carries the route-contract guard (audit P1-12), which checks the
+          # api client's URLs against the routes the C# control plane actually
+          # registers. Route drift usually originates on the SERVER side, so
+          # gating that guard on dashboard/ alone would let exactly the change
+          # it exists to catch skip it.
           FRONTEND=false
-          if echo "$CHANGED" | grep -qE '^dashboard/'; then
+          if echo "$CHANGED" | grep -qE '^(dashboard/|src/Networker\.ControlPlane/)'; then
             FRONTEND=true
           fi
 
@@ -480,7 +486,76 @@ jobs:
 
       - run: npm test
       - run: npm run build
+      # Audit P1-11: the bundle budget is enforced, not merely warned about
+      # (vite's chunkSizeWarningLimit has never failed a build).
+      - run: npm run check:bundle-size
+
+      # ── Audit P2: browser E2E on the PRODUCTION BUILD ──────────────────────
+      # Every other frontend test mocks ../api/client, so none of them ever
+      # loads the built bundle. A lazy chunk that 404s only in prod, a router
+      # misconfiguration, or a hook that throws during the real mount all pass
+      # jsdom and fail the user. Playwright drives `vite preview` serving dist/
+      # with the API intercepted at the network layer.
+      #
+      # Chromium only, and --with-deps because the runner lacks the shared
+      # libraries the browser needs. npm's cache does not cover browsers, so
+      # this adds a ~100MB download per run.
+      - name: Install Chromium for Playwright
+        run: npx playwright install chromium --with-deps
+
+      - name: Browser E2E
+        run: npm run test:e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: playwright-report-${{ github.run_id }}
+          path: dashboard/playwright-report/
+          retention-days: 14
+          if-no-files-found: ignore
       - run: npx tsc -b
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # P0-8 (2026-08 audit): MEASUREMENT-ACCURACY BENCHMARK.
+  # Everything else proves the code runs; this proves the code MEASURES. The
+  # loopback is shaped with `tc netem` to a known delay + rate, and the
+  # tester's reported RTT and throughput must land inside a tolerance band
+  # around that ground truth. Before this job, nothing anywhere validated the
+  # product's core claim.
+  measurement-accuracy:
+    name: Measurement accuracy (netem ground truth)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+
+      - name: Build tester + endpoint
+        run: cargo build -p networker-tester -p networker-endpoint
+
+      - name: Verify netem is available
+        run: |
+          sudo modprobe sch_netem || true
+          tc qdisc show dev lo
+          echo "tc present: $(tc -V)"
+
+      - name: Run the accuracy benchmark against a shaped loopback
+        run: sudo -E scripts/measurement-accuracy.sh
+
+      - name: Upload the recorded baseline
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: measurement-accuracy-baseline
+          path: benchmarks/baselines/measurement-accuracy.json
+          if-no-files-found: warn
 
   # ──────────────────────────────────────────────────────────────────────────
   coverage:

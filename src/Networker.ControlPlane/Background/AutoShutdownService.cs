@@ -117,6 +117,57 @@ public sealed class AutoShutdownService : BackgroundService
 
         var now = DateTime.UtcNow;
 
+        // ── Auto-wake: queued work targeting a stopped runner powers it on ──
+        // The inverse of the shutdown policy ("only shut down when idle"):
+        // when runs are QUEUED for a tester that auto-shutdown (or anything
+        // else) stopped, start it instead of letting the work sit — before
+        // this, a matrix launched after the nightly shutdown just queued until
+        // someone started the VM by hand (2026-08-04). power_state 'starting'
+        // keeps the shutdown arm (requires 'running') off its back during
+        // boot; the heartbeat reconcile flips it to 'running' when the agent
+        // connects.
+        var toWake = await db.ProjectTesters
+            .Where(t => (t.PowerState == "stopped" || t.PowerState == "deallocated")
+                && db.TestRuns.Any(r => r.TesterId == t.TesterId && r.Status == "queued"))
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+        foreach (var tester in toWake)
+        {
+            ct.ThrowIfCancellationRequested();
+            var prior = tester.PowerState;
+            var claimed = await db.ProjectTesters
+                .Where(t => t.TesterId == tester.TesterId && t.PowerState == prior)
+                .ExecuteUpdateAsync(s => s.SetProperty(t => t.PowerState, "starting"), ct)
+                .ConfigureAwait(false);
+            if (claimed == 0)
+            {
+                continue; // raced another actor
+            }
+
+            var wakeCreds = await LoadCredentialsAsync(db, tester, ct).ConfigureAwait(false);
+            var res = await provisioner.StartAsync(tester, wakeCreds, ct).ConfigureAwait(false);
+            if (res is { Success: true } || res is { Success: false, ExitCode: null })
+            {
+                // Started (or soft-failed on a CLI-less host — same convergence
+                // posture as the deallocate path). Heartbeat completes the flip.
+                _logger.LogInformation(
+                    "Auto-wake: started {Name} ({TesterId}) — {Count} queued run(s) waiting",
+                    tester.Name, tester.TesterId,
+                    await db.TestRuns.CountAsync(r => r.TesterId == tester.TesterId && r.Status == "queued", ct)
+                        .ConfigureAwait(false));
+            }
+            else
+            {
+                await db.ProjectTesters
+                    .Where(t => t.TesterId == tester.TesterId && t.PowerState == "starting")
+                    .ExecuteUpdateAsync(s => s.SetProperty(t => t.PowerState, prior), ct)
+                    .ConfigureAwait(false);
+                _logger.LogWarning(
+                    "Auto-wake failed for {Name} ({TesterId}): {Err}",
+                    tester.Name, tester.TesterId, res.Error ?? res.StdErr);
+            }
+        }
+
         // Shutdown condition — the LINQ equivalent of the Rust sweep SQL:
         //   WHERE auto_shutdown_enabled = TRUE
         //     AND next_shutdown_at < NOW()

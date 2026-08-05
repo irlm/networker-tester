@@ -13,6 +13,17 @@ _gh_create_archive() {
     local stub_bin="${pattern%.tar.gz}"
     local stub_bin_name
     stub_bin_name="$(basename "$stub_bin")"
+    # Real release tarballs contain the BARE binary name — release.yml does
+    # `tar czf networker-tester-${TARGET}.tar.gz -C "$SRC" networker-tester`.
+    # This stub used to pack `networker-tester-x86_64-unknown-linux-musl`
+    # instead, so step_download_release's `chmod +x "$tmp/networker-tester"`
+    # always failed and the function always returned 1. Every assertion about
+    # a SUCCESSFUL download was therefore unreachable — which nobody noticed,
+    # because those assertions were non-final and inert under `set +e`
+    # (P1-13, 2026-08-05). Strip the target triple so the archive matches
+    # what the release actually ships.
+    stub_bin_name="${stub_bin_name%%-x86_64*}"
+    stub_bin_name="${stub_bin_name%%-aarch64*}"
 
     mkdir -p "$dir"
     printf '#!/usr/bin/env bash\necho "%s 0.12.65"\n' "$stub_bin_name" \

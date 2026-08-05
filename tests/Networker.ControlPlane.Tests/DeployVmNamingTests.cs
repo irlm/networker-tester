@@ -78,3 +78,78 @@ public class DeployVmNamingTests
         Assert.Equal(10, names.Count);
     }
 }
+
+/// <summary>Pins the workload-derived cell deadline (v0.28.136): the fixed
+/// 900s deadline was impossible for real matrix workloads — every cell that
+/// reached the runner was killed at ~16 minutes (2026-08-03).</summary>
+public class CellMaxDurationTests
+{
+    [Fact]
+    public void Full_matrix_workload_gets_hours_not_minutes()
+        // runs=100 × 26 modes → 100*26*8 + 600 = 21400s ≈ 6h (8s/unit after the
+        // live 2026-08-04 measurement: real attempts ≈ 1.7× runs×modes and the
+        // slower proxies overshot the 4s budget at 78-85% complete).
+        => Assert.Equal(21400, ComparisonGroupsEndpoints.CellMaxDurationSecs(
+            """{"runs":100,"modes":["a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z"]}"""));
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("not json")]
+    [InlineData("[]")]
+    public void Missing_or_malformed_workload_falls_back_to_default(string? json)
+        => Assert.Equal(900, ComparisonGroupsEndpoints.CellMaxDurationSecs(json));
+
+    [Fact]
+    public void Small_workloads_keep_the_original_floor()
+        => Assert.Equal(900, ComparisonGroupsEndpoints.CellMaxDurationSecs(
+            """{"runs":10,"modes":["download","upload"]}"""));
+
+    [Fact]
+    public void Estimate_is_capped_at_eight_hours()
+        => Assert.Equal(28800, ComparisonGroupsEndpoints.CellMaxDurationSecs(
+            """{"runs":100000,"modes":["a","b","c"]}"""));
+}
+
+/// <summary>Pins the launch-time unsupported-combo gate (v0.28.141).</summary>
+public class UnsupportedComboTests
+{
+    private static ComparisonGroupsEndpoints.CellSpec Cell(string os, string stack) => new(
+        $"Azure/eastus {os} · {stack}",
+        $$"""{"kind":"pending","cloud_account_id":"{{Guid.NewGuid()}}","region":"eastus","vm_size":"Standard_B2s","os":"{{os}}","proxy_stack":"{{stack}}"}""",
+        "pending",
+        null);
+
+    [Fact]
+    public void Windows_haproxy_is_rejected_with_reason()
+    {
+        var why = ComparisonGroupsEndpoints.UnsupportedComboReason(Cell("windows", "haproxy"));
+        Assert.NotNull(why);
+        Assert.Contains("no native Windows build", why);
+    }
+
+    [Fact]
+    public void Windows_apache_is_rejected_with_reason()
+    {
+        // Apache Lounge serves an HTML decoy to every scripted download and no
+        // other Windows httpd binary source exists (verified 2026-08-04).
+        var why = ComparisonGroupsEndpoints.UnsupportedComboReason(Cell("windows", "apache"));
+        Assert.NotNull(why);
+        Assert.Contains("no scriptable Windows binary source", why);
+    }
+
+    [Theory]
+    [InlineData("linux", "haproxy")]
+    [InlineData("linux", "apache")]
+    [InlineData("windows", "iis")]
+    [InlineData("windows", "traefik")]
+    [InlineData("windows", "caddy")]
+    [InlineData("linux", "nginx")]
+    public void Supported_combos_pass(string os, string stack)
+        => Assert.Null(ComparisonGroupsEndpoints.UnsupportedComboReason(Cell(os, stack)));
+
+    [Fact]
+    public void Non_pending_cells_are_never_gated()
+        => Assert.Null(ComparisonGroupsEndpoints.UnsupportedComboReason(
+            new ComparisonGroupsEndpoints.CellSpec("net", """{"kind":"network","host":"h","port":1}""", "network", null)));
+}

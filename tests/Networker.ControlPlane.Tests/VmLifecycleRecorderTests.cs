@@ -31,7 +31,7 @@ public sealed class VmLifecycleRecorderTests
         return (sp, conn);
     }
 
-    private static void CreateSchema(SqliteConnection conn)
+    internal static void CreateSchema(SqliteConnection conn)
     {
         Exec(conn, "PRAGMA foreign_keys = ON;");
         Exec(conn, """
