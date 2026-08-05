@@ -11,6 +11,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.155] — 2026-08-05
+
+### Added
+- **Audit P0-1 — the comparison-group matrix launch is executed in a test.**
+  `ComparisonMatrixLaunchTests` drives the real HTTP route against real
+  Postgres: a 6-cell mixed-OS matrix creates one config + one run per cell
+  with distinct names; a RE-launch of the same group succeeds with a fresh
+  set (the v0.28.129 unique-name regression); unsupported Windows combos fail
+  at launch with real reasons while the supported cells still launch (per-cell
+  isolation, zero VMs burned); and a large workload gets a workload-scaled
+  cell deadline rather than the old hardcoded 900s. This flow previously had
+  only 4 JSON-parsing tests and was excluded from the write-endpoint sweep as
+  a "202 shell with no DB effect" — which was factually wrong.
+- **Audit P1-3 — list routes now execute their real queries in a test.**
+  `EndpointSmokeTests` asserts only `status < 500` and points ~20 of its routes
+  at a deliberately-not-found GUID, so the handler short-circuits on the 404
+  arm and the query never runs — a broken EF translation or a Postgres-only
+  SQL error in a list endpoint sails straight through (the 2026-07 members-page
+  500 was exactly that: an `OrderBy` after a `Join` EF couldn't translate).
+  `ListRoutes200PathTests` drives 11 list routes against SEEDED rows and
+  requires 200 + well-formed JSON, plus a guard that fails if seeding ever
+  stops producing content, so the suite can't pass on an empty set.
+- **Audit P1-9 — the benchmark-regression pipeline is exercised end to end.**
+  `BenchmarkRegressionDetector` was registered and invoked on run completion,
+  but nothing proved a genuinely slower run produces a persisted regression
+  that reaches the API. Now: a 60% p50 slowdown must be detected, persisted,
+  and visible on `GET /api/projects/{id}/benchmark-regressions`; a +2% run must
+  produce nothing (the false-positive direction); and re-delivery must not
+  duplicate. A fourth test pins that the fixture clears the analyzer's
+  small-n floor — without it the other three pass vacuously, which is exactly
+  how the first version of this suite went red in CI.
+
 ## [0.28.154] — 2026-08-05
 
 ### Added
