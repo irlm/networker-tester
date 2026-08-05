@@ -59,7 +59,7 @@ $ErrorActionPreference = "Stop"
 $RepoHttps     = "https://github.com/irlm/networker-tester"
 $RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"
-$InstallerVersion = "v0.28.149"  # fallback when gh is unavailable
+$InstallerVersion = "v0.28.150"  # fallback when gh is unavailable
 
 # ── Print helpers ──────────────────────────────────────────────────────────────
 function Write-Ok   ($msg) { Write-Host "  v " -NoNewline -ForegroundColor Green;   Write-Host $msg }
@@ -2200,9 +2200,13 @@ function Invoke-SetupTraefik {
     # treatment used on Linux for haproxy). Dynamic /page and /asset also
     # forward to the endpoint.
     $staticYaml = @"
+# NOTE: declare ONLY the entrypoints this stack owns. Traefik binds every
+# declared entrypoint eagerly at startup, so a vestigial ":8091" (which was
+# kept here "for doc parity") collides with CADDY's HTTP listener on any host
+# running both — traefik then exits instantly and nssm reports SERVICE_PAUSED.
+# Proven in CI 2026-08-05: "error while building entryPoint web: listen tcp
+# :8091: bind: Only one usage of each socket address".
 entryPoints:
-  web:
-    address: ":8091" # unused, kept for doc parity
   weblocal:
     address: ":8092"
   websecure:
@@ -2261,7 +2265,20 @@ tls:
     Invoke-EnsureFirewallRule "Networker-Traefik-HTTP"  "TCP" @(8092)
     Invoke-EnsureFirewallRule "Networker-Traefik-HTTPS" "TCP" @(8455)
     Invoke-EnsureFirewallRule "Networker-Traefik-QUIC"  "UDP" @(8455)
-    Write-Ok "Traefik serving test page on ports 8092 (HTTP) / 8455 (HTTPS+H3)"
+
+    # Port-serving check — nssm reports "started" for a process that exits
+    # immediately, so the service being registered proves nothing. The v0.28.150
+    # windows-exec job caught exactly this: "OK Traefik serving" printed while
+    # BOTH ports refused connections (same class as the caddy fixes).
+    Start-Sleep -Seconds 3
+    try {
+        $null = Invoke-WebRequest -Uri "http://localhost:8092/" -UseBasicParsing -TimeoutSec 8
+        Write-Ok "Traefik serving test page on ports 8092 (HTTP) / 8455 (HTTPS+H3)"
+    } catch {
+        Write-Err "Traefik service registered but port 8092 is not serving."
+        Write-Err "  nssm status: $(& $nssm status networker-traefik 2>&1)"
+        throw "traefik install failed: port not serving after start"
+    }
 }
 
 # ── HAProxy (ports 8093 / 8456) ──────────────────────────────────────────────
