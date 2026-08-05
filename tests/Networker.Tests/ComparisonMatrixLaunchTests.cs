@@ -53,7 +53,8 @@ public class ComparisonMatrixLaunchTests : IClassFixture<ControlPlaneFixture>
                 methodology = new { preset = "quick" },
                 cells,
             });
-        Assert.Equal(HttpStatusCode.Created, resp.StatusCode);
+        // The create endpoint returns 200 OK (Results.Ok), not 201.
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
         return body.GetProperty("id").GetGuid();
     }
@@ -189,7 +190,8 @@ public class ComparisonMatrixLaunchTests : IClassFixture<ControlPlaneFixture>
                 },
                 cells = new[] { PendingCell("Azure/eastus linux · nginx", "linux", "nginx") },
             });
-        Assert.Equal(HttpStatusCode.Created, resp.StatusCode);
+        // The create endpoint returns 200 OK (Results.Ok), not 201.
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
         var groupId = (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
 
         var launch = await client.PostAsync($"/api/v2/comparison-groups/{groupId}/launch", null);
