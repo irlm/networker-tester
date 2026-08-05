@@ -33,7 +33,7 @@ public sealed class MembersQueryTranslationTests
         return sp;
     }
 
-    private static void CreateSchema(SqliteConnection conn)
+    internal static void CreateSchema(SqliteConnection conn)
     {
         Exec(conn, """
             CREATE TABLE project (

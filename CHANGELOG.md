@@ -11,6 +11,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.159] — 2026-08-05
+
+### Fixed
+- **`scripts/deploy-dashboard.sh` now refuses to run instead of failing
+  halfway.** It installs the retired Rust control plane and downloads
+  `networker-dashboard-<target>.tar.gz`, an asset unpublished since the
+  v0.28.148 decommission — so a run 404s *after* creating a VM, a database and
+  DNS records. The warning existed only in `docs/setup-guide.md`, which nobody
+  reads while pasting a command. The script now fails fast with a pointer to
+  `install.sh dashboard` (repaired in v0.28.156) and an explicit
+  `ALLOW_LEGACY_RUST_DEPLOY=1` opt-out for its still-useful infrastructure
+  steps. The setup guide's Quick Deploy now leads with the installer.
+
+### Added
+- **Audit P2 — leader election is tested for the behaviour it exists for.**
+  `PgAdvisoryLeaderLock` is what stops two control-plane replicas running the
+  same background tick concurrently (duplicate schedule fan-out, double VM
+  deallocation, racing reapers), and it was covered only by a test of its
+  FNV-1a key derivation — a pure function. `LeaderElectionFailoverTests` pins
+  the real contract against real Postgres: a second replica is refused **and
+  its tick body does not run**; the key is released after success, after the
+  tick throws, and after cancellation (a leak silently disables that loop and
+  looks exactly like "nothing to do"); a killed backend hands leadership to a
+  survivor, which is the claim "the DB session IS the lease" actually resting
+  on Postgres behaviour rather than on a comment; and distinct services do not
+  block each other. Verified in both directions — removing the unlock turns
+  three of the seven red.
+- **Audit P2 — hand-written test schemas are checked against the EF model.**
+  Several SQLite suites build tables from DDL that is a hand copy of the model,
+  and copies drift; EF's INSERT names every mapped column, so a missing one
+  surfaces as a raw SQLite error inside an unrelated test, while a
+  read-only column drifts with no error at all. `TestSchemaDriftTests` creates
+  each suite's schema for real and requires every mapped column to exist.
+  Tables that are deliberately one-column foreign-key stubs are out of scope —
+  comparing a stub against the full model reports drift that isn't there.
+  The audit's suggested fix, `Database.GenerateCreateScript()`, **does not
+  work here** and the reason is now recorded rather than left as an open
+  suggestion: the model declares Postgres sequences and the SQLite provider
+  throws `NotSupportedException: SQLite does not support sequences`.
+
+---
+
 ## [0.28.157] — 2026-08-05
 
 ### Fixed

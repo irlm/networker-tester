@@ -31,6 +31,40 @@ set -euo pipefail
 #   - Must change password on first login
 # ============================================================================
 
+# ── LEGACY GUARD ─────────────────────────────────────────────────────────────
+# This script predates the C# cutover. Step "install the control plane" still
+# downloads networker-dashboard-<target>.tar.gz — an asset that has not been
+# built since the v0.28.148 decommission — so a run gets a 404 partway through,
+# AFTER creating a VM, a database and DNS records. The warning existed only in
+# docs/setup-guide.md, which nobody reads when they are pasting a command.
+#
+# `install.sh dashboard` installs the C# control plane properly (repaired in
+# v0.28.156). The infrastructure steps below (VM, PostgreSQL, nginx, SSL, SSO
+# app registration, ACS) are still a useful reference, so the script is kept and
+# an explicit opt-out is provided rather than deleting it.
+if [[ "${ALLOW_LEGACY_RUST_DEPLOY:-0}" != "1" ]]; then
+    cat >&2 <<'LEGACY'
+ERROR: scripts/deploy-dashboard.sh installs the RETIRED Rust control plane.
+
+  The networker-dashboard binary it downloads has not been published since
+  v0.28.148, so this run would fail with a 404 after already creating a VM,
+  a database and DNS records.
+
+  Use the installer instead — it deploys the C# control plane, PostgreSQL,
+  the prebuilt frontend and nginx in one step:
+
+      DASHBOARD_ADMIN_PASSWORD='choose-a-strong-one' \
+        curl -fsSL https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh \
+        | bash -s -- dashboard
+
+  See docs/installation.md ("Self-hosting the control plane").
+
+  To run this script anyway for its infrastructure steps:
+      ALLOW_LEGACY_RUST_DEPLOY=1 ./scripts/deploy-dashboard.sh ...
+LEGACY
+    exit 1
+fi
+
 # ── Defaults ─────────────────────────────────────────────────────────────────
 DOMAIN=""
 EXTRA_DOMAINS=""        # comma-separated additional domains (e.g., "example.net,example.info")
