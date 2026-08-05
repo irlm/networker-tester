@@ -252,6 +252,20 @@ jobs:
               & .\install.ps1 -Setup $case.Stack
             } catch {
               Write-Host "::error::$($case.Stack): setup threw — $($_.Exception.Message)"
+              # Dump what the wrapped process actually said — nssm's
+              # SERVICE_PAUSED means "started then exited", and the reason is
+              # only in the stack's own stderr/config.
+              $sd = Join-Path $env:ProgramData "networker\$($case.Stack)"
+              Get-ChildItem $sd -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  file: $($_.Name) ($($_.Length)b)" }
+              foreach ($log in @("$sd\$($case.Stack)-stderr.log", "$sd\$($case.Stack)-stdout.log")) {
+                if (Test-Path $log) { Write-Host "--- $log"; Get-Content $log -Tail 20 | ForEach-Object { Write-Host "    $_" } }
+              }
+              if ($case.Stack -eq 'traefik') {
+                foreach ($cfg in @("$sd\traefik.yml", "$sd\dynamic.yml")) {
+                  if (Test-Path $cfg) { Write-Host "--- $cfg"; Get-Content $cfg | ForEach-Object { Write-Host "    $_" } }
+                }
+                & "$sd\traefik.exe" --configfile "$sd\traefik.yml" 2>&1 | Select-Object -First 15 | ForEach-Object { Write-Host "    run: $_" }
+              }
               $failed = $true; Write-Host "::endgroup::"; continue
             }
             Start-Sleep -Seconds 3
