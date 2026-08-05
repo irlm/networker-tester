@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.149] — 2026-08-05
+
+### Added
+- **Audit P0 wave 1 — the two highest-leverage test gaps closed + the
+  supply-chain hole plugged:**
+  - **P0-2:** `BackgroundLoopHealthTests` (real-Postgres fixture) seeds a
+    forcing row for every fast background loop (teardown candidate with real
+    jsonb config, stopped tester + queued run, stale running run, due
+    schedule), waits for each loop to tick, and requires `last_error == null`
+    across the board plus real domain outcomes (deployment `torn_down`, stale
+    run reaped, schedule advanced, wake attempted). The 2026-08-03 `jsonb ~~
+    jsonb` tick-wedge class is now permanently caught in CI.
+  - **P0-6:** `AutoWakeSweepTests` pin the v0.28.140 auto-wake state machine
+    end-to-end with a fake provisioner: wake claim (`starting`), rollback on
+    genuine CLI failure, CLI-less soft-success convergence, and the
+    no-work/running no-touch guards.
+  - **P0-9:** the Gist sync workflow now verifies the round-trip — it
+    re-downloads both raw installer files after the PATCH and requires
+    byte-for-byte equality with the repo copies (deployed Windows VMs fetch
+    install.ps1 from that Gist; a partial sync used to be silent).
+
+---
+
 ## [0.28.148] — 2026-08-05
 
 ### Removed

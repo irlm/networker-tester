@@ -40,3 +40,33 @@ jobs:
             "https://api.github.com/gists/${GIST_ID}" \
             | jq -r '.updated_at // "no updated_at in response"'
           echo "Gist updated."
+
+      - name: Verify Gist round-trip
+        env:
+          GIST_ID: 37a1af64b70ef6e58ea117839407f4f9
+        run: |
+          # P0-9 (2026-08 audit): deployed Windows VMs FETCH install.ps1 from
+          # this Gist (install.sh's _azure_win_setup_* path), and install.sh's
+          # remote setup fallback fetches install.sh from it too — so a failed
+          # or partial sync silently ships a STALE installer to production
+          # deploys. Re-download the raw files and require byte-for-byte
+          # equality with the repo copies. The raw URL is cache-busted with
+          # the commit SHA; retry a few times for CDN propagation.
+          verify() {
+            local name="$1"
+            for attempt in 1 2 3 4 5; do
+              curl -fsSL "https://gist.githubusercontent.com/irlm/${GIST_ID}/raw/${name}?cb=${GITHUB_SHA}-${attempt}" \
+                -o "/tmp/gist-${name}"
+              if cmp -s "${name}" "/tmp/gist-${name}"; then
+                echo "OK: ${name} round-trips byte-for-byte"
+                return 0
+              fi
+              echo "attempt ${attempt}: ${name} differs (CDN propagation?) — retrying in 15s"
+              sleep 15
+            done
+            echo "FAIL: gist ${name} does not match the repo copy after sync"
+            diff <(head -5 "${name}") <(head -5 "/tmp/gist-${name}") || true
+            return 1
+          }
+          verify install.sh
+          verify install.ps1
