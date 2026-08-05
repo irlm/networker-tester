@@ -11,6 +11,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.156] — 2026-08-05
+
+### Fixed
+- **The self-hosted install (`install.sh dashboard`) was dead since v0.28.148
+  — repointed at the C# artefacts.** The decommission deleted the
+  `networker-dashboard` and `networker-agent` Rust crates, and their release
+  assets went with them, but the installer still asked for
+  `networker-dashboard-<target>.tar.gz` and then "fell back to source compile"
+  with `cargo install networker-dashboard`. Both arms fail on every release
+  from v0.28.148 onward: the download 404s and the fallback reports a
+  confusing "crate not found". Anyone self-hosting since that release got a
+  broken install with no usable diagnosis. Now the component installs what the
+  release actually ships — `networker-controlplane-linux-x64.tar.gz` (a
+  self-contained .NET publish directory, so no runtime is needed on the host),
+  `networker-agent-cs-linux-x64.tar.gz`, and the prebuilt
+  `dashboard-frontend.tar.gz` (which also removes the Node.js toolchain and
+  the git clone + `npm run build` from the install path). There is deliberately
+  no source fallback: the crates are gone, and failing with an actionable
+  message beats failing with a misleading one.
+- **The self-host environment file wrote the Rust contract to a C# app.**
+  `DASHBOARD_DB_URL=postgres://…` is a URI, and Npgsql does not parse URI form
+  — the value was silently ignored and the control plane connected to its
+  built-in default database instead of the one the installer had just created
+  and seeded. Now written as `DASHBOARD_DB_URL_NPGSQL` in Npgsql keyword
+  syntax, alongside `ASPNETCORE_URLS` (replacing `DASHBOARD_PORT` /
+  `DASHBOARD_BIND_ADDR`) and `DASHBOARD_PUBLIC_URL`. `DASHBOARD_STATIC_DIR` is
+  dropped because the C# control plane serves no static files at all.
+- **nginx proxied every path to the control plane, which serves no HTML.**
+  The Rust dashboard served the SPA itself; the C# one does not, so `/` 404'd
+  for every page load. nginx now serves `/opt/networker/dashboard` directly
+  with `try_files … /index.html` (so deep links survive a hard refresh) and
+  proxies only `/api/` and `/ws/`. `/share/{token}` is a client-side route, so
+  it is deliberately NOT proxied — its data comes from `/api/share/{token}`.
+- **The systemd unit copied a self-contained .NET entrypoint to
+  `/usr/local/bin`**, stranding its runtime. It now runs in place from the
+  publish directory with a `WorkingDirectory`, a `PATH` carrying
+  `/usr/local/bin` and `/snap/bin` (cloud CLIs, snap gcloud), and no
+  `RUST_LOG`.
+
+### Added
+- **A fresh self-hosted install can now actually be logged into.** The C#
+  control plane has no signup route and no admin bootstrap — production's
+  admin rows were inherited from the Rust-era database, so nobody noticed that
+  a brand-new deployment comes up with an empty `dash_user` table and no
+  possible way in. `AdminBootstrap` seeds one platform admin at startup from
+  `DASHBOARD_ADMIN_PASSWORD` (+ optional `DASHBOARD_ADMIN_EMAIL`, default
+  `admin@localhost`) with `must_change_password` set. It is heavily
+  fail-safe: it seeds **only** when `dash_user` is completely empty, via a
+  single `INSERT … WHERE NOT EXISTS` under an advisory lock, so it can never
+  touch, overwrite or race an existing deployment, and any failure is logged
+  and swallowed rather than blocking startup. Seven tests cover it against
+  real Postgres, the load-bearing one asserting that an existing install's
+  password hashes come through byte-identical.
+- **Guards so this class of breakage cannot recur silently.** New installer
+  tests fail if the dashboard path ever again references a retired Rust crate,
+  and — the check that was actually missing — cross-reference the installer's
+  asset names against `.github/workflows/release.yml`, so renaming an asset in
+  one place without the other breaks CI instead of self-hosting. Others pin
+  the Npgsql keyword format (by executing the generator, not grepping it), the
+  systemd unit shape, and the nginx SPA/API split.
+- **Audit P1-15 — the 42 orphaned cloud integration tests are watched again.**
+  `tests/integration/{aws,azure}` holds six real-VM bats suites that no
+  workflow has referenced since 2026-03, so they could have stopped parsing
+  and nobody would have learned of it until someone ran them by hand. CI can't
+  execute them (they create billable cloud resources), but it now parses every
+  suite and checks that the `install.sh` component names they invoke still
+  exist, on every PR that touches the installer. `tests/integration/README.md`
+  records why the AWS suites can never run in CI — there are no AWS
+  credentials — instead of leaving that as folklore.
+
+---
+
 ## [0.28.155] — 2026-08-05
 
 ### Added

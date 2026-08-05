@@ -1976,3 +1976,121 @@ JSON
     nonascii=$(printf '%s' "$out" | LC_ALL=C grep -c '[^\x00-\x7F]' || true)
     [ "$nonascii" = "0" ]
 }
+
+# ===========================================================================
+# Self-hosted control plane (C#) — v0.28.148 decommission fallout
+#
+# `install.sh dashboard` installed the RUST networker-dashboard/networker-agent
+# binaries. Those crates were deleted in v0.28.148 and their release assets went
+# with them, so from that release until this one the self-host path was dead:
+# the download 404'd and the "fallback to source compile" then failed with
+# "crate not found". Nothing caught it, because no test ever connected the
+# installer's asset names to the assets release.yml actually builds.
+# ===========================================================================
+
+@test "controlplane: the dashboard path no longer installs retired Rust crates" {
+    # The exact regression: these two calls 404 on every release >= v0.28.148.
+    ! grep -q 'step_download_release "networker-dashboard"' "$SCRIPT"
+    ! grep -q 'step_cargo_install "networker-dashboard"' "$SCRIPT"
+    ! grep -q 'step_cargo_install "networker-agent"' "$SCRIPT"
+}
+
+@test "controlplane: installer asset names match what release.yml builds" {
+    # The drift guard that was missing. Renaming an asset in the release
+    # workflow without updating the installer breaks self-hosting silently;
+    # this fails instead.
+    local wf="${BATS_TEST_DIRNAME}/../.github/workflows/release.yml"
+    [ -f "$wf" ]
+    local asset
+    for asset in networker-controlplane-linux-x64.tar.gz \
+                 networker-agent-cs-linux-x64.tar.gz \
+                 dashboard-frontend.tar.gz; do
+        grep -q "$asset" "$SCRIPT"
+        grep -q "$asset" "$wf"
+    done
+}
+
+@test "controlplane: install extracts a directory and requires the executable" {
+    local section
+    section=$(sed -n '/^step_install_controlplane()/,/^}/p' "$SCRIPT")
+    [ -n "$section" ]
+    # It is a self-contained publish DIR, not a bare binary — extracting to
+    # CONTROLPLANE_DIR and chmod-ing the entrypoint is the whole contract.
+    echo "$section" | grep -q 'CONTROLPLANE_DIR'
+    echo "$section" | grep -q 'Networker.ControlPlane'
+    # A truncated/garbage download must fail loudly, not leave a dead service.
+    echo "$section" | grep -q 'has no Networker.ControlPlane executable'
+    # And there must be no cargo fallback that would report a confusing error.
+    ! echo "$section" | grep -q 'cargo'
+}
+
+@test "controlplane: env file uses the C# contract, not the Rust one" {
+    local section
+    section=$(sed -n '/^step_write_dashboard_env()/,/^}/p' "$SCRIPT")
+    [ -n "$section" ]
+    # Npgsql does NOT parse postgres:// URIs — the old value silently fell
+    # through to the built-in default and pointed at the wrong database.
+    echo "$section" | grep -q 'DASHBOARD_DB_URL_NPGSQL=Host='
+    ! echo "$section" | grep -q 'DASHBOARD_DB_URL=postgres://'
+    echo "$section" | grep -q 'ASPNETCORE_URLS='
+    # Removed in the C# app; leaving it implies static serving that never happens.
+    ! echo "$section" | grep -q 'DASHBOARD_STATIC_DIR'
+}
+
+@test "controlplane: env file really writes an Npgsql keyword string" {
+    # Executes the generator instead of grepping it, so a broken heredoc or a
+    # quoting slip is caught rather than assumed away. Writes to a temp path,
+    # not /etc, so this RUNS everywhere — a skipped guard proves nothing.
+    local out_file="$TEST_TMPDIR/dashboard.env"
+    bash -c "
+        source '$SCRIPT' >/dev/null 2>&1
+        # Swallow every privileged side effect; capture only the env heredoc.
+        sudo() {
+            if [ \"\$1\" = tee ]; then cat > '$out_file'; fi
+            return 0
+        }
+        next_step() { :; }; print_ok() { :; }; print_info() { :; }
+        DASHBOARD_DB_PASSWORD=s3cret
+        DASHBOARD_FQDN=nwk.example.com
+        step_write_dashboard_env
+    " >/dev/null 2>&1
+
+    [ -s "$out_file" ]
+    # Npgsql keyword syntax with the installer's own DB password — NOT a URI.
+    grep -q '^DASHBOARD_DB_URL_NPGSQL=Host=127\.0\.0\.1;Port=5432;Database=networker_dashboard;Username=networker;Password=s3cret$' "$out_file"
+    grep -q '^ASPNETCORE_URLS=http://127\.0\.0\.1:5030$' "$out_file"
+    grep -q '^DASHBOARD_PUBLIC_URL=https://nwk\.example\.com$' "$out_file"
+    # Secrets must be generated, not left blank (the app fail-closes on empty).
+    grep -qE '^DASHBOARD_JWT_SECRET=.{16,}$' "$out_file"
+    grep -qE '^DASHBOARD_CREDENTIAL_KEY=[0-9a-f]{32,}$' "$out_file"
+    ! grep -q 'postgres://' "$out_file"
+}
+
+@test "controlplane: systemd unit runs the self-contained publish dir" {
+    local section
+    section=$(sed -n '/^step_setup_dashboard_service()/,/^}/p' "$SCRIPT")
+    [ -n "$section" ]
+    echo "$section" | grep -q "ExecStart=\${binary_path}"
+    echo "$section" | grep -q "WorkingDirectory=\${CONTROLPLANE_DIR}"
+    # Copying the entrypoint alone to /usr/local/bin strands its runtime.
+    ! echo "$section" | grep -q 'cp .*usr/local/bin/networker-dashboard'
+    # RUST_LOG on a .NET service is cargo-cult config.
+    ! echo "$section" | grep -q 'RUST_LOG'
+}
+
+@test "controlplane: nginx serves the SPA and proxies only api and ws" {
+    # The C# control plane serves no static files at all (the Rust one did), so
+    # proxying "/" wholesale returns 404 for every page load.
+    local section
+    section=$(sed -n '/^step_setup_nginx_proxy()/,/^}/p' "$SCRIPT")
+    [ -n "$section" ]
+    echo "$section" | grep -q 'root /opt/networker/dashboard;'
+    # Deep links must survive a hard refresh.
+    echo "$section" | grep -q 'try_files \$uri \$uri/ /index.html;'
+    echo "$section" | grep -q 'location /api/ {'
+    echo "$section" | grep -q 'location /ws/ {'
+    # /share/:token is a CLIENT-side route (App.tsx) whose data comes from
+    # /api/share/{token}. Proxying /share/ to the control plane 404s the
+    # public share page — the exact mistake this line prevents recurring.
+    ! echo "$section" | grep -q 'location /share/ {'
+}
