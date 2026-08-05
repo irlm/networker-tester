@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.151] — 2026-08-05
+
+### Added
+- **Audit P0-1 — the comparison-group matrix launch is finally executed in a
+  test.** `ComparisonMatrixLaunchTests` drives the real HTTP route against
+  real Postgres: a 6-cell mixed-OS matrix must create one config + one run per
+  cell with distinct names; a RE-launch of the same group must succeed with a
+  fresh set (the v0.28.129 unique-name regression); unsupported Windows combos
+  must fail at launch with real reasons while the supported cells still launch
+  (per-cell isolation); and a large workload must get a workload-scaled cell
+  deadline rather than the old hardcoded 900s. This flow previously had only 4
+  JSON-parsing tests and was excluded from the write-endpoint sweep as a "202
+  shell with no DB effect".
+- **Audit P0-7 — jsonb columns can no longer reach a server-side predicate.**
+  `JsonbPredicateGuardTests` enumerates every jsonb-mapped property from the
+  EF model itself (29 today, new ones covered automatically) and fails if any
+  is string-matched inside a `Where`/`Any`/`OrderBy`/… in the control-plane
+  sources — the `jsonb ~~ jsonb` (42883) shape that wedged provisioning for a
+  day. Two companion runtime tests on real Postgres prove the rejection is
+  genuine and that the select-then-match-in-memory pattern still works. The
+  static scan needs no Docker, so it runs on every machine.
+
+---
+
 ## [0.28.149] — 2026-08-05
 
 ### Added
