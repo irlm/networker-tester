@@ -169,10 +169,14 @@ public class ReportAndShareHttpTests : IClassFixture<ControlPlaneFixture>
         Assert.True(created.IsSuccessStatusCode,
             $"share-link create failed: {created.StatusCode} {await created.Content.ReadAsStringAsync()}");
 
+        // Real response shape (verified in ShareLinksEndpoints): link_id + a
+        // share URL carrying the raw token — there is no bare "token" field.
         var createdBody = await created.Content.ReadFromJsonAsync<JsonElement>();
-        var token = createdBody.TryGetProperty("token", out var t) ? t.GetString() : null;
-        var linkId = createdBody.TryGetProperty("id", out var idEl) ? idEl.GetString() : null;
-        Assert.False(string.IsNullOrWhiteSpace(token), $"no token in response: {createdBody}");
+        var url = createdBody.TryGetProperty("url", out var u) ? u.GetString() : null;
+        var linkId = createdBody.TryGetProperty("link_id", out var idEl) ? idEl.GetString() : null;
+        Assert.False(string.IsNullOrWhiteSpace(url), $"no share url in response: {createdBody}");
+        var token = url!.Split("/share/").Last();
+        Assert.False(string.IsNullOrWhiteSpace(token), $"could not extract a token from {url}");
 
         // ── public view: UNAUTHENTICATED, the whole point of a share link ──
         using var anon = _fx.CreateClient();
