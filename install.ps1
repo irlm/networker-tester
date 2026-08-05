@@ -2261,7 +2261,20 @@ tls:
     Invoke-EnsureFirewallRule "Networker-Traefik-HTTP"  "TCP" @(8092)
     Invoke-EnsureFirewallRule "Networker-Traefik-HTTPS" "TCP" @(8455)
     Invoke-EnsureFirewallRule "Networker-Traefik-QUIC"  "UDP" @(8455)
-    Write-Ok "Traefik serving test page on ports 8092 (HTTP) / 8455 (HTTPS+H3)"
+
+    # Port-serving check — nssm reports "started" for a process that exits
+    # immediately, so the service being registered proves nothing. The v0.28.150
+    # windows-exec job caught exactly this: "OK Traefik serving" printed while
+    # BOTH ports refused connections (same class as the caddy fixes).
+    Start-Sleep -Seconds 3
+    try {
+        $null = Invoke-WebRequest -Uri "http://localhost:8092/" -UseBasicParsing -TimeoutSec 8
+        Write-Ok "Traefik serving test page on ports 8092 (HTTP) / 8455 (HTTPS+H3)"
+    } catch {
+        Write-Err "Traefik service registered but port 8092 is not serving."
+        Write-Err "  nssm status: $(& $nssm status networker-traefik 2>&1)"
+        throw "traefik install failed: port not serving after start"
+    }
 }
 
 # ── HAProxy (ports 8093 / 8456) ──────────────────────────────────────────────

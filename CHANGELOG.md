@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.28.150] — 2026-08-05
 
+### Fixed
+- **Windows Traefik claimed success while serving nothing** — caught by this
+  release's own new `windows-exec` job on its first run: nssm reports a
+  service "started" even when the process exits immediately, so the setup
+  printed "✓ Traefik serving" while both ports refused connections. The
+  setup now port-verifies (and dumps nssm status) before claiming success —
+  the same guard Caddy and Apache already got.
+
 ### Added
 - **Audit P0-3 + P0-4 — the installer's proxy stacks are now EXECUTED in CI,
   not grepped.** Two new jobs in Installer Tests:
