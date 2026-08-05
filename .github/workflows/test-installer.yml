@@ -120,3 +120,151 @@ jobs:
             exit 1
           }
           Write-Host "PSScriptAnalyzer: no issues found."
+
+  # ── P0-4 (2026-08 audit): EXECUTE the linux proxy-stack setups ─────────────
+  # The bats suite drives functions and greps generated config text, but the
+  # caddy and apache stacks shipped broken for weeks while those tests were
+  # green (a config that never starts is textually indistinguishable from one
+  # that does). This job runs `install.sh --setup-stack <stack>` for every
+  # linux stack against a real networker-endpoint and asserts each proxy
+  # actually SERVES: /health and /download round-trip THROUGH the proxy on
+  # both its HTTP and HTTPS listeners.
+  stack-exec:
+    name: Linux stack execution (setup-stack + proxy round-trip)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.installer == 'true'
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Build networker-endpoint
+        run: cargo build -p networker-endpoint
+
+      - name: Start endpoint on the proxy upstream ports
+        run: |
+          # The generated proxy configs upstream to 127.0.0.1:8080 (HTTP) and
+          # 127.0.0.1:8443 (TLS). Install the binary where the setups'
+          # generate-site step expects it, then boot it.
+          sudo install -m 0755 target/debug/networker-endpoint /usr/local/bin/networker-endpoint
+          nohup /usr/local/bin/networker-endpoint \
+            --http-port 8080 --https-port 8443 \
+            --udp-port 9999 --udp-throughput-port 9998 \
+            > /tmp/endpoint.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8080/health && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:8080/health >/dev/null
+          echo "endpoint healthy"
+
+      - name: Run every linux stack setup and round-trip through each proxy
+        run: |
+          set -u
+          declare -a STACKS=("nginx:8081:8444" "caddy:8091:8454" "traefik:8092:8455" "haproxy:8093:8456" "apache:8094:8457")
+          FAILED=0
+          for entry in "${STACKS[@]}"; do
+            stack="${entry%%:*}"; rest="${entry#*:}"
+            http_port="${rest%%:*}"; https_port="${rest#*:}"
+            echo "::group::--setup-stack ${stack}"
+            if ! sudo -E bash install.sh --setup-stack "$stack" < /dev/null; then
+              echo "::error::${stack}: setup exited non-zero"
+              FAILED=1; echo "::endgroup::"; continue
+            fi
+            sleep 2
+            ok=1
+            for probe in \
+              "http://127.0.0.1:${http_port}/health" \
+              "https://127.0.0.1:${https_port}/health" \
+              "https://127.0.0.1:${https_port}/download/4096"; do
+              if curl -skf --max-time 10 "$probe" -o /dev/null; then
+                echo "OK  ${stack}: ${probe}"
+              else
+                echo "::error::${stack}: ${probe} did not serve"
+                ok=0
+              fi
+            done
+            if [ "$ok" = "0" ]; then
+              FAILED=1
+              echo "--- ${stack} service state ---"
+              systemctl --no-pager status "networker-${stack}" nginx apache2 2>/dev/null | head -30 || true
+            fi
+            echo "::endgroup::"
+          done
+          exit $FAILED
+
+  # ── P0-3 (2026-08 audit): EXECUTE the Windows installer + proxy stacks ─────
+  # install.ps1 had ZERO automated execution — PSScriptAnalyzer is lint-only —
+  # while every Windows proxy stack was asserted by grepping install.sh. That
+  # is how an em-dash (which broke the generated IIS script at PARSE time) and
+  # a never-working Caddy shipped repeatedly. This job runs the orphaned
+  # 161-assertion unit script AND actually installs the Windows stacks that
+  # can run on a GitHub runner, asserting each serves.
+  windows-exec:
+    name: Windows installer execution (unit script + stack setup)
+    runs-on: windows-latest
+    needs: changes
+    if: needs.changes.outputs.installer == 'true'
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+
+      - name: Run the install.ps1 unit suite (161 assertions, previously wired to nothing)
+        shell: pwsh
+        run: pwsh -File tests/test_install_ps1.ps1
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Build + start networker-endpoint (proxy upstream)
+        shell: pwsh
+        run: |
+          cargo build -p networker-endpoint
+          New-Item -ItemType Directory -Force C:\networker | Out-Null
+          Copy-Item target\debug\networker-endpoint.exe C:\networker\networker-endpoint.exe
+          Start-Process -FilePath C:\networker\networker-endpoint.exe `
+            -ArgumentList '--http-port','8080','--https-port','8443','--udp-port','9999','--udp-throughput-port','9998' `
+            -WindowStyle Hidden
+          $ok = $false
+          foreach ($i in 1..30) {
+            try { Invoke-WebRequest -Uri http://127.0.0.1:8080/health -UseBasicParsing -TimeoutSec 3 | Out-Null; $ok = $true; break }
+            catch { Start-Sleep -Seconds 1 }
+          }
+          if (-not $ok) { throw "endpoint did not become healthy" }
+          Write-Host "endpoint healthy"
+
+      - name: Setup Caddy + Traefik and assert they serve through the proxy
+        shell: pwsh
+        run: |
+          # IIS is excluded here: the runner image's IIS feature install +
+          # reboot-for-HTTP/3 path doesn't fit a hosted runner. Caddy and
+          # Traefik are the two Windows stacks the matrix actually provisions
+          # via install.ps1 -Setup, and both were broken-but-green before.
+          $failed = $false
+          foreach ($case in @(
+              @{ Stack = 'caddy';   Http = 8091; Https = 8454 },
+              @{ Stack = 'traefik'; Http = 8092; Https = 8455 })) {
+            Write-Host "::group::-Setup $($case.Stack)"
+            try {
+              & .\install.ps1 -Setup $case.Stack
+            } catch {
+              Write-Host "::error::$($case.Stack): setup threw — $($_.Exception.Message)"
+              $failed = $true; Write-Host "::endgroup::"; continue
+            }
+            Start-Sleep -Seconds 3
+            foreach ($url in @("http://127.0.0.1:$($case.Http)/health",
+                               "https://127.0.0.1:$($case.Https)/health")) {
+              try {
+                $r = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 10 -SkipCertificateCheck
+                Write-Host "OK  $($case.Stack): $url -> $($r.StatusCode)"
+              } catch {
+                Write-Host "::error::$($case.Stack): $url did not serve — $($_.Exception.Message)"
+                $failed = $true
+              }
+            }
+            Write-Host "::endgroup::"
+          }
+          if ($failed) { throw "one or more Windows stacks failed to serve" }
