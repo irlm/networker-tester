@@ -70,7 +70,7 @@ public sealed class RunDispatcherTesterFkTests
         return sp;
     }
 
-    private static void CreateMinimalSchema(Microsoft.Data.Sqlite.SqliteConnection conn)
+    internal static void CreateMinimalSchema(Microsoft.Data.Sqlite.SqliteConnection conn)
     {
         Exec(conn, "PRAGMA foreign_keys = ON;");
         Exec(conn, """
@@ -213,7 +213,7 @@ public sealed class RunDispatcherTesterFkTests
             """);
     }
 
-    private static void Exec(Microsoft.Data.Sqlite.SqliteConnection conn, string sql)
+    internal static void Exec(Microsoft.Data.Sqlite.SqliteConnection conn, string sql)
     {
         using var cmd = conn.CreateCommand();
         cmd.CommandText = sql;
