@@ -1387,7 +1387,7 @@ UNIT
 
 sudo systemctl daemon-reload
 sudo systemctl enable networker-endpoint
-sudo systemctl start networker-endpoint
+sudo systemctl start networker-endpoint </dev/null >/dev/null 2>&1
 
 if command -v iptables &>/dev/null; then
     sudo iptables -t nat -C PREROUTING -p tcp --dport 80  -j REDIRECT --to-port 8080 2>/dev/null || \

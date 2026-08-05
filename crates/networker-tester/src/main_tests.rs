@@ -1012,10 +1012,26 @@ fn deterministic_rng_different_seeds_diverge() {
 
 #[test]
 fn deterministic_rng_empty_array() {
-    // Empty input should not panic and should produce a valid RNG.
+    // Empty input must not panic AND must still yield a usable generator.
+    //
+    // P1-13 (vacuous-assertion sweep, 2026-08-05): this used to end at
+    // `let _ = rng.next_u64();`, so it only proved "no panic". A generator
+    // that had degenerated to a constant — the realistic failure for a
+    // zero-seeded xorshift, and exactly what the sibling
+    // `deterministic_rng_state_never_zero` exists to prevent — passed it.
     let mut rng = DeterministicRng::from_values(&[]);
-    // Just verify it doesn't panic and produces values.
-    let _ = rng.next_u64();
+    assert_ne!(rng.state, 0, "empty seed left the state at zero");
+
+    let first = rng.next_u64();
+    let rest: Vec<u64> = (0..8).map(|_| rng.next_u64()).collect();
+    assert!(
+        rest.iter().any(|&v| v != first),
+        "generator is stuck on a constant: {first} repeated {rest:?}"
+    );
+    // And it must remain usable for the thing callers actually want.
+    for _ in 0..50 {
+        assert!(rng.next_index(10) < 10);
+    }
 }
 
 #[test]
