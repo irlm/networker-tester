@@ -157,7 +157,10 @@ public class ReportAndShareHttpTests : IClassFixture<ControlPlaneFixture>
     public async Task Share_link_lifecycle_create_view_publicly_then_revoke()
     {
         var runId = await SeedCompletedRunAsync();
-        using var client = _fx.CreateAuthenticatedClient();
+        // Share links are ProjectAdmin-gated (verified in ShareLinksEndpoints:
+        // every route uses AuthPolicies.ProjectAdmin), so the operator client
+        // correctly gets a 403 here — use the admin principal.
+        using var client = _fx.CreateAdminClient();
 
         // ── create ────────────────────────────────────────────────────────
         var created = await client.PostAsJsonAsync(
