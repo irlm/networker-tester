@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { useParams, Link, useNavigate } from 'react-router';
 import { api } from '../api/client';
 import { stripAnsi } from '../lib/ansi';
@@ -73,10 +74,8 @@ export function DeployDetailPage() {
   // Server signalled DeployComplete via SSE — refresh the deployment record
   // immediately so the UI reflects the final status (endpoint_ips, DB log)
   // without waiting for the next polling tick.
-  useEffect(() => {
-    if (sseComplete) {
-      loadDeployment();
-    }
+  useAsyncEffect(() => {
+    if (sseComplete) return loadDeployment();
   }, [sseComplete, loadDeployment]);
 
   // Cost estimate — static per config, so fetch once per deployment. A miss

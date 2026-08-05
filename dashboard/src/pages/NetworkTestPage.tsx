@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
+import { useAsyncEffect } from '../hooks/useAsyncEffect';
+import { useNavigate } from 'react-router';
 import { api } from '../api/client';
 import { testersApi, type TesterRow } from '../api/testers';
 import type { Deployment, TestRun, TestConfigCreate, Workload } from '../api/types';
@@ -132,7 +133,6 @@ function deploymentStatusDot(status: string): string {
 export function NetworkTestPage() {
   const { projectId } = useProject();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
   const addToast = useToast();
   usePageTitle('New Network Test');
 
@@ -142,11 +142,19 @@ export function NetworkTestPage() {
   const [recentRuns, setRecentRuns] = useState<TestRun[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Form state — intent-first: modes → target → runner
-  const [selectedModes, setSelectedModes] = useState<Set<string>>(new Set());
+  // Form state — intent-first: modes → target → runner.
+  // ?modes= / ?target= seed the INITIAL values rather than being written back
+  // by an effect: the effect version rendered empty defaults first and then
+  // replaced them, a visible flicker, and set state during the effect body.
+  const urlParams = new URLSearchParams(window.location.search);
+  const urlModes = (urlParams.get('modes') ?? '')
+    .split(',').map(m => m.trim()).filter(m => ALL_MODES.has(m));
+  const [selectedModes, setSelectedModes] = useState<Set<string>>(() => new Set(urlModes));
   const [activePreset, setActivePreset] = useState<string | null>(null);
   const [payloadSizes, setPayloadSizes] = useState<Set<number>>(new Set(DEFAULT_PAYLOADS));
-  const [selectedTargetId, setSelectedTargetId] = useState<string>('');
+  const [selectedTargetId, setSelectedTargetId] = useState<string>(
+    () => urlParams.get('target') ?? '',
+  );
   const [targetSearch, setTargetSearch] = useState('');
   const [targetPopoverOpen, setTargetPopoverOpen] = useState(false);
   const [runnerMode, setRunnerMode] = useState<'auto' | 'specific'>('auto');
@@ -163,30 +171,20 @@ export function NetworkTestPage() {
 
   // Prefill from query params (?modes=a,b&target=<deploymentId>) — set by
   // the EndpointRunsPage preset cards and its per-run rerun links.
-  useEffect(() => {
-    const modesParam = searchParams.get('modes');
-    if (modesParam) {
-      const modes = modesParam.split(',').map(m => m.trim()).filter(m => ALL_MODES.has(m));
-      if (modes.length > 0) {
-        setSelectedModes(new Set(modes));
-        setActivePreset(null);
-      }
-    }
-    const target = searchParams.get('target');
-    if (target) setSelectedTargetId(target);
-  }, [searchParams]);
+
 
   // ── Data loading ─────────────────────────────────────────────────────
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    Promise.all([
+  // `loading` starts true, so the removed synchronous setLoading(true) only
+  // mattered on a projectId change — where the list now stays visible until the
+  // new data lands instead of flashing a spinner. useAsyncEffect owns the
+  // cancellation flag this effect used to hand-roll.
+  useAsyncEffect((cancelled) => Promise.all([
       api.getDeployments(projectId, { limit: 50 }).catch(() => [] as Deployment[]),
       testersApi.listTesters(projectId).catch(() => [] as TesterRow[]),
       api.listTestRuns(projectId, { endpoint_kind: 'network', limit: 5 }).catch(() => [] as TestRun[]),
     ]).then(([deps, rnrs, runs]) => {
-      if (cancelled) return;
+      if (cancelled()) return;
       // Only COMPLETED deployments are runnable targets — failed/cancelled ones
       // have no live endpoint and used to be listed (and selectable!) here,
       // producing guaranteed-failing runs (E2E P2-9).
@@ -194,9 +192,7 @@ export function NetworkTestPage() {
       setTesters(rnrs);
       setRecentRuns(runs);
       setLoading(false);
-    });
-    return () => { cancelled = true; };
-  }, [projectId]);
+    }), [projectId]);
 
   // ── Derived ──────────────────────────────────────────────────────────
 

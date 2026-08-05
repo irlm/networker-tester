@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useNow } from '../hooks/useNow';
 import { useSearchParams } from 'react-router';
 import { api } from '../api/client';
 import { testersApi, type TesterRow } from '../api/testers';
@@ -587,6 +588,10 @@ export function DiagnosticsPage() {
 
   // ── Build URL groups ──────────────────────────────────────────────
 
+  // Clock from state rather than read during render (react-hooks/purity); it is
+  // a memo dependency so staleness verdicts advance with it.
+  const now = useNow();
+
   const urlGroups = useMemo(() => {
     const hostMap = new Map<string, { runs: TestRun[]; configIds: Set<string> }>();
 
@@ -633,7 +638,7 @@ export function DiagnosticsPage() {
       // has claimed and finished it. Staleness ("no check in 24h") is
       // evaluated before healthy so an old green check surfaces as stale,
       // matching the summary strip's label.
-      const timeSinceLastRun = Date.now() - new Date(lastRun.created_at).getTime();
+      const timeSinceLastRun = now - new Date(lastRun.created_at).getTime();
       let lastStatus: UrlGroup['lastStatus'];
       // Verdict rule shared with the Runs pages (runDisplayStatus, audit F9):
       // completed-with-some-failures reads "partial", not "failed" — the same
@@ -668,7 +673,7 @@ export function DiagnosticsPage() {
     }
 
     return groups;
-  }, [allRuns, configs, configDetails]);
+  }, [allRuns, configs, configDetails, now]);
 
   // ── Summary counts ────────────────────────────────────────────────
 
@@ -817,8 +822,16 @@ export function DiagnosticsPage() {
     });
   };
 
-  // Reset page when filter changes
-  useEffect(() => { setPage(1); }, [filter, sort]);
+  // Reset the page when the filter/sort changes. Done DURING RENDER via the
+  // previous-value comparison React documents for this, rather than in an
+  // effect: the effect version rendered page N of the new filter first, then
+  // re-rendered at page 1 — a visible flash of the wrong slice.
+  const filterKey = `${filter}\u0000${sort}`;
+  const [prevFilterKey, setPrevFilterKey] = useState(filterKey);
+  if (filterKey !== prevFilterKey) {
+    setPrevFilterKey(filterKey);
+    setPage(1);
+  }
 
   // ── Render ────────────────────────────────────────────────────────
 

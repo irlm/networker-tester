@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { useAsyncEffect } from "../hooks/useAsyncEffect";
 import { api } from "../api/client";
 
 interface HealthCheck {
@@ -57,8 +58,12 @@ export default function SystemHealthPanel() {
     }
   }, []);
 
+  // The 60s poll stays an ordinary effect (setInterval is an external system,
+  // which is exactly what effects are for). Only the FIRST call moves off the
+  // synchronous path — that one ran during the effect body and cascaded a
+  // render before paint.
+  useAsyncEffect(() => fetchHealth(), [fetchHealth]);
   useEffect(() => {
-    fetchHealth();
     const interval = setInterval(fetchHealth, 60_000);
     return () => clearInterval(interval);
   }, [fetchHealth]);

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { testersApi, type TesterRow } from '../api/testers';
 import { api } from '../api/client';
 import { CloudAccountCombobox } from './wizard/CloudAccountCombobox';
@@ -200,11 +201,12 @@ export function CreateTesterModal({
       }
     });
     return () => { cancelled = true; };
+    // Intentionally keyed on projectId only — see the effect body.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
   // Suggest a unique tester name based on cloud + region
-  useEffect(() => {
+  useAsyncEffect(() => {
     if (name) return; // don't override user input
     if (existingNames.size === 0 && !availableClouds.length) return;
     const base = `${cloud}-${region || 'tester'}`;
@@ -220,18 +222,16 @@ export function CreateTesterModal({
         return;
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cloud, region, existingNames, availableClouds]);
 
   // Load regions when cloud changes (per-cloud static list)
-  useEffect(() => {
+  useAsyncEffect(() => {
     const list = REGIONS_BY_CLOUD[cloud] || [];
     setRegions(list);
     // If current region is not valid for this cloud, reset to first available
     if (list.length > 0 && !list.includes(region)) {
       setRegion(defaultRegion && list.includes(defaultRegion) ? defaultRegion : list[0]);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cloud]);
 
   const handleKeyDown = useCallback(
@@ -279,6 +279,7 @@ export function CreateTesterModal({
       cancelled = true;
       if (pollTimer.current) clearTimeout(pollTimer.current);
     };
+    // Polling is keyed on the run's identity, not on the callbacks it closes over.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stage, createdTester?.tester_id]);
 

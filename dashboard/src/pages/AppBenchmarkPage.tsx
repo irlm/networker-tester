@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { useNavigate, useSearchParams } from 'react-router';
 import { api } from '../api/client';
 import type { Workload, Methodology, TestConfigCreate, ComparisonCell, ComparisonGroupCreate, LanguageCapability } from '../api/types';
@@ -50,7 +51,7 @@ export function AppBenchmarkPage() {
   const [selectedTesterId, setSelectedTesterId] = useState<string | null>(null);
 
   // Step 2: Languages
-  const [selectedLangs, setSelectedLangs] = useState<Set<string>>(new Set(['nginx']));
+  const [rawSelectedLangs, setSelectedLangs] = useState<Set<string>>(new Set(['nginx']));
 
   // Workload (configured by template, not a separate step)
   const [selectedModes, setSelectedModes] = useState<Set<string>>(new Set(['http1', 'http2', 'http3', 'download', 'upload']));
@@ -71,14 +72,16 @@ export function AppBenchmarkPage() {
 
   // apibench × language gating: languages without the /api/* suite (nginx)
   // cannot appear in an apibench selection (audit C5).
-  useEffect(() => {
-    if (!capabilities || !selectedModes.has('apibench')) return;
+  // DERIVED rather than synced through an effect: the effect version held an
+  // invalid selection between render and effect and cascaded a render whenever
+  // capabilities loaded. `rawSelectedLangs` keeps the user's intent, so a
+  // language that becomes supported again reappears instead of being lost.
+  const selectedLangs = useMemo(() => {
+    if (!capabilities || !selectedModes.has('apibench')) return rawSelectedLangs;
     const unsupported = new Set(capabilities.filter(c => !c.apibench).map(c => c.language));
-    setSelectedLangs(prev => {
-      const pruned = [...prev].filter(l => !unsupported.has(l));
-      return pruned.length === prev.size ? prev : new Set(pruned);
-    });
-  }, [capabilities, selectedModes]);
+    const pruned = [...rawSelectedLangs].filter(l => !unsupported.has(l));
+    return pruned.length === rawSelectedLangs.size ? rawSelectedLangs : new Set(pruned);
+  }, [capabilities, selectedModes, rawSelectedLangs]);
 
   // Step 3: Methodology (always on). Seeded from the 'standard' preset so the
   // Review step always matches the highlighted preset (audit F14).
@@ -134,7 +137,7 @@ export function AppBenchmarkPage() {
   // once on mount, which seeds langs/modes/testbeds/methodology and advances to
   // step 1. No-op if the param is missing or unknown.
   const prefilledRef = useRef(false);
-  useEffect(() => {
+  useAsyncEffect(() => {
     if (prefilledRef.current) return;
     const templateId = searchParams.get('template');
     if (!templateId) return;

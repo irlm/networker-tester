@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
+import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { useNavigate, useSearchParams } from 'react-router';
 import { api } from '../api/client';
 import type { Workload, Methodology, TestConfigCreate, ModeGroup, ComparisonCell, ComparisonGroupCreate } from '../api/types';
@@ -46,7 +47,16 @@ export function FullStackPage() {
 
   // Step 1: Workload
   const [modeGroups, setModeGroups] = useState<ModeGroup[]>([]);
-  const [selectedModes, setSelectedModes] = useState<Set<string>>(new Set(['http1', 'http2', 'http3', 'download', 'upload']));
+  // Seeded from ?modes= on first render instead of being written back by an
+  // effect. The effect version rendered the defaults, then replaced them — a
+  // visible flicker of the wrong selection — and needed a ref to fire once.
+  const [rawSelectedModes, setSelectedModes] = useState<Set<string>>(() => {
+    const param = new URLSearchParams(window.location.search).get('modes');
+    const fromUrl = (param ?? '').split(',').map(m => m.trim()).filter(Boolean);
+    return fromUrl.length > 0
+      ? new Set(fromUrl)
+      : new Set(['http1', 'http2', 'http3', 'download', 'upload']);
+  });
   const [runs, setRuns] = useState(10);
   const [concurrency, setConcurrency] = useState(1);
   const [timeoutMs, setTimeoutMs] = useState(5000);
@@ -59,17 +69,7 @@ export function FullStackPage() {
   // The prune effect below still greys/drops anything incompatible with the
   // endpoint target, so a bad param can't select an unsupported mode.
   const [searchParams] = useSearchParams();
-  const modesPrefilledRef = useRef(false);
-  useEffect(() => {
-    if (modesPrefilledRef.current) return;
-    const modesParam = searchParams.get('modes');
-    if (!modesParam) return;
-    const modes = modesParam.split(',').map(m => m.trim()).filter(Boolean);
-    if (modes.length > 0) {
-      modesPrefilledRef.current = true;
-      setSelectedModes(new Set(modes));
-    }
-  }, [searchParams]);
+
 
   // A full-stack run always targets a provisioned networker-endpoint (a proxy
   // stack), so gate the mode picker to that target kind — greys out sdkprobe
@@ -80,14 +80,15 @@ export function FullStackPage() {
     [],
   );
 
-  // Defensively drop any unsupported mode from the selection (e.g. from a
-  // prefilled/saved config) so a launch can never include one.
-  useEffect(() => {
-    setSelectedModes(prev => {
-      const pruned = new Set([...prev].filter(m => modeUnsupported(m) === null));
-      return pruned.size === prev.size ? prev : pruned;
-    });
-  }, [modeUnsupported]);
+  // Defensively drop any unsupported mode (e.g. from a prefilled/saved config)
+  // so a launch can never include one. DERIVED, not synced through an effect:
+  // the effect version briefly held an invalid selection between render and
+  // effect, and cascaded a render whenever support changed. `rawSelectedModes`
+  // stays the user's intent so toggling a testbed back restores their picks.
+  const selectedModes = useMemo(
+    () => new Set([...rawSelectedModes].filter(m => modeUnsupported(m) === null)),
+    [rawSelectedModes, modeUnsupported],
+  );
 
   // Step 2: Methodology (always on). Seeded from the 'standard' preset so the
   // Review step always shows exactly what the highlighted preset says (F14).
@@ -119,7 +120,7 @@ export function FullStackPage() {
   // straight to Review — the user reviews the provisioning notice and launches.
   // No-op (falls back to the manual testbed step) when no cloud account exists.
   const autoProvisionedRef = useRef(false);
-  useEffect(() => {
+  useAsyncEffect(() => {
     if (autoProvisionedRef.current) return;
     if (searchParams.get('autoprovision') !== '1') return;
     if (cloudAccounts.length === 0) return; // wait for load / nothing to pick
@@ -153,7 +154,7 @@ export function FullStackPage() {
     if (step === 2) return true;
     if (step === 3) return true; // name defaults to the placeholder
     return true;
-  }, [step, testbeds, selectedModes.size, configName]);
+  }, [step, testbeds, selectedModes.size]);
 
   // Say WHY Next is disabled — a silently grey button was audit §8.
   const nextHint = useMemo(() => {

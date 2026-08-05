@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
+import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { api } from '../api/client';
 import type { BenchmarkLeaderboardEntry, BenchmarkRun, GroupedLeaderboard } from '../api/types';
 import { HorizontalBoxWhiskerChart } from '../components/charts/HorizontalBoxWhiskerChart';
@@ -58,18 +59,18 @@ function GroupedTab() {
     }
   }, []);
 
-  useEffect(() => {
-    void fetchGrouped();
-  }, [fetchGrouped]);
+  useAsyncEffect(() => fetchGrouped(), [fetchGrouped]);
 
   // Auto-select first group once data loads — "All" mixes network conditions
-  useEffect(() => {
-    if (!selectedGroup && data?.groups && data.groups.length > 0) {
-      const first = data.groups[0];
-      setSelectedGroup(first);
-      void fetchGrouped(first);
-    }
-  }, [data?.groups]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Genuinely reactive — it waits for data to ARRIVE, then picks a group and
+  // refetches — so it stays an effect. useAsyncEffect only moves the update off
+  // the effect's synchronous body (react-hooks/set-state-in-effect).
+  useAsyncEffect(() => {
+    if (selectedGroup || !data?.groups?.length) return;
+    const first = data.groups[0];
+    setSelectedGroup(first);
+    return fetchGrouped(first);
+  }, [data?.groups]);
 
   const handleGroupChange = useCallback((group: string) => {
     setSelectedGroup(group);
@@ -485,10 +486,8 @@ export function LeaderboardPage() {
     }
   }, []);
 
-  useEffect(() => {
-    if (tab !== 'grouped') {
-      void fetchData();
-    }
+  useAsyncEffect(() => {
+    if (tab !== 'grouped') return fetchData();
   }, [fetchData, tab]);
 
   const tabs: { key: Tab; label: string }[] = [

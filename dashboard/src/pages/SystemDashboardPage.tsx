@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { api, type SystemMetrics, type DbMetrics, type WorkspaceUsage, type LogEntry, type SsoProvider, type CreateSsoProvider } from '../api/client';
 
 // ── Log helpers ─────────────────────────────────────────────────────────
@@ -515,7 +516,7 @@ function AuthTab() {
     }
   }, [toast]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useAsyncEffect(() => loadData(), [loadData]);
 
   const resetForm = () => {
     setShowForm(false);

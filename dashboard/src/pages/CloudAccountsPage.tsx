@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
+import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { api } from '../api/client';
 import type { CloudAccountSummary } from '../api/types';
 import { useProject } from '../hooks/useProject';
@@ -130,7 +131,7 @@ export function CloudAccountsPage() {
     }
   }, [projectId, addToast]);
 
-  useEffect(() => { loadAccounts(); }, [loadAccounts]);
+  useAsyncEffect(() => loadAccounts(), [loadAccounts]);
 
   const resetForm = () => {
     setShowForm(false);

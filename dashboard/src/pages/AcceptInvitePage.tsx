@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { useParams, useNavigate } from 'react-router';
 import { api } from '../api/client';
 import { useAuthStore } from '../stores/authStore';
@@ -20,18 +21,23 @@ export function AcceptInvitePage() {
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
+  // The `!token` branch set state synchronously in the effect body; deferring
+  // via useAsyncEffect keeps the same outcome (an error screen) without the
+  // cascading render, and adds cancellation so a slow resolve that lands after
+  // navigation no longer sets state on an unmounted page.
+  useAsyncEffect((cancelled) => {
     if (!token) {
       setState('error');
       return;
     }
-    api.resolveInvite(token)
+    return api.resolveInvite(token)
       .then(data => {
+        if (cancelled()) return;
         setInvite(data);
         setState('resolved');
       })
       .catch(() => {
-        setState('error');
+        if (!cancelled()) setState('error');
       });
   }, [token]);
 

@@ -24,25 +24,15 @@ export default defineConfig([
       // (e.g. stubbed endpoints, test mocks).
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
 
-      // ── Newly ENFORCED by the ESLint 10 upgrade (2026-08-05) ──────────────
-      // eslint-plugin-react-hooks is unchanged at 7.1.1; ESLint 9 simply was
-      // not applying these two rules from its recommended set, and ESLint 10
-      // is. They surface 33 PRE-EXISTING findings, not regressions:
-      //
-      //   react-hooks/set-state-in-effect (29) — the codebase's standard
-      //     data-loading shape: an effect calls a useCallback that setStates
-      //     synchronously (loading=true) before awaiting.
-      //   react-hooks/purity (4) — Date.now() read during render to compute
-      //     relative times.
-      //
-      // Both are legitimate criticisms and both need behavioural refactors
-      // across ~15 components. Bundling that into a toolchain upgrade would
-      // mean shipping a broad React change whose risk has nothing to do with
-      // the upgrade, so they are WARNINGS here: visible on every lint run,
-      // not blocking. Tracked for a dedicated pass — see the issue linked from
-      // the ESLint 10 PR. Do not silence them.
-      'react-hooks/set-state-in-effect': 'warn',
-      'react-hooks/purity': 'warn',
+      // ── Enforced (was 'warn' for one release while the backlog cleared) ──
+      // The ESLint 10 upgrade surfaced 33 findings from these two rules; all of
+      // them are now fixed, so they are errors again. Keep them that way: the
+      // fixes were derive-during-render, lazy state initialisers, and a
+      // useAsyncEffect hook that moves genuinely reactive updates off the
+      // effect's synchronous body. Reintroducing a synchronous setState in an
+      // effect should fail the build, not add a warning nobody reads.
+      'react-hooks/set-state-in-effect': 'error',
+      'react-hooks/purity': 'error',
     },
   },
 ])

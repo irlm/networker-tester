@@ -11,6 +11,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.163] — 2026-08-05
+
+### Fixed
+- **All 33 `react-hooks` findings from the ESLint 10 upgrade are fixed, and
+  both rules are enforced again** (`error`, not `warn`). They were real
+  criticisms of real code, so they were fixed rather than configured away —
+  and re-enforcing them is what stops the patterns returning.
+
+  Four kinds of fix, chosen per site rather than applied mechanically:
+
+  - **Derive instead of sync (9 sites).** State that mirrored other state was
+    computed during render instead: the selected tester on the infrastructure
+    page is now derived from its ID (a stored snapshot went stale on every
+    fleet poll, which is why an effect was re-syncing it); unsupported modes
+    and languages are filtered on read, so the raw selection keeps the user's
+    intent and a mode that becomes supported again reappears; relative-time
+    labels are computed from `(iso, now)` instead of being mirrored into state.
+  - **Seed instead of write back (3 sites).** `?modes=`, `?target=` and friends
+    now seed the initial state via lazy `useState` initialisers. The effect
+    version rendered the defaults, then replaced them — a visible flicker — and
+    needed a `ref` to fire only once. The refs are gone.
+  - **Adjust during render (1 site).** Resetting to page 1 on a filter change
+    uses React's documented previous-value comparison. The effect version
+    rendered page N of the *new* filter first, then re-rendered at page 1.
+  - **`useAsyncEffect` for genuinely reactive work (12 sites).** Data loaders
+    and effects that wait for data or events to arrive stay effects — that is
+    what effects are for — but the new hook moves the update off the effect's
+    synchronous body and, more usefully, **owns a cancellation flag most of
+    these call sites never had**, so a loader resolving after unmount no longer
+    sets state on a dead component.
+  - **`useNow` (4 sites).** `Date.now()` read during render made those
+    components impure. The clock now lives in state on a fixed cadence, which
+    also replaced a bare tick counter whose only job was forcing a re-render so
+    a render-time clock read would be re-evaluated.
+
+  Verified: lint clean (0 errors, **0 warnings**), build clean, vitest 307/307,
+  Playwright 5/5, bundle within budget.
+
+---
+
 ## [0.28.162] — 2026-08-05
 
 ### Changed
