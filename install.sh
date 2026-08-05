@@ -331,7 +331,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.156"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.157"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -1387,7 +1387,7 @@ UNIT
 
 sudo systemctl daemon-reload
 sudo systemctl enable networker-endpoint
-sudo systemctl start networker-endpoint
+sudo systemctl start networker-endpoint </dev/null >/dev/null 2>&1
 
 if command -v iptables &>/dev/null; then
     sudo iptables -t nat -C PREROUTING -p tcp --dport 80  -j REDIRECT --to-port 8080 2>/dev/null || \
@@ -2900,6 +2900,18 @@ step_download_release() {
         # One more attempt after the brief pause.
         if mv -f "${tmp_dir}/${binary}" "${INSTALL_DIR}/${binary}" 2>/dev/null; then
             mv_ok=1
+        elif cmp -s "${tmp_dir}/${binary}" "${INSTALL_DIR}/${binary}" 2>/dev/null; then
+            # The version-match branch above only runs when the extracted binary
+            # can report --version. When it cannot (a cross-arch build, or a
+            # stub), a loser of the race used to return 1 even though a sibling
+            # had already installed the very same bytes — and the caller then
+            # "fell back" to a source compile for nothing. Byte equality is the
+            # exact test: identical content means the concurrent writer
+            # installed this same release, so reusing it is correct. A stale or
+            # unrelated binary differs and still fails, as it should.
+            print_ok "$binary already installed by a concurrent run (identical bytes) → ${INSTALL_DIR}/${binary}"
+            rm -rf "$tmp_dir"
+            return 0
         fi
     fi
     rm -rf "$tmp_dir"
