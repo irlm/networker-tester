@@ -331,7 +331,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.155"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.156"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -4395,6 +4395,7 @@ step_write_dashboard_env() {
     sudo tee /etc/networker-dashboard.env > /dev/null <<ENVFILE
 DASHBOARD_DB_URL_NPGSQL=Host=127.0.0.1;Port=5432;Database=networker_dashboard;Username=networker;Password=${db_pw}
 DASHBOARD_ADMIN_PASSWORD=${admin_pw}
+DASHBOARD_ADMIN_EMAIL=${DASHBOARD_ADMIN_EMAIL:-admin@localhost}
 DASHBOARD_JWT_SECRET=${jwt_secret}
 DASHBOARD_CREDENTIAL_KEY=${credential_key}
 DASHBOARD_PUBLIC_URL=${public_url}
@@ -8949,7 +8950,10 @@ display_completion() {
             echo "  ╔══════════════════════════════════════════════════════════╗"
             echo "  ║  ${BOLD}Login credentials${RESET}                                      ║"
             echo "  ║                                                          ║"
-            printf "  ║  Username:  ${BOLD}admin${RESET}%*s║\n" 37 ""
+            # Login is by EMAIL — the control plane's bootstrap seeds
+            # DASHBOARD_ADMIN_EMAIL (default admin@localhost), and "admin"
+            # alone will not authenticate.
+            printf "  ║  Email:     ${BOLD}%-16s${RESET}%*s║\n" "${DASHBOARD_ADMIN_EMAIL:-admin@localhost}" 21 ""
             printf "  ║  Password:  ${BOLD}%-16s${RESET}%*s║\n" "$DASHBOARD_TEMP_PASSWORD" 21 ""
             echo "  ║                                                          ║"
             echo "  ║  ${DIM}You will be asked to change the password on first login.${RESET} ║"

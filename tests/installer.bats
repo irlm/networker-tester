@@ -2013,25 +2013,31 @@ JSON
 
 @test "controlplane: env file really writes an Npgsql keyword string" {
     # Executes the generator instead of grepping it, so a broken heredoc or a
-    # quoting slip is caught rather than assumed away.
-    local out
-    out=$(bash -c "
+    # quoting slip is caught rather than assumed away. Writes to a temp path,
+    # not /etc, so this RUNS everywhere — a skipped guard proves nothing.
+    local out_file="$TEST_TMPDIR/dashboard.env"
+    bash -c "
         source '$SCRIPT' >/dev/null 2>&1
-        SKIP_SERVICE=1
-        sudo() { if [ \"\$1\" = tee ]; then cat > \"\$2\"; else \"\$@\"; fi; }
+        # Swallow every privileged side effect; capture only the env heredoc.
+        sudo() {
+            if [ \"\$1\" = tee ]; then cat > '$out_file'; fi
+            return 0
+        }
         next_step() { :; }; print_ok() { :; }; print_info() { :; }
         DASHBOARD_DB_PASSWORD=s3cret
-        step_write_dashboard_env >/dev/null 2>&1
-        cat /etc/networker-dashboard.env 2>/dev/null
-    " 2>/dev/null || true)
-    # Only assert when the generator actually produced a file — a sandbox
-    # without a writable /etc must not make this pass vacuously, so check.
-    if [ -n "$out" ]; then
-        echo "$out" | grep -q '^DASHBOARD_DB_URL_NPGSQL=Host=127\.0\.0\.1;Port=5432;Database=networker_dashboard;Username=networker;Password=s3cret$'
-        echo "$out" | grep -q '^ASPNETCORE_URLS=http://127\.0\.0\.1:5030$'
-    else
-        skip "/etc not writable in this sandbox"
-    fi
+        DASHBOARD_FQDN=nwk.example.com
+        step_write_dashboard_env
+    " >/dev/null 2>&1
+
+    [ -s "$out_file" ]
+    # Npgsql keyword syntax with the installer's own DB password — NOT a URI.
+    grep -q '^DASHBOARD_DB_URL_NPGSQL=Host=127\.0\.0\.1;Port=5432;Database=networker_dashboard;Username=networker;Password=s3cret$' "$out_file"
+    grep -q '^ASPNETCORE_URLS=http://127\.0\.0\.1:5030$' "$out_file"
+    grep -q '^DASHBOARD_PUBLIC_URL=https://nwk\.example\.com$' "$out_file"
+    # Secrets must be generated, not left blank (the app fail-closes on empty).
+    grep -qE '^DASHBOARD_JWT_SECRET=.{16,}$' "$out_file"
+    grep -qE '^DASHBOARD_CREDENTIAL_KEY=[0-9a-f]{32,}$' "$out_file"
+    ! grep -q 'postgres://' "$out_file"
 }
 
 @test "controlplane: systemd unit runs the self-contained publish dir" {
