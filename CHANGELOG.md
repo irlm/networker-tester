@@ -11,6 +11,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.154] — 2026-08-05
+
+### Added
+- **Audit P1-1/P1-2/P1-4 — three user-facing surfaces are now executed at the
+  HTTP layer.** `ReportAndShareHttpTests` (real Postgres, real routes): the
+  run report renders in **all four document formats** with the right content
+  type and verified magic bytes (`%PDF`, `PK` for DOCX) over a non-trivial
+  body — previously only the document *builders* were unit-tested, which is
+  how a DOCX 500 reached production once; an unknown format 400s instead of
+  500ing; `/infra` returns 200 for a real run (it reads `deployment.Config`
+  jsonb); the integrated project report renders; and the **share-link
+  lifecycle** is exercised end-to-end — create, fetch **unauthenticated** via
+  the public token, then revoke and prove the same token stops working. The
+  smoke suite previously only hit `/api/share/{unknown}`, whose 404 arm
+  short-circuits before the real query.
+- **Audit P1-11 — the dashboard bundle has a real budget.** `npm run
+  check:bundle-size` asserts a total and per-chunk budget over the built
+  output and fails CI when exceeded (vite's `chunkSizeWarningLimit` is only a
+  warning and has never failed a build). Current: 1.38 MB across 75 chunks
+  against a 1.80 MB budget; largest chunk 355 kB against 450 kB. It also
+  refuses to pass on an empty `dist/assets` (no vacuous green).
+
+### Fixed
+- **`npm test` no longer passes when it discovers zero tests.**
+  `--passWithNoTests` meant a config or glob mistake would exit green with
+  the frontend suite silently not running.
+
+---
+
 ## [0.28.153] — 2026-08-05
 
 ### Added
