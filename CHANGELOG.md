@@ -27,6 +27,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new **weekly** cron (Sundays 08:17 UTC) rather than nightly, and its groups
   register for the existing bulletproof teardown before launching.
 
+## [0.28.152] — 2026-08-05
+
+### Added
+- **Audit P0-8 — a measurement-accuracy benchmark. The product's core claim is
+  now validated against known ground truth for the first time.** Every other
+  test proves the code runs; this proves the code *measures*.
+  `scripts/measurement-accuracy.sh` shapes the loopback with `tc netem` to a
+  known delay + rate, runs the tester against a local networker-endpoint over
+  that path, and requires the reported RTT to land within ±8 ms of 2×the
+  imposed one-way delay and the reported throughput to land inside a band
+  around the imposed link cap — including an upper bound, because a figure
+  ABOVE the cap means the shaping was bypassed or the math is wrong. Results
+  are written to `benchmarks/baselines/measurement-accuracy.json` and uploaded
+  as a CI artifact. New `measurement-accuracy` job in CI (Rust-gated).
+  Methodology note: the two phases shape differently on purpose — latency
+  under `delay`, throughput under `rate` with NO added delay, because a single
+  TCP flow over a high-RTT path is bounded by the bandwidth-delay product
+  rather than the link rate (measuring under 50 ms RTT reads ~31 Mbps on a
+  100 Mbit link — correct TCP physics, not a measurement error). First green
+  run: **RTT 50.31 ms measured against 50.0 ms imposed — 0.31 ms error.**
+
 ---
 
 ## [0.28.150] — 2026-08-05

@@ -483,6 +483,47 @@ jobs:
       - run: npx tsc -b
 
   # ──────────────────────────────────────────────────────────────────────────
+  # P0-8 (2026-08 audit): MEASUREMENT-ACCURACY BENCHMARK.
+  # Everything else proves the code runs; this proves the code MEASURES. The
+  # loopback is shaped with `tc netem` to a known delay + rate, and the
+  # tester's reported RTT and throughput must land inside a tolerance band
+  # around that ground truth. Before this job, nothing anywhere validated the
+  # product's core claim.
+  measurement-accuracy:
+    name: Measurement accuracy (netem ground truth)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+
+      - name: Build tester + endpoint
+        run: cargo build -p networker-tester -p networker-endpoint
+
+      - name: Verify netem is available
+        run: |
+          sudo modprobe sch_netem || true
+          tc qdisc show dev lo
+          echo "tc present: $(tc -V)"
+
+      - name: Run the accuracy benchmark against a shaped loopback
+        run: sudo -E scripts/measurement-accuracy.sh
+
+      - name: Upload the recorded baseline
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: measurement-accuracy-baseline
+          path: benchmarks/baselines/measurement-accuracy.json
+          if-no-files-found: warn
+
+  # ──────────────────────────────────────────────────────────────────────────
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
