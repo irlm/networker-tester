@@ -11,6 +11,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.161] — 2026-08-05
+
+### Added
+- **Audit P2 — the first browser E2E coverage this app has had.** Every
+  existing frontend test mounts components with `../api/client` mocked, which
+  is fine for component logic and useless for the failures a user meets first:
+  a lazy chunk that 404s only in the production bundle, a router
+  misconfiguration, a hook that throws during the real mount and leaves a blank
+  page. None of those can occur in a jsdom test that never loads the built
+  bundle. Playwright now drives `vite preview` serving **dist/** — the bundle
+  that actually ships, code-split chunks included — with the API intercepted at
+  the network layer. Five specs: the login form renders, an authenticated route
+  mounts and shows real data, a deep link is served by the SPA fallback (the
+  failure the nginx `try_files … /index.html` line prevents, which only appears
+  on a fresh load of a nested path), an unauthenticated deep link redirects,
+  and a guard proving the console-error collector still catches anything.
+  **Verified against a real regression:** an injected render crash in
+  `ProjectsPage` turns the shell test red.
+  Chromium only, `@playwright/test` is a dev dependency (so the blocking
+  production `npm audit` is unaffected), and `e2e/**` is excluded from vitest —
+  vitest's default include matches `**/*.spec.ts` and would otherwise load the
+  Playwright runner and report a red suite unrelated to the app.
+
+---
+
 ## [0.28.160] — 2026-08-05
 
 ### Added
