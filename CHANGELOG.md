@@ -11,6 +11,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.160] — 2026-08-05
+
+### Added
+- **Audit P2 — the tester reinstall script is EXECUTED, not just inspected.**
+  `ReinstallScript` is shipped to Azure VMs via `vm run-command` and was only
+  checked for ASCII purity and a few expected substrings. That leaves the
+  failures it is most likely to have — a bash syntax error, a renamed release
+  asset, a changed tarball layout — all of which look fine to a grep and all of
+  which fail on a customer's VM mid-upgrade, with the agent already stopped.
+  It is the same class the decommission produced in `install.sh`. Now: `bash -n`
+  parses the generated script everywhere, a dedicated CI job runs it for real
+  against real release assets (installing a stub `networker-agent` unit first,
+  since the script restarts one), and its asset names are cross-referenced
+  against `release.yml`. A fourth test fails if no workflow sets the execution
+  env var — an opt-in test that nothing opts into is coverage that only looks
+  like coverage.
+- **Audit P2 — the cell-deadline budget is calibrated against its evidence.**
+  The 8s-per-(run × mode) constant came from a real incident: at 4s, haproxy and
+  traefik cells were killed at 78-85% complete after hours of work. That
+  evidence lived only in a code comment, so the number was safe exactly as long
+  as someone remembered it. `DeadlineBudgetCalibrationTests` turns the
+  measurements into assertions — the budget must clear the measured worst case
+  (4.2s/unit at 78% ⇒ ≈5.4s/unit needed) with a 1.3× safety factor, must not be
+  so loose that a wedged cell holds a runner for hours, and the largest
+  legitimate workload must fit *under* the 8h cap rather than be clamped by it.
+  Verified in both directions: reverting the constant to 4s fails with the
+  arithmetic spelled out. `scripts/deadline-calibration.sql` re-derives the
+  distribution from real completed runs, so the constant can be checked against
+  production instead of memory — excluding runs killed by a deadline, since
+  including them would ratchet the budget down toward the very failure it
+  prevents.
+- **Audit P2 — a multi-hour endurance soak.** The nightly `Prod soak check` is
+  a POINT check: "is everything healthy right now?", answered in two minutes.
+  Every defect that needs TIME is invisible to it — a memory leak, a
+  connection-pool leak, a loop that degrades after N ticks, latency drifting as
+  tables grow. `scripts/soak-endurance.sh` samples background-loop health,
+  process memory and server-reported latency for hours and judges the TREND,
+  comparing the last quarter of samples against the first (single points are
+  noisy, and a process is still warming up early on). It is strictly read-only
+  against production — no runs launched, no VMs created — which is the point: a
+  leak only reproduces on a process that has been up for days. Weekly, plus
+  manual dispatch with a validated duration. The trend maths was exercised
+  against both a healthy series and a synthetic leak.
+
+---
+
 ## [0.28.159] — 2026-08-05
 
 ### Fixed

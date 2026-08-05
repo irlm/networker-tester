@@ -109,3 +109,56 @@ jobs:
       # (Testcontainers + WebApplicationFactory against a real Postgres).
       - name: Test
         run: dotnet test Networker.sln --configuration Release --no-build --verbosity normal
+
+  # ── Audit P2: EXECUTE the tester reinstall script ─────────────────────────
+  # ReinstallScript is shipped to Azure VMs via `vm run-command` and was only
+  # ever inspected (ASCII purity, substring greps). A bash syntax error, a
+  # renamed release asset or a changed tarball layout all look fine to a grep
+  # and all fail on a customer's VM mid-upgrade, with the agent already
+  # stopped — the same class the v0.28.148 decommission produced in install.sh.
+  # This runs the real generated script against real release assets.
+  reinstall-exec:
+    name: Reinstall script execution
+    needs: changes
+    if: needs.changes.outputs.csharp == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: "10.0.x"
+
+      # The script ends with `systemctl restart networker-agent`. On a runner
+      # there is no such unit, so give it a real one to restart — stubbing
+      # systemctl would not work anyway, since sudo resets PATH via secure_path.
+      - name: Install a stub networker-agent unit
+        run: |
+          sudo tee /etc/systemd/system/networker-agent.service >/dev/null <<'UNIT'
+          [Unit]
+          Description=stub networker-agent for reinstall-script testing
+          [Service]
+          Type=oneshot
+          ExecStart=/bin/true
+          RemainAfterExit=yes
+          [Install]
+          WantedBy=multi-user.target
+          UNIT
+          sudo systemctl daemon-reload
+          sudo systemctl start networker-agent
+
+      - name: Execute the reinstall script
+        env:
+          NETWORKER_REINSTALL_EXEC: "1"
+        run: |
+          dotnet test tests/Networker.ControlPlane.Tests/Networker.ControlPlane.Tests.csproj \
+            --configuration Release \
+            --filter "FullyQualifiedName~ReinstallScriptExecution" \
+            --verbosity normal
+
+      - name: Show what landed
+        if: always()
+        run: |
+          ls -l /usr/local/bin/networker-tester /usr/local/bin/networker-agent 2>/dev/null || true
+          /usr/local/bin/networker-tester --version || true

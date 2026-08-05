@@ -1,0 +1,132 @@
+name: Soak (endurance)
+
+# Audit P2: the nightly `Prod soak check` is a POINT check — "is everything
+# healthy right now?" — and exits in a couple of minutes. Every defect that
+# needs TIME to appear is invisible to it: a memory leak, a connection-pool
+# leak, a loop that degrades after N ticks, latency that drifts as tables grow.
+#
+# This samples the same surfaces for hours and judges the TREND. It is
+# READ-ONLY against production: no runs launched, no VMs created, nothing
+# mutated. That is deliberate — a leak only reproduces on a process that has
+# been up for days, which is production and nowhere else.
+#
+# Weekly by default (Sunday 03:00 UTC, well away from the daily soak at 08:00
+# and the weekly canary matrix at 08:17), plus manual dispatch with a
+# configurable duration.
+
+on:
+  schedule:
+    - cron: "0 3 * * 0"
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: "Soak duration in hours"
+        required: false
+        default: "4"
+      interval_secs:
+        description: "Seconds between samples"
+        required: false
+        default: "120"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  # A second endurance run would double the read load and interleave its
+  # samples with the first, making both trends meaningless.
+  group: soak-endurance
+  cancel-in-progress: false
+
+jobs:
+  endurance:
+    name: Endurance soak
+    runs-on: ubuntu-latest
+    # Duration + margin for login, analysis and artifact upload. GitHub's own
+    # ceiling is 6h on hosted runners, so the input is validated below rather
+    # than trusted.
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+
+      - name: Validate duration
+        id: cfg
+        env:
+          HOURS_IN: ${{ inputs.hours }}
+          INTERVAL_IN: ${{ inputs.interval_secs }}
+        run: |
+          HOURS="${HOURS_IN:-4}"
+          INTERVAL="${INTERVAL_IN:-120}"
+          case "$HOURS" in ''|*[!0-9]*) echo "::error::hours must be an integer"; exit 1;; esac
+          case "$INTERVAL" in ''|*[!0-9]*) echo "::error::interval must be an integer"; exit 1;; esac
+          # A hosted runner is killed at 6h; leave room for setup and analysis
+          # so the job reports a verdict instead of being cancelled mid-soak.
+          if [ "$HOURS" -gt 5 ]; then
+            echo "::error::hours must be <= 5 (GitHub hosted runners cap at 6h)"; exit 1
+          fi
+          if [ "$INTERVAL" -lt 30 ]; then
+            echo "::error::interval must be >= 30s — faster sampling is load, not signal"; exit 1
+          fi
+          echo "hours=$HOURS" >> "$GITHUB_OUTPUT"
+          echo "interval=$INTERVAL" >> "$GITHUB_OUTPUT"
+
+      - name: Run the endurance soak
+        id: soak
+        env:
+          DASHBOARD_ADMIN_PASSWORD: ${{ secrets.DASHBOARD_ADMIN_PASSWORD }}
+          SOAK_HOURS: ${{ steps.cfg.outputs.hours }}
+          SOAK_INTERVAL_SECS: ${{ steps.cfg.outputs.interval }}
+          SOAK_LOG: ${{ github.workspace }}/soak-endurance.tsv
+        run: |
+          if [ -z "$DASHBOARD_ADMIN_PASSWORD" ]; then
+            echo "::error::DASHBOARD_ADMIN_PASSWORD is not set — cannot authenticate"
+            exit 1
+          fi
+          chmod +x scripts/soak-endurance.sh
+          ./scripts/soak-endurance.sh | tee /tmp/soak-out.txt
+
+      - name: Summarize
+        if: always()
+        run: |
+          {
+            echo "## Endurance soak"
+            echo ""
+            echo "Duration: ${{ steps.cfg.outputs.hours }}h, sampled every ${{ steps.cfg.outputs.interval }}s"
+            echo ""
+            echo '```'
+            grep -E 'MEM_|LAT_|TREND_OK|FAIL_|SOAK_ENDURANCE' /tmp/soak-out.txt 2>/dev/null || \
+              echo "no analysis produced — see the job log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload samples
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: soak-endurance-${{ github.run_id }}
+          path: soak-endurance.tsv
+          retention-days: 90
+          if-no-files-found: warn
+
+      # A trend failure is worth a human's attention but must not spam: one
+      # open issue, reused. Same pattern as the daily soak check.
+      - name: Open or update an issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TITLE='Endurance soak failing'
+          EXISTING=$(gh issue list --state open --search "$TITLE in:title" \
+            --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          BODY="Endurance soak failed in run ${{ github.run_id }}.
+
+          $(grep -E 'MEM_|LAT_|FAIL_|unhealthy' /tmp/soak-out.txt 2>/dev/null | head -20 || true)
+
+          Full log and per-sample TSV: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create --title "$TITLE" --body "$BODY" --label bug 2>/dev/null \
+              || gh issue create --title "$TITLE" --body "$BODY"
+          fi
