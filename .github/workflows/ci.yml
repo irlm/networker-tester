@@ -201,6 +201,39 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   # Fast checks: format + clippy (fails early, < 2 min)
   # ──────────────────────────────────────────────────────────────────────────
+  # ── Supply chain: every action must be SHA-pinned ─────────────────────────
+  # A mutable tag (`@v4`) lets whoever can move that tag run arbitrary code in
+  # CI with this repo's secrets. The convention here is SHA pins, but it was
+  # only a convention: soak-canary.yml sat on `actions/checkout@v4` while the
+  # other 44 call sites were pinned, and nothing noticed. No `if:` guard — a
+  # workflow-only change must not be able to skip this.
+  action-pins:
+    name: Action pins (SHA-pinned)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+
+      - name: Every `uses:` must reference a 40-char commit SHA
+        run: |
+          set -uo pipefail
+          BAD=$(grep -rnE '^\s*(-\s*)?uses:\s*[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@' .github/workflows/*.yml \
+                | grep -vE '@[0-9a-f]{40}' || true)
+          if [ -n "$BAD" ]; then
+            echo "::error::unpinned GitHub Action(s) — pin to a commit SHA (keep the version in a trailing comment):"
+            echo "$BAD" | sed 's/^/  /'
+            exit 1
+          fi
+
+          # Guard the guard: if the grep stopped matching, an empty result would
+          # pass forever.
+          TOTAL=$(grep -rcE '^\s*(-\s*)?uses:\s*[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@' .github/workflows/*.yml \
+                  | awk -F: '{s+=$2} END{print s+0}')
+          if [ "$TOTAL" -lt 20 ]; then
+            echo "::error::only found ${TOTAL} action references — the scan is broken, not the workflows"
+            exit 1
+          fi
+          echo "all ${TOTAL} action references are SHA-pinned"
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
