@@ -238,40 +238,78 @@ impl Endpoint {
 
     /// Wait for the QUIC/HTTP3 server (UDP) to be ready.
     ///
-    /// The QUIC server binds the same UDP port as the HTTPS TCP server, but is
-    /// spawned concurrently and may lag behind.  We probe it the same way as the
-    /// UDP echo server: send a single byte to the port and check the result.
+    /// This asks for a POSITIVE signal rather than inferring readiness from the
+    /// absence of an error. The previous version sent one byte and treated "no
+    /// reply within 100ms" as "Quinn is listening" — but an UNBOUND port
+    /// produces exactly the same silence on Windows, which reports UDP
+    /// unreachable as `WSAECONNRESET` delivered asynchronously (and not at all
+    /// for the first send on a fresh socket). So the gate returned before the
+    /// server had bound, and the test's 10s handshake budget then expired as
+    /// "QUIC handshake timeout" — a Windows-only flake that hit two unrelated
+    /// PRs on 2026-08-05.
     ///
-    /// - `ConnectionRefused` → ICMP Port Unreachable → nothing bound yet, retry.
-    /// - timeout            → Quinn absorbed the packet (no ICMP) → port is bound.
-    /// - `Ok(data)`         → Quinn sent a response (e.g. version negotiation) → ready.
+    /// Instead we send a QUIC long-header packet carrying a deliberately
+    /// unsupported version. RFC 9000 §6 requires a server to answer that with a
+    /// Version Negotiation packet, so a reply proves the port is bound AND
+    /// speaking QUIC. Silence now means "not ready", which is the truth.
+    #[cfg(feature = "http3")]
+    fn version_negotiation_trigger() -> Vec<u8> {
+        let mut pkt = Vec::with_capacity(1200);
+        // Long header, fixed bit set.
+        pkt.push(0xc0);
+        // A reserved version (0x?a?a?a?a) that no server implements -> forces VN.
+        pkt.extend_from_slice(&[0x0a, 0x0a, 0x0a, 0x0a]);
+        pkt.push(8);
+        pkt.extend_from_slice(&[0x11; 8]); // destination connection id
+        pkt.push(8);
+        pkt.extend_from_slice(&[0x22; 8]); // source connection id
+                                           // Servers discard Initial-sized datagrams below 1200 bytes, so pad.
+        pkt.resize(1200, 0);
+        pkt
+    }
+
     #[cfg(feature = "http3")]
     async fn wait_for_quic(&self) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // Generous because this now waits for a REAL response: a loaded Windows
+        // runner can take seconds to bind. Exceeding it is a genuine failure,
+        // not a retry hint.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let trigger = Self::version_negotiation_trigger();
+        let mut attempts = 0u32;
+
         loop {
+            attempts += 1;
             let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
             sock.connect(format!("127.0.0.1:{}", self.https_port))
                 .await
                 .unwrap();
-            let _ = sock.send(&[0u8]).await;
-            let mut buf = [0u8; 64];
-            match tokio::time::timeout(std::time::Duration::from_millis(100), sock.recv(&mut buf))
-                .await
+            let _ = sock.send(&trigger).await;
+
+            let mut buf = [0u8; 1500];
+            if let Ok(Ok(n)) =
+                tokio::time::timeout(std::time::Duration::from_millis(250), sock.recv(&mut buf))
+                    .await
             {
-                Err(_timeout) => break, // no ICMP unreachable → Quinn is listening
-                Ok(Ok(_)) => break,     // Quinn sent data back → definitely ready
-                Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
-                    // UDP port not bound yet — retry
+                // Any datagram back is proof of a live QUIC server; a Version
+                // Negotiation packet carries version 0 in bytes 1..5.
+                // Verify it is really Version Negotiation rather than any
+                // stray datagram: long-header bit set and a version of 0
+                // (RFC 9000 §17.2.1). Observed reply: ce 00 00 00 00 ...
+                let is_version_negotiation =
+                    n >= 5 && buf[0] & 0x80 != 0 && buf[1..5] == [0, 0, 0, 0];
+                if is_version_negotiation {
+                    return;
                 }
-                Ok(Err(_)) => break, // unexpected error; let the probe handle it
             }
+
             if std::time::Instant::now() >= deadline {
                 panic!(
-                    "QUIC server did not bind on UDP port {} within 5 seconds",
+                    "QUIC server on UDP port {} never answered a version-negotiation \
+                     probe within 20s ({attempts} attempts) — it is not bound",
                     self.https_port
                 );
             }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
     }
 }
