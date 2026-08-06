@@ -26,11 +26,19 @@ _gh_create_archive() {
     stub_bin_name="${stub_bin_name%%-aarch64*}"
 
     mkdir -p "$dir"
+    # A PRIVATE staging dir per invocation. This used to stage at the shared
+    # path /tmp/<binary>, which races when two installs run concurrently — and
+    # one bats test starts exactly two on purpose ("concurrent installs to same
+    # INSTALL_DIR"). Interleaved, one process's `rm -f` deleted the file before
+    # the other had tarred it, producing an empty archive; the install then
+    # failed with no explanation and the test flaked on a REQUIRED check.
+    local stage
+    stage="$(mktemp -d)"
     printf '#!/usr/bin/env bash\necho "%s 0.12.65"\n' "$stub_bin_name" \
-        > "/tmp/${stub_bin_name}"
-    chmod +x "/tmp/${stub_bin_name}"
-    tar czf "${dir}/${pattern}" -C /tmp "${stub_bin_name}" 2>/dev/null
-    rm -f "/tmp/${stub_bin_name}"
+        > "${stage}/${stub_bin_name}"
+    chmod +x "${stage}/${stub_bin_name}"
+    tar czf "${dir}/${pattern}" -C "$stage" "${stub_bin_name}" 2>/dev/null
+    rm -rf "$stage"
 }
 
 case "$*" in
