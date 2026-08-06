@@ -11,6 +11,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.167] — 2026-08-06
+
+### Fixed
+- **UDP bind failures now reach the caller instead of vanishing.** The three UDP
+  services each bound their own socket *inside* `tokio::spawn` and, on failure,
+  logged a warning and returned. The endpoint then reported success while
+  silently missing a service. In CI that surfaced as *"UDP echo server did not
+  start within 40s"* — blaming slowness for what was an instant, nameable error.
+
+  `run_with_shutdown` now binds all three sockets **before** spawning and
+  returns the error with the service name and port. The servers take a
+  pre-bound socket.
+
+  **This changes production behaviour**, deliberately: the endpoint now refuses
+  to start when a UDP port is taken, rather than running degraded with a service
+  missing and only a `warn!` in the log. Silent degradation is the more
+  expensive failure — it is discovered later, by a user, as a mysterious
+  timeout.
+
+- **The port-allocation race in the test harness is now survivable.**
+  `free_udp_port()` binds a socket to learn a free port and then closes it, so
+  the port is unreserved until the server binds it — an inherent TOCTOU window
+  another process can slip into. The window cannot be closed while the server
+  binds by port number, so `Endpoint::start()` retries up to three times on
+  fresh ports. A collision now costs a retry instead of a misleading 40s
+  timeout, and the harness reports the server's real startup error immediately
+  rather than waiting out its readiness budget.
+
+### Added
+- `crates/networker-endpoint/tests/bind_failure.rs` pins the contract: a taken
+  UDP port must fail startup with an error naming **both** the service and the
+  port. Verified by injecting the old swallow-the-error behaviour — the test
+  fails in 20s with *"the bind failure was swallowed instead of returned"*.
+  It is deliberately bounded by a timeout: with the regression the endpoint
+  starts normally and the future never returns, so an unbounded test would hang
+  (observed: 10 minutes) instead of failing usefully. A companion test asserts
+  startup still succeeds on free ports, so the first cannot pass for the wrong
+  reason.
+
+---
+
 ## [0.28.166] — 2026-08-06
 
 ### Fixed

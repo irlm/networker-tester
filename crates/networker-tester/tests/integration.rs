@@ -141,7 +141,33 @@ fn throughput_readiness_probe() -> [u8; 12] {
 }
 
 impl Endpoint {
+    /// Start an endpoint, retrying on a fresh set of ports if a bind loses a
+    /// race.
+    ///
+    /// `free_udp_port()` binds a socket to learn a free port and then CLOSES
+    /// it, so the port is unreserved until the server binds it — an inherent
+    /// TOCTOU window that another process (or the next test) can slip into.
+    /// The window cannot be closed while the server binds by port number, so
+    /// the harness retries instead: a collision costs a retry rather than a
+    /// misleading 40s timeout.
     async fn start() -> Self {
+        const ATTEMPTS: u32 = 3;
+        for attempt in 1..=ATTEMPTS {
+            match Self::start_once().await {
+                Ok(ep) => return ep,
+                Err(e) if attempt < ATTEMPTS => {
+                    eprintln!(
+                        "endpoint start attempt {attempt}/{ATTEMPTS} failed ({e}); \
+                         retrying on fresh ports"
+                    );
+                }
+                Err(e) => panic!("endpoint failed to start after {ATTEMPTS} attempts: {e}"),
+            }
+        }
+        unreachable!("loop either returns or panics")
+    }
+
+    async fn start_once() -> Result<Self, String> {
         init_crypto();
 
         let http_port = free_port();
@@ -160,9 +186,28 @@ impl Endpoint {
             stamp_port,
         };
 
+        // Capture the server's outcome instead of discarding it with `.ok()`.
+        // The endpoint now returns an error when a UDP bind fails, and without
+        // this the readiness gates below would simply wait out their whole
+        // budget and blame slowness — which is exactly what "UDP echo server
+        // did not start within 40s" was really reporting (2026-08-06).
+        let startup_err = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+        let startup_err_tx = std::sync::Arc::clone(&startup_err);
         tokio::spawn(async move {
-            networker_endpoint::run_with_shutdown(cfg, rx).await.ok();
+            if let Err(e) = networker_endpoint::run_with_shutdown(cfg, rx).await {
+                *startup_err_tx.lock().unwrap() = Some(format!("{e:#}"));
+            }
         });
+
+        /// Fail immediately with the server's real error rather than after the
+        /// full readiness budget.
+        macro_rules! bail_if_server_died {
+            ($stage:expr) => {
+                if let Some(err) = startup_err.lock().unwrap().as_deref() {
+                    return Err(format!("while waiting for {}: {err}", $stage));
+                }
+            };
+        }
 
         // Wait for the HTTP server to become ready (poll up to 3 s)
         let budget = readiness_budget(std::time::Duration::from_secs(10));
@@ -175,6 +220,7 @@ impl Endpoint {
                 break;
             }
             if std::time::Instant::now() >= deadline {
+                bail_if_server_died!("HTTP");
                 panic!("Endpoint did not start within {budget:?}");
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -191,6 +237,7 @@ impl Endpoint {
                 break;
             }
             if std::time::Instant::now() >= deadline {
+                bail_if_server_died!("HTTPS");
                 panic!("HTTPS endpoint did not start within {budget:?}");
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -224,6 +271,7 @@ impl Endpoint {
                 break;
             }
             if std::time::Instant::now() >= deadline {
+                bail_if_server_died!("the UDP echo server");
                 panic!("UDP echo server did not start within {budget:?}");
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -268,6 +316,7 @@ impl Endpoint {
             }
 
             if std::time::Instant::now() >= deadline {
+                bail_if_server_died!("the UDP throughput server");
                 panic!(
                     "UDP throughput server on port {udp_throughput_port} never answered a \
                      zero-byte CMD_DOWNLOAD within {budget:?} — it is not bound"
@@ -297,19 +346,20 @@ impl Endpoint {
                 break;
             }
             if std::time::Instant::now() >= deadline {
+                bail_if_server_died!("the STAMP reflector");
                 panic!("STAMP reflector did not start within {budget:?}");
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
-        Endpoint {
+        Ok(Endpoint {
             http_port,
             https_port,
             udp_port,
             udp_throughput_port,
             stamp_port,
             shutdown: Some(tx),
-        }
+        })
     }
 
     fn http_url(&self, path: &str) -> url::Url {

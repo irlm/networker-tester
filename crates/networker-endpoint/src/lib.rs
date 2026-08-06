@@ -46,6 +46,19 @@ impl Default for ServerConfig {
 
 /// Run both HTTP and HTTPS servers plus the UDP echo listener until the
 /// process exits or `shutdown_rx` fires.
+/// Bind a UDP socket, failing loudly with the port in the message.
+///
+/// The three UDP services used to bind inside their own spawned tasks and
+/// swallow the error, so "port already in use" degraded the endpoint silently.
+/// Returning the error means the caller decides — production refuses to start
+/// with an accurate reason, and the test harness can retry on a fresh port.
+async fn bind_udp(what: &str, port: u16) -> anyhow::Result<tokio::net::UdpSocket> {
+    let addr = format!("0.0.0.0:{port}");
+    tokio::net::UdpSocket::bind(&addr)
+        .await
+        .with_context(|| format!("{what}: failed to bind {addr}"))
+}
+
 pub async fn run_with_shutdown(
     cfg: ServerConfig,
     shutdown_rx: oneshot::Receiver<()>,
@@ -103,11 +116,23 @@ pub async fn run_with_shutdown(
     let router = build_router(state);
 
     // Spawn UDP echo
-    let udp_handle = tokio::spawn(udp_echo::run_udp_echo(cfg.udp_port));
+    // Bind the UDP sockets HERE, before spawning, so a failure is returned to
+    // the caller instead of vanishing into a spawned task.
+    //
+    // Previously each server bound its own socket inside `tokio::spawn` and, on
+    // failure, logged a warning and returned. The endpoint then looked healthy
+    // while silently missing a service — and in the test harness a port
+    // collision surfaced only as "UDP echo server did not start within 40s",
+    // blaming slowness for what was an instant, diagnosable error (2026-08-06).
+    let udp_sock = bind_udp("UDP echo", cfg.udp_port).await?;
+    let udp_tp_sock = bind_udp("UDP throughput", cfg.udp_throughput_port).await?;
+    let stamp_sock = bind_udp("STAMP reflector", cfg.stamp_port).await?;
+
+    let udp_handle = tokio::spawn(udp_echo::run_udp_echo(udp_sock));
     // Spawn UDP throughput server
-    let udp_tp_handle = tokio::spawn(udp_throughput::run_udp_throughput(cfg.udp_throughput_port));
+    let udp_tp_handle = tokio::spawn(udp_throughput::run_udp_throughput(udp_tp_sock));
     // Spawn STAMP Session-Reflector (RFC 8762)
-    let stamp_handle = tokio::spawn(stamp::run_stamp_reflector(cfg.stamp_port));
+    let stamp_handle = tokio::spawn(stamp::run_stamp_reflector(stamp_sock));
 
     // HTTP server — NoDelayAcceptor sets TCP_NODELAY on every accepted socket,
     // preventing 40 ms Nagle + delayed-ACK stalls during the HTTP/2 handshake.
