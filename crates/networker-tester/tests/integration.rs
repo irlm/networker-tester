@@ -127,6 +127,19 @@ fn readiness_budget_scales_only_under_instrumentation() {
     }
 }
 
+/// A zero-byte `CMD_DOWNLOAD` control packet for the UDP throughput server.
+///
+/// Wire format (crates/networker-endpoint/src/udp_throughput.rs): 12 bytes,
+/// `b"NWKT"` magic, command byte, 3 bytes padding, then a u32 LE value. A value
+/// of 0 makes the server ack and immediately reply `CMD_DONE` without blasting
+/// any data or retaining state, which is exactly what a readiness probe wants.
+fn throughput_readiness_probe() -> [u8; 12] {
+    let mut pkt = [0u8; 12];
+    pkt[..4].copy_from_slice(b"NWKT");
+    pkt[4] = 0x01; // CMD_DOWNLOAD
+    pkt // value stays 0
+}
+
 impl Endpoint {
     async fn start() -> Self {
         init_crypto();
@@ -217,29 +230,48 @@ impl Endpoint {
         }
 
         // Wait for the UDP throughput (NWKT) server to bind.
-        // Same probe as the QUIC readiness check: send a byte, classify the result.
-        //   ConnectionRefused → ICMP Port Unreachable → not bound yet, retry.
-        //   timeout           → packet absorbed (no ICMP) → server is listening.
-        //   Ok(data)          → server responded → definitely ready.
+        //
+        // This asks the server to IDENTIFY ITSELF rather than inferring life
+        // from silence. It used to send one byte and treat "no reply within
+        // 100ms" as "the packet was absorbed, so the server is listening" — but
+        // an UNBOUND port is equally silent on Windows, which reports UDP
+        // unreachable as an asynchronous WSAECONNRESET (and not at all for the
+        // first send on a fresh socket). That is the same unsound heuristic
+        // that made the QUIC gate flake (v0.28.164).
+        //
+        // The throughput protocol gives us a real handshake: a zero-byte
+        // CMD_DOWNLOAD is answered with CMD_ACK, then CMD_DONE from the
+        // zero-length transfer. CMD_DOWNLOAD is the right probe of the three —
+        // CMD_UPLOAD also acks but leaves per-client state in the server's
+        // map, and CMD_DONE without a prior upload is answered with silence.
         let budget = readiness_budget(std::time::Duration::from_secs(10));
         let deadline = std::time::Instant::now() + budget;
+        let probe_pkt = throughput_readiness_probe();
         loop {
             let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
             sock.connect(format!("127.0.0.1:{udp_throughput_port}"))
                 .await
                 .unwrap();
-            let _ = sock.send(&[0u8]).await;
+            let _ = sock.send(&probe_pkt).await;
+
             let mut buf = [0u8; 64];
-            match tokio::time::timeout(std::time::Duration::from_millis(100), sock.recv(&mut buf))
-                .await
+            if let Ok(Ok(n)) =
+                tokio::time::timeout(std::time::Duration::from_millis(150), sock.recv(&mut buf))
+                    .await
             {
-                Err(_timeout) => break,
-                Ok(Ok(_)) => break,
-                Ok(Err(e)) if e.kind() == std::io::ErrorKind::ConnectionRefused => {}
-                Ok(Err(_)) => break,
+                // A 12-byte NWKT control packet carrying ACK or DONE is proof
+                // the port is bound AND speaking the throughput protocol.
+                let ctrl = n == 12 && buf[..4] == *b"NWKT";
+                if ctrl && (buf[4] == 0x10 || buf[4] == 0x04) {
+                    break;
+                }
             }
+
             if std::time::Instant::now() >= deadline {
-                panic!("UDP throughput server did not bind on port {udp_throughput_port} within {budget:?}");
+                panic!(
+                    "UDP throughput server on port {udp_throughput_port} never answered a \
+                     zero-byte CMD_DOWNLOAD within {budget:?} — it is not bound"
+                );
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }

@@ -11,6 +11,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.166] — 2026-08-06
+
+### Fixed
+- **The last readiness gate that inferred life from silence.** The UDP
+  throughput gate still sent one byte and treated *"no reply within 100ms"* as
+  *"the packet was absorbed, so the server is listening"* — the same unsound
+  heuristic replaced in `wait_for_quic` in v0.28.164. An UNBOUND port is
+  equally silent on Windows, which reports UDP unreachable as an asynchronous
+  `WSAECONNRESET` (and not at all for the first send on a fresh socket).
+
+  v0.28.165 recorded this as "no cheap positive signal to swap in". **That was
+  wrong**, and reading the server settled it: the throughput protocol has a
+  control handshake. A zero-byte `CMD_DOWNLOAD` is answered with `CMD_ACK`,
+  then `CMD_DONE` from the zero-length transfer. The gate now sends exactly
+  that and requires a 12-byte `NWKT` control packet carrying ACK or DONE, so
+  silence means "not ready" — which is the truth.
+
+  `CMD_DOWNLOAD` is the right probe of the three: `CMD_UPLOAD` also acks but
+  leaves per-client state in the server's map, and `CMD_DONE` without a prior
+  upload is answered with silence. A zero byte count short-circuits in
+  `send_download`, so nothing is blasted and no state is retained.
+
+  Verified both directions: the suite passes 45/45 (and 3/3 UDP tests under
+  `cargo llvm-cov`) — which it could only do if the ack really arrives, since
+  the gate now breaks out on nothing else — and an unbound port produces no
+  valid control reply, so the gate correctly keeps waiting. Slightly faster
+  too: it returns on the ack instead of waiting out a 100ms timeout.
+
+  With this, every readiness gate in the harness waits on a positive signal.
+
+---
+
 ## [0.28.165] — 2026-08-06
 
 ### Fixed
