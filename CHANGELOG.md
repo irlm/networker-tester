@@ -11,6 +11,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.165] — 2026-08-06
+
+### Fixed
+- **The Coverage-job flake in the integration harness.** Right after v0.28.164
+  merged, the `Coverage` job on main failed with *"STAMP reflector did not start
+  within 10 seconds"* — a different test from the Windows QUIC flake, but the
+  same family: readiness budgets sized for a normal `cargo test`. Under
+  `cargo llvm-cov` every start-up is several times slower, so a 10s budget that
+  is generous locally expires under instrumentation. It had failed 1 of the 16
+  recent runs that actually executed Coverage (~6%).
+
+  All seven readiness gates in the harness now take their budget from
+  `readiness_budget()`, which scales ×4 when it detects coverage
+  instrumentation. Scaling beats raising unconditionally: a genuinely wedged
+  server still fails fast in the common case instead of making every developer
+  wait 40s to learn it is stuck. Panic messages now report the budget actually
+  in force, so they can no longer claim "10 seconds" during a 40s wait.
+
+  The detection was verified empirically rather than assumed — `cargo llvm-cov`
+  sets `CARGO_LLVM_COV` and `LLVM_PROFILE_FILE` in the test process, and a plain
+  `cargo test` sets neither. A guard test asserts the scaling in BOTH modes, so
+  the helper cannot silently stop scaling and leave only the Coverage job to
+  flake again.
+
+  Verified: 45/45 normally (budgets unchanged, same runtime) and 45/45 under
+  `cargo llvm-cov`, including the test that flaked.
+
+- **A race in the `gh` test stub that flaked a required check.** The bats
+  suite's "concurrent installs to same INSTALL_DIR" test starts two installs on
+  purpose, but the stub staged its fake tarball at the SHARED path
+  `/tmp/<binary>`. Interleaved, one process's `rm -f` deleted the file before
+  the other had tarred it, producing an empty archive; the install then failed
+  with no explanation and `bats (installer unit tests)` — a required check —
+  went red. The stub now stages in a private `mktemp -d` per invocation.
+
+  Honest about the evidence: this does NOT reproduce at natural timing on a
+  fast local disk (0 failures in 10 runs). Widening the window with a 0.3s
+  sleep between write and tar reproduces it — **1/5 failures on the shared
+  path, 0/5 with private staging under identical conditions** — which isolates
+  the shared path as the cause. CI's slower, noisier scheduling supplies that
+  window for free.
+
+### Known
+- The UDP-throughput readiness gate still infers readiness from the ABSENCE of
+  an ICMP error, the same unsound heuristic replaced in `wait_for_quic` in
+  v0.28.164. It has not been observed flaking, and unlike QUIC there is no cheap
+  positive signal to swap in, so the scaled budget is the mitigation for now.
+
+---
+
 ## [0.28.164] — 2026-08-05
 
 ### Fixed

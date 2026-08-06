@@ -80,6 +80,53 @@ struct Endpoint {
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
+/// Readiness budget for a server the harness is waiting on.
+///
+/// The budgets below are sized for a normal `cargo test`. Under coverage
+/// instrumentation every start-up is several times slower, which is how the
+/// STAMP reflector's 10s budget expired on main (2026-08-06, Coverage job:
+/// "STAMP reflector did not start within 10 seconds"). Scaling the budget beats
+/// raising it unconditionally — a genuine hang still fails fast in the common
+/// case, instead of every developer waiting 40s to learn a server is wedged.
+///
+/// Detection was verified empirically rather than assumed: `cargo llvm-cov`
+/// sets both `CARGO_LLVM_COV` and `LLVM_PROFILE_FILE` in the test process, and
+/// a plain `cargo test` sets neither.
+fn readiness_budget(base: std::time::Duration) -> std::time::Duration {
+    let instrumented = std::env::var_os("CARGO_LLVM_COV").is_some()
+        || std::env::var_os("LLVM_PROFILE_FILE").is_some();
+    if instrumented {
+        base * 4
+    } else {
+        base
+    }
+}
+
+/// Guards `readiness_budget`. Without this the helper could silently stop
+/// scaling — the suite would still pass locally and only the Coverage job would
+/// flake again, which is exactly the failure mode being fixed.
+#[test]
+fn readiness_budget_scales_only_under_instrumentation() {
+    let base = std::time::Duration::from_secs(10);
+    let instrumented = std::env::var_os("CARGO_LLVM_COV").is_some()
+        || std::env::var_os("LLVM_PROFILE_FILE").is_some();
+    let got = readiness_budget(base);
+
+    if instrumented {
+        assert_eq!(
+            got,
+            base * 4,
+            "running under coverage instrumentation but the readiness budget was not scaled"
+        );
+    } else {
+        assert_eq!(
+            got, base,
+            "a plain `cargo test` must use the base budget — scaling it everywhere would make a \
+             genuinely wedged server take 4x as long to report"
+        );
+    }
+}
+
 impl Endpoint {
     async fn start() -> Self {
         init_crypto();
@@ -105,7 +152,8 @@ impl Endpoint {
         });
 
         // Wait for the HTTP server to become ready (poll up to 3 s)
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let budget = readiness_budget(std::time::Duration::from_secs(10));
+        let deadline = std::time::Instant::now() + budget;
         loop {
             if tokio::net::TcpStream::connect(format!("127.0.0.1:{http_port}"))
                 .await
@@ -114,13 +162,14 @@ impl Endpoint {
                 break;
             }
             if std::time::Instant::now() >= deadline {
-                panic!("Endpoint did not start within 10 seconds");
+                panic!("Endpoint did not start within {budget:?}");
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
         // Also wait for HTTPS
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let budget = readiness_budget(std::time::Duration::from_secs(10));
+        let deadline = std::time::Instant::now() + budget;
         loop {
             if tokio::net::TcpStream::connect(format!("127.0.0.1:{https_port}"))
                 .await
@@ -129,7 +178,7 @@ impl Endpoint {
                 break;
             }
             if std::time::Instant::now() >= deadline {
-                panic!("HTTPS endpoint did not start within 10 seconds");
+                panic!("HTTPS endpoint did not start within {budget:?}");
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
@@ -142,7 +191,8 @@ impl Endpoint {
         // nothing bound returns ICMP Port Unreachable (ECONNREFUSED), so
         // retrying until we actually get the echo is the correct readiness
         // check.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let budget = readiness_budget(std::time::Duration::from_secs(10));
+        let deadline = std::time::Instant::now() + budget;
         loop {
             let probe = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
             probe
@@ -161,7 +211,7 @@ impl Endpoint {
                 break;
             }
             if std::time::Instant::now() >= deadline {
-                panic!("UDP echo server did not start within 10 seconds");
+                panic!("UDP echo server did not start within {budget:?}");
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
@@ -171,7 +221,8 @@ impl Endpoint {
         //   ConnectionRefused → ICMP Port Unreachable → not bound yet, retry.
         //   timeout           → packet absorbed (no ICMP) → server is listening.
         //   Ok(data)          → server responded → definitely ready.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let budget = readiness_budget(std::time::Duration::from_secs(10));
+        let deadline = std::time::Instant::now() + budget;
         loop {
             let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
             sock.connect(format!("127.0.0.1:{udp_throughput_port}"))
@@ -188,14 +239,15 @@ impl Endpoint {
                 Ok(Err(_)) => break,
             }
             if std::time::Instant::now() >= deadline {
-                panic!("UDP throughput server did not bind on port {udp_throughput_port} within 10 seconds");
+                panic!("UDP throughput server did not bind on port {udp_throughput_port} within {budget:?}");
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
 
         // Wait for the STAMP reflector: a valid 44-byte sender packet must
         // come back reflected (44 bytes, our sequence echoed at offset 24).
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let budget = readiness_budget(std::time::Duration::from_secs(10));
+        let deadline = std::time::Instant::now() + budget;
         loop {
             let probe = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
             probe
@@ -213,7 +265,7 @@ impl Endpoint {
                 break;
             }
             if std::time::Instant::now() >= deadline {
-                panic!("STAMP reflector did not start within 10 seconds");
+                panic!("STAMP reflector did not start within {budget:?}");
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
@@ -273,7 +325,8 @@ impl Endpoint {
         // Generous because this now waits for a REAL response: a loaded Windows
         // runner can take seconds to bind. Exceeding it is a genuine failure,
         // not a retry hint.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let budget = readiness_budget(std::time::Duration::from_secs(20));
+        let deadline = std::time::Instant::now() + budget;
         let trigger = Self::version_negotiation_trigger();
         let mut attempts = 0u32;
 
@@ -305,7 +358,7 @@ impl Endpoint {
             if std::time::Instant::now() >= deadline {
                 panic!(
                     "QUIC server on UDP port {} never answered a version-negotiation \
-                     probe within 20s ({attempts} attempts) — it is not bound",
+                     probe within {budget:?} ({attempts} attempts) — it is not bound",
                     self.https_port
                 );
             }
@@ -2147,7 +2200,8 @@ async fn start_laghound_mock(token: &'static str, app_ms: u64) -> u16 {
         }
     });
     // Readiness: wait until the listener accepts a TCP connection.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let budget = readiness_budget(std::time::Duration::from_secs(5));
+    let deadline = std::time::Instant::now() + budget;
     loop {
         if tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
             .await
@@ -2156,7 +2210,7 @@ async fn start_laghound_mock(token: &'static str, app_ms: u64) -> u16 {
             break;
         }
         if std::time::Instant::now() >= deadline {
-            panic!("LagHound mock did not start within 5 seconds");
+            panic!("LagHound mock did not start within {budget:?}");
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
