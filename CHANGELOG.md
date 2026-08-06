@@ -11,6 +11,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.164] — 2026-08-05
+
+### Fixed
+- **The Windows CI flake in the HTTP/3 integration tests.**
+  `Test (windows-latest)` is a REQUIRED check and it failed on two unrelated
+  PRs in one evening with `H3 probe failed: Timeout "QUIC handshake timeout"`;
+  both passed on a plain re-run. The cause was the test harness, not the probe.
+
+  `Endpoint::wait_for_quic()` inferred readiness from the ABSENCE of an error:
+  it sent one UDP byte and treated "no reply within 100ms" as "Quinn is
+  listening". An **unbound** port produces exactly the same silence on Windows,
+  which reports UDP unreachable as `WSAECONNRESET` delivered asynchronously —
+  and not at all for the first send on a fresh socket. So the gate returned
+  before the server had bound, and the test's 10s handshake budget then expired.
+
+  It now demands a POSITIVE signal: a QUIC long-header packet carrying a
+  deliberately unsupported version, which RFC 9000 §6 requires the server to
+  answer with a Version Negotiation packet. The reply is validated (long-header
+  bit set, version 0) rather than accepted as any stray datagram, so silence
+  now means "not ready" — which is the truth. The deadline moved 5s → 20s
+  because it is now waiting for a real response on a possibly-loaded runner;
+  exceeding it is a genuine failure rather than a retry hint.
+
+  Verified in both directions: the live server answers
+  `ce 00 00 00 00 …` (Version Negotiation, our connection ID echoed back), and
+  an unbound port produces no such reply, so the gate correctly keeps waiting.
+  Side effect: the readiness check is now ~10× faster, because it returns on
+  the answer instead of waiting out a 100ms timeout on every attempt.
+
+  Raising the handshake budget was deliberately NOT the fix — that hides the
+  race instead of closing it.
+
+---
+
 ## [0.28.163] — 2026-08-05
 
 ### Fixed
