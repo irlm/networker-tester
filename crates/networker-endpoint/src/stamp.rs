@@ -101,16 +101,11 @@ struct Session {
 }
 
 /// Run the STAMP Session-Reflector until the task is aborted.
-pub async fn run_stamp_reflector(port: u16) {
-    let bind = format!("0.0.0.0:{port}");
-    let socket = match tokio::net::UdpSocket::bind(&bind).await {
-        Ok(s) => s,
-        Err(e) => {
-            warn!("STAMP reflector failed to bind on {bind}: {e}");
-            return;
-        }
-    };
-    debug!("STAMP reflector (RFC 8762 unauthenticated) listening on {bind}");
+pub async fn run_stamp_reflector(socket: tokio::net::UdpSocket) {
+    debug!(
+        "STAMP reflector (RFC 8762 unauthenticated) listening on {:?}",
+        socket.local_addr().ok()
+    );
     run_stamp_reflector_on(socket).await;
 }
 

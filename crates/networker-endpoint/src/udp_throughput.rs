@@ -29,7 +29,7 @@ use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 const MAGIC: &[u8; 4] = b"NWKT";
 const CMD_DOWNLOAD: u8 = 0x01;
@@ -45,16 +45,9 @@ const CHUNK_SIZE: usize = 1400;
 /// Runs the UDP throughput server on `port`.
 ///
 /// Separate from the UDP echo server so the two protocols never interfere.
-pub async fn run_udp_throughput(port: u16) {
-    let addr = format!("0.0.0.0:{port}");
-    let sock = match UdpSocket::bind(&addr).await {
-        Ok(s) => Arc::new(s),
-        Err(e) => {
-            warn!("Failed to bind UDP throughput socket on {addr}: {e}");
-            return;
-        }
-    };
-    info!("UDP throughput → 0.0.0.0:{port}");
+pub async fn run_udp_throughput(socket: UdpSocket) {
+    let sock = Arc::new(socket);
+    info!("UDP throughput → {:?}", sock.local_addr().ok());
 
     let mut buf = vec![0u8; 65536];
     // Per-client upload state: tracks seq_nums and byte counts until CMD_DONE.

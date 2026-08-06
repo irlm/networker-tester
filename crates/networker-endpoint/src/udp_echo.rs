@@ -7,16 +7,8 @@
 /// The server does not need to interpret the format; it just echoes bytes.
 use tracing::{debug, warn};
 
-pub async fn run_udp_echo(port: u16) {
-    let bind = format!("0.0.0.0:{port}");
-    let socket = match tokio::net::UdpSocket::bind(&bind).await {
-        Ok(s) => s,
-        Err(e) => {
-            warn!("UDP echo server failed to bind on {bind}: {e}");
-            return;
-        }
-    };
-    debug!("UDP echo listening on {bind}");
+pub async fn run_udp_echo(socket: tokio::net::UdpSocket) {
+    debug!("UDP echo listening on {:?}", socket.local_addr().ok());
 
     let mut buf = vec![0u8; 65_535];
     loop {
