@@ -31,6 +31,49 @@ logging.basicConfig(
 )
 logger = logging.getLogger("bench-api")
 
+
+# ── TCP_NODELAY on every accepted connection (API-SPEC.md §1) ────────────────
+# uvicorn does not set it on the h1-over-TLS path, and Nagle + Linux delayed
+# ACK puts a hard ~40 ms floor on every request — the §10.10 conformance check
+# measured this server at 44.1 ms median on its first run (same artifact as
+# nodejs/java, fixed v0.28.171). The uvicorn CLI exposes no socket-option
+# knob and all three launch sites (Dockerfile, deploy.sh, ci/run-language.sh)
+# launch `uvicorn server:app`, so the patch lives here at import time: wrap
+# connection_made on the protocol classes uvicorn selects with --http auto.
+# Runtime identity (§3 / audit F12) is unchanged — still stock uvicorn.
+def _patch_uvicorn_nodelay() -> None:
+    import socket as _socket
+
+    def _wrap(cls):
+        orig = cls.connection_made
+
+        def connection_made(self, transport):
+            sock = transport.get_extra_info("socket")
+            if sock is not None:
+                try:
+                    sock.setsockopt(_socket.IPPROTO_TCP, _socket.TCP_NODELAY, 1)
+                except OSError:
+                    pass  # e.g. unix sockets; never fail a connection over this
+            return orig(self, transport)
+
+        cls.connection_made = connection_made
+
+    try:
+        from uvicorn.protocols.http.h11_impl import H11Protocol
+
+        _wrap(H11Protocol)
+    except ImportError:  # pragma: no cover — h11 ships with uvicorn
+        pass
+    try:
+        from uvicorn.protocols.http.httptools_impl import HttpToolsProtocol
+
+        _wrap(HttpToolsProtocol)
+    except ImportError:
+        pass  # httptools is optional; --http auto falls back to h11
+
+
+_patch_uvicorn_nodelay()
+
 CHUNK_SIZE = 8192  # spec §5.2: pinned chunk size
 CHUNK = b"\x42" * CHUNK_SIZE  # spec §5.2: pinned fill byte 0x42 ('B')
 DOWNLOAD_CAP = 2_147_483_648  # spec §5.2: 2 GiB cap
