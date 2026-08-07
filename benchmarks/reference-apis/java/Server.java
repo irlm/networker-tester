@@ -436,6 +436,16 @@ public class Server {
             });
 
     public static void main(String[] args) throws Exception {
+        // TCP_NODELAY on accepted connections. com.sun.net.httpserver leaves
+        // Nagle ON by default; sendResponseHeaders + body stream emit separate
+        // TLS records, which interacts with Linux delayed ACK into a ~40 ms
+        // floor per request (measured 2026-08-07: ~50 ms/request → ~1 ms with
+        // this set; same artifact as the Node.js server). Go/Rust/Kestrel all
+        // disable Nagle — without this, apibench ranks a socket flag, not the
+        // runtime. Must be set before the first HttpsServer.create(), which
+        // reads it in its static ServerConfig init.
+        System.setProperty("sun.net.httpserver.nodelay", "true");
+
         loadBenchData();
 
         // Worker policy (§3): BENCH_WORKERS maps to the HttpServer executor's
