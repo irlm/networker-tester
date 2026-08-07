@@ -702,6 +702,18 @@ function startServer() {
     server = http.createServer(onRequest);
   }
 
+  // TCP_NODELAY on every accepted connection. Go's net/http and the Rust
+  // endpoint (NoDelayAcceptor) both disable Nagle; Node's http2 secure server
+  // does not, and writeHead+end emit headers and body as separate TLS records,
+  // which interacts with Linux delayed ACK into a hard ~40 ms floor per
+  // request — measured in CI as ALL FIVE workloads pinned at exactly 41.0 ms
+  // while rust/go were sub-millisecond (2026-08-07; A/B on Linux: ~45 ms →
+  // ~0.5 ms). Without this, apibench ranks a missing socket flag, not the
+  // runtime.
+  server.on("connection", function (sock) {
+    sock.setNoDelay(true);
+  });
+
   server.on("error", (err) => {
     log.error("Server error", { error: err.message });
     process.exit(1);

@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.171] — 2026-08-07
+
+### Fixed
+- **The nodejs benchmark's 41.0 ms pin was a socket flag, not the runtime**
+  (standing observation from the first trend table). Node's http2 secure
+  server leaves Nagle enabled and emits headers/body as separate TLS records,
+  which interacts with Linux delayed ACK into a hard ~40 ms per-request floor
+  — all five workloads pinned at exactly 41.0 ms while rust/go were
+  sub-millisecond. The Java server (`com.sun.net.httpserver`) had the same
+  artifact (~50 ms measured). Both now set TCP_NODELAY, matching what
+  Go's net/http, the Rust endpoint (`NoDelayAcceptor`), Kestrel, uvicorn,
+  puma and Swoole already do — apibench ranks runtimes again, not Nagle.
+  A/B on Linux (Docker): nodejs ~45 ms → ~2 ms; java ~50 ms → ~5 ms;
+  php/swoole verified clean (no floor, untouched). Historical nodejs and
+  java latency numbers from CI benchmarks are NOT comparable across this
+  change.
+
+---
+
 ## [0.28.170] — 2026-08-07
 
 ### Fixed
