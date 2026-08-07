@@ -1,0 +1,6 @@
+# Missed-mutant ratchet for the weekly mutation job (.github/workflows/mutation.yml).
+# The job fails if the missed count RISES above this; lower it in a PR when
+# you kill survivors. Scope/exclusions: .cargo/mutants.toml.
+# Baseline measured 2026-08-07 (74 mutants: 30 caught, 43 missed, 1 unviable;
+# top gap: udp_throughput.rs 25 — no in-package test module).
+43

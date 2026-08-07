@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.172] — 2026-08-07
+
+### Added
+- **Mutation-testing pilot** (weekly `Mutation testing` workflow,
+  cargo-mutants on `networker-endpoint`): the systematic answer to the
+  born-vacuous-guard class found by hand four times (bats errexit, FD-safety,
+  QUIC gate, soak unit-names). Ratchet semantics — red only when the
+  missed-mutant count rises above the checked-in baseline
+  (`crates/networker-endpoint/.mutants-baseline`, 43); a <20-mutant sweep is
+  refused as vacuous. Scope pins code whose tests live in-package
+  (`.cargo/mutants.toml` documents the http3_server/routes exclusions and the
+  expansion path). First yields: `udp_service_label` (shipped v0.28.170)
+  had no test — killed here; `udp_throughput.rs` has NO in-package test
+  module (25 survivors) — recorded as the top test gap.
+
+---
+
 ## [0.28.171] — 2026-08-07
 
 ### Fixed
