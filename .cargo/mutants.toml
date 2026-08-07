@@ -1,0 +1,23 @@
+# cargo-mutants config — mutation-testing pilot (.github/workflows/mutation.yml).
+#
+# Scope: the pilot mutates only code whose tests live IN this package —
+# mutation testing evaluates a test suite against the code it claims to
+# cover, and two files' guards live elsewhere (baseline runs, 2026-08-07):
+#
+# - http3_server.rs (60 survivors): exercised by crates/networker-tester's
+#   integration suite (http3_probe_*, pageload_h3_*), which
+#   `cargo test -p networker-endpoint` never runs.
+# - routes.rs (187 survivors): exercised by the JSON-API-validation +
+#   canonical-baseline conformance jobs, the bats endpoint suite, and the
+#   tester's integration tests — all outside this package.
+#
+# Counting those survivors would make the ratchet measure the wrong suite.
+# EXPANSION PATH, in order of value: (1) in-package route tests via
+# tower::ServiceExt::oneshot against build_router() — routes.rs is unit-
+# testable, its tests just don't exist yet; then delete its exclusion.
+# (2) `--test-package networker-tester` for http3_server.rs, if ever
+# affordable (integration suite per mutant is minutes × hundreds).
+exclude_globs = [
+    "crates/networker-endpoint/src/http3_server.rs",
+    "crates/networker-endpoint/src/routes.rs",
+]

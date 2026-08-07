@@ -1,0 +1,87 @@
+name: Mutation testing
+
+# Weekly mutation-testing pilot on networker-endpoint (the small crate first).
+#
+# Measures whether the package's own tests KILL code mutations — the
+# systematic answer to the born-vacuous-guard class this project keeps
+# finding by hand (bats errexit vacuity, the FD-safety test that never
+# asserted, the QUIC silence-as-readiness gate, the soak check's wrong unit
+# names). Its very first local run caught a same-day example: udp_service_label
+# shipped in v0.28.170 with no test and 3 surviving mutants.
+#
+# RATCHET, not a gate: the job fails only when the missed-mutant count RISES
+# above the checked-in baseline (crates/networker-endpoint/.mutants-baseline).
+# Killing mutants and lowering the baseline is a deliberate PR edit; silently
+# rising misses turn the job red. Scope notes (http3_server.rs exclusion and
+# why) live in .cargo/mutants.toml.
+
+on:
+  schedule:
+    - cron: '23 5 * * 2' # Tuesday 05:23 UTC — clear of soak/canary/validate crons
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  mutants:
+    name: cargo-mutants (networker-endpoint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants --locked
+
+      - name: Run mutants
+        # Exit code deliberately ignored — the verdict is the RATCHET below,
+        # not "any missed mutant" (that day may come; today it would be red
+        # forever and get muted, the exact erosion this job exists to fight).
+        run: cargo mutants -p networker-endpoint -j 2 --no-shuffle || true
+
+      - name: Ratchet against baseline
+        run: |
+          MISSED=$(grep -c . mutants.out/missed.txt 2>/dev/null || echo 0)
+          CAUGHT=$(grep -c . mutants.out/caught.txt 2>/dev/null || echo 0)
+          UNVIABLE=$(grep -c . mutants.out/unviable.txt 2>/dev/null || echo 0)
+          TIMEOUT=$(grep -c . mutants.out/timeout.txt 2>/dev/null || echo 0)
+          BASELINE=$(grep -v '^#' crates/networker-endpoint/.mutants-baseline | head -1 | tr -d ' ')
+
+          {
+            echo "### Mutation testing — networker-endpoint"
+            echo ""
+            echo "| caught | missed | timeout | unviable | baseline |"
+            echo "|---|---|---|---|---|"
+            echo "| $CAUGHT | $MISSED | $TIMEOUT | $UNVIABLE | $BASELINE |"
+            echo ""
+            if [ "$MISSED" -gt 0 ]; then
+              echo "<details><summary>missed mutants</summary>"
+              echo ""
+              echo '```'
+              cat mutants.out/missed.txt
+              echo '```'
+              echo "</details>"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # A sweep that finds zero mutants means the tool matched nothing —
+          # that is a broken run, not a perfect one (vacuous-assertion lesson).
+          TOTAL=$((CAUGHT + MISSED + TIMEOUT + UNVIABLE))
+          if [ "$TOTAL" -lt 20 ]; then
+            echo "::error::only $TOTAL mutants generated — scope/config broke (expected ~40+); refusing a vacuous pass"
+            exit 1
+          fi
+
+          if [ "$MISSED" -gt "$BASELINE" ]; then
+            echo "::error::missed mutants rose: $MISSED > baseline $BASELINE — new code shipped without tests that would catch its breakage. Kill the new survivors (see summary) or justify a baseline bump in a PR."
+            exit 1
+          fi
+          if [ "$MISSED" -lt "$BASELINE" ]; then
+            echo "::notice::missed mutants fell: $MISSED < baseline $BASELINE — lower crates/networker-endpoint/.mutants-baseline in a PR to lock in the gain."
+          fi
+          echo "ratchet OK: missed $MISSED ≤ baseline $BASELINE"

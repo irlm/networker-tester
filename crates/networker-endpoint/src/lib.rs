@@ -402,6 +402,22 @@ pub fn generate_static_site(
 mod tests {
     use super::*;
 
+    // ── udp_service_label() ──────────────────────────────────────────────────
+    // First yield of the mutation pilot (2026-08-07): the function shipped the
+    // same morning with no test — 3 mutants survived (empty string, "xyzzy",
+    // == flipped to !=). The startup log is how an operator distinguishes a
+    // disabled service from one bound to a real port.
+
+    #[test]
+    fn udp_service_label_zero_means_disabled() {
+        assert_eq!(udp_service_label(0), "disabled (port 0)");
+    }
+
+    #[test]
+    fn udp_service_label_nonzero_names_the_bind_address() {
+        assert_eq!(udp_service_label(9997), "0.0.0.0:9997");
+    }
+
     // ── resolve_preset() ──────────────────────────────────────────────────────
 
     #[test]
