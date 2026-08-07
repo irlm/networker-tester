@@ -11,6 +11,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.169] — 2026-08-06
+
+### Changed
+- **CI stops paying for the version bump.** Every PR must bump five files, so
+  `git diff --name-only` always contained `install.sh`, `install.ps1`,
+  `Cargo.toml`, `Cargo.lock` and `Directory.Build.props` — which made every
+  path-based job filter permanently true. Measured on PR #664: a frontend-only
+  change ran the full installer execution matrix (Linux stack round-trip,
+  Windows installer execution, bats, shellcheck, PSScriptAnalyzer — ~13 min of
+  jobs) because **one version-string line** moved. All three `changes` detectors
+  now route through `scripts/ci/effective-changed-files.sh`, which drops a bump
+  file from the changed list ONLY when its entire diff is the bump line.
+  Anything else keeps the file — a dependabot `Cargo.lock` bump always carries
+  `checksum =` lines, so it survives by construction. Validated against real
+  history (PR #664 → all five dropped; the v0.28.156 self-host repair →
+  `install.sh` kept; the #653 dependency bump → both lockfiles kept) and by
+  three bats tests that build synthetic repos. The version-bump CHECK itself
+  still reads the raw diff, so the bump requirement is unchanged.
+- **Rust integration tests run in parallel on Linux.** Every test allocates its
+  own ports and the readiness gates wait on positive signals (v0.28.164-167),
+  so the old `--test-threads=1` is obsolete there: measured 45/45 in ~5s vs
+  ~20s serialized, across repeated runs, on both plain `cargo test` and under
+  `cargo llvm-cov`. **Windows deliberately stays serialized** until the QUIC
+  readiness fix has a longer green history — the workflow comment says not to
+  tidy it to match. The db-mssql / db-postgres suites stay serialized too
+  (shared containers).
+
+---
+
 ## [0.28.168] — 2026-08-06
 
 ### Added
