@@ -289,6 +289,59 @@ PYEOF
     fi
 }
 
+# CONF tier: Nagle floor (API-SPEC.md §1 TCP_NODELAY / §10 item 10).
+# A server that leaves Nagle on hits Linux delayed ACK for a hard ~40ms
+# per-request floor — the benchmark then ranks a socket flag, not the runtime
+# (nodejs pinned at exactly 41.0ms on all five workloads until v0.28.171;
+# java ~50ms). Median time_total of 10 fresh connections to the cheapest
+# endpoint. The handshake MUST be inside the window: on Node the response
+# writes were clean and the TLS handshake flights carried the whole stall
+# (verified: total-appconnect was 0.1ms on the pre-fix server — an
+# exclude-the-handshake variant of this check passed it). Linux only: macOS
+# delayed-ACK behaviour does not reproduce the floor, a pass there proves
+# nothing.
+check_nagle_floor() {
+    local name="$1"
+    local base="$2"
+
+    if [[ "$(uname -s)" != "Linux" ]]; then
+        printf "  ${YELLOW}SKIP${NC} %-48s %s\n" "$name nagle floor" "Linux-only check (floor not reproducible here)"
+        SKIP=$((SKIP + 1))
+        return
+    fi
+
+    # --http1.1 is LOAD-BEARING: apibench measures over HTTP/1.1 (tester
+    # --modes http1), and the Node stall only manifests on the h1-over-TLS
+    # fallback path — plain curl negotiates h2 via ALPN and sails through
+    # (verified: the pre-fix server passed an ALPN-default variant of this
+    # check at 1.4ms while pinning apibench at 41ms).
+    local samples="" t
+    for _ in $(seq 1 10); do
+        t=$(curl -sk --http1.1 -o /dev/null --max-time 5 "${AUTH_ARGS[@]}" \
+            -w '%{time_total}\n' "$base/api/validate?seed=$SEED" 2>/dev/null) || t=""
+        [[ -n "$t" ]] && samples+="$t"$'\n'
+    done
+
+    local n median_ms
+    n=$(printf '%s' "$samples" | grep -c . || true)
+    if [[ "$n" -lt 8 ]]; then
+        conf_fail "$name nagle floor" "only $n/10 timing samples collected"
+        return
+    fi
+    # Fresh-connection total in ms; median = middle of the sorted set.
+    median_ms=$(printf '%s' "$samples" \
+        | awk '{printf "%.1f\n", $1 * 1000}' \
+        | sort -n | awk '{a[NR]=$1} END {print a[int((NR+1)/2)]}')
+
+    if awk -v m="$median_ms" 'BEGIN {exit !(m >= 35)}'; then
+        conf_fail "$name nagle floor" "median ${median_ms}ms ≥ 35ms — delayed-ACK signature; set TCP_NODELAY (§1)"
+    elif awk -v m="$median_ms" 'BEGIN {exit !(m < 25)}'; then
+        pass "$name nagle floor" "median ${median_ms}ms"
+    else
+        pass "$name nagle floor" "median ${median_ms}ms (25–35ms grey zone — noisy runner, watch it)"
+    fi
+}
+
 # CONF tier: per-endpoint JSON *shape* assertions (API-SPEC.md §5) on
 # NON-canonical requests. The §7 checksums already pin four exact requests;
 # this catches an implementation that returns extra or missing FIELDS (or
@@ -487,6 +540,9 @@ validate_server() {
             conf_fail "$name auth rejection" "expected 401, got $code"
         fi
     fi
+
+    # CONF tier: Nagle floor (API-SPEC.md §1 / §10.10)
+    check_nagle_floor "$name" "$base"
 
     # CONF tier: benchmark headers (API-SPEC.md §1)
     check_header "$name Server-Timing" "$base/api/users?page=1" "Server-Timing"

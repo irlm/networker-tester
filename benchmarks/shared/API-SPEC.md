@@ -46,6 +46,15 @@ and downloads use the path form `/download/{size}`.
   - `Cache-Control: no-store, no-cache, must-revalidate`
   - `Timing-Allow-Origin: *`
   - `Access-Control-Allow-Origin: *`
+- **Socket options — TCP_NODELAY is REQUIRED** on every accepted connection.
+  A server that leaves Nagle enabled and writes headers/body as separate
+  records interacts with Linux delayed ACK into a hard ~40 ms per-request
+  floor — the benchmark then ranks a missing socket flag, not the runtime
+  (2026-08-07: nodejs pinned at exactly 41.0 ms on all five workloads, java
+  at ~50 ms, both fixed in v0.28.171; go/rust/kestrel/uvicorn/puma/swoole
+  already set it by default). If your stack does not set it by default, set
+  it explicitly and note where. macOS does NOT reproduce the floor — verify
+  on Linux.
 - **Errors**: JSON `{"error":"<message>"}` with the status codes given per
   endpoint below. No HTML error pages.
 - JSON responses use `Content-Type: application/json`. Field *names and types*
@@ -415,6 +424,16 @@ the audit, per language:
 8. With `BENCH_DATA_PATH=/nonexistent`, the process exits non-zero at startup.
 9. With `BENCH_API_TOKEN` set, `GET /api/users` without the header → 401;
    `/health` still 200.
+10. **Nagle floor check (Linux only, forced HTTP/1.1)**: median `time_total`
+    of 10 fresh-connection `GET /api/validate` requests over loopback with
+    HTTP/1.1 forced (`curl --http1.1`) is **< 25 ms**. A median ≥ 35 ms is the
+    delayed-ACK signature of a missing `TCP_NODELAY` (§1) — fail conformance,
+    do not publish the numbers. Two measurement traps, both verified against
+    the pre-fix Node server: the stall can sit in the TLS handshake flights
+    (response writes were clean; the handshake carried the whole ~40 ms), so
+    the handshake MUST be inside the measured window; and it only manifests
+    on the h1-over-TLS path — ALPN-default curl negotiates h2 and passes a
+    server that pins apibench (which measures `--modes http1`) at 41 ms.
 
 ## 11. Docker image & resource policy (audit F14)
 
