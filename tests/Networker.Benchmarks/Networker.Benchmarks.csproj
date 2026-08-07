@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- BenchmarkDotNet micro-benchmarks for C# hot paths (report exporters,
+       contracts serialization). Run weekly by .github/workflows/microbench-dotnet.yml
+       as an INFORMATIONAL artifact — never a merge gate (shared-runner noise
+       makes hard thresholds flaky; same philosophy as the language-benchmark
+       trend job). Lives under tests/ deliberately: nothing here ships, so it
+       must not drag the Rust release train (CI version-bump rule) nor the
+       installer matrix. -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <!-- BenchmarkDotNet requires optimized code; guard against Debug runs. -->
+    <Optimize Condition="'$(Configuration)' == 'Release'">true</Optimize>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" Version="0.15.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Networker.ControlPlane/Networker.ControlPlane.csproj" />
+    <ProjectReference Include="../../src/Networker.Contracts/Networker.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The pinned golden contract sample doubles as the serialization
+         fixture — one source of truth for "a real tester payload". -->
+    <Content Include="../Networker.Tests/fixtures/tester-golden.json"
+             Link="fixtures/tester-golden.json"
+             CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

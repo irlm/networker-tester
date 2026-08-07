@@ -1,0 +1,62 @@
+name: C# micro-benchmarks
+
+# Weekly BenchmarkDotNet run over the C# hot paths (report exporters,
+# contracts serialization) — tests/Networker.Benchmarks. INFORMATIONAL: the
+# job publishes a summary table + a JSON artifact for week-over-week
+# comparison and never gates merges — hard thresholds on shared runners get
+# muted (same philosophy as the language-benchmark trend job). The job still
+# FAILS when the benchmarks crash or produce no results: a silent empty run
+# must not read as green (vacuous-assertion lesson).
+
+on:
+  schedule:
+    - cron: '41 5 * * 3' # Wednesday 05:41 UTC — clear of soak/canary/validate/mutation crons
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  microbench:
+    name: BenchmarkDotNet (exporters + contracts)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Run benchmarks (short job)
+        run: |
+          dotnet run -c Release --project tests/Networker.Benchmarks -- \
+            --filter '*' --job short --exporters json github
+
+      - name: Publish summary
+        run: |
+          shopt -s nullglob
+          FILES=(BenchmarkDotNet.Artifacts/results/*-report-github.md)
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "::error::no benchmark result files produced — the run was vacuous"
+            exit 1
+          fi
+          {
+            echo "### C# micro-benchmarks (BenchmarkDotNet, --job short)"
+            echo ""
+            echo "Informational trend data — compare against last week's artifact,"
+            echo "not against an absolute number (shared runners)."
+            echo ""
+            for f in "${FILES[@]}"; do
+              cat "$f"
+              echo ""
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: microbench-dotnet-${{ github.run_id }}
+          path: BenchmarkDotNet.Artifacts/results/
+          retention-days: 90

@@ -48,3 +48,6 @@ sdk/**/obj/
 # Python bytecode (SDK) — never commit compiled caches
 __pycache__/
 *.py[cod]
+
+# BenchmarkDotNet local run output (tests/Networker.Benchmarks)
+BenchmarkDotNet.Artifacts/
