@@ -1,0 +1,14 @@
+# Missed-mutant ratchet for the weekly mutation job (.github/workflows/mutation.yml).
+# The job fails if the missed count RISES above this; lower it in a PR when
+# you kill survivors. Scope/exclusions: .cargo/mutants.toml.
+#
+# The number is CI-MEASURED (ubuntu runner) — the enforcing environment is
+# the measuring environment. A macOS-measured 43 lost to CI's 44 on the very
+# first run: udp_throughput.rs:126 `+=`→`*=` is borderline (a zeroed counter
+# mutation can spin a spawned loop; whether a test times out on it is
+# environment-dependent). Lives under tests/, NOT crates/, so ratchet
+# adjustments don't trigger the shipping version-bump rule.
+# Top open gap behind the number: udp_throughput.rs has no in-package test
+# module (26 survivors incl. the borderline one).
+# CI baseline run: actions/runs/31205741102 (2026-08-07).
+44

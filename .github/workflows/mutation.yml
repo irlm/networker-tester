@@ -10,7 +10,7 @@ name: Mutation testing
 # shipped in v0.28.170 with no test and 3 surviving mutants.
 #
 # RATCHET, not a gate: the job fails only when the missed-mutant count RISES
-# above the checked-in baseline (crates/networker-endpoint/.mutants-baseline).
+# above the checked-in baseline (tests/mutation-baseline-networker-endpoint.txt).
 # Killing mutants and lowering the baseline is a deliberate PR edit; silently
 # rising misses turn the job red. Scope notes (http3_server.rs exclusion and
 # why) live in .cargo/mutants.toml.
@@ -50,7 +50,7 @@ jobs:
           CAUGHT=$(grep -c . mutants.out/caught.txt 2>/dev/null || echo 0)
           UNVIABLE=$(grep -c . mutants.out/unviable.txt 2>/dev/null || echo 0)
           TIMEOUT=$(grep -c . mutants.out/timeout.txt 2>/dev/null || echo 0)
-          BASELINE=$(grep -v '^#' crates/networker-endpoint/.mutants-baseline | head -1 | tr -d ' ')
+          BASELINE=$(grep -v '^#' tests/mutation-baseline-networker-endpoint.txt | head -1 | tr -d ' ')
 
           {
             echo "### Mutation testing — networker-endpoint"
@@ -82,6 +82,6 @@ jobs:
             exit 1
           fi
           if [ "$MISSED" -lt "$BASELINE" ]; then
-            echo "::notice::missed mutants fell: $MISSED < baseline $BASELINE — lower crates/networker-endpoint/.mutants-baseline in a PR to lock in the gain."
+            echo "::notice::missed mutants fell: $MISSED < baseline $BASELINE — lower tests/mutation-baseline-networker-endpoint.txt in a PR to lock in the gain."
           fi
           echo "ratchet OK: missed $MISSED ≤ baseline $BASELINE"

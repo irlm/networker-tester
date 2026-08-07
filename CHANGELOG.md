@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.173] — 2026-08-07
+
+### Fixed
+- **cpp reference API sets TCP_NODELAY** — the Nagle-floor conformance check
+  caught it on its 4th run (43.9 ms median; passed the previous three). asio
+  leaves Nagle on and Beast usually coalesces header+body into one write, so
+  the ~40 ms delayed-ACK floor appeared only when a response split across
+  writes — an INTERMITTENT artifact, worse than a constant one because it
+  bimodally poisons distribution stats. Now set unconditionally at accept
+  (best-effort). Verified via the pinned Dockerfile build: 3/3 validation
+  rounds at ~1.6 ms in the exact CI shape. With nodejs/java (v0.28.171) and
+  python (#681), every reference API now sets NODELAY explicitly or by
+  framework default.
+- **Mutation baseline is CI-measured (44) and moved out of `crates/`** — the
+  ratchet fired on its first dispatched run against the macOS-measured 43;
+  the enforcing environment is now the measuring environment, and future
+  baseline adjustments (under `tests/`) no longer trigger the shipping
+  version-bump rule.
+
+---
+
 ## [0.28.172] — 2026-08-07
 
 ### Added

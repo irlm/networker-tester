@@ -1278,11 +1278,22 @@ private:
     void on_accept(beast::error_code ec, tcp::socket socket) {
         if (ec) {
             bench_log(LOG_ERROR, "accept: " + ec.message());
-        } else if (ctx_) {
-            std::make_shared<session<beast::ssl_stream<beast::tcp_stream>>>(
-                std::move(socket), *ctx_)->run();
         } else {
-            std::make_shared<session<beast::tcp_stream>>(std::move(socket))->run();
+            // TCP_NODELAY (API-SPEC.md §1). asio leaves Nagle ON by default;
+            // Beast usually coalesces header+body into one write, so the
+            // ~40 ms delayed-ACK floor only appeared INTERMITTENTLY when a
+            // response split across writes (§10.10 check: passed 3 CI runs,
+            // then 43.9 ms on the 4th, 2026-08-07). Set it unconditionally —
+            // best-effort, never fail the connection over it.
+            beast::error_code nd_ec;
+            socket.set_option(tcp::no_delay(true), nd_ec);
+
+            if (ctx_) {
+                std::make_shared<session<beast::ssl_stream<beast::tcp_stream>>>(
+                    std::move(socket), *ctx_)->run();
+            } else {
+                std::make_shared<session<beast::tcp_stream>>(std::move(socket))->run();
+            }
         }
         do_accept();
     }
