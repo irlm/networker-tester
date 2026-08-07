@@ -11,6 +11,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.168] — 2026-08-06
+
+### Added
+- **Browser E2E grows from 5 to 10 specs, pinning the react-hooks behaviours
+  that were previously only hand-verified.** `e2e/journeys.spec.ts` drives the
+  production bundle through the guarantees the v0.28.163 refactor introduced:
+  `?modes=` seeds the network-test selection on first paint (with unknown modes
+  dropped and the empty case rendering the picker, not a crash); a VM-history
+  refetch keeps its rows visible with the table sampled *immediately* after the
+  filter click — the exact window where the old synchronous `setLoading(true)`
+  blanked it; and a failing refetch shows the error banner **alongside** the
+  stale rows instead of discarding them. Stubs are shape-faithful to the client
+  source (`VmHistoryResponse` is `{events, has_more}`, projects is
+  `{projects: [...]}`) — the lesson from app.spec.ts's first run.
+  **Verified red on regression:** injecting a `setRows([])` blank into
+  `refresh` fails both refetch specs with their intended messages
+  ("rows blanked during refetch" / "rows discarded on error"); restored, 10/10.
+
+### Notes
+- The remaining test/benchmark levers need GitHub Actions (currently in partial
+  outage) rather than code: the benchmark-trend step has not yet produced its
+  first comparison (it landed after the last weekly run), and the endurance
+  soak has never executed — both are one `workflow_dispatch` away once Actions
+  recovers.
+
+---
+
 ## [0.28.167] — 2026-08-06
 
 ### Fixed
