@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.174] — 2026-08-07
+
+### Added
+- **`udp_throughput.rs` gets its first in-package test module** — the
+  mutation pilot's top finding (26 surviving mutants, zero unit tests on the
+  UDP bulk-throughput wire protocol). Five deadline-bounded loopback tests
+  pin the control-packet layout, exact download byte delivery on a
+  non-chunk-aligned size (1400+1400+200), the zero-byte-download early
+  return, upload seq deduplication, the header-only-packet guard, and
+  control-vs-data classification (a magic-less 12-byte packet is data).
+  Deliberate survivors documented in the module: the stale-state reaper's
+  TTL logic needs a clock-injection refactor to test, not a 60-second sleep.
+
+---
+
 ## [0.28.173] — 2026-08-07
 
 ### Fixed

@@ -198,3 +198,212 @@ struct UploadState {
     received_bytes: usize,
     created_at: std::time::Instant,
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Unit tests — real sockets over loopback, driving the wire protocol.
+//
+// Until 2026-08-07 this file had NO test module: its 26 surviving mutants were
+// the largest gap the mutation pilot found (the file's only guards were the
+// tester's integration probes, which exercise the happy path end-to-end but
+// pin none of the protocol arithmetic). Every test is deadline-bounded — a
+// test that hangs on regression is barely better than one that passes on it
+// (bind_failure.rs lesson).
+//
+// Deliberate survivors: the stale-state reaper (pkt_counter cadence + the
+// 60s TTL retain, lines ~133-141) uses std::time::Instant, which tokio's
+// paused clock does not advance — killing those mutants needs a clock
+// injection refactor, not a 60-second test.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    const DEADLINE: Duration = Duration::from_secs(5);
+
+    /// Bind the server on an ephemeral loopback port, spawn it, and return a
+    /// client socket already `connect`ed to it.
+    async fn start() -> UdpSocket {
+        let server_sock = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = server_sock.local_addr().unwrap();
+        tokio::spawn(run_udp_throughput(server_sock));
+
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        client.connect(server_addr).await.unwrap();
+        client
+    }
+
+    async fn recv(client: &UdpSocket, buf: &mut [u8]) -> usize {
+        tokio::time::timeout(DEADLINE, client.recv(buf))
+            .await
+            .expect("timed out waiting for a server packet")
+            .expect("recv failed")
+    }
+
+    fn is_ctrl(pkt: &[u8], cmd: u8) -> bool {
+        pkt.len() == CTRL_LEN && pkt[..4] == *MAGIC && pkt[4] == cmd
+    }
+
+    fn ctrl_value(pkt: &[u8]) -> u32 {
+        u32::from_le_bytes(pkt[8..12].try_into().unwrap())
+    }
+
+    /// Build a client→server data packet: seq/total header + `payload` zeros.
+    fn data_pkt(seq: u32, total: u32, payload: usize) -> Vec<u8> {
+        let mut pkt = vec![0u8; DATA_HDR_LEN + payload];
+        pkt[..4].copy_from_slice(&seq.to_le_bytes());
+        pkt[4..8].copy_from_slice(&total.to_le_bytes());
+        pkt
+    }
+
+    // ── make_ctrl ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn make_ctrl_layout_is_the_documented_wire_format() {
+        let pkt = make_ctrl(CMD_REPORT, 0x0102_0304);
+        assert_eq!(pkt.len(), CTRL_LEN, "control packets are exactly 12 bytes");
+        assert_eq!(&pkt[..4], MAGIC);
+        assert_eq!(pkt[4], CMD_REPORT);
+        assert_eq!(&pkt[5..8], &[0, 0, 0], "padding must stay zeroed");
+        assert_eq!(&pkt[8..12], &0x0102_0304u32.to_le_bytes());
+    }
+
+    // ── download ─────────────────────────────────────────────────────────────
+
+    /// CMD_DOWNLOAD must be ACKed, then deliver EXACTLY the requested bytes in
+    /// correctly-headered chunks, then CMD_DONE carrying the byte total.
+    /// 3000 bytes = 1400 + 1400 + 200 — a non-chunk-aligned size, so the
+    /// last-packet arithmetic (payload_size, sent_bytes accumulation) is load-
+    /// bearing here.
+    #[tokio::test]
+    async fn download_delivers_exactly_the_requested_bytes() {
+        let client = start().await;
+        client.send(&make_ctrl(CMD_DOWNLOAD, 3000)).await.unwrap();
+
+        let mut buf = vec![0u8; 65536];
+        let n = recv(&client, &mut buf).await;
+        assert!(
+            is_ctrl(&buf[..n], CMD_ACK),
+            "first reply must be CMD_ACK, got {:02x?}",
+            &buf[..n.min(16)]
+        );
+
+        let mut payload_total = 0usize;
+        let mut seqs = Vec::new();
+        loop {
+            let n = recv(&client, &mut buf).await;
+            let pkt = &buf[..n];
+            if is_ctrl(pkt, CMD_DONE) {
+                assert_eq!(ctrl_value(pkt), 3000, "CMD_DONE must report the byte total");
+                break;
+            }
+            assert!(n > DATA_HDR_LEN, "data packet with no payload");
+            let seq = u32::from_le_bytes(pkt[..4].try_into().unwrap());
+            let total = u32::from_le_bytes(pkt[4..8].try_into().unwrap());
+            assert_eq!(total, 3, "3000 bytes at 1400/chunk is 3 packets (div_ceil)");
+            assert!(
+                n - DATA_HDR_LEN <= CHUNK_SIZE,
+                "payload above CHUNK_SIZE breaks the sub-MTU guarantee"
+            );
+            seqs.push(seq);
+            payload_total += n - DATA_HDR_LEN;
+        }
+
+        assert_eq!(
+            payload_total, 3000,
+            "download must deliver exactly the requested bytes"
+        );
+        assert_eq!(seqs, vec![0, 1, 2], "seq numbers are 0-based and ordered");
+    }
+
+    /// A zero-byte download is legal: no data packets, immediate CMD_DONE(0).
+    /// (Guards the `total_bytes == 0` early-return — inverted, it would blast
+    /// data for 0-byte requests and dead-silence real ones.)
+    #[tokio::test]
+    async fn download_of_zero_bytes_is_an_immediate_done() {
+        let client = start().await;
+        client.send(&make_ctrl(CMD_DOWNLOAD, 0)).await.unwrap();
+
+        let mut buf = vec![0u8; 65536];
+        let n = recv(&client, &mut buf).await;
+        assert!(is_ctrl(&buf[..n], CMD_ACK), "download must still be ACKed");
+
+        let n = recv(&client, &mut buf).await;
+        assert!(
+            is_ctrl(&buf[..n], CMD_DONE),
+            "zero-byte download must go straight to CMD_DONE, got {:02x?}",
+            &buf[..n.min(16)]
+        );
+        assert_eq!(ctrl_value(&buf[..n]), 0);
+    }
+
+    // ── upload ───────────────────────────────────────────────────────────────
+
+    /// Full upload round-trip with the two counting hazards the wire format
+    /// allows: a DUPLICATE seq (must count once) and a header-only 8-byte
+    /// packet (must not be treated as data — it would poison the dedup set
+    /// and eat the real packet's bytes).
+    #[tokio::test]
+    async fn upload_report_counts_each_seq_once_and_ignores_header_only_packets() {
+        let client = start().await;
+        client.send(&make_ctrl(CMD_UPLOAD, 3000)).await.unwrap();
+
+        let mut buf = vec![0u8; 65536];
+        let n = recv(&client, &mut buf).await;
+        assert!(is_ctrl(&buf[..n], CMD_ACK), "CMD_UPLOAD must be ACKed");
+
+        // A header-only packet for seq 2: exactly DATA_HDR_LEN bytes, no
+        // payload. The server must ignore it entirely (`n > DATA_HDR_LEN`);
+        // if it were processed, seq 2 would enter the dedup set with 0 bytes
+        // and the real seq-2 packet below would be discarded as a duplicate.
+        client.send(&data_pkt(2, 3, 0)).await.unwrap();
+
+        client.send(&data_pkt(0, 3, 1400)).await.unwrap();
+        client.send(&data_pkt(1, 3, 1400)).await.unwrap();
+        client.send(&data_pkt(0, 3, 1400)).await.unwrap(); // duplicate seq 0
+        client.send(&data_pkt(2, 3, 200)).await.unwrap();
+
+        client.send(&make_ctrl(CMD_DONE, 0)).await.unwrap();
+        let n = recv(&client, &mut buf).await;
+        assert!(
+            is_ctrl(&buf[..n], CMD_REPORT),
+            "CMD_DONE after an upload must yield CMD_REPORT, got {:02x?}",
+            &buf[..n.min(16)]
+        );
+        assert_eq!(
+            ctrl_value(&buf[..n]),
+            3000,
+            "report must count 1400+1400+200 exactly once each \
+             (duplicate seq recounted, or header-only packet processed, or \
+             payload length miscomputed)"
+        );
+    }
+
+    /// A 12-byte packet WITHOUT the magic must be handled as data, not
+    /// control. (Guards the `n == CTRL_LEN && magic` conjunction: with `||`,
+    /// any 12-byte data packet becomes an unknown-command control packet and
+    /// its bytes vanish from the upload count.)
+    #[tokio::test]
+    async fn twelve_byte_packet_without_magic_is_data_not_control() {
+        let client = start().await;
+        client.send(&make_ctrl(CMD_UPLOAD, 4)).await.unwrap();
+
+        let mut buf = vec![0u8; 65536];
+        let n = recv(&client, &mut buf).await;
+        assert!(is_ctrl(&buf[..n], CMD_ACK));
+
+        // 12 bytes total = 8-byte header (seq 0) + 4 payload bytes. Same size
+        // as a control packet, but no magic.
+        client.send(&data_pkt(0, 1, 4)).await.unwrap();
+
+        client.send(&make_ctrl(CMD_DONE, 0)).await.unwrap();
+        let n = recv(&client, &mut buf).await;
+        assert!(is_ctrl(&buf[..n], CMD_REPORT));
+        assert_eq!(
+            ctrl_value(&buf[..n]),
+            4,
+            "a magic-less 12-byte packet is a 4-byte-payload data packet"
+        );
+    }
+}
