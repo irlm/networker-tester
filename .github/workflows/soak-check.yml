@@ -86,11 +86,17 @@ jobs:
               # crates were DELETED at the post-soak decommission (runbook §7).
               # An active unit would mean someone resurrected them; not-found
               # and inactive are both fine once the units are purged.
-              RUST_DASH=\$(systemctl is-active networker-dashboard 2>/dev/null || true)
-              RUST_AGENT=\$(systemctl is-active networker-agent 2>/dev/null || true)
-              echo \"rust_dashboard=\$RUST_DASH rust_agent=\$RUST_AGENT\"
-              case \"\$RUST_DASH\" in active|activating) FAIL=1;; esac
-              case \"\$RUST_AGENT\" in active|activating) FAIL=1;; esac
+              #
+              # The prod VM's units are named alethedash/alethedash-tester —
+              # this check originally asserted the CRATE names, matched nothing,
+              # and passed vacuously while the retired Rust dashboard crash-
+              # looped for 22 days (406k restarts, found 2026-08-07). Both name
+              # sets are asserted so neither install layout can hide.
+              for UNIT in networker-dashboard networker-agent alethedash alethedash-tester; do
+                STATE=\$(systemctl is-active \"\$UNIT\" 2>/dev/null || true)
+                echo \"rust_unit_\${UNIT}=\$STATE\"
+                case \"\$STATE\" in active|activating) FAIL=1;; esac
+              done
 
               # 4. lingering advisory locks (transient 1 is fine mid-tick; >2 suspicious)
               LOCKS=\$(sudo -u postgres psql alethedash_core -tAc \"SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND granted;\")

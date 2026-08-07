@@ -42,15 +42,17 @@ struct Cli {
     #[arg(long)]
     https_port: Option<u16>,
 
-    /// UDP echo port
+    /// UDP echo port (0 = disable the service)
     #[arg(long)]
     udp_port: Option<u16>,
 
-    /// UDP bulk throughput server port (for udpdownload / udpupload probes)
+    /// UDP bulk throughput server port (for udpdownload / udpupload probes;
+    /// 0 = disable the service)
     #[arg(long)]
     udp_throughput_port: Option<u16>,
 
-    /// STAMP Session-Reflector port (RFC 8762, for the stamp probe mode)
+    /// STAMP Session-Reflector port (RFC 8762, for the stamp probe mode;
+    /// 0 = disable the service)
     #[arg(long)]
     stamp_port: Option<u16>,
 

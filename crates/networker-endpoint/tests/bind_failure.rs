@@ -82,7 +82,7 @@ async fn startup_succeeds_when_the_ports_are_free() {
     let cfg = networker_endpoint::ServerConfig {
         http_port: free_tcp_port(),
         https_port: free_tcp_port(),
-        udp_port: 0, // 0 = let the OS pick, so no collision is possible
+        udp_port: 0, // 0 = service disabled, so no collision is possible
         udp_throughput_port: 0,
         stamp_port: 0,
     };
@@ -96,4 +96,51 @@ async fn startup_succeeds_when_the_ports_are_free() {
 
     let _ = tx.send(());
     let _ = tokio::time::timeout(std::time::Duration::from_secs(10), server).await;
+}
+
+/// The app-mode / network-mode coexistence contract behind the 2026-08-07
+/// canary catch: a SECOND endpoint instance on the same host must be able to
+/// start with every UDP service disabled (port 0), even while the first
+/// instance holds real UDP ports. Before the fix, app mode had no way to turn
+/// the STAMP reflector off — the second instance contended for the shared
+/// default and, under v0.28.167's fail-fast, refused to start.
+#[tokio::test]
+async fn a_second_instance_with_udp_disabled_coexists_with_a_full_instance() {
+    // Instance A: network mode — real (free) ports for all three UDP services.
+    let cfg_a = networker_endpoint::ServerConfig {
+        http_port: free_tcp_port(),
+        https_port: free_tcp_port(),
+        udp_port: occupy_udp().await.1,
+        udp_throughput_port: occupy_udp().await.1,
+        stamp_port: occupy_udp().await.1,
+    };
+    let (tx_a, rx_a) = oneshot::channel::<()>();
+    let server_a = tokio::spawn(networker_endpoint::run_with_shutdown(cfg_a, rx_a));
+
+    // Instance B: app mode — UDP fully disabled, own TCP ports.
+    let cfg_b = networker_endpoint::ServerConfig {
+        http_port: free_tcp_port(),
+        https_port: free_tcp_port(),
+        udp_port: 0,
+        udp_throughput_port: 0,
+        stamp_port: 0,
+    };
+    let (tx_b, rx_b) = oneshot::channel::<()>();
+    let server_b = tokio::spawn(networker_endpoint::run_with_shutdown(cfg_b, rx_b));
+
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert!(
+        !server_a.is_finished(),
+        "network-mode instance exited early on free ports"
+    );
+    assert!(
+        !server_b.is_finished(),
+        "app-mode instance (UDP disabled) failed to coexist with the \
+         network-mode instance — the rust@proxy language install breaks"
+    );
+
+    let _ = tx_a.send(());
+    let _ = tx_b.send(());
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(10), server_a).await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(10), server_b).await;
 }
