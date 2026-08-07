@@ -1148,6 +1148,20 @@ JSON
     [ "$BENCHMARK_PORT_OVERRIDE" = "8085" ]
 }
 
+@test "app-mode rust launch disables ALL THREE UDP services (stamp included)" {
+    # The app-mode rust reference server shares a VM with the network-mode
+    # endpoint, which owns the UDP defaults. Since v0.28.167 a UDP bind
+    # conflict REFUSES startup, so the launch line must pass port 0 for every
+    # UDP service. Omitting --stamp-port left 9997 contended and broke every
+    # rust@proxy language install (nightly canary catch, 2026-08-07).
+    local launch
+    launch=$(grep -E 'rust-server.*--http-port "\$BENCH_PORT"' "$SCRIPT")
+    [ -n "$launch" ] || { echo 'app-mode rust-server launch line not found in install.sh' >&2; exit 1; }
+    grep -q -- '--udp-port 0' <<<"$launch" || { echo "launch line lost --udp-port 0: $launch" >&2; exit 1; }
+    grep -q -- '--udp-throughput-port 0' <<<"$launch" || { echo "launch line lost --udp-throughput-port 0: $launch" >&2; exit 1; }
+    grep -q -- '--stamp-port 0' <<<"$launch" || { echo "launch line lost --stamp-port 0 (the 2026-08-07 canary regression): $launch" >&2; exit 1; }
+}
+
 @test "_deploy_parse_config: parses tests.http_stacks" {
     local cfg="$TEST_TMPDIR/parse-test-stacks.json"
     cat > "$cfg" <<'JSON'

@@ -16,6 +16,9 @@ use tracing::info;
 // Public configuration
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Port 0 on any of the three UDP services DISABLES that service (no socket
+/// is bound). App-mode instances sharing a VM with a network-mode instance
+/// rely on this to stay off the primary's UDP ports.
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub http_port: u16,
@@ -59,6 +62,14 @@ async fn bind_udp(what: &str, port: u16) -> anyhow::Result<tokio::net::UdpSocket
         .with_context(|| format!("{what}: failed to bind {addr}"))
 }
 
+fn udp_service_label(port: u16) -> String {
+    if port == 0 {
+        "disabled (port 0)".to_string()
+    } else {
+        format!("0.0.0.0:{port}")
+    }
+}
+
 pub async fn run_with_shutdown(
     cfg: ServerConfig,
     shutdown_rx: oneshot::Receiver<()>,
@@ -81,9 +92,12 @@ pub async fn run_with_shutdown(
         "HTTPS → https://0.0.0.0:{}  (self-signed, use --insecure)",
         cfg.https_port
     );
-    info!("UDP echo       → 0.0.0.0:{}", cfg.udp_port);
-    info!("UDP throughput → 0.0.0.0:{}", cfg.udp_throughput_port);
-    info!("STAMP reflector→ 0.0.0.0:{}", cfg.stamp_port);
+    info!("UDP echo       → {}", udp_service_label(cfg.udp_port));
+    info!(
+        "UDP throughput → {}",
+        udp_service_label(cfg.udp_throughput_port)
+    );
+    info!("STAMP reflector→ {}", udp_service_label(cfg.stamp_port));
 
     // Pass the QUIC port so the router can advertise H3 via Alt-Svc headers.
     // Chrome only acts on Alt-Svc from HTTPS origins, so HTTP clients ignore it.
@@ -115,7 +129,6 @@ pub async fn run_with_shutdown(
 
     let router = build_router(state);
 
-    // Spawn UDP echo
     // Bind the UDP sockets HERE, before spawning, so a failure is returned to
     // the caller instead of vanishing into a spawned task.
     //
@@ -124,15 +137,32 @@ pub async fn run_with_shutdown(
     // while silently missing a service — and in the test harness a port
     // collision surfaced only as "UDP echo server did not start within 40s",
     // blaming slowness for what was an instant, diagnosable error (2026-08-06).
-    let udp_sock = bind_udp("UDP echo", cfg.udp_port).await?;
-    let udp_tp_sock = bind_udp("UDP throughput", cfg.udp_throughput_port).await?;
-    let stamp_sock = bind_udp("STAMP reflector", cfg.stamp_port).await?;
-
-    let udp_handle = tokio::spawn(udp_echo::run_udp_echo(udp_sock));
-    // Spawn UDP throughput server
-    let udp_tp_handle = tokio::spawn(udp_throughput::run_udp_throughput(udp_tp_sock));
-    // Spawn STAMP Session-Reflector (RFC 8762)
-    let stamp_handle = tokio::spawn(stamp::run_stamp_reflector(stamp_sock));
+    //
+    // Port 0 DISABLES a service rather than binding an ephemeral port: the
+    // installer runs a second endpoint instance in app mode on proxy VMs, and
+    // that instance must not contend for the network-mode instance's UDP ports.
+    // (2026-08-07: app mode passed 0 for echo/throughput but nothing for STAMP,
+    // so both instances raced for 9997 — under the fail-fast above the second
+    // instance refused to start and every rust@proxy language install broke.)
+    let udp_handle = match cfg.udp_port {
+        0 => None,
+        p => Some(tokio::spawn(udp_echo::run_udp_echo(
+            bind_udp("UDP echo", p).await?,
+        ))),
+    };
+    let udp_tp_handle = match cfg.udp_throughput_port {
+        0 => None,
+        p => Some(tokio::spawn(udp_throughput::run_udp_throughput(
+            bind_udp("UDP throughput", p).await?,
+        ))),
+    };
+    // STAMP Session-Reflector (RFC 8762)
+    let stamp_handle = match cfg.stamp_port {
+        0 => None,
+        p => Some(tokio::spawn(stamp::run_stamp_reflector(
+            bind_udp("STAMP reflector", p).await?,
+        ))),
+    };
 
     // HTTP server — NoDelayAcceptor sets TCP_NODELAY on every accepted socket,
     // preventing 40 ms Nagle + delayed-ACK stalls during the HTTP/2 handshake.
@@ -179,10 +209,16 @@ pub async fn run_with_shutdown(
             tracing::error!("HTTPS server exited unexpectedly: {r:?}");
         },
     }
-    // Abort remaining tasks (some may have already exited)
-    udp_handle.abort();
-    udp_tp_handle.abort();
-    stamp_handle.abort();
+    // Abort remaining tasks (some may have already exited or never started)
+    if let Some(h) = udp_handle {
+        h.abort();
+    }
+    if let Some(h) = udp_tp_handle {
+        h.abort();
+    }
+    if let Some(h) = stamp_handle {
+        h.abort();
+    }
     #[cfg(feature = "http3")]
     h3_handle.abort();
 

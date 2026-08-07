@@ -11,6 +11,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.170] — 2026-08-07
+
+### Fixed
+- **rust@proxy language installs broke when the endpoint picked up v0.28.167**
+  (nightly canary catch, 2026-08-07, issue #677). The app-mode rust reference
+  server launched with `--udp-port 0 --udp-throughput-port 0` but no
+  `--stamp-port`, so it contended for the network-mode instance's default
+  STAMP port (9997) on the same VM. Pre-0.28.167 that degraded silently (a
+  `warn!` and a missing reflector); 0.28.167's deliberate fail-fast turned it
+  into a startup refusal — the reference API never came up, `/api` was never
+  rerouted, and apibench silently measured the built-in endpoint (the exact
+  v0.28.114 class the canary's language-authenticity assert exists to catch;
+  phases 1–2 attempts stayed green throughout). Two-part fix:
+  - `install.sh`: the app-mode launch now passes `--stamp-port 0` (pinned by a
+    bats test verified red on the regression).
+  - `networker-endpoint`: port `0` now genuinely DISABLES a UDP service
+    (echo / throughput / STAMP) instead of binding an ephemeral port — the
+    installer's documented intent. Startup logs say `disabled (port 0)`.
+    A new `bind_failure.rs` test pins two-instance coexistence.
+- **The soak check's "no Rust writers" assert checked unit names that don't
+  exist on the prod VM** (`networker-dashboard`/`networker-agent`; the real
+  units are `alethedash`/`alethedash-tester`), so it passed vacuously while
+  the retired Rust dashboard crash-looped on the VM for 22 days (406k
+  restarts, failing DB auth — zero writes, but only by luck). The check now
+  asserts both name sets. Ops action taken alongside: both retired units
+  stopped and disabled on the prod VM; laghound.com verified healthy after.
+
+---
+
 ## [0.28.169] — 2026-08-06
 
 ### Changed

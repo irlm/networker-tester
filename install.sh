@@ -331,7 +331,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.169"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.170"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -11347,8 +11347,13 @@ deploy_benchmark_server() {
             if [ "$BENCH_USE_TLS" = "1" ]; then
                 nohup "$BENCH_DIR/rust-server" --https-port "$BENCH_PORT" > "$BENCH_DIR/rust-server.log" 2>&1 &
             else
-                # App mode: HTTP only on $BENCH_PORT, disable HTTPS/UDP to avoid port conflicts with proxy
-                nohup "$BENCH_DIR/rust-server" --http-port "$BENCH_PORT" --https-port 0 --udp-port 0 --udp-throughput-port 0 > "$BENCH_DIR/rust-server.log" 2>&1 &
+                # App mode: HTTP only on $BENCH_PORT. Disable ALL THREE UDP
+                # services — the network-mode endpoint on this VM already holds
+                # them, and since v0.28.167 a UDP bind conflict refuses startup
+                # instead of degrading. Omitting --stamp-port left the default
+                # 9997 contended and killed every rust@proxy language install
+                # (canary catch 2026-08-07).
+                nohup "$BENCH_DIR/rust-server" --http-port "$BENCH_PORT" --https-port 0 --udp-port 0 --udp-throughput-port 0 --stamp-port 0 > "$BENCH_DIR/rust-server.log" 2>&1 &
             fi
             ;;
 
