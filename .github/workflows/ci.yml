@@ -49,7 +49,10 @@ jobs:
             exit 0
           fi
           git fetch origin "${{ github.base_ref }}" --quiet
-          CHANGED=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          # Version-bump-only edits to the five bump files are filtered out —
+          # otherwise the mandatory per-PR bump makes every path filter true
+          # and every PR pays for every suite (see scripts/ci/).
+          CHANGED=$(scripts/ci/effective-changed-files.sh "origin/${{ github.base_ref }}")
           echo "changed files:"; echo "$CHANGED" | sed 's/^/  /'
 
           # Rust is SKIPPED only when EVERY changed file is provably non-Rust:
@@ -411,8 +414,14 @@ jobs:
       - name: Endpoint unit tests
         run: cargo test -p networker-endpoint --lib
 
+      # Parallel since v0.28.169: every test allocates its own ports and the
+      # readiness gates wait on positive signals (v0.28.164-167), so the old
+      # serialization is obsolete. Measured locally: 45/45 in ~5s vs ~20s
+      # serialized, across repeated runs. Windows stays --test-threads=1 until
+      # the QUIC-gate fix has a longer green history — do not "tidy" that one
+      # to match without checking the flake record first.
       - name: Integration tests
-        run: cargo test --test integration -p networker-tester -- --test-threads=1
+        run: cargo test --test integration -p networker-tester
 
       - name: sccache stats
         if: always()
@@ -652,7 +661,7 @@ jobs:
       - name: Collect coverage (integration tests)
         run: |
           cargo llvm-cov --no-report -p networker-tester --all-features \
-            --test integration -- --test-threads=1
+            --test integration
 
       - name: Generate lcov report
         run: |

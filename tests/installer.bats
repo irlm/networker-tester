@@ -2094,3 +2094,61 @@ JSON
     # public share page — the exact mistake this line prevents recurring.
     ! echo "$section" | grep -q 'location /share/ {'
 }
+
+# ===========================================================================
+# scripts/ci/effective-changed-files.sh — the version-bump filter
+#
+# Every PR bumps five files by policy, which made every CI path filter true:
+# a frontend-only PR ran the full installer execution matrix because one
+# version-string line moved (PR #664, ~13 min of jobs). The filter drops a
+# bump-file from the changed list ONLY when its entire diff is the bump line.
+# ===========================================================================
+
+_ecf_repo() {  # builds a tiny repo with a base commit; leaves cwd inside it
+    local dir="$TEST_TMPDIR/ecf-repo"
+    mkdir -p "$dir" && cd "$dir" || return 1
+    git init -q -b main
+    git config user.email t@t && git config user.name t
+    printf 'INSTALLER_VERSION="v0.28.100"  # fallback\nreal_logic() { echo hi; }\n' > install.sh
+    printf 'version     = "0.28.100"\n[workspace]\n' > Cargo.toml
+    printf 'app code\n' > app.txt
+    git add -A && git commit -qm base
+}
+
+@test "effective-changes: a version-only bump is dropped" {
+    _ecf_repo
+    sed -i.bak 's/v0.28.100/v0.28.101/' install.sh && rm -f install.sh.bak
+    sed -i.bak 's/"0.28.100"/"0.28.101"/' Cargo.toml && rm -f Cargo.toml.bak
+    echo "feature" >> app.txt
+    git add -A && git commit -qm bump
+
+    run "$BATS_TEST_DIRNAME/../scripts/ci/effective-changed-files.sh" HEAD~1
+    [ "$status" -eq 0 ] || { echo "script failed: $output" >&2; exit 1; }
+    [[ "$output" == *"app.txt"* ]] || { echo 'assertion failed: app.txt missing' >&2; exit 1; }
+    [[ "$output" != *"install.sh"* ]] || { echo 'assertion failed: version-only install.sh not dropped' >&2; exit 1; }
+    [[ "$output" != *"Cargo.toml"* ]]
+}
+
+@test "effective-changes: a real change to a bump file is kept" {
+    _ecf_repo
+    sed -i.bak 's/v0.28.100/v0.28.101/' install.sh && rm -f install.sh.bak
+    printf 'new_function() { echo new; }\n' >> install.sh
+    git add -A && git commit -qm real-change
+
+    run "$BATS_TEST_DIRNAME/../scripts/ci/effective-changed-files.sh" HEAD~1
+    [ "$status" -eq 0 ] || { echo "script failed: $output" >&2; exit 1; }
+    [[ "$output" == *"install.sh"* ]] || { echo 'assertion failed: real install.sh change was DROPPED — CI would skip the installer suites on a real edit' >&2; exit 1; }
+}
+
+@test "effective-changes: a dependency bump in Cargo.lock is kept" {
+    _ecf_repo
+    printf 'version = "1.0.0"\nchecksum = "abc"\n' > Cargo.lock
+    git add -A && git commit -qm lockbase
+    printf 'version = "1.0.1"\nchecksum = "def"\n' > Cargo.lock
+    git add -A && git commit -qm depbump
+
+    run "$BATS_TEST_DIRNAME/../scripts/ci/effective-changed-files.sh" HEAD~1
+    [ "$status" -eq 0 ] || { echo "script failed: $output" >&2; exit 1; }
+    # checksum lines are outside the allowed pattern → the file must survive
+    [[ "$output" == *"Cargo.lock"* ]] || { echo 'assertion failed: dependabot-style lock change was dropped' >&2; exit 1; }
+}

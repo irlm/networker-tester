@@ -63,8 +63,10 @@ dotnet build Networker.sln -c Release
 # Unit tests (fast, no network required)
 cargo test --workspace --lib
 
-# Integration tests (spawns in-process endpoint, must serialize)
-cargo test --test integration -p networker-tester -- --test-threads=1
+# Integration tests (parallel since v0.28.169 — per-test ports + positive-signal
+# readiness gates made the old --test-threads=1 obsolete; CI keeps Windows
+# serialized until the QUIC-gate fix has a longer green history)
+cargo test --test integration -p networker-tester
 
 # SQL integration tests (requires docker-compose.db.yml running)
 NETWORKER_SQL_CONN="Server=tcp:127.0.0.1,1433;..." cargo test -p networker-tester --all-features --include-ignored -- db_mssql --test-threads=1
