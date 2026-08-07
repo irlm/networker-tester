@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.172] — 2026-08-07
+
+### Changed
+- **Windows CI integration tests run in parallel** (were `--test-threads=1`),
+  matching Linux since v0.28.169. Unpinned after 13 consecutive green
+  serialized Windows legs across 7 PRs since the QUIC readiness-gate fix
+  (v0.28.164) and the port-race/bind-failure fix (v0.28.167). The PR's own
+  Windows leg exercised parallel mode before merge.
+
+---
+
 ## [0.28.171] — 2026-08-07
 
 ### Fixed

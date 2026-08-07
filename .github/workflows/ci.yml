@@ -417,9 +417,8 @@ jobs:
       # Parallel since v0.28.169: every test allocates its own ports and the
       # readiness gates wait on positive signals (v0.28.164-167), so the old
       # serialization is obsolete. Measured locally: 45/45 in ~5s vs ~20s
-      # serialized, across repeated runs. Windows stays --test-threads=1 until
-      # the QUIC-gate fix has a longer green history — do not "tidy" that one
-      # to match without checking the flake record first.
+      # serialized, across repeated runs. Windows followed in v0.28.172 after
+      # 13 consecutive green serialized legs.
       - name: Integration tests
         run: cargo test --test integration -p networker-tester
 
@@ -479,8 +478,14 @@ jobs:
       - name: Endpoint unit tests
         run: cargo test -p networker-endpoint --lib
 
+      # Parallel since v0.28.172 (was --test-threads=1): the QUIC readiness
+      # gate waits on a Version Negotiation reply (v0.28.164) and every test
+      # allocates its own ports with bind failures surfaced + retried
+      # (v0.28.167). Unpinned after 13 consecutive green serialized Windows
+      # legs across 7 PRs (2026-08-06 → 08-07). If the flake record regresses,
+      # re-pin THIS line and note the run URL here.
       - name: Integration tests
-        run: cargo test --test integration -p networker-tester --no-default-features --features http3 -- --test-threads=1
+        run: cargo test --test integration -p networker-tester --no-default-features --features http3
 
       - name: sccache stats
         if: always()
