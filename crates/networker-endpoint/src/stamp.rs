@@ -54,8 +54,12 @@ pub fn ntp_now() -> (u32, u32) {
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO);
     let secs = (now.as_secs() + NTP_UNIX_OFFSET_SECS) as u32; // wraps in 2036, like all NTP-era code
-    let frac = ((now.subsec_nanos() as u64) << 32) / 1_000_000_000;
-    (secs, frac as u32)
+    (secs, ntp_frac(now.subsec_nanos()))
+}
+
+/// Sub-second nanoseconds → NTP 32-bit fraction (units of 2⁻³² s).
+fn ntp_frac(nanos: u32) -> u32 {
+    (((nanos as u64) << 32) / 1_000_000_000) as u32
 }
 
 /// Build the RFC 8762 §4.3 unauthenticated reflected packet.
@@ -100,6 +104,22 @@ struct Session {
     last_seen: Instant,
 }
 
+/// Drop sessions idle past [`SESSION_IDLE_EXPIRY`], at most once per expiry
+/// window. Takes `now` explicitly so the comparisons are unit-testable with
+/// backdated instants (`std::time::Instant` ignores tokio's paused clock —
+/// the same reason udp_throughput's reaper mutants survived the mutation
+/// pilot until this was extracted).
+fn sweep_idle_sessions(
+    sessions: &mut HashMap<SocketAddr, Session>,
+    last_sweep: &mut Instant,
+    now: Instant,
+) {
+    if now.duration_since(*last_sweep) > SESSION_IDLE_EXPIRY {
+        sessions.retain(|_, s| now.duration_since(s.last_seen) < SESSION_IDLE_EXPIRY);
+        *last_sweep = now;
+    }
+}
+
 /// Run the STAMP Session-Reflector until the task is aborted.
 pub async fn run_stamp_reflector(socket: tokio::net::UdpSocket) {
     debug!(
@@ -124,10 +144,7 @@ async fn run_stamp_reflector_on(socket: tokio::net::UdpSocket) {
                     continue;
                 }
                 // Periodic session sweep so the map cannot grow unbounded.
-                if last_sweep.elapsed() > SESSION_IDLE_EXPIRY {
-                    sessions.retain(|_, s| s.last_seen.elapsed() < SESSION_IDLE_EXPIRY);
-                    last_sweep = Instant::now();
-                }
+                sweep_idle_sessions(&mut sessions, &mut last_sweep, Instant::now());
                 let session = sessions.entry(addr).or_insert(Session {
                     next_seq: 0,
                     last_seen: Instant::now(),
@@ -170,6 +187,134 @@ mod tests {
         let (secs, _) = ntp_now();
         // 2020-01-01 in NTP-era seconds.
         assert!(secs > 3_786_825_600);
+    }
+
+    #[test]
+    fn ntp_frac_maps_nanoseconds_onto_the_full_binary_fraction() {
+        // 2⁻³²-second units: half a second is exactly 2³¹; the sender's RTT
+        // arithmetic consumes T3−T2, so a mis-scaled fraction corrupts every
+        // reported processing time.
+        assert_eq!(ntp_frac(0), 0);
+        assert_eq!(ntp_frac(500_000_000), 1 << 31);
+        assert_eq!(ntp_frac(250_000_000), 1 << 30);
+        // The top of the range must reach near u32::MAX — a >>32 or %1e9
+        // mutation caps it at 0 or below 1e9.
+        assert!(ntp_frac(999_999_999) > 4_290_000_000);
+    }
+
+    #[test]
+    fn sweep_drops_only_sessions_idle_past_expiry() {
+        let now = Instant::now();
+        let stale_seen = now
+            .checked_sub(SESSION_IDLE_EXPIRY + Duration::from_secs(1))
+            .expect("test clock underflow");
+        let fresh_seen = now - Duration::from_secs(1);
+
+        let stale_addr: SocketAddr = "127.0.0.1:1001".parse().unwrap();
+        let fresh_addr: SocketAddr = "127.0.0.1:1002".parse().unwrap();
+        let mut sessions = HashMap::new();
+        sessions.insert(
+            stale_addr,
+            Session {
+                next_seq: 5,
+                last_seen: stale_seen,
+            },
+        );
+        sessions.insert(
+            fresh_addr,
+            Session {
+                next_seq: 9,
+                last_seen: fresh_seen,
+            },
+        );
+
+        // Sweep due: last_sweep is older than the expiry window.
+        let mut last_sweep = stale_seen;
+        sweep_idle_sessions(&mut sessions, &mut last_sweep, now);
+
+        assert!(
+            !sessions.contains_key(&stale_addr),
+            "session idle past expiry must be dropped"
+        );
+        assert!(
+            sessions.contains_key(&fresh_addr),
+            "fresh session must survive the sweep"
+        );
+        assert_eq!(last_sweep, now, "a completed sweep resets the sweep clock");
+    }
+
+    #[test]
+    fn sweep_boundaries_are_exact() {
+        // Both comparisons are strict, and the boundary is load-bearing in
+        // opposite directions: a sweep due EXACTLY at the window must NOT run
+        // (`>` not `>=`), while a session idle EXACTLY at the expiry must be
+        // DROPPED (`<` not `<=`).
+        let now = Instant::now();
+        let exactly_window_ago = now
+            .checked_sub(SESSION_IDLE_EXPIRY)
+            .expect("test clock underflow");
+
+        let addr: SocketAddr = "127.0.0.1:1004".parse().unwrap();
+
+        // Trigger boundary: last_sweep exactly one window ago → not due yet.
+        let mut sessions = HashMap::new();
+        sessions.insert(
+            addr,
+            Session {
+                next_seq: 1,
+                last_seen: exactly_window_ago,
+            },
+        );
+        let mut last_sweep = exactly_window_ago;
+        sweep_idle_sessions(&mut sessions, &mut last_sweep, now);
+        assert!(
+            sessions.contains_key(&addr),
+            "elapsed == window must not trigger a sweep (strict >)"
+        );
+
+        // Retain boundary: sweep due, session idle exactly the expiry → dropped.
+        let mut last_sweep = now
+            .checked_sub(SESSION_IDLE_EXPIRY + Duration::from_secs(1))
+            .expect("test clock underflow");
+        sweep_idle_sessions(&mut sessions, &mut last_sweep, now);
+        assert!(
+            !sessions.contains_key(&addr),
+            "idle == expiry must be dropped (strict <)"
+        );
+    }
+
+    #[test]
+    fn sweep_is_a_noop_until_the_window_elapses() {
+        let now = Instant::now();
+        let stale_seen = now
+            .checked_sub(SESSION_IDLE_EXPIRY + Duration::from_secs(1))
+            .expect("test clock underflow");
+
+        let addr: SocketAddr = "127.0.0.1:1003".parse().unwrap();
+        let mut sessions = HashMap::new();
+        sessions.insert(
+            addr,
+            Session {
+                next_seq: 1,
+                last_seen: stale_seen,
+            },
+        );
+
+        // Sweep NOT due: last sweep was a second ago. Even a stale session
+        // stays — sweeping on every packet is the mutation this pins against
+        // (it turns the once-a-minute sweep into per-packet work).
+        let mut last_sweep = now - Duration::from_secs(1);
+        let before = last_sweep;
+        sweep_idle_sessions(&mut sessions, &mut last_sweep, now);
+
+        assert!(
+            sessions.contains_key(&addr),
+            "no session may be dropped before the sweep window elapses"
+        );
+        assert_eq!(
+            last_sweep, before,
+            "sweep clock only moves when a sweep ran"
+        );
     }
 
     #[test]
@@ -244,6 +389,74 @@ mod tests {
         let t2s = u32::from_be_bytes(reply[16..20].try_into().unwrap());
         assert!(t3s >= t2s);
 
+        task.abort();
+    }
+
+    /// The RFC 8762 length check is a MINIMUM: an oversized packet (extension
+    /// or padding beyond 44 bytes) is still a valid test packet and must be
+    /// reflected from its first 44 bytes. (Kills the runt-check `<`→`>`
+    /// inversion, which reflects runts — panicking on the short slice — and
+    /// drops valid oversized packets.)
+    #[tokio::test]
+    async fn reflector_reflects_oversized_packets_from_their_first_44_bytes() {
+        let probe = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let reflector_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = reflector_socket.local_addr().unwrap().port();
+        let task = tokio::spawn(run_stamp_reflector_on(reflector_socket));
+
+        let mut oversized = [0u8; STAMP_PACKET_LEN + 20];
+        oversized[..STAMP_PACKET_LEN].copy_from_slice(&sender_packet(42));
+
+        let mut reply = [0u8; 2048];
+        let mut attempt = 0u32;
+        let n = loop {
+            probe
+                .send_to(&oversized, ("127.0.0.1", port))
+                .await
+                .unwrap();
+            match tokio::time::timeout(Duration::from_millis(200), probe.recv(&mut reply)).await {
+                Ok(Ok(n)) => break n,
+                _ => {
+                    attempt += 1;
+                    assert!(attempt < 50, "oversized packet was never reflected");
+                }
+            }
+        };
+        assert_eq!(n, STAMP_PACKET_LEN, "reply is a standard 44-byte packet");
+        let echoed_sender_seq = u32::from_be_bytes(reply[24..28].try_into().unwrap());
+        assert_eq!(
+            echoed_sender_seq, 42,
+            "sender fields come from the first 44 bytes"
+        );
+        task.abort();
+    }
+
+    /// Round-trip through the PUBLIC entry point (`run_stamp_reflector`), not
+    /// the internal loop — lib.rs spawns the public fn, and a stubbed-out
+    /// wrapper would ship a reflector that never runs.
+    #[tokio::test]
+    async fn public_entry_point_runs_the_reflector() {
+        let probe = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let reflector_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = reflector_socket.local_addr().unwrap().port();
+        let task = tokio::spawn(run_stamp_reflector(reflector_socket));
+
+        let mut reply = [0u8; 2048];
+        let mut attempt = 0u32;
+        let n = loop {
+            probe
+                .send_to(&sender_packet(1), ("127.0.0.1", port))
+                .await
+                .unwrap();
+            match tokio::time::timeout(Duration::from_millis(200), probe.recv(&mut reply)).await {
+                Ok(Ok(n)) => break n,
+                _ => {
+                    attempt += 1;
+                    assert!(attempt < 50, "public entry point never reflected a packet");
+                }
+            }
+        };
+        assert_eq!(n, STAMP_PACKET_LEN);
         task.abort();
     }
 
