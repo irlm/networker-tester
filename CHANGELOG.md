@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.175] — 2026-08-07
+
+### Added
+- **STAMP reflector mutation survivors killed** (the largest remaining block
+  after v0.28.174): the NTP fraction arithmetic is extracted into `ntp_frac`
+  and pinned to exact values (half a second = 2³¹ in 2⁻³²-second units — a
+  mis-scaled fraction corrupts every reported processing time); the session
+  sweep is extracted into `sweep_idle_sessions(now)` and tested with
+  backdated instants (drop-idle vs keep-fresh vs not-yet-due); oversized
+  (>44-byte) STAMP packets are pinned as VALID and reflected from their
+  first 44 bytes; and the public `run_stamp_reflector` entry point gets a
+  round-trip test (a stubbed wrapper would ship a reflector that never runs).
+- The same clock-parameterized idiom applied to udp_throughput's reaper
+  (`reap_stale_uploads(now)`) kills 4 of its 5 documented TTL survivors.
+- **udp_echo's only test was vacuous** — it spawned a hand-rolled echo loop
+  instead of calling `run_udp_echo`, so the production function could be
+  stubbed out and the test still passed (the mutation pilot flagged exactly
+  that). It now exercises the real function.
+
+---
+
 ## [0.28.174] — 2026-08-07
 
 ### Added

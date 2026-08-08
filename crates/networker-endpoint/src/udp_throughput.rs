@@ -53,8 +53,6 @@ pub async fn run_udp_throughput(socket: UdpSocket) {
     // Per-client upload state: tracks seq_nums and byte counts until CMD_DONE.
     let mut upload_states: HashMap<SocketAddr, UploadState> = HashMap::new();
     let mut pkt_counter: u64 = 0;
-    /// TTL for upload states — reap entries older than this to prevent leaks.
-    const UPLOAD_STATE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
 
     loop {
         let (n, src) = match sock.recv_from(&mut buf).await {
@@ -132,15 +130,30 @@ pub async fn run_udp_throughput(socket: UdpSocket) {
         // from clients that disconnect without sending CMD_DONE.
         pkt_counter += 1;
         if pkt_counter.is_multiple_of(100) {
-            upload_states.retain(|addr, state| {
-                let alive = state.created_at.elapsed() < UPLOAD_STATE_TTL;
-                if !alive {
-                    debug!("Reaping stale upload state for {addr}");
-                }
-                alive
-            });
+            reap_stale_uploads(&mut upload_states, std::time::Instant::now());
         }
     }
+}
+
+/// TTL for upload states — reap entries older than this to prevent leaks.
+const UPLOAD_STATE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Drop upload states older than [`UPLOAD_STATE_TTL`]. Takes `now` explicitly
+/// so the TTL comparison is unit-testable with backdated instants — these
+/// were the file's 4 remaining documented mutation survivors (the 5th, the
+/// once-per-100-packets cadence, stays: reaping fresh state is a no-op, so
+/// cadence changes are unobservable without a leak-sized test).
+fn reap_stale_uploads(
+    upload_states: &mut HashMap<SocketAddr, UploadState>,
+    now: std::time::Instant,
+) {
+    upload_states.retain(|addr, state| {
+        let alive = now.duration_since(state.created_at) < UPLOAD_STATE_TTL;
+        if !alive {
+            debug!("Reaping stale upload state for {addr}");
+        }
+        alive
+    });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -209,10 +222,12 @@ struct UploadState {
 // test that hangs on regression is barely better than one that passes on it
 // (bind_failure.rs lesson).
 //
-// Deliberate survivors: the stale-state reaper (pkt_counter cadence + the
-// 60s TTL retain, lines ~133-141) uses std::time::Instant, which tokio's
-// paused clock does not advance — killing those mutants needs a clock
-// injection refactor, not a 60-second test.
+// The stale-state reaper's TTL comparison is extracted into
+// reap_stale_uploads(now) precisely so it is testable with backdated instants
+// (std::time::Instant ignores tokio's paused clock). Two deliberate survivors
+// remain: the once-per-100-packets cadence (reaping fresh state is a no-op,
+// so cadence changes are unobservable without a leak-sized test) and the
+// reaper's debug! guard (log-only — no behavioral surface to assert).
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -255,6 +270,71 @@ mod tests {
         pkt[..4].copy_from_slice(&seq.to_le_bytes());
         pkt[4..8].copy_from_slice(&total.to_le_bytes());
         pkt
+    }
+
+    // ── reap_stale_uploads ───────────────────────────────────────────────────
+
+    #[test]
+    fn reap_drops_only_states_older_than_the_ttl() {
+        let now = std::time::Instant::now();
+        let stale_created = now
+            .checked_sub(UPLOAD_STATE_TTL + Duration::from_secs(1))
+            .expect("test clock underflow");
+        let fresh_created = now - Duration::from_secs(1);
+
+        let stale_addr: SocketAddr = "127.0.0.1:2001".parse().unwrap();
+        let fresh_addr: SocketAddr = "127.0.0.1:2002".parse().unwrap();
+        let mut states = HashMap::new();
+        for (addr, created_at) in [(stale_addr, stale_created), (fresh_addr, fresh_created)] {
+            states.insert(
+                addr,
+                UploadState {
+                    expected_bytes: 1,
+                    received_seqs: HashSet::new(),
+                    received_bytes: 0,
+                    created_at,
+                },
+            );
+        }
+
+        reap_stale_uploads(&mut states, now);
+
+        assert!(
+            !states.contains_key(&stale_addr),
+            "state older than the TTL must be reaped"
+        );
+        assert!(
+            states.contains_key(&fresh_addr),
+            "fresh state must survive — reaping it would zero an in-flight upload's count"
+        );
+    }
+
+    #[test]
+    fn reap_boundary_is_exact() {
+        // The liveness comparison is strict: a state aged EXACTLY the TTL is
+        // dead (`<` not `<=`).
+        let now = std::time::Instant::now();
+        let exactly_ttl_old = now
+            .checked_sub(UPLOAD_STATE_TTL)
+            .expect("test clock underflow");
+
+        let addr: SocketAddr = "127.0.0.1:2003".parse().unwrap();
+        let mut states = HashMap::new();
+        states.insert(
+            addr,
+            UploadState {
+                expected_bytes: 1,
+                received_seqs: HashSet::new(),
+                received_bytes: 0,
+                created_at: exactly_ttl_old,
+            },
+        );
+
+        reap_stale_uploads(&mut states, now);
+        assert!(
+            !states.contains_key(&addr),
+            "age == TTL must be reaped (strict <)"
+        );
     }
 
     // ── make_ctrl ────────────────────────────────────────────────────────────
