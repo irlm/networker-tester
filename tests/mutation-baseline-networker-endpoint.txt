@@ -3,12 +3,14 @@
 # you kill survivors. Scope/exclusions: .cargo/mutants.toml.
 #
 # The number is CI-MEASURED (ubuntu runner) — the enforcing environment is
-# the measuring environment. A macOS-measured 43 lost to CI's 44 on the very
-# first run: udp_throughput.rs:126 `+=`→`*=` is borderline (a zeroed counter
-# mutation can spin a spawned loop; whether a test times out on it is
-# environment-dependent). Lives under tests/, NOT crates/, so ratchet
-# adjustments don't trigger the shipping version-bump rule.
-# Top open gap behind the number: udp_throughput.rs has no in-package test
-# module (26 survivors incl. the borderline one).
-# CI baseline run: actions/runs/31205741102 (2026-08-07).
-44
+# the measuring environment (#684 lesson: a macOS-measured 43 lost to CI's
+# 44 on the first run; borderline mutants are timing-dependent).
+#
+# History:
+#   44 — first CI measurement (run 31205741102, 2026-08-07)
+#   23 — udp_throughput.rs wire-protocol tests killed 21 (#685; CI run
+#        31217844497). Remaining bulk: stamp.rs run-loop comparisons (10),
+#        udp_throughput's 5 documented TTL-reaper survivors (clock-injection
+#        refactor needed), lib.rs network-introspection helpers, main.rs
+#        entry points.
+23
