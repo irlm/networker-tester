@@ -2,22 +2,51 @@
 #
 # Scope: the pilot mutates only code whose tests live IN this package —
 # mutation testing evaluates a test suite against the code it claims to
-# cover, and two files' guards live elsewhere (baseline runs, 2026-08-07):
+# cover. http3_server.rs (60 survivors at baseline) is exercised by
+# crates/networker-tester's integration suite (http3_probe_*, pageload_h3_*),
+# which `cargo test -p networker-endpoint` never runs; counting it would make
+# the ratchet measure the wrong suite. EXPANSION PATH:
+# `--test-package networker-tester`, if ever affordable (integration suite
+# per mutant is minutes × hundreds).
 #
-# - http3_server.rs (60 survivors): exercised by crates/networker-tester's
-#   integration suite (http3_probe_*, pageload_h3_*), which
-#   `cargo test -p networker-endpoint` never runs.
-# - routes.rs (187 survivors): exercised by the JSON-API-validation +
-#   canonical-baseline conformance jobs, the bats endpoint suite, and the
-#   tester's integration tests — all outside this package.
-#
-# Counting those survivors would make the ratchet measure the wrong suite.
-# EXPANSION PATH, in order of value: (1) in-package route tests via
-# tower::ServiceExt::oneshot against build_router() — routes.rs is unit-
-# testable, its tests just don't exist yet; then delete its exclusion.
-# (2) `--test-package networker-tester` for http3_server.rs, if ever
-# affordable (integration suite per mutant is minutes × hundreds).
+# routes.rs was UNEXCLUDED 2026-08-10: its 188-survivor map was killed down
+# via extract-pure-logic (parse_meminfo_mb, fallback_users,
+# fallback_validate_checksums), the bench-token-to-AppState refactor, and
+# assertion-deepening on the handlers. main.rs is process entry / CLI wiring.
 exclude_globs = [
     "crates/networker-endpoint/src/http3_server.rs",
-    "crates/networker-endpoint/src/routes.rs",
+    "crates/networker-endpoint/src/main.rs",
+]
+
+# Live environment probes: these functions read IMDS (169.254.169.254),
+# /proc, sysctl, env vars, or the process's own rusage — their outputs vary
+# by host, so mutants in them are undecidable for a hermetic suite. Their
+# PARSING logic is extracted into pure functions (parse_meminfo_mb,
+# parse_load_avg_1m) which stay in scope and are tested; only the thin
+# read-the-world shells are excluded.
+exclude_re = [
+    "routes.rs.*detect_public_dns",
+    "routes.rs.*detect_public_ip",
+    "routes.rs.*detect_cloud_region",
+    "routes.rs.*cloud_metadata_get_raw",
+    "routes.rs.*detect_total_memory_mb",
+    "routes.rs.*detect_mem_available_mb",
+    "routes.rs.*detect_load_avg_1m",
+    "routes.rs.*detect_os_version",
+    "routes.rs.*get_hostname",
+    "routes.rs.*csw_snapshot",
+    "routes.rs.*cpu_ms_snapshot",
+    "routes.rs.*SystemMeta::collect",
+    "lib.rs.*get_primary_local_ip",
+    # run() only wraps run_with_shutdown (tested) with ctrl-c handling.
+    "lib.rs.*replace run ",
+    # generate_self_signed_cert: output validity is proven by every TLS test
+    # that handshakes against it; its internal ! toggle isn't observable
+    # beyond that.
+    "lib.rs.*generate_self_signed_cert",
+    # WebSocket echo needs a real upgrade handshake (socket, not oneshot);
+    # the tester's websocket probe mode owns that path end-to-end. The
+    # non-upgrade rejection stays covered in-package.
+    "routes.rs.*ws_echo",
+    "routes.rs.*handle_ws_echo",
 ]

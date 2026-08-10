@@ -35,6 +35,7 @@ fn app() -> axum::Router {
         stamp_port: 9997,
         started_at: std::time::Instant::now(),
         system_meta: SystemMeta::collect(),
+        bench_token: None,
     })
 }
 
@@ -115,4 +116,45 @@ async fn download_path_form_meets_orchestrator_contract() {
         assert_eq!(body.len(), size);
         assert!(body.iter().all(|&b| b == 0x42));
     }
+}
+
+/// Dataset-branch pagination boundary: with the shared dataset present (100
+/// users), a page past the data returns `[]` — not fallback-generated users
+/// and not an error. The lib tests can't reach this branch (they run without
+/// the dataset); this file pins BENCH_DATA_PATH before building the router.
+#[tokio::test]
+async fn api_users_page_beyond_dataset_is_empty() {
+    let resp = app()
+        .oneshot(
+            Request::builder()
+                .uri("/api/users?page=999")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let users: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert!(users.is_empty(), "page past the dataset is [] by contract");
+}
+
+/// Dataset-branch page 1 serves the dataset's own users (ids 1..=100 → first
+/// 20 after id-sort), pinning the start/end slice arithmetic.
+#[tokio::test]
+async fn api_users_page_one_serves_the_dataset_slice() {
+    let resp = app()
+        .oneshot(
+            Request::builder()
+                .uri("/api/users?page=1&sort=id&order=asc")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let users: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(users.len(), 20);
+    assert_eq!(users[0]["id"], 1, "dataset page 1 starts at user id 1");
 }
