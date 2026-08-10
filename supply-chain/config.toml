@@ -126,7 +126,7 @@ version = "0.21.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.base64]]
-version = "0.23.0"
+version = "0.23.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.base64ct]]
