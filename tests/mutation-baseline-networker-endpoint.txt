@@ -3,16 +3,22 @@
 # you kill survivors. Scope/exclusions: .cargo/mutants.toml.
 #
 # The number is CI-MEASURED (ubuntu runner) — the enforcing environment is
-# the measuring environment (#684 lesson: a macOS-measured 43 lost to CI's
-# 44 on the first run; borderline mutants are timing-dependent).
+# the measuring environment (#684 lesson: borderline mutants are
+# timing-dependent; golden inputs must make every term matter, #699 lesson).
 #
 # History:
 #   44 — first CI measurement (run 31205741102, 2026-08-07)
 #   23 — udp_throughput.rs wire-protocol tests killed 21 (#685)
-#    9 — stamp.rs round (#687): ntp_frac pinned, session sweep + upload reaper
-#        clock-parameterized with exact-boundary tests, oversized-STAMP-packet
-#        contract, public entry-point round-trip, udp_echo's vacuous test made
-#        real (CI run 31387162302). Remaining 9, all documented: lib.rs
-#        network-introspection helpers + run() wrapper (5), main.rs entry
-#        points (2), udp_throughput's reap cadence + log-only debug! (2).
-9
+#    9 — stamp.rs round: sweep/reaper clock-parameterized, ntp_frac pinned,
+#        udp_echo's vacuous test made real (#687)
+#    8 — SCOPE CHANGE + kills (#699, v0.28.178; CI run 31409937985):
+#        routes.rs UNEXCLUDED, adding ~180 in-scope mutants of which 203/216
+#        total were caught (elapsed_ms extraction, bench-token AppState
+#        refactor, PRNG-fallback extraction + goldens, sort-arm/order pins,
+#        first page/asset/browser-page tests). Every survivor is named:
+#        1 ~1GiB DefaultBodyLimit variant (impractical to exercise),
+#        2 chunk/cap const variants (payload-equivalent or impractical),
+#        2 `remainder > 0` → `>=` (equivalent: appends an empty chunk),
+#        1 `start < len` → `<=` at start==len (equivalent: both slice empty),
+#        2 udp_throughput reap cadence + log-only debug! (documented).
+8
