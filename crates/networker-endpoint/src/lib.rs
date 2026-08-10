@@ -125,6 +125,7 @@ pub async fn run_with_shutdown(
         stamp_port: cfg.stamp_port,
         started_at: std::time::Instant::now(),
         system_meta,
+        bench_token: std::env::var("BENCH_API_TOKEN").ok(),
     };
 
     let router = build_router(state);

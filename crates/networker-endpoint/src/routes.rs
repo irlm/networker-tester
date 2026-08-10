@@ -40,6 +40,12 @@ pub struct AppState {
     pub stamp_port: u16,
     pub started_at: Instant,
     pub system_meta: SystemMeta,
+    /// Bearer token enforced by the auth middleware when set. Carried in
+    /// state (production fills it from `BENCH_API_TOKEN`) instead of a
+    /// process-global OnceLock so the with-token middleware branches are
+    /// testable — the env-global version left all 7 of its mutants alive
+    /// (tests can't safely vary a cached env read under a parallel runner).
+    pub bench_token: Option<String>,
 }
 
 /// Non-sensitive system metadata exposed via GET /info.
@@ -267,17 +273,25 @@ fn cloud_metadata_get_raw(
     }
 }
 
+/// Parse a `/proc/meminfo`-style buffer for `key` ("MemTotal:" /
+/// "MemAvailable:") and convert its kB value to MiB. Extracted from the
+/// per-OS detect shells so the parsing arithmetic is unit-testable (the
+/// shells themselves read live system state and are excluded from mutation).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))] // linux shells are the non-test callers
+fn parse_meminfo_mb(meminfo: &str, key: &str) -> Option<u64> {
+    for line in meminfo.lines() {
+        if let Some(rest) = line.strip_prefix(key) {
+            let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
+            return Some(kb / 1024);
+        }
+    }
+    None
+}
+
 fn detect_total_memory_mb() -> Option<u64> {
     #[cfg(target_os = "linux")]
     {
-        let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
-        for line in meminfo.lines() {
-            if let Some(rest) = line.strip_prefix("MemTotal:") {
-                let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
-                return Some(kb / 1024);
-            }
-        }
-        None
+        parse_meminfo_mb(&std::fs::read_to_string("/proc/meminfo").ok()?, "MemTotal:")
     }
     #[cfg(target_os = "macos")]
     {
@@ -347,14 +361,10 @@ fn detect_load_avg_1m() -> Option<f64> {
 fn detect_mem_available_mb() -> Option<u64> {
     #[cfg(target_os = "linux")]
     {
-        let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
-        for line in meminfo.lines() {
-            if let Some(rest) = line.strip_prefix("MemAvailable:") {
-                let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
-                return Some(kb / 1024);
-            }
-        }
-        None
+        parse_meminfo_mb(
+            &std::fs::read_to_string("/proc/meminfo").ok()?,
+            "MemAvailable:",
+        )
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -409,6 +419,14 @@ fn detect_os_version() -> Option<String> {
 // Router
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Elapsed wall time in milliseconds — the unit every `Server-Timing`
+/// `dur=` value is specified in. Extracted from 12 inline copies so the
+/// seconds→ms conversion is pinned ONCE (each copy carried two live
+/// mutants that would silently report durations 1000× off).
+fn elapsed_ms(t0: Instant) -> f64 {
+    t0.elapsed().as_secs_f64() * 1000.0
+}
+
 /// Build the router.
 ///
 /// `state.h3_port` — when `Some(port)`, every response includes
@@ -451,8 +469,11 @@ pub fn build_router(state: AppState) -> Router {
         // Allow upload probes up to 2 GiB (matching the download cap) while
         // preventing unbounded memory consumption from malicious payloads.
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024 * 1024))
-        // Bearer token auth (BENCH_API_TOKEN env var; /health exempt).
-        .layer(middleware::from_fn(bench_auth_middleware))
+        // Bearer token auth (state.bench_token; /health exempt).
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            bench_auth_middleware,
+        ))
         // Add X-Networker-Server-Timestamp (and optionally Alt-Svc) to every response.
         .layer(middleware::from_fn_with_state(state, add_server_timestamp))
         // Log every request (method + URI) and response (status + latency).
@@ -496,21 +517,15 @@ async fn add_server_timestamp(State(state): State<AppState>, req: Request, next:
 // Bearer token auth middleware (BENCH_API_TOKEN)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Cached value of the `BENCH_API_TOKEN` environment variable read once at
-/// first use. When `Some`, every request (except `/health`) must carry a
-/// matching `Authorization: Bearer <token>` header.
-static BENCH_API_TOKEN: OnceLock<Option<String>> = OnceLock::new();
-
-fn get_bench_token() -> Option<&'static str> {
-    BENCH_API_TOKEN
-        .get_or_init(|| std::env::var("BENCH_API_TOKEN").ok())
-        .as_deref()
-}
-
-/// Middleware that enforces bearer-token authentication when `BENCH_API_TOKEN`
-/// is set. `/health` is always exempt so load-balancer probes keep working.
+/// Middleware that enforces bearer-token authentication when
+/// `state.bench_token` is set (production fills it from `BENCH_API_TOKEN`).
+/// `/health` is always exempt so load-balancer probes keep working.
 /// A `Server-Timing: auth;dur=X.X` metric is appended to every response.
-async fn bench_auth_middleware(req: Request, next: Next) -> Response {
+async fn bench_auth_middleware(
+    State(state): State<AppState>,
+    req: Request,
+    next: Next,
+) -> Response {
     let t0 = Instant::now();
 
     // /health is exempt — health checks must work without credentials.
@@ -518,7 +533,7 @@ async fn bench_auth_middleware(req: Request, next: Next) -> Response {
         return next.run(req).await;
     }
 
-    if let Some(expected) = get_bench_token() {
+    if let Some(expected) = state.bench_token.as_deref() {
         let auth = req
             .headers()
             .get("authorization")
@@ -528,7 +543,7 @@ async fn bench_auth_middleware(req: Request, next: Next) -> Response {
         match auth {
             Some(token) if token == expected => { /* valid */ }
             _ => {
-                let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                let dur_ms = elapsed_ms(t0);
                 let mut resp = (
                     StatusCode::UNAUTHORIZED,
                     Json(serde_json::json!({"error": "unauthorized"})),
@@ -542,7 +557,7 @@ async fn bench_auth_middleware(req: Request, next: Next) -> Response {
         }
     }
 
-    let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let dur_ms = elapsed_ms(t0);
     let mut resp = next.run(req).await;
 
     // Append auth timing to existing Server-Timing or create a new one.
@@ -945,7 +960,7 @@ fn download_response(requested: usize) -> Response {
             }),
     ));
 
-    let proc_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let proc_ms = elapsed_ms(t0);
     #[cfg(unix)]
     let csw_part = {
         let (csw_v1, csw_i1) = csw_snapshot();
@@ -1002,7 +1017,7 @@ async fn upload(req: Request) -> impl IntoResponse {
             received_bytes += data.len();
         }
     }
-    let recv_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let recv_ms = elapsed_ms(t0);
     #[cfg(unix)]
     let csw_part = {
         let (csw_v1, csw_i1) = csw_snapshot();
@@ -1381,6 +1396,17 @@ struct UsersParams {
 
 /// GET /api/users?page=N&sort=field&order=asc
 /// Return users from shared bench-data.json, falling back to deterministic PRNG.
+/// PRNG-fallback user page for dataset-less installs (plain network-mode
+/// endpoints without bench-data.json). Pure given the page number — extracted
+/// from the handler so its arithmetic is unit-testable regardless of whether
+/// the test environment finds the shared dataset.
+fn fallback_users(page: u64) -> Vec<serde_json::Value> {
+    let mut rng = StdRng::seed_from_u64(page);
+    (0..100)
+        .map(|i| gen_user(&mut rng, (page - 1) * 100 + i + 1))
+        .collect()
+}
+
 async fn api_users(Query(p): Query<UsersParams>) -> impl IntoResponse {
     let t0 = Instant::now();
     let page = p.page.unwrap_or(1).max(1);
@@ -1398,26 +1424,18 @@ async fn api_users(Query(p): Query<UsersParams>) -> impl IntoResponse {
             Vec::new()
         }
     } else {
-        // Fallback: PRNG-generated users
-        let mut rng = StdRng::seed_from_u64(page);
-        (0..100)
-            .map(|i| gen_user(&mut rng, (page - 1) * 100 + i + 1))
-            .collect()
+        fallback_users(page)
     };
 
     // Sort by requested field
     users.sort_by(|a, b| {
         let cmp = match sort_field {
+            // (Previously compared a["name"] to ITSELF first — always Equal,
+            // dead code found by the mutation map — before the real a-vs-b.)
             "name" => a["name"]
                 .as_str()
                 .unwrap_or("")
-                .cmp(a["name"].as_str().unwrap_or(""))
-                .then(
-                    a["name"]
-                        .as_str()
-                        .unwrap_or("")
-                        .cmp(b["name"].as_str().unwrap_or("")),
-                ),
+                .cmp(b["name"].as_str().unwrap_or("")),
             "email" => a["email"]
                 .as_str()
                 .unwrap_or("")
@@ -1444,7 +1462,7 @@ async fn api_users(Query(p): Query<UsersParams>) -> impl IntoResponse {
     });
 
     let paginated: Vec<_> = users.into_iter().take(20).collect();
-    let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let dur_ms = elapsed_ms(t0);
     (bench_headers(dur_ms), Json(paginated))
 }
 
@@ -1480,7 +1498,7 @@ async fn api_transform(Json(body): Json<TransformBody>) -> impl IntoResponse {
         "reversed_values": reversed_values,
     });
 
-    let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let dur_ms = elapsed_ms(t0);
     (bench_headers(dur_ms), Json(result))
 }
 
@@ -1548,7 +1566,7 @@ async fn api_aggregate(Query(p): Query<AggregateParams>) -> impl IntoResponse {
         "categories": categories,
     });
 
-    let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let dur_ms = elapsed_ms(t0);
     (bench_headers(dur_ms), Json(result))
 }
 
@@ -1642,7 +1660,7 @@ async fn api_search(Query(p): Query<SearchParams>) -> impl IntoResponse {
         "results": results,
     });
 
-    let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let dur_ms = elapsed_ms(t0);
     (bench_headers(dur_ms), Json(result))
 }
 
@@ -1684,7 +1702,7 @@ async fn api_upload_process(req: Request) -> impl IntoResponse {
         "sha256": sha,
     });
 
-    let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let dur_ms = elapsed_ms(t0);
     (bench_headers(dur_ms), Json(result))
 }
 
@@ -1701,14 +1719,14 @@ async fn api_delayed(Query(p): Query<DelayedParams>) -> impl IntoResponse {
     let t0 = Instant::now();
     let ms = p.ms.unwrap_or(10).clamp(1, 100);
     sleep(Duration::from_millis(ms)).await;
-    let actual_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let actual_ms = elapsed_ms(t0);
 
     let result = serde_json::json!({
         "requested_ms": ms,
         "actual_ms": (actual_ms * 100.0).round() / 100.0,
     });
 
-    let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let dur_ms = elapsed_ms(t0);
     (bench_headers(dur_ms), Json(result))
 }
 
@@ -1730,7 +1748,20 @@ async fn api_validate(Query(p): Query<ValidateParams>) -> impl IntoResponse {
             "checksums": data.expected_checksums,
         })
     } else {
-        // Fallback: compute from PRNG
+        fallback_validate_checksums(seed)
+    };
+
+    let dur_ms = elapsed_ms(t0);
+    (bench_headers(dur_ms), Json(result))
+}
+
+/// PRNG-fallback checksum computation for dataset-less installs. Pure given
+/// the seed — extracted from the handler so the hashing arithmetic is
+/// unit-testable regardless of whether the test environment finds the shared
+/// dataset (in-repo runs always do, which left this branch's 14 mutants
+/// alive).
+fn fallback_validate_checksums(seed: u64) -> serde_json::Value {
+    {
         // Users: generate page=seed, hash the JSON
         let mut rng = StdRng::seed_from_u64(seed);
         let users: Vec<serde_json::Value> = (0..100)
@@ -1801,10 +1832,7 @@ async fn api_validate(Query(p): Query<ValidateParams>) -> impl IntoResponse {
                 "search": search_hash,
             },
         })
-    };
-
-    let dur_ms = t0.elapsed().as_secs_f64() * 1000.0;
-    (bench_headers(dur_ms), Json(result))
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1818,6 +1846,10 @@ mod tests {
     use tower::ServiceExt; // for `oneshot`
 
     fn app() -> Router {
+        app_with_token(None)
+    }
+
+    fn app_with_token(bench_token: Option<&str>) -> Router {
         build_router(AppState {
             h3_port: None,
             http_port: 8080,
@@ -1827,6 +1859,7 @@ mod tests {
             stamp_port: 9997,
             started_at: std::time::Instant::now(),
             system_meta: SystemMeta::collect(),
+            bench_token: bench_token.map(str::to_owned),
         })
     }
 
@@ -2453,5 +2486,548 @@ mod tests {
                 "{uri} missing Access-Control-Allow-Origin"
             );
         }
+    }
+
+    // ── page-load routes (previously untested — mutation-pilot gap) ──────────
+
+    #[tokio::test]
+    async fn page_manifest_lists_exactly_n_assets_with_requested_bytes() {
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/page?assets=7&bytes=2048")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["asset_count"], 7);
+        assert_eq!(v["asset_bytes"], 2048);
+        let assets = v["assets"].as_array().unwrap();
+        assert_eq!(assets.len(), 7, "manifest must list exactly N assets");
+        assert_eq!(assets[0], "/asset?id=0&bytes=2048");
+        assert_eq!(assets[6], "/asset?id=6&bytes=2048");
+    }
+
+    #[tokio::test]
+    async fn page_manifest_clamps_assets_to_500() {
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/page?assets=9999")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["asset_count"], 500, "asset count must clamp at 500");
+    }
+
+    #[tokio::test]
+    async fn browser_page_renders_n_img_tags_pointing_at_assets() {
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/browser-page?assets=3&bytes=512")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        assert!(resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .starts_with("text/html"));
+        let html = String::from_utf8(
+            to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert_eq!(
+            html.matches("<img ").count(),
+            3,
+            "the browser load event depends on exactly N images"
+        );
+        assert!(html.contains("/asset?id=2&bytes=512"));
+        assert!(html.contains("<!DOCTYPE html>"));
+    }
+
+    #[tokio::test]
+    async fn asset_returns_exactly_the_requested_zero_bytes() {
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/asset?id=1&bytes=3000")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            resp.headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok()),
+            Some("application/octet-stream")
+        );
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body.len(), 3000, "asset must be exactly the requested size");
+        assert!(body.iter().all(|&b| b == 0), "asset payload is a zero fill");
+    }
+
+    // ── pure helpers (previously untested — mutation-pilot gap) ──────────────
+
+    // ── auth middleware with a token (previously untestable env-global) ──────
+
+    #[tokio::test]
+    async fn auth_rejects_missing_and_wrong_tokens_with_401() {
+        for (desc, req) in [
+            (
+                "no header",
+                Request::builder().uri("/info").body(Body::empty()).unwrap(),
+            ),
+            (
+                "wrong token",
+                Request::builder()
+                    .uri("/info")
+                    .header("authorization", "Bearer wrong")
+                    .body(Body::empty())
+                    .unwrap(),
+            ),
+            (
+                "not a bearer",
+                Request::builder()
+                    .uri("/info")
+                    .header("authorization", "Basic c3VwZXI=")
+                    .body(Body::empty())
+                    .unwrap(),
+            ),
+        ] {
+            let resp = app_with_token(Some("s3cret")).oneshot(req).await.unwrap();
+            assert_eq!(resp.status(), 401, "{desc} must be rejected");
+            assert!(
+                resp.headers()
+                    .get("server-timing")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .contains("auth;dur="),
+                "{desc}: 401s still carry the auth timing metric"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn auth_accepts_the_exact_token_and_appends_timing() {
+        let resp = app_with_token(Some("s3cret"))
+            .oneshot(
+                Request::builder()
+                    .uri("/info")
+                    .header("authorization", "Bearer s3cret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        assert!(resp
+            .headers()
+            .get("server-timing")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .contains("auth;dur="));
+    }
+
+    #[tokio::test]
+    async fn auth_exempts_health_even_with_a_token_set() {
+        let resp = app_with_token(Some("s3cret"))
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "LB probes must not need credentials");
+    }
+
+    // ── extracted pure logic (previously reachable only via env variance) ────
+
+    #[test]
+    fn parse_meminfo_extracts_the_requested_key_in_mib() {
+        let meminfo =
+            "MemTotal:       16309240 kB\nMemFree: 1029900 kB\nMemAvailable:    8210012 kB\n";
+        assert_eq!(parse_meminfo_mb(meminfo, "MemTotal:"), Some(15926));
+        assert_eq!(parse_meminfo_mb(meminfo, "MemAvailable:"), Some(8017));
+        assert_eq!(parse_meminfo_mb(meminfo, "SwapTotal:"), None);
+        assert_eq!(parse_meminfo_mb("MemTotal: garbage kB", "MemTotal:"), None);
+        assert_eq!(parse_meminfo_mb("", "MemTotal:"), None);
+    }
+
+    #[test]
+    fn fallback_users_is_deterministic_and_ids_follow_the_page() {
+        let page1 = fallback_users(1);
+        assert_eq!(page1.len(), 100);
+        assert_eq!(page1[0]["id"], 1);
+        assert_eq!(page1[99]["id"], 100);
+        let page2 = fallback_users(2);
+        assert_eq!(page2[0]["id"], 101, "page 2 continues the id sequence");
+        // Deterministic per page; different across pages.
+        assert_eq!(page1, fallback_users(1));
+        assert_ne!(page1[0]["name"], page2[0]["name"]);
+        // Shape sanity on a generated user (pins gen_user's stub mutant).
+        let email = page1[0]["email"].as_str().unwrap();
+        assert!(email.contains('@') && email.contains('.'));
+        let score = page1[0]["score"].as_f64().unwrap();
+        assert!(
+            (0.0..=100.0).contains(&score),
+            "score is 2-dp 0..100: {score}"
+        );
+    }
+
+    #[test]
+    fn elapsed_ms_converts_seconds_to_milliseconds() {
+        // Every Server-Timing dur= value flows through this one conversion;
+        // a *→/ mutation reports durations 1,000,000× off.
+        let t0 = Instant::now();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let ms = elapsed_ms(t0);
+        // Bounds tight enough to kill both operator mutations: `+` lands at
+        // ~1000.02 (secs + 1000), `/` at ~0.00002 — both outside 10..500.
+        assert!(
+            (10.0..500.0).contains(&ms),
+            "20ms sleep must read as ~20ms, got {ms}"
+        );
+    }
+
+    #[tokio::test]
+    async fn http_version_names_every_version_arm() {
+        // oneshot lets us stamp any HTTP version on the request without a
+        // real connection — deleting any match arm falls through to
+        // "Unknown" and fails its case here.
+        for (version, expect) in [
+            (Version::HTTP_09, "HTTP/0.9"),
+            (Version::HTTP_10, "HTTP/1.0"),
+            (Version::HTTP_11, "HTTP/1.1"),
+            (Version::HTTP_2, "HTTP/2"),
+            (Version::HTTP_3, "HTTP/3"),
+        ] {
+            let mut req = Request::builder()
+                .uri("/http-version")
+                .body(Body::empty())
+                .unwrap();
+            *req.version_mut() = version;
+            let resp = app().oneshot(req).await.unwrap();
+            let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(v["version"], expect);
+        }
+    }
+
+    #[test]
+    fn gen_user_scores_span_the_two_decimal_0_to_100_range() {
+        // Distribution asserts across a full page: an arithmetic mutation in
+        // the score formula collapses the spread (all ≈100.0) or the scale.
+        let users = fallback_users(1);
+        let scores: Vec<f64> = users.iter().map(|u| u["score"].as_f64().unwrap()).collect();
+        assert!(scores.iter().all(|s| (0.0..100.0).contains(s)));
+        let (min, max) = scores
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(lo, hi), &s| (lo.min(s), hi.max(s)));
+        assert!(max - min > 10.0, "scores must spread, got [{min}, {max}]");
+        assert!(
+            scores.iter().any(|s| s.fract() != 0.0),
+            "2-dp rounding must leave fractional scores"
+        );
+    }
+
+    #[tokio::test]
+    async fn fallback_aggregate_values_stay_in_the_0_to_1000_range() {
+        // The lib-test env serves the PRNG fallback: 10k values in [0,1000).
+        // A + mutation on the range scaling shifts everything to ~1000.
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/aggregate")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let mean = v["mean"].as_f64().unwrap();
+        assert!(
+            (100.0..900.0).contains(&mean),
+            "uniform [0,1000) mean must sit near 500, got {mean}"
+        );
+        assert!(v["max"].as_f64().unwrap() < 1000.0);
+        assert!(v["p50"].as_f64().unwrap() < v["p95"].as_f64().unwrap());
+    }
+
+    #[test]
+    fn fallback_validate_checksums_match_the_golden_values() {
+        // GOLDEN values computed from the current implementation (seed=1):
+        // any change to the hashed content — user-id arithmetic, value
+        // scaling, float formatting — is a CONTRACT change and must show up
+        // here deliberately, not drift silently.
+        let v = fallback_validate_checksums(1);
+        assert_eq!(
+            v["checksums"]["users"],
+            "c97ab1860ec7a71d790f2ed7b2d13d617b9dde34b28576e43aa64e9a55f52bcd"
+        );
+        assert_eq!(
+            v["checksums"]["aggregate"],
+            "e1a906250ac7ec3b83cbf773ddd2e1edde806a4af21c9d28c264d732affc81a8"
+        );
+        // seed=3: (seed-1)*100 is DEGENERATE at seed=1 (zero under several
+        // arithmetic mutations), so a second golden pins the id offset term.
+        let v3 = fallback_validate_checksums(3);
+        assert_eq!(
+            v3["checksums"]["users"],
+            "caa760df5a392b4e757d7dee3725073e262e22426963237b2dc5286c9c1ab87e"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_streams_a_4mib_body_exactly() {
+        // /upload drains the stream without buffering (DefaultBodyLimit never
+        // engages there) — this pins the streaming byte count at real size.
+        let payload = vec![0x41u8; 4 * 1024 * 1024];
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/upload")
+                    .body(Body::from(payload))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let received: usize = resp
+            .headers()
+            .get("x-networker-received-bytes")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(received, 4 * 1024 * 1024);
+    }
+
+    #[tokio::test]
+    async fn body_limit_admits_a_4mib_json_body_on_the_buffering_extractor() {
+        // DefaultBodyLimit (2 GiB) only fires through BUFFERING extractors.
+        // /upload and /api/upload/process take the raw Request and stream/
+        // read manually (verified by two surviving-mutant rounds) — the one
+        // route that buffers through the limit is api_transform's
+        // Json<TransformBody>. A cap-constant mutation shrinking the limit
+        // to ~1-2 MiB turns this ~4 MiB JSON POST into a 413.
+        let chunk = "x".repeat(1024);
+        let values: Vec<String> = std::iter::repeat_n(chunk, 3900).collect();
+        let body = serde_json::json!({"seed": 1, "fields": [], "values": values});
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/transform")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "~4 MiB must clear the 2 GiB body limit");
+        let out = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(v["reversed_values"].as_array().unwrap().len(), 3900);
+    }
+
+    #[tokio::test]
+    async fn asset_and_download_sizes_are_exact_above_the_mutated_cap_range() {
+        // 2 MiB asset + 4 MiB download: both far below the real caps
+        // (100 MiB / 2 GiB) but above what cap-constant mutations shrink
+        // them to (~1-2 MiB) — a clamped body fails the exact-length assert.
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/asset?bytes=2097152")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body.len(), 2_097_152);
+
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/download/4194304")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body.len(), 4_194_304);
+        assert!(body.iter().all(|&b| b == 0x42));
+    }
+
+    #[test]
+    fn fallback_validate_checksums_is_seed_stable_and_seed_sensitive() {
+        let a = fallback_validate_checksums(42);
+        assert_eq!(a["seed"], 42);
+        let sums = a["checksums"].as_object().unwrap();
+        for key in ["users", "aggregate", "transform", "search"] {
+            let h = sums[key].as_str().unwrap();
+            assert_eq!(h.len(), 64, "{key} must be a hex SHA-256");
+        }
+        // Deterministic for a seed; users/aggregate move with the seed;
+        // transform and search are seed-independent by contract.
+        let b = fallback_validate_checksums(42);
+        assert_eq!(a, b);
+        let c = fallback_validate_checksums(7);
+        assert_ne!(a["checksums"]["users"], c["checksums"]["users"]);
+        assert_ne!(a["checksums"]["aggregate"], c["checksums"]["aggregate"]);
+        assert_eq!(a["checksums"]["transform"], c["checksums"]["transform"]);
+        assert_eq!(a["checksums"]["search"], c["checksums"]["search"]);
+    }
+
+    // ── api_users sort arms (deleting any arm must break ordering) ───────────
+
+    async fn users_sorted_by(field: &str, order: &str) -> Vec<serde_json::Value> {
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/users?page=1&sort={field}&order={order}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn api_users_sorts_by_every_field_in_both_orders() {
+        for field in ["name", "email", "score", "created_at", "id"] {
+            for order in ["asc", "desc"] {
+                let users = users_sorted_by(field, order).await;
+                assert_eq!(users.len(), 20);
+                let in_order = users.windows(2).all(|w| {
+                    let (a, b) = (&w[0][field], &w[1][field]);
+                    let cmp = if field == "score" {
+                        a.as_f64()
+                            .unwrap()
+                            .partial_cmp(&b.as_f64().unwrap())
+                            .unwrap()
+                    } else if field == "id" {
+                        a.as_u64().unwrap().cmp(&b.as_u64().unwrap())
+                    } else {
+                        a.as_str().unwrap().cmp(b.as_str().unwrap())
+                    };
+                    if order == "asc" {
+                        cmp != std::cmp::Ordering::Greater
+                    } else {
+                        cmp != std::cmp::Ordering::Less
+                    }
+                });
+                assert!(in_order, "sort={field} order={order} is not ordered");
+            }
+        }
+        // Distinct fields produce distinct leaders — a deleted sort arm falls
+        // back to id-order and collapses this distinction.
+        let by_name = users_sorted_by("name", "asc").await;
+        let by_score = users_sorted_by("score", "asc").await;
+        assert_ne!(
+            by_name[0], by_score[0],
+            "name-sorted and score-sorted pages must differ"
+        );
+    }
+
+    /// The lib-test environment has NO dataset (only canonical_checksums.rs
+    /// pins BENCH_DATA_PATH), so /api/users serves the PRNG fallback here:
+    /// every page exists and ids continue across pages. The dataset branch's
+    /// page-beyond-data-is-empty contract is asserted in
+    /// tests/canonical_checksums.rs where the dataset is guaranteed present.
+    #[tokio::test]
+    async fn api_users_fallback_pages_continue_the_id_sequence() {
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/users?page=999&sort=id&order=asc")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let users: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(users.len(), 20);
+        assert_eq!(
+            users[0]["id"], 99_801,
+            "fallback page N starts at (N-1)*100 + 1"
+        );
+    }
+
+    #[test]
+    fn parse_load_avg_accepts_proc_and_sysctl_shapes() {
+        // Linux /proc/loadavg: first token is the 1-minute average.
+        assert_eq!(parse_load_avg_1m("0.52 0.58 0.59 1/467 12345"), Some(0.52));
+        // macOS sysctl vm.loadavg: "{ 1.23 1.50 1.61 }" — the '{' token is
+        // skipped, the first numeric token wins.
+        assert_eq!(parse_load_avg_1m("{ 1.23 1.50 1.61 }"), Some(1.23));
+        // Garbage, negatives and non-finite values are rejected, not zeroed.
+        assert_eq!(parse_load_avg_1m("not a load"), None);
+        assert_eq!(parse_load_avg_1m("-1.0 0.0 0.0"), None);
+        assert_eq!(parse_load_avg_1m(""), None);
+    }
+
+    #[test]
+    fn format_uptime_picks_the_right_granularity_per_magnitude() {
+        assert_eq!(format_uptime(42), "42s");
+        assert_eq!(format_uptime(60), "1m 0s");
+        assert_eq!(format_uptime(3_723), "1h 2m 3s");
+        // Days drop the seconds — 2d 3h 4m (and 5s discarded).
+        assert_eq!(
+            format_uptime(2 * 86_400 + 3 * 3_600 + 4 * 60 + 5),
+            "2d 3h 4m"
+        );
+    }
+
+    // ── /info contract ────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn info_reports_identity_version_and_uptime() {
+        let resp = app()
+            .oneshot(Request::builder().uri("/info").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["service"], "networker-endpoint");
+        assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
+        assert!(v["uptime_secs"].is_u64());
+        let endpoints = v["endpoints"].as_array().unwrap();
+        assert!(
+            endpoints.iter().any(|e| e == "/api/validate"),
+            "/info must advertise the api surface"
+        );
     }
 }

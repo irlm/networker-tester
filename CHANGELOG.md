@@ -11,6 +11,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.178] — 2026-08-10
+
+### Added
+- **routes.rs joins the mutation-testing scope** (was excluded with 188
+  survivors). Three moves: (1) extract-pure-logic — `parse_meminfo_mb`,
+  `fallback_users`, `fallback_validate_checksums` (the PRNG fallbacks for
+  dataset-less installs were reachable production code that in-repo tests
+  never hit); (2) the bench auth token moves from a process-global
+  `OnceLock` env read into `AppState`, making the with-token middleware
+  branches deterministically testable (401 on missing/wrong/non-bearer,
+  valid-token pass-through, `/health` exemption, timing metric on every
+  path); (3) assertion-deepening — every `api_users` sort arm is pinned to
+  actually order the response (a deleted arm previously fell back to
+  id-order unnoticed), pagination boundaries pinned on BOTH data branches,
+  page/asset/browser-page routes tested for the first time. Live
+  environment probes (IMDS/proc/sysctl shells) are function-level excluded
+  with their parsers kept in scope — documented in `.cargo/mutants.toml`.
+
+### Fixed
+- `api_users`' "name" sort compared the name to ITSELF before the real
+  comparison — always-Equal dead code, found by the mutation map. Behavior
+  unchanged; the dead comparison is gone.
+
+---
+
 ## [0.28.177] — 2026-08-10
 
 ### Changed
