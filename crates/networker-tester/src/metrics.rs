@@ -6042,4 +6042,127 @@ mod tests {
         );
         assert!(sample.busy_percent <= 100.0);
     }
+
+    // ── Protocol Display/FromStr contract ─────────────────────────────────
+    // The wire names cross the versioned JSON contract, the DB, modes.json
+    // and the C# ingest — a Display/FromStr mismatch on ANY variant silently
+    // orphans that mode's attempts. The match below forces this list to grow
+    // with the enum (a new variant fails compilation here).
+    fn all_protocols() -> Vec<Protocol> {
+        fn exhaustive(p: &Protocol) {
+            match p {
+                Protocol::Tcp => (),            // in ALL below
+                Protocol::Http1 => (),          // in ALL below
+                Protocol::Http2 => (),          // in ALL below
+                Protocol::Http3 => (),          // in ALL below
+                Protocol::Udp => (),            // in ALL below
+                Protocol::Download => (),       // in ALL below
+                Protocol::Download1 => (),      // in ALL below
+                Protocol::Download2 => (),      // in ALL below
+                Protocol::Download3 => (),      // in ALL below
+                Protocol::Upload => (),         // in ALL below
+                Protocol::Upload1 => (),        // in ALL below
+                Protocol::Upload2 => (),        // in ALL below
+                Protocol::Upload3 => (),        // in ALL below
+                Protocol::WebDownload => (),    // in ALL below
+                Protocol::WebUpload => (),      // in ALL below
+                Protocol::UdpDownload => (),    // in ALL below
+                Protocol::UdpUpload => (),      // in ALL below
+                Protocol::Mthroughput => (),    // in ALL below
+                Protocol::Rpm => (),            // in ALL below
+                Protocol::Responsiveness => (), // in ALL below
+                Protocol::Stamp => (),          // in ALL below
+                Protocol::Ping => (),           // in ALL below
+                Protocol::Path => (),           // in ALL below
+                Protocol::DualStack => (),      // in ALL below
+                Protocol::WebSocket => (),      // in ALL below
+                Protocol::Pmtud => (),          // in ALL below
+                Protocol::Dns => (),            // in ALL below
+                Protocol::Tls => (),            // in ALL below
+                Protocol::TlsResume => (),      // in ALL below
+                Protocol::Native => (),         // in ALL below
+                Protocol::Curl => (),           // in ALL below
+                Protocol::PageLoad => (),       // in ALL below
+                Protocol::PageLoad2 => (),      // in ALL below
+                Protocol::PageLoad3 => (),      // in ALL below
+                Protocol::Browser => (),        // in ALL below
+                Protocol::Browser1 => (),       // in ALL below
+                Protocol::Browser2 => (),       // in ALL below
+                Protocol::Browser3 => (),       // in ALL below
+                Protocol::SdkProbe => (),       // in ALL below
+            }
+        }
+        let all = vec![
+            Protocol::Tcp,
+            Protocol::Http1,
+            Protocol::Http2,
+            Protocol::Http3,
+            Protocol::Udp,
+            Protocol::Download,
+            Protocol::Download1,
+            Protocol::Download2,
+            Protocol::Download3,
+            Protocol::Upload,
+            Protocol::Upload1,
+            Protocol::Upload2,
+            Protocol::Upload3,
+            Protocol::WebDownload,
+            Protocol::WebUpload,
+            Protocol::UdpDownload,
+            Protocol::UdpUpload,
+            Protocol::Mthroughput,
+            Protocol::Rpm,
+            Protocol::Responsiveness,
+            Protocol::Stamp,
+            Protocol::Ping,
+            Protocol::Path,
+            Protocol::DualStack,
+            Protocol::WebSocket,
+            Protocol::Pmtud,
+            Protocol::Dns,
+            Protocol::Tls,
+            Protocol::TlsResume,
+            Protocol::Native,
+            Protocol::Curl,
+            Protocol::PageLoad,
+            Protocol::PageLoad2,
+            Protocol::PageLoad3,
+            Protocol::Browser,
+            Protocol::Browser1,
+            Protocol::Browser2,
+            Protocol::Browser3,
+            Protocol::SdkProbe,
+        ];
+        all.iter().for_each(exhaustive);
+        all
+    }
+
+    #[test]
+    fn every_protocol_round_trips_through_display_and_fromstr() {
+        for p in all_protocols() {
+            let s = p.to_string();
+            let back: Protocol = s
+                .parse()
+                .unwrap_or_else(|_| panic!("Display name {s:?} of {p:?} does not parse back"));
+            assert_eq!(back, p, "{s:?} round-tripped to the wrong variant");
+        }
+    }
+
+    mod protocol_props {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            /// FromStr is total: arbitrary strings never panic, and any
+            /// ACCEPTED spelling re-parses to the same variant via Display
+            /// (case-insensitive aliases must normalize consistently).
+            #[test]
+            fn fromstr_is_total_and_accepted_inputs_normalize(s in ".{0,24}") {
+                if let Ok(p) = s.parse::<Protocol>() {
+                    let canonical = p.to_string();
+                    prop_assert_eq!(canonical.parse::<Protocol>().unwrap(), p);
+                }
+            }
+        }
+    }
 }

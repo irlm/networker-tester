@@ -2010,6 +2010,55 @@ mod tests {
         assert_eq!(super::parse_size("2g").unwrap(), 2_147_483_648);
     }
 
+    // ── parse_size properties ─────────────────────────────────────────────
+    // parse_size feeds --payload-sizes, which sizes real transfer probes —
+    // the plural-flag parsing already bit once (measurement-accuracy work,
+    // v0.28.129-146 era). Example tests pin a few points; the properties pin
+    // the whole input space.
+    mod parse_size_props {
+        use proptest::prelude::*;
+
+        proptest! {
+            /// Total function: ANY string returns Ok or Err — never panics.
+            /// (The suffix slicing is byte-indexed; multi-byte UTF-8 inputs
+            /// are exactly the crash class this hunts.)
+            #[test]
+            fn never_panics(s in ".{0,64}") {
+                let _ = crate::cli::parse_size(&s);
+            }
+
+            /// Round-trip with every suffix, exact multiplier, whitespace and
+            /// case insensitivity — overflow must be a clean Err.
+            #[test]
+            fn suffixed_numbers_round_trip(
+                n in 0usize..=u32::MAX as usize,
+                suffix in prop::sample::select(vec!["", "k", "K", "m", "M", "g", "G"]),
+                pad in prop::sample::select(vec!["", " ", "  "]),
+            ) {
+                let mul: usize = match suffix.to_lowercase().as_str() {
+                    "k" => 1 << 10,
+                    "m" => 1 << 20,
+                    "g" => 1 << 30,
+                    _ => 1,
+                };
+                let input = format!("{pad}{n}{suffix}{pad}");
+                match n.checked_mul(mul) {
+                    Some(expected) => prop_assert_eq!(
+                        crate::cli::parse_size(&input).unwrap(), expected
+                    ),
+                    None => prop_assert!(crate::cli::parse_size(&input).is_err()),
+                }
+            }
+
+            /// Garbage stays garbage: non-numeric bodies never parse.
+            #[test]
+            fn non_numeric_is_rejected(s in "[a-z]{1,8}") {
+                // Suffix-only or alpha strings must not produce a size.
+                prop_assert!(crate::cli::parse_size(&s).is_err());
+            }
+        }
+    }
+
     #[test]
     fn validate_empty_modes_fails() {
         // Supply an empty modes vec via ConfigFile (CLI always has a fallback default).

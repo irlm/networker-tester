@@ -921,6 +921,10 @@ criteria = "safe-to-deploy"
 version = "1.0.107"
 criteria = "safe-to-deploy"
 
+[[exemptions.proptest]]
+version = "1.11.0"
+criteria = "safe-to-run"
+
 [[exemptions.quinn]]
 version = "0.11.11"
 criteria = "safe-to-deploy"
@@ -968,6 +972,10 @@ criteria = "safe-to-deploy"
 [[exemptions.rand_pcg]]
 version = "0.10.2"
 criteria = "safe-to-deploy"
+
+[[exemptions.rand_xorshift]]
+version = "0.4.0"
+criteria = "safe-to-run"
 
 [[exemptions.rcgen]]
 version = "0.14.8"
@@ -1084,6 +1092,10 @@ criteria = "safe-to-deploy"
 [[exemptions.rustversion]]
 version = "1.0.23"
 criteria = "safe-to-deploy"
+
+[[exemptions.rusty-fork]]
+version = "0.3.1"
+criteria = "safe-to-run"
 
 [[exemptions.ryu]]
 version = "1.0.23"

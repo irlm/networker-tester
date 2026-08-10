@@ -486,4 +486,30 @@ mod tests {
             "a magic-less 12-byte packet is a 4-byte-payload data packet"
         );
     }
+
+    mod props {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            /// Wire contract: make_ctrl output is always the 12-byte control
+            /// layout the server-side classifier recognizes, with the value
+            /// surviving the LE round-trip for ANY cmd/value.
+            #[test]
+            fn make_ctrl_round_trips_for_any_cmd_and_value(
+                cmd in any::<u8>(),
+                value in any::<u32>(),
+            ) {
+                let pkt = make_ctrl(cmd, value);
+                prop_assert_eq!(pkt.len(), CTRL_LEN);
+                prop_assert_eq!(&pkt[..4], MAGIC);
+                prop_assert_eq!(pkt[4], cmd);
+                prop_assert_eq!(&pkt[5..8], &[0u8, 0, 0]);
+                prop_assert_eq!(
+                    u32::from_le_bytes(pkt[8..12].try_into().unwrap()),
+                    value
+                );
+            }
+        }
+    }
 }

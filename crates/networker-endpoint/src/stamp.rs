@@ -474,4 +474,47 @@ mod tests {
         assert!(got.is_err(), "runt packet must not be reflected");
         task.abort();
     }
+
+    mod props {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            /// RFC 8762 §4.3 field mapping holds for ANY request ≥44 bytes
+            /// (oversized packets are valid test packets — extension data
+            /// beyond 44 bytes must not shift the copied fields or panic)
+            /// and any seq/timestamp values.
+            #[test]
+            fn reflected_packet_layout_holds_for_any_input(
+                req in prop::collection::vec(any::<u8>(), STAMP_PACKET_LEN..=1500),
+                seq in any::<u32>(),
+                t2 in any::<(u32, u32)>(),
+                t3 in any::<(u32, u32)>(),
+            ) {
+                let out = build_reflected_packet(&req, seq, t2, t3);
+                prop_assert_eq!(out.len(), STAMP_PACKET_LEN);
+                prop_assert_eq!(u32::from_be_bytes(out[0..4].try_into().unwrap()), seq);
+                prop_assert_eq!(u32::from_be_bytes(out[4..8].try_into().unwrap()), t3.0);
+                prop_assert_eq!(u32::from_be_bytes(out[8..12].try_into().unwrap()), t3.1);
+                prop_assert_eq!(u32::from_be_bytes(out[16..20].try_into().unwrap()), t2.0);
+                prop_assert_eq!(u32::from_be_bytes(out[20..24].try_into().unwrap()), t2.1);
+                prop_assert_eq!(&out[24..28], &req[0..4]);
+                prop_assert_eq!(&out[28..36], &req[4..12]);
+                prop_assert_eq!(&out[36..38], &req[12..14]);
+                prop_assert_eq!(out[40], 255);
+                prop_assert_eq!(&out[14..16], &[0u8, 0]);
+                prop_assert_eq!(&out[38..40], &[0u8, 0]);
+                prop_assert_eq!(&out[41..44], &[0u8, 0, 0]);
+            }
+
+            /// ntp_frac is monotone in nanoseconds and stays a pure scaling —
+            /// the sender's T3−T2 arithmetic depends on ordering surviving
+            /// the conversion.
+            #[test]
+            fn ntp_frac_is_monotone(a in 0u32..1_000_000_000, b in 0u32..1_000_000_000) {
+                let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+                prop_assert!(ntp_frac(lo) <= ntp_frac(hi));
+            }
+        }
+    }
 }

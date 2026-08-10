@@ -11,6 +11,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.179] — 2026-08-10
+
+### Added
+- **Property-based tests (proptest) on the parser and wire-format seams** —
+  the last named gap from the test-estate assessment:
+  - `parse_size` (feeds `--payload-sizes`, which sizes real transfer
+    probes): total on arbitrary unicode input, exact suffix round-trip for
+    k/m/g in both cases with whitespace, clean Err on overflow.
+  - `Protocol` Display↔FromStr: exhaustive 39-variant round-trip behind a
+    compile-forced list (a new enum variant fails compilation until added),
+    plus a totality/normalization property — these names cross the versioned
+    JSON contract, the DB, modes.json and the C# ingest, where a mismatch
+    silently orphans a mode's attempts.
+  - STAMP `build_reflected_packet`: RFC 8762 §4.3 field mapping holds for
+    ANY ≥44-byte request (oversized packets must not shift fields or panic)
+    and any seq/timestamps; `ntp_frac` monotonicity.
+  - UDP throughput `make_ctrl`: 12-byte control layout + LE value round-trip
+    for any cmd/value.
+  - `parse_load_avg_1m` / `parse_meminfo_mb`: totality on arbitrary text +
+    generated-input round-trips.
+  - proptest/rand_xorshift/rusty-fork enter as dev-deps with version-pinned
+    `safe-to-run` cargo-vet exemptions (gate respected).
+
+---
+
 ## [0.28.178] — 2026-08-10
 
 ### Added

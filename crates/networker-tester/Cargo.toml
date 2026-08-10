@@ -115,6 +115,7 @@ db-mssql    = ["dep:tiberius", "dep:tokio-util"]
 db-postgres = ["dep:tokio-postgres"]
 
 [dev-dependencies]
+proptest        = "1"
 tempfile    = "3"
 rcgen       = "0.14"
 networker-endpoint = { path = "../networker-endpoint" }
