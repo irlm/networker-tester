@@ -8,9 +8,11 @@
 #
 # History:
 #   44 — first CI measurement (run 31205741102, 2026-08-07)
-#   23 — udp_throughput.rs wire-protocol tests killed 21 (#685; CI run
-#        31217844497). Remaining bulk: stamp.rs run-loop comparisons (10),
-#        udp_throughput's 5 documented TTL-reaper survivors (clock-injection
-#        refactor needed), lib.rs network-introspection helpers, main.rs
-#        entry points.
-23
+#   23 — udp_throughput.rs wire-protocol tests killed 21 (#685)
+#    9 — stamp.rs round (#687): ntp_frac pinned, session sweep + upload reaper
+#        clock-parameterized with exact-boundary tests, oversized-STAMP-packet
+#        contract, public entry-point round-trip, udp_echo's vacuous test made
+#        real (CI run 31387162302). Remaining 9, all documented: lib.rs
+#        network-introspection helpers + run() wrapper (5), main.rs entry
+#        points (2), udp_throughput's reap cadence + log-only debug! (2).
+9
