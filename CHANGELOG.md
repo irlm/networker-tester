@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.177] — 2026-08-10
+
+### Changed
+- **Release-pipeline validation release** — no product changes. Exists to
+  exercise release.yml with `actions/download-artifact` v5 → v8 (#695, a
+  major bump that only executes on a real release; auto-rollback bounds the
+  risk). If this release lands green, #692 (azure/login v2 → v3, the other
+  held major) merges next as the only auth change in flight and is validated
+  by the following scheduled soak + canary.
+
+---
+
 ## [0.28.176] — 2026-08-10
 
 ### Fixed
