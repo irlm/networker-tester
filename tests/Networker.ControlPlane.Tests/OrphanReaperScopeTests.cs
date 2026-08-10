@@ -337,6 +337,61 @@ public sealed class OrphanReaperScopeTests
         Assert.DoesNotContain(orphans, o => o.Name.StartsWith("tester-eastus-4e466", System.StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// The 2026-08-09/10 incident shape: a tester MID-CREATE. `az vm create`
+    /// is still running, so the VM + NIC + disk + IP + NSG already exist in
+    /// Azure, but the row has NO vm_resource_id yet (that's written after the
+    /// create returns) — the ONLY thing protecting the half-created VM is its
+    /// vm_name, which the create flow now persists BEFORE spawning az
+    /// (TesterWriteEndpoints.Create). With the name in liveVmNames, all five
+    /// resources must be retained; without it, the reaper deleted them out
+    /// from under the create (OperationPreempted — two canary provisioning
+    /// failures in a row).
+    /// </summary>
+    [Fact]
+    public void FilterOrphans_protects_a_mid_create_tester_by_preview_vm_name_alone()
+    {
+        // No known resource ids AT ALL for this tester — vm_resource_id is
+        // written only after CreateVmAsync returns.
+        var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var liveVmNames = new[] { "tester-eastus-0bd9f" }; // persisted pre-create
+        var raw = new[]
+        {
+            new OrphanReaperService.RawResource("/vm/creating", "tester-eastus-0bd9f", "vm", "azure"),
+            new OrphanReaperService.RawResource("/nic/creating", "tester-eastus-0bd9fVMNic", "nic", "azure"),
+            new OrphanReaperService.RawResource("/disk/creating", "tester-eastus-0bd9f_OsDisk_1_da7b1d73", "disk", "azure"),
+            new OrphanReaperService.RawResource("/ip/creating", "tester-eastus-0bd9fPublicIP", "public_ip", "azure"),
+            new OrphanReaperService.RawResource("/nsg/creating", "tester-eastus-0bd9fNSG", "nsg", "azure"),
+        };
+
+        var orphans = OrphanReaperService.FilterOrphans(raw, known, liveVmNames);
+
+        Assert.Empty(orphans);
+    }
+
+    /// <summary>
+    /// Guards the guard: the mid-create protection above must come from the
+    /// vm_name, not from FilterOrphans being generally lenient — the same
+    /// five resources WITHOUT the preview name are all reapable.
+    /// </summary>
+    [Fact]
+    public void FilterOrphans_reaps_the_same_resources_without_the_preview_name()
+    {
+        var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var raw = new[]
+        {
+            new OrphanReaperService.RawResource("/vm/creating", "tester-eastus-0bd9f", "vm", "azure"),
+            new OrphanReaperService.RawResource("/nic/creating", "tester-eastus-0bd9fVMNic", "nic", "azure"),
+            new OrphanReaperService.RawResource("/disk/creating", "tester-eastus-0bd9f_OsDisk_1_da7b1d73", "disk", "azure"),
+            new OrphanReaperService.RawResource("/ip/creating", "tester-eastus-0bd9fPublicIP", "public_ip", "azure"),
+            new OrphanReaperService.RawResource("/nsg/creating", "tester-eastus-0bd9fNSG", "nsg", "azure"),
+        };
+
+        var orphans = OrphanReaperService.FilterOrphans(raw, known, System.Array.Empty<string>());
+
+        Assert.Equal(5, orphans.Count);
+    }
+
     // ── NSG: delete order + argv (divergence from Rust) ───────────────────────
 
     [Fact]

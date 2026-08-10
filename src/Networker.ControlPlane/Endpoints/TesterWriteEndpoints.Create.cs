@@ -359,6 +359,28 @@ public static partial class TesterWriteEndpoints
             : "creating VM + running cloud-init bootstrap (~60-120s)";
         await TesterState.SetStatusMessageAsync(conn, testerId, createPhaseMsg).ConfigureAwait(false);
 
+        // Persist the vm_name BEFORE the cloud create. The orphan reaper's
+        // safety net is name-prefix–based ("a resource is protected if its name
+        // starts with a known tester's vm_name"), and a VM being created exists
+        // in Azure for 1-4 minutes before CreateVmAsync returns. With vm_name
+        // written only afterwards, a reaper tick landing in that window saw the
+        // half-created VM with no matching prefix and deleted it out from under
+        // `az vm create` (OperationPreempted — canary runner provisioning
+        // failures 2026-08-09/10, the #419 disaster class through a timing
+        // hole). A stale name on a row whose create later fails is harmless:
+        // it protects a resource that never came to exist.
+        await using (var previewCmd = conn.CreateCommand())
+        {
+            previewCmd.CommandText = """
+                UPDATE project_tester
+                   SET vm_name = @vm_name, updated_at = NOW()
+                 WHERE tester_id = @tester
+                """;
+            previewCmd.Parameters.AddWithValue("vm_name", vmNamePreview);
+            previewCmd.Parameters.AddWithValue("tester", testerId);
+            await previewCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+        }
+
         var created = await provisioner.CreateVmAsync(
             new VmCreateRequest(tester.Cloud, vmNamePreview, region, vmSize, sshUser, image, bootstrap),
             creds).ConfigureAwait(false);

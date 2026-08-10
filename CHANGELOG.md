@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.176] — 2026-08-10
+
+### Fixed
+- **The orphan reaper could delete a tester VM while `az vm create` was
+  still running** (canary runner-provisioning failures 2026-08-09/10,
+  `OperationPreempted`). The reaper's name-prefix guard protects resources
+  whose names match a known tester's `vm_name` — but `vm_name` was persisted
+  only AFTER the 1–4-minute cloud create returned, so a reaper tick landing
+  in that window saw the half-created VM (+ NIC/disk/IP/NSG) with no
+  matching prefix and reaped all five out from under the create. The create
+  flow now persists the VM name BEFORE spawning the provisioner; a stale
+  name on a row whose create later fails is harmless (it protects a resource
+  that never came to exist). Two incident-shaped `FilterOrphans` tests pin
+  the contract in both directions (protected with the preview name; all five
+  reapable without it).
+
+---
+
 ## [0.28.175] — 2026-08-07
 
 ### Added
