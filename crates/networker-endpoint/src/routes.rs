@@ -3030,4 +3030,39 @@ mod tests {
             "/info must advertise the api surface"
         );
     }
+
+    mod parser_props {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            /// Both extracted parsers are total: arbitrary text (including
+            /// multi-byte unicode) never panics.
+            #[test]
+            fn parsers_never_panic(s in ".{0,128}") {
+                let _ = parse_load_avg_1m(&s);
+                let _ = parse_meminfo_mb(&s, "MemTotal:");
+            }
+
+            /// Generated /proc/loadavg lines round-trip: the leading value
+            /// comes back within float-formatting tolerance.
+            #[test]
+            fn loadavg_round_trips(v in 0.0f64..1000.0) {
+                let line = format!("{v:.2} 0.58 0.59 1/467 12345");
+                let parsed = parse_load_avg_1m(&line).unwrap();
+                prop_assert!((parsed - v).abs() < 0.005 + v * 1e-9);
+            }
+
+            /// Generated meminfo buffers round-trip: kB → MiB is exact
+            /// integer division, key order and unrelated lines irrelevant.
+            #[test]
+            fn meminfo_round_trips(
+                kb in 0u64..=u64::MAX / 2,
+                noise in prop::sample::select(vec!["", "MemFree: 12 kB\n", "SwapTotal: 0 kB\n"]),
+            ) {
+                let buf = format!("{noise}MemTotal: {kb} kB\nMemAvailable: 1 kB\n");
+                prop_assert_eq!(parse_meminfo_mb(&buf, "MemTotal:"), Some(kb / 1024));
+            }
+        }
+    }
 }
