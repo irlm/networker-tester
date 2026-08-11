@@ -59,7 +59,7 @@ export function PendingPage() {
         </h2>
 
         {/* Signed in as */}
-        <p className="text-green-400 text-sm font-mono mb-6">
+        <p className="text-green-400 text-sm mb-6">
           Signed in as {email}
         </p>
 

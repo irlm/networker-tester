@@ -107,9 +107,9 @@ export function ShareLinksPage() {
               cellClass: 'text-gray-200',
               render: (link) => link.label || <span className="text-gray-500 italic">no label</span>,
             },
-            { key: 'type', label: 'Type', cellClass: 'text-gray-400 font-mono', render: (link) => link.resource_type },
+            { key: 'type', label: 'Type', cellClass: 'text-gray-400', render: (link) => link.resource_type },
             { key: 'status', label: 'Status', render: (link) => statusBadge(link) },
-            { key: 'views', label: 'Views', align: 'right', cellClass: 'text-gray-400 font-mono', render: (link) => link.access_count },
+            { key: 'views', label: 'Views', align: 'right', cellClass: 'text-gray-400', render: (link) => link.access_count },
             {
               key: 'expires',
               label: 'Expires',

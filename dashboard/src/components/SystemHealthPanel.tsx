@@ -141,7 +141,7 @@ export default function SystemHealthPanel() {
             </div>
             <div className="flex items-center gap-2">
               {check.value && (
-                <span className="text-gray-400 font-mono">{check.value}</span>
+                <span className="text-gray-400">{check.value}</span>
               )}
               {check.message && (
                 <span className="text-gray-400 truncate max-w-48" title={check.message}>

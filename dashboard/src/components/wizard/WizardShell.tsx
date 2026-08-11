@@ -66,7 +66,7 @@ export function WizardShell({
         {showNext && (
           <div className="flex items-center gap-3">
             {nextHint && (
-              <span className="text-[11px] text-gray-400 font-mono">{nextHint}</span>
+              <span className="text-[11px] text-gray-400">{nextHint}</span>
             )}
             <button
               onClick={onNext}

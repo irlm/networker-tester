@@ -85,7 +85,7 @@ export function CreateSdkEndpointDialog({ projectId, onClose, onCreated }: Creat
           </div>
           <p className="text-xs text-gray-400 mb-6">
             Point LagHound at a URL that mounts the SDK routes. Probes run the{' '}
-            <span className="font-mono text-purple-400">sdkprobe</span> mode and split latency into network vs server.
+            <span className="text-purple-400">sdkprobe</span> mode and split latency into network vs server.
           </p>
 
           {error && <div className="bg-red-500/10 border border-red-500/30 rounded p-2 mb-4 text-red-400 text-sm">{error}</div>}
@@ -136,7 +136,7 @@ export function CreateSdkEndpointDialog({ projectId, onClose, onCreated }: Creat
             value={route}
             onChange={(e) => setRoute(e.target.value)}
             placeholder={DEFAULT_ROUTE}
-            className={`w-full bg-[var(--bg-base)] border rounded px-3 py-2 text-sm text-gray-200 mb-1 font-mono focus:outline-none focus:border-cyan-500 placeholder:text-gray-600 ${
+            className={`w-full bg-[var(--bg-base)] border rounded px-3 py-2 text-sm text-gray-200 mb-1 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600 ${
               !routeValid ? 'border-red-500/50' : 'border-gray-700'
             }`}
           />

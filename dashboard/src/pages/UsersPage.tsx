@@ -141,7 +141,7 @@ export function UsersPage() {
                 value={inviteEmail}
                 onChange={(e) => setInviteEmail(e.target.value)}
                 placeholder="user@company.com"
-                className="w-full bg-transparent border-b border-gray-700 focus:border-cyan-500/50 py-1.5 text-sm text-gray-200 focus:outline-none placeholder:text-gray-700 font-mono"
+                className="w-full bg-transparent border-b border-gray-700 focus:border-cyan-500/50 py-1.5 text-sm text-gray-200 focus:outline-none placeholder:text-gray-700"
                 autoFocus
               />
             </div>
@@ -211,7 +211,7 @@ export function UsersPage() {
             >
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-sm text-gray-100 truncate font-mono">{u.email}</span>
+                  <span className="text-sm text-gray-100 truncate">{u.email}</span>
                   <span className={`text-[10px] px-1.5 py-0.5 rounded ${providerBadge[u.auth_provider] || providerBadge.local}`}>
                     {u.auth_provider}
                   </span>
@@ -261,7 +261,7 @@ export function UsersPage() {
               >
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-sm text-gray-100 truncate font-mono">{u.email}</span>
+                    <span className="text-sm text-gray-100 truncate">{u.email}</span>
                     <span className={`text-[10px] px-1.5 py-0.5 rounded ${providerBadge[u.auth_provider] || providerBadge.local}`}>
                       {u.auth_provider}
                     </span>
@@ -270,7 +270,7 @@ export function UsersPage() {
                     {u.last_login_at && (
                       <span className="text-xs text-gray-500">{timeAgo(u.last_login_at)}</span>
                     )}
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${roleBadge[u.role] || roleBadge.viewer}`}>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${roleBadge[u.role] || roleBadge.viewer}`}>
                       {u.role}
                     </span>
                   </div>
@@ -319,7 +319,7 @@ export function UsersPage() {
                   className="border border-gray-800/50 rounded bg-[var(--bg-card)] p-3 opacity-50"
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-sm text-gray-400 truncate font-mono">{u.email}</span>
+                    <span className="text-sm text-gray-400 truncate">{u.email}</span>
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400">
                       {u.status}
                     </span>

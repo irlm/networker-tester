@@ -33,6 +33,8 @@ interface DataTableProps<T> {
   rowClass?: (row: T) => string | undefined;
   /** Rendered centred inside the container when there are no rows. */
   empty?: ReactNode;
+  /** Rendered inside the container below the table (pagers, load-more). */
+  footer?: ReactNode;
   className?: string;
 }
 
@@ -41,7 +43,7 @@ const HIDE = {
   lg: 'hidden lg:table-cell',
 } as const;
 
-export function DataTable<T>({ columns, rows, rowKey, rowClass, empty, className }: DataTableProps<T>) {
+export function DataTable<T>({ columns, rows, rowKey, rowClass, empty, footer, className }: DataTableProps<T>) {
   return (
     <div className={`table-container ${className ?? ''}`}>
       <table className="w-full text-sm">
@@ -74,6 +76,7 @@ export function DataTable<T>({ columns, rows, rowKey, rowClass, empty, className
         </tbody>
       </table>
       {rows.length === 0 && empty && <div className="py-10 text-center">{empty}</div>}
+      {footer}
     </div>
   );
 }

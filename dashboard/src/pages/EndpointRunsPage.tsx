@@ -162,11 +162,11 @@ export function EndpointRunsPage() {
       <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-4 items-start mt-2 mb-4">
         <div>
           {deployment && <StatusBadge status={deployment.status} />}
-          <h2 className="text-xl font-bold text-gray-100 font-mono mt-2">
+          <h2 className="text-xl font-bold text-gray-100 mt-2">
             {deployment?.name ?? 'endpoint'}
             {ip !== '—' && <span className="text-cyan-400 text-sm ml-2">· {ip}</span>}
           </h2>
-          <div className="flex flex-wrap gap-3 mt-1 text-[11px] font-mono text-gray-400">
+          <div className="flex flex-wrap gap-3 mt-1 text-[11px] text-gray-400">
             {provider && <span>{provider} · {region}</span>}
             {vmSize && <span>· {vmSize}</span>}
             {stacks.length > 0 && <span className="text-cyan-400">· {stacks.join(', ')}</span>}
@@ -180,10 +180,10 @@ export function EndpointRunsPage() {
         <h3 className="text-sm font-semibold text-gray-200">Run a test</h3>
         <span className="text-[11px] text-gray-400">
           pick a saved config or build a custom one · color:
-          <span className="ml-2 px-1.5 py-0.5 border rounded-sm bg-green-400/[.14] text-green-300 border-green-400/50 font-mono text-[9px]">net</span>
-          <span className="ml-1 px-1.5 py-0.5 border rounded-sm bg-cyan-400/[.14] text-cyan-300 border-cyan-400/50 font-mono text-[9px]">http</span>
-          <span className="ml-1 px-1.5 py-0.5 border rounded-sm bg-cyan-400/[.16] text-cyan-300 border-cyan-400/55 font-mono text-[9px]">thru</span>
-          <span className="ml-1 px-1.5 py-0.5 border rounded-sm bg-yellow-400/[.14] text-yellow-300 border-yellow-400/50 font-mono text-[9px]">page</span>
+          <span className="ml-2 px-1.5 py-0.5 border rounded-sm bg-green-400/[.14] text-green-300 border-green-400/50 text-[9px]">net</span>
+          <span className="ml-1 px-1.5 py-0.5 border rounded-sm bg-cyan-400/[.14] text-cyan-300 border-cyan-400/50 text-[9px]">http</span>
+          <span className="ml-1 px-1.5 py-0.5 border rounded-sm bg-cyan-400/[.16] text-cyan-300 border-cyan-400/55 text-[9px]">thru</span>
+          <span className="ml-1 px-1.5 py-0.5 border rounded-sm bg-yellow-400/[.14] text-yellow-300 border-yellow-400/50 text-[9px]">page</span>
         </span>
       </div>
 
@@ -194,7 +194,7 @@ export function EndpointRunsPage() {
               {p.star && <span className="text-yellow-300 mr-1">★</span>}
               {p.name}
             </div>
-            <div className="text-[10px] text-gray-400 font-mono mt-1">{p.desc}</div>
+            <div className="text-[10px] text-gray-400 mt-1">{p.desc}</div>
             <div className="mt-2"><ModeChipList modes={p.modes} max={6} /></div>
             <button
               type="button"
@@ -218,7 +218,7 @@ export function EndpointRunsPage() {
         {lastRun && (
           <span>
             last run:{' '}
-            <Link to={`/projects/${projectId}/runs/${lastRun.id}`} className="text-cyan-400 hover:underline font-mono">
+            <Link to={`/projects/${projectId}/runs/${lastRun.id}`} className="text-cyan-400 hover:underline">
               {lastRun.id.slice(0, 8)}
             </Link>{' '}
             · {timeAgo(lastRun.created_at)} ·{' '}
@@ -250,12 +250,12 @@ export function EndpointRunsPage() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="search runs…"
-          className="bg-[var(--bg-base)] border border-gray-700 px-3 py-1 text-xs font-mono text-gray-200 w-60 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
+          className="bg-[var(--bg-base)] border border-gray-700 px-3 py-1 text-xs text-gray-200 w-60 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
         />
         <select
           value={presetFilter}
           onChange={(e) => setPresetFilter(e.target.value)}
-          className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs font-mono text-gray-300 focus:outline-none focus:border-cyan-500"
+          className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs text-gray-300 focus:outline-none focus:border-cyan-500"
         >
           <option value="all">all configs</option>
           {DEFAULT_PRESETS.map((p) => (

@@ -265,7 +265,7 @@ export function DashboardPage() {
                     className="px-3 py-2 border-b border-gray-800/30 text-xs flex items-center gap-2"
                   >
                     <StatusBadge status={event.status || event.type} />
-                    <span className="text-gray-400 font-mono">
+                    <span className="text-gray-400">
                       {event.job_id?.slice(0, 8) || event.agent_id?.slice(0, 8)}
                     </span>
                   </div>
@@ -318,7 +318,7 @@ function InfraSection({ agents, endpoints, projectId }: {
                       <div className="text-sm text-gray-300 truncate">{host}</div>
                       <div className="text-xs text-gray-700 truncate" title={ep.host}>{ep.host}</div>
                     </div>
-                    <span className="text-xs font-mono text-gray-500">
+                    <span className="text-xs text-gray-500">
                       {ep.reachable ? `v${ep.version}` : 'offline'}
                     </span>
                   </div>
@@ -410,7 +410,7 @@ function RecentRunsSection({ runs, projectId }: { runs: TestRun[]; projectId: st
               {runs.map(run => (
                 <tr key={run.id} className="border-b border-gray-800/30 hover:bg-gray-800/20">
                   <td className="px-3 py-2">
-                    <Link to={`/projects/${projectId}/runs/${run.id}`} className="text-cyan-400 hover:underline font-mono text-xs">
+                    <Link to={`/projects/${projectId}/runs/${run.id}`} className="text-cyan-400 hover:underline text-xs">
                       {run.id.slice(0, 8)}
                     </Link>
                   </td>
@@ -418,7 +418,7 @@ function RecentRunsSection({ runs, projectId }: { runs: TestRun[]; projectId: st
                   <td className="px-3 py-2 text-xs">
                     <RunResult ok={run.success_count} fail={run.failure_count} />
                   </td>
-                  <td className="px-3 py-2 text-gray-400 text-xs font-mono">
+                  <td className="px-3 py-2 text-gray-400 text-xs">
                     {run.started_at && run.finished_at
                       ? `${((new Date(run.finished_at).getTime() - new Date(run.started_at).getTime()) / 1000).toFixed(1)}s`
                       : run.status === 'running' ? '...' : '-'}

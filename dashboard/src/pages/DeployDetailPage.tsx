@@ -262,12 +262,12 @@ export function DeployDetailPage() {
           Provider <span className="text-gray-200 ml-1">{deployment?.provider_summary || '\u2014'}</span>
         </span>
         <span className="text-gray-400">
-          Targets <span className="text-gray-200 font-mono ml-1">
+          Targets <span className="text-gray-200 ml-1">
             {hasEndpoints ? (deployment?.endpoint_ips || []).join(', ') : '\u2014'}
           </span>
         </span>
         <span className="text-gray-400">
-          Duration <span className="text-gray-200 font-mono ml-1">
+          Duration <span className="text-gray-200 ml-1">
             {deployment?.started_at ? formatDuration(deployment.started_at, deployment.finished_at) : '\u2014'}
           </span>
         </span>
@@ -324,7 +324,7 @@ export function DeployDetailPage() {
           {costEstimate && costEstimate.priced_endpoint_count > 1 && (
             <p className="text-xs text-gray-400 mt-2">
               Total{' '}
-              <span className="text-cyan-400 font-mono">
+              <span className="text-cyan-400">
                 ${costEstimate.total_hourly_usd.toFixed(3)}/h · ${costEstimate.total_monthly_usd.toFixed(2)}/mo
               </span>{' '}
               across {costEstimate.priced_endpoint_count} VMs (always-on)
@@ -344,9 +344,9 @@ export function DeployDetailPage() {
                 className={`flex items-center gap-3 py-2 ${i > 0 ? 'border-t border-gray-800/30' : ''}`}
               >
                 <span className={`w-2 h-2 rounded-full ${ep.alive ? (ep.outdated ? 'bg-yellow-400' : 'bg-green-400') : 'bg-red-400'}`} />
-                <span className="text-sm text-gray-200 font-mono">{ep.ip}</span>
+                <span className="text-sm text-gray-200">{ep.ip}</span>
                 {ep.alive ? (
-                  <span className={`text-xs font-mono ${ep.outdated ? 'text-yellow-400' : 'text-green-400'}`}>
+                  <span className={`text-xs ${ep.outdated ? 'text-yellow-400' : 'text-green-400'}`}>
                     v{ep.version || '?'}
                     {ep.outdated && versionInfo?.latest && (
                       <span className="text-gray-500 ml-1">(latest: v{versionInfo.latest})</span>
@@ -389,7 +389,7 @@ export function DeployDetailPage() {
         <div
           ref={logContainerRef}
           onScroll={handleLogScroll}
-          className="bg-[var(--bg-base)] border border-gray-800 rounded-lg p-4 h-[400px] overflow-y-auto font-mono text-xs leading-5"
+          className="bg-[var(--bg-base)] border border-gray-800 rounded-lg p-4 h-[400px] overflow-y-auto text-xs leading-5"
         >
           {logLines.length === 0 ? (
             <p className="text-gray-500">

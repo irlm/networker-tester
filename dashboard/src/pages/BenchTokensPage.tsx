@@ -333,7 +333,7 @@ export function BenchTokensPage() {
                         : 'border-gray-700 text-gray-400 hover:border-gray-600'
                     }`}
                   >
-                    <span className="font-mono">{label}</span>
+                    <span>{label}</span>
                     <div className="flex gap-0.5">
                       {run.tokens.map((t) => (
                         <span
@@ -366,7 +366,7 @@ export function BenchTokensPage() {
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className={`font-mono text-xs truncate ${run.configId === 'unknown' ? 'text-gray-400 italic' : 'text-cyan-400'}`}>
+                        <span className={`text-xs truncate ${run.configId === 'unknown' ? 'text-gray-400 italic' : 'text-cyan-400'}`}>
                           {label}
                         </span>
                         <span className="text-[10px] text-gray-500 ml-2 shrink-0">
@@ -398,7 +398,7 @@ export function BenchTokensPage() {
                 {/* Detail header */}
                 <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800 bg-gray-800/20">
                   <div className="flex items-center gap-3">
-                    <span className={`font-mono text-sm ${selectedRunData.configId === 'unknown' ? 'text-gray-400 italic' : 'text-cyan-400'}`}>
+                    <span className={`text-sm ${selectedRunData.configId === 'unknown' ? 'text-gray-400 italic' : 'text-cyan-400'}`}>
                       {selectedRunData.configId === 'unknown' ? 'Ungrouped' : selectedRunData.configId}
                     </span>
                     <span className="text-xs text-gray-400">
@@ -440,7 +440,7 @@ export function BenchTokensPage() {
                             isCritical ? 'bg-red-500/5' : 'hover:bg-gray-800/20'
                           }`}
                         >
-                          <td className="px-4 py-2.5 font-mono text-xs text-gray-300" title={t.name}>
+                          <td className="px-4 py-2.5 text-xs text-gray-300" title={t.name}>
                             {t.testbed_id || t.name.replace(/^bench-[^-]+-vm-/, '')}
                           </td>
                           <td className="px-4 py-2.5 text-xs text-gray-400 truncate max-w-[140px]" title={t.user ?? undefined}>
@@ -450,7 +450,7 @@ export function BenchTokensPage() {
                             {relativeDate(t.created)}
                           </td>
                           <td className="px-4 py-2.5 whitespace-nowrap">
-                            <span className={`text-xs font-mono ${ttlColor(ms)}`}>
+                            <span className={`text-xs ${ttlColor(ms)}`}>
                               {ttlLabel(ms)}
                             </span>
                             <div className="inline-block w-8 h-0.5 bg-gray-800 rounded-sm align-middle ml-1">

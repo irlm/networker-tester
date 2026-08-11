@@ -57,7 +57,7 @@ export function RunComparePage() {
         <Breadcrumb items={[{ label: 'Runs', to: `/projects/${projectId}/runs` }, { label: 'Compare' }]} />
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
           <h3 className="text-red-400 font-bold mb-2">Comparison failed</h3>
-          <p className="text-red-300 text-sm font-mono">{error}</p>
+          <p className="text-red-300 text-sm">{error}</p>
         </div>
       </div>
     );
@@ -94,10 +94,10 @@ export function RunComparePage() {
             <tbody>
               {report.cases.map((c: BenchmarkCaseComparison) => (
                 <tr key={c.case_id} className="border-b border-gray-800/30 hover:bg-gray-800/10">
-                  <td className="px-4 py-2 text-gray-300 font-mono">{c.case_id.slice(0, 8)}</td>
+                  <td className="px-4 py-2 text-gray-300">{c.case_id.slice(0, 8)}</td>
                   <td className="px-4 py-2 text-gray-400">{c.protocol}</td>
                   <td className="px-4 py-2 text-gray-400">{c.metric_name} ({c.metric_unit})</td>
-                  <td className="px-4 py-2 text-gray-200 text-right font-mono">
+                  <td className="px-4 py-2 text-gray-200 text-right">
                     {c.baseline?.distribution?.median?.toFixed(2) ?? '-'}
                   </td>
                   {c.candidates?.map((cand, i) => {
@@ -105,7 +105,7 @@ export function RunComparePage() {
                     const color = delta == null ? 'text-gray-500' :
                       (c.higher_is_better ? delta > 0 : delta < 0) ? 'text-green-400' : 'text-red-400';
                     return (
-                      <td key={i} className={`px-4 py-2 text-right font-mono ${color}`}>
+                      <td key={i} className={`px-4 py-2 text-right ${color}`}>
                         {delta != null ? `${delta > 0 ? '+' : ''}${delta.toFixed(1)}%` : '-'}
                       </td>
                     );

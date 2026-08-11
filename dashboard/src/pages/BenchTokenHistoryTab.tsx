@@ -224,10 +224,10 @@ export function BenchTokenHistoryTab() {
                     key={t.name}
                     className="border-b border-gray-800/50 opacity-70"
                   >
-                    <td className="px-4 py-2.5 font-mono text-xs text-cyan-400">
+                    <td className="px-4 py-2.5 text-xs text-cyan-400">
                       {t.config_id || '\u2014'}
                     </td>
-                    <td className="px-4 py-2.5 font-mono text-xs text-gray-400">
+                    <td className="px-4 py-2.5 text-xs text-gray-400">
                       {t.testbed_id || '\u2014'}
                     </td>
                     <td className="px-4 py-2.5 text-xs text-gray-400 truncate max-w-[140px]" title={t.user ?? undefined}>
@@ -239,7 +239,7 @@ export function BenchTokenHistoryTab() {
                     <td className={`px-4 py-2.5 text-xs whitespace-nowrap ${how.label === 'revoked' ? 'text-red-400' : 'text-gray-400'}`}>
                       {formatAbsDate(t.expires)}
                     </td>
-                    <td className={`px-4 py-2.5 text-xs font-mono whitespace-nowrap ${isShortLived ? 'text-yellow-400' : 'text-gray-400'}`}>
+                    <td className={`px-4 py-2.5 text-xs whitespace-nowrap ${isShortLived ? 'text-yellow-400' : 'text-gray-400'}`}>
                       {livedLabel(lived)}
                     </td>
                     <td className={`px-4 py-2.5 text-xs ${how.color}`}>

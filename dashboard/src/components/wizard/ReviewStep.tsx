@@ -71,7 +71,7 @@ export function ReviewStep({
         />
       </label>
 
-      <div className="text-xs font-mono text-gray-400 mb-4">{summaryLine}</div>
+      <div className="text-xs text-gray-400 mb-4">{summaryLine}</div>
 
       {extraSections}
 
@@ -80,7 +80,7 @@ export function ReviewStep({
         <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">Testbeds</div>
         <div className="space-y-0.5">
           {testbeds.map((testbed, idx) => (
-            <div key={testbed.key} className="flex items-center gap-2 text-xs font-mono py-1 border-b border-gray-800/50 last:border-0">
+            <div key={testbed.key} className="flex items-center gap-2 text-xs py-1 border-b border-gray-800/50 last:border-0">
               <span className="text-gray-400 w-4">{idx + 1}</span>
               <span className="text-gray-200">{testbed.cloud}</span>
               <span className="text-gray-400">/</span>
@@ -100,7 +100,7 @@ export function ReviewStep({
       {/* Methodology */}
       <div className="mb-4">
         <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">Methodology</div>
-        <div className="text-xs font-mono text-gray-400">
+        <div className="text-xs text-gray-400">
           {methodology.warmup_runs} warmup / {methodology.measured_runs} measured / {methodology.target_error_pct > 0 ? `${methodology.target_error_pct}% target error` : 'no error target'}
         </div>
       </div>
@@ -108,11 +108,11 @@ export function ReviewStep({
       {/* Workload */}
       <div className="mb-4">
         <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">Workload</div>
-        <div className="text-xs font-mono text-gray-400">{workloadLine}</div>
+        <div className="text-xs text-gray-400">{workloadLine}</div>
       </div>
 
       {matrixNote && (
-        <div className="text-xs font-mono text-cyan-400 mb-4">{matrixNote}</div>
+        <div className="text-xs text-cyan-400 mb-4">{matrixNote}</div>
       )}
 
       {afterWorkload}
@@ -136,7 +136,7 @@ export function ReviewStep({
             type="text"
             value={cronExpr}
             onChange={e => onCronExprChange(e.target.value)}
-            className="bg-[var(--bg-base)] border border-gray-700 px-3 py-2 text-sm text-gray-200 w-full font-mono focus:outline-none focus:border-cyan-500"
+            className="bg-[var(--bg-base)] border border-gray-700 px-3 py-2 text-sm text-gray-200 w-full focus:outline-none focus:border-cyan-500"
           />
           <p className="text-xs text-gray-500 mt-1">sec min hour day month weekday -- e.g. 0 0 * * * * = hourly</p>
         </div>

@@ -10,7 +10,7 @@ export function FilterChip({ label, value, onClear }: FilterChipProps) {
   return (
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-cyan-500/10 border border-cyan-500/20 text-xs text-cyan-400">
       <span className="text-gray-400">{label}:</span>
-      <span className="font-mono">{value}</span>
+      <span>{value}</span>
       <button
         type="button"
         onClick={onClear}

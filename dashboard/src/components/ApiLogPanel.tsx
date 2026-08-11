@@ -93,9 +93,9 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
         className="fixed bottom-4 right-4 z-30 bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-gray-400 hover:text-cyan-400 hover:border-cyan-500/30 transition-colors flex items-center gap-2"
         title="Performance Log"
       >
-        <span className="font-mono">{entries.filter(e => e.source === 'user').length}</span>
+        <span>{entries.filter(e => e.source === 'user').length}</span>
         <span>user</span>
-        <span className="text-gray-500 font-mono">+{entries.filter(e => e.source === 'poll').length}</span>
+        <span className="text-gray-500">+{entries.filter(e => e.source === 'poll').length}</span>
         <span className="text-gray-500">poll</span>
         {entries.length > 0 && (
           <>
@@ -148,18 +148,18 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
           {tab === 'api' && entries.length > 0 && (
             <div className="flex items-center gap-2 text-[10px] ml-2">
               <span className="text-gray-400">avg:</span>
-              <span className="text-cyan-400 font-mono">{formatMs(avgServer)}</span>
+              <span className="text-cyan-400">{formatMs(avgServer)}</span>
               <span className="text-gray-500">srv</span>
-              <span className="text-purple-400 font-mono">{formatMs(avgTotal - avgServer)}</span>
+              <span className="text-purple-400">{formatMs(avgTotal - avgServer)}</span>
               <span className="text-gray-500">net</span>
-              <span className={`font-mono ${speedIndicator(avgTotal)}`}>{formatMs(avgTotal)}</span>
+              <span className={`${speedIndicator(avgTotal)}`}>{formatMs(avgTotal)}</span>
               <span className="text-gray-500">total</span>
             </div>
           )}
           {tab === 'render' && renderEntries.length > 0 && (
             <div className="flex items-center gap-2 text-[10px] ml-2">
               <span className="text-gray-400">avg:</span>
-              <span className={`font-mono ${renderSpeedColor(avgRender)}`}>{formatMs(avgRender)}</span>
+              <span className={`${renderSpeedColor(avgRender)}`}>{formatMs(avgRender)}</span>
               <span className="text-gray-500">render</span>
               {slowRenders > 0 && (
                 <>
@@ -219,7 +219,7 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
       </div>
 
       {/* Log entries */}
-      <div className="overflow-auto flex-1 font-mono text-[11px]">
+      <div className="overflow-auto flex-1 text-[11px]">
         {tab === 'api' && (
           filteredApi.length === 0 ? (
             <div className="px-3 py-8 text-center text-gray-500 text-xs">

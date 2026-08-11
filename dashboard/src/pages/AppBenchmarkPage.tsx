@@ -294,7 +294,7 @@ export function AppBenchmarkPage() {
                 <div className="text-sm font-medium text-gray-100">{tmpl.name}</div>
                 <div className="text-[11px] text-gray-400 mt-0.5">{tmpl.description}</div>
                 {tmpl.defaultTestbedCount > 0 && (
-                  <div className="text-[10px] font-mono text-gray-500 mt-1.5">
+                  <div className="text-[10px] text-gray-500 mt-1.5">
                     {tmpl.defaultTestbedCount} testbed / {tmpl.defaultLanguages.length} lang
                   </div>
                 )}
@@ -359,7 +359,7 @@ export function AppBenchmarkPage() {
           extraSections={
             <div className="mb-4">
               <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">Template</div>
-              <div className="text-xs font-mono text-gray-400">
+              <div className="text-xs text-gray-400">
                 {RUNTIME_TEMPLATES.find(t => t.id === selectedTemplate)?.name ?? selectedTemplate}
               </div>
             </div>
@@ -375,7 +375,7 @@ export function AppBenchmarkPage() {
           afterWorkload={
             <div className="mb-4">
               <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">Languages</div>
-              <div className="text-xs font-mono text-gray-400">
+              <div className="text-xs text-gray-400">
                 {[...selectedLangs].sort().map(lang => {
                   const entry = LANGUAGE_GROUPS.flatMap(g => g.entries).find(e => e.id === lang);
                   return entry?.label ?? lang;

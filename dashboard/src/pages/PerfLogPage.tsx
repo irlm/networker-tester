@@ -110,7 +110,7 @@ export function PerfLogPage() {
         <h2 className="text-lg md:text-xl font-bold text-gray-100 mb-6">Performance Log</h2>
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
           <h3 className="text-red-400 font-bold mb-2">Failed to load performance logs</h3>
-          <p className="text-red-300 text-sm font-mono">{loadError}</p>
+          <p className="text-red-300 text-sm">{loadError}</p>
           <p className="text-gray-400 text-xs mt-2">Retrying automatically every 15 seconds.</p>
         </div>
       </div>
@@ -350,7 +350,7 @@ export function PerfLogPage() {
             <div>
               <h3 className="text-xs text-gray-400 tracking-wider font-medium mb-3 uppercase">Slowest API Paths</h3>
               <div className="table-container">
-                <table className="w-full text-sm font-mono">
+                <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
                       <th className="px-3 py-2 text-left font-medium">Path</th>

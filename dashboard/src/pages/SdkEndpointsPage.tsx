@@ -176,13 +176,13 @@ export function SdkEndpointsPage() {
               {
                 key: 'url',
                 label: 'Target URL',
-                cellClass: 'text-cyan-400 font-mono break-all',
+                cellClass: 'text-cyan-400 break-all',
                 render: (ep) => ep.url ?? '—',
               },
               {
                 key: 'route',
                 label: 'Route',
-                cellClass: 'text-gray-400 font-mono',
+                cellClass: 'text-gray-400',
                 render: (ep) => ep.route ?? '/laghound/echo',
               },
               {
@@ -190,7 +190,7 @@ export function SdkEndpointsPage() {
                 label: 'Token',
                 render: (ep) =>
                   ep.token_set ? (
-                    <span className="text-gray-400 font-mono" title="Token stored (write-only)">
+                    <span className="text-gray-400" title="Token stored (write-only)">
                       {ep.token ?? '********'}
                     </span>
                   ) : (

@@ -131,7 +131,7 @@ export function BenchmarkCatalogPage() {
                 value={formName}
                 onChange={(e) => setFormName(e.target.value)}
                 placeholder="benchmark-ubuntu-east"
-                className="w-full bg-transparent border-b border-gray-700 focus:border-cyan-500/50 py-1.5 text-sm text-gray-200 focus:outline-none placeholder:text-gray-700 font-mono"
+                className="w-full bg-transparent border-b border-gray-700 focus:border-cyan-500/50 py-1.5 text-sm text-gray-200 focus:outline-none placeholder:text-gray-700"
                 autoFocus
               />
             </div>
@@ -142,7 +142,7 @@ export function BenchmarkCatalogPage() {
                 value={formIp}
                 onChange={(e) => setFormIp(e.target.value)}
                 placeholder="10.0.0.5"
-                className="w-full bg-transparent border-b border-gray-700 focus:border-cyan-500/50 py-1.5 text-sm text-gray-200 focus:outline-none placeholder:text-gray-700 font-mono"
+                className="w-full bg-transparent border-b border-gray-700 focus:border-cyan-500/50 py-1.5 text-sm text-gray-200 focus:outline-none placeholder:text-gray-700"
               />
             </div>
             <div>
@@ -152,7 +152,7 @@ export function BenchmarkCatalogPage() {
                 value={formSshUser}
                 onChange={(e) => setFormSshUser(e.target.value)}
                 placeholder="azureuser"
-                className="w-full bg-transparent border-b border-gray-700 focus:border-cyan-500/50 py-1.5 text-sm text-gray-200 focus:outline-none placeholder:text-gray-700 font-mono"
+                className="w-full bg-transparent border-b border-gray-700 focus:border-cyan-500/50 py-1.5 text-sm text-gray-200 focus:outline-none placeholder:text-gray-700"
               />
             </div>
             <div>
@@ -175,7 +175,7 @@ export function BenchmarkCatalogPage() {
                 value={formRegion}
                 onChange={(e) => setFormRegion(e.target.value)}
                 placeholder="eastus"
-                className="w-full bg-transparent border-b border-gray-700 focus:border-cyan-500/50 py-1.5 text-sm text-gray-200 focus:outline-none placeholder:text-gray-700 font-mono"
+                className="w-full bg-transparent border-b border-gray-700 focus:border-cyan-500/50 py-1.5 text-sm text-gray-200 focus:outline-none placeholder:text-gray-700"
               />
             </div>
           </div>
@@ -209,18 +209,18 @@ export function BenchmarkCatalogPage() {
       {vms.length > 0 && (
         <DataTable
           columns={[
-            { key: 'name', label: 'Name', cellClass: 'font-mono text-gray-200', render: (vm) => vm.name },
+            { key: 'name', label: 'Name', cellClass: 'text-gray-200', render: (vm) => vm.name },
             {
               key: 'cloud',
               label: 'Cloud',
               render: (vm) => (
-                <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${cloudBadge[vm.cloud] || cloudBadge.manual}`}>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded ${cloudBadge[vm.cloud] || cloudBadge.manual}`}>
                   {vm.cloud}
                 </span>
               ),
             },
-            { key: 'region', label: 'Region', cellClass: 'text-gray-400 font-mono', render: (vm) => vm.region || '\u2014' },
-            { key: 'ip', label: 'IP', cellClass: 'text-gray-300 font-mono', render: (vm) => vm.ip },
+            { key: 'region', label: 'Region', cellClass: 'text-gray-400', render: (vm) => vm.region || '\u2014' },
+            { key: 'ip', label: 'IP', cellClass: 'text-gray-300', render: (vm) => vm.ip },
             {
               key: 'languages',
               label: 'Languages',
@@ -232,7 +232,7 @@ export function BenchmarkCatalogPage() {
                   {vm.languages.map((lang) => (
                     <span
                       key={lang}
-                      className="text-[10px] px-1.5 py-0.5 rounded border border-cyan-700/50 bg-cyan-500/10 text-cyan-400 font-mono"
+                      className="text-[10px] px-1.5 py-0.5 rounded border border-cyan-700/50 bg-cyan-500/10 text-cyan-400"
                     >
                       {lang}
                     </span>

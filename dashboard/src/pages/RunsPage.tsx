@@ -8,6 +8,7 @@ import { RunResult } from '../components/common/RunResult';
 import { runDisplayStatus } from '../lib/runStatus';
 import { FilterBar, FilterChip } from '../components/common/FilterBar';
 import { usePolling } from '../hooks/usePolling';
+import { StatusFooter } from '../components/common/StatusFooter';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useRenderLog } from '../hooks/useRenderLog';
 import { stableSet } from '../lib/stableUpdate';
@@ -121,6 +122,9 @@ export function RunsPage() {
 
   usePageTitle('Runs');
 
+  // Declared above loadRuns because its setter is called inside the callback.
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
+
   const loadRuns = useCallback(() => {
     if (!projectId) return;
     const params: {
@@ -142,6 +146,7 @@ export function RunsPage() {
         if (changed) markRender('api:runs', data.length);
         setError(null);
         setLoading(false);
+        setLastUpdatedAt(Date.now());
       })
       .catch((e) => {
         setError(errorMessage(e));
@@ -149,7 +154,11 @@ export function RunsPage() {
       });
   }, [statusFilter, endpointKindFilter, artifactFilter, comparisonGroupId, projectId, markRender]);
 
-  usePolling(loadRuns, 15000);
+  // StatusFooter wiring: pause flips usePolling's enabled flag; refresh
+  // bumps resetKey (restarts the loop with an immediate tick).
+  const [paused, setPaused] = useState(false);
+  const [refreshTick, setRefreshTick] = useState(0);
+  usePolling(loadRuns, 15000, !paused, refreshTick);
 
   // Merge denormalized fields from the config map so the backend's sparse
   // TestRun payload (no endpoint_kind, no config_name) still drives the UI.
@@ -380,7 +389,7 @@ export function RunsPage() {
               <>
                 <Link
                   to={`/projects/${projectId}/runs/${run.id}`}
-                  className="text-cyan-400 hover:underline font-mono"
+                  className="text-cyan-400 hover:underline"
                 >
                   {run.id.slice(0, 8)}
                 </Link>
@@ -442,6 +451,20 @@ export function RunsPage() {
               </Link>
             )}
           </>
+        }
+      />
+
+      <StatusFooter
+        paused={paused}
+        onPauseToggle={() => setPaused(p => !p)}
+        onRefresh={() => { setRefreshTick(t => t + 1); if (paused) loadRuns(); }}
+        lastUpdatedAt={lastUpdatedAt}
+        intervalMs={15000}
+        pills={
+          <span className="text-gray-500">
+            {runsWithDates.length} run{runsWithDates.length !== 1 ? 's' : ''}
+            {activeFilterCount > 0 && ` · ${activeFilterCount} filter${activeFilterCount !== 1 ? 's' : ''}`}
+          </span>
         }
       />
 

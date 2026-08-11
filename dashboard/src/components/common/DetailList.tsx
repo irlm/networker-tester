@@ -23,7 +23,7 @@ export function DetailList({ rows }: { rows: DetailRow[] }) {
         <div key={r.label} className="contents">
           <dt className="text-gray-400">{r.label}</dt>
           <dd
-            className={`${r.accent ? 'text-cyan-400' : 'text-gray-300'} font-mono`}
+            className={`${r.accent ? 'text-cyan-400' : 'text-gray-300'}`}
             title={r.title}
           >
             {r.value ?? '—'}

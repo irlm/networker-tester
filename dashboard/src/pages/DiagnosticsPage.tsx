@@ -339,7 +339,7 @@ function UrlCard({
         </span>
 
         <div className="flex items-center gap-3 flex-1 min-w-0">
-          <span className={`text-[13px] font-medium font-mono truncate ${urlColor}`}>
+          <span className={`text-[13px] font-medium truncate ${urlColor}`}>
             {host}
           </span>
 
@@ -865,7 +865,7 @@ export function DiagnosticsPage() {
               onChange={e => setUrl(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && url.trim()) handleRun(); }}
               placeholder="Enter URL to test..."
-              className="flex-1 bg-[var(--bg-raised)] border border-gray-800 rounded px-3 py-2 text-[13px] font-mono text-cyan-400 focus:outline-none focus:border-cyan-500/50 placeholder:text-gray-600 transition-colors"
+              className="flex-1 bg-[var(--bg-raised)] border border-gray-800 rounded px-3 py-2 text-[13px] text-cyan-400 focus:outline-none focus:border-cyan-500/50 placeholder:text-gray-600 transition-colors"
               aria-label="URL or hostname to test"
             />
           </div>
@@ -874,7 +874,7 @@ export function DiagnosticsPage() {
             id="diag-preset"
             value={preset}
             onChange={e => setPreset(e.target.value as DiagPreset)}
-            className="bg-[var(--bg-raised)] border border-gray-800 rounded px-3 py-2 text-xs font-mono text-gray-400 focus:outline-none appearance-none pr-7 cursor-pointer"
+            className="bg-[var(--bg-raised)] border border-gray-800 rounded px-3 py-2 text-xs text-gray-400 focus:outline-none appearance-none pr-7 cursor-pointer"
             style={{
               backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23475569' stroke-width='1.5'/%3E%3C/svg%3E")`,
               backgroundRepeat: 'no-repeat',
@@ -892,7 +892,7 @@ export function DiagnosticsPage() {
             id="diag-runner"
             value={selectedTesterId ?? ''}
             onChange={e => setSelectedTesterId(e.target.value || null)}
-            className="bg-[var(--bg-raised)] border border-gray-800 rounded px-3 py-2 text-xs font-mono text-gray-400 focus:outline-none appearance-none pr-7 cursor-pointer max-w-[14rem]"
+            className="bg-[var(--bg-raised)] border border-gray-800 rounded px-3 py-2 text-xs text-gray-400 focus:outline-none appearance-none pr-7 cursor-pointer max-w-[14rem]"
             style={{
               backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23475569' stroke-width='1.5'/%3E%3C/svg%3E")`,
               backgroundRepeat: 'no-repeat',
@@ -936,7 +936,7 @@ export function DiagnosticsPage() {
             <button
               key={host}
               onClick={() => handleHostClick(host)}
-              className={`text-xs px-2 py-1 rounded border transition-colors font-mono ${
+              className={`text-xs px-2 py-1 rounded border transition-colors ${
                 extractHost(url) === host
                   ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-400'
                   : 'border-gray-800 text-gray-400 hover:border-gray-600 hover:text-gray-400'
@@ -998,7 +998,7 @@ export function DiagnosticsPage() {
               <button
                 key={f}
                 onClick={() => setFilter(f)}
-                className={`px-3 py-1 text-[11px] font-mono border-r border-gray-800 last:border-r-0 transition-colors ${
+                className={`px-3 py-1 text-[11px] border-r border-gray-800 last:border-r-0 transition-colors ${
                   filter === f
                     ? 'bg-white/5 text-gray-200'
                     : 'text-gray-500 hover:text-gray-400'
@@ -1013,7 +1013,7 @@ export function DiagnosticsPage() {
           <select
             value={sort}
             onChange={e => setSort(e.target.value as SortMode)}
-            className="bg-transparent border border-gray-800 rounded px-2.5 py-1 text-[11px] font-mono text-gray-400 focus:outline-none appearance-none pr-6 cursor-pointer"
+            className="bg-transparent border border-gray-800 rounded px-2.5 py-1 text-[11px] text-gray-400 focus:outline-none appearance-none pr-6 cursor-pointer"
             style={{
               backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23475569' stroke-width='1.5'/%3E%3C/svg%3E")`,
               backgroundRepeat: 'no-repeat',

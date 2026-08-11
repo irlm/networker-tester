@@ -112,7 +112,7 @@ export function ShareDialog({ projectId, resourceType, resourceId, onClose, onCr
                     type="text"
                     readOnly
                     value={result.url}
-                    className="flex-1 bg-[var(--bg-base)] border border-gray-800 rounded px-3 py-2 text-sm text-gray-200 font-mono"
+                    className="flex-1 bg-[var(--bg-base)] border border-gray-800 rounded px-3 py-2 text-sm text-gray-200"
                   />
                   <button
                     onClick={handleCopy}

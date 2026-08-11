@@ -364,10 +364,10 @@ export function CreateTesterModal({
           {stage === 'creating' && createdTester ? (
             <div className="space-y-4" data-testid="creating-state">
               <p className="text-sm text-gray-300">
-                Provisioning <span className="font-mono">{createdTester.name}</span> in{' '}
-                <span className="font-mono">{createdTester.region}</span>…
+                Provisioning <span>{createdTester.name}</span> in{' '}
+                <span>{createdTester.region}</span>…
               </p>
-              <div className="bg-gray-900/40 border border-gray-800 rounded p-3 font-mono text-xs text-cyan-400">
+              <div className="bg-gray-900/40 border border-gray-800 rounded p-3 text-xs text-cyan-400">
                 <div>power_state: {createdTester.power_state}</div>
                 <div>allocation: {createdTester.allocation}</div>
                 {createdTester.status_message && (

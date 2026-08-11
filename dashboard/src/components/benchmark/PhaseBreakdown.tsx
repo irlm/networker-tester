@@ -155,7 +155,7 @@ function DeltaBadge({ delta }: { delta: DeltaInfo }) {
   return (
     <span
       style={{ color: displayColor, fontWeight: delta.isBold ? 700 : 400 }}
-      className="font-mono text-xs"
+      className="text-xs"
     >
       {text}
     </span>
@@ -237,7 +237,7 @@ export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps
 
   if (modes.length === 0) {
     return (
-      <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded p-3 text-gray-400 text-xs font-mono">
+      <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded p-3 text-gray-400 text-xs">
         No phase data available
       </div>
     );
@@ -278,7 +278,7 @@ export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps
           <div key={modeData.mode} className="flex items-center gap-3">
             {/* Mode label */}
             <div
-              className="text-gray-400 text-xs font-mono w-24 shrink-0 truncate text-right"
+              className="text-gray-400 text-xs w-24 shrink-0 truncate text-right"
               title={modeData.mode}
             >
               {modeData.mode}
@@ -291,7 +291,7 @@ export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps
               onTooltip={setTooltip}
             />
             {/* Total label */}
-            <div className="text-gray-400 text-xs font-mono shrink-0">
+            <div className="text-gray-400 text-xs shrink-0">
               {modeData.total_ms.toFixed(1)}ms
             </div>
           </div>
@@ -306,14 +306,14 @@ export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps
               className="w-2.5 h-2.5 rounded-sm shrink-0"
               style={{ backgroundColor: p.color }}
             />
-            <span className="text-gray-400 text-xs font-mono">{p.label}</span>
+            <span className="text-gray-400 text-xs">{p.label}</span>
           </div>
         ))}
       </div>
 
       {/* ── Data table ── */}
       <div className="overflow-x-auto">
-        <table className="w-full text-xs font-mono border-collapse">
+        <table className="w-full text-xs border-collapse">
           <thead>
             <tr className="text-gray-400 border-b border-[var(--border-default)]">
               <th className="text-left py-1 pr-2 font-normal">Mode</th>
@@ -417,7 +417,7 @@ export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps
       {/* ── Hover Tooltip ── */}
       {tooltip && (
         <div
-          className="fixed z-50 pointer-events-none bg-[var(--bg-raised)] border border-gray-700 rounded px-2 py-1 text-xs font-mono text-gray-200"
+          className="fixed z-50 pointer-events-none bg-[var(--bg-raised)] border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"
           style={{ left: tooltip.x + 12, top: tooltip.y - 28 }}
         >
           {tooltip.label}: {fmtMs(tooltip.value)} ({tooltip.pct.toFixed(0)}% of total)

@@ -163,7 +163,7 @@ export function SettingsPage() {
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-xs text-gray-400 tracking-wider font-medium">system versions</h3>
           {latestRelease && (
-            <span className="text-xs text-gray-500 font-mono">
+            <span className="text-xs text-gray-500">
               latest: v{latestRelease}
             </span>
           )}
@@ -181,7 +181,7 @@ export function SettingsPage() {
                 </div>
                 <div className="flex items-center gap-3">
                   <span
-                    className={`text-xs font-mono ${
+                    className={`text-xs ${
                       versionInfo?.dashboard_version === latestRelease ? 'text-green-400' :
                       versionInfo?.dashboard_version ? 'text-yellow-400' : 'text-gray-400'
                     }`}
@@ -241,7 +241,7 @@ export function SettingsPage() {
                 </div>
                 <div className="flex items-center gap-3">
                   <span
-                    className={`text-xs font-mono ${
+                    className={`text-xs ${
                       !ep.reachable ? 'text-gray-500' :
                       outdated ? 'text-yellow-400' : 'text-green-400'
                     }`}
@@ -300,7 +300,7 @@ export function SettingsPage() {
           </div>
           <div
             ref={logRef}
-            className="bg-[var(--bg-base)] p-4 h-[400px] overflow-y-auto font-mono text-xs leading-5"
+            className="bg-[var(--bg-base)] p-4 h-[400px] overflow-y-auto text-xs leading-5"
           >
             {liveLines.map((line, i) => (
               <div key={i} className="text-gray-300 whitespace-pre-wrap break-all">
@@ -326,7 +326,7 @@ export function SettingsPage() {
                   <div>
                     <span className="text-sm text-gray-200">{d.name}</span>
                     <span className="text-xs text-gray-500 ml-2">{d.provider_summary}</span>
-                    <div className="text-xs text-gray-400 mt-0.5 font-mono">
+                    <div className="text-xs text-gray-400 mt-0.5">
                       {ips.join(', ') || 'No IPs'}
                     </div>
                   </div>
@@ -431,7 +431,7 @@ export function SettingsPage() {
                         {vm.status}
                       </span>
                     </td>
-                    <td className="px-3 py-2 text-gray-400 font-mono text-[11px] max-w-48 truncate" title={vm.fqdn || vm.public_ip || ''}>
+                    <td className="px-3 py-2 text-gray-400 text-[11px] max-w-48 truncate" title={vm.fqdn || vm.public_ip || ''}>
                       {vm.fqdn || vm.public_ip || '-'}
                     </td>
                     <td className="px-3 py-2 text-gray-400">{vm.vm_size || '-'}</td>
@@ -525,7 +525,7 @@ export function SettingsPage() {
                       value={newConfig.subscription_id || ''}
                       onChange={e => setNewConfig(c => ({ ...c, subscription_id: e.target.value }))}
                       placeholder="00000000-0000-0000-0000-000000000000"
-                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500"
+                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                     />
                   </div>
                   <div>
@@ -534,7 +534,7 @@ export function SettingsPage() {
                       value={newConfig.tenant_id || ''}
                       onChange={e => setNewConfig(c => ({ ...c, tenant_id: e.target.value }))}
                       placeholder="Optional"
-                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500"
+                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                     />
                   </div>
                   <p className="text-xs text-gray-500">
@@ -552,7 +552,7 @@ export function SettingsPage() {
                       value={newConfig.account_id || ''}
                       onChange={e => setNewConfig(c => ({ ...c, account_id: e.target.value }))}
                       placeholder="123456789012"
-                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500"
+                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                     />
                   </div>
                   <div>
@@ -561,7 +561,7 @@ export function SettingsPage() {
                       value={newConfig.role_arn || ''}
                       onChange={e => setNewConfig(c => ({ ...c, role_arn: e.target.value }))}
                       placeholder="arn:aws:iam::123456789012:role/networker-dashboard"
-                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500"
+                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                     />
                   </div>
                   <div>
@@ -570,7 +570,7 @@ export function SettingsPage() {
                       value={newConfig.external_id || ''}
                       onChange={e => setNewConfig(c => ({ ...c, external_id: e.target.value }))}
                       placeholder="Auto-generated if blank"
-                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500"
+                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                     />
                   </div>
                   <div>
@@ -579,7 +579,7 @@ export function SettingsPage() {
                       value={newConfig.regions || ''}
                       onChange={e => setNewConfig(c => ({ ...c, regions: e.target.value }))}
                       placeholder="us-east-1, us-west-2"
-                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500"
+                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                     />
                   </div>
                   <p className="text-xs text-gray-500">
@@ -596,7 +596,7 @@ export function SettingsPage() {
                       value={newConfig.project_id || ''}
                       onChange={e => setNewConfig(c => ({ ...c, project_id: e.target.value }))}
                       placeholder="my-project-id"
-                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500"
+                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                     />
                   </div>
                   <div>
@@ -605,7 +605,7 @@ export function SettingsPage() {
                       value={newConfig.workload_identity_pool || ''}
                       onChange={e => setNewConfig(c => ({ ...c, workload_identity_pool: e.target.value }))}
                       placeholder="projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL"
-                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500"
+                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                     />
                   </div>
                   <div>
@@ -614,7 +614,7 @@ export function SettingsPage() {
                       value={newConfig.regions || ''}
                       onChange={e => setNewConfig(c => ({ ...c, regions: e.target.value }))}
                       placeholder="us-central1, europe-west1"
-                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500"
+                      className="w-full bg-[var(--bg-raised)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                     />
                   </div>
                   <p className="text-xs text-gray-500">

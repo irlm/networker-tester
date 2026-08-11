@@ -87,7 +87,7 @@ export function TargetDetailDrawer({
               <h3 id="target-detail-title" className="text-lg font-bold text-gray-100 truncate">
                 {row.name}
               </h3>
-              <p className="text-xs text-gray-400 font-mono">
+              <p className="text-xs text-gray-400">
                 {row.provider_summary ?? endpoints[0]?.provider ?? 'target'} · {row.deployment_id.slice(0, 8)}
               </p>
             </div>

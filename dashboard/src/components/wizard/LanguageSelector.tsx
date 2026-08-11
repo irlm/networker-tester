@@ -94,7 +94,7 @@ export function LanguageSelector({ selectedLangs, onLangsChange, testbeds, selec
       <div className="space-y-5">
         {LANGUAGE_GROUPS.map(group => (
           <div key={group.label}>
-            <div className="text-[10px] uppercase tracking-wider font-mono text-gray-500 mb-2">{group.label}</div>
+            <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-2">{group.label}</div>
             <div className="flex flex-wrap gap-1.5">
               {group.entries.map(entry => {
                 const checked = selectedLangs.has(entry.id);
@@ -148,13 +148,13 @@ export function LanguageSelector({ selectedLangs, onLangsChange, testbeds, selec
 
       {hasNoApiExclusions && (
         <p className="text-xs text-gray-500 mt-1">
-          apibench selected: languages tagged <span className="font-mono">no /api/*</span> serve no measured API suite and are excluded.
+          apibench selected: languages tagged <span>no /api/*</span> serve no measured API suite and are excluded.
         </p>
       )}
 
       {hasH1OnlyAnnotations && (
         <p className="text-xs text-gray-500 mt-1">
-          Languages tagged <span className="font-mono">h1 direct</span> self-serve HTTP/1.1 only — h2/h3 modes measure the proxy in front of them, not the language runtime.
+          Languages tagged <span>h1 direct</span> self-serve HTTP/1.1 only — h2/h3 modes measure the proxy in front of them, not the language runtime.
         </p>
       )}
 

@@ -57,7 +57,7 @@ function ProgressBar({ label, value, max, unit }: { label: string; value: number
     <div className="mb-3">
       <div className="flex items-center justify-between mb-1">
         <span className="text-xs text-gray-400">{label}</span>
-        <span className="text-xs text-gray-400 font-mono">
+        <span className="text-xs text-gray-400">
           {unit ? `${formatBytes(value)} / ${formatBytes(max)}` : `${pct.toFixed(1)}%`}
         </span>
       </div>
@@ -101,7 +101,7 @@ function OverviewTab({ system, db, version, userCount, workspaceCount }: {
             <ProgressBar label="Disk" value={system.disk_used_bytes} max={system.disk_total_bytes} unit="bytes" />
             <div className="flex items-center justify-between mt-2">
               <span className="text-xs text-gray-400">Uptime</span>
-              <span className="text-xs text-gray-300 font-mono">{formatUptime(system.uptime_seconds)}</span>
+              <span className="text-xs text-gray-300">{formatUptime(system.uptime_seconds)}</span>
             </div>
           </>
         ) : (
@@ -116,19 +116,19 @@ function OverviewTab({ system, db, version, userCount, workspaceCount }: {
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-xs text-gray-400">Connections</span>
-              <span className="text-xs text-gray-300 font-mono">{db.active_connections} / {db.max_connections}</span>
+              <span className="text-xs text-gray-300">{db.active_connections} / {db.max_connections}</span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-xs text-gray-400">Database size</span>
-              <span className="text-xs text-gray-300 font-mono">{formatBytes(db.database_size_bytes)}</span>
+              <span className="text-xs text-gray-300">{formatBytes(db.database_size_bytes)}</span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-xs text-gray-400">Cache hit ratio</span>
-              <span className="text-xs text-gray-300 font-mono">{(db.cache_hit_ratio * 100).toFixed(2)}%</span>
+              <span className="text-xs text-gray-300">{(db.cache_hit_ratio * 100).toFixed(2)}%</span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-xs text-gray-400">Oldest transaction</span>
-              <span className="text-xs text-gray-300 font-mono">
+              <span className="text-xs text-gray-300">
                 {db.oldest_transaction_age_seconds !== null ? `${db.oldest_transaction_age_seconds}s` : 'none'}
               </span>
             </div>
@@ -144,15 +144,15 @@ function OverviewTab({ system, db, version, userCount, workspaceCount }: {
         <div className="grid grid-cols-3 gap-4">
           <div>
             <span className="text-xs text-gray-400 block">Version</span>
-            <span className="text-sm text-gray-200 font-mono">{version ?? '...'}</span>
+            <span className="text-sm text-gray-200">{version ?? '...'}</span>
           </div>
           <div>
             <span className="text-xs text-gray-400 block">Total users</span>
-            <span className="text-sm text-gray-200 font-mono">{userCount}</span>
+            <span className="text-sm text-gray-200">{userCount}</span>
           </div>
           <div>
             <span className="text-xs text-gray-400 block">Total workspaces</span>
-            <span className="text-sm text-gray-200 font-mono">{workspaceCount}</span>
+            <span className="text-sm text-gray-200">{workspaceCount}</span>
           </div>
         </div>
       </div>
@@ -219,16 +219,16 @@ function UsageTab({ workspaces, onRefresh }: { workspaces: WorkspaceUsage[]; onR
             const isSuspended = ws.deleted_at !== null;
             return (
               <tr key={ws.project_id} className="border-b border-gray-800/50 hover:bg-gray-800/20">
-                <td className="py-2 pr-3 text-gray-200 font-mono">
+                <td className="py-2 pr-3 text-gray-200">
                   {ws.name}
                   {ws.delete_protection && (
                     <span className="ml-1.5 text-yellow-500 text-xs" title="Delete protection enabled">&#9737;</span>
                   )}
                 </td>
-                <td className="py-2 pr-3 text-gray-400 font-mono">{ws.member_count}</td>
-                <td className="py-2 pr-3 text-gray-400 font-mono">{ws.tester_count}</td>
-                <td className="py-2 pr-3 text-gray-400 font-mono">{ws.jobs_30d}</td>
-                <td className="py-2 pr-3 text-gray-400 font-mono">{ws.runs_30d}</td>
+                <td className="py-2 pr-3 text-gray-400">{ws.member_count}</td>
+                <td className="py-2 pr-3 text-gray-400">{ws.tester_count}</td>
+                <td className="py-2 pr-3 text-gray-400">{ws.jobs_30d}</td>
+                <td className="py-2 pr-3 text-gray-400">{ws.runs_30d}</td>
                 <td className="py-2 pr-3 text-gray-400 text-xs">
                   {ws.last_activity ? timeAgo(ws.last_activity) : 'never'}
                 </td>
@@ -376,7 +376,7 @@ function LogsTab() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search logs..."
-          className="flex-1 min-w-[200px] bg-transparent border-b border-gray-700 focus:border-cyan-500/50 py-1.5 text-sm text-gray-200 focus:outline-none placeholder:text-gray-700 font-mono"
+          className="flex-1 min-w-[200px] bg-transparent border-b border-gray-700 focus:border-cyan-500/50 py-1.5 text-sm text-gray-200 focus:outline-none placeholder:text-gray-700"
         />
         <button
           onClick={() => setPaused(!paused)}
@@ -394,7 +394,7 @@ function LogsTab() {
       )}
       <div
         ref={containerRef}
-        className="max-h-[600px] overflow-y-auto border border-gray-800 rounded bg-[var(--bg-card)] p-3 font-mono text-xs leading-relaxed"
+        className="max-h-[600px] overflow-y-auto border border-gray-800 rounded bg-[var(--bg-card)] p-3 text-xs leading-relaxed"
       >
         {logs.length === 0 && (
           <p className="text-gray-500 text-center py-4">No log entries</p>
@@ -636,7 +636,7 @@ function AuthTab() {
             value={publicUrl}
             onChange={e => setPublicUrl(e.target.value)}
             placeholder="https://dash.example.com"
-            className="flex-1 bg-transparent border-b border-gray-700 focus:border-cyan-500/50 py-1.5 text-sm text-gray-200 focus:outline-none placeholder:text-gray-700 font-mono"
+            className="flex-1 bg-transparent border-b border-gray-700 focus:border-cyan-500/50 py-1.5 text-sm text-gray-200 focus:outline-none placeholder:text-gray-700"
           />
           <button
             onClick={handlePublicUrlSave}
@@ -678,9 +678,9 @@ function AuthTab() {
             <tbody>
               {providers.map(p => (
                 <tr key={p.provider_id} className="border-b border-gray-800/50 hover:bg-gray-800/20">
-                  <td className="py-2 pr-3 text-gray-200 font-mono text-xs">{p.name}</td>
+                  <td className="py-2 pr-3 text-gray-200 text-xs">{p.name}</td>
                   <td className="py-2 pr-3 text-gray-400 text-xs">{p.provider_type}</td>
-                  <td className="py-2 pr-3 text-gray-400 font-mono text-xs truncate max-w-[200px]">{p.client_id}</td>
+                  <td className="py-2 pr-3 text-gray-400 text-xs truncate max-w-[200px]">{p.client_id}</td>
                   <td className="py-2 pr-3">
                     <span className={`text-[10px] px-1.5 py-0.5 rounded ${
                       p.enabled ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'
@@ -753,7 +753,7 @@ function AuthTab() {
                 <input
                   value={formName}
                   onChange={e => setFormName(e.target.value)}
-                  className="w-full bg-transparent border-b border-gray-700 focus:border-cyan-500/50 py-1.5 text-sm text-gray-200 focus:outline-none font-mono"
+                  className="w-full bg-transparent border-b border-gray-700 focus:border-cyan-500/50 py-1.5 text-sm text-gray-200 focus:outline-none"
                 />
               </div>
             </div>
@@ -764,7 +764,7 @@ function AuthTab() {
                 <div className="text-[10px] text-cyan-400/80 font-medium uppercase tracking-wider mb-1.5">Setup Guide</div>
                 <ol className="text-[11px] text-gray-400 space-y-0.5 list-none pl-0">
                   {PROVIDER_SETUP_GUIDES[formType].map((step, i) => (
-                    <li key={i} className="font-mono">
+                    <li key={i}>
                       {step.replace(/\{public_url\}/g, publicUrl || 'https://your-dashboard-url')}
                     </li>
                   ))}
@@ -783,7 +783,7 @@ function AuthTab() {
                   value={formFields[f.key] || ''}
                   onChange={e => setFormFields(prev => ({ ...prev, [f.key]: e.target.value }))}
                   placeholder={f.secret && editingId ? '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (leave empty to keep)' : ''}
-                  className="w-full bg-transparent border-b border-gray-700 focus:border-cyan-500/50 py-1.5 text-sm text-gray-200 focus:outline-none font-mono"
+                  className="w-full bg-transparent border-b border-gray-700 focus:border-cyan-500/50 py-1.5 text-sm text-gray-200 focus:outline-none"
                 />
                 {f.help && <p className="text-[10px] text-gray-500 mt-0.5">{f.help}</p>}
               </div>
