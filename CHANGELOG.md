@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.190] - 2026-08-11
+
+### Fixed
+- **System Health panel served month-old fossil rows as current** (the
+  "Logs Retention red" mystery): phase 3 ported the read endpoint but
+  never the CHECKER — the rows froze when the Rust stack died
+  (2026-07-15). And the red itself was honest: the perf_log retention
+  cleanup the DR design specified was never implemented anywhere (Rust
+  included). Now ported and completed as `SystemHealthService` (hourly,
+  leader-gated, immediate first tick): writes `core_db`,
+  `core_db_size` (3/5 GB), `logs_retention` (7/8-day thresholds),
+  PRUNES perf_log past the 7-day window (the missing job that makes
+  retention green), ages out system_health rows (the fossils and the
+  retired `logs_db`/`logs_db_size` names clear on first tick). perf_log
+  is Rust-era unmapped schema, so fresh installs without it report
+  green/"no table" instead of erroring.
+- The endpoint now marks any check row older than two intervals as
+  `stale`, and the panel badges it — a dead writer can never again
+  masquerade as a healthy system.
+
+---
+
 ## [0.28.189] - 2026-08-11
 
 ### Fixed

@@ -72,6 +72,7 @@ public static class BackgroundServicesExtensions
         }
 
         services.AddHostedService<SchedulerService>();
+        services.AddHostedService<SystemHealthService>();
         services.AddHostedService<QueuedRunRedispatchService>();
         return services;
     }

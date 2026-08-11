@@ -131,6 +131,7 @@ public static class LeaderLockKeys
     public static readonly long Watchdog = KeyFor(OpsServiceNames.Watchdog);
     public static readonly long AgentReaper = KeyFor(OpsServiceNames.AgentReaper);
     public static readonly long AutoShutdown = KeyFor(OpsServiceNames.AutoShutdown);
+    public static readonly long SystemHealth = KeyFor(OpsServiceNames.SystemHealth);
     public static readonly long OrphanReaper = KeyFor(OpsServiceNames.OrphanReaper);
     public static readonly long WorkspaceInactivity = KeyFor(OpsServiceNames.WorkspaceInactivity);
     public static readonly long ProvisioningOrchestrator = KeyFor(OpsServiceNames.ProvisioningOrchestrator);

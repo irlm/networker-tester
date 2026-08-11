@@ -4,6 +4,7 @@ import { api } from "../api/client";
 
 interface HealthCheck {
   check_name: string;
+  stale?: boolean;
   status: string;
   value: string | null;
   message: string | null;
@@ -140,6 +141,13 @@ export default function SystemHealthPanel() {
               </span>
             </div>
             <div className="flex items-center gap-2">
+              {check.stale && (
+                // The writer once died silently and the panel served
+                // month-old rows as current — staleness is now explicit.
+                <span className="text-[10px] px-1 py-0.5 border border-yellow-500/40 text-yellow-400 rounded">
+                  stale
+                </span>
+              )}
               {check.value && (
                 <span className="text-gray-400">{check.value}</span>
               )}
