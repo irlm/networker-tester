@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react';
+import { formatMs1dp } from '../lib/format';
 import { Link } from 'react-router';
 import { api, type AppNetworkReport, type AppNetworkGroup, type AppNetworkVerdict } from '../api/client';
 import { ExportMenu } from '../components/common/ExportMenu';
@@ -50,9 +51,6 @@ function VerdictBadge({ verdict }: { verdict: AppNetworkVerdict }) {
   );
 }
 
-function fmtMs(v: number | null): string {
-  return v === null ? '—' : `${v.toFixed(1)}ms`;
-}
 
 function fmtRatio(v: number | null): string {
   return v === null ? '—' : `${Math.round(v * 100)}%`;
@@ -85,12 +83,12 @@ function SplitBar({
       <div
         className="flex h-5 w-full rounded overflow-hidden border border-gray-800 bg-gray-900"
         role="img"
-        aria-label={`Latency split: network ${fmtMs(networkMs)}, server ${fmtMs(serverMs)}`}
+        aria-label={`Latency split: network ${formatMs1dp(networkMs)}, server ${formatMs1dp(serverMs)}`}
       >
         {hasData ? (
           <>
-            <div style={{ width: `${netPct}%`, backgroundColor: NETWORK_COLOR }} title={`Network ${fmtMs(networkMs)}`} />
-            <div style={{ width: `${srvPct}%`, backgroundColor: SERVER_COLOR }} title={`Server ${fmtMs(serverMs)}`} />
+            <div style={{ width: `${netPct}%`, backgroundColor: NETWORK_COLOR }} title={`Network ${formatMs1dp(networkMs)}`} />
+            <div style={{ width: `${srvPct}%`, backgroundColor: SERVER_COLOR }} title={`Server ${formatMs1dp(serverMs)}`} />
           </>
         ) : (
           <div className="w-full bg-gray-800/40" />
@@ -98,12 +96,12 @@ function SplitBar({
       </div>
       <div className="flex justify-between mt-1 text-[11px]">
         <span className="text-cyan-400">
-          net {fmtMs(networkMs)}
-          {p95NetworkMs != null && <span className="text-gray-500"> · p95 {fmtMs(p95NetworkMs)}</span>}
+          net {formatMs1dp(networkMs)}
+          {p95NetworkMs != null && <span className="text-gray-500"> · p95 {formatMs1dp(p95NetworkMs)}</span>}
         </span>
         <span className="text-purple-400">
-          srv {fmtMs(serverMs)}
-          {p95ServerMs != null && <span className="text-gray-500"> · p95 {fmtMs(p95ServerMs)}</span>}
+          srv {formatMs1dp(serverMs)}
+          {p95ServerMs != null && <span className="text-gray-500"> · p95 {formatMs1dp(p95ServerMs)}</span>}
         </span>
       </div>
     </div>
@@ -203,7 +201,7 @@ export function AppNetworkReportPage() {
                 serverMs={report!.overall_median_server_ms}
               />
               <div className="flex flex-wrap gap-x-6 gap-y-1 mt-3 text-xs text-gray-400">
-                <span>median wall {fmtMs(report!.overall_median_wall_ms)}</span>
+                <span>median wall {formatMs1dp(report!.overall_median_wall_ms)}</span>
                 <span>server ratio {fmtRatio(report!.overall_server_ratio)}</span>
                 {report!.split_anomaly_count > 0 && (
                   <span className="text-yellow-400" title="Attempts where reported server time exceeded observed wall time — clock skew or SDK span mismatch.">
@@ -253,10 +251,10 @@ export function AppNetworkReportPage() {
                       />
                     </td>
                     <td className="px-4 py-3 text-right text-xs text-purple-300">
-                      {fmtMs(g.median_server_ms)} <span className="text-gray-500">/ {fmtMs(g.p95_server_ms)}</span>
+                      {formatMs1dp(g.median_server_ms)} <span className="text-gray-500">/ {formatMs1dp(g.p95_server_ms)}</span>
                     </td>
                     <td className="px-4 py-3 text-right text-xs text-cyan-300">
-                      {fmtMs(g.median_network_ms)} <span className="text-gray-500">/ {fmtMs(g.p95_network_ms)}</span>
+                      {formatMs1dp(g.median_network_ms)} <span className="text-gray-500">/ {formatMs1dp(g.p95_network_ms)}</span>
                     </td>
                     <td className="px-4 py-3 text-right text-xs text-gray-300">{fmtRatio(g.server_ratio)}</td>
                     <td className="px-4 py-3 text-right text-xs text-gray-400">

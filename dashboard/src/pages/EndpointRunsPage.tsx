@@ -21,6 +21,7 @@ import { usePageTitle } from '../hooks/usePageTitle';
 import { usePolling } from '../hooks/usePolling';
 import { Breadcrumb } from '../components/common/Breadcrumb';
 import { DataTable } from '../components/common/DataTable';
+import { FilterBar, FilterChip } from '../components/common/FilterBar';
 import { ModeChipList } from '../components/common/ModeChip';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { timeAgo } from '../lib/format';
@@ -244,28 +245,52 @@ export function EndpointRunsPage() {
         </span>
       </div>
 
-      <div className="flex items-center gap-2 mb-3">
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="search runs…"
-          className="bg-[var(--bg-base)] border border-gray-700 px-3 py-1 text-xs text-gray-200 w-60 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
-        />
-        <select
-          value={presetFilter}
-          onChange={(e) => setPresetFilter(e.target.value)}
-          className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs text-gray-300 focus:outline-none focus:border-cyan-500"
+      <div className="mb-3">
+        <FilterBar
+          activeCount={[search.trim().length > 0, presetFilter !== 'all'].filter(Boolean).length}
+          onClearAll={() => { setSearch(''); setPresetFilter('all'); }}
+          chips={
+            <>
+              {search.trim().length > 0 && (
+                <FilterChip label="Search" value={search.trim()} onClear={() => setSearch('')} />
+              )}
+              {presetFilter !== 'all' && (
+                <FilterChip
+                  label="Config"
+                  value={
+                    presetFilter === 'custom'
+                      ? 'custom'
+                      : DEFAULT_PRESETS.find((p) => p.id === presetFilter)?.name ?? presetFilter
+                  }
+                  onClear={() => setPresetFilter('all')}
+                />
+              )}
+            </>
+          }
         >
-          <option value="all">all configs</option>
-          {DEFAULT_PRESETS.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.star ? '★ ' : ''}
-              {p.name}
-            </option>
-          ))}
-          <option value="custom">custom</option>
-        </select>
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="search runs…"
+            className="bg-[var(--bg-base)] border border-gray-700 px-3 py-1 text-xs text-gray-200 w-60 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
+          />
+          <select
+            value={presetFilter}
+            onChange={(e) => setPresetFilter(e.target.value)}
+            aria-label="Filter by config preset"
+            className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs text-gray-300 focus:outline-none focus:border-cyan-500"
+          >
+            <option value="all">all configs</option>
+            {DEFAULT_PRESETS.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.star ? '★ ' : ''}
+                {p.name}
+              </option>
+            ))}
+            <option value="custom">custom</option>
+          </select>
+        </FilterBar>
       </div>
 
       {runsLoading && runs.length === 0 ? (

@@ -7,6 +7,8 @@ import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useToast } from '../hooks/useToast';
 import { Breadcrumb } from '../components/common/Breadcrumb';
+import { FilterBar, FilterChip } from '../components/common/FilterBar';
+import { timeAgo } from '../lib/format';
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -42,16 +44,9 @@ function ttlPercent(ms: number): number {
   return Math.max(0, Math.min(100, (ms / (4 * 3600_000)) * 100));
 }
 
-function relativeDate(iso: string | null): string {
-  if (!iso) return '\u2014';
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  return `${days}d ago`;
+/** Null-guarding wrapper: `timeAgo` requires a string, but `created` is nullable. */
+function createdAgo(iso: string | null): string {
+  return iso ? timeAgo(iso) : '\u2014';
 }
 
 function healthDotColor(ms: number): string {
@@ -259,13 +254,6 @@ export function BenchTokensPage() {
           )}
         </div>
         <div className="flex items-center gap-3">
-          <input
-            type="text"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder="Filter config, VM, user..."
-            className="px-2.5 py-1.5 text-xs bg-gray-800 border border-gray-700 rounded text-gray-200 placeholder-gray-600 focus:outline-none focus:border-cyan-500/50 w-48"
-          />
           {totalVms > 0 && (
             <button
               onClick={handleRevokeAll}
@@ -282,6 +270,28 @@ export function BenchTokensPage() {
             History &rarr;
           </button>
         </div>
+      </div>
+
+      {/* Filter bar */}
+      <div className="mb-4">
+        <FilterBar
+          activeCount={filter ? 1 : 0}
+          onClearAll={() => setFilter('')}
+          chips={
+            filter ? (
+              <FilterChip label="Filter" value={filter} onClear={() => setFilter('')} />
+            ) : undefined
+          }
+        >
+          <input
+            type="text"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Filter config, VM, user..."
+            aria-label="Filter tokens"
+            className="px-2.5 py-1.5 text-xs bg-gray-800 border border-gray-700 rounded text-gray-200 placeholder-gray-600 focus:outline-none focus:border-cyan-500/50 w-48"
+          />
+        </FilterBar>
       </div>
 
       {/* Loading state */}
@@ -447,7 +457,7 @@ export function BenchTokensPage() {
                             {t.user ?? '\u2014'}
                           </td>
                           <td className="px-4 py-2.5 text-xs text-gray-400 whitespace-nowrap">
-                            {relativeDate(t.created)}
+                            {createdAgo(t.created)}
                           </td>
                           <td className="px-4 py-2.5 whitespace-nowrap">
                             <span className={`text-xs ${ttlColor(ms)}`}>

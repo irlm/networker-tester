@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { timeAgo } from '../lib/format';
 import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { useNavigate } from 'react-router';
 import { api } from '../api/client';
@@ -109,14 +110,6 @@ function classForMode(mode: string, active: boolean): string {
     ?? 'bg-gray-700/30 text-gray-400 border-gray-700';
 }
 
-function relTime(iso: string | null): string {
-  if (!iso) return '—';
-  const diff = Date.now() - new Date(iso).getTime();
-  if (diff < 60_000) return `${Math.floor(diff / 1000)}s ago`;
-  if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86400_000) return `${Math.floor(diff / 3600_000)}h ago`;
-  return `${Math.floor(diff / 86400_000)}d ago`;
-}
 
 function deploymentStatusDot(status: string): string {
   switch (status) {
@@ -415,7 +408,7 @@ export function NetworkTestPage() {
               {lastRun.modes.length > 8 && (
                 <span className="text-[10px] text-gray-500">+{lastRun.modes.length - 8}</span>
               )}
-              <span className="ml-2">· {relTime(lastRun.finished_at ?? lastRun.started_at ?? lastRun.created_at)}</span>
+              <span className="ml-2">· {timeAgo(lastRun.finished_at ?? lastRun.started_at ?? lastRun.created_at)}</span>
               {lastRun.status === 'completed' && (
                 <span className="ml-2">· <RunResult ok={lastRun.success_count} fail={lastRun.failure_count} /></span>
               )}
@@ -485,7 +478,7 @@ export function NetworkTestPage() {
                   </span>
                   <div className="min-w-0">
                     <span className="text-xs text-gray-200">{run.config_name ?? run.id.slice(0, 8)}</span>
-                    <span className="text-[10px] text-gray-400 ml-2">{relTime(run.finished_at ?? run.started_at ?? run.created_at)}</span>
+                    <span className="text-[10px] text-gray-400 ml-2">{timeAgo(run.finished_at ?? run.started_at ?? run.created_at)}</span>
                   </div>
                   <div className="flex gap-1 flex-wrap">
                     {modes.slice(0, 6).map(m => (

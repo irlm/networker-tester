@@ -9,6 +9,7 @@ import { StatusBadge } from '../components/common/StatusBadge';
 import { FilterBar, FilterChip } from '../components/common/FilterBar';
 import { useToast } from '../hooks/useToast';
 import { usePolling } from '../hooks/usePolling';
+import { StatusFooter } from '../components/common/StatusFooter';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
 
@@ -88,14 +89,21 @@ export function SchedulesPage() {
 
   usePageTitle('Schedules');
 
+  // Declared above refresh because its setter is called inside the callback.
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
+
   const refresh = useCallback(() => {
     if (!projectId) return;
     api.listTestSchedules(projectId)
-      .then(s => { stableSet(setSchedules, s, schedulesFingerprint); setLoading(false); })
+      .then(s => { stableSet(setSchedules, s, schedulesFingerprint); setLoading(false); setLastUpdatedAt(Date.now()); })
       .catch(() => { addToast('error', 'Failed to load schedules'); setLoading(false); });
   }, [addToast, projectId]);
 
-  usePolling(refresh, 10000);
+  // StatusFooter wiring: pause flips usePolling's enabled flag; refresh
+  // bumps resetKey (restarts the loop with an immediate tick).
+  const [paused, setPaused] = useState(false);
+  const [refreshTick, setRefreshTick] = useState(0);
+  usePolling(refresh, 10000, !paused, refreshTick);
 
   const handleToggle = async (id: string, currentEnabled: boolean) => {
     setToggling(id);
@@ -339,6 +347,21 @@ export function SchedulesPage() {
               </>
             )}
           </>
+        }
+      />
+
+      <StatusFooter
+        paused={paused}
+        onPauseToggle={() => setPaused(p => !p)}
+        onRefresh={() => { setRefreshTick(t => t + 1); if (paused) refresh(); }}
+        lastUpdatedAt={lastUpdatedAt}
+        intervalMs={10000}
+        pills={
+          <span className="text-gray-500">
+            {computedSchedules.length} schedule{computedSchedules.length !== 1 ? 's' : ''}
+            {enabledCount > 0 && ` · ${enabledCount} active`}
+            {schedFilterCount > 0 && ` · ${schedFilterCount} filter${schedFilterCount !== 1 ? 's' : ''}`}
+          </span>
         }
       />
     </div>

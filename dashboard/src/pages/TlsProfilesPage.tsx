@@ -6,6 +6,13 @@ import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
 import { DataTable } from '../components/common/DataTable';
+import { FilterBar, FilterChip } from '../components/common/FilterBar';
+
+const KIND_LABELS: Record<string, string> = {
+  'managed-endpoint': 'Managed target',
+  'external-url': 'External URL',
+  'external-host': 'External host',
+};
 
 export function TlsProfilesPage() {
   const { projectId } = useProject();
@@ -80,17 +87,48 @@ export function TlsProfilesPage() {
           <h2 className="text-lg md:text-xl font-bold text-gray-100">TLS Profiles</h2>
           <p className="text-xs text-gray-400 mt-1">Persisted target TLS observations and history.</p>
         </div>
-        <div className="flex items-center gap-2 flex-wrap justify-end">
+        <button
+          onClick={() => setShowCreate(true)}
+          className="bg-cyan-600 hover:bg-cyan-500 text-white px-3 md:px-4 py-1.5 rounded text-sm transition-colors flex-shrink-0"
+        >
+          Run TLS Profile
+        </button>
+      </div>
+
+      <div className="mb-4">
+        <FilterBar
+          activeCount={[hostSearch.trim().length > 0, kindFilter !== 'all', statusFilter !== 'all'].filter(Boolean).length}
+          onClearAll={() => { setHostSearch(''); setKindFilter('all'); setStatusFilter('all'); }}
+          chips={
+            <>
+              {hostSearch.trim().length > 0 && (
+                <FilterChip label="Host" value={hostSearch.trim()} onClear={() => setHostSearch('')} />
+              )}
+              {kindFilter !== 'all' && (
+                <FilterChip label="Kind" value={KIND_LABELS[kindFilter] ?? kindFilter} onClear={() => setKindFilter('all')} />
+              )}
+              {statusFilter !== 'all' && (
+                <FilterChip
+                  label="Status"
+                  value={statusFilter.charAt(0).toUpperCase() + statusFilter.slice(1)}
+                  onClear={() => setStatusFilter('all')}
+                />
+              )}
+            </>
+          }
+        >
           <input
             type="search"
             value={hostSearch}
             onChange={(e) => setHostSearch(e.target.value)}
             placeholder="Filter by host..."
+            aria-label="Filter by host"
             className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-300 w-40 md:w-64 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
           />
           <select
             value={kindFilter}
             onChange={(e) => setKindFilter(e.target.value as 'all' | 'managed-endpoint' | 'external-url' | 'external-host')}
+            aria-label="Filter by kind"
             className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-cyan-500"
           >
             <option value="all">All kinds</option>
@@ -101,6 +139,7 @@ export function TlsProfilesPage() {
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as 'all' | 'pass' | 'warn' | 'fail')}
+            aria-label="Filter by status"
             className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-cyan-500"
           >
             <option value="all">All statuses</option>
@@ -108,13 +147,7 @@ export function TlsProfilesPage() {
             <option value="warn">Warn</option>
             <option value="fail">Fail</option>
           </select>
-          <button
-            onClick={() => setShowCreate(true)}
-            className="bg-cyan-600 hover:bg-cyan-500 text-white px-3 md:px-4 py-1.5 rounded text-sm transition-colors"
-          >
-            Run TLS Profile
-          </button>
-        </div>
+        </FilterBar>
       </div>
 
       {showCreate && projectId && (

@@ -6,6 +6,7 @@ import type { PerfLogRow, PerfLogStats } from '../api/types';
 import { DataTable } from '../components/common/DataTable';
 import { FilterBar, FilterChip } from '../components/common/FilterBar';
 import { usePolling } from '../hooks/usePolling';
+import { StatusFooter } from '../components/common/StatusFooter';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { stableSet } from '../lib/stableUpdate';
 import { formatMsCompact as formatMs } from '../lib/format';
@@ -43,6 +44,9 @@ export function PerfLogPage() {
 
   usePageTitle('Performance Log');
 
+  // Declared above loadLogs because its setter is called inside the callback.
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
+
   const loadLogs = useCallback(() => {
     const params: { kind?: string; path?: string; limit?: number } = { limit: 200 };
     if (kindFilter !== 'all') params.kind = kindFilter;
@@ -51,6 +55,7 @@ export function PerfLogPage() {
       stableSet(setLogs, data, logsFingerprint);
       setLoadError(null);
       setLoading(false);
+      setLastUpdatedAt(Date.now());
     }).catch((e: unknown) => {
       // An API failure is NOT an empty log — keep them distinguishable.
       setLoadError(errorMessage(e));
@@ -68,7 +73,12 @@ export function PerfLogPage() {
     }).catch(() => {});
   }, []);
 
-  usePolling(loadLogs, 15000);
+  // StatusFooter wiring (logs tab only): pause flips the logs poll's enabled
+  // flag; refresh bumps resetKey (restarts the loop with an immediate tick).
+  // The stats poll stays independent — the footer only speaks for the logs.
+  const [paused, setPaused] = useState(false);
+  const [refreshTick, setRefreshTick] = useState(0);
+  usePolling(loadLogs, 15000, !paused, refreshTick);
   usePolling(loadStats, 15000);
 
   // Reset page when filters change
@@ -295,6 +305,23 @@ export function PerfLogPage() {
               </div>
             </div>
           )}
+
+          {/* Mounted only on the logs tab (stats has no poll to control);
+              never more than one footer per rendered page — it binds
+              document-level r/p keys. */}
+          <StatusFooter
+            paused={paused}
+            onPauseToggle={() => setPaused(p => !p)}
+            onRefresh={() => { setRefreshTick(t => t + 1); if (paused) loadLogs(); }}
+            lastUpdatedAt={lastUpdatedAt}
+            intervalMs={15000}
+            pills={
+              <span className="text-gray-500">
+                {logs.length} row{logs.length !== 1 ? 's' : ''}
+                {activeFilterCount > 0 && ` · ${activeFilterCount} filter${activeFilterCount !== 1 ? 's' : ''}`}
+              </span>
+            }
+          />
         </>
       )}
 

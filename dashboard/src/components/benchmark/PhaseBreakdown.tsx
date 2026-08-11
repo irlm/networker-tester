@@ -2,6 +2,7 @@
  * PhaseBreakdown — per-mode stacked phase timing bars, data table, and comparison deltas.
  * Phase colors: DNS=#3b82f6, TCP=#8b5cf6, TLS=#f59e0b, TTFB=#ef4444, Transfer=#10b981
  */
+import { formatMs1dp } from '../../lib/format';
 
 import { Fragment, useState, useCallback } from 'react';
 
@@ -42,10 +43,6 @@ const PHASES: PhaseDefinition[] = [
   { key: 'transfer_ms', label: 'Transfer', color: '#10b981' },
 ];
 
-function fmtMs(v: number | null): string {
-  if (v === null) return '—';
-  return `${v.toFixed(1)}ms`;
-}
 
 function fmtMsShort(v: number | null): string {
   if (v === null) return '—';
@@ -420,7 +417,7 @@ export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps
           className="fixed z-50 pointer-events-none bg-[var(--bg-raised)] border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"
           style={{ left: tooltip.x + 12, top: tooltip.y - 28 }}
         >
-          {tooltip.label}: {fmtMs(tooltip.value)} ({tooltip.pct.toFixed(0)}% of total)
+          {tooltip.label}: {formatMs1dp(tooltip.value)} ({tooltip.pct.toFixed(0)}% of total)
         </div>
       )}
     </div>

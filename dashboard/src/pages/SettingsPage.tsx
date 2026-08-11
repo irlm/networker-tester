@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { cloudProviderText } from '../lib/provider';
 import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { api, errorMessage } from '../api/client';
 import type { Deployment, CloudConnection } from '../api/types';
@@ -406,9 +407,7 @@ export function SettingsPage() {
                   <tr key={`${vm.provider}-${vm.name}-${i}`} className="border-b border-gray-800/30 hover:bg-gray-800/20">
                     <td className="px-3 py-2">
                       <span className={`text-xs font-medium ${
-                        vm.provider === 'azure' ? 'text-blue-400' :
-                        vm.provider === 'aws' ? 'text-orange-400' :
-                        'text-green-400'
+                        cloudProviderText(vm.provider)
                       }`}>
                         {vm.provider.toUpperCase()}
                       </span>
@@ -703,9 +702,7 @@ export function SettingsPage() {
                 const regionStr = Array.isArray(regions) ? regions.join(', ') : '';
 
                 const providerColor =
-                  conn.provider === 'azure' ? 'text-blue-400' :
-                  conn.provider === 'aws' ? 'text-orange-400' :
-                  'text-green-400';
+                  cloudProviderText(conn.provider)
 
                 const validated = conn.last_validated
                   ? timeAgo(conn.last_validated)
