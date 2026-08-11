@@ -5,6 +5,7 @@ import type { AlertChannel, AlertEvent, AlertRule, TestConfigListItem } from '..
 import { DataTable } from '../components/common/DataTable';
 import { EmptyState } from '../components/common/EmptyState';
 import { StatusBadge } from '../components/common/StatusBadge';
+import { StatusFooter } from '../components/common/StatusFooter';
 import { ChannelDialog } from '../components/alerts/ChannelDialog';
 import { RuleDialog } from '../components/alerts/RuleDialog';
 import { formatCondition, formatThreshold, SECRET_MASK } from '../components/alerts/alert-form';
@@ -110,6 +111,9 @@ export function AlertsPage() {
     [projectId, addToast],
   );
 
+  // Declared above refresh because its setter is called inside the callback.
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
+
   const refresh = useCallback(() => {
     if (!projectId) return;
     Promise.all([api.listAlertRules(projectId), api.listAlertChannels(projectId), api.listTestConfigs(projectId)])
@@ -118,6 +122,7 @@ export function AlertsPage() {
         setChannels(c);
         setConfigs(tc);
         setLoading(false);
+        setLastUpdatedAt(Date.now());
       })
       .catch(() => {
         addToast('error', 'Failed to load alerts');
@@ -126,7 +131,11 @@ export function AlertsPage() {
     loadEvents(eventsOffset, eventsRuleFilter);
   }, [projectId, addToast, loadEvents, eventsOffset, eventsRuleFilter]);
 
-  usePolling(refresh, 15000);
+  // StatusFooter wiring: pause flips usePolling's enabled flag; refresh
+  // bumps resetKey (restarts the loop with an immediate tick).
+  const [paused, setPaused] = useState(false);
+  const [refreshTick, setRefreshTick] = useState(0);
+  usePolling(refresh, 15000, !paused, refreshTick);
 
   const configNames = useMemo(() => new Map(configs.map((c) => [c.id, c.name])), [configs]);
   const channelNames = useMemo(() => new Map(channels.map((c) => [c.channel_id, c.name])), [channels]);
@@ -586,6 +595,24 @@ export function AlertsPage() {
           )}
         </>
       )}
+
+      {/* One footer for the whole page, mounted outside the tab switch —
+          the single refresh() poll feeds all three tabs, and StatusFooter
+          binds document-level r/p keys so only one instance may exist. */}
+      <StatusFooter
+        paused={paused}
+        onPauseToggle={() => setPaused(p => !p)}
+        onRefresh={() => { setRefreshTick(t => t + 1); if (paused) refresh(); }}
+        lastUpdatedAt={lastUpdatedAt}
+        intervalMs={15000}
+        pills={
+          <span className="text-gray-500">
+            {rules.length} rule{rules.length !== 1 ? 's' : ''}
+            {rules.length > 0 && ` (${enabledRules} active)`}
+            {` · ${channels.length} channel${channels.length !== 1 ? 's' : ''}`}
+          </span>
+        }
+      />
 
       {ruleDialog.open && (
         <RuleDialog

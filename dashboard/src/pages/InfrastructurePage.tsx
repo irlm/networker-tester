@@ -15,6 +15,7 @@ import { TargetDetailDrawer } from '../components/targets/TargetDetailDrawer';
 import { InfraDeployWizard } from '../components/InfraDeployWizard';
 import type { DeployWizardPrefill } from '../components/DeployWizard';
 import { usePolling } from '../hooks/usePolling';
+import { StatusFooter } from '../components/common/StatusFooter';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
 import { useTesterSubscription } from '../hooks/useTesterSubscription';
@@ -204,6 +205,9 @@ export function InfrastructurePage() {
   const [cloudAccountsCt, setCloudAccountsCt] = useState<number | null>(null);
 
   /* ── Data loading ── */
+  // Declared above loadAll because its setter is called inside the callback.
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
+
   const loadAll = useCallback(async () => {
     if (!projectId) return;
     try {
@@ -218,6 +222,7 @@ export function InfrastructurePage() {
       setHistory(histResp.events);
       if (accounts) setCloudAccountsCt(accounts.filter(a => a.status === 'active').length);
       setError(null);
+      setLastUpdatedAt(Date.now());
     } catch {
       setError('Failed to load infrastructure data');
     } finally {
@@ -229,7 +234,11 @@ export function InfrastructurePage() {
 
   useAsyncEffect(() => loadAll(), [loadAll]);
 
-  usePolling(() => void loadAll(), 10000, !!projectId);
+  // StatusFooter wiring: pause flips usePolling's enabled flag; refresh
+  // bumps resetKey (restarts the loop with an immediate tick).
+  const [paused, setPaused] = useState(false);
+  const [refreshTick, setRefreshTick] = useState(0);
+  usePolling(() => void loadAll(), 10000, !!projectId && !paused, refreshTick);
 
   // Keep an open runner drawer synced to live (polled) data instead of the
   // snapshot captured on open — so an async delete's outcome is visible: the
@@ -793,6 +802,20 @@ export function InfrastructurePage() {
         </div>
         <span className="text-xs text-cyan-400 flex-shrink-0">View full history →</span>
       </Link>
+
+      <StatusFooter
+        paused={paused}
+        onPauseToggle={() => setPaused(p => !p)}
+        onRefresh={() => { setRefreshTick(t => t + 1); if (paused) void loadAll(); }}
+        lastUpdatedAt={lastUpdatedAt}
+        intervalMs={10000}
+        pills={
+          <span className="text-gray-500">
+            {runnerActiveCt} runner{runnerActiveCt !== 1 ? 's' : ''} · {targetsCt} target{targetsCt !== 1 ? 's' : ''}
+            {activeDeps.length > 0 && ` · ${activeDeps.length} deploying`}
+          </span>
+        }
+      />
 
       {/* ── Modals / Drawers ── */}
 

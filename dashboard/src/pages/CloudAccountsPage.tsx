@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import { cloudProviderText } from '../lib/provider';
 import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { api } from '../api/client';
 import type { CloudAccountSummary } from '../api/types';
@@ -16,11 +17,6 @@ const PROVIDER_LABELS: Record<string, string> = {
   gcp: 'GCP',
 };
 
-const PROVIDER_COLORS: Record<string, string> = {
-  azure: 'text-blue-400',
-  aws: 'text-orange-400',
-  gcp: 'text-green-400',
-};
 
 const STATUS_STYLES: Record<string, string> = {
   active: 'bg-green-500/10 text-green-400 border-green-500/30',
@@ -591,7 +587,7 @@ export function CloudAccountsPage() {
               key: 'provider',
               label: 'Provider',
               render: (acct) => (
-                <span className={`text-xs font-medium ${PROVIDER_COLORS[acct.provider] || 'text-gray-400'}`}>
+                <span className={`text-xs font-medium ${cloudProviderText(acct.provider) || 'text-gray-400'}`}>
                   {PROVIDER_LABELS[acct.provider] || acct.provider.toUpperCase()}
                 </span>
               ),

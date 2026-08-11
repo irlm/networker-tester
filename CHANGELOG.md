@@ -11,6 +11,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.188] - 2026-08-11
+
+Dashboard UI-7: consistency pass — the footer and filter patterns
+everywhere they belong, one formatter library, one provider-color map.
+
+### Changed
+- **StatusFooter adopted on Schedules, PerfLog (logs tab), Alerts, and
+  Infrastructure** — every polled list page now has the LIVE/PAUSED
+  toggle, freshness line, and r/p keys (one instance per page; PerfLog's
+  stats poll deliberately stays un-pausable since the footer speaks for
+  the logs tab).
+- **FilterBar adopted on Endpoint Runs, TLS Profiles, and Tokens** —
+  the last hand-rolled filter rows, now with active-filter chips and
+  clear-all.
+- **Formatter consolidation**: `timeAgo` accepts null ('—'); the
+  byte-identical `fmtMs` copies in AppNetworkReport and PhaseBreakdown
+  fold into `lib/format.formatMs1dp`; NetworkTest's `relTime` and
+  BenchTokens' `relativeDate` fold into `timeAgo`. Near-dupes with real
+  semantic differences (µs-precision measurement formatter, adaptive
+  ms/s) deliberately stay separate.
+- **One cloud-provider color map** (`lib/provider.ts`): the three page
+  maps disagreed (aws orange vs yellow, gcp green vs red) — canonical is
+  azure=blue, aws=orange, gcp=green. The VM catalog's aws/gcp badges
+  change color accordingly. Auth-provider colors (UsersPage) are a
+  different semantic and unchanged.
+
+### Deferred (recorded)
+- RunDetail's timing-breakdown and case-summary tables are DataTable
+  candidates but stay hand-rolled: dense measurement displays where the
+  canonical padding would change layout for no functional gain.
+
+---
+
 ## [0.28.187] - 2026-08-11
 
 Dashboard UI-6: the status footer, the last DataTable skip, and the

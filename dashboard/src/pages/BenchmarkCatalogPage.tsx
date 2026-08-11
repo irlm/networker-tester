@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import { cloudProviderBadge } from '../lib/provider';
 import { api } from '../api/client';
 import type { BenchmarkVmCatalogEntry } from '../api/types';
 import { useProject } from '../hooks/useProject';
@@ -10,12 +11,6 @@ import { EmptyState } from '../components/common/EmptyState';
 import { DataTable } from '../components/common/DataTable';
 import { timeAgo } from '../lib/format';
 
-const cloudBadge: Record<string, string> = {
-  azure: 'bg-blue-500/20 text-blue-400',
-  aws: 'bg-yellow-500/20 text-yellow-400',
-  gcp: 'bg-red-500/20 text-red-400',
-  manual: 'bg-gray-500/20 text-gray-400',
-};
 
 const statusBadge: Record<string, string> = {
   online: 'bg-green-500/20 text-green-400',
@@ -214,7 +209,7 @@ export function BenchmarkCatalogPage() {
               key: 'cloud',
               label: 'Cloud',
               render: (vm) => (
-                <span className={`text-[10px] px-1.5 py-0.5 rounded ${cloudBadge[vm.cloud] || cloudBadge.manual}`}>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded ${cloudProviderBadge(vm.cloud)}`}>
                   {vm.cloud}
                 </span>
               ),

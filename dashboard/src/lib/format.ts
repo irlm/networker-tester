@@ -2,7 +2,8 @@
  * Format an ISO timestamp as a relative time string ("2m ago", "3h ago", "2d ago").
  * Falls back to the raw string on invalid input.
  */
-export function timeAgo(iso: string): string {
+export function timeAgo(iso: string | null | undefined): string {
+  if (iso == null) return '\u2014';
   try {
     const parsed = new Date(iso).getTime();
     // new Date('garbage') yields NaN without throwing — honor the documented
@@ -73,4 +74,14 @@ export function formatDuration(
   if (mins < 60) return `${mins}m ${secs % 60}s`;
   const hours = Math.floor(mins / 60);
   return `${hours}h ${mins % 60}m`;
+}
+
+/**
+ * One-decimal millisecond formatter for report tables ('\u2014' for missing).
+ * Was duplicated byte-identically in AppNetworkReportPage and
+ * PhaseBreakdown before the 2026-08 UI-7 pass. Distinct from
+ * `lib/analysis.ts::formatMs` (adaptive \u00b5s precision for measurements).
+ */
+export function formatMs1dp(v: number | null | undefined): string {
+  return v == null ? '\u2014' : `${v.toFixed(1)}ms`;
 }
