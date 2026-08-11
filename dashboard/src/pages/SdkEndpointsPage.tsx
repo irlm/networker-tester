@@ -4,6 +4,7 @@ import { api, errorMessage, type SdkEndpoint } from '../api/client';
 import { CreateSdkEndpointDialog } from '../components/CreateSdkEndpointDialog';
 import { PageHeader } from '../components/common/PageHeader';
 import { EmptyState } from '../components/common/EmptyState';
+import { DataTable, type DataTableColumn } from '../components/common/DataTable';
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
@@ -157,41 +158,58 @@ export function SdkEndpointsPage() {
             </Link>
           </div>
 
-          <div className="table-container">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
-                  <th className="px-4 py-2.5 text-left font-medium">Name</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Target URL</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Route</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Token</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Created</th>
-                  {isOperator && <th className="px-4 py-2.5 text-right font-medium">Actions</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {endpoints.map((ep) => (
-                  <tr key={ep.id} className="border-b border-gray-800/50 hover:bg-gray-800/20">
-                    <td className="px-4 py-3 text-gray-200">
-                      {ep.name}
-                      {ep.description && (
-                        <div className="text-xs text-gray-500 mt-0.5">{ep.description}</div>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-cyan-400 font-mono text-xs break-all">{ep.url ?? '—'}</td>
-                    <td className="px-4 py-3 text-gray-400 font-mono text-xs">{ep.route ?? '/laghound/echo'}</td>
-                    <td className="px-4 py-3 text-xs">
-                      {ep.token_set ? (
-                        <span className="text-gray-400 font-mono" title="Token stored (write-only)">
-                          {ep.token ?? '********'}
-                        </span>
-                      ) : (
-                        <span className="text-yellow-500">not set</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-gray-400 text-xs">{new Date(ep.created_at).toLocaleString()}</td>
-                    {isOperator && (
-                      <td className="px-4 py-3 text-right">
+          <DataTable
+            columns={[
+              {
+                key: 'name',
+                label: 'Name',
+                cellClass: 'text-gray-200',
+                render: (ep) => (
+                  <>
+                    {ep.name}
+                    {ep.description && (
+                      <div className="text-xs text-gray-500 mt-0.5">{ep.description}</div>
+                    )}
+                  </>
+                ),
+              },
+              {
+                key: 'url',
+                label: 'Target URL',
+                cellClass: 'text-cyan-400 font-mono break-all',
+                render: (ep) => ep.url ?? '—',
+              },
+              {
+                key: 'route',
+                label: 'Route',
+                cellClass: 'text-gray-400 font-mono',
+                render: (ep) => ep.route ?? '/laghound/echo',
+              },
+              {
+                key: 'token',
+                label: 'Token',
+                render: (ep) =>
+                  ep.token_set ? (
+                    <span className="text-gray-400 font-mono" title="Token stored (write-only)">
+                      {ep.token ?? '********'}
+                    </span>
+                  ) : (
+                    <span className="text-yellow-500">not set</span>
+                  ),
+              },
+              {
+                key: 'created',
+                label: 'Created',
+                cellClass: 'text-gray-400',
+                render: (ep) => new Date(ep.created_at).toLocaleString(),
+              },
+              ...(isOperator
+                ? [
+                    {
+                      key: 'actions',
+                      label: 'Actions',
+                      align: 'right',
+                      render: (ep) => (
                         <button
                           onClick={() => setConfirmDelete(ep)}
                           className="text-gray-400 hover:text-red-400 text-xs transition-colors"
@@ -199,13 +217,14 @@ export function SdkEndpointsPage() {
                         >
                           Delete
                         </button>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                      ),
+                    } satisfies DataTableColumn<SdkEndpoint>,
+                  ]
+                : []),
+            ]}
+            rows={endpoints}
+            rowKey={(ep) => ep.id}
+          />
         </>
       )}
 

@@ -6,6 +6,7 @@ import { useProject } from '../hooks/useProject';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useToast } from '../hooks/useToast';
 import { SettingsTabs } from '../components/common/SettingsTabs';
+import { DataTable } from '../components/common/DataTable';
 
 const PROVIDERS = ['azure', 'aws', 'gcp'] as const;
 
@@ -583,84 +584,88 @@ export function CloudAccountsPage() {
           <p className="text-gray-500 text-xs mt-1">Add a cloud account to enable deployments with stored credentials</p>
         </div>
       ) : (
-        <div className="table-container">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
-                <th className="px-4 py-2.5 text-left font-medium">Name</th>
-                <th className="px-4 py-2.5 text-left font-medium">Provider</th>
-                <th className="px-4 py-2.5 text-left font-medium">Region</th>
-                <th className="px-4 py-2.5 text-left font-medium">Type</th>
-                <th className="px-4 py-2.5 text-left font-medium">Status</th>
-                <th className="px-4 py-2.5 text-left font-medium">Last Validated</th>
-                <th className="px-4 py-2.5 text-left font-medium"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {accounts.map(acct => (
-                <tr key={acct.account_id} className="border-b border-gray-800/50 hover:bg-gray-800/20">
-                  <td className="px-4 py-3 text-gray-200">{acct.name}</td>
-                  <td className="px-4 py-3">
-                    <span className={`text-xs font-medium ${PROVIDER_COLORS[acct.provider] || 'text-gray-400'}`}>
-                      {PROVIDER_LABELS[acct.provider] || acct.provider.toUpperCase()}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-gray-400 text-xs">{acct.region_default || '\u2014'}</td>
-                  <td className="px-4 py-3">
-                    <span className={`text-xs ${acct.personal ? 'text-gray-400' : 'text-cyan-400'}`}>
-                      {acct.personal ? 'personal' : 'shared'}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={`inline-block px-2 py-0.5 rounded text-xs border ${STATUS_STYLES[acct.status] || 'bg-gray-500/10 text-gray-400 border-gray-500/30'}`}>
-                      {acct.status}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-gray-400 text-xs">
-                    {acct.last_validated ? new Date(acct.last_validated).toLocaleString() : '\u2014'}
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex gap-3">
-                      {isOperator && (
-                        <button
-                          onClick={() => openEditForm(acct)}
-                          className="text-xs text-gray-400 hover:text-cyan-300 transition-colors"
-                        >
-                          Edit
-                        </button>
-                      )}
-                      <button
-                        onClick={() => handleValidate(acct.account_id)}
-                        disabled={validating === acct.account_id}
-                        className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors disabled:opacity-50"
-                      >
-                        {validating === acct.account_id ? 'Validating...' : 'Validate'}
-                      </button>
-                      {isProjectAdmin && acct.status === 'active' && (
-                        <button
-                          onClick={() => handleCleanOrphans(acct.account_id, acct.name)}
-                          disabled={cleaning === acct.account_id}
-                          className="text-xs text-yellow-400 hover:text-yellow-300 transition-colors disabled:opacity-50"
-                          title="Delete cloud resources not referenced by the database (admin only, destructive)"
-                        >
-                          {cleaning === acct.account_id ? 'Cleaning...' : 'Clean orphans'}
-                        </button>
-                      )}
-                      {isOperator && (
-                        <button
-                          onClick={() => handleDelete(acct.account_id, acct.name)}
-                          className="text-xs text-gray-500 hover:text-red-400 transition-colors"
-                        >
-                          Delete
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          columns={[
+            { key: 'name', label: 'Name', cellClass: 'text-gray-200', render: (acct) => acct.name },
+            {
+              key: 'provider',
+              label: 'Provider',
+              render: (acct) => (
+                <span className={`text-xs font-medium ${PROVIDER_COLORS[acct.provider] || 'text-gray-400'}`}>
+                  {PROVIDER_LABELS[acct.provider] || acct.provider.toUpperCase()}
+                </span>
+              ),
+            },
+            { key: 'region', label: 'Region', cellClass: 'text-gray-400', render: (acct) => acct.region_default || '\u2014' },
+            {
+              key: 'type',
+              label: 'Type',
+              render: (acct) => (
+                <span className={`text-xs ${acct.personal ? 'text-gray-400' : 'text-cyan-400'}`}>
+                  {acct.personal ? 'personal' : 'shared'}
+                </span>
+              ),
+            },
+            {
+              key: 'status',
+              label: 'Status',
+              render: (acct) => (
+                <span className={`inline-block px-2 py-0.5 rounded text-xs border ${STATUS_STYLES[acct.status] || 'bg-gray-500/10 text-gray-400 border-gray-500/30'}`}>
+                  {acct.status}
+                </span>
+              ),
+            },
+            {
+              key: 'last_validated',
+              label: 'Last Validated',
+              cellClass: 'text-gray-400',
+              render: (acct) => (acct.last_validated ? new Date(acct.last_validated).toLocaleString() : '\u2014'),
+            },
+            {
+              key: 'actions',
+              label: '',
+              render: (acct) => (
+                <div className="flex gap-3">
+                  {isOperator && (
+                    <button
+                      onClick={() => openEditForm(acct)}
+                      className="text-xs text-gray-400 hover:text-cyan-300 transition-colors"
+                    >
+                      Edit
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleValidate(acct.account_id)}
+                    disabled={validating === acct.account_id}
+                    className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors disabled:opacity-50"
+                  >
+                    {validating === acct.account_id ? 'Validating...' : 'Validate'}
+                  </button>
+                  {isProjectAdmin && acct.status === 'active' && (
+                    <button
+                      onClick={() => handleCleanOrphans(acct.account_id, acct.name)}
+                      disabled={cleaning === acct.account_id}
+                      className="text-xs text-yellow-400 hover:text-yellow-300 transition-colors disabled:opacity-50"
+                      title="Delete cloud resources not referenced by the database (admin only, destructive)"
+                    >
+                      {cleaning === acct.account_id ? 'Cleaning...' : 'Clean orphans'}
+                    </button>
+                  )}
+                  {isOperator && (
+                    <button
+                      onClick={() => handleDelete(acct.account_id, acct.name)}
+                      className="text-xs text-gray-500 hover:text-red-400 transition-colors"
+                    >
+                      Delete
+                    </button>
+                  )}
+                </div>
+              ),
+            },
+          ]}
+          rows={accounts}
+          rowKey={(acct) => acct.account_id}
+        />
       )}
     </div>
   );

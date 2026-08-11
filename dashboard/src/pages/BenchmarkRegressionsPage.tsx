@@ -119,6 +119,7 @@ export function BenchmarkRegressionsPage() {
           ]}
           rows={regressions}
           rowKey={(r) => r.regression_id}
+          rowClass={(r) => (r.severity === 'critical' ? 'bg-red-500/5' : undefined)}
         />
       )}
     </div>

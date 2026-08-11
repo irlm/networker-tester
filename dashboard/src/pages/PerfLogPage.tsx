@@ -3,6 +3,7 @@ import { KpiTile } from '../components/common/KpiTile';
 import { rampTextClass } from '../lib/severity';
 import { api, errorMessage } from '../api/client';
 import type { PerfLogRow, PerfLogStats } from '../api/types';
+import { DataTable } from '../components/common/DataTable';
 import { FilterBar, FilterChip } from '../components/common/FilterBar';
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
@@ -166,113 +167,134 @@ export function PerfLogPage() {
             />
           </FilterBar>
 
-          <div className="table-container mt-4">
-            <table className="w-full text-sm font-mono">
-              <thead>
-                <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
-                  <th className="px-3 py-2 text-left font-medium">Time</th>
-                  <th className="px-3 py-2 text-left font-medium w-14">Kind</th>
-                  <th className="px-3 py-2 text-left font-medium">Path / Component</th>
-                  <th className="px-3 py-2 text-left font-medium w-14">Status</th>
-                  <th className="px-3 py-2 text-right font-medium w-20">Total</th>
-                  <th className="px-3 py-2 text-right font-medium w-20">Server</th>
-                  <th className="px-3 py-2 text-right font-medium w-20">Net/Render</th>
-                  <th className="px-3 py-2 text-left font-medium w-16 hidden lg:table-cell">Source</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pagedLogs.map(log => {
+          <DataTable
+            className="mt-4"
+            columns={[
+              {
+                key: 'time',
+                label: 'Time',
+                cellClass: 'text-gray-400',
+                render: log => new Date(log.logged_at).toLocaleString(),
+              },
+              {
+                key: 'kind',
+                label: 'Kind',
+                render: log => (
+                  <span className={`text-[10px] uppercase px-1.5 py-0.5 rounded border ${
+                    log.kind === 'api'
+                      ? 'border-cyan-500/30 text-cyan-400 bg-cyan-500/5'
+                      : 'border-green-500/30 text-green-400 bg-green-500/5'
+                  }`}>
+                    {log.kind}
+                  </span>
+                ),
+              },
+              {
+                key: 'path',
+                label: 'Path / Component',
+                cellClass: 'text-gray-300 truncate max-w-[250px]',
+                titleOf: log => log.path || log.component || '',
+                render: log => {
                   // Shorten UUID paths for readability
                   const displayPath = log.path?.replace(
                     /\/projects\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g,
                     '/projects/…'
                   );
-                  return (
-                  <tr key={log.id} className="border-b border-gray-800/30 hover:bg-gray-800/20">
-                    <td className="px-3 py-2 text-gray-400 text-xs">{new Date(log.logged_at).toLocaleString()}</td>
-                    <td className="px-3 py-2">
-                      <span className={`text-[10px] uppercase px-1.5 py-0.5 rounded border ${
-                        log.kind === 'api'
-                          ? 'border-cyan-500/30 text-cyan-400 bg-cyan-500/5'
-                          : 'border-green-500/30 text-green-400 bg-green-500/5'
-                      }`}>
-                        {log.kind}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-gray-300 text-xs truncate max-w-[250px]" title={log.path || log.component || ''}>
-                      {log.kind === 'api' ? (
-                        <><span className="text-gray-400">{log.method} </span>{displayPath}</>
-                      ) : (
-                        <><span className="text-gray-400">{log.component}</span> <span className="text-gray-500">{log.trigger}</span></>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 text-xs">
-                      {log.kind === 'api' ? (
-                        <span className={log.status && log.status < 300 ? 'text-green-400' : log.status && log.status < 400 ? 'text-yellow-400' : 'text-red-400'}>
-                          {log.status || '-'}
-                        </span>
-                      ) : (
-                        <span className="text-gray-500">{log.item_count ?? '-'}</span>
-                      )}
-                    </td>
-                    <td className={`px-3 py-2 text-right text-xs ${log.kind === 'api' ? speedColor(log.total_ms) : renderSpeedColor(log.render_ms)}`}>
-                      {log.kind === 'api' ? formatMs(log.total_ms) : formatMs(log.render_ms)}
-                    </td>
-                    <td className="px-3 py-2 text-right text-xs text-cyan-400">
-                      {log.kind === 'api' ? formatMs(log.server_ms) : '-'}
-                    </td>
-                    <td className="px-3 py-2 text-right text-xs text-purple-400">
-                      {log.kind === 'api' ? formatMs(log.network_ms) : formatMs(log.render_ms)}
-                    </td>
-                    <td className="px-3 py-2 text-xs text-gray-500 hidden lg:table-cell">
-                      {log.source || '-'}
-                    </td>
-                  </tr>
+                  return log.kind === 'api' ? (
+                    <><span className="text-gray-400">{log.method} </span>{displayPath}</>
+                  ) : (
+                    <><span className="text-gray-400">{log.component}</span> <span className="text-gray-500">{log.trigger}</span></>
                   );
-                })}
-              </tbody>
-            </table>
-            {logs.length === 0 && (
-              <div className="py-10 text-center text-gray-400 text-sm">
+                },
+              },
+              {
+                key: 'status',
+                label: 'Status',
+                render: log => (
+                  log.kind === 'api' ? (
+                    <span className={log.status && log.status < 300 ? 'text-green-400' : log.status && log.status < 400 ? 'text-yellow-400' : 'text-red-400'}>
+                      {log.status || '-'}
+                    </span>
+                  ) : (
+                    <span className="text-gray-500">{log.item_count ?? '-'}</span>
+                  )
+                ),
+              },
+              {
+                key: 'total',
+                label: 'Total',
+                align: 'right',
+                render: log => (
+                  <span className={log.kind === 'api' ? speedColor(log.total_ms) : renderSpeedColor(log.render_ms)}>
+                    {log.kind === 'api' ? formatMs(log.total_ms) : formatMs(log.render_ms)}
+                  </span>
+                ),
+              },
+              {
+                key: 'server',
+                label: 'Server',
+                align: 'right',
+                cellClass: 'text-cyan-400',
+                render: log => (log.kind === 'api' ? formatMs(log.server_ms) : '-'),
+              },
+              {
+                key: 'netrender',
+                label: 'Net/Render',
+                align: 'right',
+                cellClass: 'text-purple-400',
+                render: log => (log.kind === 'api' ? formatMs(log.network_ms) : formatMs(log.render_ms)),
+              },
+              {
+                key: 'source',
+                label: 'Source',
+                hideBelow: 'lg',
+                cellClass: 'text-gray-500',
+                render: log => log.source || '-',
+              },
+            ]}
+            rows={pagedLogs}
+            rowKey={log => String(log.id)}
+            empty={
+              <span className="text-gray-400 text-sm">
                 No performance logs recorded yet. Logs are flushed every 30 seconds.
+              </span>
+            }
+          />
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between px-3 py-2 border-t border-gray-800/50 text-xs text-gray-400">
+              <span>{logs.length} rows &middot; page {currentPage + 1} of {totalPages}</span>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setPage(0)}
+                  disabled={currentPage === 0}
+                  className="px-2 py-1 rounded border border-gray-700 disabled:opacity-30 hover:border-cyan-500/30 hover:text-cyan-400 transition-colors"
+                >
+                  &laquo;
+                </button>
+                <button
+                  onClick={() => setPage(p => Math.max(0, p - 1))}
+                  disabled={currentPage === 0}
+                  className="px-2 py-1 rounded border border-gray-700 disabled:opacity-30 hover:border-cyan-500/30 hover:text-cyan-400 transition-colors"
+                >
+                  &lsaquo; Prev
+                </button>
+                <button
+                  onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
+                  disabled={currentPage >= totalPages - 1}
+                  className="px-2 py-1 rounded border border-gray-700 disabled:opacity-30 hover:border-cyan-500/30 hover:text-cyan-400 transition-colors"
+                >
+                  Next &rsaquo;
+                </button>
+                <button
+                  onClick={() => setPage(totalPages - 1)}
+                  disabled={currentPage >= totalPages - 1}
+                  className="px-2 py-1 rounded border border-gray-700 disabled:opacity-30 hover:border-cyan-500/30 hover:text-cyan-400 transition-colors"
+                >
+                  &raquo;
+                </button>
               </div>
-            )}
-            {totalPages > 1 && (
-              <div className="flex items-center justify-between px-3 py-2 border-t border-gray-800/50 text-xs text-gray-400">
-                <span>{logs.length} rows &middot; page {currentPage + 1} of {totalPages}</span>
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => setPage(0)}
-                    disabled={currentPage === 0}
-                    className="px-2 py-1 rounded border border-gray-700 disabled:opacity-30 hover:border-cyan-500/30 hover:text-cyan-400 transition-colors"
-                  >
-                    &laquo;
-                  </button>
-                  <button
-                    onClick={() => setPage(p => Math.max(0, p - 1))}
-                    disabled={currentPage === 0}
-                    className="px-2 py-1 rounded border border-gray-700 disabled:opacity-30 hover:border-cyan-500/30 hover:text-cyan-400 transition-colors"
-                  >
-                    &lsaquo; Prev
-                  </button>
-                  <button
-                    onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
-                    disabled={currentPage >= totalPages - 1}
-                    className="px-2 py-1 rounded border border-gray-700 disabled:opacity-30 hover:border-cyan-500/30 hover:text-cyan-400 transition-colors"
-                  >
-                    Next &rsaquo;
-                  </button>
-                  <button
-                    onClick={() => setPage(totalPages - 1)}
-                    disabled={currentPage >= totalPages - 1}
-                    className="px-2 py-1 rounded border border-gray-700 disabled:opacity-30 hover:border-cyan-500/30 hover:text-cyan-400 transition-colors"
-                  >
-                    &raquo;
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
+            </div>
+          )}
         </>
       )}
 

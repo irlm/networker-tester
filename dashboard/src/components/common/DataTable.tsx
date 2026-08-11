@@ -29,6 +29,8 @@ interface DataTableProps<T> {
   columns: DataTableColumn<T>[];
   rows: T[];
   rowKey: (row: T) => string;
+  /** Extra classes for a row (e.g. a severity background tint). */
+  rowClass?: (row: T) => string | undefined;
   /** Rendered centred inside the container when there are no rows. */
   empty?: ReactNode;
   className?: string;
@@ -39,7 +41,7 @@ const HIDE = {
   lg: 'hidden lg:table-cell',
 } as const;
 
-export function DataTable<T>({ columns, rows, rowKey, empty, className }: DataTableProps<T>) {
+export function DataTable<T>({ columns, rows, rowKey, rowClass, empty, className }: DataTableProps<T>) {
   return (
     <div className={`table-container ${className ?? ''}`}>
       <table className="w-full text-sm">
@@ -57,7 +59,7 @@ export function DataTable<T>({ columns, rows, rowKey, empty, className }: DataTa
         </thead>
         <tbody>
           {rows.map(row => (
-            <tr key={rowKey(row)} className="border-b border-gray-800/50 hover:bg-gray-800/20">
+            <tr key={rowKey(row)} className={`border-b border-gray-800/50 hover:bg-gray-800/20 ${rowClass?.(row) ?? ''}`}>
               {columns.map(col => (
                 <td
                   key={col.key}
