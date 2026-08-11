@@ -239,7 +239,7 @@ export function DeployWizard({ projectId, onClose, onCreated, prefill }: DeployW
             <div>
               {upgradeMode ? (
                 <p className="text-sm text-gray-400 mb-3">
-                  Add proxy stacks to <span className="text-cyan-400 font-mono">{prefill.existingVmIp}</span>.
+                  Add proxy stacks to <span className="text-cyan-400">{prefill.existingVmIp}</span>.
                   Already-installed stacks are pre-selected; tick additional stacks to install.
                 </p>
               ) : (
@@ -299,11 +299,11 @@ export function DeployWizard({ projectId, onClose, onCreated, prefill }: DeployW
                 <p className="text-xs text-gray-400 mb-2 font-medium">Targets ({testbeds.length})</p>
                 {testbeds.map((tb, i) => (
                   <div key={tb.key} className="text-sm text-gray-300 py-1 flex flex-wrap items-center gap-2">
-                    <span className="text-gray-400 font-mono w-4">{i + 1}</span>
+                    <span className="text-gray-400 w-4">{i + 1}</span>
                     {tb.existingVm ? (
                       <>
                         <span className="text-yellow-400 text-[10px] px-1.5 py-0.5 border border-yellow-500/30 rounded">upgrade</span>
-                        <span className="font-mono text-cyan-400">{tb.existingVmId}</span>
+                        <span className="text-cyan-400">{tb.existingVmId}</span>
                       </>
                     ) : (
                       <>

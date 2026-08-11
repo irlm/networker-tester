@@ -67,7 +67,7 @@ export function ProjectSwitcher({ collapsed, connectionDot }: ProjectSwitcherPro
         >
           <div className="flex items-center gap-1 min-w-0">
             <span className="text-sm text-gray-200 truncate">{project.name}</span>
-            <span className="text-[10px] text-gray-400 font-mono whitespace-nowrap">
+            <span className="text-[10px] text-gray-400 whitespace-nowrap">
               {zoneLabel(project.project_id)}
             </span>
           </div>

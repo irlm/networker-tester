@@ -16,7 +16,7 @@ const ROLE_COLORS: Record<string, string> = {
 function roleBadge(role: string) {
   const cls = ROLE_COLORS[role] ?? ROLE_COLORS.viewer;
   return (
-    <span className={`inline-block text-[10px] uppercase tracking-wider border rounded px-1.5 py-0.5 font-mono ${cls}`}>
+    <span className={`inline-block text-[10px] uppercase tracking-wider border rounded px-1.5 py-0.5 ${cls}`}>
       {role}
     </span>
   );

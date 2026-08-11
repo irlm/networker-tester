@@ -19,7 +19,7 @@ export function ModeChip({ mode, label }: ModeChipProps) {
   const cls = CHIP_CLASSES[familyOf(mode)];
   return (
     <span
-      className={`inline-flex items-center px-1.5 py-0.5 text-[9px] font-mono leading-tight border rounded-sm ${cls}`}
+      className={`inline-flex items-center px-1.5 py-0.5 text-[9px] leading-tight border rounded-sm ${cls}`}
       title={mode}
     >
       {label ?? modeLabel(mode)}
@@ -30,7 +30,7 @@ export function ModeChip({ mode, label }: ModeChipProps) {
 /** Render a list of mode chips. Truncates after `max` with a "+N" overflow. */
 export function ModeChipList({ modes, max = 24 }: { modes: string[]; max?: number }) {
   if (modes.length === 0) {
-    return <span className="text-[10px] text-gray-500 font-mono">no modes</span>;
+    return <span className="text-[10px] text-gray-500">no modes</span>;
   }
   const shown = modes.slice(0, max);
   const overflow = modes.length - shown.length;
@@ -40,7 +40,7 @@ export function ModeChipList({ modes, max = 24 }: { modes: string[]; max?: numbe
         <ModeChip key={m} mode={m} />
       ))}
       {overflow > 0 && (
-        <span className="inline-flex items-center px-1.5 py-0.5 text-[9px] font-mono leading-tight border rounded-sm bg-gray-700/30 text-gray-400 border-gray-700">
+        <span className="inline-flex items-center px-1.5 py-0.5 text-[9px] leading-tight border rounded-sm bg-gray-700/30 text-gray-400 border-gray-700">
           +{overflow}
         </span>
       )}

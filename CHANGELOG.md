@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.187] - 2026-08-11
+
+Dashboard UI-6: the status footer, the last DataTable skip, and the
+font-mono sweep.
+
+### Added
+- **`StatusFooter`** (status-footer/v3 pick, v1 scope): LIVE/PAUSED
+  toggle, status-pill slot, freshness ("updated 12s ago · every 15s"),
+  refresh — with `r`/`p` keyboard actions. Adopted on Runs; pause drives
+  `usePolling`'s enabled flag and refresh works while paused. Deferred
+  from the pick (recorded): pill drill-down drawers, trend sparkline,
+  error acknowledgement.
+- `DataTable` gains a `footer` slot (in-container pagers) — VM History,
+  the recorded UI-5 skip, is now converted with its Load-more footer.
+
+### Changed
+- **407 redundant `font-mono` class tokens removed across 64 files** —
+  the body font is globally monospace, so every one was a no-op that
+  masked intentional typography. The two `var(--font-mono)` style-prop
+  references in the chart components are kept (real CSS, not classes).
+
+---
+
 ## [0.28.186] - 2026-08-11
 
 Dashboard UI-5: DataTable adoption across the list pages.

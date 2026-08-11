@@ -10,8 +10,8 @@ export function ProvisioningNotice(props: ProvisioningNoticeProps) {
   const { headline, runner, runnerOk } = provisioningSummary(props);
   return (
     <div className="border border-yellow-500/40 bg-yellow-500/5 p-3 mb-4">
-      <div className="text-xs font-mono text-yellow-300">⚠ {headline}</div>
-      <div className={`mt-1 text-xs font-mono ${runnerOk ? 'text-gray-400' : 'text-yellow-400'}`}>
+      <div className="text-xs text-yellow-300">⚠ {headline}</div>
+      <div className={`mt-1 text-xs ${runnerOk ? 'text-gray-400' : 'text-yellow-400'}`}>
         {runnerOk ? '✓ ' : '⚠ '}
         {runner}
       </div>

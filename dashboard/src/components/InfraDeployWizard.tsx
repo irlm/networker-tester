@@ -312,7 +312,7 @@ export function InfraDeployWizard({
                 <button
                   type="button"
                   onClick={() => reachable && setStep(i)}
-                  className={`flex items-center gap-2 text-xs font-mono whitespace-nowrap ${
+                  className={`flex items-center gap-2 text-xs whitespace-nowrap ${
                     i === step ? accentClass :
                     reachable ? 'text-gray-400 hover:text-gray-200 cursor-pointer' :
                     'text-gray-500 cursor-not-allowed'
@@ -364,13 +364,13 @@ export function InfraDeployWizard({
                           : 'border-gray-800 hover:border-gray-600'
                       }`}
                     >
-                      <span className={`inline-block font-mono text-[9px] tracking-wider px-1.5 py-0.5 border mb-2 ${
+                      <span className={`inline-block text-[9px] tracking-wider px-1.5 py-0.5 border mb-2 ${
                         card.color === 'cyan'
                           ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
                           : 'bg-purple-500/15 border-purple-500/40 text-purple-300'
                       }`}>{card.id.toUpperCase()}</span>
                       <h5 className="text-sm font-medium text-gray-100 mb-1">{card.title}</h5>
-                      <p className="text-xs text-gray-400 font-mono leading-relaxed">{card.desc}</p>
+                      <p className="text-xs text-gray-400 leading-relaxed">{card.desc}</p>
                     </button>
                   );
                 })}
@@ -404,7 +404,7 @@ export function InfraDeployWizard({
                   <select
                     value={region}
                     onChange={e => setRegion(e.target.value)}
-                    className="w-full bg-[var(--bg-base)] border border-gray-700 px-3 py-2 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500"
+                    className="w-full bg-[var(--bg-base)] border border-gray-700 px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                   >
                     {(REGIONS[cloud] ?? []).map(r => <option key={r} value={r}>{r}</option>)}
                   </select>
@@ -414,7 +414,7 @@ export function InfraDeployWizard({
                   <select
                     value={vmSize}
                     onChange={e => setVmSize(e.target.value)}
-                    className="w-full bg-[var(--bg-base)] border border-gray-700 px-3 py-2 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500"
+                    className="w-full bg-[var(--bg-base)] border border-gray-700 px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                   >
                     {(INSTANCE_TYPES[cloud] ?? []).map(t => (
                       <option key={t.id} value={t.id}>{t.id} · {t.hint}</option>
@@ -429,7 +429,7 @@ export function InfraDeployWizard({
                         key={o}
                         type="button"
                         onClick={() => setOs(o)}
-                        className={`px-3 py-1.5 text-xs font-mono border transition-colors ${
+                        className={`px-3 py-1.5 text-xs border transition-colors ${
                           os === o
                             ? o === 'linux'
                               ? 'bg-green-500/10 border-green-500/40 text-green-300 z-10'
@@ -442,12 +442,12 @@ export function InfraDeployWizard({
                     ))}
                   </div>
                   {kind === 'target' && (
-                    <p className="text-[11px] text-gray-500 mt-2 font-mono">
+                    <p className="text-[11px] text-gray-500 mt-2">
                       ⓘ Linux unlocks all 5 proxy stacks; Windows adds IIS but excludes native Caddy / HAProxy packages.
                     </p>
                   )}
                   {kind === 'runner' && (
-                    <p className="text-[11px] text-gray-500 mt-2 font-mono">
+                    <p className="text-[11px] text-gray-500 mt-2">
                       ⓘ Runners are typically Linux. Windows runners are supported but require additional setup.
                     </p>
                   )}
@@ -462,7 +462,7 @@ export function InfraDeployWizard({
               <h4 className="text-base font-semibold text-gray-100 mb-1">Configure target</h4>
               <p className="text-xs text-gray-400 mb-4">Pick which proxy stacks to install. install.sh runs idempotently — already-installed stacks are skipped.</p>
 
-              <div className="bg-cyan-500/5 border-l-2 border-cyan-500 px-3 py-1.5 mb-4 text-[10px] font-mono text-cyan-400 tracking-wider uppercase">
+              <div className="bg-cyan-500/5 border-l-2 border-cyan-500 px-3 py-1.5 mb-4 text-[10px] text-cyan-400 tracking-wider uppercase">
                 ▢ Target-only fields
               </div>
 
@@ -537,7 +537,7 @@ export function InfraDeployWizard({
                   value={existingVmIp}
                   onChange={e => setExistingVmIp(e.target.value)}
                   placeholder="VM IP or hostname"
-                  className="bg-[var(--bg-base)] border border-gray-700 px-3 py-1.5 text-xs font-mono text-gray-300 w-72 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
+                  className="bg-[var(--bg-base)] border border-gray-700 px-3 py-1.5 text-xs text-gray-300 w-72 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
                 />
               )}
             </div>
@@ -548,7 +548,7 @@ export function InfraDeployWizard({
               <h4 className="text-base font-semibold text-gray-100 mb-1">Configure runner</h4>
               <p className="text-xs text-gray-400 mb-4">Name the runner so you can find it in the regional list. Auto-shutdown saves cost when the runner is idle past business hours.</p>
 
-              <div className="bg-purple-500/5 border-l-2 border-purple-500 px-3 py-1.5 mb-4 text-[10px] font-mono text-purple-400 tracking-wider uppercase">
+              <div className="bg-purple-500/5 border-l-2 border-purple-500 px-3 py-1.5 mb-4 text-[10px] text-purple-400 tracking-wider uppercase">
                 ↗ Runner-only fields
               </div>
 
@@ -560,9 +560,9 @@ export function InfraDeployWizard({
                     value={runnerName}
                     onChange={e => setRunnerName(e.target.value)}
                     placeholder={`${region}-runner-01`}
-                    className="w-full bg-[var(--bg-base)] border border-gray-700 px-3 py-2 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
+                    className="w-full bg-[var(--bg-base)] border border-gray-700 px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
                   />
-                  <p className="text-[11px] text-gray-500 mt-1 font-mono">
+                  <p className="text-[11px] text-gray-500 mt-1">
                     ⓘ Suggested format: {`{region}-runner-{nn}`}. Must be unique within this project.
                   </p>
                 </div>
@@ -575,9 +575,9 @@ export function InfraDeployWizard({
                     value={autoShutdownHour}
                     onChange={e => setAutoShutdownHour(Number(e.target.value))}
                     disabled={!autoShutdownEnabled}
-                    className="w-full bg-[var(--bg-base)] border border-gray-700 px-3 py-2 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500 disabled:opacity-40"
+                    className="w-full bg-[var(--bg-base)] border border-gray-700 px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500 disabled:opacity-40"
                   />
-                  <p className="text-[11px] text-gray-500 mt-1 font-mono">
+                  <p className="text-[11px] text-gray-500 mt-1">
                     ⓘ Runner deallocates if idle past this hour. Default = 23:00.
                   </p>
                 </div>
@@ -605,8 +605,8 @@ export function InfraDeployWizard({
               <div className="space-y-1 mb-4">
                 {[
                   { k: 'Kind', v: kind === 'target'
-                    ? <><span className="font-mono text-[9px] px-1.5 py-0.5 bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 mr-2">▢ TARGET</span>Server-under-test</>
-                    : <><span className="font-mono text-[9px] px-1.5 py-0.5 bg-purple-500/15 border border-purple-500/40 text-purple-300 mr-2">↗ RUNNER</span>Load-generator agent</>
+                    ? <><span className="text-[9px] px-1.5 py-0.5 bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 mr-2">▢ TARGET</span>Server-under-test</>
+                    : <><span className="text-[9px] px-1.5 py-0.5 bg-purple-500/15 border border-purple-500/40 text-purple-300 mr-2">↗ RUNNER</span>Load-generator agent</>
                   },
                   { k: 'Cloud account', v: cloudAccounts.find(a => a.account_id === accountId)?.name ?? '—' },
                   { k: 'Region', v: region },
@@ -623,13 +623,13 @@ export function InfraDeployWizard({
                         ? <span className="text-cyan-400">{APIBENCH_LANGS.filter(l => languages.includes(l.id)).map(l => l.label).join(', ')}</span>
                         : <span className="text-gray-400">none — apibench uses the built-in endpoint /api</span>,
                     },
-                    { k: 'Existing VM', v: useExistingVm ? <span className="font-mono text-cyan-400">{existingVmIp}</span> : <span className="text-gray-400">no — provisioning new</span> },
+                    { k: 'Existing VM', v: useExistingVm ? <span className="text-cyan-400">{existingVmIp}</span> : <span className="text-gray-400">no — provisioning new</span> },
                   ] : [
-                    { k: 'Name', v: <span className="font-mono">{runnerName}</span> },
-                    { k: 'Auto-shutdown', v: autoShutdownEnabled ? <span className="font-mono">{String(autoShutdownHour).padStart(2, '0')}:00 local</span> : <span className="text-gray-400">disabled</span> },
+                    { k: 'Name', v: <span>{runnerName}</span> },
+                    { k: 'Auto-shutdown', v: autoShutdownEnabled ? <span>{String(autoShutdownHour).padStart(2, '0')}:00 local</span> : <span className="text-gray-400">disabled</span> },
                   ]),
                 ].map((row, idx) => (
-                  <div key={idx} className="flex items-baseline gap-3 px-3 py-2 border border-gray-800 bg-[var(--bg-raised)] font-mono text-xs">
+                  <div key={idx} className="flex items-baseline gap-3 px-3 py-2 border border-gray-800 bg-[var(--bg-raised)] text-xs">
                     <span className="text-gray-400 w-32 flex-shrink-0 text-[10px] tracking-wider uppercase">{row.k}</span>
                     <span className="text-gray-200 flex-1">{row.v}</span>
                   </div>
@@ -642,7 +642,7 @@ export function InfraDeployWizard({
                 value={deployName}
                 onChange={e => setDeployName(e.target.value)}
                 placeholder={autoDeployName}
-                className="w-full bg-[var(--bg-base)] border border-gray-700 px-3 py-2 text-sm text-gray-200 font-mono focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
+                className="w-full bg-[var(--bg-base)] border border-gray-700 px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
               />
             </div>
           )}

@@ -6,7 +6,7 @@ export interface WizardStepperProps {
 
 export function WizardStepper({ steps, currentStep, onStepClick }: WizardStepperProps) {
   return (
-    <div className="flex items-center gap-0.5 mb-8 font-mono text-xs">
+    <div className="flex items-center gap-0.5 mb-8 text-xs">
       {steps.map((label, i) => {
         const isCurrent = i === currentStep;
         const isPast = i < currentStep;

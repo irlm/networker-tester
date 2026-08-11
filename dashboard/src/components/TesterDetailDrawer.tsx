@@ -233,7 +233,7 @@ export function TesterDetailDrawer({
               <h3 id="tester-detail-title" className="text-lg font-bold text-gray-100">
                 {tester.name}
               </h3>
-              <p className="text-xs text-gray-400 font-mono">
+              <p className="text-xs text-gray-400">
                 {tester.cloud} / {tester.region} · {tester.tester_id.slice(0, 8)}
               </p>
             </div>
@@ -269,7 +269,7 @@ export function TesterDetailDrawer({
                   queueing more work.
                 </p>
                 {tester.status_message && (
-                  <p className="text-xs text-gray-400 mt-2 font-mono">
+                  <p className="text-xs text-gray-400 mt-2">
                     {tester.status_message}
                   </p>
                 )}
@@ -328,13 +328,13 @@ export function TesterDetailDrawer({
                 label={`${tester.power_state} · ${tester.allocation}`}
               />
               {tester.allocation === 'locked' && tester.locked_by_config_id && (
-                <span className="text-xs text-gray-400 font-mono">
+                <span className="text-xs text-gray-400">
                   locked by {tester.locked_by_config_id.slice(0, 8)}
                 </span>
               )}
             </div>
             {tester.status_message && !isError && (
-              <p className="text-xs text-gray-400 mt-2 font-mono">
+              <p className="text-xs text-gray-400 mt-2">
                 {tester.status_message}
               </p>
             )}
@@ -374,7 +374,7 @@ export function TesterDetailDrawer({
             <div className="text-xs space-y-1">
               <div className="flex items-center gap-2">
                 <span className="text-gray-400">Installed:</span>
-                <span className="text-gray-300 font-mono">{installerVersion}</span>
+                <span className="text-gray-300">{installerVersion}</span>
                 {tester.last_installed_at && (
                   <span className="text-gray-400">
                     · {formatDate(tester.last_installed_at)}
@@ -383,7 +383,7 @@ export function TesterDetailDrawer({
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-gray-400">Latest known:</span>
-                <span className="text-gray-300 font-mono">{latestVersion ?? '—'}</span>
+                <span className="text-gray-300">{latestVersion ?? '—'}</span>
                 {updateAvailable && (
                   <span className="px-1.5 py-0.5 text-[10px] rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
                     Update available
@@ -428,13 +428,13 @@ export function TesterDetailDrawer({
             <h4 className="text-xs uppercase tracking-wide text-gray-400 mb-2">Usage</h4>
             <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
               <dt className="text-gray-400">Benchmarks run</dt>
-              <dd className="text-gray-300 font-mono">{tester.benchmark_run_count}</dd>
+              <dd className="text-gray-300">{tester.benchmark_run_count}</dd>
               <dt className="text-gray-400">Avg duration</dt>
-              <dd className="text-gray-300 font-mono">
+              <dd className="text-gray-300">
                 {formatDuration(tester.avg_benchmark_duration_seconds)}
               </dd>
               <dt className="text-gray-400">Last used</dt>
-              <dd className="text-gray-300 font-mono">{formatDate(tester.last_used_at)}</dd>
+              <dd className="text-gray-300">{formatDate(tester.last_used_at)}</dd>
             </dl>
           </section>
 
@@ -445,21 +445,21 @@ export function TesterDetailDrawer({
             </h4>
             <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs mb-3">
               <dt className="text-gray-400">Enabled</dt>
-              <dd className="text-gray-300 font-mono">
+              <dd className="text-gray-300">
                 {tester.auto_shutdown_enabled ? 'yes' : 'no'}
               </dd>
               <dt className="text-gray-400">Local hour</dt>
-              <dd className="text-gray-300 font-mono">
+              <dd className="text-gray-300">
                 {String(tester.auto_shutdown_local_hour).padStart(2, '0')}:00
               </dd>
               <dt className="text-gray-400">Next shutdown</dt>
-              <dd className="text-gray-300 font-mono">
+              <dd className="text-gray-300">
                 {formatDate(tester.next_shutdown_at)}
               </dd>
               {tester.shutdown_deferral_count > 0 && (
                 <>
                   <dt className="text-gray-400">Deferrals</dt>
-                  <dd className="text-yellow-400 font-mono">
+                  <dd className="text-yellow-400">
                     {tester.shutdown_deferral_count}
                   </dd>
                 </>
@@ -482,7 +482,7 @@ export function TesterDetailDrawer({
                     value={scheduleHour}
                     disabled={!scheduleEnabled}
                     onChange={(e) => setScheduleHour(Number(e.target.value))}
-                    className="bg-[var(--bg-base)] border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono focus:outline-none focus:border-cyan-500 disabled:opacity-50"
+                    className="bg-[var(--bg-base)] border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-cyan-500 disabled:opacity-50"
                     aria-label="Local shutdown hour"
                   >
                     {HOURS.map((h) => (
@@ -573,7 +573,7 @@ export function TesterDetailDrawer({
             <h4 className="text-xs uppercase tracking-wide text-gray-400 mb-2">Recovery</h4>
             <div className="flex items-center gap-2 mb-2">
               <span className="text-xs text-gray-400">Auto-probe:</span>
-              <span className="text-xs text-gray-300 font-mono">
+              <span className="text-xs text-gray-300">
                 {tester.auto_probe_enabled ? 'enabled' : 'disabled'}
               </span>
             </div>
@@ -596,7 +596,7 @@ export function TesterDetailDrawer({
             </h4>
             <div className="flex items-center gap-2 mb-2">
               <span className="text-xs text-gray-400">Last seen:</span>
-              <span className="text-xs text-gray-300 font-mono">
+              <span className="text-xs text-gray-300">
                 {tester.api_key_last_used_at
                   ? formatDate(tester.api_key_last_used_at)
                   : 'never'}
@@ -612,7 +612,7 @@ export function TesterDetailDrawer({
                   label={`expires ${formatDate(tester.api_key_expires_at)}`}
                 />
               ) : (
-                <span className="text-xs text-gray-300 font-mono">no expiry</span>
+                <span className="text-xs text-gray-300">no expiry</span>
               )}
             </div>
             {isOperator && (
@@ -631,7 +631,7 @@ export function TesterDetailDrawer({
             <h4 className="text-xs uppercase tracking-wide text-gray-400 mb-2">Queue</h4>
             {queueState?.running ? (
               <div className="border border-cyan-500/30 bg-cyan-500/5 rounded p-2 mb-2 text-xs">
-                <div className="text-cyan-400 font-mono">
+                <div className="text-cyan-400">
                   running: {queueState.running.name}
                 </div>
               </div>
@@ -639,7 +639,7 @@ export function TesterDetailDrawer({
               <p className="text-xs text-gray-400">No running benchmark.</p>
             )}
             {queueState && queueState.queued.length > 0 ? (
-              <ol className="space-y-1 text-xs font-mono">
+              <ol className="space-y-1 text-xs">
                 {queueState.queued.map((q) => (
                   <li key={q.config_id} className="text-gray-400">
                     #{q.position ?? '?'} {q.name}

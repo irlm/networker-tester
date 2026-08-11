@@ -471,7 +471,7 @@ export function BenchmarkConfigResultsPage() {
                 return (
                   <div key={lang}>
                     <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-mono font-semibold" style={{ color }}>
+                      <span className="text-xs font-semibold" style={{ color }}>
                         {lang}
                       </span>
                       <button
@@ -537,14 +537,14 @@ export function BenchmarkConfigResultsPage() {
 
                   return (
                     <tr key={row.language} className="border-b border-gray-800 text-gray-300">
-                      <td className="py-2 pr-4 font-mono">{row.language}</td>
+                      <td className="py-2 pr-4">{row.language}</td>
                       {data.testbeds.map((testbed) => {
                         const v = row.testbeds.get(testbed.testbed_id);
                         const isBest = v && v.mean === minMean;
                         return (
                           <td
                             key={testbed.testbed_id}
-                            className={`py-2 pr-4 text-right font-mono ${isBest ? 'text-cyan-300' : ''}`}
+                            className={`py-2 pr-4 text-right ${isBest ? 'text-cyan-300' : ''}`}
                           >
                             {v ? formatBenchmarkMetric(v.mean, 'ms') : '-'}
                           </td>
@@ -552,10 +552,10 @@ export function BenchmarkConfigResultsPage() {
                       })}
                       {data.testbeds.length === 2 && (
                         <>
-                          <td className="py-2 pr-4 text-right font-mono text-yellow-400">
+                          <td className="py-2 pr-4 text-right text-yellow-400">
                             {deltaPercent !== null ? formatBenchmarkDelta(deltaPercent) : '-'}
                           </td>
-                          <td className="py-2 text-center font-mono text-sm">
+                          <td className="py-2 text-center text-sm">
                             {winnerTestbed ? (
                               <span className="text-cyan-400">{winnerTestbed.cloud}</span>
                             ) : (

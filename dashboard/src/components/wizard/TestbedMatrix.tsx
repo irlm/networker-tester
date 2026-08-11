@@ -118,7 +118,7 @@ export function TestbedMatrix({
                 key={`${cloud}-${os}`}
                 type="button"
                 onClick={() => addTestbed(cloud, os)}
-                className="px-3 py-1.5 text-xs font-mono border border-gray-700 text-gray-300 hover:border-cyan-500 hover:text-cyan-300 transition-colors"
+                className="px-3 py-1.5 text-xs border border-gray-700 text-gray-300 hover:border-cyan-500 hover:text-cyan-300 transition-colors"
               >
                 + {cloud} / {os === 'linux' ? 'Linux' : 'Windows'}
               </button>
@@ -155,7 +155,7 @@ export function TestbedMatrix({
           <div className="flex items-center justify-between mb-3">
             <h4 className="text-xs font-semibold text-gray-300 uppercase tracking-wider">Runner Assignment</h4>
             {!testersLoading && (
-              <span className="text-[10px] font-mono text-gray-500">
+              <span className="text-[10px] text-gray-500">
                 {runnerStats.idle} idle / {runnerStats.online} online
               </span>
             )}
@@ -212,8 +212,8 @@ export function TestbedMatrix({
                       />
                       <span className={`w-1.5 h-1.5 rounded-full ${isIdle ? 'bg-green-400' : isBusy ? 'bg-yellow-400' : 'bg-gray-600'}`} />
                       <span className="text-sm font-medium text-gray-100 flex-1">{row.name}</span>
-                      <span className="text-[10px] font-mono text-gray-400">{row.cloud} / {row.region}</span>
-                      <span className={`text-[10px] font-mono px-1.5 py-0.5 border rounded ${testerStatusClass(row)}`}>
+                      <span className="text-[10px] text-gray-400">{row.cloud} / {row.region}</span>
+                      <span className={`text-[10px] px-1.5 py-0.5 border rounded ${testerStatusClass(row)}`}>
                         {testerStatusLabel(row)}
                       </span>
                     </div>

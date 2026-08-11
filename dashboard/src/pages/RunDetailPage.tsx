@@ -297,16 +297,16 @@ export function RunDetailPage() {
       {/* Inline metrics */}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1 py-3 mb-6 text-xs border-b border-gray-800/50">
         <span className="text-gray-400">
-          Probes <span className="text-gray-200 font-mono font-semibold ml-1">{probeCount}</span>
+          Probes <span className="text-gray-200 font-semibold ml-1">{probeCount}</span>
         </span>
         <span className="text-gray-400">
-          Success <span className="text-green-400 font-mono font-semibold ml-1">{successCount}</span>
+          Success <span className="text-green-400 font-semibold ml-1">{successCount}</span>
         </span>
         <span className="text-gray-400">
-          Failed <span className={`font-mono font-semibold ml-1 ${failureCount > 0 ? 'text-red-400' : 'text-gray-500'}`}>{failureCount}</span>
+          Failed <span className={`font-semibold ml-1 ${failureCount > 0 ? 'text-red-400' : 'text-gray-500'}`}>{failureCount}</span>
         </span>
         <span className="text-gray-400">
-          Rate <span className={`font-mono font-semibold ml-1 ${successRateClass(probeCount > 0 ? (successCount / probeCount) * 100 : 100)}`}>
+          Rate <span className={`font-semibold ml-1 ${successRateClass(probeCount > 0 ? (successCount / probeCount) * 100 : 100)}`}>
             {probeCount > 0 ? `${((successCount / probeCount) * 100).toFixed(0)}%` : '-'}
           </span>
         </span>
@@ -427,7 +427,7 @@ export function RunDetailPage() {
                   const whiskerRight = scale(s.max);
                   return (
                     <div key={`${r.protocol}:${r.payloadBytes ?? ''}`} className="flex items-center gap-3">
-                      <div className="w-40 text-xs font-mono text-right shrink-0 truncate">
+                      <div className="w-40 text-xs text-right shrink-0 truncate">
                         <span className="text-gray-300">{r.protocol}</span>
                         {r.payloadBytes != null && <span className="text-gray-500"> · {formatBytes(r.payloadBytes)}</span>}
                       </div>
@@ -443,7 +443,7 @@ export function RunDetailPage() {
                         {/* Median line */}
                         <div className="absolute top-0 bottom-0 w-0.5 bg-cyan-400" style={{ left: `${median}%` }} />
                       </div>
-                      <div className="w-24 text-xs text-gray-400 font-mono shrink-0">
+                      <div className="w-24 text-xs text-gray-400 shrink-0">
                         {formatMs(s.min)}&ndash;{formatMs(s.max)}
                       </div>
                     </div>
@@ -568,7 +568,7 @@ export function RunDetailPage() {
               <RunResult ok={run.success_count} fail={run.failure_count} className="text-xs" />
             </div>
             {run.error_message && (
-              <p className="text-red-400 text-xs mt-2 font-mono">{stripAnsi(run.error_message)}</p>
+              <p className="text-red-400 text-xs mt-2">{stripAnsi(run.error_message)}</p>
             )}
           </div>
         </div>
@@ -650,11 +650,11 @@ function ArtifactSection({ artifact }: { artifact: BenchmarkArtifact }) {
                     <td className="px-4 py-2 text-gray-200">{s.protocol}</td>
                     <td className="px-4 py-2 text-gray-400">{s.metric_name} ({s.metric_unit})</td>
                     <td className="px-4 py-2 text-gray-400 text-right">{s.included_sample_count}</td>
-                    <td className="px-4 py-2 text-gray-100 text-right font-mono">{s.p50.toFixed(2)}</td>
-                    <td className="px-4 py-2 text-yellow-400 text-right font-mono">{s.p95.toFixed(2)}</td>
-                    <td className="px-4 py-2 text-s4 text-right font-mono">{s.p99.toFixed(2)}</td>
-                    <td className="px-4 py-2 text-gray-300 text-right font-mono">{s.rps.toFixed(0)}</td>
-                    <td className="px-4 py-2 text-gray-400 text-right font-mono">{s.stddev.toFixed(2)}</td>
+                    <td className="px-4 py-2 text-gray-100 text-right">{s.p50.toFixed(2)}</td>
+                    <td className="px-4 py-2 text-yellow-400 text-right">{s.p95.toFixed(2)}</td>
+                    <td className="px-4 py-2 text-s4 text-right">{s.p99.toFixed(2)}</td>
+                    <td className="px-4 py-2 text-gray-300 text-right">{s.rps.toFixed(0)}</td>
+                    <td className="px-4 py-2 text-gray-400 text-right">{s.stddev.toFixed(2)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -684,12 +684,12 @@ function TimingRow({ row }: { row: TimingBreakdown }) {
     <tr className="border-b border-gray-800/30 hover:bg-gray-800/10">
       <td className="px-4 py-2 text-gray-200 font-medium">{row.protocol}</td>
       <td className="px-4 py-2 text-gray-400 text-right">{row.count}</td>
-      <td className="px-4 py-2 text-gray-400 text-right font-mono">{formatMs(row.avgDns)}</td>
-      <td className="px-4 py-2 text-gray-400 text-right font-mono">{formatMs(row.avgTcp)}</td>
-      <td className="px-4 py-2 text-gray-400 text-right font-mono">{formatMs(row.avgTls)}</td>
-      <td className="px-4 py-2 text-gray-200 text-right font-mono">{formatMs(row.avgTtfb)}</td>
-      <td className="px-4 py-2 text-gray-100 text-right font-mono font-bold">{formatMs(row.avgTotal)}</td>
-      <td className={`px-4 py-2 text-right font-mono ${successRateClass(successPct)}`}>
+      <td className="px-4 py-2 text-gray-400 text-right">{formatMs(row.avgDns)}</td>
+      <td className="px-4 py-2 text-gray-400 text-right">{formatMs(row.avgTcp)}</td>
+      <td className="px-4 py-2 text-gray-400 text-right">{formatMs(row.avgTls)}</td>
+      <td className="px-4 py-2 text-gray-200 text-right">{formatMs(row.avgTtfb)}</td>
+      <td className="px-4 py-2 text-gray-100 text-right font-bold">{formatMs(row.avgTotal)}</td>
+      <td className={`px-4 py-2 text-right ${successRateClass(successPct)}`}>
         {row.successCount}/{row.totalCount}
       </td>
     </tr>
@@ -706,14 +706,14 @@ function StatsRow({ ps }: { ps: ProtocolStats }) {
       </td>
       <td className="px-4 py-2 text-gray-400">{ps.label}</td>
       <td className="px-4 py-2 text-gray-400 text-right">{ps.stats.count}</td>
-      <td className="px-4 py-2 text-gray-400 text-right font-mono">{fmt(ps.stats.min)}</td>
-      <td className="px-4 py-2 text-gray-400 text-right font-mono">{fmt(ps.stats.mean)}</td>
-      <td className="px-4 py-2 text-gray-100 text-right font-mono font-semibold">{fmt(ps.stats.p50)}</td>
-      <td className="px-4 py-2 text-yellow-400 text-right font-mono">{fmt(ps.stats.p95)}</td>
-      <td className="px-4 py-2 text-s4 text-right font-mono">{fmt(ps.stats.p99)}</td>
-      <td className="px-4 py-2 text-gray-400 text-right font-mono">{fmt(ps.stats.max)}</td>
-      <td className="px-4 py-2 text-gray-400 text-right font-mono">{fmt(ps.stats.stddev)}</td>
-      <td className={`px-4 py-2 text-right font-mono ${successRateClass(ps.successRate)}`}>
+      <td className="px-4 py-2 text-gray-400 text-right">{fmt(ps.stats.min)}</td>
+      <td className="px-4 py-2 text-gray-400 text-right">{fmt(ps.stats.mean)}</td>
+      <td className="px-4 py-2 text-gray-100 text-right font-semibold">{fmt(ps.stats.p50)}</td>
+      <td className="px-4 py-2 text-yellow-400 text-right">{fmt(ps.stats.p95)}</td>
+      <td className="px-4 py-2 text-s4 text-right">{fmt(ps.stats.p99)}</td>
+      <td className="px-4 py-2 text-gray-400 text-right">{fmt(ps.stats.max)}</td>
+      <td className="px-4 py-2 text-gray-400 text-right">{fmt(ps.stats.stddev)}</td>
+      <td className={`px-4 py-2 text-right ${successRateClass(ps.successRate)}`}>
         {ps.successRate.toFixed(0)}%
       </td>
     </tr>
@@ -730,7 +730,7 @@ export function AttemptRow({ a }: { a: LiveAttempt }) {
   return (
     <div className="px-4 py-3 border-b border-gray-800/30 hover:bg-gray-800/10">
       <div className="flex items-center gap-4 mb-2">
-        <span className="text-gray-400 font-mono text-xs w-8">#{a.sequence_num}</span>
+        <span className="text-gray-400 text-xs w-8">#{a.sequence_num}</span>
         {a.success
           ? <span className="text-green-400 text-xs font-medium">OK</span>
           : <span className="text-red-400 text-xs font-medium">FAIL</span>
@@ -742,16 +742,16 @@ export function AttemptRow({ a }: { a: LiveAttempt }) {
           <SubResult label="DNS" color="gray">
             <p className="text-gray-300">{formatMs(a.dns.duration_ms)}</p>
             {a.dns.resolved_ips?.length > 0 && (
-              <p className="text-gray-400 font-mono truncate">{a.dns.resolved_ips.join(', ')}</p>
+              <p className="text-gray-400 truncate">{a.dns.resolved_ips.join(', ')}</p>
             )}
           </SubResult>
         )}
         {a.tcp && (
           <SubResult label="TCP" color="gray">
             <p className="text-gray-300">{formatMs(a.tcp.connect_duration_ms)}</p>
-            <p className="text-gray-400 font-mono truncate">{a.tcp.remote_addr}</p>
+            <p className="text-gray-400 truncate">{a.tcp.remote_addr}</p>
             {(a.tcp.total_retrans != null || a.tcp.congestion_algorithm != null || a.tcp.rtt_estimate_ms != null) && (
-              <p className="font-mono truncate">
+              <p className="truncate">
                 {a.tcp.total_retrans != null && (
                   <span className={a.tcp.total_retrans > 0 ? 'text-yellow-400' : 'text-gray-400'}>
                     {a.tcp.total_retrans} retrans
@@ -770,9 +770,9 @@ export function AttemptRow({ a }: { a: LiveAttempt }) {
         {a.tls && (
           <SubResult label="TLS" color="gray">
             <p className="text-gray-300">{formatMs(a.tls.handshake_duration_ms)}</p>
-            <p className="text-gray-400 font-mono truncate">{a.tls.protocol_version} · {a.tls.cipher_suite}</p>
+            <p className="text-gray-400 truncate">{a.tls.protocol_version} · {a.tls.cipher_suite}</p>
             {(a.tls.handshake_kind != null || a.tls.resumed != null || a.tls.alpn_negotiated != null) && (
-              <p className="font-mono truncate">
+              <p className="truncate">
                 {(a.tls.handshake_kind != null || a.tls.resumed != null) && (
                   <span className={(a.tls.resumed ?? a.tls.handshake_kind === 'resumed') ? 'text-cyan-400' : 'text-gray-400'}>
                     {a.tls.handshake_kind ?? (a.tls.resumed ? 'resumed' : 'full')}
@@ -793,7 +793,7 @@ export function AttemptRow({ a }: { a: LiveAttempt }) {
               <span className={a.http.status_code >= 400 ? 'text-red-400' : 'text-green-400'}>{a.http.status_code}</span>
               {' · '}TTFB {formatMs(a.http.ttfb_ms)} · Total {formatMs(a.http.total_duration_ms)}
             </p>
-            <p className="text-gray-400 font-mono truncate">
+            <p className="text-gray-400 truncate">
               {a.http.negotiated_version}
               {a.http.throughput_mbps != null && ` · ${a.http.throughput_mbps.toFixed(1)} MB/s`}
               {a.http.goodput_mbps != null && ` · goodput ${a.http.goodput_mbps.toFixed(1)} MB/s`}
@@ -825,7 +825,7 @@ export function AttemptRow({ a }: { a: LiveAttempt }) {
                     <span className="text-yellow-400"> · split anomaly</span>
                   )}
                 </p>
-                {st.app_ms != null && <p className="text-gray-400 font-mono">app {formatMs(st.app_ms)}</p>}
+                {st.app_ms != null && <p className="text-gray-400">app {formatMs(st.app_ms)}</p>}
               </>
             ) : (
               <p className="text-gray-300">
@@ -842,7 +842,7 @@ export function AttemptRow({ a }: { a: LiveAttempt }) {
               RTT {formatMs(a.rpm.unloaded_rtt_avg_ms)} &rarr; {formatMs(a.rpm.loaded_rtt_avg_ms)} under load
               {a.rpm.rpm != null && ` · ${a.rpm.rpm.toFixed(0)} RPM`}
             </p>
-            <p className="font-mono truncate">
+            <p className="truncate">
               {a.rpm.bufferbloat_factor != null && (
                 <span className={a.rpm.bufferbloat_factor >= 2 ? 'text-yellow-400' : 'text-gray-400'}>
                   bufferbloat &times;{a.rpm.bufferbloat_factor.toFixed(2)}
@@ -877,9 +877,9 @@ export function AttemptRow({ a }: { a: LiveAttempt }) {
               </span>
               {a.path.destination_rtt_ms != null && ` · ${formatMs(a.path.destination_rtt_ms)}`}
             </p>
-            <p className="text-gray-400 font-mono truncate">{a.path.method}</p>
+            <p className="text-gray-400 truncate">{a.path.method}</p>
             {a.path.hops.length > 0 && (
-              <p className="text-gray-400 font-mono truncate">
+              <p className="text-gray-400 truncate">
                 {a.path.hops.map((h) => h.addr ?? '*').join(' → ')}
               </p>
             )}
@@ -902,7 +902,7 @@ export function AttemptRow({ a }: { a: LiveAttempt }) {
                 </span>
               )}
             </p>
-            <p className="text-gray-400 font-mono truncate">{a.dualstack.happy_eyeballs_verdict}</p>
+            <p className="text-gray-400 truncate">{a.dualstack.happy_eyeballs_verdict}</p>
           </SubResult>
         )}
         {a.websocket && (
@@ -920,11 +920,11 @@ export function AttemptRow({ a }: { a: LiveAttempt }) {
           <SubResult label="PMTUD" color="gray">
             <p className="text-gray-300">
               {a.pmtud.path_mtu != null
-                ? <>Path MTU <span className="font-mono">{a.pmtud.path_mtu}</span>{a.pmtud.lower_bound_only && <span className="text-yellow-400"> (lower bound)</span>}</>
+                ? <>Path MTU <span>{a.pmtud.path_mtu}</span>{a.pmtud.lower_bound_only && <span className="text-yellow-400"> (lower bound)</span>}</>
                 : <span className="text-yellow-400">no MTU verdict</span>}
               {a.pmtud.local_mtu != null && ` · local ${a.pmtud.local_mtu}`}
             </p>
-            <p className="text-gray-400 font-mono truncate">{a.pmtud.method}</p>
+            <p className="text-gray-400 truncate">{a.pmtud.method}</p>
           </SubResult>
         )}
         {a.page_load && (

@@ -9,7 +9,7 @@
 export function RunResult({ ok, fail, className = '' }: { ok: number; fail: number; className?: string }) {
   const total = ok + fail;
   return (
-    <span className={`font-mono tabular-nums whitespace-nowrap ${className}`}>
+    <span className={`tabular-nums whitespace-nowrap ${className}`}>
       <span className={ok > 0 ? 'text-green-400' : 'text-gray-500'}>
         {ok}/{total}
       </span>

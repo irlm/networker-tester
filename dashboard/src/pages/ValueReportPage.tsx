@@ -207,23 +207,23 @@ export function ValueReportPage() {
                     className="border-b border-gray-800/50 hover:bg-gray-800/20"
                   >
                     <td className="px-4 py-3 text-gray-200">{r.group.provider}</td>
-                    <td className="px-4 py-3 text-gray-400 font-mono text-xs">{r.group.vm_size}</td>
+                    <td className="px-4 py-3 text-gray-400 text-xs">{r.group.vm_size}</td>
                     <td className="px-4 py-3 text-gray-400 text-xs">{r.group.region}</td>
-                    <td className="px-4 py-3 text-gray-400 text-xs text-right font-mono">{r.fam.run_count}</td>
-                    <td className="px-4 py-3 text-gray-400 text-xs text-right font-mono">{r.fam.sample_count}</td>
-                    <td className="px-4 py-3 text-gray-300 text-xs text-right font-mono">
+                    <td className="px-4 py-3 text-gray-400 text-xs text-right">{r.fam.run_count}</td>
+                    <td className="px-4 py-3 text-gray-400 text-xs text-right">{r.fam.sample_count}</td>
+                    <td className="px-4 py-3 text-gray-300 text-xs text-right">
                       {fmtMetric(r.fam, r.fam.median)}
                     </td>
-                    <td className="px-4 py-3 text-gray-400 text-xs text-right font-mono">
+                    <td className="px-4 py-3 text-gray-400 text-xs text-right">
                       {r.fam.p95_ms !== null ? `${r.fam.p95_ms.toFixed(1)}ms` : '—'}
                     </td>
-                    <td className="px-4 py-3 text-gray-300 text-xs text-right font-mono">
+                    <td className="px-4 py-3 text-gray-300 text-xs text-right">
                       {r.group.hourly_usd !== null ? `$${r.group.hourly_usd.toFixed(4)}` : '—'}
                       {r.group.cost_note && (
                         <span className="text-yellow-500/80 ml-1" title={r.group.cost_note}>*</span>
                       )}
                     </td>
-                    <td className={`px-4 py-3 text-xs text-right font-mono ${
+                    <td className={`px-4 py-3 text-xs text-right ${
                       i === 0 && r.fam.value_score !== null ? 'text-cyan-400' : 'text-gray-300'
                     }`}>
                       {fmtValueScore(r.fam)}
@@ -256,8 +256,8 @@ export function ValueReportPage() {
 
           {/* Formulas + disclaimer */}
           <div className="text-xs text-gray-500 space-y-1">
-            <p className="font-mono">{report.formulas.latency_cost_index}</p>
-            <p className="font-mono">{report.formulas.mbps_per_dollar_hour}</p>
+            <p>{report.formulas.latency_cost_index}</p>
+            <p>{report.formulas.mbps_per_dollar_hour}</p>
             <p>
               Prices: static curated table ({report.cost_table.source}), as of{' '}
               {report.cost_table.as_of}. {report.cost_table.disclaimer}

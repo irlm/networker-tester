@@ -151,7 +151,7 @@ export function CloudAccountCombobox({
           // Next-button hint carries the "select an account" message instead.
           className={`w-full bg-[var(--bg-base)] border ${
             open ? 'border-cyan-500/60' : 'border-gray-700'
-          } px-3 py-1.5 text-xs font-mono text-gray-200 focus:outline-none placeholder:text-gray-500 ${
+          } px-3 py-1.5 text-xs text-gray-200 focus:outline-none placeholder:text-gray-500 ${
             selected && !open ? 'pl-7' : ''
           }`}
           role="combobox"
@@ -173,7 +173,7 @@ export function CloudAccountCombobox({
           className="absolute z-20 left-0 right-0 mt-1 border border-gray-700 bg-[var(--bg-surface)] max-h-60 overflow-y-auto"
         >
           {filtered.length === 0 ? (
-            <div className="px-3 py-3 text-xs text-gray-400 font-mono">No accounts match "{query}"</div>
+            <div className="px-3 py-3 text-xs text-gray-400">No accounts match "{query}"</div>
           ) : (
             filtered.map((acct, idx) => {
               const isActive = idx === activeIdx;
@@ -195,7 +195,7 @@ export function CloudAccountCombobox({
                     setQuery('');
                     inputRef.current?.blur();
                   }}
-                  className={`flex items-center gap-2.5 px-3 py-2 text-xs font-mono border-b border-gray-800/60 last:border-b-0 ${
+                  className={`flex items-center gap-2.5 px-3 py-2 text-xs border-b border-gray-800/60 last:border-b-0 ${
                     isActive ? 'bg-cyan-500/10 text-gray-100' : 'text-gray-300'
                   } ${isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${
                     isActive ? 'shadow-[inset_2px_0_0_#22d3ee]' : ''
@@ -223,7 +223,7 @@ export function CloudAccountCombobox({
               setOpen(false);
               navigate(`/projects/${projectId}/cloud-accounts`);
             }}
-            className="flex items-center gap-2 px-3 py-2 text-xs font-mono text-cyan-400 border-t border-gray-800 hover:bg-cyan-500/5 cursor-pointer"
+            className="flex items-center gap-2 px-3 py-2 text-xs text-cyan-400 border-t border-gray-800 hover:bg-cyan-500/5 cursor-pointer"
           >
             + add cloud account…
           </div>
@@ -232,7 +232,7 @@ export function CloudAccountCombobox({
 
       {/* Keyboard hints */}
       {open && (
-        <div className="mt-1 flex gap-3 text-[10px] text-gray-500 font-mono">
+        <div className="mt-1 flex gap-3 text-[10px] text-gray-500">
           <span><kbd className="px-1 py-0.5 border border-gray-700 rounded">↑↓</kbd> navigate</span>
           <span><kbd className="px-1 py-0.5 border border-gray-700 rounded">↵</kbd> select</span>
           <span><kbd className="px-1 py-0.5 border border-gray-700 rounded">esc</kbd> close</span>

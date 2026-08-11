@@ -99,16 +99,16 @@ function SharedRunView({ data }: { data: LiveAttempt[] }) {
       {/* Summary */}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1 py-3 mb-6 text-xs border-b border-gray-800/50">
         <span className="text-gray-400">
-          Probes <span className="text-gray-200 font-mono font-semibold ml-1">{attempts.length}</span>
+          Probes <span className="text-gray-200 font-semibold ml-1">{attempts.length}</span>
         </span>
         <span className="text-gray-400">
-          Success <span className="text-green-400 font-mono font-semibold ml-1">{successCount}</span>
+          Success <span className="text-green-400 font-semibold ml-1">{successCount}</span>
         </span>
         <span className="text-gray-400">
-          Failed <span className={`font-mono font-semibold ml-1 ${failureCount > 0 ? 'text-red-400' : 'text-gray-500'}`}>{failureCount}</span>
+          Failed <span className={`font-semibold ml-1 ${failureCount > 0 ? 'text-red-400' : 'text-gray-500'}`}>{failureCount}</span>
         </span>
         <span className="text-gray-400">
-          Rate <span className={`font-mono font-semibold ml-1 ${successRateClass(attempts.length > 0 ? (successCount / attempts.length) * 100 : 100)}`}>
+          Rate <span className={`font-semibold ml-1 ${successRateClass(attempts.length > 0 ? (successCount / attempts.length) * 100 : 100)}`}>
             {attempts.length > 0 ? `${((successCount / attempts.length) * 100).toFixed(0)}%` : '-'}
           </span>
         </span>
@@ -186,8 +186,8 @@ function SharedRunView({ data }: { data: LiveAttempt[] }) {
           {attempts.map(a => (
             <div key={a.attempt_id} className="px-4 py-2 border-b border-gray-800/30 text-xs">
               <div className="flex items-center gap-3">
-                <span className="text-gray-400 font-mono w-8">#{a.sequence_num}</span>
-                <span className="text-gray-400 font-mono">{a.protocol}</span>
+                <span className="text-gray-400 w-8">#{a.sequence_num}</span>
+                <span className="text-gray-400">{a.protocol}</span>
                 {a.success
                   ? <span className="text-green-400">OK</span>
                   : <span className="text-red-400">FAIL</span>
@@ -218,7 +218,7 @@ function SharedJobView({ data }: { data: unknown }) {
           {Object.entries(job).map(([key, value]) => (
             <div key={key} className="flex gap-4">
               <span className="text-gray-400 w-32 shrink-0">{key}</span>
-              <span className="text-gray-200 font-mono text-xs break-all">
+              <span className="text-gray-200 text-xs break-all">
                 {typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value ?? '-')}
               </span>
             </div>
@@ -235,12 +235,12 @@ function SharedTimingRow({ row }: { row: TimingBreakdown }) {
     <tr className="border-b border-gray-800/30 hover:bg-gray-800/10">
       <td className="px-4 py-2 text-gray-200 font-medium">{row.protocol}</td>
       <td className="px-4 py-2 text-gray-400 text-right">{row.count}</td>
-      <td className="px-4 py-2 text-gray-400 text-right font-mono">{formatMs(row.avgDns)}</td>
-      <td className="px-4 py-2 text-gray-400 text-right font-mono">{formatMs(row.avgTcp)}</td>
-      <td className="px-4 py-2 text-gray-400 text-right font-mono">{formatMs(row.avgTls)}</td>
-      <td className="px-4 py-2 text-gray-200 text-right font-mono">{formatMs(row.avgTtfb)}</td>
-      <td className="px-4 py-2 text-gray-100 text-right font-mono font-bold">{formatMs(row.avgTotal)}</td>
-      <td className={`px-4 py-2 text-right font-mono ${successRateClass(successPct)}`}>
+      <td className="px-4 py-2 text-gray-400 text-right">{formatMs(row.avgDns)}</td>
+      <td className="px-4 py-2 text-gray-400 text-right">{formatMs(row.avgTcp)}</td>
+      <td className="px-4 py-2 text-gray-400 text-right">{formatMs(row.avgTls)}</td>
+      <td className="px-4 py-2 text-gray-200 text-right">{formatMs(row.avgTtfb)}</td>
+      <td className="px-4 py-2 text-gray-100 text-right font-bold">{formatMs(row.avgTotal)}</td>
+      <td className={`px-4 py-2 text-right ${successRateClass(successPct)}`}>
         {row.successCount}/{row.totalCount}
       </td>
     </tr>
@@ -257,14 +257,14 @@ function SharedStatsRow({ ps }: { ps: ProtocolStats }) {
       </td>
       <td className="px-4 py-2 text-gray-400">{ps.label}</td>
       <td className="px-4 py-2 text-gray-400 text-right">{ps.stats.count}</td>
-      <td className="px-4 py-2 text-gray-400 text-right font-mono">{fmt(ps.stats.min)}</td>
-      <td className="px-4 py-2 text-gray-400 text-right font-mono">{fmt(ps.stats.mean)}</td>
-      <td className="px-4 py-2 text-gray-100 text-right font-mono font-semibold">{fmt(ps.stats.p50)}</td>
-      <td className="px-4 py-2 text-yellow-400 text-right font-mono">{fmt(ps.stats.p95)}</td>
-      <td className="px-4 py-2 text-s4 text-right font-mono">{fmt(ps.stats.p99)}</td>
-      <td className="px-4 py-2 text-gray-400 text-right font-mono">{fmt(ps.stats.max)}</td>
-      <td className="px-4 py-2 text-gray-400 text-right font-mono">{fmt(ps.stats.stddev)}</td>
-      <td className={`px-4 py-2 text-right font-mono ${successRateClass(ps.successRate)}`}>
+      <td className="px-4 py-2 text-gray-400 text-right">{fmt(ps.stats.min)}</td>
+      <td className="px-4 py-2 text-gray-400 text-right">{fmt(ps.stats.mean)}</td>
+      <td className="px-4 py-2 text-gray-100 text-right font-semibold">{fmt(ps.stats.p50)}</td>
+      <td className="px-4 py-2 text-yellow-400 text-right">{fmt(ps.stats.p95)}</td>
+      <td className="px-4 py-2 text-s4 text-right">{fmt(ps.stats.p99)}</td>
+      <td className="px-4 py-2 text-gray-400 text-right">{fmt(ps.stats.max)}</td>
+      <td className="px-4 py-2 text-gray-400 text-right">{fmt(ps.stats.stddev)}</td>
+      <td className={`px-4 py-2 text-right ${successRateClass(ps.successRate)}`}>
         {ps.successRate.toFixed(0)}%
       </td>
     </tr>

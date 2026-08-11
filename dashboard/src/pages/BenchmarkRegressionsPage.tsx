@@ -102,11 +102,11 @@ export function BenchmarkRegressionsPage() {
                 </Link>
               ),
             },
-            { key: 'case', label: 'Case', hideBelow: 'md', cellClass: 'text-gray-400 font-mono', render: (r) => r.case_id },
+            { key: 'case', label: 'Case', hideBelow: 'md', cellClass: 'text-gray-400', render: (r) => r.case_id },
             { key: 'metric', label: 'Metric', hideBelow: 'lg', cellClass: 'text-gray-400', render: (r) => metricLabel(r.metric) },
-            { key: 'baseline', label: 'Baseline', align: 'right', hideBelow: 'md', cellClass: 'text-gray-400 font-mono', render: (r) => formatValue(r.metric, r.metric_unit, r.baseline_value) },
-            { key: 'current', label: 'Current', align: 'right', cellClass: 'text-gray-200 font-mono', render: (r) => formatValue(r.metric, r.metric_unit, r.current_value) },
-            { key: 'delta', label: 'Delta', align: 'right', cellClass: 'font-mono text-red-400', render: (r) => formatDelta(r.metric, r.delta_percent) },
+            { key: 'baseline', label: 'Baseline', align: 'right', hideBelow: 'md', cellClass: 'text-gray-400', render: (r) => formatValue(r.metric, r.metric_unit, r.baseline_value) },
+            { key: 'current', label: 'Current', align: 'right', cellClass: 'text-gray-200', render: (r) => formatValue(r.metric, r.metric_unit, r.current_value) },
+            { key: 'delta', label: 'Delta', align: 'right', cellClass: 'text-red-400', render: (r) => formatDelta(r.metric, r.delta_percent) },
             {
               key: 'severity',
               label: 'Severity',

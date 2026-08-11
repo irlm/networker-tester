@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
+import { DataTable } from '../components/common/DataTable';
 import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { PageHeader } from '../components/common/PageHeader';
 import { useProject } from '../hooks/useProject';
@@ -51,7 +52,7 @@ function EventBadge({ kind }: { kind: string }) {
   const cls =
     EVENT_BADGE[kind] ?? 'text-gray-400 border-gray-500/30 bg-gray-500/5';
   return (
-    <span className={`inline-block text-[11px] px-2 py-0.5 rounded border font-mono ${cls}`}>
+    <span className={`inline-block text-[11px] px-2 py-0.5 rounded border ${cls}`}>
       {kind}
     </span>
   );
@@ -137,7 +138,7 @@ export function VmHistoryPage() {
               key={val || 'all'}
               type="button"
               onClick={() => setTypeFilter(val)}
-              className={`px-2 py-1 rounded border font-mono ${
+              className={`px-2 py-1 rounded border ${
                 typeFilter === val
                   ? 'border-cyan-500 text-cyan-400 bg-cyan-500/10'
                   : 'border-gray-700 text-gray-400 hover:border-gray-500'
@@ -175,54 +176,51 @@ export function VmHistoryPage() {
           </p>
         </div>
       ) : (
-        <div className="table-container">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="text-gray-400 border-b border-gray-800">
-                <th className="px-3 py-2 text-left">When</th>
-                <th className="px-3 py-2 text-left">Event</th>
-                <th className="px-3 py-2 text-left">Resource</th>
-                <th className="px-3 py-2 text-left">Type</th>
-                <th className="px-3 py-2 text-left">Cloud / Region</th>
-                <th className="px-3 py-2 text-left">VM size</th>
-                <th className="px-3 py-2 text-left">VM name</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr
-                  key={r.event_id}
-                  className="border-b border-gray-800/30 hover:bg-gray-800/20"
-                >
-                  <td className="px-3 py-1.5 text-gray-400 font-mono whitespace-nowrap">
-                    {formatTime(r.event_time)}
-                  </td>
-                  <td className="px-3 py-1.5">
-                    <EventBadge kind={r.event_type} />
-                  </td>
-                  <td className="px-3 py-1.5 text-gray-200 font-mono truncate max-w-xs" title={r.resource_id}>
-                    {r.resource_name ?? <span className="text-gray-500">(unnamed)</span>}
-                  </td>
-                  <td className="px-3 py-1.5">
-                    <span className={`font-mono ${RESOURCE_BADGE[r.resource_type] ?? 'text-gray-400'}`}>
-                      {r.resource_type}
-                    </span>
-                  </td>
-                  <td className="px-3 py-1.5 text-gray-400 font-mono">
-                    {r.cloud}
-                    {r.region ? ` · ${r.region}` : ''}
-                  </td>
-                  <td className="px-3 py-1.5 text-gray-400 font-mono">
-                    {r.vm_size ?? '—'}
-                  </td>
-                  <td className="px-3 py-1.5 text-gray-400 font-mono truncate max-w-xs" title={r.vm_resource_id ?? undefined}>
-                    {r.vm_name ?? '—'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {hasMore && (
+        <DataTable
+          columns={[
+            {
+              key: 'when',
+              label: 'When',
+              cellClass: 'text-gray-400 whitespace-nowrap',
+              render: (r) => formatTime(r.event_time),
+            },
+            { key: 'event', label: 'Event', render: (r) => <EventBadge kind={r.event_type} /> },
+            {
+              key: 'resource',
+              label: 'Resource',
+              cellClass: 'text-gray-200 truncate max-w-xs',
+              titleOf: (r) => r.resource_id,
+              render: (r) => r.resource_name ?? <span className="text-gray-500">(unnamed)</span>,
+            },
+            {
+              key: 'type',
+              label: 'Type',
+              render: (r) => (
+                <span className={RESOURCE_BADGE[r.resource_type] ?? 'text-gray-400'}>
+                  {r.resource_type}
+                </span>
+              ),
+            },
+            {
+              key: 'cloud',
+              label: 'Cloud / Region',
+              hideBelow: 'md',
+              cellClass: 'text-gray-400',
+              render: (r) => `${r.cloud}${r.region ? ` · ${r.region}` : ''}`,
+            },
+            { key: 'size', label: 'VM size', hideBelow: 'lg', cellClass: 'text-gray-400', render: (r) => r.vm_size ?? '—' },
+            {
+              key: 'vm',
+              label: 'VM name',
+              hideBelow: 'lg',
+              cellClass: 'text-gray-400 truncate max-w-xs',
+              titleOf: (r) => r.vm_resource_id ?? undefined,
+              render: (r) => r.vm_name ?? '—',
+            },
+          ]}
+          rows={rows}
+          rowKey={(r) => r.event_id}
+          footer={hasMore ? (
             <div className="p-3 text-center border-t border-gray-800">
               <button
                 type="button"
@@ -233,8 +231,8 @@ export function VmHistoryPage() {
                 {loadingMore ? 'Loading…' : 'Load more'}
               </button>
             </div>
-          )}
-        </div>
+          ) : undefined}
+        />
       )}
     </div>
   );

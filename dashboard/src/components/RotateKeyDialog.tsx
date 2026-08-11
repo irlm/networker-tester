@@ -66,7 +66,7 @@ export function RotateKeyDialog({
             <div className="space-y-4">
               <p className="text-sm text-gray-300">
                 Generate a new api-key for{' '}
-                <span className="font-mono text-gray-100">{testerName}</span>.
+                <span className="text-gray-100">{testerName}</span>.
               </p>
               <div className="bg-yellow-500/10 border border-yellow-500/30 rounded p-3">
                 <p className="text-xs text-yellow-400">
@@ -107,7 +107,7 @@ export function RotateKeyDialog({
                     type="text"
                     readOnly
                     value={result.api_key}
-                    className="flex-1 bg-[var(--bg-base)] border border-gray-800 rounded px-3 py-2 text-sm text-gray-200 font-mono"
+                    className="flex-1 bg-[var(--bg-base)] border border-gray-800 rounded px-3 py-2 text-sm text-gray-200"
                   />
                   <button
                     onClick={handleCopy}

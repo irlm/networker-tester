@@ -182,22 +182,22 @@ function GroupedTab() {
                     <td className="py-2.5 px-3 font-medium" style={{ color }}>
                       {lang.language}
                     </td>
-                    <td className="py-2.5 px-3 text-right font-mono text-gray-300">
+                    <td className="py-2.5 px-3 text-right text-gray-300">
                       {formatMs(lang.mean)}
                     </td>
-                    <td className="py-2.5 px-3 text-right font-mono text-gray-300">
+                    <td className="py-2.5 px-3 text-right text-gray-300">
                       {formatMs(lang.p50)}
                     </td>
-                    <td className="py-2.5 px-3 text-right font-mono text-gray-400">
+                    <td className="py-2.5 px-3 text-right text-gray-400">
                       {formatMs(lang.p95)}
                     </td>
-                    <td className="py-2.5 px-3 text-right font-mono text-gray-400">
+                    <td className="py-2.5 px-3 text-right text-gray-400">
                       --
                     </td>
-                    <td className="py-2.5 px-3 text-right font-mono text-gray-400">
+                    <td className="py-2.5 px-3 text-right text-gray-400">
                       {lang.rps > 0 ? lang.rps.toFixed(0) : '--'}
                     </td>
-                    <td className={`py-2.5 px-3 text-right font-mono ${limited ? 'text-yellow-500' : 'text-gray-400'}`}>
+                    <td className={`py-2.5 px-3 text-right ${limited ? 'text-yellow-500' : 'text-gray-400'}`}>
                       {lang.run_count}
                       {limited && <span className="text-gray-500 text-xs ml-1">*</span>}
                     </td>
@@ -251,7 +251,7 @@ function LeaderboardTab({ entries }: { entries: BenchmarkLeaderboardEntry[] }) {
                 i === 0 ? 'bg-yellow-500/[0.06]' : i === 1 ? 'bg-gray-300/[0.03]' : i === 2 ? 'bg-orange-400/[0.03]' : ''
               }`}
             >
-              <td className={`py-2.5 px-3 font-mono font-bold ${rankColor(i)}`}>
+              <td className={`py-2.5 px-3 font-bold ${rankColor(i)}`}>
                 <span className={i < 3 ? 'inline-flex items-center gap-1' : ''}>
                   {i === 0 && <span title="Gold">{'\uD83E\uDD47'}</span>}
                   {i === 1 && <span title="Silver">{'\uD83E\uDD48'}</span>}
@@ -261,13 +261,13 @@ function LeaderboardTab({ entries }: { entries: BenchmarkLeaderboardEntry[] }) {
               </td>
               <td className="py-2.5 px-3 font-medium text-gray-200">{entry.language}</td>
               <td className="py-2.5 px-3 text-gray-400">{entry.runtime}</td>
-              <td className="py-2.5 px-3 text-right font-mono text-gray-300">
+              <td className="py-2.5 px-3 text-right text-gray-300">
                 {formatMs(entry.metrics?.latency_mean_ms)}
               </td>
-              <td className="py-2.5 px-3 text-right font-mono text-gray-400">
+              <td className="py-2.5 px-3 text-right text-gray-400">
                 {formatMs(entry.metrics?.latency_p99_ms)}
               </td>
-              <td className="py-2.5 px-3 text-right font-mono text-gray-400">
+              <td className="py-2.5 px-3 text-right text-gray-400">
                 {entry.metrics?.requests_per_sec?.toFixed(0) ?? '--'}
               </td>
               <td className="py-2.5 px-3 text-gray-400">{entry.cloud ?? '--'}</td>
@@ -317,7 +317,7 @@ function ComparisonTab({ entries }: { entries: BenchmarkLeaderboardEntry[] }) {
                     style={{ width: `${Math.max(pct, 1)}%`, backgroundColor: color, opacity: 0.6 }}
                   />
                 </div>
-                <span className="w-24 text-right text-sm font-mono text-gray-300">
+                <span className="w-24 text-right text-sm text-gray-300">
                   {formatMs(val)}
                 </span>
               </div>
@@ -342,7 +342,7 @@ function ComparisonTab({ entries }: { entries: BenchmarkLeaderboardEntry[] }) {
                     style={{ width: `${Math.max(pct, 1)}%`, backgroundColor: color, opacity: 0.6 }}
                   />
                 </div>
-                <span className="w-24 text-right text-sm font-mono text-gray-300">
+                <span className="w-24 text-right text-sm text-gray-300">
                   {val > 0 ? `${val.toFixed(0)} rps` : '--'}
                 </span>
               </div>
@@ -406,7 +406,7 @@ function TimelineTab({ runs }: { runs: BenchmarkRun[] }) {
               }`}>
                 {run.status}
               </span>
-              <span className="text-xs text-gray-500 font-mono">
+              <span className="text-xs text-gray-500">
                 {new Date(run.started_at).toLocaleDateString()}
               </span>
             </button>
@@ -428,13 +428,13 @@ function TimelineTab({ runs }: { runs: BenchmarkRun[] }) {
                       <tr key={r.result_id} className="border-t border-gray-800/30">
                         <td className="py-1 pr-3 text-gray-300">{r.language}</td>
                         <td className="py-1 pr-3 text-gray-400">{r.runtime}</td>
-                        <td className="py-1 pr-3 text-right font-mono text-gray-300">
+                        <td className="py-1 pr-3 text-right text-gray-300">
                           {formatMs(r.metrics?.latency_mean_ms)}
                         </td>
-                        <td className="py-1 pr-3 text-right font-mono text-gray-400">
+                        <td className="py-1 pr-3 text-right text-gray-400">
                           {formatMs(r.metrics?.latency_p99_ms)}
                         </td>
-                        <td className="py-1 pr-3 text-right font-mono text-gray-400">
+                        <td className="py-1 pr-3 text-right text-gray-400">
                           {r.metrics?.requests_per_sec?.toFixed(0) ?? '--'}
                         </td>
                         <td className="py-1 pr-3 text-gray-400">{r.cloud ?? '--'}</td>
@@ -509,7 +509,7 @@ export function LeaderboardPage() {
           </p>
         </div>
         {tab !== 'grouped' && entries.length > 0 && (
-          <span className="text-xs text-gray-500 font-mono">
+          <span className="text-xs text-gray-500">
             {entries.length} {entries.length === 1 ? 'entry' : 'entries'}
           </span>
         )}

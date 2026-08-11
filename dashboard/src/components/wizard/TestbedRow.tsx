@@ -74,7 +74,7 @@ export function TestbedRow({
     <div className="border border-gray-800 p-3">
       {/* ── Row 1: Cloud account combobox ──────────────────────────────── */}
       <div className="flex items-center gap-2 mb-2">
-        <span className="text-[10px] font-mono text-gray-500 w-3">{index + 1}</span>
+        <span className="text-[10px] text-gray-500 w-3">{index + 1}</span>
         <span className="text-[11px] text-gray-400">Cloud account</span>
         <button
           type="button"
@@ -98,7 +98,7 @@ export function TestbedRow({
         <select
           value={testbed.region}
           onChange={e => onUpdate(testbed.key, { region: e.target.value })}
-          className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs font-mono text-gray-300 focus:outline-none focus:border-cyan-500"
+          className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs text-gray-300 focus:outline-none focus:border-cyan-500"
         >
           {(REGIONS[testbed.cloud] ?? []).map(r => <option key={r} value={r}>{r}</option>)}
         </select>
@@ -117,7 +117,7 @@ export function TestbedRow({
           value={testbed.vmSize}
           onChange={e => onUpdate(testbed.key, { vmSize: e.target.value })}
           title="Instance type"
-          className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs text-gray-300 font-mono focus:outline-none focus:border-cyan-500"
+          className="bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs text-gray-300 focus:outline-none focus:border-cyan-500"
         >
           {(INSTANCE_TYPES[testbed.cloud] ?? []).map(t => (
             <option key={t.id} value={t.id}>{t.id} · {t.hint}</option>
@@ -131,7 +131,7 @@ export function TestbedRow({
               key={os}
               type="button"
               onClick={() => onUpdate(testbed.key, { os })}
-              className={`px-2.5 py-1 text-xs font-mono border transition-colors ${
+              className={`px-2.5 py-1 text-xs border transition-colors ${
                 testbed.os === os
                   // One selection color per form — the green/blue split next to
                   // cyan proxy chips was audit finding §8.
@@ -162,7 +162,7 @@ export function TestbedRow({
             value={testbed.existingVmId}
             onChange={e => onUpdate(testbed.key, { existingVmId: e.target.value })}
             placeholder="VM ID or IP from catalog"
-            className="mt-1 bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs font-mono text-gray-300 w-64 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
+            className="mt-1 bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs text-gray-300 w-64 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
           />
         )}
       </div>

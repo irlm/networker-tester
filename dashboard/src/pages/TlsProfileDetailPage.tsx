@@ -61,7 +61,7 @@ export function TlsProfileDetailPage() {
         <Breadcrumb items={[{ label: 'TLS Profiles', to: `/projects/${projectId}/tls-profiles` }, { label: `Run ${shortId}` }]} />
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
           <h3 className="text-red-400 font-bold mb-2">Failed to load TLS profile</h3>
-          <p className="text-red-300 text-sm font-mono">{error}</p>
+          <p className="text-red-300 text-sm">{error}</p>
         </div>
       </div>
     );

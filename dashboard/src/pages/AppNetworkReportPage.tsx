@@ -96,7 +96,7 @@ function SplitBar({
           <div className="w-full bg-gray-800/40" />
         )}
       </div>
-      <div className="flex justify-between mt-1 text-[11px] font-mono">
+      <div className="flex justify-between mt-1 text-[11px]">
         <span className="text-cyan-400">
           net {fmtMs(networkMs)}
           {p95NetworkMs != null && <span className="text-gray-500"> · p95 {fmtMs(p95NetworkMs)}</span>}
@@ -202,7 +202,7 @@ export function AppNetworkReportPage() {
                 networkMs={report!.overall_median_network_ms}
                 serverMs={report!.overall_median_server_ms}
               />
-              <div className="flex flex-wrap gap-x-6 gap-y-1 mt-3 text-xs text-gray-400 font-mono">
+              <div className="flex flex-wrap gap-x-6 gap-y-1 mt-3 text-xs text-gray-400">
                 <span>median wall {fmtMs(report!.overall_median_wall_ms)}</span>
                 <span>server ratio {fmtRatio(report!.overall_server_ratio)}</span>
                 {report!.split_anomaly_count > 0 && (
@@ -252,14 +252,14 @@ export function AppNetworkReportPage() {
                         p95ServerMs={g.p95_server_ms}
                       />
                     </td>
-                    <td className="px-4 py-3 text-right font-mono text-xs text-purple-300">
+                    <td className="px-4 py-3 text-right text-xs text-purple-300">
                       {fmtMs(g.median_server_ms)} <span className="text-gray-500">/ {fmtMs(g.p95_server_ms)}</span>
                     </td>
-                    <td className="px-4 py-3 text-right font-mono text-xs text-cyan-300">
+                    <td className="px-4 py-3 text-right text-xs text-cyan-300">
                       {fmtMs(g.median_network_ms)} <span className="text-gray-500">/ {fmtMs(g.p95_network_ms)}</span>
                     </td>
-                    <td className="px-4 py-3 text-right font-mono text-xs text-gray-300">{fmtRatio(g.server_ratio)}</td>
-                    <td className="px-4 py-3 text-right font-mono text-xs text-gray-400">
+                    <td className="px-4 py-3 text-right text-xs text-gray-300">{fmtRatio(g.server_ratio)}</td>
+                    <td className="px-4 py-3 text-right text-xs text-gray-400">
                       {g.run_count} / {g.attempt_count}
                     </td>
                     <td className="px-4 py-3 text-right text-xs">
@@ -282,13 +282,13 @@ export function AppNetworkReportPage() {
 
           {/* ── Formulas / disclaimer (verbatim from the response) ──────────── */}
           <div className="text-xs text-gray-500 space-y-1">
-            <p className="font-mono">{report!.formulas.server_ms}</p>
-            <p className="font-mono">{report!.formulas.network_ms}</p>
-            <p className="font-mono">{report!.formulas.split}</p>
-            <p className="font-mono">{report!.formulas.split_anomaly}</p>
+            <p>{report!.formulas.server_ms}</p>
+            <p>{report!.formulas.network_ms}</p>
+            <p>{report!.formulas.split}</p>
+            <p>{report!.formulas.split_anomaly}</p>
             <p className="pt-1">
               Generated {new Date(report!.generated_at).toLocaleString()} · mode{' '}
-              <span className="font-mono text-gray-400">{report!.mode}</span>
+              <span className="text-gray-400">{report!.mode}</span>
             </p>
           </div>
         </>

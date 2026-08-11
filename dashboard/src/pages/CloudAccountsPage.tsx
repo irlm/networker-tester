@@ -377,7 +377,7 @@ export function CloudAccountsPage() {
               <div className="text-[10px] text-cyan-400/80 font-medium uppercase tracking-wider mb-1.5">Setup Guide</div>
               <ol className="text-[11px] text-gray-400 space-y-0.5 list-none pl-0">
                 {CLOUD_SETUP_GUIDES[formProvider].steps.map((step, i) => (
-                  <li key={i} className="font-mono">{step}</li>
+                  <li key={i}>{step}</li>
                 ))}
               </ol>
             </div>
@@ -485,7 +485,7 @@ export function CloudAccountsPage() {
                 />
                 <p className="text-[10px] text-gray-500 mt-0.5">
                   Required if using <span className="text-gray-400">aws sso login</span> or <span className="text-gray-400">aws sts assume-role</span>.
-                  Not needed for permanent IAM user keys. Get all three values with: <span className="text-gray-400 font-mono">aws configure export-credentials --format env</span>
+                  Not needed for permanent IAM user keys. Get all three values with: <span className="text-gray-400">aws configure export-credentials --format env</span>
                 </p>
               </div>
             </div>
@@ -498,7 +498,7 @@ export function CloudAccountsPage() {
                 onChange={e => setCredentials(prev => ({ ...prev, gcp: { ...prev.gcp, json_key: e.target.value } }))}
                 rows={4}
                 placeholder={isEditing ? 'leave empty to keep existing' : undefined}
-                className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500 font-mono"
+                className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 style={{ WebkitTextSecurity: 'disc' } as React.CSSProperties}
               />
               <p className="text-[10px] text-gray-500 mt-0.5">{CLOUD_SETUP_GUIDES.gcp.fieldHelp.json_key}</p>

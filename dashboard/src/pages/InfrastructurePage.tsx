@@ -372,9 +372,9 @@ export function InfrastructurePage() {
               was a trust-breaking label for an SRE audience (audit F6).
               KPI numbers stay neutral; purple is logo-only (F12). */}
           <div>
-            <div className="text-2xl font-bold font-mono leading-none text-gray-100">{runnerActiveCt}</div>
+            <div className="text-2xl font-bold leading-none text-gray-100">{runnerActiveCt}</div>
             <div className="text-[10px] uppercase tracking-wider text-gray-400 mt-1.5">Runners · {runnerIdleCt} ready</div>
-            <div className="text-[10px] font-mono mt-0.5 text-gray-400">
+            <div className="text-[10px] mt-0.5 text-gray-400">
               <span className={runnerIdleCt > 0 ? 'text-green-400' : 'text-gray-500'}>{runnerIdleCt} idle</span>
               {' · '}
               <span className={runnerBusyCt > 0 ? 'text-yellow-400' : 'text-gray-500'}>{runnerBusyCt} busy</span>
@@ -386,16 +386,16 @@ export function InfrastructurePage() {
             </div>
           </div>
           <div>
-            <div className="text-2xl font-bold font-mono leading-none text-gray-100">{targetsCt}</div>
+            <div className="text-2xl font-bold leading-none text-gray-100">{targetsCt}</div>
             <div className="text-[10px] uppercase tracking-wider text-gray-400 mt-1.5">Targets</div>
             {activeDeps.length > 0 && (
-              <div className="text-[10px] text-yellow-400 font-mono mt-0.5">
+              <div className="text-[10px] text-yellow-400 mt-0.5">
                 {activeDeps.length} in progress
               </div>
             )}
           </div>
           <div>
-            <div className="text-2xl font-bold font-mono leading-none text-gray-100">{cloudAccountsCt ?? '—'}</div>
+            <div className="text-2xl font-bold leading-none text-gray-100">{cloudAccountsCt ?? '—'}</div>
             <div className="text-[10px] uppercase tracking-wider text-gray-400 mt-1.5">Cloud accounts</div>
           </div>
         </div>
@@ -412,14 +412,14 @@ export function InfrastructurePage() {
               <button
                 type="button"
                 onClick={() => { setWizardKind('runner'); setWizardPrefill(undefined); setShowWizard(true); }}
-                className="text-[10px] text-gray-400 hover:text-cyan-400 px-2 py-0.5 border border-gray-800 font-mono"
+                className="text-[10px] text-gray-400 hover:text-cyan-400 px-2 py-0.5 border border-gray-800"
               >
                 + runner
               </button>
               <button
                 type="button"
                 onClick={() => { setWizardKind('target'); setWizardPrefill(undefined); setShowWizard(true); }}
-                className="text-[10px] text-gray-400 hover:text-cyan-400 px-2 py-0.5 border border-gray-800 font-mono"
+                className="text-[10px] text-gray-400 hover:text-cyan-400 px-2 py-0.5 border border-gray-800"
               >
                 + target
               </button>
@@ -469,7 +469,7 @@ export function InfrastructurePage() {
             >
               <span className="opacity-70">{tab.icon}</span>
               {tab.label}
-              <span className={`ml-1 font-mono text-[10px] ${active ? 'text-cyan-400' : 'text-gray-500'}`}>
+              <span className={`ml-1 text-[10px] ${active ? 'text-cyan-400' : 'text-gray-500'}`}>
                 {tab.count}
               </span>
             </button>
@@ -494,7 +494,7 @@ export function InfrastructurePage() {
                 key={c.id}
                 type="button"
                 onClick={() => { setRunnerStatusFilter(c.id); setRunnerPage(0); }}
-                className={`px-2.5 py-1 text-xs border font-mono transition-colors ${
+                className={`px-2.5 py-1 text-xs border transition-colors ${
                   active
                     ? 'bg-cyan-500/10 border-cyan-500/40 text-cyan-300'
                     : 'border-gray-700 text-gray-400 hover:text-gray-300'
@@ -515,7 +515,7 @@ export function InfrastructurePage() {
               key={label}
               type="button"
               disabled
-              className={`px-2.5 py-1 text-xs border font-mono text-gray-500 border-gray-800 opacity-40 cursor-not-allowed ${
+              className={`px-2.5 py-1 text-xs border text-gray-500 border-gray-800 opacity-40 cursor-not-allowed ${
                 i === 2 ? 'bg-cyan-500/5' : ''
               }`}
               title="Archive time-scope filter — lands with backend soft-delete"
@@ -538,7 +538,7 @@ export function InfrastructurePage() {
               key={c.id}
               type="button"
               disabled
-              className="px-2.5 py-1 text-xs border font-mono text-gray-500 border-gray-800 opacity-40 cursor-not-allowed"
+              className="px-2.5 py-1 text-xs border text-gray-500 border-gray-800 opacity-40 cursor-not-allowed"
               title="Cross-lifecycle filter — lands with backend soft-delete"
             >
               {c.label} <span className="text-gray-700">·{c.ct}</span>
@@ -553,7 +553,7 @@ export function InfrastructurePage() {
       ) : runnerTab === 'archived' ? (
         <div className="border border-dashed border-gray-800 rounded p-6 text-center">
           <p className="text-gray-400 text-sm">No archived runners</p>
-          <p className="text-[11px] text-gray-500 font-mono mt-2">
+          <p className="text-[11px] text-gray-500 mt-2">
             Archiving is a soft-delete — it preserves run-history attribution. Backend support lands next.
           </p>
         </div>
@@ -604,7 +604,7 @@ export function InfrastructurePage() {
       {/* Pagination — only when a page overflow actually exists */}
       {filteredRunners.length > RUNNER_PAGE_SIZE && (
         <div className="flex items-center justify-between mt-3 text-xs text-gray-400">
-          <span className="font-mono">
+          <span>
             showing {runnerSafePage * RUNNER_PAGE_SIZE + 1}–{Math.min((runnerSafePage + 1) * RUNNER_PAGE_SIZE, filteredRunners.length)} of {filteredRunners.length}
           </span>
           <div className="flex items-center gap-1">
@@ -612,18 +612,18 @@ export function InfrastructurePage() {
               type="button"
               disabled={runnerSafePage === 0}
               onClick={() => setRunnerPage(p => Math.max(0, p - 1))}
-              className="px-2 py-0.5 border border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed font-mono"
+              className="px-2 py-0.5 border border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed"
             >
               ←
             </button>
-            <span className="tabular-nums text-gray-400 px-2 font-mono">
+            <span className="tabular-nums text-gray-400 px-2">
               {runnerSafePage + 1} / {runnerTotalPages}
             </span>
             <button
               type="button"
               disabled={runnerSafePage >= runnerTotalPages - 1}
               onClick={() => setRunnerPage(p => Math.min(runnerTotalPages - 1, p + 1))}
-              className="px-2 py-0.5 border border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed font-mono"
+              className="px-2 py-0.5 border border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed"
             >
               →
             </button>
@@ -639,7 +639,7 @@ export function InfrastructurePage() {
         count={completedDeps.length}
         action={
           activeDeps.length > 0 ? (
-            <span className="text-[10px] text-yellow-400 font-mono">
+            <span className="text-[10px] text-yellow-400">
               {activeDeps.length} in progress
             </span>
           ) : null
@@ -717,14 +717,14 @@ export function InfrastructurePage() {
             {
               key: 'target',
               label: 'Target',
-              cellClass: 'text-gray-400 font-mono truncate max-w-48',
+              cellClass: 'text-gray-400 truncate max-w-48',
               render: (d) => d.endpoint_ips?.[0] || '\u2014',
             },
             {
               key: 'duration',
               label: 'Duration',
               hideBelow: 'lg',
-              cellClass: 'text-gray-400 font-mono',
+              cellClass: 'text-gray-400',
               render: (d) => formatDuration(d.started_at, d.finished_at),
             },
             {
@@ -784,11 +784,11 @@ export function InfrastructurePage() {
           <span className="text-gray-500">≡</span>
           <span className="text-gray-300">Recent activity</span>
           {history.length > 0 ? (
-            <span className="font-mono text-[11px] text-gray-400 truncate">
+            <span className="text-[11px] text-gray-400 truncate">
               {history[0].resource_name ?? '(unnamed)'} · <EventBadgeInline kind={history[0].event_type} /> · {formatTime(history[0].event_time)}
             </span>
           ) : (
-            <span className="font-mono text-[11px] text-gray-500">no recent events</span>
+            <span className="text-[11px] text-gray-500">no recent events</span>
           )}
         </div>
         <span className="text-xs text-cyan-400 flex-shrink-0">View full history →</span>

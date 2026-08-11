@@ -306,13 +306,13 @@ export function AlertsPage() {
               {
                 key: 'condition',
                 label: 'Condition',
-                cellClass: 'font-mono text-cyan-400/90',
+                cellClass: 'text-cyan-400/90',
                 render: (r) => formatCondition(r.metric, r.comparator, r.threshold),
               },
               {
                 key: 'window',
                 label: 'Window',
-                cellClass: 'text-gray-400 font-mono',
+                cellClass: 'text-gray-400',
                 render: (r) => <>{r.window_runs} run{r.window_runs === 1 ? '' : 's'}</>,
               },
               { key: 'scope', label: 'Scope', cellClass: 'text-gray-300', render: (r) => scopeLabel(r.test_config_id) },
@@ -391,11 +391,11 @@ export function AlertsPage() {
           <DataTable
             columns={[
               { key: 'name', label: 'Name', cellClass: 'text-gray-200', render: (c) => c.name },
-              { key: 'kind', label: 'Kind', cellClass: 'text-gray-400 font-mono', render: (c) => c.kind },
+              { key: 'kind', label: 'Kind', cellClass: 'text-gray-400', render: (c) => c.kind },
               {
                 key: 'destination',
                 label: 'Destination',
-                cellClass: 'font-mono text-gray-400',
+                cellClass: 'text-gray-400',
                 render: (c) =>
                   c.kind === 'webhook' ? (
                     <span className="inline-flex items-center gap-2">
@@ -449,7 +449,7 @@ export function AlertsPage() {
                       </button>
                       {testResults[c.channel_id] && (
                         <span
-                          className={`text-[11px] font-mono ${deliveryStatusColor(testResults[c.channel_id])}`}
+                          className={`text-[11px] ${deliveryStatusColor(testResults[c.channel_id])}`}
                           title={testResults[c.channel_id]}
                         >
                           {testResults[c.channel_id]}
@@ -524,13 +524,13 @@ export function AlertsPage() {
                 {
                   key: 'rule',
                   label: 'Rule',
-                  cellClass: 'font-mono text-cyan-400/90 whitespace-nowrap',
+                  cellClass: 'text-cyan-400/90 whitespace-nowrap',
                   render: (e) => formatCondition(e.metric, e.comparator, e.threshold),
                 },
                 {
                   key: 'value',
                   label: 'Value',
-                  cellClass: 'font-mono text-gray-200',
+                  cellClass: 'text-gray-200',
                   render: (e) => (e.value !== null ? formatThreshold(e.metric, e.value) : '--'),
                 },
                 {
@@ -551,7 +551,7 @@ export function AlertsPage() {
                 {
                   key: 'delivery',
                   label: 'Delivery',
-                  cellClass: 'font-mono max-w-[16rem] truncate',
+                  cellClass: 'max-w-[16rem] truncate',
                   titleOf: (e) => e.delivery_status ?? undefined,
                   render: (e) => (
                     <span className={deliveryStatusColor(e.delivery_status)}>{e.delivery_status ?? '--'}</span>
@@ -572,7 +572,7 @@ export function AlertsPage() {
               >
                 &#x2190; Newer
               </button>
-              <span className="font-mono">
+              <span>
                 {eventsOffset + 1}–{eventsOffset + events.length}
               </span>
               <button

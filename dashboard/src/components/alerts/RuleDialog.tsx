@@ -149,7 +149,7 @@ export function RuleDialog({ projectId, channels, configs, existing, onClose, on
                 value={threshold}
                 onChange={(e) => setThreshold(e.target.value)}
                 placeholder={unit === 'ms' ? '500' : '0.05'}
-                className={`${inputCls} font-mono`}
+                className={`${inputCls}`}
               />
             </div>
             <div>
@@ -161,7 +161,7 @@ export function RuleDialog({ projectId, channels, configs, existing, onClose, on
                 max={MAX_WINDOW_RUNS}
                 value={windowRuns}
                 onChange={(e) => setWindowRuns(e.target.value)}
-                className={`${inputCls} font-mono`}
+                className={`${inputCls}`}
               />
             </div>
           </div>

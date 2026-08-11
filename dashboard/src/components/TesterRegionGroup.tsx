@@ -79,7 +79,7 @@ export function TesterRegionGroup({
           className="flex items-center gap-2 text-sm text-gray-200 hover:text-cyan-400"
         >
           <span className="text-xs">{expanded ? '▾' : '▸'}</span>
-          <span className="font-mono">
+          <span>
             {cloud} / {region}
           </span>
           <span className="text-xs text-gray-400">
@@ -117,7 +117,7 @@ export function TesterRegionGroup({
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
-                            <span className="text-gray-200 font-mono truncate">{t.name}</span>
+                            <span className="text-gray-200 truncate">{t.name}</span>
                             {keyExpired(t) && (
                               <StatusBadge status="failed" label="key expired" />
                             )}
@@ -126,7 +126,7 @@ export function TesterRegionGroup({
                             {t.vm_size} · v{t.installer_version ?? '?'}
                           </div>
                         </div>
-                        <div className="w-32 text-right font-mono text-gray-400">
+                        <div className="w-32 text-right text-gray-400">
                           <div>{detail ?? ''}</div>
                           <div
                             className="text-gray-500"

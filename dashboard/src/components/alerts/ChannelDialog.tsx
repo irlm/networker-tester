@@ -122,7 +122,7 @@ export function ChannelDialog({ projectId, existing, onClose, onSaved }: Channel
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   placeholder="https://hooks.example.com/networker"
-                  className={`${inputCls} font-mono`}
+                  className={`${inputCls}`}
                 />
               </div>
               <div className="mb-4">
@@ -135,7 +135,7 @@ export function ChannelDialog({ projectId, existing, onClose, onSaved }: Channel
                   autoComplete="off"
                   value={secret}
                   onChange={(e) => setSecret(e.target.value)}
-                  className={`${inputCls} font-mono`}
+                  className={`${inputCls}`}
                 />
                 <p className="text-[11px] text-gray-500 mt-1">
                   {existing?.config.secret
@@ -153,7 +153,7 @@ export function ChannelDialog({ projectId, existing, onClose, onSaved }: Channel
                 onChange={(e) => setTo(e.target.value)}
                 placeholder="sre@example.com, oncall@example.com"
                 rows={3}
-                className={`${inputCls} font-mono resize-y`}
+                className={`${inputCls} resize-y`}
               />
               <p className="text-[11px] text-gray-500 mt-1">Comma or newline separated. One send per address.</p>
             </div>

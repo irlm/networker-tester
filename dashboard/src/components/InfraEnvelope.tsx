@@ -71,7 +71,7 @@ export function InfraEnvelope({
               {suggestions.map((s) => (
                 <div
                   key={`${s.side}:${s.to}`}
-                  className="flex items-baseline gap-2 text-[11px] font-mono"
+                  className="flex items-baseline gap-2 text-[11px]"
                 >
                   <span
                     className={`shrink-0 px-1.5 py-0.5 rounded-sm border text-[10px] ${
@@ -116,7 +116,7 @@ function SideLine({ label, side }: { label: string; side: RunInfraSide | null })
   if (!side) return null;
   const s = side.specs;
   return (
-    <div className="flex items-baseline gap-3 text-xs font-mono">
+    <div className="flex items-baseline gap-3 text-xs">
       <span className="w-14 text-right text-gray-500 shrink-0">{label}</span>
       <span className="text-gray-300">{side.vm_size ?? 'unknown size'}</span>
       <span className="text-gray-500">
@@ -156,7 +156,7 @@ function DirectionRow({ a }: { a: DirectionAssessment }) {
   const pct =
     a.utilization != null ? Math.min(100, a.utilization * 100) : null;
   return (
-    <div className="flex items-center gap-3 text-xs font-mono">
+    <div className="flex items-center gap-3 text-xs">
       <span className="w-14 text-right text-gray-400 shrink-0">
         {a.direction}
       </span>
