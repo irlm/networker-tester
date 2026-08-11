@@ -11,6 +11,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.185] - 2026-08-11
+
+Dashboard UI-4: the benchmark-wizard merge.
+
+### Changed
+- **FullStackPage and AppBenchmarkPage now share one wizard skeleton**
+  (`WizardShell` + `ReviewStep` + `useComparisonSubmit`): page chrome,
+  Back/Next footer with disabled-reason hints, the whole Review & Launch
+  step, and the entire submit path (comparison-group vs single-config,
+  scheduling, toasts, navigation) exist once instead of as two drifted
+  copies. Each page keeps only its distinct steps (Template/Languages vs
+  Workload) and its cell fan-out.
+- Review-step drift resolved to the canonical form: neutral OS tags (the
+  app wizard's blue/green pair violated the status-hue rules), cyan matrix
+  note (was purple — reserved for the brand/runner semantic).
+- The application wizard gains the "why is Next disabled" hint that only
+  the full-stack wizard had.
+
+### Fixed
+- The full-stack wizard's review-step runner-readiness count required only
+  a powered-on VM; it now requires a connected agent, matching the
+  Infrastructure page, the runner picker, and the Dashboard KPI
+  (v0.28.182's reconciliation had missed this counter).
+
+---
+
 ## [0.28.184] - 2026-08-11
 
 Dashboard UI-3 pass: the remaining canonical components from the deferred
