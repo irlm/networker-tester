@@ -261,7 +261,7 @@ function UrlCard({
     lastStatus === 'failed'
       ? 'border-l-2 border-l-red-500'
       : lastStatus === 'partial' || lastStatus === 'stale'
-        ? 'border-l-2 border-l-amber-500'
+        ? 'border-l-2 border-l-yellow-500'
         : lastStatus === 'pending'
           ? 'border-l-2 border-l-cyan-500'
           : '';
@@ -271,7 +271,7 @@ function UrlCard({
     lastStatus === 'failed'
       ? 'text-red-400'
       : lastStatus === 'partial' || lastStatus === 'stale'
-        ? 'text-amber-400'
+        ? 'text-yellow-400'
         : lastStatus === 'pending'
           ? 'text-gray-300'
           : 'text-cyan-400';
@@ -281,7 +281,7 @@ function UrlCard({
     lastStatus === 'failed'
       ? 'bg-red-500'
       : lastStatus === 'partial' || lastStatus === 'stale'
-        ? 'bg-amber-500'
+        ? 'bg-yellow-500'
         : lastStatus === 'pending'
           ? 'bg-cyan-500 animate-pulse'
           : 'bg-emerald-500';
@@ -410,7 +410,7 @@ function UrlCard({
                             {verdict === 'completed' ? (
                               <span className="text-emerald-400">{'\u2713'}</span>
                             ) : verdict === 'partial' ? (
-                              <span className="text-amber-400">{'\u2713'}</span>
+                              <span className="text-yellow-400">{'\u2713'}</span>
                             ) : verdict === 'failed' ? (
                               <span className="text-red-400">{'\u2717'}</span>
                             ) : verdict === 'running' || verdict === 'queued' ? (
@@ -963,7 +963,7 @@ export function DiagnosticsPage() {
             <>
               <span className="text-gray-700">&middot;</span>
               <span className="text-gray-400">
-                <strong className="text-amber-400 font-medium">{summary.partial}</strong> partial
+                <strong className="text-yellow-400 font-medium">{summary.partial}</strong> partial
               </span>
             </>
           )}
@@ -981,7 +981,7 @@ export function DiagnosticsPage() {
           )}
           <span className="text-gray-700">&middot;</span>
           <span className="text-gray-400">
-            <strong className={`font-medium ${summary.stale > 0 ? 'text-amber-400' : 'text-gray-500'}`}>{summary.stale}</strong> stale (no check in 24h)
+            <strong className={`font-medium ${summary.stale > 0 ? 'text-yellow-400' : 'text-gray-500'}`}>{summary.stale}</strong> stale (no check in 24h)
           </span>
         </div>
       )}

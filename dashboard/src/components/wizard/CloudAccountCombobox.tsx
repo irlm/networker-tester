@@ -17,7 +17,7 @@ function dotClass(provider: string): string {
 function statusDotClass(status: string): string {
   if (status === 'active') return 'bg-green-400';
   if (status === 'error') return 'bg-red-400';
-  return 'bg-amber-400';
+  return 'bg-yellow-400';
 }
 
 // ── Highlight matching substrings (case-insensitive) ────────────────────

@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { Link, useNavigate } from 'react-router';
+import { DataTable } from '../components/common/DataTable';
 import { api } from '../api/client';
 import type { Deployment } from '../api/types';
 import { testersApi, type TesterRow } from '../api/testers';
@@ -47,7 +48,7 @@ const EVENT_BADGE: Record<string, string> = {
   created: 'text-cyan-400 border-cyan-500/30 bg-cyan-500/10',
   started: 'text-green-400 border-green-500/30 bg-green-500/10',
   stopped: 'text-gray-400 border-gray-500/30 bg-gray-500/10',
-  auto_shutdown: 'text-amber-400 border-amber-500/30 bg-amber-500/10',
+  auto_shutdown: 'text-yellow-400 border-yellow-500/30 bg-yellow-500/10',
   deleted: 'text-red-400 border-red-500/30 bg-red-500/10',
   error: 'text-red-400 border-red-500/30 bg-red-500/10',
 };
@@ -388,7 +389,7 @@ export function InfrastructurePage() {
             <div className="text-2xl font-bold font-mono leading-none text-gray-100">{targetsCt}</div>
             <div className="text-[10px] uppercase tracking-wider text-gray-400 mt-1.5">Targets</div>
             {activeDeps.length > 0 && (
-              <div className="text-[10px] text-amber-400 font-mono mt-0.5">
+              <div className="text-[10px] text-yellow-400 font-mono mt-0.5">
                 {activeDeps.length} in progress
               </div>
             )}
@@ -638,7 +639,7 @@ export function InfrastructurePage() {
         count={completedDeps.length}
         action={
           activeDeps.length > 0 ? (
-            <span className="text-[10px] text-amber-400 font-mono">
+            <span className="text-[10px] text-yellow-400 font-mono">
               {activeDeps.length} in progress
             </span>
           ) : null
@@ -694,100 +695,80 @@ export function InfrastructurePage() {
           </div>
         )
       ) : (
-        <>
-          {/* Mobile */}
-          <div className="md:hidden space-y-2">
-            {completedDeps.map(d => (
-              <Link
-                key={d.deployment_id}
-                to={`/projects/${projectId}/deploy/${d.deployment_id}`}
-                className="block border border-gray-800 rounded p-3"
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-cyan-400 text-sm">{d.name}</span>
-                  <StatusBadge status={d.status} />
-                </div>
-                <div className="flex items-center gap-3 text-xs text-gray-400 flex-wrap">
-                  <span>{d.provider_summary || '\u2014'}</span>
-                  {d.endpoint_ips?.[0] && (
-                    <span className="font-mono truncate max-w-[200px]">{d.endpoint_ips[0]}</span>
-                  )}
-                </div>
-              </Link>
-            ))}
-          </div>
-
-          {/* Desktop */}
-          <div className="hidden md:block table-container">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
-                  <th className="text-left px-4 py-2.5 font-medium">Name</th>
-                  <th className="text-left px-4 py-2.5 font-medium">Provider</th>
-                  <th className="text-left px-4 py-2.5 font-medium">Status</th>
-                  <th className="text-left px-4 py-2.5 font-medium">Target</th>
-                  <th className="text-left px-4 py-2.5 font-medium hidden lg:table-cell">Duration</th>
-                  <th className="text-left px-4 py-2.5 font-medium hidden lg:table-cell">Created</th>
-                  {isOperator && <th className="text-right px-4 py-2.5 font-medium" />}
-                </tr>
-              </thead>
-              <tbody>
-                {completedDeps.map(d => (
-                  <tr key={d.deployment_id} className="border-b border-gray-800/30 hover:bg-gray-800/10">
-                    <td className="px-4 py-3">
-                      {/* Select-to-inspect, same as runners: the name opens the
-                          drawer; the full page (log/config) is linked inside. */}
-                      <button
-                        type="button"
-                        onClick={() => setSelectedDeployment(d)}
-                        className="text-cyan-400 hover:text-cyan-300 text-left"
-                      >
-                        {d.name}
-                      </button>
-                    </td>
-                    <td className="px-4 py-3 text-gray-400 text-xs">{d.provider_summary || '\u2014'}</td>
-                    <td className="px-4 py-3"><StatusBadge status={d.status} /></td>
-                    <td className="px-4 py-3 text-gray-400 font-mono text-xs truncate max-w-48">
-                      {d.endpoint_ips?.[0] || '\u2014'}
-                    </td>
-                    <td className="px-4 py-3 text-gray-400 font-mono text-xs hidden lg:table-cell">
-                      {formatDuration(d.started_at, d.finished_at)}
-                    </td>
-                    <td className="px-4 py-3 text-gray-400 text-xs hidden lg:table-cell" title={new Date(d.created_at).toISOString()}>
-                      {timeAgo(d.created_at)}
-                    </td>
-                    {isOperator && (
-                      <td className="px-4 py-3 text-right whitespace-nowrap">
-                        {/* Rows here are completed deployments — a live target
-                            has status 'completed' (the deploy finished), so
-                            gate on having an IP, not on 'running'. */}
-                        {d.endpoint_ips?.[0] && (
-                          <>
-                            <Link
-                              to={`/projects/${projectId}/network/${d.deployment_id}`}
-                              className="text-[11px] px-2 py-1 rounded border border-gray-700 text-gray-400 hover:border-cyan-500/40 hover:text-cyan-300 transition-colors mr-1.5"
-                              title="See benchmark history for this endpoint"
-                            >
-                              ↗ Runs
-                            </Link>
-                            <button
-                              type="button"
-                              onClick={() => openAddStack(d)}
-                              className="text-[11px] px-2 py-1 rounded border border-gray-700 text-gray-400 hover:border-cyan-500/40 hover:text-cyan-300 transition-colors"
-                              title="Install additional proxy stacks on this target"
-                            >
-                              + Add stack
-                            </button>
-                          </>
-                        )}
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
+        <DataTable
+          columns={[
+            {
+              key: 'name',
+              label: 'Name',
+              render: (d) => (
+                // Select-to-inspect, same as runners: the name opens the
+                // drawer; the full page (log/config) is linked inside.
+                <button
+                  type="button"
+                  onClick={() => setSelectedDeployment(d)}
+                  className="text-cyan-400 hover:text-cyan-300 text-left text-sm"
+                >
+                  {d.name}
+                </button>
+              ),
+            },
+            { key: 'provider', label: 'Provider', hideBelow: 'md', cellClass: 'text-gray-400', render: (d) => d.provider_summary || '\u2014' },
+            { key: 'status', label: 'Status', render: (d) => <StatusBadge status={d.status} /> },
+            {
+              key: 'target',
+              label: 'Target',
+              cellClass: 'text-gray-400 font-mono truncate max-w-48',
+              render: (d) => d.endpoint_ips?.[0] || '\u2014',
+            },
+            {
+              key: 'duration',
+              label: 'Duration',
+              hideBelow: 'lg',
+              cellClass: 'text-gray-400 font-mono',
+              render: (d) => formatDuration(d.started_at, d.finished_at),
+            },
+            {
+              key: 'created',
+              label: 'Created',
+              hideBelow: 'lg',
+              cellClass: 'text-gray-400',
+              titleOf: (d) => new Date(d.created_at).toISOString(),
+              render: (d) => timeAgo(d.created_at),
+            },
+            ...(isOperator ? [{
+              key: 'actions',
+              label: '',
+              align: 'right' as const,
+              cellClass: 'whitespace-nowrap',
+              render: (d: typeof completedDeps[number]) => (
+                // Rows here are completed deployments — a live target has
+                // status 'completed' (the deploy finished), so gate on
+                // having an IP, not on 'running'.
+                d.endpoint_ips?.[0] ? (
+                  <>
+                    <Link
+                      to={`/projects/${projectId}/network/${d.deployment_id}`}
+                      className="text-[11px] px-2 py-1 rounded border border-gray-700 text-gray-400 hover:border-cyan-500/40 hover:text-cyan-300 transition-colors mr-1.5"
+                      title="See benchmark history for this endpoint"
+                    >
+                      ↗ Runs
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => openAddStack(d)}
+                      className="text-[11px] px-2 py-1 rounded border border-gray-700 text-gray-400 hover:border-cyan-500/40 hover:text-cyan-300 transition-colors"
+                      title="Install additional proxy stacks on this target"
+                    >
+                      + Add stack
+                    </button>
+                  </>
+                ) : null
+              ),
+            }] : []),
+          ]}
+          rows={completedDeps}
+          rowKey={(d) => d.deployment_id}
+        />
       )}
 
 

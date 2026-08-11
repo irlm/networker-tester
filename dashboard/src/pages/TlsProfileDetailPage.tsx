@@ -86,7 +86,7 @@ export function TlsProfileDetailPage() {
         </div>
         <div className="text-right">
           <div className={`text-sm font-semibold ${statusClass(detail.summary_status)}`}>{detail.summary_status}</div>
-          {detail.summary_score != null && <div className="text-xs text-amber-400 mt-1">score {detail.summary_score}</div>}
+          {detail.summary_score != null && <div className="text-xs text-yellow-400 mt-1">score {detail.summary_score}</div>}
         </div>
       </div>
 

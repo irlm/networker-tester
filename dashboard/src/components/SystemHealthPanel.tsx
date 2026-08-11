@@ -16,13 +16,13 @@ interface HealthData {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  green: "text-emerald-400",
+  green: "text-green-400",
   yellow: "text-yellow-400",
   red: "text-red-400",
 };
 
 const STATUS_DOT: Record<string, string> = {
-  green: "bg-emerald-400",
+  green: "bg-green-400",
   yellow: "bg-yellow-400",
   red: "bg-red-400",
 };
@@ -117,10 +117,10 @@ export default function SystemHealthPanel() {
       </div>
 
       <div className="flex gap-4 mb-3 text-xs">
-        <span className={health?.live.core_db ? "text-emerald-400" : "text-red-400"}>
+        <span className={health?.live.core_db ? "text-green-400" : "text-red-400"}>
           Core DB: {health?.live.core_db ? "connected" : "down"}
         </span>
-        <span className={health?.live.logs_db ? "text-emerald-400" : "text-red-400"}>
+        <span className={health?.live.logs_db ? "text-green-400" : "text-red-400"}>
           Logs DB: {health?.live.logs_db ? "connected" : "down"}
         </span>
       </div>

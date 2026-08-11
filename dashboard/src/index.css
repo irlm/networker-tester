@@ -1,5 +1,21 @@
 @import "tailwindcss";
 
+/* ── Design tokens (Tailwind v4 @theme → real utilities) ──
+   Severity/intensity ramp (severity-v2 pick): a single cyan hue encodes
+   MAGNITUDE — latency numbers, bars, sparklines, row accents. `breach` red
+   is reserved for hard threshold violations. Deliberate exception: STATUS
+   PILLS keep the universal green/yellow/red model ("green = healthy" is a
+   shared mental model; see StatusBadge). Use `text-s2/s3/s4`,
+   `text-breach`, `bg-s1` etc. — never raw orange/amber/emerald/blue for a
+   severity or status meaning. */
+@theme {
+  --color-s1: #1e3a45; /* idle / trace */
+  --color-s2: #1f6a7a; /* low */
+  --color-s3: #22a5b9; /* mid */
+  --color-s4: #22d3ee; /* peak (cyan-400 family) */
+  --color-breach: #ef4444; /* hard breach only (red-500) */
+}
+
 /* ── Color tokens ── */
 :root {
   --bg-base: #0a0b0f;     /* page background, input fields */

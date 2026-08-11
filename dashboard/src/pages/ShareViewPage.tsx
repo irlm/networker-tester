@@ -261,7 +261,7 @@ function SharedStatsRow({ ps }: { ps: ProtocolStats }) {
       <td className="px-4 py-2 text-gray-400 text-right font-mono">{fmt(ps.stats.mean)}</td>
       <td className="px-4 py-2 text-gray-100 text-right font-mono font-semibold">{fmt(ps.stats.p50)}</td>
       <td className="px-4 py-2 text-yellow-400 text-right font-mono">{fmt(ps.stats.p95)}</td>
-      <td className="px-4 py-2 text-orange-400 text-right font-mono">{fmt(ps.stats.p99)}</td>
+      <td className="px-4 py-2 text-s4 text-right font-mono">{fmt(ps.stats.p99)}</td>
       <td className="px-4 py-2 text-gray-400 text-right font-mono">{fmt(ps.stats.max)}</td>
       <td className="px-4 py-2 text-gray-400 text-right font-mono">{fmt(ps.stats.stddev)}</td>
       <td className={`px-4 py-2 text-right font-mono ${successRateClass(ps.successRate)}`}>

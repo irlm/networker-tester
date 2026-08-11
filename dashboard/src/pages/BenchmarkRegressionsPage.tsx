@@ -7,6 +7,7 @@ import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
 import { PageHeader } from '../components/common/PageHeader';
 import { EmptyState } from '../components/common/EmptyState';
+import { DataTable } from '../components/common/DataTable';
 import { timeAgo } from '../lib/format';
 
 function severityColor(severity: string): string {
@@ -86,93 +87,39 @@ export function BenchmarkRegressionsPage() {
           detail="When a benchmark run completes, each case is compared against the same case in the baseline run (the config's pinned baseline, or the previous completed run): a p50 more than 10% worse or a success rate below 99% is flagged automatically. Cases with fewer than 10 samples on either side are skipped so noise-level runs are never flagged. Run a benchmark config at least twice to enable regression tracking."
         />
       ) : (
-        <>
-          {/* Mobile card layout */}
-          <div className="md:hidden space-y-2">
-            {regressions.map(r => (
-              <div key={r.regression_id} className="border border-gray-800 rounded p-3">
-                <div className="flex items-start justify-between gap-2 mb-2">
-                  <div className="min-w-0">
-                    <Link
-                      to={`/projects/${projectId}/benchmark-configs/${r.config_id}/results`}
-                      className="text-gray-200 text-sm font-medium hover:text-cyan-400 truncate block"
-                    >
-                      {r.config_name}
-                    </Link>
-                    <p className="text-gray-400 text-xs font-mono">{r.case_id}</p>
-                  </div>
-                  <span className={`text-xs px-2 py-0.5 rounded ${severityColor(r.severity)}`}>
-                    {r.severity}
-                  </span>
-                </div>
-                <div className="flex items-center gap-3 text-xs">
-                  <span className="text-gray-400">{metricLabel(r.metric)}</span>
-                  <span className="text-gray-400">{formatValue(r.metric, r.metric_unit, r.baseline_value)}</span>
-                  <span className="text-gray-500">-&gt;</span>
-                  <span className="text-gray-200">{formatValue(r.metric, r.metric_unit, r.current_value)}</span>
-                  <span className="text-red-400">
-                    {formatDelta(r.metric, r.delta_percent)}
-                  </span>
-                </div>
-                <p className="text-xs text-gray-500 mt-1">{timeAgo(r.detected_at)}</p>
-              </div>
-            ))}
-          </div>
-
-          {/* Desktop table */}
-          <div className="hidden md:block table-container">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
-                  <th className="px-4 py-2.5 text-left font-medium">Detected</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Benchmark</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Case</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Metric</th>
-                  <th className="px-4 py-2.5 text-right font-medium">Baseline</th>
-                  <th className="px-4 py-2.5 text-right font-medium">Current</th>
-                  <th className="px-4 py-2.5 text-right font-medium">Delta</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Severity</th>
-                </tr>
-              </thead>
-              <tbody>
-                {regressions.map(r => (
-                  <tr
-                    key={r.regression_id}
-                    className={`border-b border-gray-800/50 hover:bg-gray-800/20 ${
-                      r.severity === 'critical' ? 'bg-red-500/5' : ''
-                    }`}
-                  >
-                    <td className="px-4 py-3 text-gray-400 text-xs">{timeAgo(r.detected_at)}</td>
-                    <td className="px-4 py-3">
-                      <Link
-                        to={`/projects/${projectId}/benchmark-configs/${r.config_id}/results`}
-                        className="text-gray-200 hover:text-cyan-400"
-                      >
-                        {r.config_name}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3 text-gray-400 font-mono text-xs">{r.case_id}</td>
-                    <td className="px-4 py-3 text-gray-400 text-xs">{metricLabel(r.metric)}</td>
-                    <td className="px-4 py-3 text-gray-400 text-xs text-right font-mono">
-                      {formatValue(r.metric, r.metric_unit, r.baseline_value)}
-                    </td>
-                    <td className="px-4 py-3 text-gray-200 text-xs text-right font-mono">
-                      {formatValue(r.metric, r.metric_unit, r.current_value)}
-                    </td>
-                    <td className="px-4 py-3 text-xs text-right font-mono text-red-400">
-                      {formatDelta(r.metric, r.delta_percent)}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={`text-xs px-2 py-0.5 rounded ${severityColor(r.severity)}`}>
-                        {r.severity}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
+        <DataTable
+          columns={[
+            { key: 'detected', label: 'Detected', cellClass: 'text-gray-400', render: (r) => timeAgo(r.detected_at) },
+            {
+              key: 'benchmark',
+              label: 'Benchmark',
+              render: (r) => (
+                <Link
+                  to={`/projects/${projectId}/benchmark-configs/${r.config_id}/results`}
+                  className="text-gray-200 hover:text-cyan-400"
+                >
+                  {r.config_name}
+                </Link>
+              ),
+            },
+            { key: 'case', label: 'Case', hideBelow: 'md', cellClass: 'text-gray-400 font-mono', render: (r) => r.case_id },
+            { key: 'metric', label: 'Metric', hideBelow: 'lg', cellClass: 'text-gray-400', render: (r) => metricLabel(r.metric) },
+            { key: 'baseline', label: 'Baseline', align: 'right', hideBelow: 'md', cellClass: 'text-gray-400 font-mono', render: (r) => formatValue(r.metric, r.metric_unit, r.baseline_value) },
+            { key: 'current', label: 'Current', align: 'right', cellClass: 'text-gray-200 font-mono', render: (r) => formatValue(r.metric, r.metric_unit, r.current_value) },
+            { key: 'delta', label: 'Delta', align: 'right', cellClass: 'font-mono text-red-400', render: (r) => formatDelta(r.metric, r.delta_percent) },
+            {
+              key: 'severity',
+              label: 'Severity',
+              render: (r) => (
+                <span className={`text-xs px-2 py-0.5 rounded ${severityColor(r.severity)}`}>
+                  {r.severity}
+                </span>
+              ),
+            },
+          ]}
+          rows={regressions}
+          rowKey={(r) => r.regression_id}
+        />
       )}
     </div>
   );
