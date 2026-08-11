@@ -5,7 +5,10 @@ use crate::metrics::{
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
-pub const ADAPTIVE_BOOTSTRAP_RESAMPLES: usize = 1_024;
+// Matches the artifact layer (json.rs BOOTSTRAP_RESAMPLES = 2048) so the
+// adaptive stop decision and the published CI are the same estimate — a
+// looser in-loop CI could stop a run the artifact then reports unconverged.
+pub const ADAPTIVE_BOOTSTRAP_RESAMPLES: usize = 2_048;
 pub const ADAPTIVE_CONFIDENCE_LEVEL: f64 = 0.95;
 pub const DEFAULT_AUTO_TARGET_RELATIVE_ERROR: f64 = 0.05;
 pub const DEFAULT_PILOT_MIN_SAMPLES: u32 = 6;
@@ -181,6 +184,7 @@ pub fn derive_measured_plan_from_pilot(
         target_absolute_error,
         pilot_sample_count: pilot_status.completed_samples,
         pilot_elapsed_ms: Some(pilot_status.elapsed_ms),
+        stop_reason: None,
     }
 }
 

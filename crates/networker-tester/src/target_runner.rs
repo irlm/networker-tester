@@ -629,7 +629,7 @@ pub(crate) async fn run_for_target(
         }
     }
 
-    let benchmark_execution_plan = if !pilot_attempts.is_empty() {
+    let mut benchmark_execution_plan = if !pilot_attempts.is_empty() {
         Some(derive_measured_plan_from_pilot(cfg, &pilot_attempts))
     } else if let Some(criteria) = benchmark_adaptive_criteria(cfg) {
         Some(BenchmarkExecutionPlan {
@@ -641,6 +641,7 @@ pub(crate) async fn run_for_target(
             target_absolute_error: criteria.target_absolute_error,
             pilot_sample_count: 0,
             pilot_elapsed_ms: None,
+            stop_reason: None,
         })
     } else if cfg.benchmark_mode && cfg.benchmark_phase == "measured" {
         Some(BenchmarkExecutionPlan {
@@ -652,6 +653,7 @@ pub(crate) async fn run_for_target(
             target_absolute_error: None,
             pilot_sample_count: 0,
             pilot_elapsed_ms: None,
+            stop_reason: None,
         })
     } else {
         None
@@ -681,6 +683,7 @@ pub(crate) async fn run_for_target(
     }
     let mut measured_attempts = Vec::new();
     let mut cooldown_attempts = Vec::new();
+    let mut measured_stop_reason: Option<&'static str> = None;
     let mut completed_runs = 0u32;
     let mut progress_request_counter = 0u32;
     let total_estimated_requests = max_run_count.saturating_mul(mode_tasks.len() as u32);
@@ -721,6 +724,7 @@ pub(crate) async fn run_for_target(
                         elapsed_ms = format_args!("{:.1}", status.elapsed_ms),
                         "Adaptive benchmark stop criteria satisfied"
                     );
+                    measured_stop_reason = Some("accuracy_target_reached");
                     break;
                 }
                 Some(BenchmarkAdaptiveStopReason::MaxSamplesReached) => {
@@ -729,11 +733,22 @@ pub(crate) async fn run_for_target(
                         elapsed_ms = format_args!("{:.1}", status.elapsed_ms),
                         "Adaptive benchmark reached maximum sample budget"
                     );
+                    measured_stop_reason = Some("max_samples_reached");
                     break;
                 }
                 None => {}
             }
         }
+    }
+    if let Some(plan) = benchmark_execution_plan.as_mut() {
+        // Fixed-count runs and adaptive loops that ran out of run budget
+        // without the criteria firing stopped because the budget was spent,
+        // not because the estimate converged.
+        plan.stop_reason = Some(
+            measured_stop_reason
+                .unwrap_or("sample_budget_exhausted")
+                .to_string(),
+        );
     }
 
     if cooldown_runs > 0 {

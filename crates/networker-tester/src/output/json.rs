@@ -213,6 +213,10 @@ pub struct BenchmarkSummary {
     pub skewness: f64,
     #[serde(default)]
     pub kurtosis: f64,
+    /// Gregg/Perfolizer modal value (see `stats_shape`): ≈2 unimodal,
+    /// >3.2 bimodal, >4.2 multimodal. `None` below 15 samples.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mvalue: Option<f64>,
     #[serde(default)]
     pub mad: f64,
     #[serde(default)]
@@ -442,7 +446,7 @@ pub fn to_benchmark_artifact(run: &TestRun) -> anyhow::Result<BenchmarkArtifact>
         .map(|record| record.attempt)
         .collect();
     let summary = benchmark_summary_from_attempts(aggregate_case, &aggregate_attempts);
-    let data_quality = benchmark_data_quality(run, &summary);
+    let data_quality = benchmark_data_quality(run, &summaries, &summary);
     let launches = vec![benchmark_launch_from_records(
         run,
         &attempt_records,
@@ -727,6 +731,7 @@ fn benchmark_summary_from_attempts(
     } else {
         0.0
     };
+    let mvalue = crate::stats_shape::mvalue(&included_values);
     let (standard_error, ci95_lower, ci95_upper) = bootstrap_median_interval(&included_values);
     let relative_margin_of_error = if p50.abs() > f64::EPSILON {
         ((ci95_upper - ci95_lower) / 2.0) / p50.abs()
@@ -784,6 +789,7 @@ fn benchmark_summary_from_attempts(
         outlier_count,
         skewness,
         kurtosis,
+        mvalue,
         mad,
         ci95_lower,
         ci95_upper,
@@ -805,7 +811,11 @@ fn packet_loss_exceeds_threshold(packet_loss_percent: f64, threshold_percent: f6
     }
 }
 
-fn benchmark_data_quality(run: &TestRun, summary: &BenchmarkSummary) -> BenchmarkDataQuality {
+fn benchmark_data_quality(
+    run: &TestRun,
+    per_case: &[BenchmarkSummary],
+    aggregate: &BenchmarkSummary,
+) -> BenchmarkDataQuality {
     let mut warnings = Vec::new();
     let mut publication_blockers = Vec::new();
     let noise_thresholds = run.benchmark_noise_thresholds.clone().unwrap_or_default();
@@ -988,48 +998,145 @@ fn benchmark_data_quality(run: &TestRun, summary: &BenchmarkSummary) -> Benchmar
         }
     }
 
-    let sample_stability_cv = summary.cv;
-
-    if summary.failure_count > 0 {
-        warnings.push(format!(
-            "{} failed attempts were excluded from the primary metric summary",
-            summary.failure_count
-        ));
-        publication_blockers.push("Measured phase contained failed attempts".into());
-    }
-    if sample_stability_cv > 0.15 {
-        warnings.push("High sample variability detected".into());
-    }
-    if sample_stability_cv > 0.10 {
-        publication_blockers.push("Sample variability exceeds the publication threshold".into());
-    }
-    if summary.outlier_count > 0 {
-        warnings.push(format!(
-            "{} measured samples were flagged outside Tukey 1.5xIQR fences",
-            summary.outlier_count
-        ));
-    }
-    if summary.relative_margin_of_error > 0.10 {
-        warnings.push("Confidence interval is wide relative to the median".into());
-    }
-    if summary.relative_margin_of_error > 0.05 {
-        publication_blockers
-            .push("Confidence interval is too wide for publication-ready claims".into());
-    }
-    if summary.kurtosis > 1.0 {
-        warnings.push("Heavy-tailed distribution detected in the primary metric".into());
-    }
-    if summary.skewness.abs() > 1.0 {
-        warnings.push("Skewed distribution detected in the primary metric".into());
+    // Clock skew (BDN-style environment warning, never a blocker: primary
+    // metrics are locally-timed durations, but wall-clock timestamps and
+    // any cross-host comparison inherit the offset).
+    if let Some(offset_ms) = run
+        .clock_sync
+        .as_ref()
+        .and_then(|clock_sync| clock_sync.offset_ms)
+    {
+        if offset_ms.abs() > 100.0 {
+            warnings.push(format!(
+                "Client clock is {:.0} ms off the NTP reference — timestamps and \
+                 cross-host comparisons carry this offset",
+                offset_ms
+            ));
+        }
     }
 
-    let sufficiency = if summary.included_sample_count >= 100 {
+    // Statistical checks run PER CASE: the aggregate pools different cases
+    // (protocols, payload sizes), so its distribution is multimodal and its
+    // CV inflated by construction — judging quality on it would warn on
+    // every healthy multi-case run. The run-level fields report the worst
+    // case; message prefixes name the case whenever there is more than one.
+    let cases: &[BenchmarkSummary] = if per_case.is_empty() {
+        std::slice::from_ref(aggregate)
+    } else {
+        per_case
+    };
+    let multi_case = cases.len() > 1;
+    let label = |case: &BenchmarkSummary, message: String| {
+        if multi_case {
+            format!("[{}] {}", case.case_id, message)
+        } else {
+            message
+        }
+    };
+
+    let sample_stability_cv = cases.iter().map(|case| case.cv).fold(0.0, f64::max);
+    let relative_margin_of_error = cases
+        .iter()
+        .map(|case| case.relative_margin_of_error)
+        .fold(0.0, f64::max);
+    let low_outlier_count: u64 = cases.iter().map(|case| case.low_outlier_count).sum();
+    let high_outlier_count: u64 = cases.iter().map(|case| case.high_outlier_count).sum();
+    let outlier_count = low_outlier_count + high_outlier_count;
+    let quality_tier = quality_tier_for_cv(sample_stability_cv);
+
+    for case in cases {
+        if case.failure_count > 0 {
+            warnings.push(label(
+                case,
+                format!(
+                    "{} failed attempts were excluded from the primary metric summary",
+                    case.failure_count
+                ),
+            ));
+            publication_blockers.push(label(
+                case,
+                "Measured phase contained failed attempts".into(),
+            ));
+        }
+        if case.cv > 0.15 {
+            warnings.push(label(case, "High sample variability detected".into()));
+        }
+        if case.cv > 0.10 {
+            publication_blockers.push(label(
+                case,
+                "Sample variability exceeds the publication threshold".into(),
+            ));
+        }
+        if case.outlier_count > 0 {
+            warnings.push(label(
+                case,
+                format!(
+                    "{} measured samples were flagged outside Tukey 1.5xIQR fences",
+                    case.outlier_count
+                ),
+            ));
+        }
+        if case.relative_margin_of_error > 0.10 {
+            warnings.push(label(
+                case,
+                "Confidence interval is wide relative to the median".into(),
+            ));
+        }
+        if case.relative_margin_of_error > 0.05 {
+            publication_blockers.push(label(
+                case,
+                "Confidence interval is too wide for publication-ready claims".into(),
+            ));
+        }
+        if case.kurtosis > 1.0 {
+            warnings.push(label(
+                case,
+                "Heavy-tailed distribution detected in the primary metric".into(),
+            ));
+        }
+        if case.skewness.abs() > 1.0 {
+            warnings.push(label(
+                case,
+                "Skewed distribution detected in the primary metric".into(),
+            ));
+        }
+        if let Some(mvalue) = case.mvalue {
+            if let Some(warning) = crate::stats_shape::mvalue_warning(mvalue) {
+                warnings.push(label(case, warning));
+            }
+            // A bimodal-or-worse case means its median/percentiles summarize
+            // a MIXTURE of behaviours (route flap, per-connection stall) —
+            // no single number from it is publication-quotable.
+            if mvalue > crate::stats_shape::MVALUE_BIMODAL {
+                publication_blockers.push(label(
+                    case,
+                    "Primary metric distribution is multimodal (mixed behaviours)".into(),
+                ));
+            }
+        }
+    }
+
+    let worst_included = cases
+        .iter()
+        .map(|case| case.included_sample_count)
+        .min()
+        .unwrap_or(0);
+    let sufficiency = if worst_included >= 100 {
         "adequate"
-    } else if summary.included_sample_count >= 30 {
-        warnings.push("Sample count is marginal for publication-quality claims".into());
+    } else if worst_included >= 30 {
+        warnings.push(format!(
+            "Sample count is marginal for publication-quality claims (worst case n={}; \
+             p99/p999 are not tail estimates below n=100 — the values are kept but \
+             indistinguishable from the max)",
+            worst_included
+        ));
         "marginal"
     } else {
-        warnings.push("Insufficient included samples for strong benchmark claims".into());
+        warnings.push(format!(
+            "Insufficient included samples for strong benchmark claims (worst case n={}; \
+             tail percentiles p95 and beyond are not tail estimates at this size)",
+            worst_included
+        ));
         "insufficient"
     };
 
@@ -1051,11 +1158,11 @@ fn benchmark_data_quality(run: &TestRun, summary: &BenchmarkSummary) -> Benchmar
         confidence_level: REPORT_CONFIDENCE_LEVEL,
         outlier_policy: default_benchmark_outlier_policy(),
         uncertainty_method: default_benchmark_uncertainty_method(),
-        relative_margin_of_error: summary.relative_margin_of_error,
-        quality_tier: summary.quality_tier.clone(),
-        low_outlier_count: summary.low_outlier_count,
-        high_outlier_count: summary.high_outlier_count,
-        outlier_count: summary.outlier_count,
+        relative_margin_of_error,
+        quality_tier,
+        low_outlier_count,
+        high_outlier_count,
+        outlier_count,
         publication_blockers,
     }
 }
@@ -1406,6 +1513,7 @@ mod tests {
             target_absolute_error: None,
             pilot_sample_count: 1,
             pilot_elapsed_ms: Some(12.0),
+            stop_reason: Some("accuracy_target_reached".into()),
         });
 
         let mut pilot = run.attempts[0].clone();
@@ -1981,6 +2089,130 @@ mod tests {
             .contains("Tukey 1.5xIQR"));
         assert!(!artifact.data_quality.publication_ready);
         assert!(!artifact.data_quality.publication_blockers.is_empty());
+    }
+
+    /// A run whose attempts carry the given per-protocol total durations —
+    /// the builder for the per-case data-quality tests.
+    fn benchmark_run_with_values(cases: &[(Protocol, &[f64])]) -> TestRun {
+        let mut run = benchmark_dummy_run();
+        let run_id = run.run_id;
+        let started_at = run.started_at;
+        let template = run.attempts.remove(0);
+        run.attempts = cases
+            .iter()
+            .flat_map(|(protocol, values)| {
+                values.iter().enumerate().map({
+                    let template = template.clone();
+                    let protocol = protocol.clone();
+                    move |(sequence_num, &total_duration_ms)| RequestAttempt {
+                        attempt_id: Uuid::new_v4(),
+                        run_id,
+                        protocol: protocol.clone(),
+                        sequence_num: sequence_num as u32,
+                        started_at,
+                        finished_at: Some(started_at),
+                        success: true,
+                        http: Some(HttpResult {
+                            negotiated_version: "HTTP/1.1".into(),
+                            status_code: 200,
+                            headers_size_bytes: 256,
+                            body_size_bytes: 1024,
+                            ttfb_ms: total_duration_ms / 2.0,
+                            total_duration_ms,
+                            redirect_count: 0,
+                            started_at,
+                            response_headers: vec![],
+                            payload_bytes: 0,
+                            throughput_mbps: None,
+                            goodput_mbps: None,
+                            cpu_time_ms: None,
+                            csw_voluntary: None,
+                            csw_involuntary: None,
+                            http_handshake_ms: None,
+                            socket_stats: None,
+                            content_encoding: None,
+                            content_length_header: None,
+                            security_headers: None,
+                            quic_stats: None,
+                            quic_resumption_stats: None,
+                        }),
+                        ..template.clone()
+                    }
+                })
+            })
+            .collect();
+        run
+    }
+
+    /// Deterministic smooth jitter in [-0.5, 0.5) (splitmix64 keyed by
+    /// index) — same discipline as the stats_shape calibration.
+    fn jitter(i: u64) -> f64 {
+        let mut z = i.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        (z as f64 / u64::MAX as f64) - 0.5
+    }
+
+    #[test]
+    fn benchmark_quality_is_judged_per_case_not_on_the_pooled_aggregate() {
+        // Two healthy tight cases at very different levels: pooled they are
+        // "bimodal with huge CV by construction"; per case they are clean.
+        // This run must be publication-ready.
+        let fast: Vec<f64> = (0..120).map(|i| 5.0 + jitter(i) * 0.2).collect();
+        let slow: Vec<f64> = (0..120).map(|i| 50.0 + jitter(i + 500) * 2.0).collect();
+        let run = benchmark_run_with_values(&[(Protocol::Http1, &fast), (Protocol::Http2, &slow)]);
+
+        let artifact = to_benchmark_artifact(&run).unwrap();
+
+        // The pooled aggregate really is wild — the point of the fix.
+        assert!(
+            artifact.summary.cv > 0.5,
+            "pooled aggregate should look unstable, cv = {}",
+            artifact.summary.cv
+        );
+        assert!(artifact.summary.mvalue.unwrap_or(0.0) > 3.2);
+
+        // ...but quality judges the cases, which are clean.
+        assert!(
+            artifact.data_quality.sample_stability_cv < 0.10,
+            "per-case stability cv, got {}",
+            artifact.data_quality.sample_stability_cv
+        );
+        assert!(
+            artifact.data_quality.publication_ready,
+            "healthy multi-case run must be publication-ready, blockers: {:?}",
+            artifact.data_quality.publication_blockers
+        );
+        assert_eq!(artifact.data_quality.sufficiency, "adequate");
+    }
+
+    #[test]
+    fn benchmark_bimodal_case_warns_and_blocks_publication() {
+        // The cpp-incident shape inside ONE case: half ~1.5 ms, half ~44 ms.
+        let mut mixed: Vec<f64> = (0..60).map(|i| 1.5 + jitter(i) * 0.4).collect();
+        mixed.extend((0..60).map(|i| 44.0 + jitter(i + 1000) * 2.0));
+        let run = benchmark_run_with_values(&[(Protocol::Http1, &mixed)]);
+
+        let artifact = to_benchmark_artifact(&run).unwrap();
+
+        let case = &artifact.summaries[0];
+        assert!(
+            case.mvalue.unwrap_or(0.0) > crate::stats_shape::MVALUE_BIMODAL,
+            "case mvalue must cross the bimodal tier, got {:?}",
+            case.mvalue
+        );
+        assert!(artifact
+            .data_quality
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("bimodal") || warning.contains("multimodal")));
+        assert!(!artifact.data_quality.publication_ready);
+        assert!(artifact
+            .data_quality
+            .publication_blockers
+            .iter()
+            .any(|blocker| blocker.contains("multimodal (mixed behaviours)")));
     }
 
     #[test]

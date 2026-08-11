@@ -105,9 +105,8 @@ pub(super) fn write_multi_target_charts(
             if data.len() >= 4 {
                 let mut sorted = data.clone();
                 sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                let n = sorted.len();
-                let p50 = sorted[((n as f64 * 0.50).round() as usize).min(n - 1)];
-                let p95 = sorted[((n as f64 * 0.95).round() as usize).min(n - 1)];
+                let p50 = crate::metrics::percentile_from_sorted(&sorted, 50.0);
+                let p95 = crate::metrics::percentile_from_sorted(&sorted, 95.0);
                 spreads.push((label.as_str(), p95 - p50));
             }
         }
@@ -376,11 +375,8 @@ pub(super) fn svg_boxplot(title: &str, groups: &[(&str, &[f64], &str)], unit: &s
         .map(|(label, vals, color)| {
             let mut sorted = vals.to_vec();
             sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            let n = sorted.len();
-            let pct = |p: f64| -> f64 {
-                let idx = (p * (n - 1) as f64).round() as usize;
-                sorted[idx.min(n - 1)]
-            };
+            let pct =
+                |p: f64| -> f64 { crate::metrics::percentile_from_sorted(&sorted, p * 100.0) };
             BoxRow {
                 label: (*label).to_string(),
                 color: (*color).to_string(),

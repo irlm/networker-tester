@@ -66,8 +66,8 @@ describe('computeStats', () => {
     expect(s.mean).toBeCloseTo(5.5, 10);
     // p50 rank = 0.5*(10-1) = 4.5 → 5 + 0.5*(6-5) = 5.5 (same formula as Rust)
     expect(s.p50).toBeCloseTo(5.5, 10);
-    // stddev (population) = sqrt(8.25) ≈ 2.8723 — matches metrics.rs
-    expect(s.stddev).toBeCloseTo(Math.sqrt(8.25), 10);
+    // sample stddev = sqrt(82.5/9) ≈ 3.0277 — matches metrics.rs
+    expect(s.stddev).toBeCloseTo(Math.sqrt(82.5 / 9), 10);
     // p25 rank = 0.25*9 = 2.25 → 3 + 0.25 = 3.25 ; p75 → 7.75
     expect(s.p25).toBeCloseTo(3.25, 10);
     expect(s.p75).toBeCloseTo(7.75, 10);
