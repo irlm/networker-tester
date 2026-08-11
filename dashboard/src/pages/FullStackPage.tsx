@@ -1,40 +1,37 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useAsyncEffect } from '../hooks/useAsyncEffect';
-import { useNavigate, useSearchParams } from 'react-router';
+import { useSearchParams } from 'react-router';
 import { api } from '../api/client';
-import type { Workload, Methodology, TestConfigCreate, ModeGroup, ComparisonCell, ComparisonGroupCreate } from '../api/types';
+import type { Workload, ModeGroup } from '../api/types';
 import { buildComparisonCells as buildCells, countCells } from '../lib/matrix-cells';
-import { Breadcrumb } from '../components/common/Breadcrumb';
-import { WizardStepper } from '../components/wizard/WizardStepper';
+import { WizardShell } from '../components/wizard/WizardShell';
 import { TestbedMatrix } from '../components/wizard/TestbedMatrix';
 import { WorkloadPanel } from '../components/wizard/WorkloadPanel';
 import { MethodologyPanel } from '../components/wizard/MethodologyPanel';
+import { ReviewStep } from '../components/wizard/ReviewStep';
 import { ProvisioningNotice } from '../components/wizard/ProvisioningNotice';
+import { useComparisonSubmit } from '../components/wizard/useComparisonSubmit';
 import { unsupportedReason } from '../lib/mode-capabilities';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
-import { useToast } from '../hooks/useToast';
 import { testersApi } from '../api/testers';
-import type { CloudAccountSummary } from '../api/types';
+import type { CloudAccountSummary, Methodology } from '../api/types';
 import type { TestbedState } from '../components/wizard/testbed-constants';
 import {
   methodologyForPreset,
   makeTestbed,
   REGIONS,
-  PROXY_LABELS,
-  TESTER_OS_OPTIONS,
 } from '../components/wizard/testbed-constants';
 
-// ── Constants ──────────────────────────────────────────────────────────
+// Shared wizard chrome/submit live in components/wizard (WizardShell,
+// ReviewStep, useComparisonSubmit) — this page owns only what makes a
+// full-stack benchmark different: the Workload step, mode gating for
+// endpoint targets, and the ?autoprovision= scenario prefill.
 
 const STEPS = ['Testbeds', 'Workload', 'Methodology', 'Review'];
 
-// ── Component ──────────────────────────────────────────────────────────
-
 export function FullStackPage() {
   const { projectId } = useProject();
-  const navigate = useNavigate();
-  const addToast = useToast();
   usePageTitle('New Full Stack Benchmark');
 
   const [step, setStep] = useState(0);
@@ -65,11 +62,7 @@ export function FullStackPage() {
   const [connectionReuse, setConnectionReuse] = useState(true);
   const [captureMode, setCaptureMode] = useState<'none' | 'tester' | 'endpoint' | 'both'>('none');
 
-  // Prefill the mode selection from ?modes= (scenario launcher), once on mount.
-  // The prune effect below still greys/drops anything incompatible with the
-  // endpoint target, so a bad param can't select an unsupported mode.
   const [searchParams] = useSearchParams();
-
 
   // A full-stack run always targets a provisioned networker-endpoint (a proxy
   // stack), so gate the mode picker to that target kind — greys out sdkprobe
@@ -99,7 +92,6 @@ export function FullStackPage() {
   const [configName, setConfigName] = useState('');
   const [addSchedule, setAddSchedule] = useState(false);
   const [cronExpr, setCronExpr] = useState('0 0 * * * *');
-  const [submitting, setSubmitting] = useState(false);
 
   // Infra for the auto-provisioning path + the review cost/runner notice.
   const [cloudAccounts, setCloudAccounts] = useState<CloudAccountSummary[]>([]);
@@ -111,7 +103,7 @@ export function FullStackPage() {
     api.getModes().then(r => setModeGroups(r.groups)).catch(() => {});
     api.getCloudAccounts(projectId).then(setCloudAccounts).catch(() => {});
     testersApi.listTesters(projectId)
-      .then(rows => setOnlineRunners(rows.filter(t => t.power_state === 'running').length))
+      .then(rows => setOnlineRunners(rows.filter(t => t.power_state === 'running' && t.agent_status === 'online').length))
       .catch(() => {});
   }, [projectId]);
 
@@ -151,8 +143,6 @@ export function FullStackPage() {
       );
     }
     if (step === 1) return selectedModes.size > 0;
-    if (step === 2) return true;
-    if (step === 3) return true; // name defaults to the placeholder
     return true;
   }, [step, testbeds, selectedModes.size]);
 
@@ -178,119 +168,65 @@ export function FullStackPage() {
     setStep(step + 1);
   };
 
-  const goBack = () => {
-    if (step > 0) setStep(step - 1);
-  };
-
   // ── Submit ──────────────────────────────────────────────────────────
 
-  // Fan out each testbed across its selected proxies. One testbed with
-  // [nginx, caddy] becomes 2 cells — the orchestrator deduplicates by
-  // (cloud_account_id, region, vm_size, os) so they share one deployment
-  // that installs both stacks side-by-side.
-  // Extracted to lib/matrix-cells so it can be unit-tested (audit P1-12).
-  const buildComparisonCells = (): ComparisonCell[] =>
-    buildCells(testbeds, selectedTesterId);
-
-  // Any combination that produces more than one cell is a matrix (multiple
-  // testbeds, OR a single testbed with multiple proxies).
+  // Fan out each testbed across its selected proxies (lib/matrix-cells,
+  // unit-tested per audit P1-12). Any combination producing more than one
+  // cell is a matrix run.
+  const buildComparisonCells = () => buildCells(testbeds, selectedTesterId);
   const totalCells = countCells(testbeds);
   const isMatrixRun = totalCells > 1;
 
   // Name defaults to the placeholder when left blank — requiring a retype of
-  // the suggested default left Launch silently disabled (E2E P3-11; same fix
-  // as AppBenchmarkPage in v0.28.104).
-  const effectiveName = () =>
-    configName.trim() || `Full stack benchmark ${new Date().toISOString().slice(0, 10)}`;
+  // the suggested default left Launch silently disabled (E2E P3-11).
+  const namePlaceholder = `Full stack benchmark ${new Date().toISOString().slice(0, 10)}`;
+  const effectiveName = () => configName.trim() || namePlaceholder;
 
-  const handleSubmit = async (launchNow: boolean) => {
-    setSubmitting(true);
-    try {
-      const name = effectiveName();
-      const sizeMap: Record<string, number> = { '64k': 65536, '1m': 1048576, '16m': 16777216 };
-      const payloadSizes = [...selectedPayloads].map(s => sizeMap[s]).filter(Boolean);
-      const captureModeMap: Record<string, string> = { none: 'metrics-only', tester: 'headers-only', endpoint: 'headers-only', both: 'full' };
-
-      const workload: Workload = {
-        modes: [...selectedModes],
-        runs,
-        concurrency,
-        timeout_ms: timeoutMs,
-        payload_sizes: payloadSizes,
-        capture_mode: (captureModeMap[captureMode] ?? 'headers-only') as Workload['capture_mode'],
-        insecure: insecure || undefined,
-        connection_reuse: connectionReuse || undefined,
-      };
-
-      if (isMatrixRun && launchNow) {
-        const cells = buildComparisonCells();
-        const body: ComparisonGroupCreate = {
-          name,
-          base_workload: workload,
-          methodology,
-          cells,
-        };
-        const group = await api.createComparisonGroup(projectId, body);
-        await api.launchComparisonGroup(group.id);
-        addToast('success', `Launched ${cells.length} run${cells.length === 1 ? '' : 's'}`);
-        navigate(`/projects/${projectId}/runs?comparison_group=${group.id}`);
-        return;
-      }
-
-      // Single-cell path: save/launch one TestConfig with a Pending endpoint.
-      const cells = buildComparisonCells();
-      const onlyEndpoint = cells[0]?.endpoint;
-      if (!onlyEndpoint) {
-        addToast('error', 'At least one testbed with one proxy is required');
-        return;
-      }
-      const config: TestConfigCreate = {
-        name,
-        endpoint: onlyEndpoint,
-        workload,
-        methodology,
-      };
-
-      const created = await api.createTestConfig(projectId, config);
-
-      if (addSchedule) {
-        await api.createTestSchedule(projectId, {
-          test_config_id: created.id,
-          cron_expr: cronExpr,
-        });
-      }
-
-      if (launchNow) {
-        const run = await api.launchTestConfig(created.id, selectedTesterId ?? undefined);
-        addToast('success', `Run ${run.id.slice(0, 8)} launched`);
-        navigate(`/projects/${projectId}/runs/${run.id}`);
-      } else {
-        addToast('success', `Config "${name}" saved`);
-        navigate(`/projects/${projectId}/runs`);
-      }
-    } catch (e) {
-      addToast('error', `Failed: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setSubmitting(false);
-    }
+  const buildWorkload = (): Workload => {
+    const sizeMap: Record<string, number> = { '64k': 65536, '1m': 1048576, '16m': 16777216 };
+    const payloadSizes = [...selectedPayloads].map(s => sizeMap[s]).filter(Boolean);
+    const captureModeMap: Record<string, string> = { none: 'metrics-only', tester: 'headers-only', endpoint: 'headers-only', both: 'full' };
+    return {
+      modes: [...selectedModes],
+      runs,
+      concurrency,
+      timeout_ms: timeoutMs,
+      payload_sizes: payloadSizes,
+      capture_mode: (captureModeMap[captureMode] ?? 'headers-only') as Workload['capture_mode'],
+      insecure: insecure || undefined,
+      connection_reuse: connectionReuse || undefined,
+    };
   };
+
+  const { submitting, handleSubmit } = useComparisonSubmit({
+    projectId,
+    buildCells: buildComparisonCells,
+    buildWorkload,
+    methodology,
+    effectiveName,
+    addSchedule,
+    cronExpr,
+    selectedTesterId,
+    isMatrixRun,
+    emptyCellsError: 'At least one testbed with one proxy is required',
+  });
 
   // ── Render ──────────────────────────────────────────────────────────
 
   return (
-    <div className="p-4 md:p-6 max-w-5xl">
-      <Breadcrumb items={[{ label: 'Full Stack', to: `/projects/${projectId}/runs` }, { label: 'New Benchmark' }]} />
-
-      <div className="mb-6">
-        <h2 className="text-lg md:text-xl font-bold text-gray-100">New Full Stack Benchmark</h2>
-        <p className="text-xs text-gray-400 mt-1">
-          Test infrastructure stack performance through proxies with statistical methodology.
-        </p>
-      </div>
-
-      <WizardStepper steps={STEPS} currentStep={step} onStepClick={setStep} />
-
-      {/* ── Step 0: Testbeds ── */}
+    <WizardShell
+      breadcrumbLabel="Full Stack"
+      breadcrumbTo={`/projects/${projectId}/runs`}
+      title="New Full Stack Benchmark"
+      subtitle="Test infrastructure stack performance through proxies with statistical methodology."
+      steps={STEPS}
+      step={step}
+      onStepClick={setStep}
+      canNext={canNext}
+      nextHint={nextHint}
+      onNext={goNext}
+      onBack={() => step > 0 && setStep(step - 1)}
+    >
       {step === 0 && (
         <TestbedMatrix
           projectId={projectId}
@@ -304,7 +240,6 @@ export function FullStackPage() {
         />
       )}
 
-      {/* ── Step 1: Workload ── */}
       {step === 1 && (
         <WorkloadPanel
           modeGroups={modeGroups}
@@ -328,7 +263,6 @@ export function FullStackPage() {
         />
       )}
 
-      {/* ── Step 2: Methodology ── */}
       {step === 2 && (
         <MethodologyPanel
           alwaysOn
@@ -341,161 +275,45 @@ export function FullStackPage() {
         />
       )}
 
-      {/* ── Step 3: Review ── */}
       {step === 3 && (
-        <div>
-          <h3 className="text-sm font-semibold text-gray-200 mb-4">Review & Launch</h3>
-
-          <label className="text-xs text-gray-400 block mb-4">
-            Benchmark name
-            <input
-              type="text"
-              value={configName}
-              onChange={e => setConfigName(e.target.value)}
-              placeholder={`Full stack benchmark ${new Date().toISOString().slice(0, 10)}`}
-              className="mt-1 w-full bg-[var(--bg-base)] border border-gray-700 px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
+        <ReviewStep
+          configName={configName}
+          onConfigNameChange={setConfigName}
+          namePlaceholder={namePlaceholder}
+          summaryLine={
+            <>
+              {testbeds.length} testbed{testbeds.length !== 1 ? 's' : ''}
+              {' / '}{totalProxies} prox{totalProxies !== 1 ? 'ies' : 'y'}
+              {' / '}{[...selectedModes].join(', ')}
+            </>
+          }
+          testbeds={testbeds}
+          methodology={methodology}
+          workloadLine={
+            <>{runs} runs x {concurrency} concurrency / {timeoutMs}ms timeout / {[...selectedModes].join(' ')}</>
+          }
+          matrixNote={isMatrixRun
+            ? <>Comparison group: {totalCells} cell{totalCells !== 1 ? 's' : ''} across {testbeds.length} testbed{testbeds.length !== 1 ? 's' : ''}</>
+            : undefined}
+          afterWorkload={
+            // Provisioning cost + runner-readiness — the last check before spend
+            <ProvisioningNotice
+              vmCount={testbeds.length}
+              cloud={new Set(testbeds.map(t => t.cloud)).size === 1 ? testbeds[0].cloud : 'multiple'}
+              region={new Set(testbeds.map(t => t.region)).size === 1 ? testbeds[0].region : 'multiple'}
+              onlineRunners={onlineRunners}
             />
-          </label>
-
-          {/* Summary */}
-          <div className="text-xs font-mono text-gray-400 mb-4">
-            {testbeds.length} testbed{testbeds.length !== 1 ? 's' : ''}
-            {' / '}{totalProxies} prox{totalProxies !== 1 ? 'ies' : 'y'}
-            {' / '}{[...selectedModes].join(', ')}
-          </div>
-
-          {/* Testbeds */}
-          <div className="mb-4">
-            <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">Testbeds</div>
-            <div className="space-y-0.5">
-              {testbeds.map((testbed, idx) => (
-                <div key={testbed.key} className="flex items-center gap-2 text-xs font-mono py-1 border-b border-gray-800/50 last:border-0">
-                  <span className="text-gray-400 w-4">{idx + 1}</span>
-                  <span className="text-gray-200">{testbed.cloud}</span>
-                  <span className="text-gray-400">/</span>
-                  <span className="text-gray-300">{testbed.region}</span>
-                  <span className="text-[10px] px-1 text-gray-300">
-                    {testbed.os === 'windows' ? 'win' : 'linux'}
-                  </span>
-                  <span className="text-gray-500">{testbed.vmSize}</span>
-                  <span className="text-gray-700">{testbed.topology}</span>
-                  <span className="text-cyan-500/70">{testbed.proxies.map(p => PROXY_LABELS[p] ?? p).join(', ')}</span>
-                  <span className="text-gray-500">{TESTER_OS_OPTIONS.find(o => o.id === testbed.testerOs)?.label ?? testbed.testerOs}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Methodology */}
-          <div className="mb-4">
-            <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">Methodology</div>
-            <div className="text-xs font-mono text-gray-400">
-              {methodology.warmup_runs} warmup / {methodology.measured_runs} measured / {methodology.target_error_pct > 0 ? `${methodology.target_error_pct}% target error` : 'no error target'}
-            </div>
-          </div>
-
-          {/* Workload */}
-          <div className="mb-4">
-            <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">Workload</div>
-            <div className="text-xs font-mono text-gray-400">
-              {runs} runs x {concurrency} concurrency / {timeoutMs}ms timeout / {[...selectedModes].join(' ')}
-            </div>
-          </div>
-
-          {isMatrixRun && (
-            <div className="text-xs font-mono text-cyan-400 mb-4">
-              Comparison group: {totalCells} cell{totalCells !== 1 ? 's' : ''} across {testbeds.length} testbed{testbeds.length !== 1 ? 's' : ''}
-            </div>
-          )}
-
-          {/* Provisioning cost + runner-readiness — the last check before spend */}
-          <ProvisioningNotice
-            vmCount={testbeds.length}
-            cloud={new Set(testbeds.map(t => t.cloud)).size === 1 ? testbeds[0].cloud : 'multiple'}
-            region={new Set(testbeds.map(t => t.region)).size === 1 ? testbeds[0].region : 'multiple'}
-            onlineRunners={onlineRunners}
-          />
-
-          {/* Schedule */}
-          <label className="flex items-center gap-3 cursor-pointer mb-4">
-            <input
-              type="checkbox"
-              checked={addSchedule}
-              onChange={e => setAddSchedule(e.target.checked)}
-              className="w-4 h-4 border-gray-600 bg-gray-900 text-cyan-500 focus:ring-cyan-500/50"
-            />
-            <span className="text-sm text-gray-200">Add schedule</span>
-          </label>
-
-          {addSchedule && (
-            <div className="border border-gray-800 p-4 mb-4">
-              <label htmlFor="cron" className="text-xs text-gray-400 mb-1 block">Cron Expression (6-field)</label>
-              <input
-                id="cron"
-                type="text"
-                value={cronExpr}
-                onChange={e => setCronExpr(e.target.value)}
-                className="bg-[var(--bg-base)] border border-gray-700 px-3 py-2 text-sm text-gray-200 w-full font-mono focus:outline-none focus:border-cyan-500"
-              />
-              <p className="text-xs text-gray-500 mt-1">sec min hour day month weekday -- e.g. 0 0 * * * * = hourly</p>
-            </div>
-          )}
-
-          {/* Launch buttons — matrix runs can't be saved as a single config
-              (the save path would silently keep only the first cell), so
-              Save is hidden for them, matching AppBenchmarkPage. */}
-          <div className="flex gap-2">
-            {!isMatrixRun && (
-              <button
-                onClick={() => handleSubmit(false)}
-                disabled={submitting}
-                className="border border-gray-700 hover:border-gray-600 text-gray-300 px-4 py-2 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                Save Config
-              </button>
-            )}
-            <button
-              onClick={() => handleSubmit(true)}
-              disabled={submitting}
-              className={`text-white px-6 py-2.5 text-sm font-medium transition-colors disabled:cursor-wait ${
-                submitting ? 'bg-cyan-700 cursor-wait' : 'bg-cyan-600 hover:bg-cyan-500'
-              }`}
-            >
-              {submitting ? (
-                <span className="flex items-center gap-2">
-                  <span className="inline-block w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  Launching...
-                </span>
-              ) : isMatrixRun ? `Launch ${totalCells} Runs` : 'Launch Now'}
-            </button>
-          </div>
-        </div>
+          }
+          addSchedule={addSchedule}
+          onAddScheduleChange={setAddSchedule}
+          cronExpr={cronExpr}
+          onCronExprChange={setCronExpr}
+          isMatrixRun={isMatrixRun}
+          submitting={submitting}
+          onSubmit={handleSubmit}
+          launchLabel={isMatrixRun ? `Launch ${totalCells} Runs` : 'Launch Now'}
+        />
       )}
-
-      {/* ── Navigation ── */}
-      <div className="flex items-center justify-between mt-10 pt-4 border-t border-gray-800/50">
-        <button
-          onClick={goBack}
-          disabled={step === 0}
-          className="text-xs text-gray-400 disabled:text-gray-700 disabled:cursor-not-allowed hover:text-gray-300 transition-colors"
-        >
-          Back
-        </button>
-        {step < 3 && (
-          <div className="flex items-center gap-3">
-            {nextHint && (
-              <span className="text-[11px] text-gray-400 font-mono">{nextHint}</span>
-            )}
-            <button
-              onClick={goNext}
-              disabled={!canNext}
-              className="px-5 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-800 disabled:text-gray-600 text-white text-xs font-medium transition-colors"
-            >
-              Next
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
+    </WizardShell>
   );
 }
