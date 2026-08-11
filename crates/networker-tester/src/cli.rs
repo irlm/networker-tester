@@ -242,10 +242,11 @@ pub struct Cli {
     #[arg(long)]
     pub benchmark_mode: bool,
 
-    /// Shorthand flag that auto-populates a default Methodology block
-    /// (warmup 5, measured 30, target CV 5%, IQR outlier policy, standard
-    /// quality gates). Equivalent to specifying a full methodology section
-    /// in a v2 config file.
+    /// Alias for --benchmark-mode: emit the normalized benchmark contract
+    /// and, on the measured phase, run the adaptive plan (pilot-derived
+    /// sample budget, stop when the bootstrap 95% CI half-width of the
+    /// median is within the relative-error target, default 5%). Tune with
+    /// the --benchmark-{min,max}-samples / --benchmark-target-* flags.
     #[arg(long)]
     pub benchmark: bool,
 

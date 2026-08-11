@@ -256,6 +256,13 @@ pub struct BenchmarkExecutionPlan {
     pub pilot_sample_count: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pilot_elapsed_ms: Option<f64>,
+    /// Why the measured phase actually stopped: `accuracy_target_reached`,
+    /// `max_samples_reached`, or `sample_budget_exhausted` (fixed-count runs
+    /// and adaptive runs whose loop ended without the criteria firing).
+    /// Consumers use this to tell "converged" apart from "gave up at the
+    /// budget" — the two mean very different things about the numbers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
 }
 
 /// Publication thresholds used to classify benchmark noise and publication readiness.
@@ -3794,8 +3801,9 @@ pub fn aggregate_udp_rtts(samples: &[Option<f64>]) -> RttStats {
     rtts.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let min = rtts[0];
     let avg = rtts.iter().sum::<f64>() / received;
-    let p95_idx = ((rtts.len() as f64 * 0.95).ceil() as usize).saturating_sub(1);
-    let p95 = rtts[p95_idx.min(rtts.len() - 1)];
+    // Same linear-interpolation convention as every other percentile in the
+    // project (this was the lone nearest-rank-ceil holdout).
+    let p95 = percentile_from_sorted(&rtts, 95.0);
 
     RttStats {
         min,
@@ -3855,7 +3863,14 @@ pub fn compute_stats(values: &[f64]) -> Option<Stats> {
     // indistinguishable from the max at small n (V13).
     let p95 = (count >= MIN_SAMPLES_P95).then(|| percentile_from_sorted(&sorted, 95.0));
     let p99 = (count >= MIN_SAMPLES_P99).then(|| percentile_from_sorted(&sorted, 99.0));
-    let variance = sorted.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / count as f64;
+    // Sample (n-1) stddev: these are always samples of a longer-running
+    // behaviour, never the whole population, and the artifact layer
+    // (json.rs) already divides by n-1 — one convention everywhere.
+    let variance = if count > 1 {
+        sorted.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (count as f64 - 1.0)
+    } else {
+        0.0
+    };
     let stddev = variance.sqrt();
     Some(Stats {
         count,
@@ -3869,7 +3884,9 @@ pub fn compute_stats(values: &[f64]) -> Option<Stats> {
     })
 }
 
-fn percentile_from_sorted(sorted: &[f64], p: f64) -> f64 {
+/// Linear-interpolation percentile (the project-wide convention; the
+/// artifact layer and dashboard mirror this exactly).
+pub fn percentile_from_sorted(sorted: &[f64], p: f64) -> f64 {
     let n = sorted.len();
     if n == 1 {
         return sorted[0];
@@ -4282,8 +4299,8 @@ mod tests {
         assert_eq!(s.loss_percent, 0.0);
         assert!((s.min - 1.0).abs() < 1e-9);
         assert!((s.avg - 5.5).abs() < 1e-9);
-        // 95th percentile of 10 values → index ceil(9.5)-1 = 9 → 10.0
-        assert!((s.p95 - 10.0).abs() < 1e-9);
+        // Linear-interp p95 of 1..10: rank = 0.95*9 = 8.55 → 9 + 0.55 = 9.55
+        assert!((s.p95 - 9.55).abs() < 1e-9);
         // Sequence-consecutive |IPDV|: 5,8,6,3,5,3,6,4,3 → mean = 43/9
         assert!(
             (s.jitter - 43.0 / 9.0).abs() < 1e-9,
@@ -4760,7 +4777,7 @@ mod tests {
 
     #[test]
     fn compute_stats_known_values() {
-        // 1..=10: mean=5.5, stddev=sqrt(8.25)≈2.872, p50=5.5
+        // 1..=10: mean=5.5, sample stddev=sqrt(82.5/9)≈3.028, p50=5.5
         let vals: Vec<f64> = (1..=10).map(|v| v as f64).collect();
         let s = compute_stats(&vals).unwrap();
         assert_eq!(s.count, 10);
@@ -4772,8 +4789,8 @@ mod tests {
         // n=10 < MIN_SAMPLES_P95 — p95/p99 suppressed.
         assert!(s.p95.is_none());
         assert!(s.p99.is_none());
-        // stddev of 1..10: variance = (sum of (i-5.5)^2 for i in 1..10)/10 = 8.25
-        assert!((s.stddev - 8.25f64.sqrt()).abs() < 1e-9);
+        // Sample stddev of 1..10: variance = sum((i-5.5)^2)/(10-1) = 82.5/9
+        assert!((s.stddev - (82.5f64 / 9.0).sqrt()).abs() < 1e-9);
     }
 
     #[test]

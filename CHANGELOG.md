@@ -11,6 +11,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.180] - 2026-08-11
+
+Measurement-methodology parity pass against BenchmarkDotNet/Perfolizer
+(state-of-the-art survey → gap matrix). **Two reported numbers change
+convention** — see Changed.
+
+### Added
+- **Multimodality detection (mvalue)**: every per-case benchmark summary now
+  carries Gregg/Perfolizer's modal value (`stats_shape.rs` — Tukey pre-clean,
+  Scott-width coarsen-only scan, data-anchored adaptive histogram with a
+  quantized-data guard). BenchmarkDotNet's exact warning tiers (>2.8 several
+  modes, >3.2 bimodal, >4.2 multimodal); bimodal-or-worse cases BLOCK
+  publication readiness — a mixture's median describes no real behaviour
+  (the 2026-08 cpp Nagle incident shape is now caught in one run instead of
+  wandering medians across runs).
+- `benchmark_execution_plan.stop_reason` in the artifact:
+  `accuracy_target_reached` vs `max_samples_reached` vs
+  `sample_budget_exhausted` — consumers can now tell a converged run from
+  one that gave up at its budget.
+- Clock-skew data-quality warning when the SNTP offset exceeds 100 ms
+  (warning-only; primary metrics are locally-timed durations).
+- Small-n sufficiency warnings now name the worst case's n and state that
+  tail percentiles are kept but not tail estimates below the gates.
+
+### Changed
+- **Data quality is judged per case, not on the pooled aggregate.** The old
+  pooled sample mixed protocols/payloads, making CV and shape warnings fire
+  by construction on healthy multi-case runs (and masking per-case issues).
+  Warnings/blockers are now per-case (prefixed with the case id when
+  multi-case); `sample_stability_cv`/`relative_margin_of_error` report the
+  worst case; sufficiency uses the worst case's included count.
+- **Percentile convention unified to linear interpolation everywhere**
+  (report box-plot/spread observations were nearest-rank-round; UDP RTT p95
+  was nearest-rank-ceil). UDP p95 readings shift slightly (e.g. exact-decile
+  10-sample series: 10.0 → 9.55).
+- **Stddev convention unified to sample (n−1)** in `compute_stats` and the
+  dashboard mirror (was population /n; the artifact layer already used n−1).
+  Reported stddev rises slightly at small n (×√(n/(n−1))).
+- Adaptive stop decision now uses 2048 bootstrap resamples (was 1024),
+  matching the artifact layer — the in-loop CI and the published CI are the
+  same estimate.
+- `--benchmark` help text now describes what the flag actually does (alias
+  for --benchmark-mode + adaptive plan); it previously promised an
+  unimplemented methodology block.
+
+---
+
 ## [0.28.179] — 2026-08-10
 
 ### Added

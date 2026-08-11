@@ -39,7 +39,8 @@ export function computeStats(values: number[]): Stats | null {
   const p75 = percentile(sorted, 75);
   const p95 = percentile(sorted, 95);
   const p99 = percentile(sorted, 99);
-  const variance = sorted.reduce((s, v) => s + (v - mean) ** 2, 0) / n;
+  // Sample (n-1) variance, matching metrics.rs::compute_stats.
+  const variance = n > 1 ? sorted.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1) : 0;
   const stddev = Math.sqrt(variance);
   return { count: n, min, mean, p5, p25, p50, p75, p95, p99, max, stddev };
 }
