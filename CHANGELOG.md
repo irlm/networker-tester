@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.189] - 2026-08-11
+
+### Fixed
+- **`GET /api/system/health` 500'd on prod under the deploy-window load**
+  (Settings → System Health showed "Server error"): EF Core 10.0.0's
+  concurrent first-compilation of the `GroupBy(...).First()`
+  latest-per-group query raced when the dashboard's parallel panel
+  requests hit a freshly restarted service
+  (`KeyNotFoundException: 'EmptyProjectionMember'`). Two-layer fix: the
+  query is rewritten to the aggregate+join shape (avoids the fragile
+  translation path entirely), and the EF family is patched
+  (Npgsql.EntityFrameworkCore.PostgreSQL 10.0.0 → 10.0.3, EFCore pinned
+  10.0.11) so the compilation race is fixed for every other query too.
+  New cold-start regression test fires 8 parallel first requests against
+  a fresh app instance — the exact incident shape single-threaded smoke
+  tests can never see.
+
+---
+
 ## [0.28.188] - 2026-08-11
 
 Dashboard UI-7: consistency pass — the footer and filter patterns
