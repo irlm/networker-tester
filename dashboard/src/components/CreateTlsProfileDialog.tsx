@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../api/client';
 import type { Agent } from '../api/types';
 import { useToast } from '../hooks/useToast';
+import { Modal } from './common/Modal';
 
 interface CreateTlsProfileDialogProps {
   projectId: string;
@@ -20,22 +21,11 @@ export function CreateTlsProfileDialog({ projectId, onClose, onCreated }: Create
   const [selectedTester, setSelectedTester] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const firstInputRef = useRef<HTMLInputElement>(null);
   const addToast = useToast();
 
   useEffect(() => {
-    firstInputRef.current?.focus();
     api.getAgents(projectId).then(setTesters).catch(() => {});
   }, [projectId]);
-
-  // Escape closes — matches every other slide-over dialog.
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [onClose]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -71,14 +61,7 @@ export function CreateTlsProfileDialog({ projectId, onClose, onCreated }: Create
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-black/40 slide-over-backdrop" onClick={onClose} aria-hidden="true" />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="create-tls-profile-title"
-        className="relative w-full md:w-[520px] md:max-w-[90vw] bg-[var(--bg-base)] md:border-l border-gray-800 h-full overflow-y-auto slide-over-panel"
-      >
+    <Modal onClose={onClose} labelledBy="create-tls-profile-title" variant="slide-over">
         <form onSubmit={handleSubmit} className="p-4 md:p-6">
           <div className="flex items-center justify-between mb-6">
             <h3 id="create-tls-profile-title" className="text-lg font-bold text-gray-100">Run TLS Profile</h3>
@@ -88,7 +71,7 @@ export function CreateTlsProfileDialog({ projectId, onClose, onCreated }: Create
           {error && <div className="bg-red-500/10 border border-red-500/30 rounded p-2 mb-4 text-red-400 text-sm">{error}</div>}
 
           <label className="block text-xs text-gray-400 mb-1">HTTPS URL</label>
-          <input ref={firstInputRef} value={url} onChange={(e) => setUrl(e.target.value)} className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 mb-4 focus:outline-none focus:border-cyan-500" />
+          <input value={url} onChange={(e) => setUrl(e.target.value)} className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 mb-4 focus:outline-none focus:border-cyan-500" />
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
             <div>
@@ -136,7 +119,6 @@ export function CreateTlsProfileDialog({ projectId, onClose, onCreated }: Create
             </button>
           </div>
         </form>
-      </div>
-    </div>
+    </Modal>
   );
 }

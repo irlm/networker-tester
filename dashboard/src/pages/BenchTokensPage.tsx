@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo, useEffect } from 'react';
-import { Link } from 'react-router';
+import { useSearchParams } from 'react-router';
+import { BenchTokenHistoryTab } from './BenchTokenHistoryTab';
 import { api } from '../api/client';
 import type { BenchTokenInfo } from '../api/types';
 import { usePolling } from '../hooks/usePolling';
@@ -70,8 +71,12 @@ interface RunGroup {
 // ── Component ───────────────────────────────────────────────────────────
 
 export function BenchTokensPage() {
-  usePageTitle('Active Tokens');
+  usePageTitle('Tokens');
   const toast = useToast();
+  // active | history — the History page duplicated this page's whole shell,
+  // so it lives here as a tab now (?tab=history keeps old links working).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab = searchParams.get('tab') === 'history' ? 'history' : 'active';
 
   const [tokens, setTokens] = useState<BenchTokenInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -222,6 +227,27 @@ export function BenchTokensPage() {
     <div className="p-4 md:p-6">
       <Breadcrumb items={[{ label: 'Admin' }, { label: 'Tokens' }]} />
 
+      {/* Tab strip: Active | History */}
+      <div className="flex items-center gap-1 mb-4 border-b border-gray-800/50">
+        {(['active', 'history'] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setSearchParams(t === 'active' ? {} : { tab: t }, { replace: true })}
+            className={`px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
+              tab === t
+                ? 'border-cyan-500 text-gray-100'
+                : 'border-transparent text-gray-400 hover:text-gray-200'
+            }`}
+          >
+            {t === 'active' ? 'Active' : 'History'}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'history' ? (
+        <BenchTokenHistoryTab />
+      ) : (
+      <>
       {/* Top bar */}
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <div className="flex items-center gap-3">
@@ -249,12 +275,12 @@ export function BenchTokensPage() {
               {revokingAll ? 'Revoking...' : `Revoke All (${totalVms})`}
             </button>
           )}
-          <Link
-            to="/bench-tokens/history"
+          <button
+            onClick={() => setSearchParams({ tab: 'history' }, { replace: true })}
             className="text-xs text-gray-400 hover:text-cyan-400 transition-colors"
           >
             History &rarr;
-          </Link>
+          </button>
         </div>
       </div>
 
@@ -277,12 +303,12 @@ export function BenchTokensPage() {
         <div className="py-16 text-center">
           <p className="text-gray-400 text-sm">No active benchmark tokens</p>
           {tokens.length > 0 && (
-            <Link
-              to="/bench-tokens/history"
+            <button
+              onClick={() => setSearchParams({ tab: 'history' }, { replace: true })}
               className="text-xs text-gray-400 hover:text-cyan-400 transition-colors mt-2 inline-block"
             >
               View {tokens.length} historical token{tokens.length !== 1 ? 's' : ''} &rarr;
-            </Link>
+            </button>
           )}
         </div>
       )}
@@ -477,6 +503,8 @@ export function BenchTokensPage() {
           </div>
         );
       })()}
+      </>
+      )}
     </div>
   );
 }

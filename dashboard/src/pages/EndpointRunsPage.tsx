@@ -1,4 +1,5 @@
 // ── EndpointRunsPage ─────────────────────────────────────────────────────
+import { EmptyState } from '../components/common/EmptyState';
 //
 // Per-endpoint runs-list (v6+color mockup). Lands when the user clicks a
 // deployed target from /vms. Shows endpoint metadata in the hero, preset
@@ -271,9 +272,11 @@ export function EndpointRunsPage() {
           Loading runs…
         </div>
       ) : filteredRuns.length === 0 ? (
-        <div className="border border-dashed border-gray-800 p-8 text-center text-xs text-gray-400">
-          {runs.length === 0 ? 'No network runs yet — pick a preset above to start.' : 'No runs match the current filter.'}
-        </div>
+        <EmptyState
+          compact
+          message={runs.length === 0 ? 'No network runs yet' : 'No runs match the current filter'}
+          detail={runs.length === 0 ? 'Pick a preset above to start.' : undefined}
+        />
       ) : (
         <div className="border border-gray-800">
           <table className="w-full text-xs font-mono">

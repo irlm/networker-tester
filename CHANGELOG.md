@@ -11,6 +11,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.184] - 2026-08-11
+
+Dashboard UI-3 pass: the remaining canonical components from the deferred
+list.
+
+### Added
+- **`KpiTile`** (kpi-strip/v2 pick): 2px left border encodes health, sub
+  line carries denominator/reason; magnitude values can use the cyan ramp
+  via `valueClass`. Replaces three private implementations (PerfLog
+  StatCard, TlsProfileDetail MetricCard, Dashboard's inline KPI divs).
+- **`Modal`** — the one dialog shell (backdrop, Escape, focus trap, focus
+  restore, initial-focus on the first form field, aria wiring) with
+  `variant="slide-over"` for the right-docked create/edit forms. All 7
+  hand-rolled dialogs converted (3 centered, 4 slide-over; −166 lines of
+  duplicated chrome). Focus trap + restore are NEW behavior for all of
+  them — Tab previously walked out of every dialog into the page behind.
+
+### Changed
+- Token pages merged: `/bench-tokens` now has Active | History tabs
+  (`?tab=history`); the standalone history page and its duplicated shell
+  are gone, old URLs redirect.
+- EmptyState adopted on the remaining hand-rollers (CommandApprovals,
+  Leaderboard, EndpointRuns).
+
+### Deferred (recorded)
+- FullStack+AppBenchmark wizard merge; DataTable adoption on the ~26
+  single-table pages; StatusFooter; font-mono sweep.
+
+---
+
 ## [0.28.183] - 2026-08-11
 
 Dashboard UI-2 pass: design tokens + the canonical DataTable.

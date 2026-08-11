@@ -70,7 +70,7 @@ export const PALETTE_EXTRA_ENTRIES: NavEntry[] = [
   { label: 'VM history', icon: '☷', path: '/projects/:pid/vms/history', section: 'main', keywords: ['lifecycle', 'deleted vms', 'audit'], gate: 'project' },
   { label: 'Project settings', icon: '⚙', path: '/projects/:pid/settings', section: 'main', keywords: ['members', 'cloud accounts', 'share links', 'approvals'], gate: 'project' },
   { label: 'Projects', icon: '○', path: '/projects', section: 'main', keywords: ['switch project', 'workspaces'], gate: 'project' },
-  { label: 'Token history', icon: '⚿', path: '/bench-tokens/history', section: 'admin', keywords: ['revoked', 'expired tokens'], gate: 'platformAdmin' },
+  { label: 'Token history', icon: '⚿', path: '/bench-tokens?tab=history', section: 'admin', keywords: ['revoked', 'expired tokens'], gate: 'platformAdmin' },
 ];
 
 export function resolveNavPath(path: string, pid: string | null): string | null {

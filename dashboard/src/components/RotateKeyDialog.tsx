@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { errorMessage } from '../api/client';
 import { testersApi, type RotateKeyResponse } from '../api/testers';
+import { Modal } from './common/Modal';
 
 interface RotateKeyDialogProps {
   projectId: string;
@@ -43,14 +44,6 @@ export function RotateKeyDialog({
     }
   };
 
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [onClose]);
-
   const handleCopy = async () => {
     if (result?.api_key) {
       await navigator.clipboard.writeText(result.api_key);
@@ -60,17 +53,7 @@ export function RotateKeyDialog({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-      onClick={onClose}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="rotate-key-dialog-title"
-        className="bg-[var(--bg-surface)] border border-gray-800 rounded-lg w-full max-w-md p-6"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Modal onClose={onClose} labelledBy="rotate-key-dialog-title" maxWidth="max-w-md">
         <h3
           id="rotate-key-dialog-title"
           className="text-gray-100 font-bold text-lg mb-4"
@@ -153,7 +136,6 @@ export function RotateKeyDialog({
             </div>
           </>
         )}
-      </div>
-    </div>
+    </Modal>
   );
 }

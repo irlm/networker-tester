@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { KpiTile } from '../components/common/KpiTile';
 import { useParams } from 'react-router';
 import { api, errorMessage, type TlsProfileDetail } from '../api/client';
 import { Breadcrumb } from '../components/common/Breadcrumb';
@@ -91,10 +92,10 @@ export function TlsProfileDetailPage() {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <MetricCard label="TCP connect" value={formatMs(connectivity.tcp_connect_ms)} />
-        <MetricCard label="TLS handshake" value={formatMs(connectivity.tls_handshake_ms)} />
-        <MetricCard label="TLS version" value={connectivity.negotiated_tls_version ?? '-'} />
-        <MetricCard label="ALPN" value={connectivity.alpn ?? '-'} />
+        <KpiTile label="TCP connect" value={formatMs(connectivity.tcp_connect_ms)} />
+        <KpiTile label="TLS handshake" value={formatMs(connectivity.tls_handshake_ms)} />
+        <KpiTile label="TLS version" value={connectivity.negotiated_tls_version ?? '-'} />
+        <KpiTile label="ALPN" value={connectivity.alpn ?? '-'} />
       </div>
 
       <Section title="Trust posture">
@@ -197,14 +198,6 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function MetricCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-gray-800 bg-[var(--bg-surface)] p-3">
-      <div className="text-[11px] uppercase tracking-wider text-gray-400">{label}</div>
-      <div className="mt-1 text-sm font-medium text-gray-200">{value}</div>
-    </div>
-  );
-}
 
 function KeyValueGrid({ items }: { items: Array<[string, React.ReactNode]> }) {
   return (

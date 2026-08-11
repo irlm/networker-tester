@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { api } from '../../api/client';
 import type { AlertChannel, AlertComparator, AlertMetric, AlertRule, TestConfigListItem } from '../../api/types';
 import { useToast } from '../../hooks/useToast';
+import { Modal } from '../common/Modal';
 import {
   ALERT_COMPARATORS,
   ALERT_METRICS,
@@ -34,24 +35,11 @@ export function RuleDialog({ projectId, channels, configs, existing, onClose, on
   const [enabled, setEnabled] = useState(existing?.enabled ?? true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const firstInputRef = useRef<HTMLSelectElement>(null);
   const addToast = useToast();
 
   // A config-scoped rule cannot be widened back to project-wide via PATCH
   // (the backend cannot distinguish "clear" from "unchanged") — recreate it.
   const scopeLocked = existing != null && existing.test_config_id != null;
-
-  useEffect(() => {
-    firstInputRef.current?.focus();
-  }, []);
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [onClose]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -99,14 +87,7 @@ export function RuleDialog({ projectId, channels, configs, existing, onClose, on
   const unit = metricUnit(metric);
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-black/40 slide-over-backdrop" onClick={onClose} aria-hidden="true" />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="alert-rule-dialog-title"
-        className="relative w-full md:w-[520px] md:max-w-[90vw] bg-[var(--bg-base)] md:border-l border-gray-800 h-full overflow-y-auto slide-over-panel"
-      >
+    <Modal onClose={onClose} labelledBy="alert-rule-dialog-title" variant="slide-over">
         {/* noValidate: alert-form.ts owns validation so errors render in the
             styled banner instead of native constraint tooltips. */}
         <form onSubmit={handleSubmit} noValidate className="p-4 md:p-6">
@@ -130,7 +111,6 @@ export function RuleDialog({ projectId, channels, configs, existing, onClose, on
               <label htmlFor="rule-metric" className="block text-xs text-gray-400 mb-1">Metric</label>
               <select
                 id="rule-metric"
-                ref={firstInputRef}
                 value={metric}
                 onChange={(e) => setMetric(e.target.value as AlertMetric)}
                 className={inputCls}
@@ -243,7 +223,6 @@ export function RuleDialog({ projectId, channels, configs, existing, onClose, on
             </button>
           </div>
         </form>
-      </div>
-    </div>
+    </Modal>
   );
 }

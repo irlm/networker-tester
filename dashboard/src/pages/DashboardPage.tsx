@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
+import { KpiTile } from '../components/common/KpiTile';
 import { Link } from 'react-router';
 import { api, errorMessage } from '../api/client';
 import type { Agent, Deployment, TestRun } from '../api/types';
@@ -136,33 +137,22 @@ export function DashboardPage() {
 
       {/* ── KPI Row — skip when all zeros ── */}
       {!allKpisZero && (
-        <div className="flex flex-wrap gap-x-8 gap-y-3 mb-8 pb-6 border-b border-gray-800/50 items-end">
-          <div>
-            <div className={`text-3xl font-bold tabular-nums ${onlineAgents.length > 0 ? 'text-green-400' : 'text-gray-500'}`}>
-              {onlineAgents.length}
-            </div>
-            <div className="text-xs text-gray-400" title="Agents that execute network tests from remote locations">runners online</div>
-          </div>
-          <div>
-            <div className={`text-xl font-semibold tabular-nums ${activeCount > 0 ? 'text-cyan-400' : 'text-gray-500'}`}>
-              {activeCount}
-            </div>
-            <div className="text-xs text-gray-500">running</div>
-          </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
+          <KpiTile
+            label="runners online"
+            value={onlineAgents.length}
+            health={onlineAgents.length > 0 ? 'ok' : 'muted'}
+            title="Agents that execute network tests from remote locations"
+          />
+          <KpiTile
+            label="running"
+            value={activeCount}
+            health={activeCount > 0 ? 'info' : 'muted'}
+          />
           {showRuns24h && (
-            <div>
-              <div className="text-xl font-semibold tabular-nums text-gray-300">
-                {summary?.runs_24h ?? 0}
-              </div>
-              <div className="text-xs text-gray-500">runs · last 24h</div>
-            </div>
+            <KpiTile label="runs · last 24h" value={summary?.runs_24h ?? 0} />
           )}
-          <div>
-            <div className="text-xl font-semibold tabular-nums text-gray-300">
-              {completedDeps.length}
-            </div>
-            <div className="text-xs text-gray-500">targets</div>
-          </div>
+          <KpiTile label="targets" value={completedDeps.length} />
         </div>
       )}
 
