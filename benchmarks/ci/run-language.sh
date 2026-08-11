@@ -9,10 +9,17 @@
 #   TESTER        — path to networker-tester binary
 #   PORT          — server listen port (default: 8443)
 #   RESULTS_DIR   — directory for JSON output files
+#   WARMUP_REQUESTS — discarded per-workload warmup requests (default 25)
 set -euo pipefail
 
 LANG="${1:?Usage: run-language.sh <language> [runs]}"
 RUNS="${2:-100}"
+# Discarded requests per workload before measurement (0 disables). JIT
+# runtimes (JVM, V8, CLR, opcache, YJIT) are 10-100x slower on first
+# contact with a code path; without a warmup the first measured samples
+# rank a language's compiler, not its server. BenchmarkDotNet separates
+# warmup from measurement for the same reason.
+WARMUP_REQUESTS="${WARMUP_REQUESTS:-25}"
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
 CERT_DIR="${CERT_DIR:-$REPO_ROOT/benchmarks/shared}"
 TESTER="${TESTER:-$REPO_ROOT/target/release/networker-tester}"
@@ -123,6 +130,24 @@ start_server() {
     esac
 }
 
+# Issue WARMUP_REQUESTS discarded requests against one workload URL so the
+# measured samples see a warmed JIT/opcache/allocator, not first-contact
+# compilation. Fresh connection per request (matching how the tester
+# measures); failures ignored — a warmup must never fail the run.
+warmup_workload() {
+    local method="$1" url="$2" body_file="$3" ctype="$4"
+    local w=0
+    while [ "$w" -lt "$WARMUP_REQUESTS" ]; do
+        if [ "$method" = "POST" ]; then
+            curl -sk --max-time 10 -X POST -H "Content-Type: $ctype" \
+                --data-binary @"$body_file" "$url" >/dev/null 2>&1 || true
+        else
+            curl -sk --max-time 10 "$url" >/dev/null 2>&1 || true
+        fi
+        w=$((w + 1))
+    done
+}
+
 # Measure the apibench workload suite (benchmarks/configs/apibench.json) —
 # the spec-measured /api/* endpoints (API-SPEC.md §4). /health is
 # constant-work by spec and MUST NOT be ranked (audit F4), so it is only used
@@ -138,6 +163,7 @@ run_benchmark() {
     if [ "$LANG" = "nginx" ]; then
         echo "NOTE: nginx serves no /api/* endpoints — health smoke only (not ranked)" >&2
         local outfile="$RESULTS_DIR/${LANG}-health-smoke.json"
+        warmup_workload GET "https://localhost:$PORT/health" "" ""
         "$TESTER" \
             --target "https://localhost:$PORT/health" \
             --modes http1 \
@@ -168,7 +194,7 @@ run_benchmark() {
         path=$(jq -r ".workloads[$i].path" "$config")
         outfile="$RESULTS_DIR/${LANG}-${name}.json"
 
-        echo "Workload $name: $method $path" >&2
+        echo "Workload $name: $method $path (warmup $WARMUP_REQUESTS, measured $RUNS)" >&2
         if [ "$method" = "POST" ]; then
             body=$(jq -r ".workloads[$i].body" "$config")
             ctype=$(jq -r ".workloads[$i].content_type // \"application/json\"" "$config")
@@ -176,6 +202,7 @@ run_benchmark() {
             # printf (not jq > file) so the body bytes are exact — no
             # trailing newline that would change content-length/checksums.
             printf '%s' "$body" > "$body_file"
+            warmup_workload POST "https://localhost:$PORT$path" "$body_file" "$ctype"
             "$TESTER" \
                 --target "https://localhost:$PORT$path" \
                 --modes http1 \
@@ -188,6 +215,7 @@ run_benchmark() {
                 > "$outfile" 2>/dev/null
             rm -f "$body_file"
         else
+            warmup_workload GET "https://localhost:$PORT$path" "" ""
             "$TESTER" \
                 --target "https://localhost:$PORT$path" \
                 --modes http1 \
