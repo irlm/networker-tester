@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import { EmptyState } from '../components/common/EmptyState';
 import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { api } from '../api/client';
 import type { BenchmarkLeaderboardEntry, BenchmarkRun, GroupedLeaderboard } from '../api/types';
@@ -140,9 +141,10 @@ function GroupedTab() {
 
       {/* Chart */}
       {hboxGroups.length === 0 ? (
-        <div className="text-center text-gray-400 py-16">
-          No benchmark data yet
-        </div>
+        <EmptyState
+          message="No benchmark data yet"
+          detail="Run a full-stack or application benchmark and the ranked results land here."
+        />
       ) : (
         <div className="bg-[#0d1117] border border-gray-800 rounded p-4">
           <HorizontalBoxWhiskerChart

@@ -63,7 +63,6 @@ const BenchmarkConfigResultsPage = lazyPage(() => import('./pages/BenchmarkConfi
 const BenchmarkRegressionsPage = lazyPage(() => import('./pages/BenchmarkRegressionsPage'), 'BenchmarkRegressionsPage');
 const ValueReportPage = lazyPage(() => import('./pages/ValueReportPage'), 'ValueReportPage');
 const BenchTokensPage = lazyPage(() => import('./pages/BenchTokensPage'), 'BenchTokensPage');
-const BenchTokenHistoryPage = lazyPage(() => import('./pages/BenchTokenHistoryPage'), 'BenchTokenHistoryPage');
 const NetworkTestPage = lazyPage(() => import('./pages/NetworkTestPage'), 'NetworkTestPage');
 const TlsProfilesPage = lazyPage(() => import('./pages/TlsProfilesPage'), 'TlsProfilesPage');
 const TlsProfileDetailPage = lazyPage(() => import('./pages/TlsProfileDetailPage'), 'TlsProfileDetailPage');
@@ -299,7 +298,8 @@ function AuthenticatedApp() {
             {isPlatformAdmin && <Route path="/admin/system" element={<SystemDashboardPage />} />}
             {isPlatformAdmin && <Route path="/admin/perf-log" element={<PerfLogPage />} />}
             {isPlatformAdmin && <Route path="/bench-tokens" element={<BenchTokensPage />} />}
-            {isPlatformAdmin && <Route path="/bench-tokens/history" element={<BenchTokenHistoryPage />} />}
+            {/* Token history merged into the tokens page as a tab (UI-3). */}
+            {isPlatformAdmin && <Route path="/bench-tokens/history" element={<Navigate to="/bench-tokens?tab=history" replace />} />}
             {isAdmin && <Route path="/users" element={<UsersPage />} />}
             <Route path="/change-password" element={<ChangePasswordPage />} />
             <Route path="/pending" element={<PendingPage />} />

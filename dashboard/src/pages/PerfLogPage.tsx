@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useRef } from 'react';
+import { KpiTile } from '../components/common/KpiTile';
 import { rampTextClass } from '../lib/severity';
 import { api, errorMessage } from '../api/client';
 import type { PerfLogRow, PerfLogStats } from '../api/types';
@@ -23,15 +24,7 @@ function renderSpeedColor(ms: number | null | undefined): string {
   return rampTextClass(ms, { mid: 16, high: 50, breach: 100 });
 }
 
-function StatCard({ label, value, color, sub }: { label: string; value: string; color: string; sub?: string }) {
-  return (
-    <div className="bg-[var(--bg-surface)] border border-gray-800 rounded-lg p-4">
-      <p className="text-[10px] text-gray-400 tracking-wider uppercase mb-1">{label}</p>
-      <p className={`text-2xl font-mono font-bold ${color}`}>{value}</p>
-      {sub && <p className="text-xs text-gray-500 mt-1">{sub}</p>}
-    </div>
-  );
-}
+
 
 const PAGE_SIZE = 50;
 
@@ -287,48 +280,46 @@ export function PerfLogPage() {
         <div className="space-y-6">
           {/* Summary cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <StatCard
+            <KpiTile
               label="API Requests"
               value={String(stats.api_count)}
-              color="text-cyan-400"
+              health="info"
               sub={`${stats.slow_api_count} slow (>200ms)`}
             />
-            <StatCard
+            <KpiTile
               label="Avg Total"
               value={formatMs(stats.avg_total_ms)}
-              color={speedColor(stats.avg_total_ms)}
+              valueClass={speedColor(stats.avg_total_ms)}
               sub={`P95: ${formatMs(stats.p95_total_ms)}`}
             />
-            <StatCard
+            <KpiTile
               label="Renders"
               value={String(stats.render_count)}
-              color="text-green-400"
+              health={stats.janky_render_count > 0 ? 'warn' : 'ok'}
               sub={`${stats.janky_render_count} janky (>16ms)`}
             />
-            <StatCard
+            <KpiTile
               label="Avg Render"
               value={formatMs(stats.avg_render_ms)}
-              color={renderSpeedColor(stats.avg_render_ms)}
+              valueClass={renderSpeedColor(stats.avg_render_ms)}
               sub={`P95: ${formatMs(stats.p95_render_ms)}`}
             />
           </div>
 
           {/* Breakdown */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <StatCard
+            <KpiTile
               label="Avg Server Time"
               value={formatMs(stats.avg_server_ms)}
-              color="text-cyan-400"
+              health="info"
             />
-            <StatCard
+            <KpiTile
               label="Avg Network Time"
               value={stats.avg_total_ms && stats.avg_server_ms ? formatMs(stats.avg_total_ms - stats.avg_server_ms) : '-'}
-              color="text-purple-400"
             />
-            <StatCard
+            <KpiTile
               label="Server % of Total"
               value={stats.avg_total_ms && stats.avg_server_ms ? `${((stats.avg_server_ms / stats.avg_total_ms) * 100).toFixed(0)}%` : '-'}
-              color="text-gray-300"
             />
           </div>
 

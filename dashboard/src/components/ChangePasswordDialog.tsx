@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState } from 'react';
 import { api } from '../api/client';
 import { useAuthStore } from '../stores/authStore';
+import { Modal } from './common/Modal';
 
 interface ChangePasswordDialogProps {
   onClose: () => void;
@@ -14,19 +15,6 @@ export function ChangePasswordDialog({ onClose }: ChangePasswordDialogProps) {
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const clearPasswordChange = useAuthStore((s) => s.clearPasswordChange);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
-
-  useEffect(() => {
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', handleEscape);
-    return () => document.removeEventListener('keydown', handleEscape);
-  }, [onClose]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -61,14 +49,7 @@ export function ChangePasswordDialog({ onClose }: ChangePasswordDialogProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
-      <div
-        className="bg-[var(--bg-surface)] border border-gray-800 rounded-lg w-full max-w-sm p-6"
-        onClick={e => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="change-pw-title"
-      >
+    <Modal onClose={onClose} labelledBy="change-pw-title" maxWidth="max-w-sm">
         <div className="flex items-center justify-between mb-5">
           <h2 id="change-pw-title" className="text-sm font-semibold text-gray-200">Change password</h2>
           <button
@@ -99,7 +80,6 @@ export function ChangePasswordDialog({ onClose }: ChangePasswordDialogProps) {
                 Current password
               </label>
               <input
-                ref={inputRef}
                 id="dlg-current-password"
                 type="password"
                 value={currentPassword}
@@ -156,7 +136,6 @@ export function ChangePasswordDialog({ onClose }: ChangePasswordDialogProps) {
             </div>
           </form>
         )}
-      </div>
-    </div>
+    </Modal>
   );
 }

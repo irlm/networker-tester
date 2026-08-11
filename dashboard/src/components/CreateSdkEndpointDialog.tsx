@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { api, errorMessage } from '../api/client';
 import { useToast } from '../hooks/useToast';
+import { Modal } from './common/Modal';
 
 interface CreateSdkEndpointDialogProps {
   projectId: string;
@@ -34,21 +35,7 @@ export function CreateSdkEndpointDialog({ projectId, onClose, onCreated }: Creat
   const [description, setDescription] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const firstInputRef = useRef<HTMLInputElement>(null);
   const addToast = useToast();
-
-  useEffect(() => {
-    firstInputRef.current?.focus();
-  }, []);
-
-  // Escape closes — matches every other slide-over dialog.
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [onClose]);
 
   // Client-side validation so the user gets an inline message before the POST.
   const trimmedName = name.trim();
@@ -90,14 +77,7 @@ export function CreateSdkEndpointDialog({ projectId, onClose, onCreated }: Creat
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-black/40 slide-over-backdrop" onClick={onClose} aria-hidden="true" />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="create-sdk-endpoint-title"
-        className="relative w-full md:w-[520px] md:max-w-[90vw] bg-[var(--bg-base)] md:border-l border-gray-800 h-full overflow-y-auto slide-over-panel"
-      >
+    <Modal onClose={onClose} labelledBy="create-sdk-endpoint-title" variant="slide-over">
         <form onSubmit={handleSubmit} className="p-4 md:p-6">
           <div className="flex items-center justify-between mb-2">
             <h3 id="create-sdk-endpoint-title" className="text-lg font-bold text-gray-100">Register SDK endpoint</h3>
@@ -113,7 +93,6 @@ export function CreateSdkEndpointDialog({ projectId, onClose, onCreated }: Creat
           <label htmlFor="sdk-name" className="block text-xs text-gray-400 mb-1">Name</label>
           <input
             id="sdk-name"
-            ref={firstInputRef}
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Checkout API (prod)"
@@ -183,7 +162,6 @@ export function CreateSdkEndpointDialog({ projectId, onClose, onCreated }: Creat
             </button>
           </div>
         </form>
-      </div>
-    </div>
+    </Modal>
   );
 }

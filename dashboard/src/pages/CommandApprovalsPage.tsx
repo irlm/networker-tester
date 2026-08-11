@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { EmptyState } from '../components/common/EmptyState';
 import { useNow } from '../hooks/useNow';
 import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { useProject } from '../hooks/useProject';
@@ -144,7 +145,7 @@ export function CommandApprovalsPage() {
         <div className="text-gray-400 text-sm py-8 text-center">Loading...</div>
       ) : tab === 'pending' ? (
         pending.length === 0 ? (
-          <div className="text-gray-400 text-sm py-8 text-center">No pending approvals</div>
+          <EmptyState compact message="No pending approvals" detail="Agent commands that need operator sign-off will appear here." />
         ) : (
           <div className="space-y-2">
             {pending.map(a => (

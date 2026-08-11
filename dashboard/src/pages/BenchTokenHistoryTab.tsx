@@ -1,10 +1,7 @@
 import { useState, useCallback, useMemo } from 'react';
-import { Link } from 'react-router';
 import { api } from '../api/client';
 import type { BenchTokenInfo } from '../api/types';
 import { usePolling } from '../hooks/usePolling';
-import { usePageTitle } from '../hooks/usePageTitle';
-import { Breadcrumb } from '../components/common/Breadcrumb';
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -73,8 +70,12 @@ const PAGE_SIZE = 10;
 
 // ── Component ───────────────────────────────────────────────────────────
 
-export function BenchTokenHistoryPage() {
-  usePageTitle('Token History');
+/**
+ * History tab of the tokens page. This was a standalone page duplicating
+ * BenchTokensPage's shell, imports, and table conventions (the survey's
+ * "one page with a status filter" finding) — merged 2026-08 UI-3 pass.
+ */
+export function BenchTokenHistoryTab() {
 
   const [tokens, setTokens] = useState<BenchTokenInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -148,31 +149,12 @@ export function BenchTokenHistoryPage() {
   };
 
   return (
-    <div className="p-4 md:p-6 max-w-6xl">
-      <Breadcrumb
-        items={[
-          { label: 'Active Tokens', to: '/bench-tokens' },
-          { label: 'History' },
-        ]}
-      />
-
-      {/* Top bar */}
-      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-        <div className="flex items-center gap-3">
-          <Link
-            to="/bench-tokens"
-            className="text-xs text-gray-400 hover:text-cyan-400 transition-colors"
-          >
-            &larr; Active Tokens
-          </Link>
-          <h1 className="text-lg font-bold text-gray-100">Token History</h1>
-          {!loading && !error && (
-            <span className="text-xs text-gray-400">
-              {filtered.length} token{filtered.length !== 1 ? 's' : ''}
-            </span>
-          )}
+    <div>
+      {!loading && !error && (
+        <div className="text-xs text-gray-400 mb-3">
+          {filtered.length} token{filtered.length !== 1 ? 's' : ''}
         </div>
-      </div>
+      )}
 
       {/* Filters row */}
       <div className="flex items-center gap-3 mb-4">

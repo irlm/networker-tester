@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { api } from '../../api/client';
 import type { AlertChannel, AlertChannelKind } from '../../api/types';
 import { useToast } from '../../hooks/useToast';
+import { Modal } from '../common/Modal';
 import { channelConfigFromForm, validateChannelForm } from './alert-form';
 
 interface ChannelDialogProps {
@@ -26,20 +27,7 @@ export function ChannelDialog({ projectId, existing, onClose, onSaved }: Channel
   const [enabled, setEnabled] = useState(existing?.enabled ?? true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const firstInputRef = useRef<HTMLInputElement>(null);
   const addToast = useToast();
-
-  useEffect(() => {
-    firstInputRef.current?.focus();
-  }, []);
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [onClose]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -79,14 +67,7 @@ export function ChannelDialog({ projectId, existing, onClose, onSaved }: Channel
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-black/40 slide-over-backdrop" onClick={onClose} aria-hidden="true" />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="alert-channel-dialog-title"
-        className="relative w-full md:w-[520px] md:max-w-[90vw] bg-[var(--bg-base)] md:border-l border-gray-800 h-full overflow-y-auto slide-over-panel"
-      >
+    <Modal onClose={onClose} labelledBy="alert-channel-dialog-title" variant="slide-over">
         {/* noValidate: alert-form.ts owns validation so errors render in the
             styled banner instead of native constraint tooltips. */}
         <form onSubmit={handleSubmit} noValidate className="p-4 md:p-6">
@@ -110,7 +91,6 @@ export function ChannelDialog({ projectId, existing, onClose, onSaved }: Channel
               <label htmlFor="channel-name" className="block text-xs text-gray-400 mb-1">Name</label>
               <input
                 id="channel-name"
-                ref={firstInputRef}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="ops hook"
@@ -197,7 +177,6 @@ export function ChannelDialog({ projectId, existing, onClose, onSaved }: Channel
             </button>
           </div>
         </form>
-      </div>
-    </div>
+    </Modal>
   );
 }
