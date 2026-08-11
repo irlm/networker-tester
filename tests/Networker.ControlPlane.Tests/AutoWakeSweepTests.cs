@@ -258,4 +258,145 @@ public class AutoWakeSweepTests
         Assert.Equal(0, prov.StartCalls);
         Assert.Equal("stopped", tester.PowerState);
     }
+    // ── Unpinned arm (2026-08-11: URL-probe class — auto-pick runs carry no
+    // TesterId, so the pinned arm never woke anything and the probe sat
+    // queued to watchdog death) ──────────────────────────────────────────
+
+    private static void SeedUnpinnedQueuedRun(NetworkerDbContext db, string projectId)
+    {
+        var now = DateTime.UtcNow;
+        if (!db.Projects.Any(p => p.ProjectId == projectId))
+        {
+            db.Projects.Add(new Project
+            {
+                ProjectId = projectId,
+                Name = "wake-u",
+                Slug = "wake-u-" + projectId[^4..],
+                Settings = "{}",
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+        }
+        var configId = Guid.NewGuid();
+        db.TestConfigs.Add(new TestConfig
+        {
+            Id = configId,
+            ProjectId = projectId,
+            Name = $"probe-cfg-{configId:N}",
+            EndpointKind = "network",
+            EndpointRef = "{}",
+            Workload = "{}",
+            MaxDurationSecs = 60,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        db.TestRuns.Add(new TestRun
+        {
+            Id = Guid.NewGuid(),
+            TestConfigId = configId,
+            ProjectId = projectId,
+            Status = "queued",
+            TesterId = null, // auto-pick — the incident shape
+            CreatedAt = now,
+        });
+        db.SaveChanges();
+    }
+
+    private static Guid SeedIdleStoppedTester(NetworkerDbContext db, string projectId, string name = "u-tester")
+    {
+        var now = DateTime.UtcNow;
+        var testerId = Guid.NewGuid();
+        db.ProjectTesters.Add(new ProjectTester
+        {
+            TesterId = testerId,
+            ProjectId = projectId,
+            Name = name,
+            Cloud = "azure",
+            Region = "eastus",
+            VmSize = "Standard_B2s",
+            SshUser = "azureuser",
+            PowerState = "stopped",
+            Allocation = "idle",
+            AutoShutdownEnabled = true,
+            AutoShutdownLocalHour = 23,
+            ShutdownDeferralCount = 0,
+            AutoProbeEnabled = false,
+            BenchmarkRunCount = 0,
+            CreatedBy = Guid.NewGuid(),
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        db.SaveChanges();
+        return testerId;
+    }
+
+    [Fact]
+    public async Task Unpinned_queued_run_with_no_online_agent_wakes_one_idle_tester()
+    {
+        const string pid = "proj-wake-unpin1";
+        var (sp, conn, prov) = BuildHost(nameof(Unpinned_queued_run_with_no_online_agent_wakes_one_idle_tester));
+        using var _ = conn;
+        Guid testerId;
+        using (var db = Db(sp))
+        {
+            SeedUnpinnedQueuedRun(db, pid);
+            testerId = SeedIdleStoppedTester(db, pid, "aaa-first");
+            SeedIdleStoppedTester(db, pid, "bbb-second");
+        }
+
+        await RunSweepOnceAsync(sp);
+
+        Assert.Equal(1, prov.StartCalls); // exactly ONE tester woken, not the fleet
+        using (var db = Db(sp))
+        {
+            Assert.Equal("starting", db.ProjectTesters.Single(t => t.TesterId == testerId).PowerState);
+            Assert.Equal("stopped", db.ProjectTesters.Single(t => t.Name == "bbb-second").PowerState);
+        }
+    }
+
+    [Fact]
+    public async Task Unpinned_queued_run_with_an_online_agent_does_not_wake()
+    {
+        const string pid = "proj-wake-unpin2";
+        var (sp, conn, prov) = BuildHost(nameof(Unpinned_queued_run_with_an_online_agent_does_not_wake));
+        using var _ = conn;
+        using (var db = Db(sp))
+        {
+            SeedUnpinnedQueuedRun(db, pid);
+            SeedIdleStoppedTester(db, pid);
+            db.Agents.Add(new Agent
+            {
+                AgentId = Guid.NewGuid(),
+                ProjectId = pid,
+                Name = "online-agent",
+                Status = "online",
+                RegisteredAt = DateTime.UtcNow,
+            });
+            db.SaveChanges();
+        }
+
+        await RunSweepOnceAsync(sp);
+
+        Assert.Equal(0, prov.StartCalls); // dispatch will handle it; no wake
+    }
+
+    [Fact]
+    public async Task Unpinned_wake_skipped_while_another_tester_is_already_starting()
+    {
+        const string pid = "proj-wake-unpin3";
+        var (sp, conn, prov) = BuildHost(nameof(Unpinned_wake_skipped_while_another_tester_is_already_starting));
+        using var _ = conn;
+        using (var db = Db(sp))
+        {
+            SeedUnpinnedQueuedRun(db, pid);
+            SeedIdleStoppedTester(db, pid);
+            var starting = SeedIdleStoppedTester(db, pid, "already-starting");
+            db.ProjectTesters.Single(t => t.TesterId == starting).PowerState = "starting";
+            db.SaveChanges();
+        }
+
+        await RunSweepOnceAsync(sp);
+
+        Assert.Equal(0, prov.StartCalls); // a wake is already in flight
+    }
 }

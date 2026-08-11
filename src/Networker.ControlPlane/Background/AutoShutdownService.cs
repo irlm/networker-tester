@@ -134,38 +134,50 @@ public sealed class AutoShutdownService : BackgroundService
         foreach (var tester in toWake)
         {
             ct.ThrowIfCancellationRequested();
-            var prior = tester.PowerState;
-            var claimed = await db.ProjectTesters
-                .Where(t => t.TesterId == tester.TesterId && t.PowerState == prior)
-                .ExecuteUpdateAsync(s => s.SetProperty(t => t.PowerState, "starting"), ct)
-                .ConfigureAwait(false);
-            if (claimed == 0)
-            {
-                continue; // raced another actor
-            }
+            await TryWakeAsync(db, provisioner, tester, "pinned queued run(s)", ct).ConfigureAwait(false);
+        }
 
-            var wakeCreds = await LoadCredentialsAsync(db, tester, ct).ConfigureAwait(false);
-            var res = await provisioner.StartAsync(tester, wakeCreds, ct).ConfigureAwait(false);
-            if (res is { Success: true } || res is { Success: false, ExitCode: null })
+        // ── Auto-wake, UNPINNED arm: auto-pick launches (URL probes, plain
+        // network tests) carry no TesterId, so the arm above never matched
+        // them — a probe launched after the nightly shutdown sat queued with
+        // no signal until the watchdog failed it (user-caught 2026-08-11).
+        // For each project with unpinned queued work and NO online agent,
+        // wake ONE stopped idle tester; the redispatcher hands the run over
+        // when its agent connects.
+        var projectsNeedingRunner = await db.TestRuns
+            .Where(r => r.Status == "queued" && r.TesterId == null)
+            .Select(r => r.ProjectId)
+            .Distinct()
+            .Where(pid => !db.Agents.Any(a => a.ProjectId == pid && a.Status == "online"))
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+        foreach (var pid in projectsNeedingRunner)
+        {
+            ct.ThrowIfCancellationRequested();
+            // Anything already starting? Then a wake is in flight — don't
+            // start a second VM for the same queue.
+            var alreadyWaking = await db.ProjectTesters
+                .AnyAsync(t => t.ProjectId == pid && t.PowerState == "starting", ct)
+                .ConfigureAwait(false);
+            if (alreadyWaking)
             {
-                // Started (or soft-failed on a CLI-less host — same convergence
-                // posture as the deallocate path). Heartbeat completes the flip.
-                _logger.LogInformation(
-                    "Auto-wake: started {Name} ({TesterId}) — {Count} queued run(s) waiting",
-                    tester.Name, tester.TesterId,
-                    await db.TestRuns.CountAsync(r => r.TesterId == tester.TesterId && r.Status == "queued", ct)
-                        .ConfigureAwait(false));
+                continue;
             }
-            else
+            var candidate = await db.ProjectTesters
+                .Where(t => t.ProjectId == pid
+                    && (t.PowerState == "stopped" || t.PowerState == "deallocated")
+                    && t.Allocation == "idle")
+                .OrderBy(t => t.Name)
+                .FirstOrDefaultAsync(ct)
+                .ConfigureAwait(false);
+            if (candidate is null)
             {
-                await db.ProjectTesters
-                    .Where(t => t.TesterId == tester.TesterId && t.PowerState == "starting")
-                    .ExecuteUpdateAsync(s => s.SetProperty(t => t.PowerState, prior), ct)
-                    .ConfigureAwait(false);
                 _logger.LogWarning(
-                    "Auto-wake failed for {Name} ({TesterId}): {Err}",
-                    tester.Name, tester.TesterId, res.Error ?? res.StdErr);
+                    "Project {ProjectId} has unpinned queued run(s), no online agent, and no wakeable tester — runs will sit until the watchdog cutoff",
+                    pid);
+                continue;
             }
+            await TryWakeAsync(db, provisioner, candidate, "unpinned queued run(s), no online agent", ct).ConfigureAwait(false);
         }
 
         // Shutdown condition — the LINQ equivalent of the Rust sweep SQL:
@@ -453,5 +465,48 @@ public sealed class AutoShutdownService : BackgroundService
         }
 
         return new ProviderCredentials(conn.Provider, sub, rg, region, extra);
+    }
+    /// <summary>
+    /// Guarded single-tester wake: CAS power_state → 'starting', call the
+    /// provisioner, roll back on hard failure. Shared by the pinned and
+    /// unpinned auto-wake arms.
+    /// </summary>
+    private async Task TryWakeAsync(
+        NetworkerDbContext db,
+        IComputeProvisioner provisioner,
+        Networker.Data.Entities.ProjectTester tester,
+        string reason,
+        CancellationToken ct)
+    {
+        var prior = tester.PowerState;
+        var claimed = await db.ProjectTesters
+            .Where(t => t.TesterId == tester.TesterId && t.PowerState == prior)
+            .ExecuteUpdateAsync(s => s.SetProperty(t => t.PowerState, "starting"), ct)
+            .ConfigureAwait(false);
+        if (claimed == 0)
+        {
+            return; // raced another actor
+        }
+
+        var wakeCreds = await LoadCredentialsAsync(db, tester, ct).ConfigureAwait(false);
+        var res = await provisioner.StartAsync(tester, wakeCreds, ct).ConfigureAwait(false);
+        if (res is { Success: true } || res is { Success: false, ExitCode: null })
+        {
+            // Started (or soft-failed on a CLI-less host — same convergence
+            // posture as the deallocate path). Heartbeat completes the flip.
+            _logger.LogInformation(
+                "Auto-wake: started {Name} ({TesterId}) — {Reason}",
+                tester.Name, tester.TesterId, reason);
+        }
+        else
+        {
+            await db.ProjectTesters
+                .Where(t => t.TesterId == tester.TesterId && t.PowerState == "starting")
+                .ExecuteUpdateAsync(s => s.SetProperty(t => t.PowerState, prior), ct)
+                .ConfigureAwait(false);
+            _logger.LogWarning(
+                "Auto-wake failed for {Name} ({TesterId}): {Err}",
+                tester.Name, tester.TesterId, res.Error ?? res.StdErr);
+        }
     }
 }

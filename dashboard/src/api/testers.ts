@@ -17,6 +17,7 @@ export type PowerState =
   | 'running'
   | 'stopping'
   | 'stopped'
+  | 'deallocated'
   | 'upgrading'
   | 'error';
 

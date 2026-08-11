@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.191] - 2026-08-11
+
+### Fixed
+- **A URL probe launched with no runner online queued silently until the
+  watchdog failed it** (user-caught: a microsoft.com probe stuck at
+  "queued" with all runners shut down). The auto-wake only matched runs
+  PINNED to a tester; auto-pick launches (probes, plain network tests)
+  carry no tester id and never woke anything. The sweep now has an
+  unpinned arm: any project with unpinned queued runs and zero online
+  agents wakes exactly ONE stopped idle tester (skipped while another is
+  already starting; ≤60s pickup at the sweep cadence).
+
+### Added
+- **Runner-availability banner on the URL Probe page**: when no runner
+  is online it says so immediately — waking (name + ETA), wakeable
+  (with a "Start now" button), or none at all ("Deploy a runner →").
+  Healthy state renders nothing.
+- `PowerState` frontend union gains `deallocated` (the backend has
+  written it since the deallocate path shipped; the type was stale).
+
+---
+
 ## [0.28.190] - 2026-08-11
 
 ### Fixed
