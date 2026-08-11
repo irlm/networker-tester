@@ -224,8 +224,13 @@ export function RunDetailPage() {
     );
   }
 
-  const successCount = attempts.filter((a) => a.success).length;
-  const failureCount = attempts.length - successCount;
+  // Attempt rows can be absent for a run that really happened (retention
+  // pruning, ingest-only runs) — the run row still carries its counts. Fall
+  // back so the header never claims "0 attempts" about a 20/20 run.
+  const attemptsMissing = attempts.length === 0 && !!run && (run.success_count + run.failure_count) > 0;
+  const successCount = attemptsMissing ? run.success_count : attempts.filter((a) => a.success).length;
+  const failureCount = attemptsMissing ? run.failure_count : attempts.length - successCount;
+  const probeCount = attemptsMissing ? run.success_count + run.failure_count : attempts.length;
 
   return (
     <div className="p-4 md:p-6">
@@ -244,7 +249,7 @@ export function RunDetailPage() {
           <p className="text-sm text-gray-400">
             {run?.config_name && <>Config: <span className="text-gray-300">{run.config_name}</span> · </>}
             {run?.modes && <>Modes: <span className="text-gray-300">{run.modes.join(', ')}</span> · </>}
-            {attempts.length} attempts
+            {probeCount} attempts{attemptsMissing ? ' (summary only)' : ''}
           </p>
           {/* Run-envelope context (V046 pass-through) — data-gated: old runs
               have no envelope and render nothing here. */}
@@ -292,7 +297,7 @@ export function RunDetailPage() {
       {/* Inline metrics */}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1 py-3 mb-6 text-xs border-b border-gray-800/50">
         <span className="text-gray-400">
-          Probes <span className="text-gray-200 font-mono font-semibold ml-1">{attempts.length}</span>
+          Probes <span className="text-gray-200 font-mono font-semibold ml-1">{probeCount}</span>
         </span>
         <span className="text-gray-400">
           Success <span className="text-green-400 font-mono font-semibold ml-1">{successCount}</span>
@@ -301,8 +306,8 @@ export function RunDetailPage() {
           Failed <span className={`font-mono font-semibold ml-1 ${failureCount > 0 ? 'text-red-400' : 'text-gray-500'}`}>{failureCount}</span>
         </span>
         <span className="text-gray-400">
-          Rate <span className={`font-mono font-semibold ml-1 ${successRateClass(attempts.length > 0 ? (successCount / attempts.length) * 100 : 100)}`}>
-            {attempts.length > 0 ? `${((successCount / attempts.length) * 100).toFixed(0)}%` : '-'}
+          Rate <span className={`font-mono font-semibold ml-1 ${successRateClass(probeCount > 0 ? (successCount / probeCount) * 100 : 100)}`}>
+            {probeCount > 0 ? `${((successCount / probeCount) * 100).toFixed(0)}%` : '-'}
           </span>
         </span>
       </div>
@@ -480,6 +485,18 @@ export function RunDetailPage() {
 
       {/* ── Attempts by Protocol (collapsible) ── */}
       <h3 className="text-xs text-gray-400 tracking-wider mb-3 font-medium">probe details</h3>
+      {!loading && !attemptsError && attempts.length === 0 && (
+        <div className="border border-gray-800 rounded p-6 text-center mb-2">
+          <p className="text-gray-400 text-sm mb-1">
+            {attemptsMissing ? 'Per-attempt detail is no longer stored for this run' : 'No attempts recorded'}
+          </p>
+          <p className="text-gray-500 text-xs">
+            {attemptsMissing
+              ? 'The summary above reflects the run\u2019s recorded totals; individual probe rows were pruned or never ingested.'
+              : 'The run finished without producing any probe attempts.'}
+          </p>
+        </div>
+      )}
       {attemptsError && attempts.length === 0 && (
         <div className="border border-gray-800 rounded p-6 text-center mb-2">
           <p className="text-gray-400 text-sm mb-1">Attempt data unavailable</p>
@@ -579,7 +596,10 @@ function ArtifactSection({ artifact }: { artifact: BenchmarkArtifact }) {
               </span>
             </span>
             <span className="text-gray-400">
-              Sufficiency: <span className={artifact.data_quality.sufficiency === 'sufficient' ? 'text-green-400' : 'text-yellow-400'}>
+              {/* Artifact vocabulary is adequate/marginal/insufficient
+                  (json.rs) — this compared against 'sufficient' and painted
+                  every healthy run yellow. */}
+              Sufficiency: <span className={artifact.data_quality.sufficiency === 'adequate' ? 'text-green-400' : 'text-yellow-400'}>
                 {artifact.data_quality.sufficiency}
               </span>
             </span>
@@ -594,7 +614,7 @@ function ArtifactSection({ artifact }: { artifact: BenchmarkArtifact }) {
               </span>
             )}
           </div>
-          {artifact.data_quality.warnings.length > 0 && (
+          {(artifact.data_quality.warnings?.length ?? 0) > 0 && (
             <div className="mt-2 space-y-1">
               {artifact.data_quality.warnings.map((w, i) => (
                 <p key={i} className="text-yellow-400/80">&#9888; {w}</p>

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNow } from '../hooks/useNow';
-import { useSearchParams } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { api } from '../api/client';
 import { testersApi, type TesterRow } from '../api/testers';
 import type { EndpointRef, TestConfig, TestConfigCreate, TestConfigListItem, TestRun, Workload } from '../api/types';
@@ -843,6 +843,12 @@ export function DiagnosticsPage() {
           <h1 className="text-[22px] font-semibold text-gray-200 tracking-tight">URL Probe</h1>
           <p className="text-xs text-gray-400 mt-1">Discover what features a URL supports — protocols, TLS, certificates, ALPN.</p>
         </div>
+        <Link
+          to={`/projects/${projectId}/tls-profiles`}
+          className="text-xs text-gray-400 hover:text-cyan-400 transition-colors whitespace-nowrap mt-1"
+        >
+          TLS profiles →
+        </Link>
       </div>
 
       {/* Probe input bar */}

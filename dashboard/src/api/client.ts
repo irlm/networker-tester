@@ -489,7 +489,6 @@ export const api = {
       Array.isArray(r) ? r : (r?.agents ?? [])
     ),
 
-  getJob: (projectId: string, jobId: string) => request<Job>(projectUrl(projectId, `jobs/${jobId}`)),
 
   createJob: (projectId: string, config: JobConfig, agentId?: string) =>
     request<{ job_id: string; status: string }>(projectUrl(projectId, 'jobs'), {
@@ -497,8 +496,6 @@ export const api = {
       body: JSON.stringify({ config, agent_id: agentId }),
     }),
 
-  cancelJob: (projectId: string, jobId: string) =>
-    request<{ status: string }>(projectUrl(projectId, `jobs/${jobId}/cancel`), { method: 'POST' }),
 
   getRun: (projectId: string, runId: string) =>
     request<{

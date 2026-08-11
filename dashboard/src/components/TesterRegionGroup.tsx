@@ -37,6 +37,11 @@ function runnerState(
   if (q?.running || t.allocation === 'locked' || t.allocation === 'upgrading') {
     return { badge: 'busy', label: 'busy' };
   }
+  // Powered on but no agent connected: never call it idle — nothing is
+  // listening for jobs. Mirrors runnerStatus() on InfrastructurePage.
+  if (t.agent_status !== 'online') {
+    return { badge: 'failed', label: 'unreachable' };
+  }
   return { badge: 'online', label: 'idle' };
 }
 

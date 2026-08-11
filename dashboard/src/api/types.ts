@@ -169,7 +169,7 @@ export interface ComparisonGroup {
   created_at: string;
 }
 
-// ── Legacy type aliases (used by out-of-scope pages: DashboardPage, JobDetailPage) ──
+// ── Legacy type aliases (kept for API-shape compatibility) ──
 
 export interface Agent {
   agent_id: string;
