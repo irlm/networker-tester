@@ -50,14 +50,24 @@ public static class SystemHealthEndpoints
                 return Results.StatusCode(StatusCodes.Status403Forbidden);
             }
 
-            // latest_all: DISTINCT ON (check_name) ordered by check_name,
-            // checked_at DESC — i.e. the most recent row per check_name.
-            var latest = await db.SystemHealths
+            // latest_all: the most recent row per check_name. Expressed as
+            // max-per-group + join rather than GroupBy(...).First(): the
+            // First-per-group shape hit EF Core 10.0.0's concurrent
+            // first-compilation defect in prod (KeyNotFoundException:
+            // 'EmptyProjectionMember' when parallel cold requests raced the
+            // query cache after a deploy — 2026-08-11 incident). The
+            // aggregate+join shape avoids that translation path entirely.
+            var latestTimes = db.SystemHealths
                 .AsNoTracking()
                 .GroupBy(h => h.CheckName)
-                .Select(g => g
-                    .OrderByDescending(h => h.CheckedAt)
-                    .First())
+                .Select(g => new { CheckName = g.Key, MaxAt = g.Max(h => h.CheckedAt) });
+            var latest = await db.SystemHealths
+                .AsNoTracking()
+                .Join(
+                    latestTimes,
+                    h => new { h.CheckName, MaxAt = h.CheckedAt },
+                    t => new { t.CheckName, t.MaxAt },
+                    (h, _) => h)
                 .OrderBy(h => h.CheckName)
                 .ToListAsync(ct);
 
