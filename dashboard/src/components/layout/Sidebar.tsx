@@ -7,6 +7,7 @@ import { NotificationBell } from '../NotificationBell';
 import { HelpHint } from '../docs/HelpHint';
 import { ChangePasswordDialog } from '../ChangePasswordDialog';
 import { api } from '../../api/client';
+import { NAV_ENTRIES, navEntryVisible, resolveNavPath } from './nav-config';
 
 interface NavItem {
   path: string;
@@ -36,70 +37,40 @@ export function Sidebar({ connectionDot }: SidebarProps) {
 
   // ── Nav items ───────────────────────────────────────────────────────
   //
-  // Three test-category groups plus the Dashboard/Infrastructure core and
-  // Runs/Schedules tail. Group headers (── PROBE ──, ── BENCHMARKS ──)
-  // carry the category so child labels can be terse: "URL" under PROBE
-  // reads as "URL Probe"; "Application" under BENCHMARKS reads as
-  // "Application Benchmark". Avoids suffix repetition. See sidebar-v3
-  // mockup iteration 3.
+  // The list itself lives in nav-config.ts (shared with the `/` palette
+  // and the g-key jumps). This component only resolves paths, applies
+  // role gates, and attaches page-specific badges.
 
-  const mainItems: NavItem[] = pid ? [
-    { path: `/projects/${pid}`, label: 'Dashboard', icon: '\u25C8', exact: true },
-    // Scenario launcher \u2014 the recommended starting point: pick an outcome,
-    // land in the right pre-filled flow (probe / network / benchmarks below).
-    { path: `/projects/${pid}/scenarios`, label: 'New Test', icon: '\u2605' },
-    { path: `/projects/${pid}/vms`, label: 'Infrastructure', icon: '\u25A3' },
-  ] : [];
+  const gateCtx = { pid: pid ?? null, isAdmin, isPlatformAdmin };
+  const toItem = (entry: (typeof NAV_ENTRIES)[number]): NavItem => ({
+    path: resolveNavPath(entry.path, pid ?? null) ?? entry.path,
+    label: entry.label,
+    icon: entry.icon,
+    exact: entry.exact,
+  });
 
-  const probeItems: NavItem[] = pid ? [
-    // Label matches the page title exactly ("URL Probe") \u2014 audit \u00a76.
-    { path: `/projects/${pid}/probe`, label: 'URL Probe', icon: '\u2713' },
-  ] : [];
+  const mainItems: NavItem[] = NAV_ENTRIES
+    .filter(e => e.section === 'main' && navEntryVisible(e, gateCtx))
+    .map(toItem);
 
-  const benchmarkItems: NavItem[] = pid ? [
-    { path: `/projects/${pid}/tests/new`, label: 'Network', icon: '\u25B7', exact: true },
-    { path: `/projects/${pid}/benchmarks/full-stack/new`, label: 'Full Stack', icon: '\u25A4', exact: true },
-    { path: `/projects/${pid}/benchmarks/application/new`, label: 'Application', icon: '\u25A5', exact: true },
-  ] : [];
+  const reportItems: NavItem[] = NAV_ENTRIES
+    .filter(e => e.section === 'reports' && navEntryVisible(e, gateCtx))
+    .map(toItem);
 
-  // \u2500\u2500 SDK \u2500\u2500 group (LagHound SDK endpoints + the app-network report).
-  // "Endpoints" reads as "SDK Endpoints"; "App Network" is the sellable
-  // Application Network Performance report. Both member-visible.
-  const sdkItems: NavItem[] = pid ? [
-    { path: `/projects/${pid}/sdk-endpoints`, label: 'Endpoints', icon: '\u2726' },
-    { path: `/projects/${pid}/reports/app-network`, label: 'App Network', icon: '\u25D0' },
-  ] : [];
+  // Project settings: project-scoped and member-visible, so it sits on its
+  // own above the platform ADMIN section rather than inside it.
+  const settingsItems: NavItem[] = pid ? [{
+    path: `/projects/${pid}/settings`,
+    label: 'Settings',
+    icon: '\u2699',
+    badge: isProjectAdmin ? <NotificationBell projectId={pid} /> : undefined,
+  }] : [];
 
-  const tailItems: NavItem[] = pid ? [
-    { path: `/projects/${pid}/runs`, label: 'Runs', icon: '\u25B6' },
-    // Provider performance-per-cost report \u2014 "Value" in the runs/reports tail.
-    { path: `/projects/${pid}/reports/value`, label: 'Value', icon: '$' },
-    { path: `/projects/${pid}/schedules`, label: 'Schedules', icon: '\u21BB' },
-    { path: `/projects/${pid}/alerts`, label: 'Alerts', icon: '\u26A0' },
-  ] : [];
+  const adminItems: NavItem[] = NAV_ENTRIES
+    .filter(e => e.section === 'admin' && navEntryVisible(e, gateCtx))
+    .map(toItem);
 
-  const adminItems: NavItem[] = [];
-  if (isPlatformAdmin) {
-    // \u25a6 instead of \u2318 \u2014 the command glyph is macOS-specific (audit \u00a712).
-    adminItems.push({ path: '/admin/system', label: 'System', icon: '\u25a6' });
-    adminItems.push({ path: '/bench-tokens', label: 'Tokens', icon: '\u26BF' });
-    adminItems.push({ path: '/admin/perf-log', label: 'Perf Log', icon: '\u23F1' });
-  }
-  if (isAdmin) {
-    adminItems.push({ path: '/users', label: 'Users', icon: '\u265F' });
-  }
-  if (pid) {
-    adminItems.push({
-      path: `/projects/${pid}/settings`,
-      label: 'Settings',
-      icon: '\u2699',
-      badge: isProjectAdmin && pid ? <NotificationBell projectId={pid} /> : undefined,
-    });
-  }
-
-  // Keep Leaderboard, Runtimes, Regressions accessible but hidden from
-  // sidebar — they're linked from Full Stack / Application pages instead.
-  void isOperator; // suppress unused warning
+  void isOperator; // role available for future gating; nav is member-uniform today
 
   // ── Pending user count (admin only) ─────────────────────────────────
 
@@ -203,53 +174,29 @@ export function Sidebar({ connectionDot }: SidebarProps) {
         </div>
 
         <nav className="flex-1 p-1.5 overflow-y-auto" aria-label="Main navigation">
-          {/* Core items */}
+          {/* Main working loop */}
           {mainItems.map(renderItem)}
 
-          {/* ── PROBE ── group (URL capability discovery) */}
-          {probeItems.length > 0 && (
-            <div className="mt-4">
-              {!collapsed && (
-                <div className="px-3 mb-1 text-[10px] uppercase tracking-wider text-gray-500">
-                  probe
-                </div>
-              )}
-              {probeItems.map(renderItem)}
-            </div>
-          )}
-
-          {/* ── BENCHMARKS ── group (Network / Stack / Application) */}
-          {benchmarkItems.length > 0 && (
-            <div className="mt-4">
-              {!collapsed && (
-                <div className="px-3 mb-1 text-[10px] uppercase tracking-wider text-gray-500">
-                  benchmarks
-                </div>
-              )}
-              {benchmarkItems.map(renderItem)}
-            </div>
-          )}
-
-          {/* ── SDK ── group (LagHound endpoints + App Network report) */}
-          {sdkItems.length > 0 && (
-            <div className="mt-4">
-              {!collapsed && (
-                <div className="px-3 mb-1 text-[10px] uppercase tracking-wider text-gray-500">
-                  sdk
-                </div>
-              )}
-              {sdkItems.map(renderItem)}
-            </div>
-          )}
-
-          {/* Tail items — Runs / Schedules are the output/observing surfaces */}
-          {tailItems.length > 0 && (
+          {/* ── REPORTS ── derived/analysis views over finished runs */}
+          {reportItems.length > 0 && (
             <div className="mt-4 pt-3 border-t border-gray-800/50">
-              {tailItems.map(renderItem)}
+              {!collapsed && (
+                <div className="px-3 mb-1 text-[10px] uppercase tracking-wider text-gray-500">
+                  reports
+                </div>
+              )}
+              {reportItems.map(renderItem)}
             </div>
           )}
 
-          {/* Admin section — collapsible */}
+          {/* Project settings — project scope, outside the platform ADMIN group */}
+          {settingsItems.length > 0 && (
+            <div className="mt-4 pt-3 border-t border-gray-800/50">
+              {settingsItems.map(renderItem)}
+            </div>
+          )}
+
+          {/* Admin section — platform scope, collapsible */}
           {adminItems.length > 0 && (
             <div className="mt-4 pt-3 border-t border-gray-800/50">
               {!collapsed && (

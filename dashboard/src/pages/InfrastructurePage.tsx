@@ -132,6 +132,11 @@ function runnerStatus(row: TesterRow): RunnerStatus {
   if (row.power_state === 'starting' || row.power_state === 'provisioning' || row.power_state === 'upgrading') {
     return 'busy';
   }
+  // A powered-on VM whose agent is not connected is not "ready" — it is a
+  // problem. This is what reconciles the Dashboard's "runners online"
+  // (agent connection) with this page's READY count: idle now implies the
+  // agent is actually listening (2026-08 UI pass).
+  if (row.agent_status !== 'online') return 'error';
   return 'idle';
 }
 
@@ -337,10 +342,18 @@ export function InfrastructurePage() {
 
   return (
     <div className="p-4 md:p-6 max-w-6xl mx-auto">
-      <PageHeader
-        title="Infrastructure"
-        subtitle="Runners do the work; targets are what they probe."
-      />
+      <div className="flex items-start justify-between">
+        <PageHeader
+          title="Infrastructure"
+          subtitle="Runners do the work; targets are what they probe."
+        />
+        <Link
+          to={`/projects/${projectId}/benchmark-catalog`}
+          className="text-xs text-gray-400 hover:text-cyan-400 transition-colors whitespace-nowrap mt-1"
+        >
+          VM catalog →
+        </Link>
+      </div>
 
       {error && (
         <div role="alert" className="bg-red-500/10 border border-red-500/30 rounded p-3 mb-4">

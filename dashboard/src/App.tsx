@@ -6,6 +6,7 @@ import { useDocsStore } from './stores/docsStore';
 import { api } from './api/client';
 import { useWebSocket, type ConnectionStatus } from './hooks/useWebSocket';
 import { useHotkey } from './hooks/useHotkey';
+import { useGoKeys } from './hooks/useGoKeys';
 import { Sidebar } from './components/layout/Sidebar';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ToastContainer } from './components/common/Toast';
@@ -33,10 +34,8 @@ const ForgotPasswordPage = lazyPage(() => import('./pages/ForgotPasswordPage'), 
 const ResetPasswordPage = lazyPage(() => import('./pages/ResetPasswordPage'), 'ResetPasswordPage');
 const ChangePasswordPage = lazyPage(() => import('./pages/ChangePasswordPage'), 'ChangePasswordPage');
 const DashboardPage = lazyPage(() => import('./pages/DashboardPage'), 'DashboardPage');
-const JobDetailPage = lazyPage(() => import('./pages/JobDetailPage'), 'JobDetailPage');
 const RunsPage = lazyPage(() => import('./pages/RunsPage'), 'RunsPage');
 const RunDetailPage = lazyPage(() => import('./pages/RunDetailPage'), 'RunDetailPage');
-const NewRunPage = lazyPage(() => import('./pages/NewRunPage'), 'NewRunPage');
 const DiagnosticsPage = lazyPage(() => import('./pages/DiagnosticsPage'), 'DiagnosticsPage');
 const ScenariosPage = lazyPage(() => import('./pages/ScenariosPage'), 'ScenariosPage');
 const RunComparePage = lazyPage(() => import('./pages/RunComparePage'), 'RunComparePage');
@@ -156,6 +155,7 @@ function AuthenticatedApp() {
   const handlePalette = useCallback(() => { if (!helpOpen) openPalette(); }, [openPalette, helpOpen]);
   useHotkey('?', handleHelp);
   useHotkey('/', handlePalette);
+  useGoKeys();
 
   // Fetch projects on mount
   useEffect(() => {
@@ -211,7 +211,10 @@ function AuthenticatedApp() {
             {/* Project-scoped routes */}
             <Route path="/projects/:projectId" element={<DashboardPage />} />
             <Route path="/projects/:projectId/runs" element={<RunsPage />} />
-            <Route path="/projects/:projectId/runs/new" element={<NewRunPage />} />
+            <Route
+              path="/projects/:projectId/runs/new"
+              element={<Navigate to="../tests/new" replace relative="path" />}
+            />
             {/* Scenario launcher — pre-fills one of the four flows below */}
             <Route path="/projects/:projectId/scenarios" element={<ScenariosPage />} />
             <Route path="/projects/:projectId/tests/new" element={<NetworkTestPage />} />
@@ -228,7 +231,14 @@ function AuthenticatedApp() {
 
             {/* Legacy redirects: old bookmarks → new pages */}
             <Route path="/projects/:projectId/tests" element={<Navigate to="../runs" replace relative="path" />} />
-            <Route path="/projects/:projectId/tests/:jobId" element={<JobDetailPage />} />
+            {/* Legacy job-detail URLs — the jobs API did not survive the C#
+                cutover (backend-unification: TestConfig replaced Job), so the
+                1,100-line page rendering it was dead weight. Old links land
+                on Runs. */}
+            <Route
+              path="/projects/:projectId/tests/:jobId"
+              element={<Navigate to="../runs" replace relative="path" />}
+            />
             <Route path="/projects/:projectId/benchmarks" element={<Navigate to="../runs?has_artifact=yes" replace relative="path" />} />
             <Route path="/projects/:projectId/benchmark-wizard" element={<Navigate to="../runs/new" replace relative="path" />} />
             <Route path="/projects/:projectId/app-benchmark-wizard" element={<Navigate to="../runs/new" replace relative="path" />} />
@@ -264,7 +274,7 @@ function AuthenticatedApp() {
 
             {/* Detail pages keep their own URLs — they aren't tab-scoped. */}
             <Route path="/projects/:projectId/deploy/:deploymentId" element={<DeployDetailPage />} />
-            {/* TLS profile history — linked from JobDetailPage TLS-profile runs. */}
+            {/* TLS profile history — linked from the URL Probe page. */}
             <Route path="/projects/:projectId/tls-profiles" element={<TlsProfilesPage />} />
             <Route path="/projects/:projectId/tls-profiles/:runId" element={<TlsProfileDetailPage />} />
             <Route path="/projects/:projectId/schedules" element={<SchedulesPage />} />

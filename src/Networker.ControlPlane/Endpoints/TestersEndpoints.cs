@@ -365,7 +365,8 @@ public static class TestersEndpoints
     private sealed record AgentKeyInfo(
         DateTime? ApiKeyLastUsedAt,
         string? ApiKeyLastUsedIp,
-        DateTime? ApiKeyExpiresAt);
+        DateTime? ApiKeyExpiresAt,
+        string? Status);
 
     /// <summary>
     /// EF-translatable correlated sub-query: the api-key lifecycle fields of the
@@ -375,7 +376,7 @@ public static class TestersEndpoints
     private static AgentKeyInfo? AgentKeyInfoFor(NetworkerDbContext db, string projectId, Guid testerId) =>
         db.Agents
             .Where(a => a.TesterId == testerId && a.ProjectId == projectId)
-            .Select(a => new AgentKeyInfo(a.ApiKeyLastUsedAt, a.ApiKeyLastUsedIp, a.ApiKeyExpiresAt))
+            .Select(a => new AgentKeyInfo(a.ApiKeyLastUsedAt, a.ApiKeyLastUsedIp, a.ApiKeyExpiresAt, a.Status))
             .FirstOrDefault();
 
     private static object ToListDto(ProjectTester t, AgentKeyInfo? agent) => new
@@ -396,6 +397,10 @@ public static class TestersEndpoints
         api_key_last_used_at = agent != null ? agent.ApiKeyLastUsedAt : null,
         api_key_last_used_ip = agent != null ? agent.ApiKeyLastUsedIp : null,
         api_key_expires_at = agent != null ? agent.ApiKeyExpiresAt : null,
+        // Live agent connection state ("online"/"offline"; null = no agent
+        // linked). Lets the UI stop calling a runner "ready" when its VM is
+        // powered on but nothing is listening (2026-08 UI pass).
+        agent_status = agent != null ? agent.Status : null,
         created_at = t.CreatedAt,
         updated_at = t.UpdatedAt,
     };
@@ -431,6 +436,7 @@ public static class TestersEndpoints
         api_key_last_used_at = agent != null ? agent.ApiKeyLastUsedAt : null,
         api_key_last_used_ip = agent != null ? agent.ApiKeyLastUsedIp : null,
         api_key_expires_at = agent != null ? agent.ApiKeyExpiresAt : null,
+        agent_status = agent != null ? agent.Status : null,
         avg_benchmark_duration_seconds = t.AvgBenchmarkDurationSeconds,
         benchmark_run_count = t.BenchmarkRunCount,
         created_by = t.CreatedBy,

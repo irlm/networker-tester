@@ -58,6 +58,8 @@ export type TesterRow = {
   api_key_last_used_ip?: string | null;
   /** When the agent api-key expires (null = no expiry). V044. */
   api_key_expires_at?: string | null;
+  /** Live agent connection state ("online"/"offline"; null = no agent linked). */
+  agent_status?: string | null;
   avg_benchmark_duration_seconds: number | null;
   benchmark_run_count: number;
   created_by: string;

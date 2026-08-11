@@ -60,7 +60,7 @@ export function ScenariosPage() {
         <h2 className="text-lg md:text-xl font-bold text-gray-100">Start a test</h2>
         <p className="mt-1 text-xs font-mono text-gray-400">
           Pick a scenario — we pre-fill the right test and modes. You can tweak everything before
-          launching. Prefer to build from scratch? Every flow is still in the sidebar.
+          launching. Prefer to build from scratch? The builders are one Configure click away, or press / and jump straight there.
         </p>
       </div>
 

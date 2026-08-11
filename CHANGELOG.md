@@ -11,6 +11,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.182] - 2026-08-11
+
+Dashboard navigation + reachability pass ("simple navigation, all
+information"): the sidebar taxonomy is gone, every results page is
+reachable again, and the keyboard layer landed.
+
+### Added
+- **`/` palette now navigates**: pages rank above manual entries ("GO TO"
+  rows); Enter jumps. Page list, gates, and shortcuts live in ONE config
+  (`nav-config.ts`) shared by sidebar, palette, and keys.
+- **`g`+key jumps**: `g d` dashboard, `g r` runs, `g n` start a test,
+  `g p` probe, `g i` infrastructure, `g s` schedules, `g a` alerts,
+  `g v` value, `g l` leaderboard, `g e` SDK endpoints, `g x` regressions.
+  Listed in the help panel and on palette rows.
+- Tester API rows now carry `agent_status` (live agent connection state,
+  from the existing agent sub-query) on list + detail DTOs.
+
+### Changed
+- **Sidebar restructured to workflow**: main loop (Dashboard, Start a
+  test, Runs, URL Probe, Infrastructure, SDK Endpoints, Schedules,
+  Alerts) + REPORTS (Value, App Network, Leaderboard, Regressions) +
+  Settings + platform ADMIN. The PROBE/BENCHMARKS/SDK sections and the
+  "New Test" vs "Network" naming collision are gone; the four test-type
+  builders are reachable via Start a test, the palette, and in-page
+  buttons. Project Settings moved out of the ADMIN group (it is
+  project-scoped and member-visible).
+- **Orphaned pages re-linked**: Leaderboard + Benchmark Regressions
+  (sidebar REPORTS), VM catalog (Infrastructure header), TLS profiles
+  (URL Probe header). All four have live APIs and had zero inbound links.
+- **A runner only counts as ready/online when its agent is connected** —
+  Infrastructure (READY count + row pill now "unreachable"), the network
+  test runner picker, and the Dashboard KPI now agree instead of calling
+  the same powered-on-but-dark VM "offline", "idle · READY", and
+  "0 online" at once.
+
+### Fixed
+- RunDetail crashed (error boundary) on benchmark artifacts without a
+  `data_quality.warnings` array.
+- RunDetail sufficiency badge compared against 'sufficient'; the artifact
+  vocabulary is 'adequate' — healthy runs always rendered yellow.
+- RunDetail on runs whose attempt rows were pruned showed "0 attempts,
+  Rate –" and a blank void; it now falls back to the run's recorded
+  totals ("204 attempts (summary only)") with an explicit empty state.
+
+### Removed
+- `JobDetailPage` (1,145 lines): its `/jobs/:id` API never survived the
+  C# cutover — the page was unreachable AND unbackable. Legacy
+  `/tests/:jobId` URLs redirect to Runs. Dead `getJob`/`cancelJob` client
+  methods removed. `NewRunPage` stub replaced by a route-level redirect.
+
+---
+
 ## [0.28.181] - 2026-08-11
 
 ### Changed

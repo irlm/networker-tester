@@ -239,6 +239,10 @@ export default function HelpPanel() {
                 <br />
                 <kbd className="text-gray-400">/</kbd> search
                 {' '}<kbd className="text-gray-400">Tab</kbd> toggle mode
+                <br />
+                <kbd className="text-gray-400">g</kbd>+key jump to page
+                {' '}(<kbd className="text-gray-400">g r</kbd> runs,{' '}
+                <kbd className="text-gray-400">g d</kbd> dashboard — full list in the / palette)
               </div>
             </div>
           </div>

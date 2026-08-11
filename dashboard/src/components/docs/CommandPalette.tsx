@@ -1,11 +1,67 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useNavigate } from 'react-router';
 import { useDocsStore } from '../../stores/docsStore';
+import { useAuthStore } from '../../stores/authStore';
+import { useProjectStore } from '../../stores/projectStore';
 import { DOC_ENTRIES, DOC_CATEGORIES, type DocEntry } from '../../lib/docs/content';
 import { searchDocs } from '../../lib/docs/search';
 import { DocEntryView } from './DocEntryView';
+import {
+  NAV_ENTRIES,
+  PALETTE_EXTRA_ENTRIES,
+  navEntryVisible,
+  resolveNavPath,
+  type NavEntry,
+} from '../layout/nav-config';
+
+/** A palette row: a page to jump to, or a manual entry to read. */
+type PaletteResult =
+  | { kind: 'nav'; nav: NavEntry; path: string }
+  | { kind: 'doc'; doc: DocEntry };
+
+/**
+ * Rank pages against the query: label prefix > label substring > keyword
+ * substring. Empty query surfaces the sidebar pages in nav order — the
+ * palette then doubles as a keyboard-only sidebar.
+ */
+function searchNav(
+  query: string,
+  ctx: { pid: string | null; isAdmin: boolean; isPlatformAdmin: boolean },
+): PaletteResult[] {
+  const q = query.trim().toLowerCase();
+  const candidates = [...NAV_ENTRIES, ...PALETTE_EXTRA_ENTRIES]
+    .filter(entry => navEntryVisible(entry, ctx));
+
+  const scored: Array<{ score: number; entry: NavEntry }> = [];
+  for (const entry of candidates) {
+    const label = entry.label.toLowerCase();
+    let score = 0;
+    if (!q) {
+      score = 1;
+    } else if (label.startsWith(q)) {
+      score = 3;
+    } else if (label.includes(q)) {
+      score = 2;
+    } else if (entry.keywords?.some(k => k.toLowerCase().includes(q))) {
+      score = 1;
+    }
+    if (score > 0) scored.push({ score, entry });
+  }
+  scored.sort((a, b) => b.score - a.score);
+
+  const limit = q ? 6 : 8;
+  return scored.slice(0, limit).flatMap(({ entry }) => {
+    const path = resolveNavPath(entry.path, ctx.pid);
+    return path ? [{ kind: 'nav' as const, nav: entry, path }] : [];
+  });
+}
 
 export default function CommandPalette() {
   const { closePalette } = useDocsStore();
+  const navigate = useNavigate();
+  const isPlatformAdmin = useAuthStore(s => s.isPlatformAdmin);
+  const authRole = useAuthStore(s => s.role);
+  const activeProjectId = useProjectStore(s => s.activeProjectId);
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [detailEntry, setDetailEntry] = useState<DocEntry | null>(null);
@@ -21,19 +77,35 @@ export default function CommandPalette() {
     inputRef.current?.focus();
   }, []);
 
-  const results = searchDocs(DOC_ENTRIES, query);
-  const maxVisible = 20;
-  const visibleResults = results.slice(0, maxVisible);
+  const gateCtx = useMemo(() => ({
+    pid: activeProjectId ?? null,
+    isAdmin: authRole === 'admin' || isPlatformAdmin,
+    isPlatformAdmin,
+  }), [activeProjectId, authRole, isPlatformAdmin]);
+  const navResults = useMemo(() => searchNav(query, gateCtx), [query, gateCtx]);
+  const visibleResults: PaletteResult[] = useMemo(() => {
+    const docResults = searchDocs(DOC_ENTRIES, query);
+    const maxVisible = 20;
+    return [
+      ...navResults,
+      ...docResults.slice(0, maxVisible - navResults.length).map(doc => ({ kind: 'doc' as const, doc })),
+    ];
+  }, [query, navResults]);
+
+  const activate = useCallback((result: PaletteResult) => {
+    if (result.kind === 'nav') {
+      closePalette();
+      navigate(result.path);
+    } else {
+      setDetailEntry(result.doc);
+    }
+  }, [closePalette, navigate]);
 
   useEffect(() => {
     if (!listRef.current) return;
     const items = listRef.current.querySelectorAll('[data-palette-item]');
     items[selectedIndex]?.scrollIntoView({ block: 'nearest' });
   }, [selectedIndex]);
-
-  const openDetail = useCallback((entry: DocEntry) => {
-    setDetailEntry(entry);
-  }, []);
 
   const goBack = useCallback(() => {
     setDetailEntry(null);
@@ -87,11 +159,12 @@ export default function CommandPalette() {
         isKeyboardNav.current = true;
       } else if (e.key === 'Enter' && visibleResults[selectedIndex]) {
         e.preventDefault();
-        openDetail(visibleResults[selectedIndex]);
-        enterNormalMode();
+        const result = visibleResults[selectedIndex];
+        activate(result);
+        if (result.kind === 'doc') enterNormalMode();
       }
     },
-    [detailEntry, enterNormalMode, goBack, openDetail, query, visibleResults, selectedIndex],
+    [activate, detailEntry, enterNormalMode, goBack, query, visibleResults, selectedIndex],
   );
 
   useEffect(() => {
@@ -162,7 +235,7 @@ export default function CommandPalette() {
         setSelectedIndex(visibleResults.length - 1);
       } else if (e.key === 'Enter' && visibleResults[selectedIndex]) {
         e.preventDefault();
-        openDetail(visibleResults[selectedIndex]);
+        activate(visibleResults[selectedIndex]);
       } else if (e.key === '/' || e.key === 'i') {
         e.preventDefault();
         enterInsertMode();
@@ -171,7 +244,7 @@ export default function CommandPalette() {
 
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [closePalette, detailEntry, enterInsertMode, goBack, openDetail, visibleResults, selectedIndex]);
+  }, [activate, closePalette, detailEntry, enterInsertMode, goBack, visibleResults, selectedIndex]);
 
   const modeLabel = detailEntry ? 'DETAIL' : isInsertMode ? 'INSERT' : 'NORMAL';
   // Prompt changes with mode: > for INSERT (typing), : for NORMAL (commands)
@@ -208,7 +281,7 @@ export default function CommandPalette() {
             onKeyDown={handleInputKeyDown}
             onFocus={() => setIsInsertMode(true)}
             onBlur={() => setIsInsertMode(false)}
-            placeholder={isInsertMode ? 'Search docs... (try: p95, man throughput, man man)' : ''}
+            placeholder={isInsertMode ? 'Jump to a page or search docs... (runs, p95, man man)' : ''}
             className="flex-1 bg-transparent py-2.5 text-sm text-gray-200 placeholder-gray-600 outline-none"
             style={{ caretColor: '#22d3ee' }}
             spellCheck={false}
@@ -246,24 +319,38 @@ export default function CommandPalette() {
                 </div>
               </div>
             ) : (
-              visibleResults.map((entry, i) => {
-                const cat = DOC_CATEGORIES.find((c) => c.id === entry.category);
+              visibleResults.map((result, i) => {
                 const isSelected = i === selectedIndex;
+                const rowClass = `w-full text-left px-4 py-2 flex items-center gap-3 text-sm transition-colors duration-75 ${
+                  isSelected
+                    ? 'bg-gray-800/60 text-gray-100 border-l-2 border-cyan-500'
+                    : 'text-gray-400 hover:bg-gray-800/20 border-l-2 border-transparent'
+                }`;
+                const rowProps = {
+                  'data-palette-item': true,
+                  onMouseMove: () => { if (!isKeyboardNav.current) setSelectedIndex(i); },
+                  onMouseDown: () => { isKeyboardNav.current = false; },
+                  className: rowClass,
+                };
+                if (result.kind === 'nav') {
+                  const gKey = result.nav.gKey;
+                  return (
+                    <button key={`nav:${result.path}`} {...rowProps} onClick={() => activate(result)}>
+                      <span className="text-[10px] uppercase tracking-wider text-gray-500 w-16 flex-shrink-0">
+                        go to
+                      </span>
+                      <span className="text-gray-600 flex-shrink-0" aria-hidden="true">{result.nav.icon}</span>
+                      <span className="text-cyan-400 flex-shrink-0">{result.nav.label}</span>
+                      {gKey && (
+                        <span className="text-gray-600 text-xs ml-auto flex-shrink-0">g {gKey}</span>
+                      )}
+                    </button>
+                  );
+                }
+                const entry = result.doc;
+                const cat = DOC_CATEGORIES.find((c) => c.id === entry.category);
                 return (
-                  <button
-                    key={entry.id}
-                    data-palette-item
-                    onClick={() => openDetail(entry)}
-                    onMouseMove={() => {
-                      if (!isKeyboardNav.current) setSelectedIndex(i);
-                    }}
-                    onMouseDown={() => { isKeyboardNav.current = false; }}
-                    className={`w-full text-left px-4 py-2 flex items-center gap-3 text-sm transition-colors duration-75 ${
-                      isSelected
-                        ? 'bg-gray-800/60 text-gray-100 border-l-2 border-cyan-500'
-                        : 'text-gray-400 hover:bg-gray-800/20 border-l-2 border-transparent'
-                    }`}
-                  >
+                  <button key={entry.id} {...rowProps} onClick={() => activate(result)}>
                     {cat && (
                       <span className="text-[10px] uppercase tracking-wider text-[#863bff] w-16 flex-shrink-0">
                         {cat.label}
@@ -282,9 +369,9 @@ export default function CommandPalette() {
         {!detailEntry && (
           <div className="flex items-center justify-between border-t border-[var(--border-default)] px-3 py-1 text-[10px] text-gray-500">
             <span>
-              {query && results.length !== DOC_ENTRIES.length
-                ? `${results.length} result${results.length !== 1 ? 's' : ''}`
-                : `${DOC_ENTRIES.length} entries`}
+              {query
+                ? `${visibleResults.length} result${visibleResults.length !== 1 ? 's' : ''}`
+                : `${navResults.length} pages · ${DOC_ENTRIES.length} manual entries`}
             </span>
             <span>
               {visibleResults.length > 0 && `${selectedIndex + 1}/${visibleResults.length}`}
