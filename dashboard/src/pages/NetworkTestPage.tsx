@@ -123,7 +123,7 @@ function deploymentStatusDot(status: string): string {
     case 'running': return 'bg-green-400';
     case 'stopped': case 'stopping': return 'bg-gray-500';
     case 'error': case 'failed':     return 'bg-red-400';
-    case 'creating': case 'starting': return 'bg-amber-400';
+    case 'creating': case 'starting': return 'bg-yellow-400';
     default: return 'bg-gray-600';
   }
 }

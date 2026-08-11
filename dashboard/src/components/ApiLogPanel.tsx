@@ -1,4 +1,5 @@
 import { useState, useMemo, memo } from 'react';
+import { rampTextClass } from '../lib/severity';
 import { useApiLogStore, type ApiLogEntry } from '../stores/apiLogStore';
 import { useShallow } from 'zustand/react/shallow';
 import { formatMsCompact as formatMs } from '../lib/format';
@@ -25,18 +26,15 @@ function statusColor(status: number): string {
   return 'text-red-400';
 }
 
+// Latency on the shared cyan magnitude ramp (severity-v2); HTTP status
+// stays green/yellow/red above — that is a STATUS, not a magnitude.
 function speedIndicator(totalMs: number): string {
-  if (totalMs < 50) return 'text-green-400';
-  if (totalMs < 200) return 'text-yellow-400';
-  if (totalMs < 500) return 'text-orange-400';
-  return 'text-red-400';
+  return rampTextClass(totalMs, { mid: 50, high: 200, breach: 500 });
 }
 
 function renderSpeedColor(ms: number): string {
-  if (ms < 16) return 'text-green-400';   // under 1 frame (60fps)
-  if (ms < 50) return 'text-yellow-400';  // under 3 frames
-  if (ms < 100) return 'text-orange-400';
-  return 'text-red-400';                  // jank
+  // 16ms = 1 frame at 60fps; 50ms = 3 frames; 100ms+ = jank (breach).
+  return rampTextClass(ms, { mid: 16, high: 50, breach: 100 });
 }
 
 export const ApiLogPanel = memo(function ApiLogPanel() {

@@ -180,8 +180,8 @@ export function EndpointRunsPage() {
           pick a saved config or build a custom one · color:
           <span className="ml-2 px-1.5 py-0.5 border rounded-sm bg-green-400/[.14] text-green-300 border-green-400/50 font-mono text-[9px]">net</span>
           <span className="ml-1 px-1.5 py-0.5 border rounded-sm bg-cyan-400/[.14] text-cyan-300 border-cyan-400/50 font-mono text-[9px]">http</span>
-          <span className="ml-1 px-1.5 py-0.5 border rounded-sm bg-violet-400/[.16] text-violet-300 border-violet-400/55 font-mono text-[9px]">thru</span>
-          <span className="ml-1 px-1.5 py-0.5 border rounded-sm bg-amber-400/[.14] text-amber-300 border-amber-400/50 font-mono text-[9px]">page</span>
+          <span className="ml-1 px-1.5 py-0.5 border rounded-sm bg-cyan-400/[.16] text-cyan-300 border-cyan-400/55 font-mono text-[9px]">thru</span>
+          <span className="ml-1 px-1.5 py-0.5 border rounded-sm bg-yellow-400/[.14] text-yellow-300 border-yellow-400/50 font-mono text-[9px]">page</span>
         </span>
       </div>
 
@@ -189,7 +189,7 @@ export function EndpointRunsPage() {
         {DEFAULT_PRESETS.map((p) => (
           <div key={p.id} className="p-3 border border-gray-800 bg-[var(--bg-surface)]">
             <div className="text-sm text-gray-100 font-medium">
-              {p.star && <span className="text-amber-300 mr-1">★</span>}
+              {p.star && <span className="text-yellow-300 mr-1">★</span>}
               {p.name}
             </div>
             <div className="text-[10px] text-gray-400 font-mono mt-1">{p.desc}</div>
@@ -318,7 +318,7 @@ export function EndpointRunsPage() {
                     </td>
                     <td className="px-3 py-2 text-right">
                       {run.failure_count > 0 ? (
-                        <span className="text-amber-300">
+                        <span className="text-yellow-300">
                           {run.success_count}/{total}
                           <span className="text-red-400 ml-1">· {run.failure_count} fail</span>
                         </span>

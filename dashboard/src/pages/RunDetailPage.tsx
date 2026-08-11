@@ -652,7 +652,7 @@ function ArtifactSection({ artifact }: { artifact: BenchmarkArtifact }) {
                     <td className="px-4 py-2 text-gray-400 text-right">{s.included_sample_count}</td>
                     <td className="px-4 py-2 text-gray-100 text-right font-mono">{s.p50.toFixed(2)}</td>
                     <td className="px-4 py-2 text-yellow-400 text-right font-mono">{s.p95.toFixed(2)}</td>
-                    <td className="px-4 py-2 text-orange-400 text-right font-mono">{s.p99.toFixed(2)}</td>
+                    <td className="px-4 py-2 text-s4 text-right font-mono">{s.p99.toFixed(2)}</td>
                     <td className="px-4 py-2 text-gray-300 text-right font-mono">{s.rps.toFixed(0)}</td>
                     <td className="px-4 py-2 text-gray-400 text-right font-mono">{s.stddev.toFixed(2)}</td>
                   </tr>
@@ -710,7 +710,7 @@ function StatsRow({ ps }: { ps: ProtocolStats }) {
       <td className="px-4 py-2 text-gray-400 text-right font-mono">{fmt(ps.stats.mean)}</td>
       <td className="px-4 py-2 text-gray-100 text-right font-mono font-semibold">{fmt(ps.stats.p50)}</td>
       <td className="px-4 py-2 text-yellow-400 text-right font-mono">{fmt(ps.stats.p95)}</td>
-      <td className="px-4 py-2 text-orange-400 text-right font-mono">{fmt(ps.stats.p99)}</td>
+      <td className="px-4 py-2 text-s4 text-right font-mono">{fmt(ps.stats.p99)}</td>
       <td className="px-4 py-2 text-gray-400 text-right font-mono">{fmt(ps.stats.max)}</td>
       <td className="px-4 py-2 text-gray-400 text-right font-mono">{fmt(ps.stats.stddev)}</td>
       <td className={`px-4 py-2 text-right font-mono ${successRateClass(ps.successRate)}`}>

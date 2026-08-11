@@ -5,6 +5,7 @@ import { CreateTlsProfileDialog } from '../components/CreateTlsProfileDialog';
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
+import { DataTable } from '../components/common/DataTable';
 
 export function TlsProfilesPage() {
   const { projectId } = useProject();
@@ -130,69 +131,36 @@ export function TlsProfilesPage() {
         Showing {filtered.length} of {profiles.length} TLS profile runs
       </div>
 
-      <div className="md:hidden space-y-2">
-        {filtered.length === 0 ? (
-          <div className="border border-gray-800 rounded p-8 text-center">
+      <DataTable
+        columns={[
+          {
+            key: 'target',
+            label: 'Target',
+            render: (profile) => (
+              <Link to={`/projects/${projectId}/tls-profiles/${profile.id}`} className="text-cyan-400 hover:underline font-medium">
+                {profile.host}:{profile.port}
+              </Link>
+            ),
+          },
+          { key: 'kind', label: 'Kind', hideBelow: 'md', cellClass: 'text-gray-300', render: (p) => p.target_kind },
+          { key: 'coverage', label: 'Coverage', hideBelow: 'lg', cellClass: 'text-gray-400', render: (p) => p.coverage_level },
+          {
+            key: 'status',
+            label: 'Status',
+            render: (p) => <span className={`font-medium ${statusClass(p.summary_status)}`}>{p.summary_status}</span>,
+          },
+          { key: 'score', label: 'Score', cellClass: 'text-yellow-400', render: (p) => p.summary_score ?? '-' },
+          { key: 'started', label: 'Started', cellClass: 'text-gray-400', render: (p) => new Date(p.started_at).toLocaleString() },
+        ]}
+        rows={filtered}
+        rowKey={(p) => p.id}
+        empty={
+          <>
             <p className="text-gray-400 text-sm">No TLS profile runs yet</p>
             <p className="text-gray-700 text-xs mt-1">Run a TLS endpoint profile with DB saving enabled and it will show up here.</p>
-          </div>
-        ) : filtered.map((profile) => (
-          <Link
-            key={profile.id}
-            to={`/projects/${projectId}/tls-profiles/${profile.id}`}
-            className="block border border-gray-800 rounded p-3"
-          >
-            <div className="flex items-center justify-between mb-1 gap-2">
-              <span className="text-cyan-400 font-medium text-xs truncate">{profile.host}:{profile.port}</span>
-              <span className="text-xs text-gray-400">{new Date(profile.started_at).toLocaleTimeString()}</span>
-            </div>
-            <div className="flex flex-wrap gap-2 text-xs">
-              <span className="text-gray-400">{profile.target_kind}</span>
-              <span className="text-gray-400">{profile.coverage_level}</span>
-              <span className={`font-medium ${statusClass(profile.summary_status)}`}>{profile.summary_status}</span>
-              {profile.summary_score != null && <span className="text-amber-400">score {profile.summary_score}</span>}
-            </div>
-          </Link>
-        ))}
-      </div>
-
-      <div className="hidden md:block table-container">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
-              <th className="px-4 py-2.5 text-left font-medium">Target</th>
-              <th className="px-4 py-2.5 text-left font-medium">Kind</th>
-              <th className="px-4 py-2.5 text-left font-medium">Coverage</th>
-              <th className="px-4 py-2.5 text-left font-medium">Status</th>
-              <th className="px-4 py-2.5 text-left font-medium">Score</th>
-              <th className="px-4 py-2.5 text-left font-medium">Started</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((profile) => (
-              <tr key={profile.id} className="border-b border-gray-800/50 hover:bg-gray-800/20">
-                <td className="px-4 py-3">
-                  <Link to={`/projects/${projectId}/tls-profiles/${profile.id}`} className="text-cyan-400 hover:underline text-xs font-medium">
-                    {profile.host}:{profile.port}
-                  </Link>
-                </td>
-                <td className="px-4 py-3 text-gray-300 text-xs">{profile.target_kind}</td>
-                <td className="px-4 py-3 text-gray-400 text-xs">{profile.coverage_level}</td>
-                <td className={`px-4 py-3 text-xs font-medium ${statusClass(profile.summary_status)}`}>{profile.summary_status}</td>
-                <td className="px-4 py-3 text-amber-400 text-xs">{profile.summary_score ?? '-'}</td>
-                <td className="px-4 py-3 text-gray-400 text-xs">{new Date(profile.started_at).toLocaleString()}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-
-        {filtered.length === 0 && (
-          <div className="py-10 text-center">
-            <p className="text-gray-400 text-sm">No TLS profile runs yet</p>
-            <p className="text-gray-700 text-xs mt-1">Run a TLS endpoint profile with DB saving enabled and it will show up here.</p>
-          </div>
-        )}
-      </div>
+          </>
+        }
+      />
     </div>
   );
 }

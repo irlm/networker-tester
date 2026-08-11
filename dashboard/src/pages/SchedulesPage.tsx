@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useRef } from 'react';
+import { DataTable } from '../components/common/DataTable';
 import { Link, useSearchParams } from 'react-router';
 import { api } from '../api/client';
 import { stableSet } from '../lib/stableUpdate';
@@ -244,144 +245,85 @@ export function SchedulesPage() {
       </FilterBar>
       )}
 
-      {/* Mobile card layout */}
-      <div className="md:hidden space-y-2 mt-4">
-        {filteredSchedules.length === 0 ? (
-          <div className="border border-gray-800 rounded p-8 text-center">
-            <p className="text-gray-400 text-sm">{schedFilterCount > 0 ? 'No schedules match filters' : 'No scheduled tests yet'}</p>
-            {schedFilterCount === 0 && (
-              <Link
-                to={`/projects/${projectId}/benchmarks/full-stack/new`}
-                className="inline-block mt-3 px-4 py-1.5 text-xs bg-cyan-600 hover:bg-cyan-500 text-white rounded transition-colors"
-              >
-                New Full Stack Benchmark
-              </Link>
-            )}
-          </div>
-        ) : (
-          computedSchedules.map((s) => (
-            <div
-              key={s.id}
-              className={`border border-gray-800 rounded p-3 ${s._isPaused ? 'opacity-60' : ''}`}
-            >
-              <div className="flex items-start justify-between gap-2 mb-2">
-                <div className="min-w-0">
-                  <p className="text-gray-200 text-sm font-medium truncate">{s._name}</p>
-                  <p className="text-gray-400 text-xs font-mono">{s.test_config_id.slice(0, 8)}</p>
-                </div>
-                <button
-                  onClick={() => handleToggle(s.id, s.enabled)}
-                  disabled={toggling === s.id}
-                  className={`w-9 h-5 rounded-full transition-colors relative flex-shrink-0 ${
-                    toggling === s.id ? 'opacity-50' : ''
-                  } ${s.enabled ? 'bg-cyan-600' : 'bg-gray-700'}`}
-                >
-                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                    s.enabled ? 'left-[18px]' : 'left-0.5'
-                  }`} />
-                </button>
-              </div>
-              <div className="flex items-center gap-3 flex-wrap">
+      <DataTable
+        className="mt-4"
+        columns={[
+          {
+            key: 'config',
+            label: 'Config',
+            cellClass: 'text-gray-200 text-sm',
+            render: (s) => <span className={s._isPaused ? 'opacity-60' : ''}>{s._name}</span>,
+          },
+          {
+            key: 'frequency',
+            label: 'Frequency',
+            titleOf: (s) => s._cron.raw,
+            render: (s) => <span className="text-cyan-400/70">{s._cron.label}</span>,
+          },
+          { key: 'timezone', label: 'Timezone', hideBelow: 'md', cellClass: 'text-gray-400', render: (s) => s.timezone },
+          {
+            key: 'status',
+            label: 'Status',
+            render: (s) => (
+              <div className="flex items-center gap-2">
                 <StatusBadge status={s._status.badge} label={s._status.label} />
                 {s._status.detail && <span className={`text-xs ${s._status.detailColor}`}>{s._status.detail}</span>}
-                <span className="text-xs text-cyan-400/70">{s._cron.label}</span>
-                {s.last_fired_at && <span className="text-xs text-gray-500">{timeAgo(s.last_fired_at)}</span>}
               </div>
-              <div className="flex items-center gap-3 mt-2 pt-2 border-t border-gray-800/50">
-                {isOperator && (
-                  <button onClick={() => handleTrigger(s.id, s._name)} className="text-xs text-cyan-400 py-1">
-                    Run now
+            ),
+          },
+          {
+            key: 'last-fired',
+            label: 'Last Fired',
+            hideBelow: 'lg',
+            cellClass: 'text-gray-400',
+            render: (s) => (s.last_fired_at ? timeAgo(s.last_fired_at) : '--'),
+          },
+          {
+            key: 'enabled',
+            label: 'On',
+            render: (s) => (
+              <button
+                onClick={() => handleToggle(s.id, s.enabled)}
+                disabled={toggling === s.id}
+                className={`w-9 h-5 rounded-full transition-colors relative inline-block ${
+                  toggling === s.id ? 'opacity-50' : ''
+                } ${s.enabled ? 'bg-cyan-600' : 'bg-gray-700'}`}
+                title={s.enabled ? 'Pause' : 'Resume'}
+              >
+                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                  s.enabled ? 'left-[18px]' : 'left-0.5'
+                }`} />
+              </button>
+            ),
+          },
+          {
+            key: 'actions',
+            label: '',
+            render: (s) =>
+              isOperator ? (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleTrigger(s.id, s._name)}
+                    className="text-xs text-cyan-400 hover:text-cyan-300"
+                    title="Run now"
+                  >
+                    &#9654;
                   </button>
-                )}
-                {isOperator && (
                   <button
                     onClick={() => handleDelete(s.id)}
-                    className={`text-xs py-1 transition-colors ${confirmDelete === s.id ? 'text-red-400' : 'text-gray-500'}`}
+                    className={`text-xs transition-colors ${confirmDelete === s.id ? 'text-red-400' : 'text-gray-500 hover:text-red-400'}`}
+                    title={confirmDelete === s.id ? 'Click again to confirm' : 'Delete'}
                   >
-                    {confirmDelete === s.id ? 'Click to confirm delete' : 'Delete'}
+                    {confirmDelete === s.id ? 'delete?' : '\u2715'}
                   </button>
-                )}
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-
-      {/* Desktop table */}
-      <div className="hidden md:block table-container mt-4">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
-              <th className="px-4 py-2.5 text-left font-medium">Config</th>
-              <th className="px-4 py-2.5 text-left font-medium">Frequency</th>
-              <th className="px-4 py-2.5 text-left font-medium">Timezone</th>
-              <th className="px-4 py-2.5 text-left font-medium">Status</th>
-              <th className="px-4 py-2.5 text-left font-medium hidden lg:table-cell">Last Fired</th>
-              <th className="px-4 py-2.5 text-center font-medium w-16">On</th>
-              <th className="px-4 py-2.5 text-left font-medium"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {computedSchedules.map((s) => (
-              <tr
-                key={s.id}
-                className={`border-b border-gray-800/50 hover:bg-gray-800/20 ${s._isPaused ? 'opacity-60' : ''}`}
-              >
-                <td className="px-4 py-3 text-gray-200">{s._name}</td>
-                <td className="px-4 py-3 text-xs" title={s._cron.raw}>
-                  <span className="text-cyan-400/70">{s._cron.label}</span>
-                </td>
-                <td className="px-4 py-3 text-gray-400 text-xs">{s.timezone}</td>
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <StatusBadge status={s._status.badge} label={s._status.label} />
-                    {s._status.detail && <span className={`text-xs ${s._status.detailColor}`}>{s._status.detail}</span>}
-                  </div>
-                </td>
-                <td className="px-4 py-3 text-gray-400 text-xs hidden lg:table-cell">
-                  {s.last_fired_at ? timeAgo(s.last_fired_at) : '--'}
-                </td>
-                <td className="px-4 py-3 text-center">
-                  <button
-                    onClick={() => handleToggle(s.id, s.enabled)}
-                    disabled={toggling === s.id}
-                    className={`w-9 h-5 rounded-full transition-colors relative inline-block ${
-                      toggling === s.id ? 'opacity-50' : ''
-                    } ${s.enabled ? 'bg-cyan-600' : 'bg-gray-700'}`}
-                    title={s.enabled ? 'Pause' : 'Resume'}
-                  >
-                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                      s.enabled ? 'left-[18px]' : 'left-0.5'
-                    }`} />
-                  </button>
-                </td>
-                <td className="px-4 py-3">
-                  {isOperator && (
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => handleTrigger(s.id, s._name)}
-                        className="text-xs text-cyan-400 hover:text-cyan-300"
-                        title="Run now"
-                      >
-                        &#9654;
-                      </button>
-                      <button
-                        onClick={() => handleDelete(s.id)}
-                        className={`text-xs transition-colors ${confirmDelete === s.id ? 'text-red-400' : 'text-gray-500 hover:text-red-400'}`}
-                        title={confirmDelete === s.id ? 'Click again to confirm' : 'Delete'}
-                      >
-                        {confirmDelete === s.id ? 'delete?' : '\u2715'}
-                      </button>
-                    </div>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-
-        {filteredSchedules.length === 0 && (
-          <div className="py-10 text-center">
+                </div>
+              ) : null,
+          },
+        ]}
+        rows={computedSchedules}
+        rowKey={(s) => s.id}
+        empty={
+          <>
             <p className="text-gray-400 text-sm">{schedFilterCount > 0 ? 'No schedules match the current filters' : 'No scheduled tests yet'}</p>
             {schedFilterCount === 0 && (
               <>
@@ -396,9 +338,9 @@ export function SchedulesPage() {
                 </Link>
               </>
             )}
-          </div>
-        )}
-      </div>
+          </>
+        }
+      />
     </div>
   );
 }

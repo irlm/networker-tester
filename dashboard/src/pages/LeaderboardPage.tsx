@@ -133,7 +133,7 @@ function GroupedTab() {
 
       {/* All-groups warning */}
       {showAllWarning && (
-        <div className="border-l-4 border-amber-500 bg-[#1a1a2e] text-gray-400 text-sm p-3 rounded">
+        <div className="border-l-4 border-yellow-500 bg-[#1a1a2e] text-gray-400 text-sm p-3 rounded">
           Mixed network conditions — results are not directly comparable. Use for general trends only.
         </div>
       )}
@@ -195,7 +195,7 @@ function GroupedTab() {
                     <td className="py-2.5 px-3 text-right font-mono text-gray-400">
                       {lang.rps > 0 ? lang.rps.toFixed(0) : '--'}
                     </td>
-                    <td className={`py-2.5 px-3 text-right font-mono ${limited ? 'text-amber-500' : 'text-gray-400'}`}>
+                    <td className={`py-2.5 px-3 text-right font-mono ${limited ? 'text-yellow-500' : 'text-gray-400'}`}>
                       {lang.run_count}
                       {limited && <span className="text-gray-500 text-xs ml-1">*</span>}
                     </td>

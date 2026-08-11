@@ -302,7 +302,7 @@ export function TesterDetailDrawer({
                   type="button"
                   disabled={isBusy}
                   onClick={() => setConfirmForceStop(true)}
-                  className="px-3 py-1 text-xs rounded border border-amber-500/50 text-amber-400 hover:bg-amber-500/10 disabled:opacity-50"
+                  className="px-3 py-1 text-xs rounded border border-yellow-500/50 text-yellow-400 hover:bg-yellow-500/10 disabled:opacity-50"
                 >
                   Force to stopped
                 </button>
@@ -459,7 +459,7 @@ export function TesterDetailDrawer({
               {tester.shutdown_deferral_count > 0 && (
                 <>
                   <dt className="text-gray-400">Deferrals</dt>
-                  <dd className="text-amber-400 font-mono">
+                  <dd className="text-yellow-400 font-mono">
                     {tester.shutdown_deferral_count}
                   </dd>
                 </>
@@ -672,7 +672,7 @@ export function TesterDetailDrawer({
                   type="button"
                   disabled={isBusy}
                   onClick={() => run(() => testersApi.startTester(projectId, tester.tester_id))}
-                  className="px-3 py-1 text-xs rounded border border-emerald-500/50 text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-50"
+                  className="px-3 py-1 text-xs rounded border border-green-500/50 text-green-400 hover:bg-green-500/10 disabled:opacity-50"
                 >
                   Start runner
                 </button>
@@ -685,7 +685,7 @@ export function TesterDetailDrawer({
                     tester.power_state !== 'running'
                   }
                   onClick={() => run(() => testersApi.stopTester(projectId, tester.tester_id))}
-                  className="px-3 py-1 text-xs rounded border border-amber-500/50 text-amber-400 hover:bg-amber-500/10 disabled:opacity-50"
+                  className="px-3 py-1 text-xs rounded border border-yellow-500/50 text-yellow-400 hover:bg-yellow-500/10 disabled:opacity-50"
                   title={
                     tester.power_state !== 'running'
                       ? `Cannot stop in power_state=${tester.power_state}`

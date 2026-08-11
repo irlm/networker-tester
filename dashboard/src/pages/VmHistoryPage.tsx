@@ -28,7 +28,7 @@ const EVENT_BADGE: Record<string, string> = {
   created: 'text-cyan-400 border-cyan-500/30 bg-cyan-500/10',
   started: 'text-green-400 border-green-500/30 bg-green-500/10',
   stopped: 'text-gray-400 border-gray-500/30 bg-gray-500/10',
-  auto_shutdown: 'text-amber-400 border-amber-500/30 bg-amber-500/10',
+  auto_shutdown: 'text-yellow-400 border-yellow-500/30 bg-yellow-500/10',
   deleted: 'text-red-400 border-red-500/30 bg-red-500/10',
   error: 'text-red-400 border-red-500/30 bg-red-500/10',
 };

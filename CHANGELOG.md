@@ -11,6 +11,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.183] - 2026-08-11
+
+Dashboard UI-2 pass: design tokens + the canonical DataTable.
+
+### Added
+- **Design tokens** (Tailwind v4 `@theme`): the severity/intensity ramp
+  `--color-s1..s4` (single-hue cyan for magnitudes — latency numbers,
+  bars, sparklines) + `--color-breach` red reserved for hard threshold
+  violations. Status pills deliberately keep the universal
+  green/yellow/red model.
+- **`DataTable`** (`components/common/DataTable.tsx`): the canonical
+  table — one render for every viewport (container scrolls horizontally;
+  `hideBelow` drops secondary columns), canonical header/cell classes,
+  empty-state slot.
+
+### Changed
+- The five dual-render pages (Runs, Schedules, Benchmark Regressions,
+  TLS Profiles, Infrastructure targets) no longer ship every row twice
+  (`md:hidden` cards + `hidden md:block` table) — each is one DataTable.
+- The competing page-local latency ramps (PerfLog, ApiLogPanel,
+  RunDetail/ShareView p99 columns) now draw the shared cyan ramp via
+  `lib/severity.ts` (same thresholds, one palette; red only at breach).
+- Status hue cleanup: amber→yellow everywhere (41 sites — one attention
+  hue), emerald→green (SystemHealthPanel, TesterDetailDrawer), Toast
+  info + Settings in-progress pulse blue→cyan, EndpointRuns throughput
+  chip violet→cyan. Provider brand colors (azure blue, aws orange) are
+  intentionally untouched.
+
+---
+
 ## [0.28.182] - 2026-08-11
 
 Dashboard navigation + reachability pass ("simple navigation, all

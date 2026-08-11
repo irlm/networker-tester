@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useRef } from 'react';
+import { rampTextClass } from '../lib/severity';
 import { api, errorMessage } from '../api/client';
 import type { PerfLogRow, PerfLogStats } from '../api/types';
 import { FilterBar, FilterChip } from '../components/common/FilterBar';
@@ -10,19 +11,16 @@ import { formatMsCompact as formatMs } from '../lib/format';
 type Tab = 'logs' | 'stats';
 type Kind = 'all' | 'api' | 'render';
 
+// Latency renders on the shared cyan magnitude ramp (severity-v2) — red
+// only at breach. Thresholds unchanged from the old local ramp.
 function speedColor(ms: number | null | undefined): string {
   if (ms === null || ms === undefined) return 'text-gray-400';
-  if (ms < 50) return 'text-green-400';
-  if (ms < 200) return 'text-yellow-400';
-  if (ms < 500) return 'text-orange-400';
-  return 'text-red-400';
+  return rampTextClass(ms, { mid: 50, high: 200, breach: 500 });
 }
 
 function renderSpeedColor(ms: number | null | undefined): string {
   if (ms === null || ms === undefined) return 'text-gray-400';
-  if (ms < 16) return 'text-green-400';
-  if (ms < 50) return 'text-yellow-400';
-  return 'text-red-400';
+  return rampTextClass(ms, { mid: 16, high: 50, breach: 100 });
 }
 
 function StatCard({ label, value, color, sub }: { label: string; value: string; color: string; sub?: string }) {

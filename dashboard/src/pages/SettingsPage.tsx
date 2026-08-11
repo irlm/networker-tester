@@ -208,7 +208,7 @@ export function SettingsPage() {
                       disabled={dashboardUpdating}
                       className={`text-xs px-3 py-1 rounded border transition-colors ${
                         dashboardUpdating
-                          ? 'border-blue-500/30 text-blue-400 motion-safe:animate-pulse'
+                          ? 'border-cyan-500/30 text-cyan-400 motion-safe:animate-pulse'
                           : 'border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/10'
                       } disabled:opacity-50`}
                     >

@@ -302,7 +302,7 @@ export function DeployWizard({ projectId, onClose, onCreated, prefill }: DeployW
                     <span className="text-gray-400 font-mono w-4">{i + 1}</span>
                     {tb.existingVm ? (
                       <>
-                        <span className="text-amber-400 text-[10px] px-1.5 py-0.5 border border-amber-500/30 rounded">upgrade</span>
+                        <span className="text-yellow-400 text-[10px] px-1.5 py-0.5 border border-yellow-500/30 rounded">upgrade</span>
                         <span className="font-mono text-cyan-400">{tb.existingVmId}</span>
                       </>
                     ) : (

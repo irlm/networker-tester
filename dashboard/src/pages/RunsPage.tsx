@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import { DataTable } from '../components/common/DataTable';
 import { Link, useSearchParams } from 'react-router';
 import { api, errorMessage } from '../api/client';
 import type { TestRun, RunStatus, EndpointKind, TestConfig, TestConfigListItem } from '../api/types';
@@ -366,110 +367,83 @@ export function RunsPage() {
         </div>
       )}
 
-      {/* Mobile card layout (< md) */}
-      <div className="md:hidden space-y-2 mt-4">
-        {pageRuns.length === 0 ? (
-          <div className="border border-gray-800 rounded p-8 text-center">
-            <p className="text-gray-400 text-sm">{activeFilterCount > 0 ? 'No runs match filters' : 'No runs yet'}</p>
-            {activeFilterCount === 0 && (
-              <Link to={`/projects/${projectId}/tests/new`} className="text-cyan-400 text-xs mt-2 inline-block">
-                Start a network test
-              </Link>
-            )}
-          </div>
-        ) : pageRuns.map((run) => (
-          <Link
-            key={run.id}
-            to={`/projects/${projectId}/runs/${run.id}`}
-            className="block border border-gray-800 rounded p-3"
-          >
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-cyan-400 font-mono text-xs">{run.id.slice(0, 8)}</span>
-              <StatusBadge status={runDisplayStatus(run)} />
-            </div>
-            <p className="text-gray-300 text-xs truncate mb-1">
-              {run.config_name || run.test_config_id.slice(0, 8)}
-            </p>
-            <div className="flex items-center gap-3 text-xs text-gray-400">
-              {run.endpoint_kind && <KindBadge kind={run.endpoint_kind} />}
-              {run.artifact_id && <span className="text-gray-400">benchmark</span>}
-              <RunResult ok={run.success_count} fail={run.failure_count} />
-              <span title={run._createdIso}>{run._createdAgo}</span>
-            </div>
-          </Link>
-        ))}
-      </div>
-
-      {/* Desktop/iPad table (>= md) */}
-      <div className="hidden md:block table-container mt-4">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
-              <th className="px-4 py-2.5 text-left font-medium">Run</th>
-              <th className="px-4 py-2.5 text-left font-medium">Name</th>
-              <th className="px-4 py-2.5 text-left font-medium hidden lg:table-cell">Type</th>
-              <th className="px-4 py-2.5 text-left font-medium">Status</th>
-              <th className="px-4 py-2.5 text-left font-medium">Result</th>
-              <th className="px-4 py-2.5 text-left font-medium hidden lg:table-cell">Modes</th>
-              <th className="px-4 py-2.5 text-left font-medium">Created</th>
-            </tr>
-          </thead>
-          <tbody>
-            {pageRuns.map((run) => (
-              <tr
-                key={run.id}
-                className="border-b border-gray-800/50 hover:bg-gray-800/20"
-              >
-                <td className="px-4 py-3">
-                  <Link
-                    to={`/projects/${projectId}/runs/${run.id}`}
-                    className="text-cyan-400 hover:underline font-mono text-xs"
-                  >
-                    {run.id.slice(0, 8)}
-                  </Link>
-                  {run.artifact_id && (
-                    <span className="ml-2 text-[10px] text-gray-300 bg-gray-500/10 px-1.5 py-0.5 rounded">benchmark</span>
-                  )}
-                </td>
-                {/* Name gets the width — it's the most scannable column; Modes
-                    truncates with a tooltip instead of wrapping to 3 lines. */}
-                <td className="px-4 py-3 text-gray-300 text-xs truncate max-w-72" title={run.config_name || undefined}>
-                  {run.config_name || run.test_config_id.slice(0, 8)}
-                </td>
-                <td className="px-4 py-3 hidden lg:table-cell">
-                  <KindBadge kind={run.endpoint_kind} />
-                </td>
-                <td className="px-4 py-3">
-                  <StatusBadge status={runDisplayStatus(run)} />
-                </td>
-                <td className="px-4 py-3 text-xs">
-                  <RunResult ok={run.success_count} fail={run.failure_count} />
-                </td>
-                <td
-                  className="px-4 py-3 text-gray-400 text-xs hidden lg:table-cell truncate max-w-40"
-                  title={run.modes?.join(', ') || undefined}
+      {/* One table for every viewport (DataTable handles responsive
+          column drops + horizontal scroll — the old md:hidden card list
+          duplicated every row and drifted from the table). */}
+      <DataTable
+        className="mt-4"
+        columns={[
+          {
+            key: 'run',
+            label: 'Run',
+            render: (run) => (
+              <>
+                <Link
+                  to={`/projects/${projectId}/runs/${run.id}`}
+                  className="text-cyan-400 hover:underline font-mono"
                 >
-                  {run.modes?.join(', ') || '-'}
-                </td>
-                <td className="px-4 py-3 text-gray-400 text-xs" title={run._createdIso}>
-                  {run._createdAgo}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-
-        {runsWithDates.length === 0 && (
-          <div className="py-10 text-center">
+                  {run.id.slice(0, 8)}
+                </Link>
+                {run.artifact_id && (
+                  <span className="ml-2 text-[10px] text-gray-300 bg-gray-500/10 px-1.5 py-0.5 rounded">benchmark</span>
+                )}
+              </>
+            ),
+          },
+          {
+            // Name gets the width — it's the most scannable column; Modes
+            // truncates with a tooltip instead of wrapping to 3 lines.
+            key: 'name',
+            label: 'Name',
+            cellClass: 'text-gray-300 truncate max-w-72',
+            titleOf: (run) => run.config_name || undefined,
+            render: (run) => run.config_name || run.test_config_id.slice(0, 8),
+          },
+          {
+            key: 'type',
+            label: 'Type',
+            hideBelow: 'lg',
+            render: (run) => <KindBadge kind={run.endpoint_kind} />,
+          },
+          {
+            key: 'status',
+            label: 'Status',
+            render: (run) => <StatusBadge status={runDisplayStatus(run)} />,
+          },
+          {
+            key: 'result',
+            label: 'Result',
+            render: (run) => <RunResult ok={run.success_count} fail={run.failure_count} />,
+          },
+          {
+            key: 'modes',
+            label: 'Modes',
+            hideBelow: 'lg',
+            cellClass: 'text-gray-400 truncate max-w-40',
+            titleOf: (run) => run.modes?.join(', ') || undefined,
+            render: (run) => run.modes?.join(', ') || '-',
+          },
+          {
+            key: 'created',
+            label: 'Created',
+            cellClass: 'text-gray-400',
+            titleOf: (run) => run._createdIso,
+            render: (run) => run._createdAgo,
+          },
+        ]}
+        rows={pageRuns}
+        rowKey={(run) => run.id}
+        empty={
+          <>
             <p className="text-gray-400 text-sm">{activeFilterCount > 0 ? 'No runs match the current filters' : 'No runs yet'}</p>
             {activeFilterCount === 0 && (
               <Link to={`/projects/${projectId}/tests/new`} className="text-cyan-400 text-xs mt-1 inline-block">
                 Start a network test
               </Link>
             )}
-          </div>
-        )}
-      </div>
+          </>
+        }
+      />
 
       {/* Pagination footer */}
       {runsWithDates.length > 0 && (

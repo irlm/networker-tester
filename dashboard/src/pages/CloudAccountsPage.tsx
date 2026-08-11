@@ -640,7 +640,7 @@ export function CloudAccountsPage() {
                         <button
                           onClick={() => handleCleanOrphans(acct.account_id, acct.name)}
                           disabled={cleaning === acct.account_id}
-                          className="text-xs text-amber-400 hover:text-amber-300 transition-colors disabled:opacity-50"
+                          className="text-xs text-yellow-400 hover:text-yellow-300 transition-colors disabled:opacity-50"
                           title="Delete cloud resources not referenced by the database (admin only, destructive)"
                         >
                           {cleaning === acct.account_id ? 'Cleaning...' : 'Clean orphans'}
