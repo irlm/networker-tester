@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Networker.ControlPlane.Background;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Auth;
 using Networker.Data;
@@ -71,6 +72,10 @@ public static class SystemHealthEndpoints
                 .OrderBy(h => h.CheckName)
                 .ToListAsync(ct);
 
+            // A row older than two check intervals is presented as STALE — the
+            // panel served month-old fossil rows as current when the writer
+            // died with the Rust stack (2026-08-11 finding); never again.
+            var staleCutoff = DateTime.UtcNow - (SystemHealthService.TickInterval * 2);
             var checks = latest.Select(h => new
             {
                 check_name = h.CheckName,
@@ -79,6 +84,7 @@ public static class SystemHealthEndpoints
                 message = h.Message,
                 details = RawJsonOrNull(h.Details),
                 checked_at = h.CheckedAt,
+                stale = h.CheckedAt < staleCutoff,
             });
 
             // live.core_db / live.logs_db — both probe the single core DB in the

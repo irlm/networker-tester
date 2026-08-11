@@ -10,6 +10,7 @@
     <!-- The reaper's scope-resolution/argv helpers are internal (implementation
          detail, not API) but unit-tested — expose internals to the test project. -->
     <InternalsVisibleTo Include="Networker.ControlPlane.Tests" />
+    <InternalsVisibleTo Include="Networker.Tests" />
   </ItemGroup>
 
   <ItemGroup>
