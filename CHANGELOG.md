@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.181] - 2026-08-11
+
+### Changed
+- **Benchmark regression detection is noise-aware** (PR C of the
+  measurement-SOTA gap matrix): when both the current and baseline case
+  summaries carry the artifact's bootstrap 95% CI of the median
+  (`ci95_lower`/`ci95_upper`), a p50 flag additionally requires the two
+  intervals to be disjoint in the worsening direction — a threshold-crossing
+  swing whose CIs overlap is one noisy run, not a movement. Legacy artifacts
+  without usable CIs (including the 0.0/0.0 serde placeholder) keep the pure
+  threshold behaviour. Success-rate checks unchanged.
+
+---
+
 ## [0.28.180] - 2026-08-11
 
 Measurement-methodology parity pass against BenchmarkDotNet/Perfolizer
