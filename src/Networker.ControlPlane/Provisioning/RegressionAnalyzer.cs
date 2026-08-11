@@ -31,7 +31,9 @@ public sealed record CaseStats(
     double P50,
     long SuccessCount,
     long FailureCount,
-    long IncludedSampleCount);
+    long IncludedSampleCount,
+    double Ci95Lower = double.NaN,
+    double Ci95Upper = double.NaN);
 
 /// <summary>
 /// Benchmark regression detection policy — the comparison logic the dashboard
@@ -48,6 +50,14 @@ public sealed record CaseStats(
 ///   for latency-style cases, decrease for throughput-style
 ///   <c>higher_is_better</c> cases). Severity escalates to <c>critical</c>
 ///   beyond <see cref="P50CriticalPct"/>%.</item>
+///   <item><b>noise gate</b> — when BOTH sides carry the artifact's bootstrap
+///   95% CI of the median (<c>ci95_lower</c>/<c>ci95_upper</c>), the p50 flag
+///   additionally requires the intervals to be DISJOINT in the worsening
+///   direction: a 15% swing whose confidence intervals overlap is one noisy
+///   run, not a movement (the BenchmarkDotNet-parity survey item — BDN's
+///   baseline comparison is significance-tested for the same reason). Runs
+///   without usable CIs (legacy artifacts) keep the pure threshold
+///   behaviour.</item>
 ///   <item><b>success rate</b> — flagged when the case's success rate falls
 ///   below <see cref="SuccessRateFloorPct"/>%; <c>critical</c> below
 ///   <see cref="SuccessRateCriticalPct"/>%.</item>
@@ -145,6 +155,20 @@ public static class RegressionAnalyzer
             return;
         }
 
+        // Noise gate: with usable CIs on both sides the movement must exceed
+        // both runs' sampling uncertainty — the current interval entirely on
+        // the worse side of the baseline interval.
+        if (HasUsableCi(cur) && HasUsableCi(basec))
+        {
+            var disjointWorse = cur.HigherIsBetter
+                ? cur.Ci95Upper < basec.Ci95Lower
+                : cur.Ci95Lower > basec.Ci95Upper;
+            if (!disjointWorse)
+            {
+                return;
+            }
+        }
+
         outList.Add(new Regression(
             cur.CaseId,
             cur.MetricUnit == "ms" ? MetricP50LatencyMs : MetricP50,
@@ -154,6 +178,17 @@ public static class RegressionAnalyzer
             deltaPct,
             worsenedPct > P50CriticalPct ? SeverityCritical : SeverityWarning));
     }
+
+    /// <summary>
+    /// A CI is usable when both bounds are finite, ordered, and not the
+    /// all-zero placeholder old artifacts carry for the serde-defaulted
+    /// <c>ci95_*</c> fields.
+    /// </summary>
+    private static bool HasUsableCi(CaseStats stats) =>
+        !double.IsNaN(stats.Ci95Lower)
+        && !double.IsNaN(stats.Ci95Upper)
+        && stats.Ci95Upper >= stats.Ci95Lower
+        && !(stats.Ci95Lower == 0.0 && stats.Ci95Upper == 0.0);
 
     private static void CheckSuccessRate(CaseStats cur, CaseStats basec, List<Regression> outList)
     {
@@ -228,7 +263,9 @@ public static class RegressionAnalyzer
                     GetDouble(el, "p50"),
                     GetLong(el, "success_count"),
                     GetLong(el, "failure_count"),
-                    GetLong(el, "included_sample_count")));
+                    GetLong(el, "included_sample_count"),
+                    GetDouble(el, "ci95_lower"),
+                    GetDouble(el, "ci95_upper")));
             }
 
             return result;

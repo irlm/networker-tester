@@ -245,6 +245,75 @@ public sealed class RegressionAnalyzerTests
         Assert.Empty(RegressionAnalyzer.ParseSummaries(json));
     }
 
+    // ── CI noise gate ────────────────────────────────────────────────────────
+
+    private static CaseStats LatencyWithCi(
+        string caseId, double p50, double ciLo, double ciHi) =>
+        new(caseId, "ms", HigherIsBetter: false, p50, 100, 0, 100, ciLo, ciHi);
+
+    [Fact]
+    public void P50_swing_with_overlapping_cis_is_suppressed_as_noise()
+    {
+        // +15% crosses the threshold, but the intervals overlap — one noisy
+        // run on a shared box, not a movement.
+        var result = RegressionAnalyzer.Detect(
+            [LatencyWithCi("http1-1k", 11.5, ciLo: 9.8, ciHi: 13.0)],
+            [LatencyWithCi("http1-1k", 10.0, ciLo: 9.0, ciHi: 11.2)]);
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public void P50_swing_with_disjoint_cis_still_flags()
+    {
+        var result = RegressionAnalyzer.Detect(
+            [LatencyWithCi("http1-1k", 11.5, ciLo: 11.3, ciHi: 11.8)],
+            [LatencyWithCi("http1-1k", 10.0, ciLo: 9.8, ciHi: 10.2)]);
+
+        var reg = Assert.Single(result);
+        Assert.Equal(15.0, reg.DeltaPercent, 6);
+    }
+
+    [Fact]
+    public void Throughput_drop_needs_current_ci_entirely_below_baseline_ci()
+    {
+        // Throughput worsens DOWNWARD: overlapping intervals → suppressed.
+        var overlapping = RegressionAnalyzer.Detect(
+            [new CaseStats("dl-1m", "MB/s", true, 80.0, 100, 0, 100, 70.0, 95.0)],
+            [new CaseStats("dl-1m", "MB/s", true, 100.0, 100, 0, 100, 90.0, 110.0)]);
+        Assert.Empty(overlapping);
+
+        var disjoint = RegressionAnalyzer.Detect(
+            [new CaseStats("dl-1m", "MB/s", true, 80.0, 100, 0, 100, 78.0, 82.0)],
+            [new CaseStats("dl-1m", "MB/s", true, 100.0, 100, 0, 100, 97.0, 103.0)]);
+        Assert.Single(disjoint);
+    }
+
+    [Fact]
+    public void Zero_zero_ci_is_treated_as_absent_and_keeps_threshold_behaviour()
+    {
+        // Old artifacts serde-default the ci95 fields to 0.0/0.0 — that must
+        // read as "no CI", not as an ultra-tight interval at zero.
+        var result = RegressionAnalyzer.Detect(
+            [LatencyWithCi("http1-1k", 11.5, ciLo: 0.0, ciHi: 0.0)],
+            [LatencyWithCi("http1-1k", 10.0, ciLo: 0.0, ciHi: 0.0)]);
+
+        Assert.Single(result);
+    }
+
+    [Fact]
+    public void ParseSummaries_reads_ci95_bounds()
+    {
+        var parsed = RegressionAnalyzer.ParseSummaries(
+            "[{\"case_id\":\"http1-1k\",\"metric_unit\":\"ms\",\"higher_is_better\":false," +
+            "\"p50\":10.0,\"success_count\":100,\"failure_count\":0," +
+            "\"included_sample_count\":100,\"ci95_lower\":9.5,\"ci95_upper\":10.5}]");
+
+        var stats = Assert.Single(parsed);
+        Assert.Equal(9.5, stats.Ci95Lower);
+        Assert.Equal(10.5, stats.Ci95Upper);
+    }
+
     // ── event emission seam ──────────────────────────────────────────────────
 
     private static EventBus NewBus()
