@@ -7,6 +7,7 @@ import { usePageTitle } from '../hooks/usePageTitle';
 import { useToast } from '../hooks/useToast';
 import { PageHeader } from '../components/common/PageHeader';
 import { EmptyState } from '../components/common/EmptyState';
+import { DataTable } from '../components/common/DataTable';
 import { timeAgo } from '../lib/format';
 
 const cloudBadge: Record<string, string> = {
@@ -206,106 +207,106 @@ export function BenchmarkCatalogPage() {
 
       {/* VM table */}
       {vms.length > 0 && (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs text-gray-500 border-b border-gray-800">
-                <th className="py-2 pr-3 font-medium">Name</th>
-                <th className="py-2 pr-3 font-medium">Cloud</th>
-                <th className="py-2 pr-3 font-medium">Region</th>
-                <th className="py-2 pr-3 font-medium">IP</th>
-                <th className="py-2 pr-3 font-medium">Languages</th>
-                <th className="py-2 pr-3 font-medium">Status</th>
-                <th className="py-2 pr-3 font-medium">Last Health</th>
-                <th className="py-2 font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {vms.map((vm) => (
-                <tr
-                  key={vm.vm_id}
-                  className="border-b border-gray-800/50 hover:bg-gray-800/20 transition-colors"
-                >
-                  <td className="py-2.5 pr-3 font-mono text-gray-200">{vm.name}</td>
-                  <td className="py-2.5 pr-3">
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${cloudBadge[vm.cloud] || cloudBadge.manual}`}>
-                      {vm.cloud}
+        <DataTable
+          columns={[
+            { key: 'name', label: 'Name', cellClass: 'font-mono text-gray-200', render: (vm) => vm.name },
+            {
+              key: 'cloud',
+              label: 'Cloud',
+              render: (vm) => (
+                <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${cloudBadge[vm.cloud] || cloudBadge.manual}`}>
+                  {vm.cloud}
+                </span>
+              ),
+            },
+            { key: 'region', label: 'Region', cellClass: 'text-gray-400 font-mono', render: (vm) => vm.region || '\u2014' },
+            { key: 'ip', label: 'IP', cellClass: 'text-gray-300 font-mono', render: (vm) => vm.ip },
+            {
+              key: 'languages',
+              label: 'Languages',
+              render: (vm) => (
+                <div className="flex flex-wrap gap-1">
+                  {vm.languages.length === 0 && (
+                    <span className="text-gray-500 text-xs">none</span>
+                  )}
+                  {vm.languages.map((lang) => (
+                    <span
+                      key={lang}
+                      className="text-[10px] px-1.5 py-0.5 rounded border border-cyan-700/50 bg-cyan-500/10 text-cyan-400 font-mono"
+                    >
+                      {lang}
                     </span>
-                  </td>
-                  <td className="py-2.5 pr-3 text-gray-400 font-mono">{vm.region || '\u2014'}</td>
-                  <td className="py-2.5 pr-3 text-gray-300 font-mono">{vm.ip}</td>
-                  <td className="py-2.5 pr-3">
-                    <div className="flex flex-wrap gap-1">
-                      {vm.languages.length === 0 && (
-                        <span className="text-gray-500 text-xs">none</span>
-                      )}
-                      {vm.languages.map((lang) => (
-                        <span
-                          key={lang}
-                          className="text-[10px] px-1.5 py-0.5 rounded border border-cyan-700/50 bg-cyan-500/10 text-cyan-400 font-mono"
-                        >
-                          {lang}
-                        </span>
-                      ))}
-                    </div>
-                  </td>
-                  <td className="py-2.5 pr-3">
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${statusBadge[vm.status] || statusBadge.unknown}`}>
-                      {vm.status}
-                    </span>
-                  </td>
-                  <td className="py-2.5 pr-3 text-xs text-gray-400">
-                    {vm.last_health_check ? timeAgo(vm.last_health_check) : '\u2014'}
-                  </td>
-                  <td className="py-2.5">
-                    <div className="flex items-center gap-1.5">
-                      {isOperator && (
-                        <>
+                  ))}
+                </div>
+              ),
+            },
+            {
+              key: 'status',
+              label: 'Status',
+              render: (vm) => (
+                <span className={`text-[10px] px-1.5 py-0.5 rounded ${statusBadge[vm.status] || statusBadge.unknown}`}>
+                  {vm.status}
+                </span>
+              ),
+            },
+            {
+              key: 'last_health',
+              label: 'Last Health',
+              cellClass: 'text-gray-400',
+              render: (vm) => (vm.last_health_check ? timeAgo(vm.last_health_check) : '\u2014'),
+            },
+            {
+              key: 'actions',
+              label: 'Actions',
+              render: (vm) => (
+                <div className="flex items-center gap-1.5">
+                  {isOperator && (
+                    <>
+                      <button
+                        onClick={() => handleDetect(vm.vm_id)}
+                        disabled={detectingVmId === vm.vm_id}
+                        className="px-2 py-1 text-[10px] rounded text-cyan-400 hover:bg-cyan-500/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        title="Detect installed languages"
+                      >
+                        {detectingVmId === vm.vm_id ? (
+                          <span className="inline-block motion-safe:animate-spin">&#8635;</span>
+                        ) : (
+                          'Detect'
+                        )}
+                      </button>
+                      {deletingVmId === vm.vm_id ? (
+                        <span className="flex items-center gap-1">
                           <button
-                            onClick={() => handleDetect(vm.vm_id)}
-                            disabled={detectingVmId === vm.vm_id}
-                            className="px-2 py-1 text-[10px] rounded text-cyan-400 hover:bg-cyan-500/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                            title="Detect installed languages"
+                            onClick={() => handleDelete(vm.vm_id)}
+                            className="px-2 py-1 text-[10px] rounded bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors"
                           >
-                            {detectingVmId === vm.vm_id ? (
-                              <span className="inline-block motion-safe:animate-spin">&#8635;</span>
-                            ) : (
-                              'Detect'
-                            )}
+                            Confirm
                           </button>
-                          {deletingVmId === vm.vm_id ? (
-                            <span className="flex items-center gap-1">
-                              <button
-                                onClick={() => handleDelete(vm.vm_id)}
-                                className="px-2 py-1 text-[10px] rounded bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors"
-                              >
-                                Confirm
-                              </button>
-                              <button
-                                onClick={() => setDeletingVmId(null)}
-                                className="px-1.5 py-1 text-[10px] text-gray-400 hover:text-gray-300 transition-colors"
-                              >
-                                Cancel
-                              </button>
-                            </span>
-                          ) : (
-                            <button
-                              onClick={() => setDeletingVmId(vm.vm_id)}
-                              className="px-2 py-1 text-[10px] rounded text-red-400 hover:bg-red-500/20 transition-colors"
-                              title="Delete VM"
-                            >
-                              &#10005;
-                            </button>
-                          )}
-                        </>
+                          <button
+                            onClick={() => setDeletingVmId(null)}
+                            className="px-1.5 py-1 text-[10px] text-gray-400 hover:text-gray-300 transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => setDeletingVmId(vm.vm_id)}
+                          className="px-2 py-1 text-[10px] rounded text-red-400 hover:bg-red-500/20 transition-colors"
+                          title="Delete VM"
+                        >
+                          &#10005;
+                        </button>
                       )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                    </>
+                  )}
+                </div>
+              ),
+            },
+          ]}
+          rows={vms}
+          rowKey={(vm) => vm.vm_id}
+        />
       )}
     </div>
   );

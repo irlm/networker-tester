@@ -6,6 +6,7 @@ import { usePageTitle } from '../hooks/usePageTitle';
 import { usePolling } from '../hooks/usePolling';
 import { Breadcrumb } from '../components/common/Breadcrumb';
 import { SettingsTabs } from '../components/common/SettingsTabs';
+import { DataTable } from '../components/common/DataTable';
 
 function statusBadge(link: ShareLink) {
   if (link.revoked) {
@@ -98,74 +99,68 @@ export function ShareLinksPage() {
           <p className="text-sm">Share links can be created from run and test detail pages.</p>
         </div>
       ) : (
-        <div className="table-container">
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b border-gray-800 text-gray-400">
-                  <th className="px-4 py-2 text-left">Label</th>
-                  <th className="px-4 py-2 text-left">Type</th>
-                  <th className="px-4 py-2 text-left">Status</th>
-                  <th className="px-4 py-2 text-right">Views</th>
-                  <th className="px-4 py-2 text-left">Expires</th>
-                  <th className="px-4 py-2 text-left">Created By</th>
-                  <th className="px-4 py-2 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {links.map(link => {
-                  const isActive = !link.revoked && new Date(link.expires_at) > new Date();
-                  const busy = actionInProgress === link.link_id;
-                  return (
-                    <tr key={link.link_id} className="border-b border-gray-800/30 hover:bg-gray-800/10">
-                      <td className="px-4 py-2 text-gray-200">
-                        {link.label || <span className="text-gray-500 italic">no label</span>}
-                      </td>
-                      <td className="px-4 py-2 text-gray-400 font-mono">{link.resource_type}</td>
-                      <td className="px-4 py-2">{statusBadge(link)}</td>
-                      <td className="px-4 py-2 text-gray-400 text-right font-mono">{link.access_count}</td>
-                      <td className="px-4 py-2 text-gray-400">
-                        {new Date(link.expires_at).toLocaleDateString()}
-                      </td>
-                      <td className="px-4 py-2 text-gray-400">{link.created_by_email}</td>
-                      <td className="px-4 py-2 text-right">
-                        {isProjectAdmin && (
-                          <div className="flex items-center justify-end gap-2">
-                            {isActive && (
-                              <>
-                                <button
-                                  onClick={() => handleRevoke(link.link_id)}
-                                  disabled={busy}
-                                  className="text-yellow-500 hover:text-yellow-400 disabled:opacity-50"
-                                >
-                                  Revoke
-                                </button>
-                                <button
-                                  onClick={() => handleExtend(link.link_id)}
-                                  disabled={busy}
-                                  className="text-cyan-500 hover:text-cyan-400 disabled:opacity-50"
-                                >
-                                  +30d
-                                </button>
-                              </>
-                            )}
-                            <button
-                              onClick={() => handleDelete(link.link_id)}
-                              disabled={busy}
-                              className="text-red-500 hover:text-red-400 disabled:opacity-50"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <DataTable
+          columns={[
+            {
+              key: 'label',
+              label: 'Label',
+              cellClass: 'text-gray-200',
+              render: (link) => link.label || <span className="text-gray-500 italic">no label</span>,
+            },
+            { key: 'type', label: 'Type', cellClass: 'text-gray-400 font-mono', render: (link) => link.resource_type },
+            { key: 'status', label: 'Status', render: (link) => statusBadge(link) },
+            { key: 'views', label: 'Views', align: 'right', cellClass: 'text-gray-400 font-mono', render: (link) => link.access_count },
+            {
+              key: 'expires',
+              label: 'Expires',
+              cellClass: 'text-gray-400',
+              render: (link) => new Date(link.expires_at).toLocaleDateString(),
+            },
+            { key: 'created_by', label: 'Created By', cellClass: 'text-gray-400', render: (link) => link.created_by_email },
+            {
+              key: 'actions',
+              label: 'Actions',
+              align: 'right',
+              render: (link) => {
+                const isActive = !link.revoked && new Date(link.expires_at) > new Date();
+                const busy = actionInProgress === link.link_id;
+                return (
+                  isProjectAdmin && (
+                    <div className="flex items-center justify-end gap-2">
+                      {isActive && (
+                        <>
+                          <button
+                            onClick={() => handleRevoke(link.link_id)}
+                            disabled={busy}
+                            className="text-yellow-500 hover:text-yellow-400 disabled:opacity-50"
+                          >
+                            Revoke
+                          </button>
+                          <button
+                            onClick={() => handleExtend(link.link_id)}
+                            disabled={busy}
+                            className="text-cyan-500 hover:text-cyan-400 disabled:opacity-50"
+                          >
+                            +30d
+                          </button>
+                        </>
+                      )}
+                      <button
+                        onClick={() => handleDelete(link.link_id)}
+                        disabled={busy}
+                        className="text-red-500 hover:text-red-400 disabled:opacity-50"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  )
+                );
+              },
+            },
+          ]}
+          rows={links}
+          rowKey={(link) => link.link_id}
+        />
       )}
     </div>
   );

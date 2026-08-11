@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { api, ApiError } from '../api/client';
 import type { AlertChannel, AlertEvent, AlertRule, TestConfigListItem } from '../api/types';
+import { DataTable } from '../components/common/DataTable';
 import { EmptyState } from '../components/common/EmptyState';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { ChannelDialog } from '../components/alerts/ChannelDialog';
@@ -300,76 +301,75 @@ export function AlertsPage() {
             }
           />
         ) : (
-          <div className="table-container">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
-                  <th className="px-4 py-2.5 text-left font-medium">Condition</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Window</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Scope</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Channel</th>
-                  <th className="px-4 py-2.5 text-left font-medium hidden lg:table-cell">Created</th>
-                  <th className="px-4 py-2.5 text-center font-medium w-16">On</th>
-                  <th className="px-4 py-2.5 text-left font-medium"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {rules.map((r) => (
-                  <tr
-                    key={r.rule_id}
-                    className={`border-b border-gray-800/50 hover:bg-gray-800/20 ${r.enabled ? '' : 'opacity-60'}`}
-                  >
-                    <td className="px-4 py-3 font-mono text-cyan-400/90 text-xs">
-                      {formatCondition(r.metric, r.comparator, r.threshold)}
-                    </td>
-                    <td className="px-4 py-3 text-gray-400 text-xs font-mono">
-                      {r.window_runs} run{r.window_runs === 1 ? '' : 's'}
-                    </td>
-                    <td className="px-4 py-3 text-gray-300 text-xs">{scopeLabel(r.test_config_id)}</td>
-                    <td className="px-4 py-3 text-gray-300 text-xs">
-                      {channelNames.get(r.channel_id) ?? r.channel_id.slice(0, 8)}
-                    </td>
-                    <td className="px-4 py-3 text-gray-400 text-xs hidden lg:table-cell">{timeAgo(r.created_at)}</td>
-                    <td className="px-4 py-3 text-center">
-                      {isOperator ? (
-                        <Toggle
-                          on={r.enabled}
-                          busy={toggling === r.rule_id}
-                          onClick={() => handleToggleRule(r)}
-                          title={r.enabled ? 'Disable rule' : 'Enable rule'}
-                        />
-                      ) : (
-                        <StatusBadge status={r.enabled ? 'online' : 'offline'} label={r.enabled ? 'on' : 'off'} />
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      {isOperator && (
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => setRuleDialog({ open: true, rule: r })}
-                            className="text-xs text-cyan-400 hover:text-cyan-300"
-                            title="Edit rule"
-                          >
-                            edit
-                          </button>
-                          <button
-                            onClick={() => handleDeleteRule(r)}
-                            className={`text-xs transition-colors ${
-                              confirmDelete === `rule:${r.rule_id}` ? 'text-red-400' : 'text-gray-500 hover:text-red-400'
-                            }`}
-                            title={confirmDelete === `rule:${r.rule_id}` ? 'Click again to confirm' : 'Delete rule'}
-                            aria-label={confirmDelete === `rule:${r.rule_id}` ? 'Confirm delete rule' : 'Delete rule'}
-                          >
-                            {confirmDelete === `rule:${r.rule_id}` ? 'delete?' : '✕'}
-                          </button>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DataTable
+            columns={[
+              {
+                key: 'condition',
+                label: 'Condition',
+                cellClass: 'font-mono text-cyan-400/90',
+                render: (r) => formatCondition(r.metric, r.comparator, r.threshold),
+              },
+              {
+                key: 'window',
+                label: 'Window',
+                cellClass: 'text-gray-400 font-mono',
+                render: (r) => <>{r.window_runs} run{r.window_runs === 1 ? '' : 's'}</>,
+              },
+              { key: 'scope', label: 'Scope', cellClass: 'text-gray-300', render: (r) => scopeLabel(r.test_config_id) },
+              {
+                key: 'channel',
+                label: 'Channel',
+                cellClass: 'text-gray-300',
+                render: (r) => channelNames.get(r.channel_id) ?? r.channel_id.slice(0, 8),
+              },
+              { key: 'created', label: 'Created', hideBelow: 'lg', cellClass: 'text-gray-400', render: (r) => timeAgo(r.created_at) },
+              {
+                key: 'on',
+                label: 'On',
+                cellClass: 'text-center',
+                render: (r) =>
+                  isOperator ? (
+                    <Toggle
+                      on={r.enabled}
+                      busy={toggling === r.rule_id}
+                      onClick={() => handleToggleRule(r)}
+                      title={r.enabled ? 'Disable rule' : 'Enable rule'}
+                    />
+                  ) : (
+                    <StatusBadge status={r.enabled ? 'online' : 'offline'} label={r.enabled ? 'on' : 'off'} />
+                  ),
+              },
+              {
+                key: 'actions',
+                label: '',
+                render: (r) =>
+                  isOperator && (
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setRuleDialog({ open: true, rule: r })}
+                        className="text-xs text-cyan-400 hover:text-cyan-300"
+                        title="Edit rule"
+                      >
+                        edit
+                      </button>
+                      <button
+                        onClick={() => handleDeleteRule(r)}
+                        className={`text-xs transition-colors ${
+                          confirmDelete === `rule:${r.rule_id}` ? 'text-red-400' : 'text-gray-500 hover:text-red-400'
+                        }`}
+                        title={confirmDelete === `rule:${r.rule_id}` ? 'Click again to confirm' : 'Delete rule'}
+                        aria-label={confirmDelete === `rule:${r.rule_id}` ? 'Confirm delete rule' : 'Delete rule'}
+                      >
+                        {confirmDelete === `rule:${r.rule_id}` ? 'delete?' : '✕'}
+                      </button>
+                    </div>
+                  ),
+              },
+            ]}
+            rows={rules}
+            rowKey={(r) => r.rule_id}
+            rowClass={(r) => (r.enabled ? undefined : 'opacity-60')}
+          />
         )
       ) : tab === 'channels' ? (
         channels.length === 0 ? (
@@ -388,102 +388,98 @@ export function AlertsPage() {
             }
           />
         ) : (
-          <div className="table-container">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
-                  <th className="px-4 py-2.5 text-left font-medium">Name</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Kind</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Destination</th>
-                  <th className="px-4 py-2.5 text-center font-medium w-16">On</th>
-                  <th className="px-4 py-2.5 text-left font-medium"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {channels.map((c) => (
-                  <tr
-                    key={c.channel_id}
-                    className={`border-b border-gray-800/50 hover:bg-gray-800/20 ${c.enabled ? '' : 'opacity-60'}`}
-                  >
-                    <td className="px-4 py-3 text-gray-200">{c.name}</td>
-                    <td className="px-4 py-3 text-gray-400 text-xs font-mono">{c.kind}</td>
-                    <td className="px-4 py-3 text-xs font-mono text-gray-400">
-                      {c.kind === 'webhook' ? (
-                        <span className="inline-flex items-center gap-2">
-                          <span className="truncate max-w-[28rem]" title={c.config.url}>
-                            {c.config.url}
-                          </span>
-                          {c.config.secret === SECRET_MASK && (
-                            <span
-                              className="text-[10px] text-purple-300 border border-purple-500/30 bg-purple-500/10 rounded px-1.5 py-0.5"
-                              title="Deliveries carry an HMAC-SHA256 signature header"
-                            >
-                              signed
-                            </span>
-                          )}
-                        </span>
-                      ) : (
-                        <span className="truncate max-w-[28rem] inline-block" title={(c.config.to ?? []).join(', ')}>
-                          {(c.config.to ?? []).join(', ')}
+          <DataTable
+            columns={[
+              { key: 'name', label: 'Name', cellClass: 'text-gray-200', render: (c) => c.name },
+              { key: 'kind', label: 'Kind', cellClass: 'text-gray-400 font-mono', render: (c) => c.kind },
+              {
+                key: 'destination',
+                label: 'Destination',
+                cellClass: 'font-mono text-gray-400',
+                render: (c) =>
+                  c.kind === 'webhook' ? (
+                    <span className="inline-flex items-center gap-2">
+                      <span className="truncate max-w-[28rem]" title={c.config.url}>
+                        {c.config.url}
+                      </span>
+                      {c.config.secret === SECRET_MASK && (
+                        <span
+                          className="text-[10px] text-purple-300 border border-purple-500/30 bg-purple-500/10 rounded px-1.5 py-0.5"
+                          title="Deliveries carry an HMAC-SHA256 signature header"
+                        >
+                          signed
                         </span>
                       )}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      {isOperator ? (
-                        <Toggle
-                          on={c.enabled}
-                          busy={toggling === c.channel_id}
-                          onClick={() => handleToggleChannel(c)}
-                          title={c.enabled ? 'Disable channel' : 'Enable channel'}
-                        />
-                      ) : (
-                        <StatusBadge status={c.enabled ? 'online' : 'offline'} label={c.enabled ? 'on' : 'off'} />
+                    </span>
+                  ) : (
+                    <span className="truncate max-w-[28rem] inline-block" title={(c.config.to ?? []).join(', ')}>
+                      {(c.config.to ?? []).join(', ')}
+                    </span>
+                  ),
+              },
+              {
+                key: 'on',
+                label: 'On',
+                cellClass: 'text-center',
+                render: (c) =>
+                  isOperator ? (
+                    <Toggle
+                      on={c.enabled}
+                      busy={toggling === c.channel_id}
+                      onClick={() => handleToggleChannel(c)}
+                      title={c.enabled ? 'Disable channel' : 'Enable channel'}
+                    />
+                  ) : (
+                    <StatusBadge status={c.enabled ? 'online' : 'offline'} label={c.enabled ? 'on' : 'off'} />
+                  ),
+              },
+              {
+                key: 'actions',
+                label: '',
+                render: (c) =>
+                  isOperator && (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        onClick={() => handleTestChannel(c)}
+                        disabled={testing === c.channel_id}
+                        className="text-xs text-cyan-400 hover:text-cyan-300 disabled:opacity-50"
+                        title="Send a test notification through this channel"
+                      >
+                        {testing === c.channel_id ? 'testing...' : 'Test'}
+                      </button>
+                      {testResults[c.channel_id] && (
+                        <span
+                          className={`text-[11px] font-mono ${deliveryStatusColor(testResults[c.channel_id])}`}
+                          title={testResults[c.channel_id]}
+                        >
+                          {testResults[c.channel_id]}
+                        </span>
                       )}
-                    </td>
-                    <td className="px-4 py-3">
-                      {isOperator && (
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <button
-                            onClick={() => handleTestChannel(c)}
-                            disabled={testing === c.channel_id}
-                            className="text-xs text-cyan-400 hover:text-cyan-300 disabled:opacity-50"
-                            title="Send a test notification through this channel"
-                          >
-                            {testing === c.channel_id ? 'testing...' : 'Test'}
-                          </button>
-                          {testResults[c.channel_id] && (
-                            <span
-                              className={`text-[11px] font-mono ${deliveryStatusColor(testResults[c.channel_id])}`}
-                              title={testResults[c.channel_id]}
-                            >
-                              {testResults[c.channel_id]}
-                            </span>
-                          )}
-                          <button
-                            onClick={() => setChannelDialog({ open: true, channel: c })}
-                            className="text-xs text-cyan-400 hover:text-cyan-300"
-                            title="Edit channel"
-                          >
-                            edit
-                          </button>
-                          <button
-                            onClick={() => handleDeleteChannel(c)}
-                            className={`text-xs transition-colors ${
-                              confirmDelete === `channel:${c.channel_id}` ? 'text-red-400' : 'text-gray-500 hover:text-red-400'
-                            }`}
-                            title={confirmDelete === `channel:${c.channel_id}` ? 'Click again to confirm' : 'Delete channel'}
-                            aria-label={confirmDelete === `channel:${c.channel_id}` ? 'Confirm delete channel' : 'Delete channel'}
-                          >
-                            {confirmDelete === `channel:${c.channel_id}` ? 'delete?' : '✕'}
-                          </button>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                      <button
+                        onClick={() => setChannelDialog({ open: true, channel: c })}
+                        className="text-xs text-cyan-400 hover:text-cyan-300"
+                        title="Edit channel"
+                      >
+                        edit
+                      </button>
+                      <button
+                        onClick={() => handleDeleteChannel(c)}
+                        className={`text-xs transition-colors ${
+                          confirmDelete === `channel:${c.channel_id}` ? 'text-red-400' : 'text-gray-500 hover:text-red-400'
+                        }`}
+                        title={confirmDelete === `channel:${c.channel_id}` ? 'Click again to confirm' : 'Delete channel'}
+                        aria-label={confirmDelete === `channel:${c.channel_id}` ? 'Confirm delete channel' : 'Delete channel'}
+                      >
+                        {confirmDelete === `channel:${c.channel_id}` ? 'delete?' : '✕'}
+                      </button>
+                    </div>
+                  ),
+              },
+            ]}
+            rows={channels}
+            rowKey={(c) => c.channel_id}
+            rowClass={(c) => (c.enabled ? undefined : 'opacity-60')}
+          />
         )
       ) : (
         // ── History ──────────────────────────────────────────────────────
@@ -511,51 +507,60 @@ export function AlertsPage() {
               detail="Events are recorded when a rule transitions between quiet and firing. Once a scheduled run breaches a threshold, it shows up here with its delivery outcome."
             />
           ) : (
-            <div className="table-container">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
-                    <th className="px-4 py-2.5 text-left font-medium">Time</th>
-                    <th className="px-4 py-2.5 text-left font-medium">State</th>
-                    <th className="px-4 py-2.5 text-left font-medium">Rule</th>
-                    <th className="px-4 py-2.5 text-left font-medium">Value</th>
-                    <th className="px-4 py-2.5 text-left font-medium hidden lg:table-cell">Scope</th>
-                    <th className="px-4 py-2.5 text-left font-medium hidden md:table-cell">Message</th>
-                    <th className="px-4 py-2.5 text-left font-medium">Delivery</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {events.map((e) => (
-                    <tr key={e.event_id} className="border-b border-gray-800/50 hover:bg-gray-800/20">
-                      <td className="px-4 py-2.5 text-gray-400 text-xs whitespace-nowrap" title={e.fired_at}>
-                        {timeAgo(e.fired_at)}
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <StatusBadge status={e.state === 'firing' ? 'failed' : 'completed'} label={e.state} />
-                      </td>
-                      <td className="px-4 py-2.5 font-mono text-cyan-400/90 text-xs whitespace-nowrap">
-                        {formatCondition(e.metric, e.comparator, e.threshold)}
-                      </td>
-                      <td className="px-4 py-2.5 font-mono text-gray-200 text-xs">
-                        {e.value !== null ? formatThreshold(e.metric, e.value) : '--'}
-                      </td>
-                      <td className="px-4 py-2.5 text-gray-400 text-xs hidden lg:table-cell">
-                        {scopeLabel(e.test_config_id)}
-                      </td>
-                      <td className="px-4 py-2.5 text-gray-400 text-xs hidden md:table-cell max-w-[24rem] truncate" title={e.message ?? undefined}>
-                        {e.message ?? '--'}
-                      </td>
-                      <td
-                        className={`px-4 py-2.5 text-xs font-mono max-w-[16rem] truncate ${deliveryStatusColor(e.delivery_status)}`}
-                        title={e.delivery_status ?? undefined}
-                      >
-                        {e.delivery_status ?? '--'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <DataTable
+              columns={[
+                {
+                  key: 'time',
+                  label: 'Time',
+                  cellClass: 'text-gray-400 whitespace-nowrap',
+                  titleOf: (e) => e.fired_at,
+                  render: (e) => timeAgo(e.fired_at),
+                },
+                {
+                  key: 'state',
+                  label: 'State',
+                  render: (e) => <StatusBadge status={e.state === 'firing' ? 'failed' : 'completed'} label={e.state} />,
+                },
+                {
+                  key: 'rule',
+                  label: 'Rule',
+                  cellClass: 'font-mono text-cyan-400/90 whitespace-nowrap',
+                  render: (e) => formatCondition(e.metric, e.comparator, e.threshold),
+                },
+                {
+                  key: 'value',
+                  label: 'Value',
+                  cellClass: 'font-mono text-gray-200',
+                  render: (e) => (e.value !== null ? formatThreshold(e.metric, e.value) : '--'),
+                },
+                {
+                  key: 'scope',
+                  label: 'Scope',
+                  hideBelow: 'lg',
+                  cellClass: 'text-gray-400',
+                  render: (e) => scopeLabel(e.test_config_id),
+                },
+                {
+                  key: 'message',
+                  label: 'Message',
+                  hideBelow: 'md',
+                  cellClass: 'text-gray-400 max-w-[24rem] truncate',
+                  titleOf: (e) => e.message ?? undefined,
+                  render: (e) => e.message ?? '--',
+                },
+                {
+                  key: 'delivery',
+                  label: 'Delivery',
+                  cellClass: 'font-mono max-w-[16rem] truncate',
+                  titleOf: (e) => e.delivery_status ?? undefined,
+                  render: (e) => (
+                    <span className={deliveryStatusColor(e.delivery_status)}>{e.delivery_status ?? '--'}</span>
+                  ),
+                },
+              ]}
+              rows={events}
+              rowKey={(e) => e.event_id}
+            />
           )}
 
           {(eventsOffset > 0 || events.length === EVENTS_PAGE_SIZE) && (

@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.186] - 2026-08-11
+
+Dashboard UI-5: DataTable adoption across the list pages.
+
+### Changed
+- Nine more hand-rolled tables converted to the canonical `DataTable`
+  (ShareLinks, SDK Endpoints, Cloud Accounts, Project Members pending
+  invites, Benchmark Catalog, Endpoint Runs, PerfLog logs tab, Alerts
+  rules/channels/history) — table-owning files down from 31 to 21. RBAC-
+  gated action columns are expressed as conditional column spreads so the
+  header and cells disappear together for viewers.
+- `DataTable` gains `rowClass` (per-row severity tints); the Benchmark
+  Regressions critical-row tint dropped in the v0.28.183 conversion is
+  restored.
+- Deliberately NOT converted (structural mismatches, recorded): Members
+  table (interactive select-all header), CSV import preview/results
+  (pseudo-headers, no stable row key), VM History (in-container pagination
+  footer), Users page (card lists, not tables).
+
+---
+
 ## [0.28.185] - 2026-08-11
 
 Dashboard UI-4: the benchmark-wizard merge.

@@ -10,6 +10,7 @@ import { RoleBadge } from '../components/common/RoleBadge';
 import { PageHeader } from '../components/common/PageHeader';
 import { EmptyState } from '../components/common/EmptyState';
 import { SettingsTabs } from '../components/common/SettingsTabs';
+import { DataTable } from '../components/common/DataTable';
 
 const ROLES = ['admin', 'operator', 'viewer'] as const;
 type StatusFilter = 'all' | 'active' | 'pending_acceptance' | 'denied';
@@ -398,41 +399,30 @@ export function ProjectMembersPage() {
       {pendingInvites.length > 0 && (
         <div className="mb-6">
           <h3 className="text-xs text-gray-400 uppercase tracking-wider mb-2">Pending Invites</h3>
-          <div className="table-container">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
-                  <th className="px-4 py-2.5 text-left font-medium">Email</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Role</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Invited By</th>
-                  <th className="px-4 py-2.5 text-left font-medium">Expires</th>
-                  <th className="px-4 py-2.5 text-left font-medium"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {pendingInvites.map(invite => (
-                  <tr key={invite.invite_id} className="border-b border-gray-800/50 hover:bg-gray-800/20">
-                    <td className="px-4 py-3 text-gray-200">{invite.email}</td>
-                    <td className="px-4 py-3">
-                      <RoleBadge role={invite.role} className="text-xs" />
-                    </td>
-                    <td className="px-4 py-3 text-gray-400 text-xs">{invite.invited_by_email}</td>
-                    <td className="px-4 py-3 text-gray-400 text-xs">{relativeTime(invite.expires_at)}</td>
-                    <td className="px-4 py-3">
-                      {isProjectAdmin && (
-                        <button
-                          onClick={() => handleRevokeInvite(invite.invite_id, invite.email)}
-                          className="text-xs text-gray-500 hover:text-red-400 transition-colors"
-                        >
-                          Revoke
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DataTable
+            columns={[
+              { key: 'email', label: 'Email', cellClass: 'text-gray-200', render: invite => invite.email },
+              { key: 'role', label: 'Role', render: invite => <RoleBadge role={invite.role} className="text-xs" /> },
+              { key: 'invited_by', label: 'Invited By', cellClass: 'text-gray-400', render: invite => invite.invited_by_email },
+              { key: 'expires', label: 'Expires', cellClass: 'text-gray-400', render: invite => relativeTime(invite.expires_at) },
+              {
+                key: 'actions',
+                label: '',
+                render: invite => (
+                  isProjectAdmin && (
+                    <button
+                      onClick={() => handleRevokeInvite(invite.invite_id, invite.email)}
+                      className="text-xs text-gray-500 hover:text-red-400 transition-colors"
+                    >
+                      Revoke
+                    </button>
+                  )
+                ),
+              },
+            ]}
+            rows={pendingInvites}
+            rowKey={invite => invite.invite_id}
+          />
         </div>
       )}
 

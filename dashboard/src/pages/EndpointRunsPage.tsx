@@ -20,6 +20,7 @@ import { useProject } from '../hooks/useProject';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { usePolling } from '../hooks/usePolling';
 import { Breadcrumb } from '../components/common/Breadcrumb';
+import { DataTable } from '../components/common/DataTable';
 import { ModeChipList } from '../components/common/ModeChip';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { timeAgo } from '../lib/format';
@@ -278,80 +279,94 @@ export function EndpointRunsPage() {
           detail={runs.length === 0 ? 'Pick a preset above to start.' : undefined}
         />
       ) : (
-        <div className="border border-gray-800">
-          <table className="w-full text-xs font-mono">
-            <thead>
-              <tr className="text-gray-400 text-[10px] uppercase tracking-wider bg-[var(--bg-raised)]">
-                <th className="text-left px-3 py-2 font-medium">Run</th>
-                <th className="text-left px-3 py-2 font-medium">When</th>
-                <th className="text-left px-3 py-2 font-medium">Config · modes</th>
-                <th className="text-right px-3 py-2 font-medium">Result</th>
-                <th className="text-right px-3 py-2 font-medium" />
-              </tr>
-            </thead>
-            <tbody>
-              {filteredRuns.map((run) => {
+        <DataTable
+          columns={[
+            {
+              key: 'run',
+              label: 'Run',
+              render: (run) => (
+                <Link
+                  to={`/projects/${projectId}/runs/${run.id}`}
+                  className="text-cyan-400 hover:underline"
+                >
+                  {run.id.slice(0, 8)}
+                </Link>
+              ),
+            },
+            {
+              key: 'when',
+              label: 'When',
+              cellClass: 'text-gray-400',
+              render: (run) => timeAgo(run.created_at),
+            },
+            {
+              key: 'config',
+              label: 'Config · modes',
+              render: (run) => {
                 const preset = matchPreset(run.modes);
-                const total = run.success_count + run.failure_count;
                 return (
-                  <tr key={run.id} className="border-t border-gray-800/60 hover:bg-cyan-500/[.04]">
-                    <td className="px-3 py-2">
-                      <Link
-                        to={`/projects/${projectId}/runs/${run.id}`}
-                        className="text-cyan-400 hover:underline"
-                      >
-                        {run.id.slice(0, 8)}
-                      </Link>
-                    </td>
-                    <td className="px-3 py-2 text-gray-400">{timeAgo(run.created_at)}</td>
-                    <td className="px-3 py-2">
-                      <div className="flex items-center gap-2 mb-1">
-                        {preset ? (
-                          <span className="text-[10px] px-1.5 py-0.5 border border-cyan-500/40 text-cyan-300 rounded">
-                            {preset.star && <span className="mr-0.5">★</span>}
-                            {preset.name}
-                          </span>
-                        ) : (
-                          <span className="text-[10px] px-1.5 py-0.5 border border-gray-700 text-gray-400 rounded">
-                            custom
-                          </span>
-                        )}
-                      </div>
-                      <ModeChipList modes={run.modes ?? []} />
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      {run.failure_count > 0 ? (
-                        <span className="text-yellow-300">
-                          {run.success_count}/{total}
-                          <span className="text-red-400 ml-1">· {run.failure_count} fail</span>
+                  <>
+                    <div className="flex items-center gap-2 mb-1">
+                      {preset ? (
+                        <span className="text-[10px] px-1.5 py-0.5 border border-cyan-500/40 text-cyan-300 rounded">
+                          {preset.star && <span className="mr-0.5">★</span>}
+                          {preset.name}
                         </span>
                       ) : (
-                        <span className="text-green-400">{run.success_count}/{total} ✓</span>
+                        <span className="text-[10px] px-1.5 py-0.5 border border-gray-700 text-gray-400 rounded">
+                          custom
+                        </span>
                       )}
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      <button
-                        type="button"
-                        onClick={() => launchModes(run.modes ?? [])}
-                        className="text-gray-400 hover:text-cyan-400 mr-3"
-                        title="Rerun this exact config"
-                      >
-                        ↻ rerun
-                      </button>
-                      <Link
-                        to={`/projects/${projectId}/runs/${run.id}`}
-                        className="text-gray-400 hover:text-cyan-400"
-                        title="Open run details"
-                      >
-                        →
-                      </Link>
-                    </td>
-                  </tr>
+                    </div>
+                    <ModeChipList modes={run.modes ?? []} />
+                  </>
                 );
-              })}
-            </tbody>
-          </table>
-        </div>
+              },
+            },
+            {
+              key: 'result',
+              label: 'Result',
+              align: 'right',
+              render: (run) => {
+                const total = run.success_count + run.failure_count;
+                return run.failure_count > 0 ? (
+                  <span className="text-yellow-300">
+                    {run.success_count}/{total}
+                    <span className="text-red-400 ml-1">· {run.failure_count} fail</span>
+                  </span>
+                ) : (
+                  <span className="text-green-400">{run.success_count}/{total} ✓</span>
+                );
+              },
+            },
+            {
+              key: 'actions',
+              label: '',
+              align: 'right',
+              render: (run) => (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => launchModes(run.modes ?? [])}
+                    className="text-gray-400 hover:text-cyan-400 mr-3"
+                    title="Rerun this exact config"
+                  >
+                    ↻ rerun
+                  </button>
+                  <Link
+                    to={`/projects/${projectId}/runs/${run.id}`}
+                    className="text-gray-400 hover:text-cyan-400"
+                    title="Open run details"
+                  >
+                    →
+                  </Link>
+                </>
+              ),
+            },
+          ]}
+          rows={filteredRuns}
+          rowKey={(run) => run.id}
+        />
       )}
     </div>
   );
