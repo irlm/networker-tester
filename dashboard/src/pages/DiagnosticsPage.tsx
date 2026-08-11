@@ -851,6 +851,13 @@ export function DiagnosticsPage() {
         </Link>
       </div>
 
+      <RunnerAvailabilityBanner
+        projectId={projectId}
+        testers={testers}
+        queuedCount={allRuns.filter(r => r.status === 'queued').length}
+        onWoken={() => testersApi.listTesters(projectId).then(setTesters).catch(() => {})}
+      />
+
       {/* Probe input bar */}
       <div className="border border-gray-800 rounded p-4 mb-7">
         <div className="text-[11px] tracking-wider text-gray-500 mb-2.5">Probe a URL</div>
@@ -1091,6 +1098,81 @@ export function DiagnosticsPage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Runner availability banner ───────────────────────────────────────────────
+// A probe launched with zero online runners used to queue SILENTLY until the
+// watchdog failed it (user-caught 2026-08-11, microsoft.com probe). The
+// backend now auto-wakes a stopped idle runner within ~60s; this banner makes
+// the state visible immediately and offers to start one right now.
+function RunnerAvailabilityBanner({
+  projectId,
+  testers,
+  queuedCount,
+  onWoken,
+}: {
+  projectId: string;
+  testers: TesterRow[];
+  queuedCount: number;
+  onWoken: () => void;
+}) {
+  const addToast = useToast();
+  const [starting, setStarting] = useState(false);
+
+  const online = testers.filter(t => t.power_state === 'running' && t.agent_status === 'online');
+  if (online.length > 0) return null; // healthy — stay quiet
+
+  const waking = testers.filter(t => t.power_state === 'starting');
+  const wakeable = testers.filter(
+    t => (t.power_state === 'stopped' || t.power_state === 'deallocated') && t.allocation === 'idle',
+  );
+  const queuedNote = queuedCount > 0
+    ? ` ${queuedCount} probe${queuedCount !== 1 ? 's' : ''} queued — `
+    : ' ';
+
+  if (waking.length > 0) {
+    return (
+      <div className="border border-cyan-500/30 bg-cyan-500/5 rounded p-3 mb-4 text-xs text-cyan-300">
+        No runner online —{queuedNote}waking <span className="text-cyan-200">{waking[0].name}</span> (~2 min);
+        queued probes start automatically when it connects.
+      </div>
+    );
+  }
+
+  if (wakeable.length > 0) {
+    return (
+      <div className="border border-yellow-500/30 bg-yellow-500/5 rounded p-3 mb-4 text-xs text-yellow-300 flex items-center justify-between gap-3">
+        <span>
+          No runner online —{queuedNote}probes will queue and a stopped runner wakes automatically within ~1 min.
+        </span>
+        <button
+          onClick={() => {
+            setStarting(true);
+            testersApi.startTester(projectId, wakeable[0].tester_id)
+              .then(() => { addToast('info', `Starting ${wakeable[0].name}...`); onWoken(); })
+              .catch((e) => addToast('error', `Start failed: ${e instanceof Error ? e.message : String(e)}`))
+              .finally(() => setStarting(false));
+          }}
+          disabled={starting}
+          className="px-3 py-1 border border-yellow-500/40 text-yellow-300 hover:bg-yellow-500/10 rounded transition-colors disabled:opacity-50 whitespace-nowrap"
+        >
+          {starting ? 'Starting…' : `Start ${wakeable[0].name} now`}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="border border-red-500/30 bg-red-500/5 rounded p-3 mb-4 text-xs text-red-300 flex items-center justify-between gap-3">
+      <span>No runners in this project — probes cannot run.</span>
+      <Link
+        to={`/projects/${projectId}/vms`}
+        className="px-3 py-1 border border-red-500/40 text-red-300 hover:bg-red-500/10 rounded transition-colors whitespace-nowrap"
+      >
+        Deploy a runner →
+      </Link>
     </div>
   );
 }
