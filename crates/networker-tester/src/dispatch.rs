@@ -171,12 +171,18 @@ pub async fn dispatch_once(
                 probe_count: udp_cfg.probe_count,
                 timeout_ms: udp_cfg.timeout_ms,
                 payload_size: udp_cfg.payload_size,
+                // The labeled tcp-rtt fallback (all echoes lost → cloud SNAT
+                // ate the ICMP) connects to the probe URL's own port.
+                fallback_tcp_port: Some(target.port_or_known_default().unwrap_or(443)),
             };
             run_ping_probe(run_id, seq, &ping_cfg).await
         }
         (Protocol::Path, _) => {
             let path_cfg = PathProbeConfig {
                 target_host: target.host_str().unwrap_or("").to_string(),
+                // Zero-info traces get classified against the probe URL's own
+                // port: reachable-over-TCP ⇒ the environment ate the ICMP.
+                verify_tcp_port: Some(target.port_or_known_default().unwrap_or(443)),
                 ..PathProbeConfig::default()
             };
             run_path_probe(run_id, seq, &path_cfg).await
@@ -575,9 +581,18 @@ pub fn log_attempt(a: &RequestAttempt) {
         Ping => {
             if let Some(p) = &a.ping {
                 let ttl = p.reply_ttl.map(|t| format!(" ttl={t}")).unwrap_or_default();
+                // A tcp-rtt fallback RTT must never read as an ICMP RTT.
+                let via = p
+                    .fallback_method
+                    .as_deref()
+                    .map(|m| {
+                        let port = p.fallback_port.map(|p| format!(":{p}")).unwrap_or_default();
+                        format!(" via={m}{port} (ICMP blocked)")
+                    })
+                    .unwrap_or_default();
                 info!(
                     "{status} #{seq} [ping] {addr} RTT avg={avg:.1}ms p95={p95:.1}ms \
-                     jitter={jitter:.1}ms loss={loss:.1}%{ttl}{retry}",
+                     jitter={jitter:.1}ms loss={loss:.1}%{ttl}{via}{retry}",
                     seq = a.sequence_num,
                     addr = p.remote_addr,
                     avg = p.rtt_avg_ms,

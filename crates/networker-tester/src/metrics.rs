@@ -3014,6 +3014,16 @@ pub struct PingResult {
     /// it to unprivileged sockets. `None` is "not observable", never a guess.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_ttl: Option<u32>,
+    /// Set when every ICMP echo was lost and the probe fell back to TCP
+    /// connect RTT ("tcp-rtt") — cloud SNAT layers (e.g. Azure SLB) drop
+    /// ICMP wholesale, and a labeled TCP RTT beats no data. ICMP and TCP
+    /// RTTs are NOT comparable; consumers MUST surface this label with the
+    /// numbers. `None` = genuine ICMP data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_method: Option<String>,
+    /// TCP port the fallback connected to (only with `fallback_method`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_port: Option<u16>,
     pub started_at: DateTime<Utc>,
 }
 

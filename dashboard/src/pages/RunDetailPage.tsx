@@ -860,10 +860,16 @@ export function AttemptRow({ a }: { a: LiveAttempt }) {
           <SubResult label="Ping" color="gray">
             <p className="text-gray-300">
               RTT avg {formatMs(a.ping.rtt_avg_ms)} · Jitter {formatMs(a.ping.jitter_ms)} · Loss {a.ping.loss_percent.toFixed(1)}%
+              {a.ping.fallback_method && (
+                <span className="ml-2 rounded-sm border border-yellow-700 px-1.5 py-0.5 text-xs text-yellow-400" title={`Every ICMP echo was lost (cloud NAT layers drop ICMP), so the RTTs above are TCP connect times to port ${a.ping.fallback_port ?? '?'} — not comparable to ICMP RTTs.`}>
+                  TCP RTT — ICMP blocked
+                </span>
+              )}
             </p>
             <p className="text-gray-400">
               {a.ping.probe_count} probes
               {a.ping.reply_ttl != null && ` · ttl ${a.ping.reply_ttl}`}
+              {a.ping.fallback_method && a.ping.fallback_port != null && ` · tcp :${a.ping.fallback_port}`}
             </p>
           </SubResult>
         )}

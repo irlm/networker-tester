@@ -788,11 +788,14 @@ export interface LiveAttempt {
     rpm?: number; bufferbloat_factor?: number;
     load_duration_ms: number; load_bytes_transferred: number; load_downloads_completed: number; load_throughput_mbps?: number;
   };
-  /** ICMP echo RTT (`ping` mode). reply_ttl is null when the platform can't observe it unprivileged. */
+  /** ICMP echo RTT (`ping` mode). reply_ttl is null when the platform can't observe it unprivileged.
+   *  fallback_method="tcp-rtt" means every echo was lost (cloud SNAT eats ICMP) and the RTTs are
+   *  TCP connect times to fallback_port — NOT comparable to ICMP RTTs; always show the label. */
   ping?: {
     remote_addr: string; probe_count: number; success_count: number; loss_percent: number;
     rtt_min_ms: number; rtt_avg_ms: number; rtt_p95_ms: number; jitter_ms: number;
     probe_rtts_ms: (number | null)[]; reply_ttl?: number;
+    fallback_method?: string; fallback_port?: number;
   };
   /** Hop discovery (`path` mode). hops is empty on platforms that can't observe hop addresses unprivileged (see method). */
   path?: {

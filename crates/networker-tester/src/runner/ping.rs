@@ -44,6 +44,10 @@ pub struct PingProbeConfig {
     pub timeout_ms: u64,
     /// ICMP payload size in bytes (min 16: seq marker + timestamp + padding).
     pub payload_size: usize,
+    /// TCP port for the labeled RTT fallback when EVERY echo is lost
+    /// (cloud SNAT layers drop ICMP wholesale — Azure SLB proven
+    /// v0.28.120). `None` disables the fallback.
+    pub fallback_tcp_port: Option<u16>,
 }
 
 impl Default for PingProbeConfig {
@@ -53,6 +57,7 @@ impl Default for PingProbeConfig {
             probe_count: 10,
             timeout_ms: 5000,
             payload_size: 56, // classic ping default payload
+            fallback_tcp_port: Some(443),
         }
     }
 }
@@ -149,6 +154,38 @@ pub async fn run_ping_probe(
     let stats = aggregate_udp_rtts(&probe_rtts);
     let success_count = probe_rtts.iter().filter(|r| r.is_some()).count() as u32;
 
+    // ── Labeled TCP-RTT fallback ─────────────────────────────────────────
+    // 100% echo loss from a cloud runner almost always means the SNAT layer
+    // ate the ICMP (Azure SLB does, regardless of NSG — proven live
+    // v0.28.120), not that the target is down. Fall back to TCP connect
+    // RTTs against the target port so the run yields DATA — explicitly
+    // labeled, because TCP and ICMP RTTs are not comparable.
+    if success_count == 0 && count > 0 {
+        if let Some(port) = cfg.fallback_tcp_port {
+            let tcp_rtts = tcp_rtt_probes(addr, port, count, timeout_ms).await;
+            let tcp_ok = tcp_rtts.iter().filter(|r| r.is_some()).count() as u32;
+            if tcp_ok > 0 {
+                let tcp_stats = aggregate_udp_rtts(&tcp_rtts);
+                let result = PingResult {
+                    remote_addr: addr.to_string(),
+                    probe_count: count,
+                    success_count: tcp_ok,
+                    loss_percent: tcp_stats.loss_percent,
+                    rtt_min_ms: tcp_stats.min,
+                    rtt_avg_ms: tcp_stats.avg,
+                    rtt_p95_ms: tcp_stats.p95,
+                    jitter_ms: tcp_stats.jitter,
+                    probe_rtts_ms: tcp_rtts,
+                    reply_ttl: None,
+                    fallback_method: Some("tcp-rtt".to_string()),
+                    fallback_port: Some(port),
+                    started_at,
+                };
+                return ping_attempt(run_id, attempt_id, sequence_num, started_at, result, true);
+            }
+        }
+    }
+
     let result = PingResult {
         remote_addr: addr.to_string(),
         probe_count: count,
@@ -160,9 +197,33 @@ pub async fn run_ping_probe(
         jitter_ms: stats.jitter,
         probe_rtts_ms: probe_rtts,
         reply_ttl,
+        fallback_method: None,
+        fallback_port: None,
         started_at,
     };
 
+    // Same rule as the udp probe: all echoes lost = failure (loss is
+    // still reported in the result), some echoes = success. (The TCP
+    // fallback above already returned if it produced data.)
+    ping_attempt(
+        run_id,
+        attempt_id,
+        sequence_num,
+        started_at,
+        result,
+        success_count > 0,
+    )
+}
+
+/// Assemble the ping attempt (shared by the ICMP and tcp-rtt-fallback paths).
+fn ping_attempt(
+    run_id: Uuid,
+    attempt_id: Uuid,
+    sequence_num: u32,
+    started_at: chrono::DateTime<Utc>,
+    result: PingResult,
+    success: bool,
+) -> RequestAttempt {
     RequestAttempt {
         phase: None,
         attempt_id,
@@ -171,9 +232,7 @@ pub async fn run_ping_probe(
         sequence_num,
         started_at,
         finished_at: Some(Utc::now()),
-        // Same rule as the udp probe: all echoes lost = failure (loss is
-        // still reported in the result), some echoes = success.
-        success: success_count > 0,
+        success,
         dns: None,
         tcp: None,
         tls: None,
@@ -196,6 +255,27 @@ pub async fn run_ping_probe(
         stamp: None,
         mthroughput: None,
     }
+}
+
+/// TCP connect RTT probes — the labeled fallback when ICMP is eaten by the
+/// network. Sequential like the echo loop; a failed/timed-out connect is a
+/// lost probe (`None`).
+async fn tcp_rtt_probes(addr: IpAddr, port: u16, count: u32, timeout_ms: u64) -> Vec<Option<f64>> {
+    let mut rtts = Vec::with_capacity(count as usize);
+    let timeout = std::time::Duration::from_millis(timeout_ms);
+    for _ in 0..count {
+        let t0 = std::time::Instant::now();
+        let connected =
+            tokio::time::timeout(timeout, tokio::net::TcpStream::connect((addr, port))).await;
+        match connected {
+            Ok(Ok(stream)) => {
+                rtts.push(Some(t0.elapsed().as_secs_f64() * 1000.0));
+                drop(stream); // RST/FIN immediately; we only wanted the handshake
+            }
+            _ => rtts.push(None),
+        }
+    }
+    rtts
 }
 
 async fn resolve_host(host: &str) -> Result<IpAddr, String> {
@@ -943,6 +1023,7 @@ mod tests {
             probe_count: 3,
             timeout_ms: 2000,
             payload_size: 56,
+            fallback_tcp_port: None,
         };
         let attempt = run_ping_probe(Uuid::new_v4(), 0, &cfg).await;
         if env_lacks_icmp(&attempt) {
@@ -970,6 +1051,7 @@ mod tests {
             probe_count: 1,
             timeout_ms: 200,
             payload_size: 56,
+            fallback_tcp_port: None,
         };
         let attempt = run_ping_probe(Uuid::new_v4(), 0, &cfg).await;
         assert!(!attempt.success);
@@ -989,6 +1071,7 @@ mod tests {
             probe_count: 1,
             timeout_ms: 500,
             payload_size: 56,
+            fallback_tcp_port: None,
         };
         let attempt = run_ping_probe(Uuid::new_v4(), 0, &cfg).await;
         if attempt.success {
@@ -997,5 +1080,76 @@ mod tests {
         } else {
             assert!(attempt.error.is_some(), "failure must carry an error");
         }
+    }
+
+    /// The tcp-rtt fallback helper measures real handshakes: every connect
+    /// to a listening local port yields an RTT, and the values are sane.
+    #[tokio::test]
+    async fn tcp_rtt_probes_measure_local_listener() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // Keep accepting so connects complete even with a full backlog.
+        tokio::spawn(async move {
+            loop {
+                let _ = listener.accept().await;
+            }
+        });
+
+        let rtts = tcp_rtt_probes("127.0.0.1".parse().unwrap(), port, 5, 2_000).await;
+        assert_eq!(rtts.len(), 5);
+        for rtt in &rtts {
+            let v = rtt.expect("local listener connect must succeed");
+            assert!(v > 0.0 && v < 2_000.0, "implausible local RTT {v}ms");
+        }
+    }
+
+    /// A refused/closed port is a LOST probe (`None`), never a fabricated RTT.
+    #[tokio::test]
+    async fn tcp_rtt_probes_closed_port_is_lost_not_fabricated() {
+        // Bind-then-drop to find a port that is very likely closed.
+        let port = {
+            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let rtts = tcp_rtt_probes("127.0.0.1".parse().unwrap(), port, 3, 500).await;
+        assert_eq!(rtts, vec![None, None, None]);
+    }
+
+    /// PingResult serde: the fallback fields are additive — absent from
+    /// genuine-ICMP JSON (old consumers unaffected) and round-tripping when
+    /// set (the label must survive persistence).
+    #[test]
+    fn fallback_fields_are_additive_and_round_trip() {
+        let mk = |fallback: bool| crate::metrics::PingResult {
+            remote_addr: "192.0.2.7".into(),
+            probe_count: 3,
+            success_count: 3,
+            loss_percent: 0.0,
+            rtt_min_ms: 1.0,
+            rtt_avg_ms: 2.0,
+            rtt_p95_ms: 3.0,
+            jitter_ms: 0.5,
+            probe_rtts_ms: vec![Some(2.0); 3],
+            reply_ttl: None,
+            fallback_method: fallback.then(|| "tcp-rtt".to_string()),
+            fallback_port: fallback.then_some(443),
+            started_at: Utc::now(),
+        };
+
+        let icmp_json = serde_json::to_string(&mk(false)).unwrap();
+        assert!(
+            !icmp_json.contains("fallback_method"),
+            "None must serialize to absent"
+        );
+
+        let fb_json = serde_json::to_string(&mk(true)).unwrap();
+        let back: crate::metrics::PingResult = serde_json::from_str(&fb_json).unwrap();
+        assert_eq!(back.fallback_method.as_deref(), Some("tcp-rtt"));
+        assert_eq!(back.fallback_port, Some(443));
+
+        // Old JSON (no fallback fields) still deserializes.
+        let old: crate::metrics::PingResult = serde_json::from_str(&icmp_json).unwrap();
+        assert_eq!(old.fallback_method, None);
+        assert_eq!(old.fallback_port, None);
     }
 }

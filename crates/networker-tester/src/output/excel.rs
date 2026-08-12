@@ -749,7 +749,16 @@ fn write_probe_depth(
         row += 1;
         for (seq, p) in &ping {
             ws.write(row, 0, *seq as f64)?;
-            ws.write(row, 1, p.remote_addr.as_str())?;
+            // TCP-fallback RTTs must never read as ICMP RTTs.
+            if let Some(method) = &p.fallback_method {
+                ws.write(
+                    row,
+                    1,
+                    format!("{} (via {method} — ICMP blocked)", p.remote_addr).as_str(),
+                )?;
+            } else {
+                ws.write(row, 1, p.remote_addr.as_str())?;
+            }
             ws.write(row, 2, p.probe_count as f64)?;
             ws.write(row, 3, p.success_count as f64)?;
             ws.write_with_format(row, 4, p.loss_percent, num2)?;
@@ -1731,6 +1740,8 @@ mod tests {
             jitter_ms: 0.4,
             probe_rtts_ms: vec![Some(2.2); 9],
             reply_ttl: Some(64),
+            fallback_method: None,
+            fallback_port: None,
             started_at: now,
         });
 

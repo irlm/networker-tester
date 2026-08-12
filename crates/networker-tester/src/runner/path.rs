@@ -53,6 +53,12 @@ pub struct PathProbeConfig {
     /// chosen to be closed). Constant across TTLs so all hops are measured on
     /// one ECMP flow — see the module docs on Paris-traceroute semantics.
     pub base_port: u16,
+    /// TCP port used to classify a zero-information trace: if NOTHING
+    /// answered but this port connects, the environment (cloud SNAT, e.g.
+    /// Azure SLB — proven v0.28.120) is eating the ICMP errors and the
+    /// verdict is "environment-blocked", not "path down". `None` skips the
+    /// check.
+    pub verify_tcp_port: Option<u16>,
 }
 
 pub const DEFAULT_PATH_MAX_TTL: u32 = 30;
@@ -66,6 +72,7 @@ impl Default for PathProbeConfig {
             max_ttl: DEFAULT_PATH_MAX_TTL,
             per_hop_timeout_ms: DEFAULT_PATH_HOP_TIMEOUT_MS,
             base_port: DEFAULT_PATH_BASE_PORT,
+            verify_tcp_port: Some(443),
         }
     }
 }
@@ -139,6 +146,55 @@ pub async fn run_path_probe(
         started_at,
     };
 
+    // A trace with NO information at all is ambiguous: the path could be
+    // down, or the runner's environment could be eating every ICMP error
+    // (cloud SNAT does — Azure SLB proven v0.28.120). One TCP connect to
+    // the target settles it and turns "failed" into an honest,
+    // environment-classified verdict with evidence.
+    let has_info = result.destination_reached || !result.hops.is_empty();
+    let error = if has_info {
+        None
+    } else {
+        let (category, message) = match cfg.verify_tcp_port {
+            Some(port) => match tcp_reachability_ms(addr, port, 5_000).await {
+                Some(rtt_ms) => (
+                    ErrorCategory::Config,
+                    format!(
+                        "Hop discovery blocked by this runner's environment, not the path: \
+                         no ICMP responses for any TTL 1..={max_ttl} ({method}), but the \
+                         destination IS reachable — TCP connect to port {port} in {rtt_ms:.1}ms. \
+                         Cloud SNAT layers (e.g. Azure SLB) drop ICMP; run path from a \
+                         runner with a direct public IP to see hops.",
+                        method = result.method,
+                    ),
+                ),
+                None => (
+                    ErrorCategory::Udp,
+                    format!(
+                        "No ICMP responses for any TTL 1..={max_ttl} and the destination \
+                         never answered (also unreachable on TCP port {port}) — path \
+                         blocked or target down ({})",
+                        result.method
+                    ),
+                ),
+            },
+            None => (
+                ErrorCategory::Udp,
+                format!(
+                    "No ICMP responses for any TTL 1..={max_ttl} and the destination never \
+                     answered — path blocked or ICMP filtered ({})",
+                    result.method
+                ),
+            ),
+        };
+        Some(ErrorRecord {
+            category,
+            message,
+            detail: None,
+            occurred_at: Utc::now(),
+        })
+    };
+
     RequestAttempt {
         phase: None,
         attempt_id,
@@ -150,26 +206,13 @@ pub async fn run_path_probe(
         // The probe ran and produced an honest observation either way; an
         // unreached destination (firewalled path) is a finding, not a probe
         // failure — but a trace with NO information at all is a failure.
-        success: result.destination_reached || !result.hops.is_empty(),
+        success: has_info,
         dns: None,
         tcp: None,
         tls: None,
         http: None,
         udp: None,
-        error: if result.destination_reached || !result.hops.is_empty() {
-            None
-        } else {
-            Some(ErrorRecord {
-                category: ErrorCategory::Udp,
-                message: format!(
-                    "No ICMP responses for any TTL 1..={max_ttl} and the destination never \
-                     answered — path blocked or ICMP filtered ({})",
-                    result.method
-                ),
-                detail: None,
-                occurred_at: Utc::now(),
-            })
-        },
+        error,
         retry_count: 0,
         server_timing: None,
         udp_throughput: None,
@@ -200,6 +243,21 @@ async fn resolve_host(host: &str) -> Result<IpAddr, String> {
             .map(|a| a.ip())
             .ok_or_else(|| format!("No address resolved for {host}")),
         Err(e) => Err(format!("DNS error for {host}: {e}")),
+    }
+}
+
+/// One TCP connect to classify a zero-information trace; returns the
+/// handshake RTT in ms if the destination answered.
+async fn tcp_reachability_ms(addr: IpAddr, port: u16, timeout_ms: u64) -> Option<f64> {
+    let t0 = std::time::Instant::now();
+    match tokio::time::timeout(
+        std::time::Duration::from_millis(timeout_ms),
+        tokio::net::TcpStream::connect((addr, port)),
+    )
+    .await
+    {
+        Ok(Ok(_stream)) => Some(t0.elapsed().as_secs_f64() * 1000.0),
+        _ => None,
     }
 }
 
@@ -716,6 +774,7 @@ mod tests {
             max_ttl: 4,
             per_hop_timeout_ms: 1000,
             base_port: DEFAULT_PATH_BASE_PORT,
+            verify_tcp_port: None,
         };
         let attempt = run_path_probe(Uuid::new_v4(), 0, &cfg).await;
         let Some(p) = attempt.path.as_ref() else {

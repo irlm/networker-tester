@@ -943,6 +943,7 @@ async fn ping_probe_loopback_structure() {
         probe_count: 4,
         timeout_ms: 2000,
         payload_size: 56,
+        fallback_tcp_port: None,
     };
     let attempt = run_ping_probe(Uuid::new_v4(), 0, &cfg).await;
 
