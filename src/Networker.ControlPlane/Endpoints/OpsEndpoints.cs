@@ -43,6 +43,7 @@ public static class OpsEndpoints
             [OpsServiceNames.OrphanReaper] = TimeSpan.FromMinutes(10),
             [OpsServiceNames.WorkspaceInactivity] = TimeSpan.FromHours(24),
             [OpsServiceNames.ProvisioningOrchestrator] = TimeSpan.FromSeconds(5),
+            [OpsServiceNames.AgentAutoUpgrade] = TimeSpan.FromMinutes(10),
         };
 
     /// <summary>Healthy = ticked within this many expected intervals. 3× rides

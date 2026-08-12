@@ -73,6 +73,7 @@ public class LeaderLockKeysTests
             OpsServiceNames.OrphanReaper,
             OpsServiceNames.WorkspaceInactivity,
             OpsServiceNames.ProvisioningOrchestrator,
+            OpsServiceNames.AgentAutoUpgrade,
         };
         Assert.Equal(expected, OpsServiceNames.All);
     }

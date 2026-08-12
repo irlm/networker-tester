@@ -20,6 +20,7 @@ public static class OpsServiceNames
     public const string WorkspaceInactivity = "workspace-inactivity";
     public const string ProvisioningOrchestrator = "provisioning-orchestrator";
     public const string SystemHealth = "system-health";
+    public const string AgentAutoUpgrade = "agent-auto-upgrade";
 
     /// <summary>Every known background service, in display order.</summary>
     public static readonly string[] All =
@@ -32,6 +33,7 @@ public static class OpsServiceNames
         OrphanReaper,
         WorkspaceInactivity,
         ProvisioningOrchestrator,
+        AgentAutoUpgrade,
     ];
 }
 

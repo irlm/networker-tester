@@ -135,6 +135,7 @@ public static class LeaderLockKeys
     public static readonly long OrphanReaper = KeyFor(OpsServiceNames.OrphanReaper);
     public static readonly long WorkspaceInactivity = KeyFor(OpsServiceNames.WorkspaceInactivity);
     public static readonly long ProvisioningOrchestrator = KeyFor(OpsServiceNames.ProvisioningOrchestrator);
+    public static readonly long AgentAutoUpgrade = KeyFor(OpsServiceNames.AgentAutoUpgrade);
 
     /// <summary>
     /// FNV-1a 64-bit of <c>UTF-8("networker-controlplane:" + serviceName)</c>,
