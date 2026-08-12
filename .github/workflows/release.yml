@@ -5,7 +5,11 @@ name: Release
 #   git tag v0.28.15 <merge-commit>
 #   git push origin v0.28.15
 #
-# The workflow — DEPLOY-FIRST GRAPH (the deploy never waits for Windows/mac):
+# The workflow — single-release graph (NOTE: the old "deploy-first" property
+# was lost when immutable releases removed async asset-attach — the deploy
+# now waits for the release, which waits for every build; the Windows job
+# sets prod latency. Recorded 2026-08-12; restoring deploy-first would need
+# deploy to consume workflow artifacts instead of release URLs):
 #   1. build-linux (+ sccache) builds the deploy-critical artifacts: tester/
 #      endpoint/agent (musl), alethabench, and the frontend. build-csharp
 #      publishes the control plane. build-native (macOS x64/ARM64, Windows
@@ -196,16 +200,19 @@ jobs:
           --target ${{ matrix.target }}
           --features browser
           -p networker-tester -p networker-endpoint
+        # NOTE (2026-08-12): crt-static was only ever set on the (now
+        # retired) native orchestrator step — the SHIPPED exes have always
+        # built without it and work on the prod Windows matrix. Deliberately
+        # not adding it here: changing shipped-binary linkage belongs in its
+        # own change, not a latency PR.
 
-      - name: Build orchestrator
-        run: >
-          cargo build --release --locked
-          --target ${{ matrix.target }}
-          --manifest-path benchmarks/orchestrator/Cargo.toml
-        env:
-          # Static-link the VC++ runtime on Windows so binaries work on clean
-          # Windows Server images (e.g. GCP) without installing vcredist.
-          RUSTFLAGS: ${{ contains(matrix.target, 'windows') && '-C target-feature=+crt-static' || '' }}
+      # alethabench is NOT built for native targets (2026-08-12): nothing
+      # consumes the Windows/mac archives — the installers never name them
+      # and the benchmark harness runs the musl build on Linux CI — yet the
+      # orchestrator build added ~2.5 min to the Windows job, which sets the
+      # RELEASE latency, which gates the prod deploy. Cutting it takes the
+      # tag→prod path from ~10 min to ~7.5. The musl alethabench (deploy's
+      # consumer) still ships from build-linux.
 
       # ── Package (Unix: .tar.gz) ──────────────────────────────────────────
       - name: Package (tar.gz)
@@ -221,9 +228,6 @@ jobs:
           tar czf "dist/networker-endpoint-${TARGET}.tar.gz" \
               -C "${SRC}" "networker-endpoint"
 
-          ORCH_SRC="benchmarks/orchestrator/target/${TARGET}/release"
-          tar czf "dist/alethabench-${TARGET}.tar.gz" \
-              -C "${ORCH_SRC}" "alethabench"
 
       # ── Package (Windows: .zip) ──────────────────────────────────────────
       - name: Package (zip)
@@ -243,11 +247,6 @@ jobs:
               -DestinationPath "dist\networker-endpoint-$target.zip" `
               -Force
 
-          $orchSrc = "benchmarks\orchestrator\target\$target\release"
-          Compress-Archive `
-              -Path "$orchSrc\alethabench.exe" `
-              -DestinationPath "dist\alethabench-$target.zip" `
-              -Force
 
       # Hand the archives to the release job as artifacts — the release is
       # created once with every platform's assets (immutable releases forbid
