@@ -955,6 +955,9 @@ export interface CloudAccountSummary {
   personal: boolean;
   status: string;
   last_validated: string | null;
+  /** Persisted reason when status === 'error' (the wire always sent it;
+      the type was stale until 2026-08-12). */
+  validation_error: string | null;
 }
 
 export interface ShareLink {

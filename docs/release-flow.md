@@ -92,7 +92,7 @@ installers fall back to the newest release that carries the requested asset.
 |-------|----------|-------|
 | `networker-tester-<target>.tar.gz` / `.zip` | build-linux / build-native | Rust probe engine (musl, mac x2, windows) |
 | `networker-endpoint-<target>.tar.gz` / `.zip` | build-linux / build-native | Rust diagnostic server |
-| `alethabench-<target>.tar.gz` / `.zip` | build-linux / build-native | Benchmark orchestrator |
+| `alethabench-x86_64-unknown-linux-musl.tar.gz` | build-linux | Benchmark orchestrator (musl only since v0.28.194 — native archives had no consumer and gated prod latency) |
 | `dashboard-frontend.tar.gz` | build-linux | Built React SPA (served static by nginx) |
 | `networker-controlplane-linux-x64.tar.gz` | build-csharp | Self-contained C# control plane — the laghound.com deployable |
 | `networker-agent-cs-linux-x64.tar.gz` | build-csharp | Self-contained single-file C# agent (binary named `networker-agent`) — what tester VMs bootstrap since v0.28.26 |

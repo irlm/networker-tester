@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import { timeAgo } from '../lib/format';
 import { cloudProviderText } from '../lib/provider';
 import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { api } from '../api/client';
@@ -605,17 +606,33 @@ export function CloudAccountsPage() {
             {
               key: 'status',
               label: 'Status',
+              // The validate toast is transient; the WHY must survive it.
+              // Error rows render the persisted validation_error inline
+              // (truncated, full text on hover) so "error" is never a dead
+              // end (user feedback 2026-08-12).
+              cellClass: 'max-w-80',
               render: (acct) => (
-                <span className={`inline-block px-2 py-0.5 rounded text-xs border ${STATUS_STYLES[acct.status] || 'bg-gray-500/10 text-gray-400 border-gray-500/30'}`}>
-                  {acct.status}
-                </span>
+                <div className="min-w-0">
+                  <span className={`inline-block px-2 py-0.5 rounded text-xs border ${STATUS_STYLES[acct.status] || 'bg-gray-500/10 text-gray-400 border-gray-500/30'}`}>
+                    {acct.status}
+                  </span>
+                  {acct.status === 'error' && acct.validation_error && (
+                    <p
+                      className="text-[11px] text-red-400/90 mt-1 truncate"
+                      title={acct.validation_error}
+                    >
+                      {acct.validation_error}
+                    </p>
+                  )}
+                </div>
               ),
             },
             {
               key: 'last_validated',
               label: 'Last Validated',
               cellClass: 'text-gray-400',
-              render: (acct) => (acct.last_validated ? new Date(acct.last_validated).toLocaleString() : '\u2014'),
+              titleOf: (acct) => (acct.last_validated ? new Date(acct.last_validated).toLocaleString() : undefined),
+              render: (acct) => (acct.last_validated ? timeAgo(acct.last_validated) : 'never'),
             },
             {
               key: 'actions',

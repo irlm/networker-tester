@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.194] - 2026-08-12
+
+### Fixed
+- **Cloud-account validation errors are now persistent, not a vanishing
+  toast**: error rows render the stored `validation_error` inline under
+  the status pill (truncated, full text on hover). The wire always
+  carried the field — the frontend type was stale. Last Validated shows
+  relative time with the absolute timestamp on hover.
+
+### Changed
+- **Release latency cut ~2.5 min** (tag→prod was ~10 min; user feedback):
+  the Windows build sets the release latency and the prod deploy waits on
+  the release — and it was spending 2.5 min building alethabench for
+  Windows/mac, archives nothing consumes (installers never name them; the
+  benchmark harness runs the musl build on Linux CI). Native alethabench
+  builds removed; musl still ships. The stale "deploy-first graph" header
+  comment now records reality: immutable releases made the deploy wait on
+  every build — restoring deploy-first (deploy from workflow artifacts,
+  not release URLs) is the recorded next lever if latency still matters.
+
+---
+
 ## [0.28.193] - 2026-08-11
 
 ### Fixed
