@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.192] - 2026-08-11
+
+### Fixed
+- **Cloud-account "Validate" now actually validates** (user-caught: an
+  expired AWS token showed "active"). Since the phase-3 port it had been
+  a field-presence stub — the keys existing was enough to pass. The Rust
+  validators are ported for real: Azure via a direct client-credentials
+  token request to login.microsoftonline.com (no CLI; Rust-parity
+  friendly AADSTS error messages), AWS via `aws sts get-caller-identity`,
+  GCP via `gcloud auth activate-service-account` — now against an
+  ISOLATED `CLOUDSDK_CONFIG` (the Rust version silently switched the
+  host's active gcloud account; fixed in this port). Hosts without the
+  aws/gcloud CLIs report an honest "CLI not available" instead of a fake
+  pass. Tests inject a deterministic fake — CI never calls a real cloud.
+
+---
+
 ## [0.28.191] - 2026-08-11
 
 ### Fixed

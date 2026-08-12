@@ -207,6 +207,29 @@ public sealed class ControlPlaneFixture : WebApplicationFactory<Program>, IAsync
     {
         builder.UseSetting("ConnectionStrings:Networker", _db.GetConnectionString());
         builder.UseSetting("NETWORKER_RUN_MIGRATIONS", "0");
+        // Credential validation goes to real clouds/CLIs in prod — tests get a
+        // deterministic fake with the old stub's field-presence semantics.
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<Networker.ControlPlane.Provisioning.IProviderCredentialValidator, FakeCredentialValidator>();
+        });
+    }
+
+    private sealed class FakeCredentialValidator : Networker.ControlPlane.Provisioning.IProviderCredentialValidator
+    {
+        public Task<(string Status, string? Error)> ValidateAsync(
+            string provider, IReadOnlyDictionary<string, string> creds, CancellationToken ct)
+        {
+            bool Has(string k) => creds.TryGetValue(k, out var v) && !string.IsNullOrEmpty(v);
+            var ok = provider switch
+            {
+                "azure" => Has("client_id") && Has("client_secret") && Has("tenant_id"),
+                "aws" => Has("access_key_id") && Has("secret_access_key"),
+                "gcp" => Has("json_key"),
+                _ => false,
+            };
+            return Task.FromResult(ok ? ("active", (string?)null) : ("error", (string?)"missing fields (fake validator)"));
+        }
     }
 
     /// A client carrying a JWT for the seeded user, minted by the app's OWN
