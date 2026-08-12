@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.196] - 2026-08-12
+
+### Fixed
+- **Probe run-history rows now open the run detail** (user-caught: the
+  rows were dead text — no way to inspect a finished run or watch a
+  running one, even though the detail page live-streams attempts
+  mid-run). Whole row clicks through; the timestamp is a real link
+  (middle-click friendly); trailing → affordance. Two emerald stragglers
+  in the probe page brought onto the green convention.
+
+---
+
 ## [0.28.195] - 2026-08-12
 
 ### Fixed
