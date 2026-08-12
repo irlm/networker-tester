@@ -550,6 +550,17 @@ jobs:
             echo "::error::Deploy failed — see output above"
             exit 1
           fi
+          # Positive completion marker, not just the absence of the failure
+          # sentinel: when the VM-side script dies before reaching any check
+          # (v0.28.199 incident — the artifact download curl died in a GitHub
+          # CDN outage), run-command still reports success and no
+          # DEPLOY_FAILED ever prints. The old build keeps serving while the
+          # job goes green. Same vacuous-assertion class as the bats set +e
+          # sweep — demand the affirmative signal.
+          if ! echo "$RESULT" | grep -q "Deploy v${VERSION} complete"; then
+            echo "::error::Deploy script never reached its completion marker — VM-side script died early; prod was NOT updated"
+            exit 1
+          fi
 
       - name: Update Gist
         run: |
@@ -563,6 +574,7 @@ jobs:
 
       - name: Verify deployment
         run: |
+          VERSION="${RELEASE_TAG#v}"
           echo "Verifying deployment..."
           sleep 5
           RESULT=$(az vm run-command invoke \
@@ -574,6 +586,17 @@ jobs:
               echo '=== Service status ==='
               echo \"control-plane (cs): \$(systemctl is-active alethedash-cs)\"
               echo \"endpoint:           \$(systemctl is-active networker-endpoint)\"
+
+              echo '=== App version matches the tag ==='
+              # The strongest signal a deploy actually happened: the running
+              # control plane self-reports the tag's version. Catches the
+              # died-early deploy the completion-marker check also guards.
+              APPV=\$(curl -s --max-time 5 http://localhost:5030/api/health | grep -o '\"version\":\"[^\"]*\"' | cut -d'\"' -f4)
+              echo \"control plane reports: \${APPV} (expected ${VERSION})\"
+              if [ \"\${APPV}\" != '${VERSION}' ]; then
+                echo \"VERIFY_FAILED: running version \${APPV} != released ${VERSION}\"
+                exit 1
+              fi
 
               echo '=== Binary versions ==='
               echo \"tester:       \$(/opt/alethedash/tester/networker-tester --version 2>/dev/null || echo 'missing')\"
@@ -594,6 +617,13 @@ jobs:
           echo "$RESULT"
           if echo "$RESULT" | grep -q 'VERIFY_FAILED'; then
             echo "::error::Deployment verification failed"
+            exit 1
+          fi
+          # VERIFY_OK is the affirmative marker the script prints last; the
+          # grep above only catches failures the script lived long enough to
+          # report (same died-early class as the deploy step's marker check).
+          if ! echo "$RESULT" | grep -q 'VERIFY_OK'; then
+            echo "::error::Verification script never reached VERIFY_OK — it died early; deployment state unknown"
             exit 1
           fi
           echo "Deployment verified successfully"
