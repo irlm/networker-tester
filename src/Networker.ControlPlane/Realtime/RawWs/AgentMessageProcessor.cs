@@ -377,14 +377,22 @@ public sealed class AgentMessageProcessor
         // the systemd agent reconnects, but nothing flipped power_state off the
         // stale 'stopped' the AutoShutdownService wrote — so the UI showed a
         // running runner as stopped and the upgrade path no-op'd (2026-07-31).
-        // Reconcile ONLY from a settled 'stopped'/'stopping' (never fight an
-        // in-flight start/provision, which converges via its own FinishAsync)
-        // and clear the now-false auto-shutdown status message.
+        // Reconcile from settled 'stopped'/'stopping' AND from 'starting':
+        // the auto-wake path (AutoShutdownService) sets 'starting' and has no
+        // FinishAsync of its own — its old comment claimed this reconcile
+        // completed the flip, but 'starting' was excluded, so every
+        // auto-woken tester stayed 'starting' forever and auto-shutdown
+        // (which requires 'running') never re-engaged: woken VMs never shut
+        // down again (latent since v0.28.140, caught by the 2026-08-11
+        // wake-on-launch replay). A heartbeating agent proves the VM is up,
+        // so starting→running is convergent with the lifecycle endpoint's
+        // own convergence loop, not a fight with it. 'provisioning' stays
+        // excluded — install may still be mid-flight there.
         if (agent.TesterId is { } reconTesterId)
         {
             await _db.ProjectTesters
                 .Where(t => t.TesterId == reconTesterId
-                            && (t.PowerState == "stopped" || t.PowerState == "stopping"))
+                            && (t.PowerState == "stopped" || t.PowerState == "stopping" || t.PowerState == "starting"))
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(t => t.PowerState, "running")
                     .SetProperty(t => t.StatusMessage, (string?)null)

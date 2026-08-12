@@ -100,6 +100,11 @@ public sealed class HeartbeatPowerStateReconcileTests
     [Theory]
     [InlineData("stopped")]
     [InlineData("stopping")]
+    // 'starting' = the auto-wake path, which has no convergence loop of its
+    // own — excluded here until 2026-08-11, so every auto-woken tester stayed
+    // 'starting' forever and auto-shutdown never re-engaged (cost leak,
+    // latent since v0.28.140).
+    [InlineData("starting")]
     public async Task Heartbeat_flips_stale_stopped_to_running_and_clears_status(string stale)
     {
         var sp = BuildHost();
