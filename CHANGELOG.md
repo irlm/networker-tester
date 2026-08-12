@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.193] - 2026-08-11
+
+### Fixed
+- **Auto-woken runners stayed `starting` forever and never auto-shut-down
+  again** (cost leak, latent since the wake path shipped in v0.28.140;
+  exposed by the v0.28.191 wake-on-launch field replay): the heartbeat
+  power-state reconcile deliberately excluded `starting` to avoid
+  fighting the lifecycle endpoint's convergence loop — but the auto-wake
+  path has no convergence loop, and its comment wrongly claimed the
+  reconcile completed the flip. A heartbeating agent proves the VM is up,
+  so `starting` → `running` on heartbeat is convergent; `provisioning`
+  stays excluded (install may be mid-flight). Prod's stuck runner
+  self-heals on the first heartbeat after this deploys.
+
+---
+
 ## [0.28.192] - 2026-08-11
 
 ### Fixed
