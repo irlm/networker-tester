@@ -181,7 +181,36 @@ public sealed class ProviderCredentialValidator : IProviderCredentialValidator
             psi.Environment["AWS_SESSION_TOKEN"] = sessionToken;
         }
 
-        return await RunCliAsync(psi, "AWS validation failed", "aws CLI not available", ct).ConfigureAwait(false);
+        var (status, error) = await RunCliAsync(psi, "AWS validation failed", "aws CLI not available", ct).ConfigureAwait(false);
+        return error is null ? (status, error) : (status, CleanAwsError(error));
+    }
+
+    /// <summary>
+    /// The aws CLI wraps the useful part in three layers of boilerplate
+    /// ("aws: [ERROR]: An error occurred (Code) when calling the Op
+    /// operation: message") and the UI truncates from the LEFT — so the
+    /// visible fragment carried zero signal (user screenshot 2026-08-12).
+    /// Extract the code + message and lead with the human explanation.
+    /// </summary>
+    internal static string CleanAwsError(string raw)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(
+            raw, @"An error occurred \((?<code>\w+)\) when calling the \w+ operation:\s*(?<msg>.+?)\s*$",
+            System.Text.RegularExpressions.RegexOptions.Singleline);
+        if (!m.Success)
+        {
+            return raw;
+        }
+        var code = m.Groups["code"].Value;
+        var msg = m.Groups["msg"].Value.TrimEnd('.');
+        return code switch
+        {
+            "InvalidClientTokenId" => $"Invalid access key ID — it does not exist or is deactivated ({code}).",
+            "SignatureDoesNotMatch" => $"Secret access key does not match the access key ID ({code}).",
+            "ExpiredToken" => $"Temporary credentials have expired — generate a fresh session token ({code}).",
+            "AccessDenied" => $"Key is valid but denied sts:GetCallerIdentity ({code}): {msg}.",
+            _ => $"{code}: {msg}.",
+        };
     }
 
     private async Task<(string, string?)> ValidateGcpAsync(string jsonKey, CancellationToken ct)
@@ -207,7 +236,8 @@ public sealed class ProviderCredentialValidator : IProviderCredentialValidator
             psi.ArgumentList.Add(keyPath);
             psi.Environment["CLOUDSDK_CONFIG"] = configDir;
 
-            return await RunCliAsync(psi, "GCP validation failed", "gcloud CLI not available", ct).ConfigureAwait(false);
+            var (status, error) = await RunCliAsync(psi, "GCP validation failed", "gcloud CLI not available", ct).ConfigureAwait(false);
+            return error is null ? (status, error) : (status, CleanGcloudError(error));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -217,6 +247,15 @@ public sealed class ProviderCredentialValidator : IProviderCredentialValidator
         {
             try { Directory.Delete(configDir, recursive: true); } catch { /* best effort */ }
         }
+    }
+
+    /// <summary>Strip gcloud's "ERROR: (gcloud.auth.activate-service-account)"
+    /// prefix so the visible head of the message is the reason.</summary>
+    internal static string CleanGcloudError(string raw)
+    {
+        var cleaned = System.Text.RegularExpressions.Regex.Replace(
+            raw, @"ERROR:\s*\(gcloud[\w.-]*\)\s*", "");
+        return cleaned.Length > 0 ? cleaned : raw;
     }
 
     private async Task<(string, string?)> RunCliAsync(

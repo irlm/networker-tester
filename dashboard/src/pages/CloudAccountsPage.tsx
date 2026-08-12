@@ -618,7 +618,7 @@ export function CloudAccountsPage() {
                   </span>
                   {acct.status === 'error' && acct.validation_error && (
                     <p
-                      className="text-[11px] text-red-400/90 mt-1 truncate"
+                      className="text-[11px] text-red-400/90 mt-1 line-clamp-2 break-words"
                       title={acct.validation_error}
                     >
                       {acct.validation_error}
