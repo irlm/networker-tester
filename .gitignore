@@ -51,3 +51,4 @@ __pycache__/
 
 # BenchmarkDotNet local run output (tests/Networker.Benchmarks)
 BenchmarkDotNet.Artifacts/
+test-results/
