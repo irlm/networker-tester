@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Networker.ControlPlane.Provisioning;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -253,19 +254,17 @@ public static class CloudAccountsEndpoints
         }).RequireAuthorization(AuthPolicies.ProjectMember);
 
         // POST /api/projects/{projectId}/cloud-accounts/{id}/validate — ProjectOperator.
-        // Decrypts the stored credentials and performs a best-effort provider check.
-        //
-        // NOTE: the actual provider API/CLI call is STUBBED here (see
-        // ValidateProviderStub). CI has no cloud credentials and the Rust
-        // validators shell out to az/aws/gcloud or hit login.microsoftonline.com —
-        // neither is available/appropriate in the C# test environment yet. We still
-        // exercise the real decrypt path and persist Status/LastValidated/
-        // ValidationError so the shape and DB effects match the Rust endpoint.
+        // Decrypts the stored credentials and performs the REAL provider check
+        // (IProviderCredentialValidator: Azure OAuth round-trip; aws/gcloud CLI).
+        // This was a field-presence stub until 2026-08-11 — an expired AWS key
+        // validated "active" because the fields existed. Tests inject a fake
+        // validator; CI never calls a real cloud.
         app.MapPost("/api/projects/{projectId}/cloud-accounts/{id:guid}/validate", async (
             string projectId,
             Guid id,
             NetworkerDbContext db,
             CredentialCipher cipher,
+            IProviderCredentialValidator validator,
             CancellationToken ct) =>
         {
             var account = await db.CloudAccounts
@@ -289,7 +288,7 @@ public static class CloudAccountsEndpoints
                 return Results.Ok(new { status = account.Status, validation_error = account.ValidationError });
             }
 
-            var (status, error) = ValidateProviderStub(account.Provider, creds);
+            var (status, error) = await validator.ValidateAsync(account.Provider, creds, ct);
 
             account.Status = status;
             account.LastValidated = DateTime.UtcNow;
@@ -349,39 +348,6 @@ public static class CloudAccountsEndpoints
     /// ("error", message). Replace with real provider calls once outbound cloud
     /// access is available in the deployment/test environment.
     /// </summary>
-    private static (string status, string? error) ValidateProviderStub(
-        string provider,
-        IReadOnlyDictionary<string, string> creds)
-    {
-        bool Has(string k) => creds.TryGetValue(k, out var v) && !string.IsNullOrEmpty(v);
-
-        switch (provider)
-        {
-            case "azure":
-                if (!Has("client_id") || !Has("client_secret") || !Has("tenant_id"))
-                {
-                    return ("error", "Missing client_id, client_secret, or tenant_id");
-                }
-                break;
-            case "aws":
-                if (!Has("access_key_id") || !Has("secret_access_key"))
-                {
-                    return ("error", "Missing access_key_id or secret_access_key");
-                }
-                break;
-            case "gcp":
-                if (!Has("json_key"))
-                {
-                    return ("error", "Missing json_key");
-                }
-                break;
-            default:
-                return ("error", $"Unknown provider: {provider}");
-        }
-
-        // Fields present; the real provider round-trip is not performed (stub).
-        return ("active", null);
-    }
 
     // ── DTOs (snake_case bodies/responses to match the Rust wire shapes) ───────
 

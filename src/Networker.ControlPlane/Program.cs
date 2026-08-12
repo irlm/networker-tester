@@ -75,6 +75,8 @@ builder.Services.AddNetworkerReconciliationServices();
 // byte-compatible with the Rust dashboard) and the compute provisioner (CLI
 // shell-out to az/aws/gcloud for VM lifecycle — SDKs are a later pass).
 builder.Services.AddCredentialCipher();
+builder.Services.AddHttpClient();
+builder.Services.AddSingleton<IProviderCredentialValidator, ProviderCredentialValidator>();
 builder.Services.AddComputeProvisioner();
 // M4 slice 2: the provisioning orchestrator (Pending→provision→Network→re-queue,
 // via the deploy-runner shelling install.sh) and the cloud lifecycle loops
