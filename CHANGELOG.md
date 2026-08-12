@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.198] - 2026-08-12
+
+### Added
+- **Runner auto-upgrade sweep** (closes the gap found during the v0.28.197
+  verification: nothing ever upgraded deployed runners — the eastus agent
+  sat on 0.28.126 for ~70 releases, so its probes were missing a month of
+  measurement fixes). A new leader-gated background service compares each
+  ONLINE agent's self-reported version against the control plane's own
+  version every 10 minutes and reinstalls stale runners in place via the
+  same `ReinstallScript` the manual `POST /testers/{id}/upgrade` endpoint
+  runs. Guards mirror the manual endpoint (azure, running, idle, no
+  in-flight runs) plus: at most 2 upgrades per sweep (no fleet-wide agent
+  restart storms), guarded `running → upgrading → running` transitions,
+  6-hour per-runner backoff after a failed reinstall, and a missing cloud
+  CLI is recorded honestly ("skipped: cloud CLI unavailable") instead of
+  being counted as an upgrade. Successful upgrades stamp
+  `installer_version`/`last_installed_at`, and the service reports ticks
+  to `/api/health/background` as `agent-auto-upgrade`.
+
+---
+
 ## [0.28.197] - 2026-08-12
 
 ### Added

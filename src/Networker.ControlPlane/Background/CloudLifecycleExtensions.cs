@@ -39,6 +39,7 @@ public static class CloudLifecycleExtensions
 
         services.AddHostedService<AutoShutdownService>();
         services.AddHostedService<OrphanReaperService>();
+        services.AddHostedService<AgentAutoUpgradeService>();
         return services;
     }
 }
