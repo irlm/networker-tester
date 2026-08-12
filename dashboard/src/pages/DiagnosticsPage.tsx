@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNow } from '../hooks/useNow';
-import { Link, useSearchParams } from 'react-router';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { api } from '../api/client';
 import { testersApi, type TesterRow } from '../api/testers';
 import type { EndpointRef, TestConfig, TestConfigCreate, TestConfigListItem, TestRun, Workload } from '../api/types';
@@ -246,13 +246,16 @@ function UrlCard({
   onToggle,
   onRunAgain,
   onRemove,
+  projectId,
 }: {
+  projectId: string;
   group: UrlGroup;
   expanded: boolean;
   onToggle: () => void;
   onRunAgain: (host: string) => void;
   onRemove: (host: string, configIds: Set<string>) => void;
 }) {
+  const navigate = useNavigate();
   const { host, runs, lastRun, lastStatus, configIds } = group;
   const isActive = lastRun.status === 'queued' || lastRun.status === 'running';
 
@@ -284,7 +287,7 @@ function UrlCard({
         ? 'bg-yellow-500'
         : lastStatus === 'pending'
           ? 'bg-cyan-500 animate-pulse'
-          : 'bg-emerald-500';
+          : 'bg-green-500';
 
   // Sparkline data: last 10 runs' durations
   const sparklineValues = useMemo(() => {
@@ -390,6 +393,7 @@ function UrlCard({
                       <th className="text-left py-1 px-2 font-medium border-b border-gray-800/50">Status</th>
                       <th className="text-right py-1 px-2 font-medium border-b border-gray-800/50">Results</th>
                       <th className="text-right py-1 px-2 font-medium border-b border-gray-800/50">Duration</th>
+                      <th className="border-b border-gray-800/50 w-6"></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -397,18 +401,30 @@ function UrlCard({
                       const dur = getDurationMs(run);
                       const verdict = runDisplayStatus(run);
                       return (
+                        // Every run row opens the run detail — mid-run it
+                        // live-streams attempts; finished it shows the full
+                        // breakdown. These rows were dead text before
+                        // (user-caught 2026-08-12: "cannot select some link
+                        // to see the result").
                         <tr
                           key={run.id}
-                          className={`border-b border-white/[0.02] last:border-b-0 ${
+                          onClick={() => navigate(`/projects/${projectId}/runs/${run.id}`)}
+                          className={`border-b border-white/[0.02] last:border-b-0 cursor-pointer hover:bg-gray-800/20 transition-colors ${
                             verdict === 'failed' ? 'text-red-400/80' : ''
                           }`}
                         >
-                          <td className="py-1.5 px-2 text-gray-400 whitespace-nowrap">
-                            {fmtTime(run.created_at)}
+                          <td className="py-1.5 px-2 whitespace-nowrap">
+                            <Link
+                              to={`/projects/${projectId}/runs/${run.id}`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="text-gray-400 hover:text-cyan-400"
+                            >
+                              {fmtTime(run.created_at)}
+                            </Link>
                           </td>
                           <td className="py-1.5 px-2">
                             {verdict === 'completed' ? (
-                              <span className="text-emerald-400">{'\u2713'}</span>
+                              <span className="text-green-400">{'\u2713'}</span>
                             ) : verdict === 'partial' ? (
                               <span className="text-yellow-400">{'\u2713'}</span>
                             ) : verdict === 'failed' ? (
@@ -430,6 +446,7 @@ function UrlCard({
                           <td className="py-1.5 px-2 text-right text-gray-200 font-medium">
                             {fmtMs(dur)}
                           </td>
+                          <td className="py-1.5 px-2 text-right text-gray-600 w-6">→</td>
                         </tr>
                       );
                     })}
@@ -964,7 +981,7 @@ export function DiagnosticsPage() {
           </span>
           <span className="text-gray-700">&middot;</span>
           <span className="text-gray-400">
-            <strong className={`font-medium ${summary.healthy > 0 ? 'text-emerald-400' : 'text-gray-500'}`}>{summary.healthy}</strong> healthy
+            <strong className={`font-medium ${summary.healthy > 0 ? 'text-green-400' : 'text-gray-500'}`}>{summary.healthy}</strong> healthy
           </span>
           {summary.partial > 0 && (
             <>
@@ -1061,6 +1078,7 @@ export function DiagnosticsPage() {
             <UrlCard
               key={group.host}
               group={group}
+              projectId={projectId}
               expanded={expandedCards.has(group.host)}
               onToggle={() => toggleCard(group.host)}
               onRunAgain={host => handleRun(host)}
