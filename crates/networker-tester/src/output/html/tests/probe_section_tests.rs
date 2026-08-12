@@ -55,6 +55,8 @@ fn make_ping_attempt(success_count: u32, reply_ttl: Option<u32>) -> RequestAttem
         jitter_ms: if success_count > 0 { 0.4 } else { 0.0 },
         probe_rtts_ms: vec![Some(2.2); success_count as usize],
         reply_ttl,
+        fallback_method: None,
+        fallback_port: None,
         started_at: Utc::now(),
     });
     a
@@ -306,6 +308,24 @@ fn ping_all_lost_shows_dashes_not_zero_sentinels() {
     assert!(
         !html.contains("0.00ms"),
         "fully-lost attempt must not show 0.0 sentinel RTTs"
+    );
+}
+
+#[test]
+fn ping_fallback_is_labeled_never_masquerades_as_icmp() {
+    let mut a = make_ping_attempt(3, None);
+    {
+        let p = a.ping.as_mut().unwrap();
+        p.fallback_method = Some("tcp-rtt".into());
+        p.fallback_port = Some(443);
+    }
+    let mut run = make_run();
+    run.attempts.clear();
+    run.attempts.push(a);
+    let html = render(&run, None, None);
+    assert!(
+        html.contains("via tcp-rtt (ICMP blocked)"),
+        "fallback RTTs must carry the label"
     );
 }
 

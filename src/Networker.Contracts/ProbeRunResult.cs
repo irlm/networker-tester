@@ -468,6 +468,17 @@ public sealed record PingPhase
     [JsonPropertyName("reply_ttl")]
     public uint? ReplyTtl { get; init; }
 
+    /// <summary>"tcp-rtt" when every ICMP echo was lost and the probe fell
+    /// back to TCP connect RTTs (cloud SNAT layers drop ICMP wholesale — e.g.
+    /// Azure SLB). TCP and ICMP RTTs are NOT comparable; consumers must
+    /// surface this label with the numbers. Null = genuine ICMP data.</summary>
+    [JsonPropertyName("fallback_method")]
+    public string? FallbackMethod { get; init; }
+
+    /// <summary>TCP port the fallback connected to (only with FallbackMethod).</summary>
+    [JsonPropertyName("fallback_port")]
+    public ushort? FallbackPort { get; init; }
+
     [JsonPropertyName("started_at")]
     public DateTimeOffset StartedAt { get; init; }
 }

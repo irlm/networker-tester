@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.197] - 2026-08-12
+
+### Added
+- **ping: labeled TCP-RTT fallback when ICMP is environment-blocked**
+  (user ask: "can we have some by pass on that block? at least some data
+  we can get?"). When EVERY echo is lost — the signature of cloud SNAT
+  layers eating ICMP wholesale (Azure SLB does, regardless of NSG,
+  proven live in v0.28.120) — the probe now measures TCP connect RTTs to
+  the target's own port instead of returning 0/N. The result is
+  explicitly labeled everywhere it surfaces (`fallback_method:
+  "tcp-rtt"` + `fallback_port` in the JSON contract, "via tcp-rtt (ICMP
+  blocked)" in logs and the HTML/Excel reports, a yellow "TCP RTT — ICMP
+  blocked" badge in the dashboard): a TCP handshake RTT is real data but
+  it is NOT an ICMP RTT, and it never masquerades as one. Genuine ICMP
+  results serialize byte-identically to before (fields absent).
+- **path: zero-information traces are classified, not just "failed"**.
+  When no TTL gets any response, one TCP connect to the target settles
+  the ambiguity: destination reachable ⇒ "hop discovery blocked by this
+  runner's environment, not the path" (Config category, with the
+  measured TCP RTT as evidence and a pointer to run from a direct-IP
+  runner); unreachable ⇒ "path blocked or target down" (Udp category).
+
+---
+
 ## [0.28.196] - 2026-08-12
 
 ### Fixed

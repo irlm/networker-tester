@@ -249,7 +249,7 @@ fn write_ping_section(run: &TestRun, out: &mut String) {
             out,
             r#"      <tr>
         <td>{seq}</td>
-        <td><code>{addr}</code></td>
+        <td><code>{addr}</code>{via}</td>
         <td>{sent}</td>
         <td>{recv}</td>
         <td class="{loss_cls}">{loss:.1}%</td>
@@ -262,6 +262,12 @@ fn write_ping_section(run: &TestRun, out: &mut String) {
 "#,
             seq = a.sequence_num,
             addr = escape_html(&p.remote_addr),
+            // TCP-fallback RTTs must never read as ICMP RTTs.
+            via = p
+                .fallback_method
+                .as_deref()
+                .map(|m| format!(r#" <span class="warn">via {m} (ICMP blocked)</span>"#))
+                .unwrap_or_default(),
             sent = p.probe_count,
             recv = p.success_count,
             loss = p.loss_percent,

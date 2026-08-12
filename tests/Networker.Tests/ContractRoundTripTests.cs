@@ -248,6 +248,7 @@ public class ContractRoundTripTests
               "loss_percent": 10.0, "rtt_min_ms": 7.9, "rtt_avg_ms": 9.4,
               "rtt_p95_ms": 12.6, "jitter_ms": 0.7,
               "probe_rtts_ms": [8.0, null, 9.1], "reply_ttl": 54,
+              "fallback_method": "tcp-rtt", "fallback_port": 443,
               "started_at": "2026-07-20T12:00:01Z"
             },
             "path": {
@@ -368,6 +369,8 @@ public class ContractRoundTripTests
         Assert.Equal(0.7, a.Ping.JitterMs);
         Assert.Equal(new double?[] { 8.0, null, 9.1 }, a.Ping.ProbeRttsMs);
         Assert.Equal(54u, a.Ping.ReplyTtl);
+        Assert.Equal("tcp-rtt", a.Ping.FallbackMethod);
+        Assert.Equal((ushort)443, a.Ping.FallbackPort);
 
         // ── path ────────────────────────────────────────────────────────────
         Assert.NotNull(a.Path);
