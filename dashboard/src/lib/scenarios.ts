@@ -77,8 +77,11 @@ const application = (pid: string, template: string) =>
 // the probe page selects. Kept in lockstep by scenarios.test.ts (all `any`).
 const URL_QUICK = ['dns', 'tcp', 'tls', 'http2'];
 // 'native' removed: catalog:false — release binaries lack --features native.
-const URL_STANDARD = ['dns', 'tcp', 'tls', 'tlsresume', 'http1', 'http2', 'http3', 'udp'];
-const URL_FULL = [...URL_STANDARD, 'curl', 'pageload', 'pageload2', 'pageload3', 'browser1', 'browser2', 'browser3'];
+// udp + pageload* removed 2026-08-12: endpoint-only (echo :9999 / synthetic
+// /asset ladder) — they fail by construction against raw URLs. browser* cover
+// real-site page load.
+const URL_STANDARD = ['dns', 'tcp', 'tls', 'tlsresume', 'http1', 'http2', 'http3'];
+const URL_FULL = [...URL_STANDARD, 'curl', 'browser1', 'browser2', 'browser3'];
 const URL_ROUTE = ['ping', 'path', 'dualstack', 'pmtud'];
 
 export interface ScenarioGroup {
@@ -111,11 +114,11 @@ export const SCENARIO_GROUPS: ScenarioGroup[] = [
         id: 'url-protocols',
         title: 'Protocol & handshake deep-dive',
         summary: 'Every network + HTTP layer isolated — compare protocol versions and TLS behavior.',
-        measures: ['HTTP/1·2·3', 'TLS resume', 'Native OS TLS', 'UDP RTT & jitter'],
+        measures: ['HTTP/1·2·3', 'TLS resume', 'TLS handshake', 'TTFB per protocol'],
         flow: 'url',
         badge: 'URL Probe',
         needs: 'Any reachable URL',
-        est: '~15s',
+        est: '~12s',
         modes: URL_STANDARD,
         presetId: 'standard',
         href: (pid) => probe(pid, 'standard'),
@@ -136,12 +139,12 @@ export const SCENARIO_GROUPS: ScenarioGroup[] = [
       {
         id: 'url-pageload',
         title: 'Real page-load experience',
-        summary: 'What a browser actually experiences — parallel fetch + headless Chrome render.',
-        measures: ['H1/H2/H3 page load', 'Chrome DOM + load', 'Bytes transferred'],
+        summary: 'What a browser actually experiences — headless Chrome loads over H1, H2, and H3.',
+        measures: ['Chrome DOM + load', 'H1/H2/H3 compared', 'Bytes transferred'],
         flow: 'url',
         badge: 'URL Probe',
         needs: 'Any reachable URL',
-        est: '~60s',
+        est: '~45s',
         modes: URL_FULL,
         presetId: 'full',
         href: (pid) => probe(pid, 'full'),

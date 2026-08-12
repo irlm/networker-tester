@@ -55,9 +55,9 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
     // ── Migration chain ─────────────────────────────────────────────────
 
     [Fact]
-    public void Fresh_database_applies_the_full_chain_v002_to_v047()
+    public void Fresh_database_applies_the_full_chain_v002_to_v048()
     {
-        Assert.Equal(Enumerable.Range(2, 46), _fx.FreshRun.Applied);
+        Assert.Equal(Enumerable.Range(2, 47), _fx.FreshRun.Applied);
         Assert.Empty(_fx.FreshRun.AlreadyApplied);
     }
 
@@ -70,7 +70,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
 
         Assert.True(second.WasUpToDate);
         Assert.Empty(second.Applied);
-        Assert.Equal(Enumerable.Range(2, 46), second.AlreadyApplied);
+        Assert.Equal(Enumerable.Range(2, 47), second.AlreadyApplied);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
             }
         }
 
-        Assert.Equal(Enumerable.Range(2, 46), recorded);
+        Assert.Equal(Enumerable.Range(2, 47), recorded);
     }
 
     // ── EF-model equivalence ────────────────────────────────────────────
@@ -548,6 +548,67 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
         Assert.Equal("YES", reader.GetString(1));
         Assert.False(await reader.ReadAsync());
     }
+
+    [Fact]
+    public async Task V048_strips_endpoint_only_modes_from_url_configs_only()
+    {
+        await using var conn = new NpgsqlConnection(_fx.ConnectionString);
+        await conn.OpenAsync();
+
+        // Seed one plain-URL config carrying the endpoint-only modes (the
+        // pre-V048 "Full" diagnostic shape) and one proxy-target config that
+        // legitimately runs them. V048 is idempotent, so replaying the shipped
+        // script against the already-migrated DB exercises the exact SQL.
+        var urlId = Guid.NewGuid();
+        var proxyId = Guid.NewGuid();
+        await using (var seed = new NpgsqlCommand(
+            """
+            INSERT INTO project (project_id, name, slug, settings, created_at, updated_at)
+            VALUES ('projv048000001', 'v048', 'v048', '{}', now(), now())
+            ON CONFLICT DO NOTHING;
+            INSERT INTO dash_user (user_id, email, role, created_at, must_change_password, status, auth_provider)
+            VALUES (@user, 'v048@test.local', 'admin', now(), false, 'active', 'local')
+            ON CONFLICT DO NOTHING;
+            INSERT INTO test_config (id, project_id, name, endpoint_kind, endpoint_ref, workload, created_by, created_at, updated_at)
+            VALUES
+              (@url, 'projv048000001', 'v048-url', 'network',
+               '{"kind": "network", "host": "https://example.com/"}'::jsonb,
+               '{"runs": 1, "modes": ["dns", "udp", "http2", "pageload", "pageload2", "pageload3", "browser1"]}'::jsonb,
+               @user, now(), now()),
+              (@proxy, 'projv048000001', 'v048-proxy', 'proxy',
+               '{"kind": "proxy", "proxy_stack": "nginx"}'::jsonb,
+               '{"runs": 1, "modes": ["udp", "pageload", "download"]}'::jsonb,
+               @user, now(), now());
+            """, conn))
+        {
+            seed.Parameters.AddWithValue("user", Guid.NewGuid());
+            seed.Parameters.AddWithValue("url", urlId);
+            seed.Parameters.AddWithValue("proxy", proxyId);
+            await seed.ExecuteNonQueryAsync();
+        }
+
+        await using (var replay = new NpgsqlCommand(SchemaMigrator.GetScript(48), conn))
+        {
+            await replay.ExecuteNonQueryAsync();
+        }
+
+        await using var check = new NpgsqlCommand(
+            "SELECT id, workload->'modes' FROM test_config WHERE id = ANY(@ids)", conn);
+        check.Parameters.AddWithValue("ids", new[] { urlId, proxyId });
+        var modesById = new Dictionary<Guid, string>();
+        await using (var reader = await check.ExecuteReaderAsync())
+        {
+            while (await reader.ReadAsync())
+            {
+                modesById[reader.GetGuid(0)] = reader.GetString(1);
+            }
+        }
+
+        // URL config: udp + pageload* stripped, order preserved, rest intact.
+        Assert.Equal("""["dns", "http2", "browser1"]""", modesById[urlId]);
+        // Proxy config: untouched — endpoint targets legitimately run these.
+        Assert.Equal("""["udp", "pageload", "download"]""", modesById[proxyId]);
+    }
 }
 
 /// <summary>
@@ -608,6 +669,7 @@ public sealed class MigrationScriptFreezeTests
         ["V045_drop_agent_api_key_plaintext.sql"] = "4c1e010d1195ca489d73a331c0659e77c31ffb35f721fb99f285189ab006066b",
         ["V046_run_envelope.sql"] = "4f74ac99fabbece4d3106c9baab080d72496a639a7d3ebc57125e6486428ea55",
         ["V047_benchmark_regression.sql"] = "71e4a60fa1ec664cf5b9274ed44307904ab1779458400b6094001819ea3655d7",
+        ["V048_strip_endpoint_only_modes_from_url_configs.sql"] = "629e07f03f878ffbbcff474597c9f4783c7d3cc19fd5d5fd77a9535155a237c8",
     };
 
     [Fact]
@@ -627,7 +689,7 @@ public sealed class MigrationScriptFreezeTests
             Assert.Contains(version, scripted);
         }
 
-        Assert.Equal(45, scripted.Count);
+        Assert.Equal(46, scripted.Count);
     }
 
     [Fact]

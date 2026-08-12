@@ -11,6 +11,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.199] - 2026-08-12
+
+### Fixed
+- **URL diagnostics no longer run modes that fail by construction**
+  (user-caught: a "Full" probe of an ordinary website reported 4 failed
+  attempts every time — udp echoes off the endpoint's :9999 server and
+  pageload/pageload2/pageload3 fetch the endpoint's synthetic
+  `/asset?id=N&bytes=M` ladder, which 404s on real sites; none of them
+  can ever succeed against a raw URL). `shared/modes.json` now classifies
+  all four as `requires: "networker-endpoint"` (the C# mirror, the
+  frontend classifier, and both drift guards updated in lockstep), the
+  create-time 422 gate and wizard disabling follow automatically, the
+  Quick/Standard/Full presets and scenario cards drop them for URL
+  targets (real-site page load stays covered by the browser modes), and
+  migration V048 strips them from existing URL-diagnostic configs —
+  which are reused by name across launches and referenced by schedules,
+  so without the cleanup old watchlist entries would keep failing
+  forever. Provisioned endpoint/proxy targets are untouched.
+- **Zero-echo UDP attempts now explain themselves**: an all-lost echo
+  train carries an error record naming the likely cause ("nothing is
+  listening for the echo protocol there — this mode requires a LagHound
+  endpoint's echo server") instead of a bare failed attempt with no
+  message. Partial loss remains a measurement, never an error.
+
+---
+
 ## [0.28.198] - 2026-08-12
 
 ### Added

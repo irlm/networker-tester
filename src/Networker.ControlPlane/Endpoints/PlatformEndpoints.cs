@@ -71,7 +71,7 @@ public static class PlatformEndpoints
         // "native" is catalog:false — release tester binaries ship without the
         // `native` feature, so pickers offering it produced guaranteed-failing
         // attempts ("recompile to enable"). RequirementOf still resolves it.
-        new("udp", "UDP", "Round-trip", "UDP echo probe — measures RTT, jitter, and packet loss", "Network", "any"),
+        new("udp", "UDP", "Round-trip", "UDP echo probe — measures RTT, jitter, and packet loss", "Network", "networker-endpoint"),
         new("rpm", "RPM", "Latency under load", "Bufferbloat probe — UDP echo RTT idle vs during a sustained download; reports RPM (round-trips per minute) and bufferbloat factor", "Network", "networker-endpoint"),
         new("responsiveness", "Responsiveness", "RPM under load", "Working-conditions responsiveness per draft-ietf-ippm-responsiveness — ramps parallel HTTP/2 load connections to saturation while probing latency on new and on the loaded connections; reports RPM per direction and capacity", "Network", "networker-endpoint"),
         new("stamp", "STAMP", "RFC 8762 probe", "STAMP (RFC 8762) UDP probe against the endpoint's Session-Reflector (port 9997) — processing-corrected RTT, per-direction delay variation, and directional loss", "Network", "networker-endpoint"),
@@ -87,9 +87,9 @@ public static class PlatformEndpoints
         new("curl", "Curl", "Via curl CLI", "Spawns curl binary, captures per-phase timing from --write-out", "HTTP", "any"),
         new("sdkprobe", "SDK Probe", "Server split", "Probes a customer-embedded LagHound endpoint — splits total time into DNS, TCP, TLS, network transfer, and server processing via Server-Timing", "HTTP", "sdk-endpoint"),
         // Page Load (Native)
-        new("pageload", "H1", "6 parallel connections", "Fetches page manifest + assets using 6 parallel HTTP/1.1 connections (browser-like)", "Page Load (Native)", "any"),
-        new("pageload2", "H2", "Multiplexed", "Same assets multiplexed over a single TLS/HTTP2 connection", "Page Load (Native)", "any"),
-        new("pageload3", "H3", "QUIC", "Same assets multiplexed over a single QUIC connection", "Page Load (Native)", "any"),
+        new("pageload", "H1", "6 parallel connections", "Fetches page manifest + assets using 6 parallel HTTP/1.1 connections (browser-like)", "Page Load (Native)", "networker-endpoint"),
+        new("pageload2", "H2", "Multiplexed", "Same assets multiplexed over a single TLS/HTTP2 connection", "Page Load (Native)", "networker-endpoint"),
+        new("pageload3", "H3", "QUIC", "Same assets multiplexed over a single QUIC connection", "Page Load (Native)", "networker-endpoint"),
         // Page Load (Browser)
         new("browser1", "H1", "Chrome HTTP/1.1", "Chrome headless with HTTP/2 disabled — forces HTTP/1.1", "Page Load (Browser)", "any"),
         new("browser2", "H2", "Chrome HTTP/2", "Chrome headless with QUIC disabled — forces HTTP/2", "Page Load (Browser)", "any"),

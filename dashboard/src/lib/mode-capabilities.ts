@@ -63,15 +63,28 @@ export const MODE_REQUIREMENT: Readonly<Record<string, ModeRequirement>> = {
   // message-RTT phase; an arbitrary URL has no frame-echoing WS server.
   websocket: 'networker-endpoint',
 
+  // UDP echo RTT — needs the endpoint's UDP echo server (:9999); an
+  // arbitrary URL has nothing speaking the echo protocol, so every probe is
+  // "lost" by construction (proven live 2026-08-12: 10/10 lost against a
+  // Cloudflare-fronted site while everything TCP was healthy).
+  udp: 'networker-endpoint',
+
+  // Native page-load ladder — fetches the endpoint's synthetic
+  // `/asset?id=N&bytes=M` route; against a real website all assets 404 and
+  // the 2xx-only success rule (v0.28.81) correctly fails the attempt. Real
+  // websites are measured by the `browser*` modes, which load the actual
+  // page in headless Chrome and stay 'any'.
+  pageload: 'networker-endpoint',
+  pageload2: 'networker-endpoint',
+  pageload3: 'networker-endpoint',
+
   // NOTE: `pmtud` is 'any' — DF-bit path-MTU discovery concludes from ICMP
   // fragmentation-needed errors alone; the endpoint's UDP echo (:9999) only
   // upgrades the evidence when present.
 
-  // NOTE: `udp` (echo RTT), `pageload*` (native page fetch), and `browser*`
-  // (Chrome) are 'any' — the URL Probe runs all of them against arbitrary URLs
-  // (they load a real page / probe a real host), so they must NOT be gated as
-  // endpoint-only. Chrome-on-tester is a tester capability, not a target one —
-  // a separate axis for a later slice.
+  // NOTE: `browser*` (Chrome) stay 'any' — they load the real page.
+  // Chrome-on-tester is a tester capability, not a target one — a separate
+  // axis for a later slice.
 };
 
 export function requirementOf(mode: string): ModeRequirement {
