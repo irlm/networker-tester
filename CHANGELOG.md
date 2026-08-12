@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.195] - 2026-08-12
+
+### Fixed
+- **Validation error messages lead with the reason, not boilerplate**
+  (user screenshot: the visible fragment was "aws: [ERROR]: An error
+  occurred (I…" — truncated exactly where the signal started). The aws
+  CLI stderr is parsed into a human message with the code mapped
+  (InvalidClientTokenId → "Invalid access key ID — it does not exist or
+  is deactivated"; SignatureDoesNotMatch, ExpiredToken, AccessDenied;
+  unknown codes fall back to "Code: message"). gcloud's
+  "ERROR: (gcloud.…)" prefix is stripped the same way. The row now wraps
+  to two lines instead of one-line truncation.
+
+---
+
 ## [0.28.194] - 2026-08-12
 
 ### Fixed

@@ -59,4 +59,41 @@ public sealed class ProviderCredentialValidatorTests
         var msg = ProviderCredentialValidator.MapAzureError("", "", "cid", "tid", 503);
         Assert.Equal("Azure token request failed (HTTP 503)", msg);
     }
+    // ── stderr cleaners (2026-08-12: the raw aws CLI message was three
+    // layers of boilerplate and the UI truncated exactly where the error
+    // code started — the visible fragment carried zero signal) ──────────
+
+    [Theory]
+    [InlineData(
+        "AWS validation failed: aws: [ERROR]: An error occurred (InvalidClientTokenId) when calling the GetCallerIdentity operation: The security token included in the request is invalid.",
+        "Invalid access key ID — it does not exist or is deactivated (InvalidClientTokenId).")]
+    [InlineData(
+        "AWS validation failed: An error occurred (SignatureDoesNotMatch) when calling the GetCallerIdentity operation: Signature mismatch",
+        "Secret access key does not match the access key ID (SignatureDoesNotMatch).")]
+    [InlineData(
+        "An error occurred (ExpiredToken) when calling the GetCallerIdentity operation: token expired",
+        "Temporary credentials have expired — generate a fresh session token (ExpiredToken).")]
+    [InlineData(
+        "An error occurred (SomethingNew) when calling the GetCallerIdentity operation: unusual failure.",
+        "SomethingNew: unusual failure.")]
+    public void Aws_errors_lead_with_the_human_reason(string raw, string expected)
+    {
+        Assert.Equal(expected, ProviderCredentialValidator.CleanAwsError(raw));
+    }
+
+    [Fact]
+    public void Aws_unrecognized_stderr_passes_through()
+    {
+        var raw = "aws CLI not available";
+        Assert.Equal(raw, ProviderCredentialValidator.CleanAwsError(raw));
+    }
+
+    [Fact]
+    public void Gcloud_prefix_is_stripped()
+    {
+        var raw = "GCP validation failed: ERROR: (gcloud.auth.activate-service-account) There was a problem refreshing auth tokens: invalid_grant";
+        var cleaned = ProviderCredentialValidator.CleanGcloudError(raw);
+        Assert.DoesNotContain("(gcloud.auth", cleaned);
+        Assert.Contains("invalid_grant", cleaned);
+    }
 }
