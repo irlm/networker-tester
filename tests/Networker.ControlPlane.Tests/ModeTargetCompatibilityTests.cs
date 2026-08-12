@@ -19,8 +19,8 @@ public class ModeTargetCompatibilityTests
     [InlineData("tcp", "any")]
     [InlineData("dns", "any")]
     [InlineData("http3", "any")]
-    [InlineData("udp", "any")]
-    [InlineData("pageload3", "any")]
+    [InlineData("udp", "networker-endpoint")]
+    [InlineData("pageload3", "networker-endpoint")]
     [InlineData("browser2", "any")]
     [InlineData("download", "networker-endpoint")]
     [InlineData("upload3", "networker-endpoint")]
@@ -64,11 +64,14 @@ public class ModeTargetCompatibilityTests
     // ── The gate: what gets rejected (defense-in-depth) ───────────────────────
 
     [Fact]
-    public void Network_url_rejects_throughput_sdkprobe_and_apibench()
+    public void Network_url_rejects_endpoint_only_throughput_sdkprobe_and_apibench()
     {
         // These can only fail against a raw URL — the exact case the gate exists
-        // for ("we can call tests that will fail every time").
-        foreach (var mode in new[] { "download", "upload", "udpdownload", "sdkprobe", "apibench" })
+        // for ("we can call tests that will fail every time"). udp + pageload*
+        // joined the list 2026-08-12 after a live Full diagnostic proved they
+        // fail by construction on real websites (echo :9999 / synthetic /asset
+        // ladder are endpoint-only).
+        foreach (var mode in new[] { "download", "upload", "udpdownload", "sdkprobe", "apibench", "udp", "pageload", "pageload2", "pageload3" })
         {
             var bad = ModeTargetCompatibility.IncompatibleModes([mode], "network");
             Assert.Single(bad);
@@ -77,10 +80,11 @@ public class ModeTargetCompatibilityTests
     }
 
     [Fact]
-    public void Network_url_allows_any_modes_including_udp_pageload_browser()
+    public void Network_url_allows_primitives_and_browser_modes()
     {
-        // URL Diagnostics runs all of these against arbitrary URLs.
-        var modes = new[] { "dns", "tcp", "tls", "http1", "http2", "http3", "curl", "udp", "pageload", "pageload3", "browser1", "browser3" };
+        // URL Diagnostics runs these against arbitrary URLs; browser* load the
+        // real page (unlike pageload*, which fetch the endpoint asset ladder).
+        var modes = new[] { "dns", "tcp", "tls", "http1", "http2", "http3", "curl", "browser1", "browser3", "ping", "path", "dualstack", "pmtud" };
         Assert.Empty(ModeTargetCompatibility.IncompatibleModes(modes, "network"));
     }
 

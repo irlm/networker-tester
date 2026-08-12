@@ -167,6 +167,29 @@ pub async fn run_udp_probe(
         loss_pattern,
     };
 
+    // Zero echoes back is ambiguous from the wire alone — 100% path loss, a
+    // firewall, or (most common in the field) nothing speaking the echo
+    // protocol at the target: the probe requires a networker-endpoint echo
+    // server, and against an arbitrary URL every probe is "lost" by
+    // construction. Say so instead of leaving a bare failed attempt
+    // (user-caught 2026-08-12: 0/10 with no explanation).
+    let error = if success_count == 0 {
+        Some(ErrorRecord {
+            category: ErrorCategory::Udp,
+            message: format!(
+                "No UDP echo replies from {target_addr} ({count} probes): either the path \
+                 drops UDP or nothing is listening for the echo protocol there — this mode \
+                 requires a LagHound endpoint's echo server, so 100% loss is expected \
+                 against ordinary websites",
+                count = cfg.probe_count,
+            ),
+            detail: None,
+            occurred_at: Utc::now(),
+        })
+    } else {
+        None
+    };
+
     RequestAttempt {
         phase: None,
         attempt_id,
@@ -181,7 +204,7 @@ pub async fn run_udp_probe(
         tls: None,
         http: None,
         udp: Some(result),
-        error: None,
+        error,
         retry_count: 0,
         server_timing: None,
         udp_throughput: None,
@@ -353,6 +376,56 @@ mod tests {
         let udp = attempt.udp.as_ref().unwrap();
         assert_eq!(udp.success_count, 0);
         assert_eq!(udp.loss_percent, 100.0);
+        // Zero echoes must carry an explanation — the most common cause is
+        // "no echo server at the target" and a bare failed attempt reads as
+        // a network problem (user-caught 2026-08-12).
+        assert!(!attempt.success);
+        let err = attempt
+            .error
+            .as_ref()
+            .expect("all-lost attempt must explain itself");
+        assert_eq!(err.category, ErrorCategory::Udp);
+        assert!(
+            err.message.contains("echo"),
+            "message names the echo protocol: {}",
+            err.message
+        );
+    }
+
+    /// Partial loss is a measurement, not an error — the error record is
+    /// reserved for the zero-information case.
+    #[tokio::test]
+    async fn udp_probe_partial_echoes_carry_no_error() {
+        let server = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let server_port = server.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let mut buf = [0u8; 2048];
+            let mut n_seen = 0u32;
+            while let Ok((n, addr)) = server.recv_from(&mut buf).await {
+                n_seen += 1;
+                // Echo only every second datagram: guaranteed partial loss.
+                if n_seen % 2 == 1 {
+                    let _ = server.send_to(&buf[..n], addr).await;
+                }
+            }
+        });
+
+        let cfg = UdpProbeConfig {
+            target_host: "127.0.0.1".to_string(),
+            target_port: server_port,
+            probe_count: 4,
+            timeout_ms: 500,
+            payload_size: 64,
+        };
+
+        let attempt = run_udp_probe(Uuid::new_v4(), 0, &cfg).await;
+        assert!(attempt.success);
+        assert!(
+            attempt.error.is_none(),
+            "partial loss must not set an error"
+        );
+        let udp = attempt.udp.unwrap();
+        assert!(udp.success_count > 0 && udp.success_count < 4);
     }
 
     #[test]

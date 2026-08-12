@@ -38,8 +38,17 @@ describe('requirementOf', () => {
     expect(requirementOf('websocket')).toBe('networker-endpoint');
   });
 
-  it('classifies udp / page-load / browser as any-target (the URL Probe runs them against raw URLs)', () => {
-    for (const m of ['udp', 'pageload', 'pageload3', 'browser1', 'browser2', 'browser3']) {
+  it('classifies udp + native page-load as endpoint-only (proven live 2026-08-12)', () => {
+    // udp echoes off the endpoint's :9999 server; pageload* fetch the
+    // endpoint's synthetic /asset ladder (404 on real sites since the
+    // v0.28.81 2xx-only rule). Against a raw URL they fail by construction.
+    for (const m of ['udp', 'pageload', 'pageload2', 'pageload3']) {
+      expect(requirementOf(m)).toBe('networker-endpoint');
+    }
+  });
+
+  it('classifies browser modes as any-target (they load the real page)', () => {
+    for (const m of ['browser1', 'browser2', 'browser3']) {
       expect(requirementOf(m)).toBe('any');
     }
   });
@@ -57,13 +66,15 @@ describe('requirementOf', () => {
 });
 
 describe('unsupportedReason / isModeSupported', () => {
-  it('URL target: primitives + udp + page-load + browser ok; only throughput/sdk/apibench blocked', () => {
-    // The URL Probe runs all of these against arbitrary URLs.
+  it('URL target: primitives + browser ok; endpoint-only/throughput/sdk/apibench blocked', () => {
+    // The URL Probe runs these against arbitrary URLs.
     expect(isModeSupported('http3', url)).toBe(true);
     expect(isModeSupported('tls', url)).toBe(true);
-    expect(isModeSupported('udp', url)).toBe(true);
-    expect(isModeSupported('pageload3', url)).toBe(true);
     expect(isModeSupported('browser2', url)).toBe(true);
+    // udp echo + native pageload asset ladder only exist on the endpoint —
+    // against a raw URL they fail by construction (user-caught 2026-08-12).
+    expect(isModeSupported('udp', url)).toBe(false);
+    expect(isModeSupported('pageload3', url)).toBe(false);
     // Throughput needs the endpoint's servers — the "always fails" case on a raw URL.
     expect(isModeSupported('download', url)).toBe(false);
     expect(isModeSupported('udpdownload', url)).toBe(false);
