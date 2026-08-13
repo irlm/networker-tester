@@ -29,6 +29,12 @@ pub struct ServerConfig {
     /// STAMP Session-Reflector port (RFC 8762 unauthenticated mode; `stamp`
     /// probe mode).
     pub stamp_port: u16,
+    /// Reverse-proxy every `/api/*` request to this `host:port` (a reference-API
+    /// language server) instead of serving the built-in /api implementation.
+    /// This is how a language is measured BEHIND the endpoint on platforms with
+    /// no fronting proxy (Windows targets bind 8443 directly; Linux targets get
+    /// the same effect from nginx's `location ^~ /api`). `None` = built-ins.
+    pub api_upstream: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -39,6 +45,7 @@ impl Default for ServerConfig {
             udp_port: 9999,
             udp_throughput_port: 9998,
             stamp_port: 9997,
+            api_upstream: None,
         }
     }
 }
@@ -126,6 +133,7 @@ pub async fn run_with_shutdown(
         started_at: std::time::Instant::now(),
         system_meta,
         bench_token: std::env::var("BENCH_API_TOKEN").ok(),
+        api_upstream: cfg.api_upstream.clone(),
     };
 
     let router = build_router(state);

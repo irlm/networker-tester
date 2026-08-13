@@ -923,6 +923,7 @@ mod real {
                     udp_port,
                     udp_throughput_port,
                     stamp_port: free_udp_port(),
+                    api_upstream: None,
                 };
                 tokio::spawn(async move {
                     networker_endpoint::run_with_shutdown(cfg, rx).await.ok();

@@ -36,6 +36,7 @@ async fn a_taken_udp_port_fails_startup_with_a_named_error() {
         udp_port: taken, // ← already ours
         udp_throughput_port: occupy_udp().await.1,
         stamp_port: occupy_udp().await.1,
+        api_upstream: None,
     };
 
     let (_tx, rx) = oneshot::channel::<()>();
@@ -85,6 +86,7 @@ async fn startup_succeeds_when_the_ports_are_free() {
         udp_port: 0, // 0 = service disabled, so no collision is possible
         udp_throughput_port: 0,
         stamp_port: 0,
+        api_upstream: None,
     };
 
     let (tx, rx) = oneshot::channel::<()>();
@@ -113,6 +115,7 @@ async fn a_second_instance_with_udp_disabled_coexists_with_a_full_instance() {
         udp_port: occupy_udp().await.1,
         udp_throughput_port: occupy_udp().await.1,
         stamp_port: occupy_udp().await.1,
+        api_upstream: None,
     };
     let (tx_a, rx_a) = oneshot::channel::<()>();
     let server_a = tokio::spawn(networker_endpoint::run_with_shutdown(cfg_a, rx_a));
@@ -124,6 +127,7 @@ async fn a_second_instance_with_udp_disabled_coexists_with_a_full_instance() {
         udp_port: 0,
         udp_throughput_port: 0,
         stamp_port: 0,
+        api_upstream: None,
     };
     let (tx_b, rx_b) = oneshot::channel::<()>();
     let server_b = tokio::spawn(networker_endpoint::run_with_shutdown(cfg_b, rx_b));

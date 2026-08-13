@@ -184,6 +184,7 @@ impl Endpoint {
             udp_port,
             udp_throughput_port,
             stamp_port,
+            api_upstream: None,
         };
 
         // Capture the server's outcome instead of discarding it with `.ok()`.
