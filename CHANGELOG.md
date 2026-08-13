@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.202] - 2026-08-13
+
+### Added
+- **Targets self-report the tests they support** (user ask: "the target
+  must return the tests supported"). The endpoint's `/health` now carries
+  a `services` map — live truth about which listeners this instance runs
+  (`udp_echo`, `udp_throughput`, `stamp`, `ws_echo`, `page_assets`, `h3`),
+  with port-0-disabled listeners honestly reading as null. A new
+  `GET …/deployments/{id}/capabilities` probes each target host and maps
+  the report onto probe modes (fail-closed: absence of a key is never
+  treated as capability). The target detail's "Test support" line shows
+  the target-reported truth (with a "Disabled on target" row when
+  something is off), and the Network Test launch page disables — with the
+  reason — any mode the selected target can't serve, pruning it from
+  selections and presets. Unreachable or pre-0.28.202 targets fall back
+  to the config-derived summary; filtering only ever narrows on positive
+  knowledge.
+
+---
+
 ## [0.28.201] - 2026-08-13
 
 ### Fixed

@@ -1,6 +1,6 @@
-import type { DeployEndpoint, DeploymentCostEstimate } from '../../api/types';
+import type { DeployEndpoint, DeploymentCostEstimate, TargetCapabilityReport } from '../../api/types';
 import { DetailList } from '../common/DetailList';
-import { endpointIdentity, testSupportOf } from '../../lib/deploy-endpoint';
+import { endpointIdentity, liveTestSupportOf, testSupportOf } from '../../lib/deploy-endpoint';
 
 interface TargetEndpointCardProps {
   ep: DeployEndpoint;
@@ -8,6 +8,8 @@ interface TargetEndpointCardProps {
   /** Live IP from the deployment record (endpoint_ips[i]), if any. */
   ip?: string | null;
   cost?: DeploymentCostEstimate['endpoints'][number];
+  /** Live capability self-report for this endpoint's host, if fetched. */
+  capability?: TargetCapabilityReport;
   /** Render without the border/box (drawer context provides its own section). */
   bare?: boolean;
 }
@@ -19,8 +21,11 @@ interface TargetEndpointCardProps {
  * across the endpoint top level AND the provider block (cloud configs nest
  * region/vm_size/os under ep.<provider>).
  */
-export function TargetEndpointCard({ ep, index, ip, cost, bare }: TargetEndpointCardProps) {
+export function TargetEndpointCard({ ep, index, ip, cost, capability, bare }: TargetEndpointCardProps) {
   const id = endpointIdentity(ep);
+  // Prefer the target's LIVE self-report ("the target must return the tests
+  // supported"); fall back to config-derived inference when it can't report.
+  const live = liveTestSupportOf(capability, ep);
   const body = (
     <>
       <p className="text-xs text-gray-200 font-medium mb-2">
@@ -37,7 +42,17 @@ export function TargetEndpointCard({ ep, index, ip, cost, bare }: TargetEndpoint
           ...(ep.http_stacks?.length
             ? [{ label: 'Stacks', value: ep.http_stacks.join(', ') }]
             : []),
-          { label: 'Test support', value: testSupportOf(ep) },
+          live
+            ? { label: 'Test support', value: `${live.summary} (target-reported)` }
+            : {
+                label: 'Test support',
+                value: capability && !capability.reachable
+                  ? `${testSupportOf(ep)} (configured — target unreachable)`
+                  : testSupportOf(ep),
+              },
+          ...(live && live.disabled.length > 0
+            ? [{ label: 'Disabled on target', value: live.disabled.join(', ') }]
+            : []),
           ...(cost?.hourly_usd != null
             ? [
                 { label: 'Hourly', value: `$${cost.hourly_usd.toFixed(3)}` },
