@@ -11,6 +11,7 @@ struct ConfigFile {
     udp_port: Option<u16>,
     udp_throughput_port: Option<u16>,
     stamp_port: Option<u16>,
+    api_upstream: Option<String>,
     log_level: Option<String>,
 }
 
@@ -55,6 +56,12 @@ struct Cli {
     /// 0 = disable the service)
     #[arg(long)]
     stamp_port: Option<u16>,
+
+    /// Reverse-proxy /api/* to this host:port (a reference-API language
+    /// server), shadowing the built-in /api implementation. apibench then
+    /// measures the LANGUAGE behind this endpoint instead of the built-ins.
+    #[arg(long)]
+    api_upstream: Option<String>,
 
     /// Log level e.g. "debug", "info,tower_http=debug". Overrides RUST_LOG.
     #[arg(long)]
@@ -115,6 +122,11 @@ async fn main() -> anyhow::Result<()> {
         .or(f.udp_throughput_port)
         .unwrap_or(9998);
     let stamp_port = cli.stamp_port.or(f.stamp_port).unwrap_or(9997);
+    // Empty string = explicitly disabled (config-file authors can null it out).
+    let api_upstream = cli
+        .api_upstream
+        .or(f.api_upstream)
+        .filter(|s| !s.trim().is_empty());
     let log_level = cli.log_level.or(f.log_level);
 
     let mut builder =
@@ -133,6 +145,7 @@ async fn main() -> anyhow::Result<()> {
         udp_port,
         udp_throughput_port: udp_tp_port,
         stamp_port,
+        api_upstream,
     };
 
     run(cfg).await

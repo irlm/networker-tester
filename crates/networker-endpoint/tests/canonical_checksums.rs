@@ -36,6 +36,7 @@ fn app() -> axum::Router {
         started_at: std::time::Instant::now(),
         system_meta: SystemMeta::collect(),
         bench_token: None,
+        api_upstream: None,
     })
 }
 

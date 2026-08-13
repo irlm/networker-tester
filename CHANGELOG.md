@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.203] - 2026-08-13
+
+### Added
+- **`networker-endpoint --api-upstream <host:port>`** — reverse-proxies
+  every `/api/*` request to a reference-API language server, fully
+  shadowing the built-in `/api` implementation (the same semantics the
+  fronting nginx's `location ^~ /api` gives Linux targets). This is the
+  enabler for Windows-target language support: Windows endpoints bind
+  :8443 directly with no fronting proxy, so until now a language server
+  could not sit behind them at all. A dead upstream surfaces as a loud
+  502 naming the cause — never a silent fallback to the built-ins, which
+  would mislabel what apibench measured. `/health` `services` reports
+  `api_upstream` so the capability self-report tells consumers exactly
+  what `/api` measures.
+
+---
+
 ## [0.28.202] - 2026-08-13
 
 ### Added

@@ -38,6 +38,9 @@ pub struct AppState {
     pub udp_throughput_port: u16,
     /// STAMP Session-Reflector port (RFC 8762).
     pub stamp_port: u16,
+    /// `host:port` of a reference-API language server that SHADOWS the
+    /// built-in /api implementation (see `ServerConfig::api_upstream`).
+    pub api_upstream: Option<String>,
     pub started_at: Instant,
     pub system_meta: SystemMeta,
     /// Bearer token enforced by the auth middleware when set. Carried in
@@ -457,13 +460,24 @@ pub fn build_router(state: AppState) -> Router {
         .route("/browser-page", get(browser_page))
         .route("/asset", get(asset_handler))
         // ── JSON API benchmark endpoints ──
-        .route("/api/users", get(api_users))
-        .route("/api/transform", post(api_transform))
-        .route("/api/aggregate", get(api_aggregate))
-        .route("/api/search", get(api_search))
-        .route("/api/upload/process", post(api_upload_process))
-        .route("/api/delayed", get(api_delayed))
-        .route("/api/validate", get(api_validate))
+        // With an api_upstream configured, /api/* is reverse-proxied WHOLESALE
+        // to the reference-API language server and the built-ins are not
+        // mounted — matching the Linux front-nginx `location ^~ /api`
+        // semantics, so apibench measures the LANGUAGE, never a mix.
+        .merge(if state.api_upstream.is_some() {
+            Router::new()
+                .route("/api/{*rest}", axum::routing::any(api_proxy))
+                .route("/api", axum::routing::any(api_proxy))
+        } else {
+            Router::new()
+                .route("/api/users", get(api_users))
+                .route("/api/transform", post(api_transform))
+                .route("/api/aggregate", get(api_aggregate))
+                .route("/api/search", get(api_search))
+                .route("/api/upload/process", post(api_upload_process))
+                .route("/api/delayed", get(api_delayed))
+                .route("/api/validate", get(api_validate))
+        })
         // Provide AppState to all handlers (converts Router<AppState> -> Router<()>).
         .with_state(state.clone())
         // Allow upload probes up to 2 GiB (matching the download cap) while
@@ -862,6 +876,12 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
             "udp_throughput": port_or_null(state.udp_throughput_port),
             "stamp": port_or_null(state.stamp_port),
             "h3": state.h3_port.map_or(serde_json::Value::Null, |p| serde_json::json!(p)),
+            // Set when /api/* is reverse-proxied to a reference-API language
+            // server (apibench measures the language, not the built-ins).
+            "api_upstream": state
+                .api_upstream
+                .as_deref()
+                .map_or(serde_json::Value::Null, |u| serde_json::json!(u)),
         },
     }))
 }
@@ -1756,6 +1776,61 @@ struct ValidateParams {
     seed: Option<u64>,
 }
 
+/// Reverse-proxy one /api request to the configured language server. Streams
+/// both bodies; upstream connection errors surface as 502 with the reason —
+/// never as a silent fallback to the built-ins (that would mislabel WHAT was
+/// measured, the v0.28.114 wrong-backend class).
+async fn api_proxy(State(state): State<AppState>, req: Request) -> Response {
+    let Some(upstream) = state.api_upstream.clone() else {
+        // Unreachable by construction (route only mounted when set).
+        return status_response(500, "api_upstream not configured");
+    };
+
+    static CLIENT: OnceLock<
+        hyper_util::client::legacy::Client<
+            hyper_util::client::legacy::connect::HttpConnector,
+            Body,
+        >,
+    > = OnceLock::new();
+    let client = CLIENT.get_or_init(|| {
+        hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
+            .build_http()
+    });
+
+    let path_and_query = req
+        .uri()
+        .path_and_query()
+        .map(|pq| pq.as_str().to_owned())
+        .unwrap_or_else(|| "/".to_owned());
+    let uri = match format!("http://{upstream}{path_and_query}").parse::<http::Uri>() {
+        Ok(u) => u,
+        Err(e) => return status_response(502, &format!("bad api_upstream uri: {e}")),
+    };
+
+    let (mut parts, body) = req.into_parts();
+    parts.uri = uri;
+    // The upstream sees itself as the host; hop-by-hop headers stay minimal
+    // (HTTP/1.1 client; axum already stripped connection semantics).
+    parts.headers.remove(http::header::HOST);
+    let outbound = Request::from_parts(parts, body);
+
+    match client.request(outbound).await {
+        Ok(resp) => resp.map(Body::new).into_response(),
+        Err(e) => status_response(502, &format!("api_upstream {upstream} unreachable: {e}")),
+    }
+}
+
+fn status_response(code: u16, msg: &str) -> Response {
+    Response::builder()
+        .status(code)
+        .header("content-type", "application/json")
+        .body(Body::from(format!(
+            "{{\"error\":{}}}",
+            serde_json::json!(msg)
+        )))
+        .unwrap()
+}
+
 /// GET /api/validate?seed=42
 /// Return checksums of all endpoint outputs for the given seed.
 async fn api_validate(Query(p): Query<ValidateParams>) -> impl IntoResponse {
@@ -1871,6 +1946,10 @@ mod tests {
     }
 
     fn app_with_token(bench_token: Option<&str>) -> Router {
+        app_with(bench_token, None)
+    }
+
+    fn app_with(bench_token: Option<&str>, api_upstream: Option<String>) -> Router {
         build_router(AppState {
             h3_port: None,
             http_port: 8080,
@@ -1881,7 +1960,147 @@ mod tests {
             started_at: std::time::Instant::now(),
             system_meta: SystemMeta::collect(),
             bench_token: bench_token.map(str::to_owned),
+            api_upstream,
         })
+    }
+
+    /// With api_upstream set, /api/* must reach the upstream VERBATIM
+    /// (path + query), the built-ins must be fully shadowed, and a dead
+    /// upstream must surface as 502 — never fall back to the built-ins
+    /// (that would mislabel what apibench measured).
+    #[tokio::test]
+    async fn api_upstream_proxies_and_shadows_builtins() {
+        // Tiny live upstream that echoes the path it was asked for.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = vec![0u8; 4096];
+                    let n = sock.read(&mut buf).await.unwrap_or(0);
+                    let head = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let path = head.split_whitespace().nth(1).unwrap_or("?").to_string();
+                    let body = format!("{{\"upstream_saw\":\"{path}\"}}");
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                });
+            }
+        });
+
+        let app = app_with(None, Some(upstream_addr.to_string()));
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/users?limit=3")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            v["upstream_saw"], "/api/users?limit=3",
+            "path+query must reach the upstream verbatim"
+        );
+
+        // /health reports the upstream so consumers see WHAT /api measures.
+        let health = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let hb = axum::body::to_bytes(health.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let hv: serde_json::Value = serde_json::from_slice(&hb).unwrap();
+        assert_eq!(hv["services"]["api_upstream"], upstream_addr.to_string());
+
+        // Non-/api routes still hit the built-ins.
+        let info = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(info.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn api_upstream_dead_is_502_never_builtin_fallback() {
+        // Bind-then-drop: a port that is very likely closed.
+        let dead = {
+            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            l.local_addr().unwrap()
+        };
+        let app = app_with(None, Some(dead.to_string()));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/users")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 502, "dead upstream must be a loud 502");
+        let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            v["error"].as_str().unwrap_or("").contains("unreachable"),
+            "502 body names the cause: {v}"
+        );
+    }
+
+    /// Without api_upstream the built-ins serve /api and health reports null.
+    #[tokio::test]
+    async fn api_builtins_serve_when_no_upstream() {
+        let resp = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/users")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let health = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let hb = axum::body::to_bytes(health.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let hv: serde_json::Value = serde_json::from_slice(&hb).unwrap();
+        assert!(hv["services"]["api_upstream"].is_null());
     }
 
     #[tokio::test]
@@ -1938,6 +2157,7 @@ mod tests {
                 started_at: std::time::Instant::now(),
                 system_meta: SystemMeta::collect(),
                 bench_token: None,
+                api_upstream: None,
             })
         };
 
