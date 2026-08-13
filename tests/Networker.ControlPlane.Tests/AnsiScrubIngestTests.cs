@@ -144,6 +144,8 @@ public sealed class AnsiScrubIngestTests
                 created_at TEXT NOT NULL,
                 comparison_group_id TEXT,
                 provisioning_deployment_id TEXT,
+                provision_attempts INTEGER NOT NULL DEFAULT 0,
+                next_provision_attempt_at TEXT,
                 client_envelope TEXT
             );
             """);

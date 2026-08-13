@@ -55,9 +55,9 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
     // ── Migration chain ─────────────────────────────────────────────────
 
     [Fact]
-    public void Fresh_database_applies_the_full_chain_v002_to_v048()
+    public void Fresh_database_applies_the_full_chain_v002_to_v049()
     {
-        Assert.Equal(Enumerable.Range(2, 47), _fx.FreshRun.Applied);
+        Assert.Equal(Enumerable.Range(2, 48), _fx.FreshRun.Applied);
         Assert.Empty(_fx.FreshRun.AlreadyApplied);
     }
 
@@ -70,7 +70,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
 
         Assert.True(second.WasUpToDate);
         Assert.Empty(second.Applied);
-        Assert.Equal(Enumerable.Range(2, 47), second.AlreadyApplied);
+        Assert.Equal(Enumerable.Range(2, 48), second.AlreadyApplied);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
             }
         }
 
-        Assert.Equal(Enumerable.Range(2, 47), recorded);
+        Assert.Equal(Enumerable.Range(2, 48), recorded);
     }
 
     // ── EF-model equivalence ────────────────────────────────────────────
@@ -550,6 +550,36 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
     }
 
     [Fact]
+    public async Task V049_added_the_provision_retry_columns()
+    {
+        await using var conn = new NpgsqlConnection(_fx.ConnectionString);
+        await conn.OpenAsync();
+
+        await using var cols = new NpgsqlCommand(
+            """
+            SELECT column_name, data_type, is_nullable, column_default
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'test_run'
+              AND column_name IN ('provision_attempts', 'next_provision_attempt_at')
+            ORDER BY column_name
+            """, conn);
+        var found = new List<(string Name, string Type, string Nullable)>();
+        await using (var reader = await cols.ExecuteReaderAsync())
+        {
+            while (await reader.ReadAsync())
+            {
+                found.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2)));
+            }
+        }
+
+        Assert.Equal(2, found.Count);
+        // Backoff timestamp: nullable (NULL = immediately eligible).
+        Assert.Equal(("next_provision_attempt_at", "timestamp with time zone", "YES"), found[0]);
+        // Attempts counter: NOT NULL with default 0 so pre-V049 rows read as fresh.
+        Assert.Equal(("provision_attempts", "smallint", "NO"), found[1]);
+    }
+
+    [Fact]
     public async Task V048_strips_endpoint_only_modes_from_url_configs_only()
     {
         await using var conn = new NpgsqlConnection(_fx.ConnectionString);
@@ -670,6 +700,7 @@ public sealed class MigrationScriptFreezeTests
         ["V046_run_envelope.sql"] = "4f74ac99fabbece4d3106c9baab080d72496a639a7d3ebc57125e6486428ea55",
         ["V047_benchmark_regression.sql"] = "71e4a60fa1ec664cf5b9274ed44307904ab1779458400b6094001819ea3655d7",
         ["V048_strip_endpoint_only_modes_from_url_configs.sql"] = "629e07f03f878ffbbcff474597c9f4783c7d3cc19fd5d5fd77a9535155a237c8",
+        ["V049_provision_retry_columns.sql"] = "d06c0e1967f6228523284609dc6bdd54b10d3044762bc6cf2c6eabdcadc93c9d",
     };
 
     [Fact]
@@ -689,7 +720,7 @@ public sealed class MigrationScriptFreezeTests
             Assert.Contains(version, scripted);
         }
 
-        Assert.Equal(46, scripted.Count);
+        Assert.Equal(47, scripted.Count);
     }
 
     [Fact]
