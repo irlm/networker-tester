@@ -102,24 +102,26 @@ export function InfraDeployWizard({
   const [useExistingVm, setUseExistingVm] = useState(!!prefillUpgrade);
   const [existingVmIp, setExistingVmIp] = useState(prefillUpgrade?.existingVmIp ?? '');
 
-  // Prune selections the current OS/cloud cannot deploy. Switching OS after
+  // Prune selections the chosen OS/cloud cannot deploy. Switching OS after
   // picking stacks used to carry an INVISIBLE selection into the config — the
   // default nginx stayed selected while the Windows list hid its button, and
   // the deploy failed at install.sh validation after the row was created
-  // (user-caught 2026-08-12). Languages are Linux-only in this path.
-  useEffect(() => {
-    const valid = os === 'windows' ? windowsProxiesFor(cloud) : LINUX_PROXIES;
+  // (user-caught 2026-08-12). Languages are Linux-only in this path. Runs in
+  // the OS/cloud CHANGE HANDLERS (not an effect — react-hooks/set-state-in-
+  // effect), so it fires exactly when the incompatibility can appear.
+  const pruneForPlatform = (nextOs: 'linux' | 'windows', nextCloud: 'Azure' | 'AWS' | 'GCP') => {
+    const valid = nextOs === 'windows' ? windowsProxiesFor(nextCloud) : LINUX_PROXIES;
     setProxies(prev => {
       const kept = prev.filter(p => (valid as readonly string[]).includes(p));
       if (kept.length === prev.length) return prev;
       if (kept.length > 0) return kept;
-      const fallback = os === 'windows' ? 'iis' : 'nginx';
+      const fallback = nextOs === 'windows' ? 'iis' : 'nginx';
       return (valid as readonly string[]).includes(fallback) ? [fallback] : [];
     });
-    if (os === 'windows') {
+    if (nextOs === 'windows') {
       setLanguages(prev => (prev.length > 0 ? [] : prev));
     }
-  }, [os, cloud]);
+  };
 
   // Runner-specific
   const [runnerName, setRunnerName] = useState('');
@@ -220,6 +222,7 @@ export function InfraDeployWizard({
     setCloud(c);
     setRegion(validRegion);
     setVmSize(validSku);
+    pruneForPlatform(os, c);
   };
 
   // ── Compute the auto-suggested deployment name for the review step ─────
@@ -452,7 +455,7 @@ export function InfraDeployWizard({
                       <button
                         key={o}
                         type="button"
-                        onClick={() => setOs(o)}
+                        onClick={() => { setOs(o); pruneForPlatform(o, cloud); }}
                         className={`px-3 py-1.5 text-xs border transition-colors ${
                           os === o
                             ? o === 'linux'

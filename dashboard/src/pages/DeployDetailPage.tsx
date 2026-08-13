@@ -3,7 +3,7 @@ import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { useParams, Link, useNavigate } from 'react-router';
 import { api } from '../api/client';
 import { stripAnsi } from '../lib/ansi';
-import type { Deployment, DeploymentCostEstimate } from '../api/types';
+import type { Deployment, DeploymentCostEstimate, TargetCapabilitiesResponse } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { TargetEndpointCard } from '../components/targets/TargetEndpointCard';
 import { InfraDeployWizard, type InfraDeployWizardProps } from '../components/InfraDeployWizard';
@@ -34,6 +34,7 @@ export function DeployDetailPage() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [versionInfo, setVersionInfo] = useState<{ latest: string | null; endpointVersion: string | null } | null>(null);
   const [costEstimate, setCostEstimate] = useState<DeploymentCostEstimate | null>(null);
+  const [capabilities, setCapabilities] = useState<TargetCapabilitiesResponse | null>(null);
   const [upgradePrefill, setUpgradePrefill] = useState<InfraDeployWizardProps['prefillUpgrade'] | null>(null);
   const logContainerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -88,6 +89,18 @@ export function DeployDetailPage() {
       .catch(() => { /* cost is optional decoration on this page */ });
     return () => { cancelled = true; };
   }, [projectId, deploymentId]);
+
+  // Live capability self-report — what the target says it supports. Only
+  // meaningful once the deploy completed (there are hosts to probe); a miss
+  // leaves the config-derived Test support line in place.
+  useEffect(() => {
+    if (!deploymentId || deployment?.status !== 'completed') return;
+    let cancelled = false;
+    api.getDeploymentCapabilities(projectId, deploymentId)
+      .then((c) => { if (!cancelled) setCapabilities(c); })
+      .catch(() => { /* capability report is optional decoration */ });
+    return () => { cancelled = true; };
+  }, [projectId, deploymentId, deployment?.status]);
 
   // Auto-scroll log container when new lines arrive or DB log loads
   useEffect(() => {
@@ -318,6 +331,7 @@ export function DeployDetailPage() {
                 index={i}
                 ip={deployment?.endpoint_ips?.[i]}
                 cost={costEstimate?.endpoints[i]}
+                capability={capabilities?.endpoints[i]}
               />
             ))}
           </div>

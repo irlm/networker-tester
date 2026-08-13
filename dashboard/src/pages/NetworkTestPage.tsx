@@ -148,6 +148,44 @@ export function NetworkTestPage() {
   const [selectedTargetId, setSelectedTargetId] = useState<string>(
     () => urlParams.get('target') ?? '',
   );
+
+  // Per-target capability filter ("the target must return the tests
+  // supported"): modes the SELECTED target's live self-report marks
+  // unsupported (mode → reason). Stored keyed by target id and DERIVED back
+  // to a map, so switching targets clears it without a synchronous
+  // setState-in-effect; only ever narrows on POSITIVE knowledge — no report
+  // (unreachable / pre-0.28.202) means no filtering.
+  const [targetCaps, setTargetCaps] = useState<{ targetId: string; off: Map<string, string> } | null>(null);
+  const targetUnsupported = useMemo(
+    () => (targetCaps?.targetId === selectedTargetId ? targetCaps.off : new Map<string, string>()),
+    [targetCaps, selectedTargetId],
+  );
+  useEffect(() => {
+    if (!selectedTargetId) return;
+    let cancelled = false;
+    api.getDeploymentCapabilities(projectId, selectedTargetId)
+      .then(c => {
+        if (cancelled) return;
+        const reporting = c.endpoints.filter(e => e.supported_modes != null);
+        // A mode is off only when EVERY reporting host says so — a
+        // multi-endpoint deployment supports what any of its hosts serves.
+        const off = new Map<string, string>();
+        for (const u of reporting[0]?.unsupported_modes ?? []) {
+          if (reporting.every(r => r.unsupported_modes?.some(x => x.mode === u.mode))) {
+            off.set(u.mode, u.reason);
+          }
+        }
+        setTargetCaps({ targetId: selectedTargetId, off });
+        if (off.size > 0) {
+          setSelectedModes(prev => {
+            const next = new Set([...prev].filter(m => !off.has(m)));
+            return next.size === prev.size ? prev : next;
+          });
+        }
+      })
+      .catch(() => { /* no report — no filtering */ });
+    return () => { cancelled = true; };
+  }, [projectId, selectedTargetId]);
   const [targetSearch, setTargetSearch] = useState('');
   const [targetPopoverOpen, setTargetPopoverOpen] = useState(false);
   const [runnerMode, setRunnerMode] = useState<'auto' | 'specific'>('auto');
@@ -246,19 +284,20 @@ export function NetworkTestPage() {
     setActivePreset(null);
     setSelectedModes(prev => {
       const next = new Set(prev);
-      const allSelected = family.modes.every(m => next.has(m));
-      if (allSelected) family.modes.forEach(m => next.delete(m));
-      else family.modes.forEach(m => next.add(m));
+      const eligible = family.modes.filter(m => !targetUnsupported.has(m));
+      const allSelected = eligible.every(m => next.has(m));
+      if (allSelected) eligible.forEach(m => next.delete(m));
+      else eligible.forEach(m => next.add(m));
       return next;
     });
-  }, []);
+  }, [targetUnsupported]);
 
   const applyPreset = useCallback((presetId: string) => {
     const preset = MODE_PRESETS.find(p => p.id === presetId);
     if (!preset) return;
     setActivePreset(presetId);
-    setSelectedModes(new Set(preset.modes));
-  }, []);
+    setSelectedModes(new Set(preset.modes.filter(m => !targetUnsupported.has(m))));
+  }, [targetUnsupported]);
 
   const clearModes = useCallback(() => {
     setActivePreset(null);
@@ -603,11 +642,18 @@ export function NetworkTestPage() {
                 <div className="flex gap-1 flex-wrap">
                   {family.modes.map(m => {
                     const active = selectedModes.has(m);
+                    const offReason = targetUnsupported.get(m);
                     return (
                       <button
                         key={m}
                         onClick={() => toggleMode(m)}
-                        className={`px-2 py-0.5 text-[11px] border transition-colors rounded-sm ${classForMode(m, active)}`}
+                        disabled={offReason != null}
+                        title={offReason}
+                        className={`px-2 py-0.5 text-[11px] border transition-colors rounded-sm ${
+                          offReason != null
+                            ? 'border-gray-800 text-gray-600 line-through cursor-not-allowed'
+                            : classForMode(m, active)
+                        }`}
                       >
                         {modeLabel(m)}
                       </button>

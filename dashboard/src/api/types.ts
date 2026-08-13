@@ -633,6 +633,22 @@ export interface DeployEndpoint {
  * helpers as the runner cost endpoint. Endpoints without a VM size
  * (ssh/lan targets) carry null cost. Deploy VMs have no auto-shutdown →
  * monthly figures are always-on. */
+/** One endpoint host's capability self-report (GET …/deployments/{id}/capabilities). */
+export interface TargetCapabilityReport {
+  host: string;
+  reachable: boolean;
+  version: string | null;
+  /** Raw /health services map; null when unreachable or pre-0.28.202. */
+  services: Record<string, number | boolean | null> | null;
+  /** Endpoint-required modes this target supports; null = no self-report. */
+  supported_modes: string[] | null;
+  unsupported_modes: { mode: string; reason: string }[] | null;
+}
+
+export interface TargetCapabilitiesResponse {
+  endpoints: TargetCapabilityReport[];
+}
+
 export interface DeploymentCostEstimate {
   endpoints: {
     label: string;

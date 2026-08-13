@@ -51,6 +51,33 @@ public static class DeploymentsEndpoints
         })
         .RequireAuthorization(AuthPolicies.ProjectMember);
 
+        // GET /api/projects/{projectId}/deployments/{deploymentId}/capabilities
+        // Live per-target test-support: probe each endpoint host's /health and
+        // relay its `services` self-report mapped onto probe modes ("the
+        // target must return the tests supported", 2026-08-13). Hosts that are
+        // unreachable — or run a pre-0.28.202 endpoint without the report —
+        // come back with supported_modes: null so the UI falls back to the
+        // config-derived summary instead of trusting a fabricated list.
+        app.MapGet("/api/projects/{projectId}/deployments/{deploymentId:guid}/capabilities", async (
+            string projectId, Guid deploymentId, NetworkerDbContext db) =>
+        {
+            var d = await db.Deployments
+                .AsNoTracking()
+                .Where(x => x.ProjectId == projectId && x.DeploymentId == deploymentId)
+                .Select(x => new { x.EndpointIps })
+                .FirstOrDefaultAsync();
+
+            if (d is null)
+            {
+                return Results.NotFound();
+            }
+
+            var hosts = DeploymentWriteEndpoints.ParseHosts(d.EndpointIps);
+            var reports = await Task.WhenAll(hosts.Select(TargetCapabilities.ProbeHostAsync));
+            return Results.Ok(new { endpoints = reports });
+        })
+        .RequireAuthorization(AuthPolicies.ProjectMember);
+
         // GET /api/projects/{projectId}/deployments/{deploymentId}/cost_estimate
         // Per-endpoint VM cost, priced by the same CostEstimation helpers the
         // tester cost endpoint uses so the two views can never disagree.

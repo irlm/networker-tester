@@ -1,4 +1,4 @@
-import type { Agent, Job, JobConfig, Attempt, Deployment, DeploymentCostEstimate, ModeGroup, PacketCaptureSummary, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, LogsResponse, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo, PerfLogRow, PerfLogStats, ImportResult, SendInviteResult, TestConfig, TestConfigListItem, TestConfigCreate, TestRun, TestSchedule, ComparisonReport, ComparisonGroup, ComparisonGroupCreate, AlertChannel, AlertChannelCreate, AlertRule, AlertRuleCreate, AlertEvent, RunGeoInfo, RunClockSync, RunLoadSample, RunInfra } from './types';
+import type { Agent, Job, JobConfig, Attempt, Deployment, DeploymentCostEstimate, TargetCapabilitiesResponse, ModeGroup, PacketCaptureSummary, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, LogsResponse, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo, PerfLogRow, PerfLogStats, ImportResult, SendInviteResult, TestConfig, TestConfigListItem, TestConfigCreate, TestRun, TestSchedule, ComparisonReport, ComparisonGroup, ComparisonGroupCreate, AlertChannel, AlertChannelCreate, AlertRule, AlertRuleCreate, AlertEvent, RunGeoInfo, RunClockSync, RunLoadSample, RunInfra } from './types';
 
 export type { Agent, Job, JobConfig, Attempt, Deployment, ModeGroup, PacketCaptureSummary, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, LogsResponse, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo, ImportResult, SendInviteResult, TestConfig, TestConfigListItem, TestConfigCreate, TestRun, TestSchedule, ComparisonReport, ComparisonGroup, ComparisonGroupCreate, AlertChannel, AlertChannelCreate, AlertRule, AlertRuleCreate, AlertEvent };
 export type { AlertMetric, AlertComparator, AlertChannelKind, AlertChannelConfig } from './types';
@@ -547,6 +547,13 @@ export const api = {
 
   getDeploymentCostEstimate: (projectId: string, deploymentId: string) =>
     request<DeploymentCostEstimate>(projectUrl(projectId, `deployments/${deploymentId}/cost_estimate`)),
+
+  // Live per-target test support: each endpoint host's /health `services`
+  // self-report mapped onto probe modes. supported_modes is null when the
+  // host is unreachable or runs a pre-0.28.202 endpoint — fall back to the
+  // config-derived summary, never fabricate.
+  getDeploymentCapabilities: (projectId: string, deploymentId: string) =>
+    request<TargetCapabilitiesResponse>(projectUrl(projectId, `deployments/${deploymentId}/capabilities`)),
 
   createDeployment: (projectId: string, name: string, config: unknown) =>
     request<{ deployment_id: string; status: string }>(projectUrl(projectId, 'deployments'), {

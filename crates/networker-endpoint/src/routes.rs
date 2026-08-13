@@ -832,17 +832,38 @@ async fn landing_page(State(state): State<AppState>) -> impl IntoResponse {
 /// Constant-work per API-SPEC.md §5.1: the body is a compile-time constant so
 /// every language's /health does identical (zero) per-request work. `runtime`
 /// and `version` are required by the orchestrator contract (validator.rs).
-async fn health() -> impl IntoResponse {
-    const HEALTH_BODY: &str = concat!(
-        "{\"status\":\"ok\",\"runtime\":\"rust\",\"service\":\"networker-endpoint\",\"version\":\"",
-        env!("CARGO_PKG_VERSION"),
-        "\"}"
-    );
-    Response::builder()
-        .status(200)
-        .header("content-type", "application/json")
-        .body(Body::from(HEALTH_BODY))
-        .unwrap()
+async fn health(State(state): State<AppState>) -> impl IntoResponse {
+    // `services` is the target's capability self-report — LIVE truth about
+    // what this instance actually runs (a port CAN be 0-disabled, e.g.
+    // `--stamp-port 0` since v0.28.170), so launch flows can offer exactly
+    // the tests this target supports instead of inferring them from static
+    // config ("the target must return the tests supported", 2026-08-13).
+    // Additive fields only: pre-existing consumers key on status/version.
+    let port_or_null = |p: u16| -> serde_json::Value {
+        if p == 0 {
+            serde_json::Value::Null
+        } else {
+            serde_json::json!(p)
+        }
+    };
+    Json(serde_json::json!({
+        "status": "ok",
+        "runtime": "rust",
+        "service": "networker-endpoint",
+        "version": env!("CARGO_PKG_VERSION"),
+        "services": {
+            // Always-on HTTP routes (same process as this handler).
+            "download": true,
+            "upload": true,
+            "ws_echo": true,
+            "page_assets": true,
+            // Optional/disable-able listeners, by port; null = not running.
+            "udp_echo": port_or_null(state.udp_port),
+            "udp_throughput": port_or_null(state.udp_throughput_port),
+            "stamp": port_or_null(state.stamp_port),
+            "h3": state.h3_port.map_or(serde_json::Value::Null, |p| serde_json::json!(p)),
+        },
+    }))
 }
 
 /// GET /echo – returns empty body with request info
@@ -1898,6 +1919,75 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), 200);
+    }
+
+    /// /health self-reports the target's capabilities — running listeners by
+    /// port, disabled ones as null — so launch flows offer exactly what this
+    /// instance supports. A 0-configured port (e.g. `--stamp-port 0`,
+    /// v0.28.170) must read as null, never as "port 0".
+    #[tokio::test]
+    async fn health_reports_live_service_capabilities() {
+        let make = |stamp_port: u16| {
+            build_router(AppState {
+                h3_port: None,
+                http_port: 8080,
+                https_port: 8443,
+                udp_port: 9999,
+                udp_throughput_port: 9998,
+                stamp_port,
+                started_at: std::time::Instant::now(),
+                system_meta: SystemMeta::collect(),
+                bench_token: None,
+            })
+        };
+
+        let body = |resp: Response| async move {
+            let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+                .await
+                .unwrap();
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()
+        };
+
+        let enabled = body(
+            make(9997)
+                .oneshot(
+                    Request::builder()
+                        .uri("/health")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(enabled["status"], "ok");
+        assert_eq!(enabled["services"]["stamp"], 9997);
+        assert_eq!(enabled["services"]["udp_echo"], 9999);
+        assert_eq!(enabled["services"]["udp_throughput"], 9998);
+        assert_eq!(enabled["services"]["download"], true);
+        assert_eq!(enabled["services"]["ws_echo"], true);
+        assert!(
+            enabled["services"]["h3"].is_null(),
+            "no h3 listener configured"
+        );
+
+        let disabled = body(
+            make(0)
+                .oneshot(
+                    Request::builder()
+                        .uri("/health")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert!(
+            disabled["services"]["stamp"].is_null(),
+            "port 0 = disabled must self-report null, got {}",
+            disabled["services"]["stamp"]
+        );
     }
 
     #[tokio::test]

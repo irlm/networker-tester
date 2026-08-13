@@ -1,4 +1,4 @@
-import type { DeployEndpoint, DeployProviderBlock } from '../api/types';
+import type { DeployEndpoint, DeployProviderBlock, TargetCapabilityReport } from '../api/types';
 
 /**
  * Resolve an endpoint fact across the top level and the provider block —
@@ -44,4 +44,32 @@ export function testSupportOf(ep: DeployEndpoint): string {
       ? `apibench: ${ep.languages.join(', ')}`
       : 'apibench: built-in /api',
   ].filter(Boolean).join(' · ');
+}
+
+/**
+ * Test-support summary from the target's LIVE capability self-report
+ * (/health `services` → supported modes). Falls back to null when the target
+ * gave no report (unreachable / pre-0.28.202) — callers then render the
+ * config-derived `testSupportOf` instead of a fabricated list.
+ */
+export function liveTestSupportOf(
+  report: TargetCapabilityReport | undefined,
+  ep: DeployEndpoint,
+): { summary: string; disabled: string[] } | null {
+  if (!report?.supported_modes) return null;
+  const has = (m: string) => report.supported_modes!.includes(m);
+  const summary = [
+    'network',
+    has('download') ? 'throughput' : null,
+    has('udp') ? 'udp' : null,
+    has('stamp') ? 'stamp' : null,
+    has('websocket') ? 'websocket' : null,
+    has('pageload') ? 'page-load' : null,
+    ep.http_stacks?.length ? 'stack comparison' : null,
+    ep.languages?.length
+      ? `apibench: ${ep.languages.join(', ')}`
+      : 'apibench: built-in /api',
+  ].filter(Boolean).join(' · ');
+  const disabled = (report.unsupported_modes ?? []).map(u => u.mode);
+  return { summary, disabled };
 }
