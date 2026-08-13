@@ -439,6 +439,10 @@ public partial class NetworkerDbContext : DbContext
             entity.Property(e => e.LastHeartbeat).HasColumnName("last_heartbeat");
             entity.Property(e => e.ProjectId).HasColumnName("project_id");
             entity.Property(e => e.ProvisioningDeploymentId).HasColumnName("provisioning_deployment_id");
+            entity.Property(e => e.ProvisionAttempts)
+                .HasDefaultValue((short)0)
+                .HasColumnName("provision_attempts");
+            entity.Property(e => e.NextProvisionAttemptAt).HasColumnName("next_provision_attempt_at");
             entity.Property(e => e.StartedAt).HasColumnName("started_at");
             entity.Property(e => e.Status).HasColumnName("status");
             entity.Property(e => e.SuccessCount)

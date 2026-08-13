@@ -37,6 +37,14 @@ public partial class TestRun
 
     public Guid? ProvisioningDeploymentId { get; set; }
 
+    /// <summary>Auto-provision attempts consumed (V049). Bumped each time a
+    /// quota-class provisioning failure re-queues the run for another kick.</summary>
+    public short ProvisionAttempts { get; set; }
+
+    /// <summary>Earliest time the next provisioning kick may pick this run up
+    /// (V049) — the quota-retry backoff. Null = immediately eligible.</summary>
+    public DateTime? NextProvisionAttemptAt { get; set; }
+
     /// <summary>
     /// V046: the tester's run envelope (client_network / client_geo /
     /// target_geo / client_load_before / client_load_after / clock_sync /

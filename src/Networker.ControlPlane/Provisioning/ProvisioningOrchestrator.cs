@@ -72,6 +72,12 @@ public sealed class ProvisioningOrchestrator : BackgroundService
 
     private const int KickBatchLimit = 25;
 
+    /// <summary>Max provisioning kicks per run before a quota-class failure
+    /// becomes terminal. Backoff grows 4m/8m/12m per retry, so with cells
+    /// taking ~10 min the window spans roughly half an hour of capacity churn
+    /// — enough for a full matrix wave to drain and free its cores/IPs.</summary>
+    internal const short MaxProvisionAttempts = 4;
+
     /// <summary>Max auto-provision deployments in flight at once. Each holds a
     /// public IP, and Azure's default quota is 10 per region — a 10-cell
     /// comparison matrix plus the standing runner/target/control-plane VMs blew
@@ -215,10 +221,13 @@ public sealed class ProvisioningOrchestrator : BackgroundService
             return 0;
         }
 
-        // queued runs, config endpoint is Pending, not yet linked to a deployment.
+        // queued runs, config endpoint is Pending, not yet linked to a
+        // deployment, and past any quota-retry backoff (V049).
+        var now = DateTime.UtcNow;
         var candidates = await db.TestRuns
             .Where(r => r.Status == RunQueued
                         && r.ProvisioningDeploymentId == null
+                        && (r.NextProvisionAttemptAt == null || r.NextProvisionAttemptAt <= now)
                         && r.TestConfig.EndpointKind == EndpointKindPending)
             .OrderBy(r => r.CreatedAt)
             .Take(Math.Min(KickBatchLimit, capacity))
@@ -515,7 +524,7 @@ public sealed class ProvisioningOrchestrator : BackgroundService
     /// <returns><c>true</c> when the run reached a resolution this pass
     /// (re-queued after promote, or failed); <c>false</c> when it is still
     /// waiting on its deployment.</returns>
-    private async Task<bool> HandleProvisioningRunAsync(
+    internal async Task<bool> HandleProvisioningRunAsync(
         NetworkerDbContext db, Guid runId, Guid testConfigId, Guid deploymentId, CancellationToken ct)
     {
         var deployment = await db.Deployments
@@ -535,6 +544,72 @@ public sealed class ProvisioningOrchestrator : BackgroundService
 
             case DeploymentFailed:
                 var msg = deployment.ErrorMessage ?? "deployment failed";
+
+                // ── Quota-class failures retry instead of failing ─────────
+                // Capacity quota (Azure regional cores / public IPs) is
+                // transient by construction: every finished cell's teardown
+                // frees capacity, so the same kick minutes later succeeds.
+                // 13 of 15 matrix cells died permanently on 'exceeding
+                // approved cores quota' while two that raced in later
+                // completed fine (user-caught 2026-08-13). Re-queue with
+                // backoff up to MaxProvisionAttempts, then fail with a
+                // HUMAN message instead of "exited with code 1".
+                if (ProvisioningFailureClassifier.IsQuotaFailure(deployment.Log, msg))
+                {
+                    var attempts = await db.TestRuns.AsNoTracking()
+                        .Where(r => r.Id == runId)
+                        .Select(r => r.ProvisionAttempts)
+                        .FirstOrDefaultAsync(ct)
+                        .ConfigureAwait(false);
+                    if (attempts < MaxProvisionAttempts)
+                    {
+                        var attempt = (short)(attempts + 1);
+                        var backoff = TimeSpan.FromMinutes(Math.Min(4 * attempt, 12));
+                        await db.TestRuns
+                            .Where(r => r.Id == runId && r.Status == RunProvisioning)
+                            .ExecuteUpdateAsync(s => s
+                                .SetProperty(r => r.Status, RunQueued)
+                                .SetProperty(r => r.ProvisioningDeploymentId, (Guid?)null)
+                                .SetProperty(r => r.ProvisionAttempts, attempt)
+                                .SetProperty(r => r.NextProvisionAttemptAt, DateTime.UtcNow + backoff)
+                                .SetProperty(r => r.ErrorMessage,
+                                    $"Cloud capacity quota hit — retry {attempt}/{MaxProvisionAttempts} "
+                                    + $"scheduled in {backoff.TotalMinutes:0}m (capacity frees as other cells finish)"), ct)
+                            .ConfigureAwait(false);
+                        // Quota rejections are create-time: the deployment is
+                        // hostless (no VM/IP registered), so releasing its
+                        // throttle slot is safe — partial NIC/IP debris is the
+                        // orphan reaper's job, exactly like the teardown
+                        // phase's hostless arm. Keep the row+log as the
+                        // diagnostic; just mark it released.
+                        await db.Deployments
+                            .Where(d => d.DeploymentId == deploymentId && d.Status == DeploymentFailed)
+                            .ExecuteUpdateAsync(s => s
+                                .SetProperty(d => d.Status, DeploymentTornDown)
+                                .SetProperty(d => d.FinishedAt, d => d.FinishedAt ?? DateTime.UtcNow), ct)
+                            .ConfigureAwait(false);
+                        _logger.LogInformation(
+                            "Run {RunId} provisioning hit a capacity quota — re-queued (attempt {Attempt}/{Max}, backoff {Backoff}m)",
+                            runId, attempt, MaxProvisionAttempts, backoff.TotalMinutes);
+                        return true;
+                    }
+
+                    await db.TestRuns
+                        .Where(r => r.Id == runId)
+                        .ExecuteUpdateAsync(s => s
+                            .SetProperty(r => r.Status, "failed")
+                            .SetProperty(r => r.ErrorMessage,
+                                $"Cloud capacity quota exceeded after {MaxProvisionAttempts} attempts — "
+                                + "raise the subscription's regional vCPU/IP quota (the deploy log has the "
+                                + "Azure request link) or lower NETWORKER_MAX_CONCURRENT_PROVISIONS")
+                            .SetProperty(r => r.FinishedAt, DateTime.UtcNow), ct)
+                        .ConfigureAwait(false);
+                    _logger.LogWarning(
+                        "Run {RunId} failed: capacity quota still exhausted after {Max} provisioning attempts",
+                        runId, MaxProvisionAttempts);
+                    return true;
+                }
+
                 await db.TestRuns
                     .Where(r => r.Id == runId)
                     .ExecuteUpdateAsync(s => s

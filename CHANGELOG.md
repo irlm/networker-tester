@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.201] - 2026-08-13
+
+### Fixed
+- **Matrix cells no longer die permanently on cloud capacity quota**
+  (user-caught: 13 of 15 comparison-matrix cells failed with a bare
+  "install.sh exited with code 1" — the deploy logs showed Azure refusing
+  the VMs on the subscription's regional cores quota, while the two cells
+  that raced in later completed fine). Quota pressure is transient by
+  construction — every finished cell's teardown frees its cores/IP — so
+  the orchestrator now classifies quota-class failures (cores quota,
+  QuotaExceeded, PublicIPCountLimitReached) and re-queues the cell with
+  growing backoff (4/8/12 min, up to 4 attempts total) instead of failing
+  it; the dead deployment stops counting toward the provisioning throttle
+  (its row and log are kept as the diagnostic). Runs that still can't get
+  capacity after all attempts fail with a human message — the quota
+  remediation options, not an exit code. Migration V049 adds the retry
+  bookkeeping columns.
+
+---
+
 ## [0.28.200] - 2026-08-13
 
 ### Fixed
