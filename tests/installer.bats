@@ -590,6 +590,69 @@ JSON
     [ "$DEPLOY_VALIDATE_ERRORS" -gt 0 ]
 }
 
+@test "_deploy_validate_config: rejects nginx on a windows endpoint" {
+    local cfg="$TEST_TMPDIR/nginx-win.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "azure", "http_stacks": ["nginx", "iis"], "azure": { "region": "eastus", "os": "windows" } }]
+}
+JSON
+    run _deploy_validate_config "$cfg"
+    echo "$output" | grep -q "nginx requires Linux" || { echo "expected nginx-on-windows rejection, got: $output" >&2; exit 1; }
+}
+
+@test "_deploy_validate_config: rejects reference-API languages on a windows endpoint" {
+    local cfg="$TEST_TMPDIR/langs-win.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "azure", "http_stacks": ["iis"], "languages": ["go"], "azure": { "region": "eastus", "os": "windows" } }]
+}
+JSON
+    run _deploy_validate_config "$cfg"
+    echo "$output" | grep -q "languages require a Linux endpoint" || { echo "expected languages-on-windows rejection, got: $output" >&2; exit 1; }
+}
+
+@test "_deploy_validate_config: rejects csharp-net48 as a deploy language (contradiction by construction)" {
+    # Languages require Linux; .NET Framework 4.8 requires Windows — the
+    # combination can never deploy. The runtime arm used to reject it only
+    # MID-DEPLOY; the validator must catch it up front (user-caught 2026-08-12).
+    local cfg="$TEST_TMPDIR/net48-linux.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "azure", "http_stacks": ["nginx"], "languages": ["csharp-net48"], "azure": { "region": "eastus", "os": "linux" } }]
+}
+JSON
+    run _deploy_validate_config "$cfg"
+    echo "$output" | grep -q "unknown language 'csharp-net48'" || { echo "expected net48 rejection, got: $output" >&2; exit 1; }
+}
+
+@test "_deploy_validate_config: accepts linux languages that windows rejects (control)" {
+    # Same config as the net48 test but with a VALID language: the language
+    # arm must add no error (other fields may — compare against the net48
+    # variant to keep the assertion attributable).
+    local ok_cfg="$TEST_TMPDIR/go-linux.json"
+    local bad_cfg="$TEST_TMPDIR/net48-linux-b.json"
+    cat > "$ok_cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "azure", "http_stacks": ["nginx"], "languages": ["go"], "azure": { "region": "eastus", "os": "linux" } }]
+}
+JSON
+    sed 's/"go"/"csharp-net48"/' "$ok_cfg" > "$bad_cfg"
+    _deploy_validate_config "$ok_cfg"
+    local ok_errors="$DEPLOY_VALIDATE_ERRORS"
+    _deploy_validate_config "$bad_cfg"
+    local bad_errors="$DEPLOY_VALIDATE_ERRORS"
+    [ "$bad_errors" -gt "$ok_errors" ] || { echo "net48 must add an error over the valid-language control ($bad_errors vs $ok_errors)" >&2; exit 1; }
+}
+
 @test "_deploy_validate_config: rejects LAN without ip" {
     local cfg="$TEST_TMPDIR/lan-no-ip.json"
     cat > "$cfg" <<'JSON'

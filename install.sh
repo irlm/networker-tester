@@ -331,7 +331,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.199"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.200"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -9537,7 +9537,11 @@ _deploy_validate_config() {
                 # apibench; must match deploy_benchmark_server's case arms)
                 local langs_count; langs_count="$(jq ".endpoints[$i].languages | length // 0" "$cfg" 2>/dev/null)"
                 if [[ "${langs_count:-0}" -gt 0 ]]; then
-                    local valid_langs="rust nginx go nodejs python java cpp ruby php csharp-net8 csharp-net8-aot csharp-net9 csharp-net10 csharp-net48"
+                    # csharp-net48 is NOT valid here: deploy-config languages
+                    # require a Linux endpoint (below) and .NET Framework 4.8
+                    # requires Windows — the combination is a contradiction the
+                    # runtime arm used to reject only mid-deploy.
+                    local valid_langs="rust nginx go nodejs python java cpp ruby php csharp-net8 csharp-net8-aot csharp-net9 csharp-net10"
                     local l
                     for l in $(seq 0 $((langs_count - 1))); do
                         local lname; lname="$(jq -r ".endpoints[$i].languages[$l]" "$cfg")"

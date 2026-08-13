@@ -17,7 +17,7 @@ import {
   INSTANCE_TYPES,
   defaultInstanceType,
   LINUX_PROXIES,
-  WINDOWS_PROXIES,
+  windowsProxiesFor,
   PROXY_LABELS,
   LANGUAGE_GROUPS,
 } from './wizard/testbed-constants';
@@ -59,9 +59,13 @@ function providerToCloud(p: string): 'Azure' | 'AWS' | 'GCP' {
 // (apibench then measures the LANGUAGE server behind the proxy instead of
 // networker-endpoint's built-in /api). Must match install.sh's valid_langs;
 // 'nginx' (static stack) and the AOT variants it doesn't ship are excluded.
+// csharp-net48 is deliberately absent: deploy-config languages are Linux-only
+// (install.sh) and .NET Framework 4.8 is Windows-only — the combination is a
+// contradiction that used to be offered and failed mid-deploy (user-caught
+// 2026-08-12). .NET 4.8 measurement runs via the Application Benchmark flow.
 const APIBENCH_LANG_IDS = new Set([
   'rust', 'go', 'cpp', 'java', 'nodejs', 'python', 'ruby', 'php',
-  'csharp-net8', 'csharp-net8-aot', 'csharp-net9', 'csharp-net10', 'csharp-net48',
+  'csharp-net8', 'csharp-net8-aot', 'csharp-net9', 'csharp-net10',
 ]);
 const APIBENCH_LANGS = LANGUAGE_GROUPS
   .flatMap(g => g.entries)
@@ -97,6 +101,25 @@ export function InfraDeployWizard({
   const [languages, setLanguages] = useState<string[]>(prefillUpgrade?.installedLanguages ?? []);
   const [useExistingVm, setUseExistingVm] = useState(!!prefillUpgrade);
   const [existingVmIp, setExistingVmIp] = useState(prefillUpgrade?.existingVmIp ?? '');
+
+  // Prune selections the current OS/cloud cannot deploy. Switching OS after
+  // picking stacks used to carry an INVISIBLE selection into the config — the
+  // default nginx stayed selected while the Windows list hid its button, and
+  // the deploy failed at install.sh validation after the row was created
+  // (user-caught 2026-08-12). Languages are Linux-only in this path.
+  useEffect(() => {
+    const valid = os === 'windows' ? windowsProxiesFor(cloud) : LINUX_PROXIES;
+    setProxies(prev => {
+      const kept = prev.filter(p => (valid as readonly string[]).includes(p));
+      if (kept.length === prev.length) return prev;
+      if (kept.length > 0) return kept;
+      const fallback = os === 'windows' ? 'iis' : 'nginx';
+      return (valid as readonly string[]).includes(fallback) ? [fallback] : [];
+    });
+    if (os === 'windows') {
+      setLanguages(prev => (prev.length > 0 ? [] : prev));
+    }
+  }, [os, cloud]);
 
   // Runner-specific
   const [runnerName, setRunnerName] = useState('');
@@ -280,7 +303,8 @@ export function InfraDeployWizard({
   const upgradeMode = !!prefillUpgrade;
   const accentClass = kind === 'target' ? 'text-cyan-300' : 'text-purple-300';
   const accentBorder = kind === 'target' ? 'border-cyan-500' : 'border-purple-500';
-  const validProxyList = os === 'windows' ? WINDOWS_PROXIES : LINUX_PROXIES;
+  // Per-cloud: AWS Windows bootstraps IIS only; GCP Windows isn't wired yet.
+  const validProxyList = os === 'windows' ? windowsProxiesFor(cloud) : LINUX_PROXIES;
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
@@ -443,7 +467,7 @@ export function InfraDeployWizard({
                   </div>
                   {kind === 'target' && (
                     <p className="text-[11px] text-gray-500 mt-2">
-                      ⓘ Linux unlocks all 5 proxy stacks; Windows adds IIS but excludes native Caddy / HAProxy packages.
+                      ⓘ Linux unlocks all 5 proxy stacks. Windows offers IIS{cloud === 'Azure' ? ', Caddy, and Traefik' : cloud === 'AWS' ? ' only' : ' (not yet wired on GCP)'} — nginx, HAProxy, and Apache are Linux-only.
                     </p>
                   )}
                   {kind === 'runner' && (
@@ -488,6 +512,14 @@ export function InfraDeployWizard({
               </div>
               {proxies.length === 0 && (
                 <p className="text-xs text-yellow-500 mb-3">At least one proxy is required</p>
+              )}
+
+              {os === 'windows' && (
+                <p className="text-[11px] text-gray-500 mb-4">
+                  ⓘ Reference-API languages are Linux-only in this deploy path — Windows
+                  targets serve the endpoint&apos;s built-in /api for apibench. (.NET
+                  Framework 4.8 is measured via the Application Benchmark flow instead.)
+                </p>
               )}
 
               {os === 'linux' && (
