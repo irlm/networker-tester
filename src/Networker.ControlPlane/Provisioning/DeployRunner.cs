@@ -212,6 +212,16 @@ public sealed class DeployRunner
         var stdoutTask = PumpAsync(process.StandardOutput, deploymentId, output, "stdout", runCt);
         var stderrTask = PumpAsync(process.StandardError, deploymentId, output, "stderr", runCt);
 
+        // Incremental log persistence: deployment.log used to be written only
+        // at terminal state, so a page load mid-deploy showed 'running' with
+        // an EMPTY log — all progress lived in the live event stream and was
+        // lost on refresh (user-caught 2026-08-12, a 15-min 5-stack deploy
+        // with nothing to look at). Flush the accumulated log every few
+        // seconds; the event bus stays the low-latency path and FinishAsync
+        // still writes the authoritative final log.
+        using var flushCts = CancellationTokenSource.CreateLinkedTokenSource(runCt);
+        var flusher = FlushLogPeriodicallyAsync(deploymentId, output, flushCts.Token);
+
         try
         {
             await process.WaitForExitAsync(runCt).ConfigureAwait(false);
@@ -231,8 +241,59 @@ public sealed class DeployRunner
             KillTree(process); // caller cancelled — don't leave install.sh running
             throw;
         }
+        finally
+        {
+            flushCts.Cancel();
+            try
+            {
+                await flusher.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // normal: the flusher's timer wait observed the cancel
+            }
+        }
 
         return process.ExitCode;
+    }
+
+    /// <summary>Persist the accumulated log every few seconds while install.sh
+    /// runs, so the deployment detail page shows progress on LOAD instead of
+    /// only over the live event stream. Skips ticks with no new output;
+    /// best-effort (a failed flush is a debug log, never a deploy failure).</summary>
+    private async Task FlushLogPeriodicallyAsync(Guid deploymentId, DeployOutput output, CancellationToken ct)
+    {
+        var lastLength = 0;
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(3));
+            while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
+            {
+                var log = output.FullLog;
+                if (log.Length == lastLength)
+                {
+                    continue;
+                }
+                lastLength = log.Length;
+                try
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var db = scope.ServiceProvider.GetRequiredService<NetworkerDbContext>();
+                    await db.Deployments
+                        .Where(d => d.DeploymentId == deploymentId)
+                        .ExecuteUpdateAsync(s => s.SetProperty(d => d.Log, log), ct)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger.LogDebug(ex, "Incremental log flush failed for {DeploymentId}", deploymentId);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // normal shutdown — FinishAsync writes the authoritative final log
+        }
     }
 
     private void PumpLine(Guid deploymentId, DeployOutput output, string line, string stream)
@@ -372,17 +433,49 @@ public sealed class DeployRunner
     /// <c>DeployOutput</c> struct.</summary>
     private sealed class DeployOutput
     {
+        // One lock for all mutable state: the stdout and stderr pumps append
+        // CONCURRENTLY (a latent race before the incremental flusher made it
+        // load-bearing — StringBuilder is not thread-safe), and the flusher
+        // reads FullLog while both are writing.
+        private readonly object _sync = new();
         private readonly System.Text.StringBuilder _log = new();
         private readonly HashSet<string> _seen = new(StringComparer.Ordinal);
         private readonly List<string> _endpointIps = [];
 
-        public string FullLog => _log.ToString();
-        public IReadOnlyList<string> EndpointIps => _endpointIps;
+        public string FullLog
+        {
+            get
+            {
+                lock (_sync)
+                {
+                    return _log.ToString();
+                }
+            }
+        }
+
+        public IReadOnlyList<string> EndpointIps
+        {
+            get
+            {
+                lock (_sync)
+                {
+                    return _endpointIps.ToArray();
+                }
+            }
+        }
 
         /// <summary>Process one output line: append to the full log, parse for a
         /// host, and report whether it should be broadcast (true = not a
         /// duplicate). Mirrors Rust <c>process_line</c>.</summary>
         public bool ProcessLine(string text, string stream)
+        {
+            lock (_sync)
+            {
+                return ProcessLineLocked(text, stream);
+            }
+        }
+
+        private bool ProcessLineLocked(string text, string stream)
         {
             _log.Append(text).Append('\n');
 
@@ -425,6 +518,14 @@ public sealed class DeployRunner
         /// loopback/0.* — mirrors the Rust post-exit fallback loop.</summary>
         public void RunFallbackIpScan()
         {
+            lock (_sync)
+            {
+                RunFallbackIpScanLocked();
+            }
+        }
+
+        private void RunFallbackIpScanLocked()
+        {
             if (_endpointIps.Count > 0)
             {
                 return;
@@ -452,6 +553,12 @@ public sealed class DeployRunner
 
         /// <summary>Append a synthetic line to the log without broadcasting (used
         /// for timeout/kill notices).</summary>
-        public void AppendRaw(string text) => _log.Append(text).Append('\n');
+        public void AppendRaw(string text)
+        {
+            lock (_sync)
+            {
+                _log.Append(text).Append('\n');
+            }
+        }
     }
 }

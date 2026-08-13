@@ -11,6 +11,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.200] - 2026-08-13
+
+### Fixed
+- **Target wizard can no longer build OS-impossible configs** (user-caught:
+  a Windows target deployed with an invisible nginx selection — the default
+  from the Linux view stayed selected when the OS was switched, the row was
+  created, and the deploy failed at install.sh validation). Switching OS or
+  cloud now prunes incompatible stack selections (with a sensible default),
+  the Windows stack list is per-cloud (AWS Windows is IIS-only; GCP Windows
+  isn't wired), and the OS hint text now tells the truth about which stacks
+  each OS offers.
+- **csharp-net48 removed from the target-deploy language list** (user-caught:
+  offered on Linux targets, where install.sh's runtime arm rejects it
+  mid-deploy — deploy-config languages are Linux-only and .NET Framework 4.8
+  is Windows-only, a contradiction by construction). install.sh's validator
+  now rejects it up front, and Windows targets get an explanatory note where
+  the language picker would be (reference APIs are Linux-only in this path;
+  .NET 4.8 is measured via the Application Benchmark flow).
+- **Doomed deploy configs are rejected at create time (422)**: a new
+  server-side pre-flight mirrors install.sh's OS↔stack/language rules
+  (reading the provider-nested `os`, exactly where install.sh reads it), so
+  the API refuses the contradiction before a failed deployment row exists.
+- **Deploy logs persist incrementally** (user-caught: a running deployment
+  showed no progress after a page load — the log column was written only at
+  terminal state, so all mid-deploy history lived in the live event stream
+  and vanished on refresh). The runner now flushes the accumulated log every
+  ~3s; the event stream remains the low-latency path. Also fixed a latent
+  data race: the stdout/stderr pumps shared the log accumulator without
+  synchronization.
+
+---
+
 ## [0.28.199] - 2026-08-12
 
 ### Fixed

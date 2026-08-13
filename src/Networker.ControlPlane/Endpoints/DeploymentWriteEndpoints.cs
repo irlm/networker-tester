@@ -50,6 +50,20 @@ public static class DeploymentWriteEndpoints
                 return ApiError.BadRequest("name and config are required");
             }
 
+            // Pre-flight the OS↔stack/language contradictions install.sh's
+            // validator would reject anyway — but reject them HERE, before a
+            // doomed deployment row is created and the user watches it fail
+            // (user-caught 2026-08-12: an invisible nginx selection rode a
+            // Windows config through the wizard). Mirrors install.sh's
+            // validate_deploy_config rules; keep the two in lockstep.
+            var preflightErrors = DeployConfigPreflight.Validate(body.Config);
+            if (preflightErrors.Count > 0)
+            {
+                return ApiError.Status(
+                    StatusCodes.Status422UnprocessableEntity,
+                    string.Join("; ", preflightErrors));
+            }
+
             var configText = body.Config.ToJsonString();
             var deploymentId = Guid.NewGuid();
             var now = DateTime.UtcNow;
