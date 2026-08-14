@@ -2739,7 +2739,7 @@ function Invoke-BenchmarkServerSetup ($lang, $port) {
         try {
             $r = Invoke-WebRequest -Uri "http://localhost:$port/health" -UseBasicParsing -TimeoutSec 3
             if ($r.StatusCode -eq 200) { $healthy = $true; break }
-        } catch { }
+        } catch { Write-Verbose "waiting for ${lang}: $($_.Exception.Message)" }
     }
     if (-not $healthy) {
         Write-Err "$lang server not healthy on :$port after 60s — see $benchDir\$lang.log"
@@ -2775,7 +2775,7 @@ function Invoke-BenchmarkServerSetup ($lang, $port) {
             $h = Invoke-WebRequest -Uri "http://localhost:8080/health" -UseBasicParsing -TimeoutSec 3
             $j = $h.Content | ConvertFrom-Json
             if ($j.services.api_upstream -eq "127.0.0.1:$port") { $wired = $true; break }
-        } catch { }
+        } catch { Write-Verbose "waiting for endpoint restart: $($_.Exception.Message)" }
     }
     if (-not $wired) {
         Write-Err "endpoint did not come back reporting api_upstream — is it >= 0.28.203? (upgrade the target, then re-run)"
