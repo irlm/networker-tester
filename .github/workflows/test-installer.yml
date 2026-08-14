@@ -145,6 +145,28 @@ jobs:
           }
           Write-Host "PSScriptAnalyzer: no issues found."
 
+      - name: Parse install.ps1 as Windows PowerShell 5.1 sees it (ANSI, no BOM)
+        shell: pwsh
+        run: |
+          # The field failure this guards (2026-08-14): deployed VMs download
+          # install.ps1 (UTF-8, no BOM) and run it under Windows PowerShell
+          # 5.1, which reads BOM-less files as ANSI/cp1252 — a UTF-8 em dash
+          # ends in byte 0x94, a cp1252 CURLY QUOTE, which the 5.1 parser
+          # treats as a string delimiter. Strings terminate early, code leaks
+          # out, the script dies at parse time — while pwsh-7 CI (UTF-8)
+          # stays green. Tokenize the cp1252 view; any error is the exact
+          # error a target VM would hit.
+          $bytes = [IO.File]::ReadAllBytes('install.ps1')
+          $ansi = [Text.Encoding]::GetEncoding(1252).GetString($bytes)
+          $errs = $null
+          [System.Management.Automation.PSParser]::Tokenize($ansi, [ref]$errs) | Out-Null
+          if ($errs.Count) {
+            Write-Host "::error::install.ps1 fails to parse under the 5.1/ANSI view (non-ASCII inside a string?)"
+            $errs | Select-Object -First 5 | Format-List
+            exit 1
+          }
+          Write-Host "cp1252-view tokenizes clean — safe for Windows PowerShell 5.1 targets."
+
   # ── P0-4 (2026-08 audit): EXECUTE the linux proxy-stack setups ─────────────
   # The bats suite drives functions and greps generated config text, but the
   # caddy and apache stacks shipped broken for weeks while those tests were
