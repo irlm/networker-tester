@@ -311,3 +311,34 @@ jobs:
             Write-Host "::endgroup::"
           }
           if ($failed) { throw "one or more Windows stacks failed to serve" }
+      - name: Deploy Windows reference APIs and assert /api measures the language
+        shell: pwsh
+        run: |
+          # v0.28.204: install.ps1 -BenchmarkServer on the two ends of the
+          # Windows-viable set — go (fast, preinstalled) and csharp-net48
+          # (the flagship: .NET Framework, csc.exe in-box). Each must come up
+          # healthy on :8085 AND retarget the endpoint's /api at itself
+          # (--api-upstream, asserted via the endpoint's own /health
+          # self-report + an end-to-end /api round-trip).
+          $env:NETWORKER_BENCH_REPO_DIR = $PWD.Path
+          $failed = $false
+          foreach ($lang in @('go', 'csharp-net48')) {
+            Write-Host "::group::-BenchmarkServer $lang"
+            & .\install.ps1 -BenchmarkServer $lang
+            if ($LASTEXITCODE -ne 0) { Write-Host "::error::$lang setup failed"; $failed = $true; Write-Host "::endgroup::"; continue }
+            $h = (Invoke-WebRequest -Uri http://127.0.0.1:8080/health -UseBasicParsing -TimeoutSec 5).Content | ConvertFrom-Json
+            if ($h.services.api_upstream -ne '127.0.0.1:8085') {
+              Write-Host "::error::endpoint does not report api_upstream after $lang"; $failed = $true
+            }
+            $lh = (Invoke-WebRequest -Uri http://127.0.0.1:8085/health -UseBasicParsing -TimeoutSec 5).Content | ConvertFrom-Json
+            Write-Host "language runtime: $($lh.runtime)"
+            $api = Invoke-WebRequest -Uri 'http://127.0.0.1:8080/api/users?limit=2' -UseBasicParsing -TimeoutSec 10
+            if ($api.StatusCode -ne 200) {
+              Write-Host "::error::/api through the endpoint did not reach $lang (HTTP $($api.StatusCode))"; $failed = $true
+            } else {
+              Write-Host "/api round-trip through the endpoint reached $lang"
+            }
+            Write-Host "::endgroup::"
+          }
+          if ($failed) { exit 1 }
+

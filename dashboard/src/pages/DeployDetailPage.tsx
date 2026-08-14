@@ -8,6 +8,7 @@ import { StatusBadge } from '../components/common/StatusBadge';
 import { TargetEndpointCard } from '../components/targets/TargetEndpointCard';
 import { InfraDeployWizard, type InfraDeployWizardProps } from '../components/InfraDeployWizard';
 import { formatDuration } from '../lib/format';
+import { endpointIdentity } from '../lib/deploy-endpoint';
 import { usePolling } from '../hooks/usePolling';
 import { useLiveStore } from '../stores/liveStore';
 import { useToast } from '../hooks/useToast';
@@ -298,21 +299,27 @@ export function DeployDetailPage() {
         <div className="mb-6">
           <div className="flex items-center justify-between mb-2">
             <p className="text-xs text-gray-400 tracking-wider font-medium">infrastructure</p>
+            {/* Upgrade rides SSH/LAN for Linux targets and azure VM reuse
+                (run-command) for Azure Windows — other-cloud Windows targets
+                have no remote-install path yet, so no doomed button. */}
             {isOperator && deployment?.status === 'completed'
               && (deployment?.endpoint_ips?.length ?? 0) > 0
-              && deployment?.config?.endpoints?.[0]?.os !== 'windows' && (
+              && (endpointIdentity(deployment?.config?.endpoints?.[0] ?? { provider: '' } as never).os !== 'windows'
+                  || (deployment?.config?.endpoints?.[0]?.provider ?? '').toLowerCase() === 'azure') && (
               <button
                 onClick={() => {
                   const ep = deployment?.config?.endpoints?.[0];
                   const ip = deployment?.endpoint_ips?.[0];
                   if (!ep || !ip) return;
                   const p = (ep.provider || '').toLowerCase();
+                  const id = endpointIdentity(ep);
                   setUpgradePrefill({
                     cloud: p === 'aws' ? 'AWS' : p === 'gcp' ? 'GCP' : 'Azure',
                     cloudAccountId: '',
-                    region: ep.region ?? '',
-                    os: ep.os === 'windows' ? 'windows' : 'linux',
+                    region: id.region ?? ep.region ?? '',
+                    os: id.os === 'windows' ? 'windows' : 'linux',
                     existingVmIp: ip,
+                    vmName: id.vmName ?? undefined,
                     installedProxies: ep.http_stacks ?? [],
                     installedLanguages: ep.languages ?? [],
                   });

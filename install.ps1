@@ -51,6 +51,15 @@ param(
     # deploy path (az vm run-command) so the same Invoke-SetupXxx functions
     # are reused for cloud VMs instead of being duplicated as inline PowerShell.
     [string]$Setup      = "",
+    # -BenchmarkServer <lang>  Install ONLY the named reference-API language
+    # server (apibench then measures the LANGUAGE behind this endpoint) and
+    # exit. Windows-viable set: csharp-net48, csharp-net8, csharp-net9,
+    # csharp-net10, go, nodejs, python, java. Used by install.sh's remote
+    # Windows deploy path (az vm run-command) — the PowerShell mirror of
+    # install.sh --benchmark-server. Retargets the endpoint's /api at the
+    # language via --api-upstream (endpoint >= 0.28.203 required).
+    [string]$BenchmarkServer = "",
+    [int]$BenchmarkPort = 8085,
     [switch]$Help
 )
 
@@ -59,7 +68,7 @@ $ErrorActionPreference = "Stop"
 $RepoHttps     = "https://github.com/irlm/networker-tester"
 $RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"
-$InstallerVersion = "v0.28.203"  # fallback when gh is unavailable
+$InstallerVersion = "v0.28.204"  # fallback when gh is unavailable
 
 # ── Print helpers ──────────────────────────────────────────────────────────────
 function Write-Ok   ($msg) { Write-Host "  v " -NoNewline -ForegroundColor Green;   Write-Host $msg }
@@ -2522,6 +2531,259 @@ function Invoke-HttpStackSetup ($stacks) {
     }
 }
 
+# ── Reference-API language servers (Windows) ─────────────────────────────────
+# The PowerShell mirror of install.sh's deploy_benchmark_server: install the
+# language runtime (chocolatey when missing), build the committed reference
+# API, run it on $port in application mode (plain HTTP, BENCH_USE_TLS=0), and
+# persist it across reboots via a schtasks ONSTART wrapper. Finally retarget
+# the endpoint's /api at the language server (--api-upstream, endpoint
+# >= 0.28.203) so apibench measures the LANGUAGE behind this target.
+# Windows-viable set only: cpp (MSVC+boost build), ruby (devkit gem builds)
+# and php (swoole is Linux-only) are deliberately excluded; AOT variants need
+# the VS C++ toolchain. Everything here is idempotent.
+
+$script:WindowsBenchLangs = @(
+    "csharp-net48", "csharp-net8", "csharp-net9", "csharp-net10",
+    "go", "nodejs", "python", "java"
+)
+
+function Get-BenchRepo {
+    # Shallow clone (or reuse) the repo for the committed reference APIs +
+    # shared dataset. Returns the reference-apis directory path.
+    $benchRoot = "C:\networker-bench"
+    $repoDir   = Join-Path $benchRoot "repo"
+    New-Item -ItemType Directory -Force $benchRoot | Out-Null
+    # CI hook: reuse an existing checkout instead of cloning (the installer
+    # execution job runs -BenchmarkServer against the PR's own tree).
+    if ($env:NETWORKER_BENCH_REPO_DIR -and (Test-Path (Join-Path $env:NETWORKER_BENCH_REPO_DIR "benchmarks\reference-apis"))) {
+        return (Join-Path $env:NETWORKER_BENCH_REPO_DIR "benchmarks\reference-apis")
+    }
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        Write-Info "Installing git via chocolatey..."
+        choco install git -y --no-progress | Out-Null
+        $env:PATH = "$env:PATH;C:\Program Files\Git\cmd"
+    }
+    if (Test-Path (Join-Path $repoDir ".git")) {
+        Write-Info "Refreshing reference-API checkout..."
+        git -C $repoDir pull --ff-only 2>$null | Out-Null
+    } else {
+        Write-Info "Cloning reference APIs..."
+        git clone --depth 1 $RepoHttps $repoDir | Out-Null
+    }
+    return (Join-Path $repoDir "benchmarks\reference-apis")
+}
+
+function Install-BenchRuntime ($lang) {
+    # Ensure the language runtime exists; chocolatey fills gaps. Returns the
+    # tool command name to sanity-check afterwards.
+    switch -Wildcard ($lang) {
+        "csharp-net48" {
+            # csc.exe ships with .NET Framework 4.8 on Windows Server — no install.
+            $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+            if (-not (Test-Path $csc)) { throw ".NET Framework 4.8 csc.exe not found at $csc" }
+            return $csc
+        }
+        "csharp-*" {
+            $channel = switch ($lang) {
+                "csharp-net8"  { "8.0" }
+                "csharp-net9"  { "9.0" }
+                "csharp-net10" { "10.0" }
+            }
+            $sdks = & dotnet --list-sdks 2>$null
+            if (-not ($sdks -match "^$([regex]::Escape($channel))")) {
+                Write-Info "Installing .NET SDK $channel..."
+                $di = Join-Path $env:TEMP "dotnet-install.ps1"
+                Invoke-WebRequest -Uri "https://dot.net/v1/dotnet-install.ps1" -OutFile $di -UseBasicParsing
+                & $di -Channel $channel -InstallDir "$env:ProgramFiles\dotnet" | Out-Null
+            }
+            return "dotnet"
+        }
+        "go" {
+            if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
+                Write-Info "Installing Go via chocolatey..."
+                choco install golang -y --no-progress | Out-Null
+                $env:PATH = "$env:PATH;C:\Program Files\Go\bin"
+            }
+            return "go"
+        }
+        "nodejs" {
+            if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+                Write-Info "Installing Node.js via chocolatey..."
+                choco install nodejs-lts -y --no-progress | Out-Null
+                $env:PATH = "$env:PATH;C:\Program Files\nodejs"
+            }
+            return "node"
+        }
+        "python" {
+            if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+                Write-Info "Installing Python via chocolatey..."
+                choco install python -y --no-progress | Out-Null
+                $env:PATH = "$env:PATH;C:\Python312;C:\Python312\Scripts"
+            }
+            return "python"
+        }
+        "java" {
+            if (-not (Get-Command javac -ErrorAction SilentlyContinue)) {
+                Write-Info "Installing Temurin JDK via chocolatey..."
+                choco install temurin -y --no-progress | Out-Null
+                $jdk = Get-ChildItem "C:\Program Files\Eclipse Adoptium" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($jdk) { $env:PATH = "$env:PATH;$($jdk.FullName)\bin" }
+            }
+            return "javac"
+        }
+    }
+}
+
+function Invoke-BenchmarkServerSetup ($lang, $port) {
+    if ($lang -notin $script:WindowsBenchLangs) {
+        Write-Err ("'$lang' is not deployable on Windows. Supported: " +
+            ($script:WindowsBenchLangs -join ", ") +
+            ". (cpp/ruby/php and AOT variants are Linux-only in this path.)")
+        exit 1
+    }
+
+    $apiDir   = Get-BenchRepo
+    $benchDir = "C:\networker-bench"
+    $runtime  = Install-BenchRuntime $lang
+
+    # Shared dataset (API-SPEC §2 — load failure is FATAL in every server).
+    $dataSrc = Join-Path $apiDir "shared\bench-data.json"
+    $data    = Join-Path $benchDir "bench-data.json"
+    if (Test-Path $dataSrc) { Copy-Item $dataSrc $data -Force }
+
+    # ── Build + compose the start command ────────────────────────────────
+    Write-Info "Building $lang reference API..."
+    $startCmd = $null
+    switch -Wildcard ($lang) {
+        "csharp-net48" {
+            $exe = Join-Path $benchDir "csharp-net48.exe"
+            & $runtime /nologo /out:$exe `
+                /reference:System.IO.Compression.dll `
+                /reference:System.Web.Extensions.dll `
+                /target:exe (Join-Path $apiDir "csharp-net48\Server.cs")
+            if ($LASTEXITCODE -ne 0) { Write-Err "csc.exe compilation failed"; exit 1 }
+            $startCmd = "`"$exe`""
+        }
+        "csharp-*" {
+            $srcDir = Join-Path $apiDir $lang
+            if (-not (Test-Path $srcDir)) { $srcDir = Join-Path $apiDir "csharp" }
+            $outDir = Join-Path $benchDir $lang
+            Push-Location $srcDir
+            & dotnet publish -c Release -o $outDir --nologo -v quiet
+            $ok = ($LASTEXITCODE -eq 0)
+            Pop-Location
+            if (-not $ok) { Write-Err "dotnet publish failed for $lang"; exit 1 }
+            $exe = Get-ChildItem $outDir -Filter "*.exe" | Select-Object -First 1
+            if (-not $exe) { Write-Err "no exe produced for $lang"; exit 1 }
+            $startCmd = "`"$($exe.FullName)`""
+        }
+        "go" {
+            $exe = Join-Path $benchDir "go-server.exe"
+            Push-Location (Join-Path $apiDir "go")
+            & go build -o $exe .
+            $ok = ($LASTEXITCODE -eq 0)
+            Pop-Location
+            if (-not $ok) { Write-Err "go build failed"; exit 1 }
+            $startCmd = "`"$exe`""
+        }
+        "nodejs" {
+            Push-Location (Join-Path $apiDir "nodejs")
+            & npm install --quiet --no-audit --no-fund | Out-Null
+            Pop-Location
+            $startCmd = "`"$((Get-Command node).Source)`" `"$(Join-Path $apiDir 'nodejs\server.js')`""
+        }
+        "python" {
+            $venv = Join-Path $benchDir "pyenv"
+            if (-not (Test-Path $venv)) { & python -m venv $venv }
+            & (Join-Path $venv "Scripts\pip.exe") install --quiet -r (Join-Path $apiDir "python\requirements.txt")
+            if ($LASTEXITCODE -ne 0) { Write-Err "pip install failed"; exit 1 }
+            $startCmd = "`"$(Join-Path $venv 'Scripts\hypercorn.exe')`" server:app --bind 0.0.0.0:$port"
+        }
+        "java" {
+            $buildDir = Join-Path $benchDir "java-build"
+            New-Item -ItemType Directory -Force $buildDir | Out-Null
+            & javac -d $buildDir (Join-Path $apiDir "java\*.java")
+            if ($LASTEXITCODE -ne 0) { Write-Err "javac failed"; exit 1 }
+            $startCmd = "`"$((Get-Command java).Source)`" -cp `"$buildDir`" Server"
+        }
+    }
+
+    # ── Wrapper .cmd: env vars don't ride schtasks /TR ────────────────────
+    # Application mode: plain HTTP on $port (no certs provisioned => the
+    # servers fall back to http per API-SPEC audit F8).
+    $wrapper = Join-Path $benchDir "run-$lang.cmd"
+    $workDir = if ($lang -eq "python") { Join-Path $apiDir "python" } else { $benchDir }
+    @(
+        "@echo off",
+        "set BENCH_PORT=$port",
+        "set BENCH_USE_TLS=0",
+        "set BENCH_DATA_PATH=$data",
+        "cd /d `"$workDir`"",
+        "$startCmd >> `"$benchDir\$lang.log`" 2>&1"
+    ) | Set-Content -Path $wrapper -Encoding ascii
+
+    # Kill any previous language server holding the port, start, persist.
+    $owner = (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess
+    if ($owner) {
+        Write-Info "Stopping previous language server (pid $owner) on port $port..."
+        Stop-Process -Id $owner -Force -ErrorAction SilentlyContinue
+    }
+    Write-Info "Starting $lang reference API on port $port..."
+    Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $wrapper -WindowStyle Hidden
+    schtasks /Create /TN "NetworkerBench" /TR "cmd.exe /c `"$wrapper`"" /SC ONSTART /RU SYSTEM /F | Out-Null
+
+    # Verify the language server itself (its /health names the runtime, §5.1).
+    $healthy = $false
+    foreach ($i in 1..30) {
+        Start-Sleep -Seconds 2
+        try {
+            $r = Invoke-WebRequest -Uri "http://localhost:$port/health" -UseBasicParsing -TimeoutSec 3
+            if ($r.StatusCode -eq 200) { $healthy = $true; break }
+        } catch { }
+    }
+    if (-not $healthy) {
+        Write-Err "$lang server not healthy on :$port after 60s — see $benchDir\$lang.log"
+        Get-Content "$benchDir\$lang.log" -Tail 20 -ErrorAction SilentlyContinue | Write-Host
+        exit 1
+    }
+    Write-Ok "$lang reference API healthy on :$port"
+
+    # ── Retarget the endpoint /api at the language (--api-upstream) ───────
+    $epExe = "C:\networker\networker-endpoint.exe"
+    if (-not (Test-Path $epExe)) {
+        $cmd = Get-Command networker-endpoint -ErrorAction SilentlyContinue
+        if ($cmd) { $epExe = $cmd.Source }
+    }
+    if (-not (Test-Path $epExe)) {
+        Write-Err "networker-endpoint.exe not found — cannot route /api to the language server"
+        exit 1
+    }
+    Write-Info "Retargeting endpoint /api -> 127.0.0.1:$port (--api-upstream)..."
+    Stop-Process -Name "networker-endpoint" -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+    schtasks /Create /TN "NetworkerEndpoint" /TR "`"$epExe`" --api-upstream 127.0.0.1:$port" /SC ONSTART /RU SYSTEM /F | Out-Null
+    Start-Process -FilePath $epExe -ArgumentList "--api-upstream", "127.0.0.1:$port" -WindowStyle Hidden
+
+    # End-to-end proof: the ENDPOINT's /health must self-report the upstream
+    # (services.api_upstream, endpoint >= 0.28.203 — older binaries silently
+    # ignore unknown flags is NOT a risk: clap rejects them, so the process
+    # dies and this check goes red instead of lying).
+    $wired = $false
+    foreach ($i in 1..15) {
+        Start-Sleep -Seconds 2
+        try {
+            $h = Invoke-WebRequest -Uri "http://localhost:8080/health" -UseBasicParsing -TimeoutSec 3
+            $j = $h.Content | ConvertFrom-Json
+            if ($j.services.api_upstream -eq "127.0.0.1:$port") { $wired = $true; break }
+        } catch { }
+    }
+    if (-not $wired) {
+        Write-Err "endpoint did not come back reporting api_upstream — is it >= 0.28.203? (upgrade the target, then re-run)"
+        exit 1
+    }
+    Write-Ok "endpoint /api now measures $lang (services.api_upstream=127.0.0.1:$port)"
+}
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  CLOUD DEPLOYMENT STEPS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3612,6 +3874,12 @@ if ($Setup) {
         exit 1
     }
     Invoke-HttpStackSetup $wanted
+    exit 0
+}
+
+# -BenchmarkServer fast-path: same remote-invocation contract as -Setup.
+if ($BenchmarkServer) {
+    Invoke-BenchmarkServerSetup $BenchmarkServer.ToLower() $BenchmarkPort
     exit 0
 }
 

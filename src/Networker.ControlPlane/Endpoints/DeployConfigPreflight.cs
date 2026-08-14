@@ -16,6 +16,20 @@ namespace Networker.ControlPlane.Endpoints;
 /// </summary>
 public static class DeployConfigPreflight
 {
+    /// <summary>Languages install.sh's deploy_benchmark_server deploys on Linux.</summary>
+    internal static readonly HashSet<string> LinuxLanguages = new(StringComparer.Ordinal)
+    {
+        "rust", "nginx", "go", "nodejs", "python", "java", "cpp", "ruby", "php",
+        "csharp-net8", "csharp-net8-aot", "csharp-net9", "csharp-net10",
+    };
+
+    /// <summary>Languages install.ps1 -BenchmarkServer deploys on Windows (v0.28.204).</summary>
+    internal static readonly HashSet<string> WindowsLanguages = new(StringComparer.Ordinal)
+    {
+        "csharp-net48", "csharp-net8", "csharp-net9", "csharp-net10",
+        "go", "nodejs", "python", "java",
+    };
+
     public static IReadOnlyList<string> Validate(JsonNode? config)
     {
         var errors = new List<string>();
@@ -55,20 +69,23 @@ public static class DeployConfigPreflight
 
             if (ep["languages"] is JsonArray langs && langs.Count > 0)
             {
-                if (os == "windows")
-                {
-                    errors.Add($"endpoints[{i}]: reference-API languages require a Linux endpoint (os is 'windows')");
-                }
+                // Per-OS language sets (v0.28.204) — mirrors install.sh's
+                // validator: Linux deploys via deploy_benchmark_server, Windows
+                // via install.ps1 -BenchmarkServer. net48 is Windows-only
+                // (.NET Framework); cpp/ruby/php + AOT variants are Linux-only
+                // (MSVC/devkit/swoole constraints).
+                var valid = os == "windows" ? WindowsLanguages : LinuxLanguages;
+                var other = os == "windows" ? LinuxLanguages : WindowsLanguages;
                 foreach (var l in langs)
                 {
-                    // Contradiction by construction: deploy-config languages
-                    // are Linux-only and .NET Framework 4.8 is Windows-only.
-                    if (l?.GetValue<string>() == "csharp-net48")
+                    var name = l?.GetValue<string>();
+                    if (name is null || valid.Contains(name))
                     {
-                        errors.Add($"endpoints[{i}]: csharp-net48 cannot be deployed as a reference API "
-                            + "(languages require Linux; .NET Framework 4.8 requires Windows — "
-                            + "measure it via the Application Benchmark flow)");
+                        continue;
                     }
+                    errors.Add(other.Contains(name)
+                        ? $"endpoints[{i}]: '{name}' is not deployable on a {os} endpoint"
+                        : $"endpoints[{i}]: unknown language '{name}'");
                 }
             }
         }

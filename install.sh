@@ -331,7 +331,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.203"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.204"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -6069,6 +6069,38 @@ _local_setup_languages() {
     return 0
 }
 
+# Install a reference-API language server on an Azure Windows VM and retarget
+# the endpoint's /api at it (install.ps1 -BenchmarkServer → --api-upstream,
+# endpoint >= 0.28.203). The PowerShell twin of _remote_setup_languages; one
+# run-command per language. The language server binds localhost:8085 only —
+# traffic reaches it through the endpoint's /api proxy, so no NSG rule.
+_azure_win_setup_language() {
+    local rg="$1" vm="$2" lang="$3" port="${4:-8085}"
+    print_info "Installing ${lang} reference API on Windows VM ($vm) via install.ps1 -BenchmarkServer…"
+    local installer_url="https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.ps1"
+    local ps_script
+    ps_script="$(cat <<PS_BENCH
+\$ErrorActionPreference = 'Stop'
+\$installPath = "\$env:TEMP\\networker-install.ps1"
+Invoke-WebRequest -Uri '${installer_url}' -OutFile \$installPath -UseBasicParsing
+& \$installPath -BenchmarkServer ${lang} -BenchmarkPort ${port}
+PS_BENCH
+)"
+    local out
+    out="$(az vm run-command invoke \
+        --resource-group "$rg" --name "$vm" \
+        --command-id RunPowerShellScript \
+        --scripts "$ps_script" \
+        --query 'value[0].message' -o tsv 2>&1 || true)"
+    if echo "$out" | grep -q "endpoint /api now measures"; then
+        print_ok "${lang} reference API running behind ${vm}'s /api"
+        return 0
+    fi
+    print_warn "${lang} reference API install did not confirm on ${vm} — apibench will not measure ${lang}"
+    echo "$out" | tail -5
+    return 1
+}
+
 # Set up IIS on an Azure Windows VM via az vm run-command.
 # Installs IIS + URL Rewrite + ARR, enables HTTP/3, reboots if needed,
 # then waits for the VM to come back and verifies IIS is serving.
@@ -9534,26 +9566,33 @@ _deploy_validate_config() {
                 fi
 
                 # Validate languages per endpoint (reference-API servers for
-                # apibench; must match deploy_benchmark_server's case arms)
+                # apibench) — PER-OS sets, matching the deploy arms:
+                # Linux = install.sh deploy_benchmark_server; Windows =
+                # install.ps1 -BenchmarkServer (v0.28.204). net48 is
+                # Windows-ONLY (.NET Framework); cpp/ruby/php + AOT variants
+                # are Linux-only (MSVC/devkit/swoole constraints).
                 local langs_count; langs_count="$(jq ".endpoints[$i].languages | length // 0" "$cfg" 2>/dev/null)"
                 if [[ "${langs_count:-0}" -gt 0 ]]; then
-                    # csharp-net48 is NOT valid here: deploy-config languages
-                    # require a Linux endpoint (below) and .NET Framework 4.8
-                    # requires Windows — the combination is a contradiction the
-                    # runtime arm used to reject only mid-deploy.
-                    local valid_langs="rust nginx go nodejs python java cpp ruby php csharp-net8 csharp-net8-aot csharp-net9 csharp-net10"
+                    local linux_langs="rust nginx go nodejs python java cpp ruby php csharp-net8 csharp-net8-aot csharp-net9 csharp-net10"
+                    local windows_langs="csharp-net48 csharp-net8 csharp-net9 csharp-net10 go nodejs python java"
+                    local valid_langs
+                    if [[ "$ep_os" == "windows" ]]; then
+                        valid_langs="$windows_langs"
+                    else
+                        valid_langs="$linux_langs"
+                    fi
                     local l
                     for l in $(seq 0 $((langs_count - 1))); do
                         local lname; lname="$(jq -r ".endpoints[$i].languages[$l]" "$cfg")"
                         if ! echo "$valid_langs" | grep -qw "$lname"; then
-                            print_err "endpoints[$i].languages[$l]: unknown language '$lname' (valid: $valid_langs)"
+                            if echo "$linux_langs $windows_langs" | grep -qw "$lname"; then
+                                print_err "endpoints[$i].languages[$l]: '$lname' is not deployable on a ${ep_os:-linux} endpoint (valid for ${ep_os:-linux}: $valid_langs)"
+                            else
+                                print_err "endpoints[$i].languages[$l]: unknown language '$lname' (valid: $valid_langs)"
+                            fi
                             errors=$((errors + 1))
                         fi
                     done
-                    if [[ "$ep_os" == "windows" ]]; then
-                        print_err "endpoints[$i]: reference-API languages require a Linux endpoint (os is 'windows')"
-                        errors=$((errors + 1))
-                    fi
                 fi
             fi
         done
@@ -10783,7 +10822,17 @@ deploy_from_config() {
                     if [[ "$AZURE_ENDPOINT_OS" != "windows" ]]; then
                         _remote_setup_languages "$AZURE_ENDPOINT_IP" "azureuser" "$ep_langs"
                     else
-                        print_warn "Skipping language servers ($ep_langs) on Azure Windows: only supported on Linux"
+                        # Windows: install.ps1 -BenchmarkServer per language;
+                        # the LAST one wins the endpoint's /api upstream (same
+                        # last-writer semantics as the Linux 8085 bind race).
+                        local _wl
+                        IFS=',' read -ra _win_langs <<< "$ep_langs"
+                        for _wl in "${_win_langs[@]}"; do
+                            [[ -z "$_wl" ]] && continue
+                            next_step "Install $_wl reference API (Azure Windows)"
+                            _azure_win_setup_language \
+                                "$AZURE_ENDPOINT_RG" "$AZURE_ENDPOINT_VM" "$_wl" || true
+                        done
                     fi
                 fi
                 ;;

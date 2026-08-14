@@ -38,6 +38,9 @@ export interface InfraDeployWizardProps {
     region: string;
     os: 'linux' | 'windows';
     existingVmIp: string;
+    /** Cloud VM name — set for azure targets so the upgrade rides VM reuse
+     *  (run-command capable, works for Windows) instead of SSH/LAN. */
+    vmName?: string;
     installedProxies: string[];
     /** Reference-API languages already on the target (pre-checked in the picker). */
     installedLanguages?: string[];
@@ -59,17 +62,26 @@ function providerToCloud(p: string): 'Azure' | 'AWS' | 'GCP' {
 // (apibench then measures the LANGUAGE server behind the proxy instead of
 // networker-endpoint's built-in /api). Must match install.sh's valid_langs;
 // 'nginx' (static stack) and the AOT variants it doesn't ship are excluded.
-// csharp-net48 is deliberately absent: deploy-config languages are Linux-only
-// (install.sh) and .NET Framework 4.8 is Windows-only — the combination is a
-// contradiction that used to be offered and failed mid-deploy (user-caught
-// 2026-08-12). .NET 4.8 measurement runs via the Application Benchmark flow.
-const APIBENCH_LANG_IDS = new Set([
+// Per-OS reference-API sets — must match install.sh's validator
+// (linux_langs/windows_langs) and DeployConfigPreflight. Linux deploys via
+// deploy_benchmark_server (net48 excluded: .NET Framework is Windows-only);
+// Windows deploys via install.ps1 -BenchmarkServer (v0.28.204 — cpp/ruby/php
+// and AOT variants excluded: MSVC/devkit/swoole constraints).
+const LINUX_APIBENCH_LANG_IDS = new Set([
   'rust', 'go', 'cpp', 'java', 'nodejs', 'python', 'ruby', 'php',
   'csharp-net8', 'csharp-net8-aot', 'csharp-net9', 'csharp-net10',
 ]);
-const APIBENCH_LANGS = LANGUAGE_GROUPS
+const WINDOWS_APIBENCH_LANG_IDS = new Set([
+  'csharp-net48', 'csharp-net8', 'csharp-net9', 'csharp-net10',
+  'go', 'nodejs', 'python', 'java',
+]);
+const ALL_APIBENCH_LANGS = LANGUAGE_GROUPS
   .flatMap(g => g.entries)
-  .filter(e => APIBENCH_LANG_IDS.has(e.id));
+  .filter(e => LINUX_APIBENCH_LANG_IDS.has(e.id) || WINDOWS_APIBENCH_LANG_IDS.has(e.id));
+function apibenchLangsFor(os: 'linux' | 'windows') {
+  const ids = os === 'windows' ? WINDOWS_APIBENCH_LANG_IDS : LINUX_APIBENCH_LANG_IDS;
+  return ALL_APIBENCH_LANGS.filter(e => ids.has(e.id));
+}
 
 const STEPS = ['Kind', 'Cloud', 'Region & OS', 'Configure', 'Review'] as const;
 
@@ -118,9 +130,11 @@ export function InfraDeployWizard({
       const fallback = nextOs === 'windows' ? 'iis' : 'nginx';
       return (valid as readonly string[]).includes(fallback) ? [fallback] : [];
     });
-    if (nextOs === 'windows') {
-      setLanguages(prev => (prev.length > 0 ? [] : prev));
-    }
+    const validLangs = nextOs === 'windows' ? WINDOWS_APIBENCH_LANG_IDS : LINUX_APIBENCH_LANG_IDS;
+    setLanguages(prev => {
+      const kept = prev.filter(l => validLangs.has(l));
+      return kept.length === prev.length ? prev : kept;
+    });
   };
 
   // Runner-specific
@@ -246,10 +260,24 @@ export function InfraDeployWizard({
           cloud_account_id: accountId,
           endpoints: [
             (() => {
-              // languages ride the endpoint only on Linux (install.sh rejects
-              // them on Windows) and only when picked.
-              const langs = os === 'linux' && languages.length > 0 ? { languages } : {};
+              // languages ride both OSes since v0.28.204 (per-OS sets are
+              // enforced by the picker, the 422 preflight, and install.sh).
+              const langs = languages.length > 0 ? { languages } : {};
               if (useExistingVm) {
+                // Azure targets upgrade via VM reuse (install.sh finds the
+                // existing VM and re-runs the idempotent setups over
+                // run-command) — the only path that works for Windows, and
+                // SSH-free for Linux too. Non-azure/unknown-VM falls back to
+                // SSH/LAN.
+                if (cloud === 'Azure' && prefillUpgrade?.vmName) {
+                  return {
+                    provider: 'azure',
+                    http_stacks: proxies,
+                    ...langs,
+                    azure: { region, vm_size: vmSize, os, vm_name: prefillUpgrade.vmName },
+                    label: `upgrade-${prefillUpgrade.vmName}`,
+                  };
+                }
                 return {
                   provider: 'lan',
                   lan: { ip: existingVmIp.trim(), user: 'azureuser', port: 22 },
@@ -517,25 +545,17 @@ export function InfraDeployWizard({
                 <p className="text-xs text-yellow-500 mb-3">At least one proxy is required</p>
               )}
 
-              {os === 'windows' && (
-                <p className="text-[11px] text-gray-500 mb-4">
-                  ⓘ Reference-API languages are Linux-only in this deploy path — Windows
-                  targets serve the endpoint&apos;s built-in /api for apibench. (.NET
-                  Framework 4.8 is measured via the Application Benchmark flow instead.)
-                </p>
-              )}
-
-              {os === 'linux' && (
-                <>
+              <>
                   <label className="block text-xs text-gray-400 mb-1">
                     Reference APIs <span className="text-gray-500">(apibench targets — optional)</span>
                   </label>
                   <p className="text-[11px] text-gray-500 mb-2">
                     Installs the language&apos;s reference API on the target; apibench then
-                    measures it behind the proxy instead of the built-in endpoint /api.
+                    measures it {os === 'windows' ? 'behind the endpoint (/api routed via --api-upstream)' : 'behind the proxy'} instead of the built-in endpoint /api.
+                    {os === 'windows' && ' Windows offers the .NET family (incl. Framework 4.8), Go, Node.js, Python, and Java — C++/Ruby/PHP and AOT variants are Linux-only.'}
                   </p>
                   <div className="flex flex-wrap gap-2 mb-4">
-                    {APIBENCH_LANGS.map(l => {
+                    {apibenchLangsFor(os).map(l => {
                       const active = languages.includes(l.id);
                       return (
                         <button
@@ -553,8 +573,7 @@ export function InfraDeployWizard({
                       );
                     })}
                   </div>
-                </>
-              )}
+              </>
 
               <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer mb-2">
                 <input
@@ -654,8 +673,8 @@ export function InfraDeployWizard({
                     { k: 'Reverse proxies', v: <span className="text-cyan-400">{proxies.map(p => PROXY_LABELS[p] ?? p).join(', ')}</span> },
                     {
                       k: 'Reference APIs',
-                      v: os === 'linux' && languages.length > 0
-                        ? <span className="text-cyan-400">{APIBENCH_LANGS.filter(l => languages.includes(l.id)).map(l => l.label).join(', ')}</span>
+                      v: languages.length > 0
+                        ? <span className="text-cyan-400">{ALL_APIBENCH_LANGS.filter(l => languages.includes(l.id)).map(l => l.label).join(', ')}</span>
                         : <span className="text-gray-400">none — apibench uses the built-in endpoint /api</span>,
                     },
                     { k: 'Existing VM', v: useExistingVm ? <span className="text-cyan-400">{existingVmIp}</span> : <span className="text-gray-400">no — provisioning new</span> },
