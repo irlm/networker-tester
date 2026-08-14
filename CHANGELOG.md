@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.206] - 2026-08-14
+
+### Fixed
+- **install.ps1 -BenchmarkServer works on fresh Windows VMs** (second
+  field catch from the live net48 deploy: after the parse fix, the arm
+  died at `choco: not recognized` — fresh Windows Server VMs ship
+  neither git nor chocolatey; CI runners have both preinstalled and
+  could not see it). The reference-API checkout now downloads as a repo
+  zip (no git dependency at all), and chocolatey bootstraps itself
+  on demand before any runtime install (download-to-file, no
+  Invoke-Expression). csharp-net48 needs neither: csc.exe is in-box.
+
 ## [0.28.205] - 2026-08-14
 
 ### Fixed

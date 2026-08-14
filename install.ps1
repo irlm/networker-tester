@@ -68,7 +68,7 @@ $ErrorActionPreference = "Stop"
 $RepoHttps     = "https://github.com/irlm/networker-tester"
 $RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"
-$InstallerVersion = "v0.28.205"  # fallback when gh is unavailable
+$InstallerVersion = "v0.28.206"  # fallback when gh is unavailable
 
 # ── Print helpers ──────────────────────────────────────────────────────────────
 function Write-Ok   ($msg) { Write-Host "  v " -NoNewline -ForegroundColor Green;   Write-Host $msg }
@@ -2553,24 +2553,39 @@ function Get-BenchRepo {
     $benchRoot = "C:\networker-bench"
     $repoDir   = Join-Path $benchRoot "repo"
     New-Item -ItemType Directory -Force $benchRoot | Out-Null
-    # CI hook: reuse an existing checkout instead of cloning (the installer
+    # CI hook: reuse an existing checkout instead of downloading (the installer
     # execution job runs -BenchmarkServer against the PR's own tree).
     if ($env:NETWORKER_BENCH_REPO_DIR -and (Test-Path (Join-Path $env:NETWORKER_BENCH_REPO_DIR "benchmarks\reference-apis"))) {
         return (Join-Path $env:NETWORKER_BENCH_REPO_DIR "benchmarks\reference-apis")
     }
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-        Write-Info "Installing git via chocolatey..."
-        choco install git -y --no-progress | Out-Null
-        $env:PATH = "$env:PATH;C:\Program Files\Git\cmd"
-    }
-    if (Test-Path (Join-Path $repoDir ".git")) {
-        Write-Info "Refreshing reference-API checkout..."
-        git -C $repoDir pull --ff-only 2>$null | Out-Null
-    } else {
-        Write-Info "Cloning reference APIs..."
-        git clone --depth 1 $RepoHttps $repoDir | Out-Null
-    }
+    # Zip download, not git clone: fresh Windows Server VMs ship neither git
+    # nor chocolatey (field-caught 2026-08-14 on the first real net48 deploy;
+    # CI runners have both preinstalled and could not see it).
+    Write-Info "Fetching reference APIs (repo zip)..."
+    $zip = Join-Path $benchRoot "repo.zip"
+    Invoke-WebRequest -Uri "$RepoHttps/archive/refs/heads/main.zip" -OutFile $zip -UseBasicParsing
+    if (Test-Path $repoDir) { Remove-Item $repoDir -Recurse -Force }
+    Expand-Archive -Path $zip -DestinationPath $benchRoot -Force
+    Remove-Item $zip -Force
+    $extracted = Get-ChildItem $benchRoot -Directory -Filter "networker-tester-*" | Select-Object -First 1
+    if (-not $extracted) { throw "repo zip extraction produced no networker-tester-* directory" }
+    Move-Item $extracted.FullName $repoDir -Force
     return (Join-Path $repoDir "benchmarks\reference-apis")
+}
+
+function Install-Chocolatey {
+    # Fresh Windows Server VMs do NOT ship chocolatey (GH runners do, which
+    # is why CI never hit this). Official bootstrap, idempotent.
+    if (Get-Command choco -ErrorAction SilentlyContinue) { return }
+    Write-Info "Bootstrapping chocolatey..."
+    Set-ExecutionPolicy Bypass -Scope Process -Force
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+    # Download-to-file then run (PSScriptAnalyzer bans Invoke-Expression).
+    $chocoInstaller = Join-Path $env:TEMP "choco-install.ps1"
+    Invoke-WebRequest -Uri 'https://community.chocolatey.org/install.ps1' -OutFile $chocoInstaller -UseBasicParsing
+    & $chocoInstaller
+    $env:PATH = "$env:PATH;$env:ProgramData\chocolatey\bin"
+    if (-not (Get-Command choco -ErrorAction SilentlyContinue)) { throw "chocolatey bootstrap failed" }
 }
 
 function Install-BenchRuntime ($lang) {
@@ -2601,6 +2616,7 @@ function Install-BenchRuntime ($lang) {
         "go" {
             if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
                 Write-Info "Installing Go via chocolatey..."
+                Install-Chocolatey
                 choco install golang -y --no-progress | Out-Null
                 $env:PATH = "$env:PATH;C:\Program Files\Go\bin"
             }
@@ -2609,6 +2625,7 @@ function Install-BenchRuntime ($lang) {
         "nodejs" {
             if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
                 Write-Info "Installing Node.js via chocolatey..."
+                Install-Chocolatey
                 choco install nodejs-lts -y --no-progress | Out-Null
                 $env:PATH = "$env:PATH;C:\Program Files\nodejs"
             }
@@ -2617,6 +2634,7 @@ function Install-BenchRuntime ($lang) {
         "python" {
             if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
                 Write-Info "Installing Python via chocolatey..."
+                Install-Chocolatey
                 choco install python -y --no-progress | Out-Null
                 $env:PATH = "$env:PATH;C:\Python312;C:\Python312\Scripts"
             }
@@ -2625,6 +2643,7 @@ function Install-BenchRuntime ($lang) {
         "java" {
             if (-not (Get-Command javac -ErrorAction SilentlyContinue)) {
                 Write-Info "Installing Temurin JDK via chocolatey..."
+                Install-Chocolatey
                 choco install temurin -y --no-progress | Out-Null
                 $jdk = Get-ChildItem "C:\Program Files\Eclipse Adoptium" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
                 if ($jdk) { $env:PATH = "$env:PATH;$($jdk.FullName)\bin" }
