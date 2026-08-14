@@ -2663,6 +2663,7 @@ function Invoke-BenchmarkServerSetup ($lang, $port) {
                 /target:exe (Join-Path $apiDir "csharp-net48\Server.cs")
             if ($LASTEXITCODE -ne 0) { Write-Err "csc.exe compilation failed"; exit 1 }
             $startCmd = "`"$exe`""
+            break
         }
         "csharp-*" {
             $srcDir = Join-Path $apiDir $lang
@@ -2676,6 +2677,7 @@ function Invoke-BenchmarkServerSetup ($lang, $port) {
             $exe = Get-ChildItem $outDir -Filter "*.exe" | Select-Object -First 1
             if (-not $exe) { Write-Err "no exe produced for $lang"; exit 1 }
             $startCmd = "`"$($exe.FullName)`""
+            break
         }
         "go" {
             $exe = Join-Path $benchDir "go-server.exe"
@@ -2685,12 +2687,14 @@ function Invoke-BenchmarkServerSetup ($lang, $port) {
             Pop-Location
             if (-not $ok) { Write-Err "go build failed"; exit 1 }
             $startCmd = "`"$exe`""
+            break
         }
         "nodejs" {
             Push-Location (Join-Path $apiDir "nodejs")
             & npm install --quiet --no-audit --no-fund | Out-Null
             Pop-Location
             $startCmd = "`"$((Get-Command node).Source)`" `"$(Join-Path $apiDir 'nodejs\server.js')`""
+            break
         }
         "python" {
             $venv = Join-Path $benchDir "pyenv"
@@ -2698,6 +2702,7 @@ function Invoke-BenchmarkServerSetup ($lang, $port) {
             & (Join-Path $venv "Scripts\pip.exe") install --quiet -r (Join-Path $apiDir "python\requirements.txt")
             if ($LASTEXITCODE -ne 0) { Write-Err "pip install failed"; exit 1 }
             $startCmd = "`"$(Join-Path $venv 'Scripts\hypercorn.exe')`" server:app --bind 0.0.0.0:$port"
+            break
         }
         "java" {
             $buildDir = Join-Path $benchDir "java-build"
@@ -2705,6 +2710,7 @@ function Invoke-BenchmarkServerSetup ($lang, $port) {
             & javac -d $buildDir (Join-Path $apiDir "java\*.java")
             if ($LASTEXITCODE -ne 0) { Write-Err "javac failed"; exit 1 }
             $startCmd = "`"$((Get-Command java).Source)`" -cp `"$buildDir`" Server"
+            break
         }
     }
 
