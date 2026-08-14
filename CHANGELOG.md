@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.207] - 2026-08-14
+
+### Fixed
+- **`--api-upstream` serves HTTP/2 clients** (field-caught on the first
+  external `/api` round-trip through the live net48 Windows target:
+  VM-local HTTP/1.1 requests proxied fine, but every external request —
+  which arrives over h2 via ALPN on :8443 — got a 502
+  `UserUnsupportedVersion`, because the proxy forwarded the request's
+  original version to the HTTP/1.1-only upstream client). The upstream
+  hop is now always downgraded to HTTP/1.1.
+
+---
+
 ## [0.28.206] - 2026-08-14
 
 ### Fixed
