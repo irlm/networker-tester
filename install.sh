@@ -331,7 +331,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.204"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.205"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -9568,7 +9568,7 @@ _deploy_validate_config() {
                 # Validate languages per endpoint (reference-API servers for
                 # apibench) — PER-OS sets, matching the deploy arms:
                 # Linux = install.sh deploy_benchmark_server; Windows =
-                # install.ps1 -BenchmarkServer (v0.28.204). net48 is
+                # install.ps1 -BenchmarkServer (v0.28.205). net48 is
                 # Windows-ONLY (.NET Framework); cpp/ruby/php + AOT variants
                 # are Linux-only (MSVC/devkit/swoole constraints).
                 local langs_count; langs_count="$(jq ".endpoints[$i].languages | length // 0" "$cfg" 2>/dev/null)"

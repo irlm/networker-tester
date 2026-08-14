@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.205] - 2026-08-14
+
+### Fixed
+- **install.ps1 parses again under Windows PowerShell 5.1** (field-caught
+  by the first real net48 target deploy: the language step silently
+  no-op'd). Deployed VMs download install.ps1 without a BOM and run it
+  under 5.1, which reads BOM-less files as ANSI — a UTF-8 em dash ends in
+  byte 0x94, a cp1252 curly quote, which the 5.1 parser treats as a real
+  string delimiter: strings terminated early and the script died at parse
+  time, while pwsh-7 CI (UTF-8) stayed green. The three affected strings
+  are ASCII now, and a new CI step tokenizes install.ps1 exactly as a
+  5.1/ANSI target sees it — the same em-dash class as v0.28.26, closed
+  for the file-download vector.
+
+---
+
 ## [0.28.204] - 2026-08-14
 
 ### Added

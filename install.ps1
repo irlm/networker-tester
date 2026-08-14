@@ -68,7 +68,7 @@ $ErrorActionPreference = "Stop"
 $RepoHttps     = "https://github.com/irlm/networker-tester"
 $RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"
-$InstallerVersion = "v0.28.204"  # fallback when gh is unavailable
+$InstallerVersion = "v0.28.205"  # fallback when gh is unavailable
 
 # ── Print helpers ──────────────────────────────────────────────────────────────
 function Write-Ok   ($msg) { Write-Host "  v " -NoNewline -ForegroundColor Green;   Write-Host $msg }
@@ -2748,7 +2748,7 @@ function Invoke-BenchmarkServerSetup ($lang, $port) {
         } catch { Write-Verbose "waiting for ${lang}: $($_.Exception.Message)" }
     }
     if (-not $healthy) {
-        Write-Err "$lang server not healthy on :$port after 60s — see $benchDir\$lang.log"
+        Write-Err "$lang server not healthy on :$port after 60s - see $benchDir\$lang.log"
         Get-Content "$benchDir\$lang.log" -Tail 20 -ErrorAction SilentlyContinue | Write-Host
         exit 1
     }
@@ -2761,7 +2761,7 @@ function Invoke-BenchmarkServerSetup ($lang, $port) {
         if ($cmd) { $epExe = $cmd.Source }
     }
     if (-not (Test-Path $epExe)) {
-        Write-Err "networker-endpoint.exe not found — cannot route /api to the language server"
+        Write-Err "networker-endpoint.exe not found - cannot route /api to the language server"
         exit 1
     }
     Write-Info "Retargeting endpoint /api -> 127.0.0.1:$port (--api-upstream)..."
@@ -2784,7 +2784,7 @@ function Invoke-BenchmarkServerSetup ($lang, $port) {
         } catch { Write-Verbose "waiting for endpoint restart: $($_.Exception.Message)" }
     }
     if (-not $wired) {
-        Write-Err "endpoint did not come back reporting api_upstream — is it >= 0.28.203? (upgrade the target, then re-run)"
+        Write-Err "endpoint did not come back reporting api_upstream - is it >= 0.28.203? (upgrade the target, then re-run)"
         exit 1
     }
     Write-Ok "endpoint /api now measures $lang (services.api_upstream=127.0.0.1:$port)"
