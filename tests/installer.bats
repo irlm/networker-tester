@@ -603,23 +603,24 @@ JSON
     echo "$output" | grep -q "nginx requires Linux" || { echo "expected nginx-on-windows rejection, got: $output" >&2; exit 1; }
 }
 
-@test "_deploy_validate_config: rejects reference-API languages on a windows endpoint" {
+@test "_deploy_validate_config: rejects Linux-only languages on a windows endpoint" {
+    # v0.28.204: languages ARE deployable on Windows — but only the
+    # windows-viable set (cpp/ruby/php + AOT are Linux-only constraints).
     local cfg="$TEST_TMPDIR/langs-win.json"
     cat > "$cfg" <<'JSON'
 {
   "version": 1,
   "tester": { "provider": "local" },
-  "endpoints": [{ "provider": "azure", "http_stacks": ["iis"], "languages": ["go"], "azure": { "region": "eastus", "os": "windows" } }]
+  "endpoints": [{ "provider": "azure", "http_stacks": ["iis"], "languages": ["ruby"], "azure": { "region": "eastus", "os": "windows" } }]
 }
 JSON
     run _deploy_validate_config "$cfg"
-    echo "$output" | grep -q "languages require a Linux endpoint" || { echo "expected languages-on-windows rejection, got: $output" >&2; exit 1; }
+    echo "$output" | grep -q "'ruby' is not deployable on a windows endpoint" || { echo "expected ruby-on-windows rejection, got: $output" >&2; exit 1; }
 }
 
-@test "_deploy_validate_config: rejects csharp-net48 as a deploy language (contradiction by construction)" {
-    # Languages require Linux; .NET Framework 4.8 requires Windows — the
-    # combination can never deploy. The runtime arm used to reject it only
-    # MID-DEPLOY; the validator must catch it up front (user-caught 2026-08-12).
+@test "_deploy_validate_config: rejects csharp-net48 on a LINUX endpoint (Windows-only language)" {
+    # .NET Framework 4.8 requires Windows; since v0.28.204 it IS deployable —
+    # on Windows endpoints. On Linux it must still fail up front.
     local cfg="$TEST_TMPDIR/net48-linux.json"
     cat > "$cfg" <<'JSON'
 {
@@ -629,7 +630,25 @@ JSON
 }
 JSON
     run _deploy_validate_config "$cfg"
-    echo "$output" | grep -q "unknown language 'csharp-net48'" || { echo "expected net48 rejection, got: $output" >&2; exit 1; }
+    echo "$output" | grep -q "not deployable on a linux endpoint" || { echo "expected net48-on-linux rejection, got: $output" >&2; exit 1; }
+}
+
+@test "_deploy_validate_config: accepts windows-viable languages on a windows endpoint (v0.28.204)" {
+    local ok_cfg="$TEST_TMPDIR/win-langs.json"
+    local bad_cfg="$TEST_TMPDIR/win-langs-bad.json"
+    cat > "$ok_cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "azure", "http_stacks": ["iis"], "languages": ["csharp-net48", "go", "nodejs"], "azure": { "region": "eastus", "os": "windows" } }]
+}
+JSON
+    sed 's/"go"/"php"/' "$ok_cfg" > "$bad_cfg"
+    _deploy_validate_config "$ok_cfg"
+    local ok_errors="$DEPLOY_VALIDATE_ERRORS"
+    run _deploy_validate_config "$bad_cfg"
+    echo "$output" | grep -q "'php' is not deployable on a windows endpoint" || { echo "expected php-on-windows rejection, got: $output" >&2; exit 1; }
+    [ "$ok_errors" -eq 0 ] || { echo "windows-viable set must validate clean (got $ok_errors errors)" >&2; exit 1; }
 }
 
 @test "_deploy_validate_config: accepts linux languages that windows rejects (control)" {

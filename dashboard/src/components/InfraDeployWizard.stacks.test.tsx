@@ -77,6 +77,19 @@ describe('InfraDeployWizard Windows stack selection', () => {
     expect(screen.queryByRole('button', { name: 'nginx' })).toBeNull();
   });
 
+  it('offers the Windows-viable language set (net48 in, php/ruby/cpp/AOT out)', async () => {
+    renderWizard();
+    await walkToConfigure();
+
+    // v0.28.204: Windows targets host reference APIs — the picker must show
+    // the windows-viable set and exclude the Linux-only languages.
+    await screen.findByRole('button', { name: 'IIS' });
+    expect(screen.getByRole('button', { name: /\.NET 4\.8|net48/i })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /php/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /ruby/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /aot/i })).toBeNull();
+  });
+
   it('prunes the Linux default when switching to Windows and restores sanity switching back', async () => {
     renderWizard();
     await walkToConfigure();

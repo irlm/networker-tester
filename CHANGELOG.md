@@ -11,6 +11,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.204] - 2026-08-14
+
+### Added
+- **Windows targets host reference-API languages** (user ask: language
+  parity with Linux targets). `install.ps1 -BenchmarkServer <lang>`
+  installs, builds, runs, and reboot-persists a reference API on a
+  Windows target and retargets the endpoint's `/api` at it via
+  `--api-upstream` — verified end-to-end by the endpoint's own
+  capability self-report. Windows-viable set: **.NET Framework 4.8**
+  (in-box csc.exe), .NET 8/9/10, Go, Node.js, Python, Java; C++/Ruby/PHP
+  and AOT variants stay Linux-only (MSVC/devkit/swoole constraints).
+  The deploy pipeline wires it automatically (`_azure_win_setup_language`
+  over run-command), validation is per-OS at every layer (install.sh,
+  the 422 create preflight, the wizard picker — net48 now valid on
+  Windows and only there), and CI executes the arm for real (go +
+  csharp-net48 on windows-latest, asserting the /api round-trip reaches
+  the language).
+- **"Add test support later" works for Azure Windows targets**: the
+  upgrade flow now rides azure VM reuse (install.sh finds the existing
+  VM and re-runs the idempotent setups over run-command) instead of the
+  SSH/LAN path that could never work on Windows — and Linux azure
+  targets get the same SSH-free upgrade. The upgrade button appears on
+  Azure Windows targets (other-cloud Windows still has no remote-install
+  path and shows no doomed button).
+
+---
+
 ## [0.28.203] - 2026-08-13
 
 ### Added

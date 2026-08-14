@@ -41,23 +41,50 @@ public class DeployConfigPreflightTests
     }
 
     [Fact]
-    public void languages_on_windows_are_rejected()
+    public void windows_viable_languages_pass_on_windows()
     {
+        // v0.28.204: Windows endpoints deploy languages via install.ps1
+        // -BenchmarkServer — the windows-viable set validates clean.
         var errors = DeployConfigPreflight.Validate(Config("""
-            { "provider": "azure", "http_stacks": ["iis"], "languages": ["go"],
+            { "provider": "azure", "http_stacks": ["iis"],
+              "languages": ["csharp-net48", "go", "nodejs", "python", "java", "csharp-net10"],
               "azure": { "region": "eastus", "os": "windows" } }
             """));
-        Assert.Contains(errors, e => e.Contains("languages require a Linux endpoint"));
+        Assert.Empty(errors);
+    }
+
+    [Theory]
+    [InlineData("php")]  // swoole is Linux-only
+    [InlineData("ruby")] // devkit gem builds
+    [InlineData("cpp")]  // MSVC+boost build
+    [InlineData("csharp-net8-aot")] // needs the VS C++ toolchain
+    public void linux_only_languages_are_rejected_on_windows(string lang)
+    {
+        var errors = DeployConfigPreflight.Validate(Config($$"""
+            { "provider": "azure", "http_stacks": ["iis"], "languages": ["{{lang}}"],
+              "azure": { "region": "eastus", "os": "windows" } }
+            """));
+        Assert.Contains(errors, e => e.Contains($"'{lang}' is not deployable on a windows endpoint"));
     }
 
     [Fact]
-    public void net48_as_deploy_language_is_rejected_even_on_linux()
+    public void net48_stays_rejected_on_linux()
     {
         var errors = DeployConfigPreflight.Validate(Config("""
             { "provider": "azure", "http_stacks": ["nginx"], "languages": ["csharp-net48"],
               "azure": { "region": "eastus", "os": "linux" } }
             """));
-        Assert.Contains(errors, e => e.Contains("csharp-net48"));
+        Assert.Contains(errors, e => e.Contains("'csharp-net48' is not deployable on a linux endpoint"));
+    }
+
+    [Fact]
+    public void unknown_language_is_named_as_unknown_not_os_mismatched()
+    {
+        var errors = DeployConfigPreflight.Validate(Config("""
+            { "provider": "azure", "http_stacks": ["nginx"], "languages": ["cobol"],
+              "azure": { "region": "eastus", "os": "linux" } }
+            """));
+        Assert.Contains(errors, e => e.Contains("unknown language 'cobol'"));
     }
 
     [Fact]
