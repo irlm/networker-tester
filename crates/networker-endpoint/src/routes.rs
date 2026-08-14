@@ -1809,6 +1809,12 @@ async fn api_proxy(State(state): State<AppState>, req: Request) -> Response {
 
     let (mut parts, body) = req.into_parts();
     parts.uri = uri;
+    // Downgrade to HTTP/1.1 for the upstream hop: clients reach :8443 over
+    // h2 (ALPN) and forwarding the ORIGINAL version makes the h1-only legacy
+    // client refuse with UserUnsupportedVersion — a 502 on every proxied h2
+    // request (field-caught on the first external /api round-trip through a
+    // Windows net48 target, 2026-08-14; VM-local h1 worked, external h2 502'd).
+    parts.version = http::Version::HTTP_11;
     // The upstream sees itself as the host; hop-by-hop headers stay minimal
     // (HTTP/1.1 client; axum already stripped connection semantics).
     parts.headers.remove(http::header::HOST);
@@ -2044,6 +2050,51 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(info.status(), 200);
+    }
+
+    /// Clients hit :8443 over h2 (ALPN); the proxy must downgrade the hop to
+    /// HTTP/1.1 — forwarding the original version made the h1-only client
+    /// refuse (UserUnsupportedVersion → 502 on every external /api request).
+    #[tokio::test]
+    async fn api_upstream_serves_http2_originated_requests() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = vec![0u8; 4096];
+                    let _ = sock.read(&mut buf).await;
+                    let body = "{\"ok\":true}";
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                });
+            }
+        });
+
+        let app = app_with(None, Some(upstream_addr.to_string()));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/users")
+                    .version(http::Version::HTTP_2)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            200,
+            "h2-originated /api must proxy (was 502 UserUnsupportedVersion)"
+        );
     }
 
     #[tokio::test]
