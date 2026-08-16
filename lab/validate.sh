@@ -35,11 +35,22 @@
 #   --timeout SECS    per-run wall-clock budget (default 300)
 #   --skip PHASES     comma list of phase numbers to skip (e.g. --skip 3,4,5)
 #   --only PHASES     comma list of phase numbers to run
+#
+# Env overrides (all optional — set by lab.sh or by other lab front-ends such
+# as lab/native/lab-native.ps1, which drives this same matrix against native
+# Windows processes through Git Bash):
+#   LAB_STATE_ENV      path of the lab.env to source (default lab/.state/lab.env)
+#   LAB_TARGET_HOSTS   comma list: host of target-1, target-2, … (overrides the
+#                      NET_PREFIX+index addressing; LAB_TARGET_IPS is an alias)
+#   LAB_H3_OFF_STACKS  comma list of stacks whose HTTP/3 modes must be EXCLUDED
+#                      on this host even though shared/http-stacks.json says
+#                      h3=true (e.g. IIS reached by IP literal — http.sys binds
+#                      QUIC on SNI hostname bindings only; or no reboot yet)
 set -uo pipefail
 
 LAB_DIR="$(cd "$(dirname "$0")" && pwd)"
-STATE_ENV="$LAB_DIR/.state/lab.env"
-[ -f "$STATE_ENV" ] || { echo "no lab state — run ./lab/lab.sh up first" >&2; exit 2; }
+STATE_ENV="${LAB_STATE_ENV:-$LAB_DIR/.state/lab.env}"
+[ -f "$STATE_ENV" ] || { echo "no lab state — run ./lab/lab.sh up first (or set LAB_STATE_ENV)" >&2; exit 2; }
 # shellcheck disable=SC1090
 . "$STATE_ENV"
 BASE="${LAB_BASE_URL:-http://127.0.0.1:5030}"
@@ -48,6 +59,8 @@ TOKEN="${LAB_TOKEN:?}"
 NET_PREFIX="${LAB_NET_PREFIX:-172.31.100}"
 RUNNERS="${LAB_RUNNERS:-1}"
 TARGETS="${LAB_TARGETS:-rust}"
+TARGET_HOSTS="${LAB_TARGET_HOSTS:-${LAB_TARGET_IPS:-}}"
+H3_OFF_STACKS="${LAB_H3_OFF_STACKS:-}"
 
 RUNS=2
 RUN_TIMEOUT=300
@@ -98,6 +111,7 @@ STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 STACKS_JSON="$LAB_DIR/../shared/http-stacks.json"
 stack_h3() { # stack_h3 STACK → 0 (true) / 1 (false); unknown → assume true
   # (not `// true`: jq's // treats false as missing)
+  case ",$H3_OFF_STACKS," in *",$1,"*) return 1;; esac   # host-level override (LAB_H3_OFF_STACKS)
   local v; v="$(jq -r --arg s "$1" '([.stacks[]|select(.id==$s)][0].h3) | if . == null then true else . end' "$STACKS_JSON" 2>/dev/null || echo true)"
   [ "$v" = "true" ]
 }
@@ -110,7 +124,11 @@ stack_of() { echo "$TARGETS" | tr ',' '\n' | sed -n "${1}p"; }
 # lab.sh registers the windows target as its proxy stack (iis); the rest are 1:1.
 proxy_stack_of() { case "$1" in windows) echo iis;; *) echo "$1";; esac; }
 target_count() { echo "$TARGETS" | tr ',' '\n' | grep -c .; }
-target_ip() { echo "${NET_PREFIX}.$((100 + $1))"; }
+target_ip() { # target_ip N → LAB_TARGET_HOSTS[N] when given, else the docker /24 scheme
+  local h=""
+  [ -n "$TARGET_HOSTS" ] && h="$(echo "$TARGET_HOSTS" | tr ',' '\n' | sed -n "${1}p")"
+  if [ -n "$h" ]; then echo "$h"; else echo "${NET_PREFIX}.$((100 + $1))"; fi
+}
 list_of() { jq -c 'if type=="array" then . else (.attempts // .items // .data // .configs // .runs // .test_runs // []) end' <<<"$1"; }
 
 create_config() { # create_config NAME ENDPOINT_JSON WORKLOAD_JSON → id
@@ -200,7 +218,13 @@ if run_phase 2; then
       [ -n "$DEP" ] || { fail "phase 2: deployment for target-$i ($lbl) not found (lab.sh up registers it)"; i=$((i+1)); continue; }
       note "phase 2 — mode matrix through target-$i ($lbl) deployment ${DEP:0:8} at $(target_ip "$i"):$(jq -r --arg s "$pst" '[.stacks[]|select(.id==$s)][0].https_port // "?"' "$STACKS_JSON")"
       STACK_MATRIX="$MATRIX"
-      if ! stack_h3 "$pst"; then STACK_MATRIX="$(strip_h3_modes "$MATRIX")"; note "  ($pst has no HTTP/3 per shared/http-stacks.json — h3 modes excluded)"; fi
+      if ! stack_h3 "$pst"; then
+        STACK_MATRIX="$(strip_h3_modes "$MATRIX")"
+        case ",$H3_OFF_STACKS," in
+          *",$pst,"*) note "  ($pst: HTTP/3 modes excluded on THIS host by LAB_H3_OFF_STACKS — not a verdict on the stack)";;
+          *) note "  ($pst has no HTTP/3 per shared/http-stacks.json — h3 modes excluded)";;
+        esac
+      fi
       MODES_JSON="$(jq -nc --arg m "$STACK_MATRIX" '($m|split(",")) + ["native"]')"
       CFG2="$(create_config "lab-p2-${pst}-t${i}-$STAMP" \
         "$(jq -nc --arg d "$DEP" --arg s "$pst" '{kind:"proxy",proxy_endpoint_id:$d,proxy_stack:$s}')" \

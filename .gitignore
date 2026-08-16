@@ -57,4 +57,5 @@ test-results/
 /.dev-agent.key
 /lab/.generated/
 /lab/.state/
+/lab/native/.state/
 /.dev.env
