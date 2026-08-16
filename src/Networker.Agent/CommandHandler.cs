@@ -81,8 +81,10 @@ public sealed class CommandHandler(ILogger<CommandHandler> logger)
         return JsonDocument.Parse(JsonSerializer.Serialize(payload)).RootElement.Clone();
     }
 
-    /// <summary>Best-effort uptime in seconds — reads <c>/proc/uptime</c> on
-    /// Linux (Rust parity), 0 elsewhere / on parse failure.</summary>
+    /// <summary>Best-effort host uptime in seconds — <c>/proc/uptime</c> on
+    /// Linux (Rust parity); elsewhere the OS tick counter
+    /// (<see cref="Environment.TickCount64"/>, milliseconds since boot on
+    /// Windows/macOS) instead of a fabricated 0 that read as "just booted".</summary>
     private static ulong UptimeSecs()
     {
         try
@@ -97,10 +99,10 @@ public sealed class CommandHandler(ILogger<CommandHandler> logger)
         }
         catch
         {
-            // Fall through to 0.
+            // Fall through to the tick counter.
         }
 
-        return 0;
+        return (ulong)Math.Max(0, Environment.TickCount64 / 1000);
     }
 
     /// <summary>Best-effort free-disk reporting — Rust returns <c>None</c>; we

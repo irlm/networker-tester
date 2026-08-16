@@ -12,7 +12,7 @@
 #   WARMUP_REQUESTS — discarded per-workload warmup requests (default 25)
 set -euo pipefail
 
-LANG="${1:?Usage: run-language.sh <language> [runs]}"
+BENCH_LANG="${1:?Usage: run-language.sh <language> [runs]}"
 RUNS="${2:-100}"
 # Discarded requests per workload before measurement (0 disables). JIT
 # runtimes (JVM, V8, CLR, opcache, YJIT) are 10-100x slower on first
@@ -54,7 +54,7 @@ wait_for_server() {
 }
 
 start_server() {
-    case "$LANG" in
+    case "$BENCH_LANG" in
         rust)
             "$REPO_ROOT/target/release/networker-endpoint" --https-port "$PORT" &
             SERVER_PID=$!
@@ -69,7 +69,7 @@ start_server() {
             cd "$API_DIR/cpp"
             mkdir -p build && cd build
             cmake .. -DCMAKE_BUILD_TYPE=Release 2>&1
-            make -j"$(nproc)" 2>&1
+            make -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)" 2>&1
             BENCH_CERT_DIR="$CERT_DIR" ./server &
             SERVER_PID=$!
             ;;
@@ -117,13 +117,13 @@ start_server() {
             ;;
         csharp-net6|csharp-net7|csharp-net8|csharp-net8-aot|\
         csharp-net9|csharp-net9-aot|csharp-net10|csharp-net10-aot)
-            cd "$API_DIR/$LANG"
+            cd "$API_DIR/$BENCH_LANG"
             dotnet build -c Release -q 2>&1 | tail -1
             BENCH_CERT_DIR="$CERT_DIR" dotnet run -c Release --no-build &
             SERVER_PID=$!
             ;;
         *)
-            echo "ERROR: Unknown language '$LANG'" >&2
+            echo "ERROR: Unknown language '$BENCH_LANG'" >&2
             echo "Supported: rust, go, cpp, nodejs, python, java, ruby, php, nginx, csharp-net*" >&2
             exit 1
             ;;
@@ -160,9 +160,9 @@ run_benchmark() {
     mkdir -p "$RESULTS_DIR"
     local config="$REPO_ROOT/benchmarks/configs/apibench.json"
 
-    if [ "$LANG" = "nginx" ]; then
+    if [ "$BENCH_LANG" = "nginx" ]; then
         echo "NOTE: nginx serves no /api/* endpoints — health smoke only (not ranked)" >&2
-        local outfile="$RESULTS_DIR/${LANG}-health-smoke.json"
+        local outfile="$RESULTS_DIR/${BENCH_LANG}-health-smoke.json"
         warmup_workload GET "https://localhost:$PORT/health" "" ""
         "$TESTER" \
             --target "https://localhost:$PORT/health" \
@@ -192,7 +192,7 @@ run_benchmark() {
         name=$(jq -r ".workloads[$i].name" "$config")
         method=$(jq -r ".workloads[$i].method" "$config")
         path=$(jq -r ".workloads[$i].path" "$config")
-        outfile="$RESULTS_DIR/${LANG}-${name}.json"
+        outfile="$RESULTS_DIR/${BENCH_LANG}-${name}.json"
 
         echo "Workload $name: $method $path (warmup $WARMUP_REQUESTS, measured $RUNS)" >&2
         if [ "$method" = "POST" ]; then
@@ -232,14 +232,14 @@ run_benchmark() {
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
-echo "=== Networker Bench CI: $LANG ($RUNS runs) ==="
+echo "=== Networker Bench CI: $BENCH_LANG ($RUNS runs) ==="
 
-echo "Starting $LANG server on port $PORT..."
+echo "Starting $BENCH_LANG server on port $PORT..."
 start_server
 
 echo "Waiting for health check..."
 if ! wait_for_server 30; then
-    echo "FATAL: $LANG server failed to start" >&2
+    echo "FATAL: $BENCH_LANG server failed to start" >&2
     exit 1
 fi
 
@@ -252,4 +252,4 @@ RESULT_FILES=$(run_benchmark)
 echo "Results written:"
 echo "$RESULT_FILES"
 
-echo "=== Done: $LANG ==="
+echo "=== Done: $BENCH_LANG ==="

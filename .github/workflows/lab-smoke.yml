@@ -1,0 +1,85 @@
+name: Lab smoke (docker managed path)
+
+# Runs the local lab (lab/lab.sh) on a hosted runner: builds the control plane,
+# agent, tester and endpoint FROM THIS CHECKOUT into Docker images, starts
+# control plane + Postgres + 2 runner containers + rust + nginx targets, and
+# drives lab/validate.sh — the local twin of the prod canary — through the
+# public API. No cloud, no secrets, no billable resources: this is the
+# pre-VM validation gate for the managed path (dispatch, agent, tester,
+# installer proxy stacks) and keeps the lab itself from rotting.
+#
+# Weekly + on demand (a cold Rust release build in Docker is ~10-15 min on a
+# hosted runner). Not a required check; a red run = the managed path or the
+# lab regressed — see the job summary / uploaded logs.
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'   # Mondays 06:17 UTC
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: 'Target stacks (comma list: rust,nginx,caddy,apache,haproxy,traefik)'
+        default: 'rust,nginx'
+        type: string
+      runners:
+        description: 'Runner containers'
+        default: '2'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lab-smoke
+  cancel-in-progress: false
+
+jobs:
+  lab:
+    name: lab.sh up + validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TARGETS: ${{ inputs.targets || 'rust,nginx' }}
+      RUNNERS: ${{ inputs.runners || '2' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+
+      - name: Tool versions
+        run: docker version --format '{{.Server.Version}}' && docker compose version && jq --version && curl --version | head -1
+
+      - name: Build images
+        run: ./lab/lab.sh build --stacks "$TARGETS"
+
+      - name: Up
+        run: ./lab/lab.sh up --runners "$RUNNERS" --targets "$TARGETS" --no-build
+
+      - name: Validate
+        run: ./lab/lab.sh validate 2>&1 | tee lab-validate.log
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Lab smoke — targets=\`$TARGETS\` runners=\`$RUNNERS\`"
+            echo '```'
+            sed -n '/══ lab validation summary/,$p' lab-validate.log 2>/dev/null || echo "(no summary — validate did not run)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect logs
+        if: always()
+        run: |
+          mkdir -p lab-logs
+          docker compose -f lab/docker-compose.yml -f lab/.generated/topology.yml logs --no-color > lab-logs/compose.log 2>&1 || true
+          cp lab-validate.log lab-logs/ 2>/dev/null || true
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: lab-logs
+          path: lab-logs/
+          retention-days: 14
+
+      - name: Down
+        if: always()
+        run: ./lab/lab.sh down --volumes || true

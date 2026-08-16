@@ -28,6 +28,19 @@ public sealed class UserStatusMiddleware(RequestDelegate next, IMemoryCache cach
 {
     public static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(10);
 
+    /// <summary>Cache key for one user's status row.</summary>
+    public static string CacheKey(Guid userId) => $"authstatus:{userId}";
+
+    /// <summary>
+    /// Drop the cached status for <paramref name="userId"/> so the NEXT request
+    /// re-reads dash_user. Call after a status-changing write the same user
+    /// will act on immediately — e.g. change-password clearing
+    /// <c>must_change_password</c>: without this the first-login flow kept
+    /// answering 403 "Password change required" for up to <see cref="CacheTtl"/>
+    /// after the password was successfully changed (lab finding).
+    /// </summary>
+    public static void Invalidate(IMemoryCache cache, Guid userId) => cache.Remove(CacheKey(userId));
+
     public async Task InvokeAsync(HttpContext ctx, AuthRepository repo, AuthUserAccessor accessor)
     {
         var jwtUser = AuthUser.FromPrincipal(ctx.User);
@@ -38,7 +51,7 @@ public sealed class UserStatusMiddleware(RequestDelegate next, IMemoryCache cach
             return;
         }
 
-        var cacheKey = $"authstatus:{jwtUser.UserId}";
+        var cacheKey = CacheKey(jwtUser.UserId);
         if (!cache.TryGetValue(cacheKey, out AuthRepository.UserStatusRow? row))
         {
             row = await repo.GetUserStatusAsync(jwtUser.UserId, ctx.RequestAborted);

@@ -9,7 +9,7 @@ cd "$SCRIPT_DIR"
 mkdir -p build
 cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j"$(nproc)"
+make -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 
 echo "Build complete. Binary: ./build/server"
 ls -lh server

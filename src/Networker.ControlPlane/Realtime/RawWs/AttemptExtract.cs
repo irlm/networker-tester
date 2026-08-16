@@ -98,7 +98,12 @@ public static class AttemptExtract
             StartedAt: Date(attempt, "started_at"),
             FinishedAt: Date(attempt, "finished_at"),
             Success: Bool(attempt, "success") ?? false,
-            ErrorMessage: Str(attempt, "error_message"),
+            // The tester serialises failures as `error: {category, message,
+            // detail}` (metrics.rs ErrorRecord) — a flat `error_message` only
+            // exists on the DB row shape. Reading just the flat key left every
+            // persisted failure with a NULL reason (lab finding); take the
+            // structured record when present.
+            ErrorMessage: Str(attempt, "error_message") ?? ErrorFromRecord(Child(attempt, "error")),
             RetryCount: Int(attempt, "retry_count") ?? 0,
             ExtraJson: attempt.GetRawText(),
             TargetHost: host,
@@ -110,6 +115,23 @@ public static class AttemptExtract
             Udp: ParseUdp(Child(attempt, "udp")),
             ServerTiming: ParseServerTiming(Child(attempt, "server_timing")),
             Mthroughput: ParseMthroughput(Child(attempt, "mthroughput")));
+    }
+
+    /// <summary>"message" or "message — detail" from a tester <c>ErrorRecord</c>
+    /// (<c>{category, message, detail, occurred_at}</c>); null when absent.</summary>
+    internal static string? ErrorFromRecord(JsonElement? e)
+    {
+        if (e is not { } rec)
+        {
+            return null;
+        }
+        var message = Str(rec, "message");
+        var detail = Str(rec, "detail");
+        if (string.IsNullOrEmpty(message))
+        {
+            return string.IsNullOrEmpty(detail) ? null : detail;
+        }
+        return string.IsNullOrEmpty(detail) ? message : $"{message} — {detail}";
     }
 
     private static ParsedDns? ParseDns(JsonElement? e) => e is { } d

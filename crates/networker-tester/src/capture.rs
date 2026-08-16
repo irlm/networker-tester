@@ -109,13 +109,24 @@ pub fn build_plan(cfg: &ResolvedConfig, out_dir: &Path) -> Option<PacketCaptureP
 }
 
 pub fn detect_tshark() -> Option<PathBuf> {
-    [
-        "tshark",
-        "/opt/homebrew/bin/tshark",
-        "/usr/local/bin/tshark",
-    ]
-    .into_iter()
-    .find_map(which)
+    // PATH first (with PATHEXT on Windows), then the usual off-PATH install
+    // dirs: Homebrew (Apple Silicon / Intel) and the Windows Wireshark MSI
+    // location, which is NOT on PATH by default (Wireshark's installer only
+    // offers to add it) — previously `--packet-capture` always failed with
+    // "tshark was not found" on a fully configured Windows box.
+    let mut candidates: Vec<String> = vec![
+        "tshark".to_string(),
+        "/opt/homebrew/bin/tshark".to_string(),
+        "/usr/local/bin/tshark".to_string(),
+    ];
+    if cfg!(target_os = "windows") {
+        for var in ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"] {
+            if let Ok(pf) = std::env::var(var) {
+                candidates.push(format!("{pf}\\Wireshark\\tshark.exe"));
+            }
+        }
+    }
+    candidates.iter().find_map(|c| which(c))
 }
 
 fn resolve_capture_interface(requested: &str, targets: &[String]) -> String {
@@ -725,9 +736,23 @@ fn which(name: &str) -> Option<PathBuf> {
     if candidate.is_absolute() && candidate.exists() {
         return Some(candidate);
     }
+    // Windows: a bare name resolves through PATHEXT (`tshark` → `tshark.exe`);
+    // probing `p.join("tshark")` never matched.
+    let names: Vec<String> = if cfg!(target_os = "windows") && !name.contains('.') {
+        let exts = std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT".to_string());
+        std::iter::once(name.to_string())
+            .chain(
+                exts.split(';')
+                    .filter(|e| !e.is_empty())
+                    .map(|e| format!("{name}{e}")),
+            )
+            .collect()
+    } else {
+        vec![name.to_string()]
+    };
     std::env::var_os("PATH").and_then(|paths| {
         std::env::split_paths(&paths)
-            .map(|p| p.join(name))
+            .flat_map(|p| names.iter().map(move |n| p.join(n)).collect::<Vec<_>>())
             .find(|p| p.exists())
     })
 }

@@ -1,0 +1,90 @@
+# ─── networker local lab — base services ─────────────────────────────────────
+# Drive it with ./lab/lab.sh (it generates lab/.generated/topology.yml with the
+# runner-N / target-N services and merges it via `-f`). Everything builds from
+# THIS checkout — no GitHub releases involved — so what you validate here is
+# the code you are about to ship, on Linux, in a private network, exactly like
+# the cloud VMs will run it (Ubuntu 24.04 runtime images).
+name: nwk-lab
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: networker_core
+      POSTGRES_USER: networker
+      POSTGRES_PASSWORD: networker
+    command: ["postgres", "-c", "max_connections=200"]
+    ports:
+      - "${LAB_PG_PORT:-55432}:5432"
+    healthcheck:
+      # TCP (-h 127.0.0.1), not the unix socket: on FIRST init the official
+      # image runs a temporary socket-only server for init scripts and then
+      # restarts — a socket-based pg_isready reports healthy too early and the
+      # control plane's first connections get "terminating connection due to
+      # administrator command" (57P01) when the temp server stops.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U networker -d networker_core"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+    networks:
+      labnet:
+        ipv4_address: ${LAB_NET_PREFIX:-172.31.100}.5
+
+  controlplane:
+    image: nwk-lab/controlplane:local
+    build:
+      context: ..
+      dockerfile: lab/images/controlplane.Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${LAB_CP_ENVIRONMENT:-Production}
+      ASPNETCORE_URLS: http://0.0.0.0:5030
+      DASHBOARD_DB_URL_NPGSQL: "Host=postgres;Port=5432;Database=networker_core;Username=networker;Password=networker;Maximum Pool Size=50"
+      # Fail-closed secrets outside Development — fixed lab values (NOT secrets).
+      DASHBOARD_JWT_SECRET: ${LAB_JWT_SECRET:-nwk-lab-jwt-secret-0123456789abcdef0123456789abcdef}
+      DASHBOARD_CREDENTIAL_KEY: ${LAB_CREDENTIAL_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      DASHBOARD_ADMIN_EMAIL: ${LAB_ADMIN_EMAIL:-admin@lab.local}
+      DASHBOARD_ADMIN_PASSWORD: ${LAB_ADMIN_BOOTSTRAP_PASSWORD:-LabBootstrap-Pass1!}
+      # What provisioning would bake into cloud-init; irrelevant for docker
+      # runners (they are registered directly) but keeps startup warnings quiet.
+      DASHBOARD_PUBLIC_URL: ${LAB_PUBLIC_URL:-http://controlplane:5030}
+      DASHBOARD_BACKGROUND_SERVICES: "1"
+      Logging__LogLevel__Default: ${LAB_CP_LOGLEVEL:-Information}
+      Logging__LogLevel__Microsoft.AspNetCore: Warning
+    ports:
+      - "${LAB_CP_PORT:-5030}:5030"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5030/api/health/ready"]
+      interval: 5s
+      timeout: 3s
+      start_period: 40s
+      retries: 30
+    networks:
+      labnet:
+        ipv4_address: ${LAB_NET_PREFIX:-172.31.100}.10
+
+  # Optional: the React SPA behind nginx (also proxies /api + /ws like prod).
+  ui:
+    image: nwk-lab/ui:local
+    profiles: ["ui"]
+    build:
+      context: ..
+      dockerfile: lab/images/ui.Dockerfile
+    depends_on:
+      controlplane:
+        condition: service_healthy
+    ports:
+      - "${LAB_UI_PORT:-8088}:80"
+    networks:
+      labnet:
+        ipv4_address: ${LAB_NET_PREFIX:-172.31.100}.11
+
+networks:
+  labnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${LAB_NET_PREFIX:-172.31.100}.0/24

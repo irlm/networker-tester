@@ -11,6 +11,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.208] - 2026-08-15
+
+### Added
+- **`lab/` — the managed path in Docker, before any cloud VM.** `./lab/lab.sh
+  up --runners N --targets rust,nginx,caddy,apache,haproxy,traefik` builds
+  everything from the checkout (Rust release binaries, C# control plane and
+  self-contained agent, ubuntu:24.04 runtime images) and starts control plane
+  + Postgres + N runner containers + M target containers — the proxy stacks
+  are installed **by the unmodified `install.sh --setup-stack`** at image
+  build, so their configs are byte-identical to a cloud endpoint VM.
+  `./lab/lab.sh validate` is the local twin of the prod canary: network probe,
+  the full mode matrix through every proxy (h3 only where the stack has it),
+  fan-out across runners, cancel — with a non-zero exit and run/attempt detail
+  on any regression. bash-3.2/macOS clean; needs only docker + curl + jq.
+  See `lab/README.md`.
+- `shared/http-stacks.json` — one table for the comparison stacks' HTTP/HTTPS
+  ports + HTTP/3 capability, embedded by the tester (pageload/throughput/
+  browser HTTPS→HTTP rewrites, `--http-stacks` — now knows caddy/traefik/
+  haproxy/apache with the ports the installer actually uses), guarded by a
+  C# test against `ProxyHttpsPort`, and read by the lab.
+- `shared/tester-schema.postgres.sql` — the tester's V001–V005 probe schema,
+  drift-guarded against `postgres.rs`, embedded by the control plane (below).
+- CI: `Test (macos-latest)` unit-test job — the primary dev platform's
+  `#[cfg(target_os = "macos")]` code and tests were compiled only at release
+  time until now.
+
+### Fixed
+- **Fresh control-plane databases persisted zero attempts, forever.** The
+  tester-owned `RequestAttempt`/… tables only existed where a DB-backed
+  tester or install.sh's psql seed had created them; the streamed-attempt
+  ingest swallowed 42P01. `AttemptPersister` now bootstraps the schema lazily
+  (idempotent DDL under the tester's migration lock) and adapts to the fielded
+  shapes (`extrajson` vs `extra_json`; `testrun` NOT NULL columns) instead of
+  hard-coding one. Persisted failures now carry the tester's structured
+  `error.message — detail` (the extractor read a flat `error_message` that is
+  never on the wire).
+- **Dispatch spreads across idle runners** — least-loaded among compatible
+  same-project agents (tester affinity still wins); every run of a project
+  used to go to `compatible[0]` while the other online runners idled.
+- **`dns` mode against an IP-literal target** no longer fails (the standalone
+  probe appended the search domain to `172.31.100.101` and NXDOMAINed);
+  reports an instant literal resolution.
+- **`pageload` (forced HTTP/1.1) through caddy/apache/haproxy/traefik** fetched
+  0/N assets — the HTTPS→HTTP port rewrite knew only nginx/IIS (see
+  `shared/http-stacks.json`).
+- **Catalog `pageload` (H1) is sent to the tester as `pageload1`** — the tester
+  CLI's `pageload` is the all-three shorthand, so every "H1 page load" run
+  also executed H2 + H3 attempts (and failed the H3 one on non-QUIC stacks).
+- **First login**: `change-password` now invalidates the 10 s user-status
+  cache — the very next request no longer 403s "Password change required".
+- `install.sh --setup-stack caddy|apache|haproxy` runs `apt-get update` before
+  installing (fresh hosts without package lists failed "Unable to locate
+  package"; nginx already did).
+- `networker-endpoint` handles SIGTERM (systemd stop/restart, `docker stop`)
+  through the graceful-shutdown path instead of the default disposition.
+- Portability sweep (dev on macOS, runs on Linux/Windows): `dev.sh` /
+  `test-all.sh` / `scripts/seed-dev.sh` / `tests/cli_smoke.sh` no longer
+  reference the removed Rust `networker-dashboard` crate (dev.sh now starts
+  the C# control plane; DB name matched to the compose file; `lsof` guarded
+  with `ss`/`fuser` fallbacks; container names resolved via `docker compose ps`);
+  `scripts/seed-dev.sql` writes `agent.api_key_hash` (the plaintext column
+  was dropped in V045); bash-4 guard for `tests/test_install_sh.sh`;
+  `nproc`/`sysctl` fallbacks; `LANG` no longer clobbered by
+  `benchmarks/ci/run-language.sh`; Linux-only netem script exits cleanly on
+  macOS; `sha256sum`/`shasum` both accepted; obsolete compose `version:` key
+  removed. Tester: `COMPUTERNAME` hostname + PATHEXT-aware `tshark` lookup
+  (incl. `%ProgramFiles%\Wireshark`) on Windows. Agent: uptime from the OS
+  tick counter off-Linux instead of a fabricated 0. Control plane: `az`/
+  `aws`/`gcloud` resolve to their `.cmd` shims on Windows. Orchestrator:
+  temp/home dirs and `.exe` suffix resolved portably.
+
+---
+
 ## [0.28.207] - 2026-08-14
 
 ### Fixed

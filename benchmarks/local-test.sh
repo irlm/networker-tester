@@ -62,7 +62,15 @@ benchmark() {
 }
 
 kill_server() {
-    lsof -ti :$PORT 2>/dev/null | xargs kill -9 2>/dev/null || true
+    # lsof is not installed by default on many Linux distros — fall back to
+    # ss/fuser so every language server really is stopped between runs.
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -ti :"$PORT" 2>/dev/null | xargs kill -9 2>/dev/null || true
+    elif command -v fuser >/dev/null 2>&1; then
+        fuser -k -9 "$PORT"/tcp 2>/dev/null || true
+    elif command -v ss >/dev/null 2>&1; then
+        ss -lptnH "sport = :$PORT" 2>/dev/null | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | sort -u | xargs kill -9 2>/dev/null || true
+    fi
     sleep 1
 }
 

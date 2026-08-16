@@ -461,7 +461,43 @@ public sealed class RunDispatcher : IRunDispatcher
             }
         }
 
-        return compatible[0].AgentId;
+        // Least-loaded spread (lab phase 3): an agent executes at most
+        // MaxConcurrentRuns (4) probes and queues the rest, so always taking
+        // compatible[0] piled every run of a project onto one runner while the
+        // other online runners sat idle. Count each candidate's live claims
+        // (queued/running runs stamped with its worker_id) and take the fewest;
+        // ties keep DB order, so a single-agent project behaves exactly as
+        // before. Claims are stamped at dispatch (TryAssignAsync) and cleared by
+        // terminal status / watchdog, so this needs no registry state.
+        if (compatible.Count == 1)
+        {
+            return compatible[0].AgentId;
+        }
+
+        var candidateIds = compatible.Select(a => a.AgentId.ToString()).ToList();
+        var loads = await _db.TestRuns
+            .AsNoTracking()
+            .Where(r => r.WorkerId != null
+                        && candidateIds.Contains(r.WorkerId)
+                        && (r.Status == StatusQueued || r.Status == StatusRunning))
+            .GroupBy(r => r.WorkerId!)
+            .Select(g => new { WorkerId = g.Key, Count = g.Count() })
+            .ToListAsync(ct);
+        var loadByAgent = loads.ToDictionary(l => l.WorkerId, l => l.Count, StringComparer.Ordinal);
+
+        var best = compatible[0];
+        var bestLoad = loadByAgent.GetValueOrDefault(best.AgentId.ToString());
+        foreach (var candidate in compatible.Skip(1))
+        {
+            var load = loadByAgent.GetValueOrDefault(candidate.AgentId.ToString());
+            if (load < bestLoad)
+            {
+                best = candidate;
+                bestLoad = load;
+            }
+        }
+
+        return best.AgentId;
     }
 
     /// <summary>

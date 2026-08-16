@@ -229,6 +229,11 @@ dotnet test Networker.sln
 
 # Frontend
 cd dashboard && npm install && npm run build
+
+# Whole managed path in Docker — control plane + N runners + M targets
+# (real install.sh proxy stacks), then an end-to-end run matrix through the API.
+# Validate here before provisioning cloud VMs. See lab/README.md.
+./lab/lab.sh up --runners 3 --targets rust,nginx,caddy && ./lab/lab.sh validate
 ```
 
 For more usage, deployment, and benchmarking guidance, start with

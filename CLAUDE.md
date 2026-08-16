@@ -30,7 +30,8 @@ workspace) ships as `alethabench`; benchmark reference APIs have their own
 solution at `benchmarks/reference-apis/benchmarks.sln`.
 
 **Migration status: complete.** The C# control plane serves production; the
-retired Rust crates are off the release train and stay in-tree only for the
+retired Rust crates are off the release train (already removed from
+`crates/`; the full-Rust snapshot lives on the branch/tag below) and were kept only for the
 decommission soak/rollback window (`docs/phase2-cutover-runbook.md` §7; nightly
 `Prod soak check` workflow). Do NOT add features to the retired crates. The
 full-Rust snapshot is on the `legacy/rust` branch and the `rust-legacy-*` tag;
@@ -89,6 +90,28 @@ dotnet test Networker.sln
 cd dashboard && npm install && npm run build && npm run lint
 ```
 
+## Local Lab (Docker) — validate before cloud VMs
+
+`lab/lab.sh` builds everything from the checkout and runs the managed path in
+Docker: control plane + Postgres + N runners (Networker.Agent + tester on
+ubuntu:24.04) + M targets (networker-endpoint, optionally behind
+nginx/caddy/apache/haproxy/traefik set up by the REAL `install.sh
+--setup-stack`). `lab/validate.sh` drives runs through the API and asserts
+(twin of `scripts/soak-canary.sh`). Run it before provisioning cloud VMs for
+anything touching dispatch, the agent, the tester, or the installer stacks:
+
+```bash
+./lab/lab.sh build --stacks rust,nginx,caddy,apache,haproxy,traefik
+./lab/lab.sh up --runners 3 --targets rust,nginx,caddy,apache,haproxy,traefik
+./lab/lab.sh validate          # ALL PHASES PASSED or a non-zero exit with the run/attempt detail
+./lab/lab.sh down --volumes
+```
+
+Cross-stack tables live in `shared/` and are drift-guarded on every side:
+`modes.json` (modes), `http-stacks.json` (proxy stack ports + h3), and
+`tester-schema.postgres.sql` (tester V001–V005 DDL the control plane
+bootstraps lazily). See `lab/README.md` for fidelity gaps.
+
 ## Control Plane Local Dev (C#)
 
 ```bash
@@ -104,8 +127,9 @@ DASHBOARD_CREDENTIAL_KEY=$(openssl rand -hex 32) \
 ASPNETCORE_URLS=http://0.0.0.0:5030 \
   dotnet run --project src/Networker.ControlPlane
 
-# 4. Agent (C#)
-AGENT_API_KEY=dev-key AGENT_DASHBOARD_URL=ws://localhost:5030/ws/agent \
+# 4. Agent (C#) — the key must be a registered agent row (sha256 in agent.api_key_hash);
+#    ./dev.sh with DEV_WITH_AGENT=1 registers + starts one for you
+AGENT_API_KEY=<key> AGENT_DASHBOARD_URL=ws://localhost:5030/ws/agent \
   dotnet run --project src/Networker.Agent
 
 # 5. Frontend (port 5173, proxies /api and /ws to the control plane)

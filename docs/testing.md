@@ -17,6 +17,13 @@ evaluation:
 
 ---
 
+> **Validating the managed path (control plane + agents) locally?** See
+> [`lab/README.md`](../lab/README.md): `./lab/lab.sh up --runners 3 --targets rust,nginx,caddy`
+> starts the control plane, N runner containers and M target containers (real
+> `install.sh --setup-stack` proxies) in Docker, and `./lab/lab.sh validate`
+> drives the run matrix through the API — the local twin of the prod canary.
+> This guide below covers the direct CLI ⇄ endpoint path.
+
 ## Prerequisites
 
 ### 1. Build

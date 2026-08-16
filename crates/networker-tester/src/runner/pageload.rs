@@ -1254,25 +1254,11 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
 /// Rewrite an HTTPS URL to plain HTTP with the corresponding port.
 ///
 /// Used by `pageload1` to match `browser1` behavior — both use plain HTTP
-/// so the comparison is apples-to-apples without TLS overhead.
-///
-/// Port mapping: 8443 → 8080 (endpoint), 8444 → 8081 (nginx),
-/// 8445 → 8082 (IIS); 443/default → 80 (omitted), other → kept as-is.
+/// so the comparison is apples-to-apples without TLS overhead. The port
+/// pairing (8443→8080, 8444→8081, 8454→8091, …) comes from the shared stack
+/// table (`crate::http_stacks`), so every installer stack is covered.
 fn rewrite_to_http(base: &url::Url) -> url::Url {
-    if base.scheme() != "https" {
-        return base.clone();
-    }
-    let mut u = base.clone();
-    let _ = u.set_scheme("http");
-    let http_port: Option<u16> = match base.port_or_known_default() {
-        Some(8443) => Some(8080), // endpoint
-        Some(8444) => Some(8081), // nginx stack
-        Some(8445) => Some(8082), // IIS stack
-        Some(443) | None => None,
-        Some(p) => Some(p),
-    };
-    let _ = u.set_port(http_port);
-    u
+    crate::http_stacks::rewrite_to_http(base)
 }
 
 fn build_asset_urls(base: &url::Url, sizes: &[usize]) -> Vec<url::Url> {

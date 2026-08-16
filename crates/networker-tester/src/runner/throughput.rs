@@ -257,26 +257,19 @@ pub struct ThroughputConfig {
 }
 
 fn rewrite_to_http(base: &url::Url) -> url::Url {
-    if base.scheme() != "https" {
-        return base.clone();
+    // Shared stack table: covers every installer stack, not just nginx/IIS.
+    let rewritten = crate::http_stacks::rewrite_to_http(base);
+    if base.scheme() == "https"
+        && rewritten.port().is_some()
+        && rewritten.port() == base.port()
+        && base.port_or_known_default() != Some(443)
+    {
+        tracing::warn!(
+            port = base.port().unwrap_or(0),
+            "rewrite_to_http: no known HTTP port mapping for HTTPS port, keeping it as-is"
+        );
     }
-    let mut u = base.clone();
-    let _ = u.set_scheme("http");
-    let http_port: Option<u16> = match base.port_or_known_default() {
-        Some(8443) => Some(8080),
-        Some(8444) => Some(8081),
-        Some(8445) => Some(8082),
-        Some(443) | None => None,
-        Some(p) => {
-            tracing::warn!(
-                port = p,
-                "rewrite_to_http: no known HTTP port mapping for HTTPS port {p}, falling back to port 80"
-            );
-            None
-        }
-    };
-    let _ = u.set_port(http_port);
-    u
+    rewritten
 }
 
 pub async fn run_download1_probe(

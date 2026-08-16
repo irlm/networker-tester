@@ -331,7 +331,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.207"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.208"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -5017,6 +5017,10 @@ step_setup_caddy() {
         print_info "Installing Caddy…"
         case "$pkg_mgr" in
             apt-get)
+                # Fresh VMs/containers may have no package lists yet — without an
+                # update the keyring/apache2/haproxy installs below fail with
+                # "Unable to locate package" (nginx already updates first).
+                sudo apt-get update -qq < /dev/null 2>&1 || true
                 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
                     debian-keyring debian-archive-keyring apt-transport-https curl < /dev/null
                 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
@@ -5231,6 +5235,7 @@ step_setup_apache() {
 
     case "$pkg_mgr" in
         apt-get)
+            sudo apt-get update -qq < /dev/null 2>&1 || true
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq apache2 < /dev/null
             # Enable modules we need; a2enmod is idempotent.
             sudo a2enmod ssl headers proxy proxy_http proxy_wstunnel http2 rewrite >/dev/null 2>&1 || true
@@ -5392,7 +5397,8 @@ step_setup_haproxy() {
     fi
 
     case "$pkg_mgr" in
-        apt-get) sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq haproxy < /dev/null ;;
+        apt-get) sudo apt-get update -qq < /dev/null 2>&1 || true
+                 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq haproxy < /dev/null ;;
         dnf)     sudo dnf install -y haproxy < /dev/null ;;
         pacman)  sudo pacman -S --noconfirm haproxy ;;
         zypper)  sudo zypper install -y haproxy ;;

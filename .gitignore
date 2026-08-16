@@ -52,3 +52,8 @@ __pycache__/
 # BenchmarkDotNet local run output (tests/Networker.Benchmarks)
 BenchmarkDotNet.Artifacts/
 test-results/
+
+# Local dev / lab state (dev.sh, lab/lab.sh)
+/.dev-agent.key
+/lab/.generated/
+/lab/.state/
