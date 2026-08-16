@@ -21,6 +21,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$ROOT"
+# shellcheck disable=SC1091
+[ -f "$ROOT/.dev.env" ] && . "$ROOT/.dev.env"
+export DEV_PG_PORT="${DEV_PG_PORT:-5432}"
 
 
 echo "==> Starting Postgres..."
@@ -38,7 +41,7 @@ for i in $(seq 1 30); do
 done
 
 echo "==> Running the control plane once to apply migrations..."
-DASHBOARD_DB_URL_NPGSQL="Host=127.0.0.1;Port=5432;Database=networker_core;Username=networker;Password=networker" \
+DASHBOARD_DB_URL_NPGSQL="Host=127.0.0.1;Port=${DEV_PG_PORT};Database=networker_core;Username=networker;Password=networker" \
 DASHBOARD_ADMIN_PASSWORD=admin \
 DASHBOARD_ADMIN_EMAIL=admin@localhost \
 DASHBOARD_JWT_SECRET=dev-secret-dev-secret-dev-secret-dev-secret \
@@ -46,7 +49,7 @@ DASHBOARD_CREDENTIAL_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456
 DASHBOARD_BACKGROUND_SERVICES=0 \
 ASPNETCORE_URLS=http://127.0.0.1:3099 \
 ASPNETCORE_ENVIRONMENT=Development \
-  dotnet run --project src/Networker.ControlPlane &
+  dotnet run --project src/Networker.ControlPlane ${DOTNET_BUILD_EXTRA_ARGS:-} &
 DASH_PID=$!
 
 echo "==> Waiting for the control plane to be ready (building + migrating)..."

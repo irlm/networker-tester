@@ -220,6 +220,16 @@ deployment, see [`docs/setup-guide.md`](docs/setup-guide.md).
 
 ## Development
 
+First time on a machine — checks/installs every prerequisite (Docker, Rust,
+.NET 10, Node, jq, cmake, …), picks a free Postgres port and records
+machine quirks in `.dev.env`:
+
+```bash
+./scripts/dev-setup.sh          # macOS (Homebrew), Ubuntu/Debian, Fedora, Arch
+scripts\dev-setup.ps1           # Windows (winget); then run dev.sh from Git Bash / WSL
+./dev.sh                        # endpoint + C# control plane :5030 + Vite :5173
+```
+
 ```bash
 # Rust (probe engine + endpoint)
 cargo test -p networker-tester -p networker-endpoint --lib

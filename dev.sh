@@ -4,6 +4,8 @@
 #   PostgreSQL (docker) → networker-endpoint (Rust) → Networker.ControlPlane
 #   (C#, :5030) → optional local Networker.Agent → Vite dev server (:5173).
 # Ctrl+C stops everything (PostgreSQL is left running).
+# First time on a machine: ./scripts/dev-setup.sh (macOS/Linux) or
+# scripts/dev-setup.ps1 (Windows, then run this from Git Bash / WSL).
 #
 # Env overrides: DEV_ADMIN_EMAIL, DEV_ADMIN_PASSWORD (default admin@localhost /
 # admin — a bootstrap admin is only seeded when dash_user is EMPTY, so a fixed
@@ -18,6 +20,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Machine-specific settings from scripts/dev-setup.sh (free Postgres host port,
+# .NET SDK quirks). Run it once: ./scripts/dev-setup.sh
+# shellcheck disable=SC1091
+[ -f "$SCRIPT_DIR/.dev.env" ] && . "$SCRIPT_DIR/.dev.env"
+
 # ── Colors ────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; CYAN='\033[0;36m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'
 DIM='\033[2m'; BOLD='\033[1m'; NC='\033[0m'
@@ -29,7 +36,11 @@ ENDPOINT_PORT="${DEV_ENDPOINT_PORT:-8080}"
 WITH_AGENT="${DEV_WITH_AGENT:-0}"
 COMPOSE_FILE="docker-compose.dashboard.yml"
 DB_NAME="networker_core"   # must match POSTGRES_DB in $COMPOSE_FILE
-DB_URL_NPGSQL="Host=127.0.0.1;Port=5432;Database=${DB_NAME};Username=networker;Password=networker"
+export DEV_PG_PORT="${DEV_PG_PORT:-5432}"   # host port for the compose postgres (see .dev.env)
+DB_URL_NPGSQL="Host=127.0.0.1;Port=${DEV_PG_PORT};Database=${DB_NAME};Username=networker;Password=networker"
+# Extra msbuild args (e.g. -p:UseAppHost=false on SDKs with a non-nuget RID).
+# shellcheck disable=SC2206
+DOTNET_ARGS=( ${DOTNET_BUILD_EXTRA_ARGS:-} )
 
 # ── Dependency checks ────────────────────────────────────────────────────────
 MISSING=()
@@ -89,6 +100,8 @@ pids_on_port() {
   if command -v lsof > /dev/null 2>&1; then lsof -ti :"$port" 2>/dev/null || true
   elif command -v ss > /dev/null 2>&1; then ss -lptnH "sport = :$port" 2>/dev/null | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | sort -u
   elif command -v fuser > /dev/null 2>&1; then fuser "$port"/tcp 2>/dev/null | tr -s ' ' '\n' | grep . || true
+  elif command -v netstat > /dev/null 2>&1; then # Windows (Git Bash / WSL without ss)
+    netstat -ano 2>/dev/null | awk -v p=":$port" '$2 ~ p"$" && $4 == "LISTENING" {print $5}' | sort -u
   fi
 }
 for port in "$CP_PORT" 5173 "$ENDPOINT_PORT"; do
@@ -105,11 +118,11 @@ echo -e "${DIM}  ─────────────────────
 # ── 1. PostgreSQL ────────────────────────────────────────────────────────────
 echo -e "${DIM}[1/5]${NC} Starting PostgreSQL..."
 if ! docker compose -f "$COMPOSE_FILE" up postgres -d --wait; then
-  echo -e "  ${RED}PostgreSQL failed to start${NC} — is something else bound to :5432? (docker compose -f $COMPOSE_FILE logs postgres)"
+  echo -e "  ${RED}PostgreSQL failed to start${NC} — is something else bound to :${DEV_PG_PORT}? Run ./scripts/dev-setup.sh to pick a free port, or: docker compose -f $COMPOSE_FILE logs postgres"
   exit 1
 fi
 PG_CONTAINER="$(docker compose -f "$COMPOSE_FILE" ps -q postgres)"
-echo -e "       ${GREEN}PostgreSQL ready${NC} (localhost:5432, db ${DB_NAME})"
+echo -e "       ${GREEN}PostgreSQL ready${NC} (localhost:${DEV_PG_PORT}, db ${DB_NAME})"
 
 # ── 2. Build ─────────────────────────────────────────────────────────────────
 echo -e "${DIM}[2/5]${NC} Building endpoint + control plane..."
@@ -119,8 +132,8 @@ build_step() { # build_step LABEL CMD... — quiet on success, full output on fa
   if out="$("$@" 2>&1)"; then echo "       $label ok"; else echo "$out" | tail -40; echo -e "  ${RED}$label failed${NC}"; exit 1; fi
 }
 build_step "networker-endpoint"        cargo build -p networker-endpoint
-build_step "Networker.ControlPlane"    dotnet build src/Networker.ControlPlane -c Debug -v quiet -nologo
-[ "$WITH_AGENT" = 1 ] && build_step "Networker.Agent" dotnet build src/Networker.Agent -c Debug -v quiet -nologo
+build_step "Networker.ControlPlane"    dotnet build src/Networker.ControlPlane -c Debug -v quiet -nologo ${DOTNET_ARGS[@]+"${DOTNET_ARGS[@]}"}
+[ "$WITH_AGENT" = 1 ] && build_step "Networker.Agent" dotnet build src/Networker.Agent -c Debug -v quiet -nologo ${DOTNET_ARGS[@]+"${DOTNET_ARGS[@]}"}
 
 # ── 3. Endpoint ──────────────────────────────────────────────────────────────
 echo -e "${DIM}[3/5]${NC} Starting endpoint (port ${ENDPOINT_PORT})..."
@@ -138,7 +151,7 @@ DASHBOARD_DB_URL_NPGSQL="$DB_URL_NPGSQL" \
 DASHBOARD_PUBLIC_URL="http://localhost:${CP_PORT}" \
 ASPNETCORE_URLS="http://0.0.0.0:${CP_PORT}" \
 ASPNETCORE_ENVIRONMENT=Development \
-  dotnet run --project src/Networker.ControlPlane --no-build 2>&1 &
+  dotnet run --project src/Networker.ControlPlane --no-build ${DOTNET_ARGS[@]+"${DOTNET_ARGS[@]}"} 2>&1 &
 PIDS+=($!)
 
 # ── 5. Frontend ──────────────────────────────────────────────────────────────
@@ -181,7 +194,7 @@ SQL
   set -m
   AGENT_API_KEY="$AGENT_KEY" AGENT_DASHBOARD_URL="ws://localhost:${CP_PORT}/ws/agent" \
   AGENT_TESTER_PATH="$SCRIPT_DIR/target/debug/networker-tester" \
-    dotnet run --project src/Networker.Agent --no-build > /dev/null 2>&1 &
+    dotnet run --project src/Networker.Agent --no-build ${DOTNET_ARGS[@]+"${DOTNET_ARGS[@]}"} > /dev/null 2>&1 &
   PIDS+=($!)
   set +m
 fi

@@ -33,6 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   C# test against `ProxyHttpsPort`, and read by the lab.
 - `shared/tester-schema.postgres.sql` — the tester's V001–V005 probe schema,
   drift-guarded against `postgres.rs`, embedded by the control plane (below).
+- `scripts/dev-setup.sh` (macOS/Ubuntu/Fedora/Arch) + `scripts/dev-setup.ps1`
+  (Windows, winget): idempotent dev-machine setup — checks/installs Docker,
+  Rust (+cmake/cc), .NET 10, Node, jq, optional shellcheck/bats; picks a free
+  Postgres host port when :5432 is taken; detects .NET SDKs whose RID has no
+  nuget apphost (Arch `arch-x64` → NU1101) and writes `.dev.env`, which
+  `dev.sh`, `scripts/seed-dev.sh`, `tests/cli_smoke.sh` and
+  `docker-compose.dashboard.yml` honour (`DEV_PG_PORT`,
+  `DOTNET_BUILD_EXTRA_ARGS`). `dev.sh` now fails loudly on Postgres/build errors.
 - CI: `Test (macos-latest)` unit-test job — the primary dev platform's
   `#[cfg(target_os = "macos")]` code and tests were compiled only at release
   time until now.

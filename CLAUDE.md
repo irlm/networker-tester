@@ -114,6 +114,12 @@ bootstraps lazily). See `lab/README.md` for fidelity gaps.
 
 ## Control Plane Local Dev (C#)
 
+First time on a machine: `./scripts/dev-setup.sh` (macOS/Ubuntu/Fedora/Arch) or
+`scripts/dev-setup.ps1` (Windows; then use Git Bash/WSL) — checks/installs the
+toolchain and writes `.dev.env` (free `DEV_PG_PORT` when :5432 is taken,
+`DOTNET_BUILD_EXTRA_ARGS=-p:UseAppHost=false` for SDKs with a non-nuget RID such as
+Arch's `arch-x64`). Then `./dev.sh` runs the whole thing; the manual steps are:
+
 ```bash
 # 1. PostgreSQL
 docker compose -f docker-compose.dashboard.yml up -d postgres
