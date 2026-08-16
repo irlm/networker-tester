@@ -14,6 +14,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.28.208] - 2026-08-15
 
 ### Added
+- **Docker (local) cloud provider** (feature-flagged, `DASHBOARD_DOCKER_PROVIDER=1`,
+  default OFF — prod never shows it). From the dashboard/API you can now
+  create a runner (project tester) or deploy an endpoint target with cloud
+  `docker` and the control plane provisions them as containers on its own
+  Docker daemon through the **exact same product paths** used for
+  Azure/AWS/GCP: create-tester → `docker run` of the runner image with the
+  minted agent key → agent online → runs; deployments with
+  `provider: "docker"` endpoints → target container (`nwk-lab/target-<stack>`,
+  `TARGET_STACK`) gated on its healthcheck → `completed` with `endpoint_ips`
+  (log streamed via the deploy log bus); start/stop/delete/probe (`docker
+  start|stop|rm -f|inspect`, missing = success); deployment DELETE tears the
+  container down by ip; the orphan reaper removes labelled containers
+  (`networker.role`, `networker.tester_id`, `networker.deployment_id`) whose
+  row is gone; the orchestrator's `pending` endpoint kind accepts
+  `provider: "docker"` without a cloud account. `IComputeProvisioner` is now a
+  routing shim (`RoutingComputeProvisioner`: docker → `DockerComputeProvisioner`,
+  else the az/aws/gcloud `CliComputeProvisioner`). No cloud account or
+  connection is required (create-tester validation accepts cloud `docker`
+  account-less; region pinned to `local`, vm_size `container`, os
+  `ubuntu-24.04`). `GET /api/version` exposes `docker_provider`; the
+  frontend shows "Docker (local)" in the create-runner modal and both deploy
+  wizards only when it is on. Config: `DASHBOARD_DOCKER_BIN`,
+  `DASHBOARD_DOCKER_NETWORK` (default: the control plane's own container
+  network → `nwk-lab_labnet` → `bridge`), `DASHBOARD_DOCKER_RUNNER_IMAGE`,
+  `DASHBOARD_DOCKER_TARGET_IMAGE_PREFIX`, `DASHBOARD_DOCKER_AGENT_URL`
+  (`ws://host.docker.internal:5030/ws/agent` when the control plane runs on
+  the host; `--add-host host-gateway` is added on Linux). The lab enables it
+  (`lab/docker-compose.yml` mounts the docker socket; the control-plane image
+  ships the docker CLI) and `lab/validate.sh` phase 5 drives the whole
+  managed flow — tester → deployment → pinned proxy run → delete → containers
+  gone — closing the lab's "no cloud provisioning path" gap.
 - **`lab/` — the managed path in Docker, before any cloud VM.** `./lab/lab.sh
   up --runners N --targets rust,nginx,caddy,apache,haproxy,traefik` builds
   everything from the checkout (Rust release binaries, C# control plane and

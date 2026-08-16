@@ -740,6 +740,8 @@ export const api = {
     latest_release: string | null;
     update_available: boolean;
     endpoints: { host: string; version: string | null; reachable: boolean }[];
+    /** Feature-flagged Docker (local) provider (DASHBOARD_DOCKER_PROVIDER=1). */
+    docker_provider?: boolean;
   }>('/version'),
 
   // ── System Admin (platform admin only, NOT project-scoped) ──────────

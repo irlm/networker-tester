@@ -61,6 +61,21 @@ public static partial class TesterWriteEndpoints
             return ApiError.BadRequest(invalid);
         }
 
+        // Docker (local) provider: feature-flagged, account-less, single region.
+        // The flag is read from DI (DockerProviderOptions) so a prod control
+        // plane — which never sets DASHBOARD_DOCKER_PROVIDER — rejects the cloud
+        // outright, exactly like an unknown provider.
+        var dockerOptions = http.RequestServices.GetService<DockerProviderOptions>() ?? DockerProviderOptions.Disabled;
+        var isDocker = DockerProviderOptions.IsDocker(body.Cloud);
+        if (isDocker)
+        {
+            if (TesterCreateLogic.ValidateDockerCreate(dockerOptions.Enabled, body.CloudAccountId, body.CloudConnectionId) is { } dockerErr)
+            {
+                return ApiError.BadRequest(dockerErr);
+            }
+            body = TesterCreateLogic.NormalizeDockerBody(body);
+        }
+
         // Rate-limit: total testers in project + creates in the last hour
         // (Rust: one query with a FILTER; two COUNTs are semantically identical).
         var hourAgo = DateTime.UtcNow.AddHours(-1);
@@ -311,17 +326,27 @@ public static partial class TesterWriteEndpoints
         logger.LogInformation("Linked new agent row to persistent tester {TesterId}", testerId);
 
         // Step 2: resolve provider credentials + image + bootstrap script.
-        var creds = await ResolveProviderCredentialsAsync(db, cipher, tester).ConfigureAwait(false);
+        // Docker (local): no cloud account/connection — the container runs the
+        // agent directly with the minted key in its environment (the container
+        // analogue of cloud-init), so credentials are a bare provider marker and
+        // the image is the configured runner image.
+        var isDocker = DockerProviderOptions.IsDocker(tester.Cloud);
+        var dockerOptions = sp.GetService<DockerProviderOptions>() ?? DockerProviderOptions.Disabled;
+        var creds = isDocker
+            ? new ProviderCredentials(DockerProviderOptions.CloudName, Region: tester.Region)
+            : await ResolveProviderCredentialsAsync(db, cipher, tester).ConfigureAwait(false);
         var requestedOs = tester.RequestedOs ?? "ubuntu-24.04";
         var requestedVariant = tester.RequestedVariant ?? "server";
-        var image = TesterCreateLogic.ResolveImage(tester.Cloud, requestedOs, requestedVariant);
+        var image = isDocker ? dockerOptions.RunnerImage : TesterCreateLogic.ResolveImage(tester.Cloud, requestedOs, requestedVariant);
         var sshUser = TesterCreateLogic.DefaultSshUser(tester.Cloud, requestedOs);
         var targetTriple = TesterCreateLogic.TargetTripleFor(requestedOs);
-        var isWindows = requestedOs.StartsWith("windows", StringComparison.Ordinal);
+        var isWindows = !isDocker && requestedOs.StartsWith("windows", StringComparison.Ordinal);
 
-        var agentWs = CloudInitScripts.AgentWsUrl(CollabConfig.PublicUrl());
-        if (agentWs.Contains("localhost", StringComparison.Ordinal)
-            || agentWs.Contains("127.0.0.1", StringComparison.Ordinal))
+        var agentWs = isDocker
+            ? dockerOptions.ResolveAgentUrl(CollabConfig.PublicUrl())
+            : CloudInitScripts.AgentWsUrl(CollabConfig.PublicUrl());
+        if (!isDocker && (agentWs.Contains("localhost", StringComparison.Ordinal)
+            || agentWs.Contains("127.0.0.1", StringComparison.Ordinal)))
         {
             logger.LogWarning(
                 "DASHBOARD_PUBLIC_URL resolves to localhost ({AgentWs}) — the cloud VM's agent will NOT "
@@ -329,8 +354,28 @@ public static partial class TesterWriteEndpoints
                 + "URL before provisioning cloud runners.", agentWs);
         }
 
-        string bootstrap;
-        if (isWindows)
+        string? bootstrap;
+        IReadOnlyDictionary<string, string>? containerEnv = null;
+        IReadOnlyDictionary<string, string>? containerLabels = null;
+        if (isDocker)
+        {
+            // No bootstrap script: the runner image already carries the agent +
+            // tester binaries; the env is the same contract the systemd unit
+            // passes on a VM (AGENT_DASHBOARD_URL + AGENT_API_KEY).
+            bootstrap = null;
+            containerEnv = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["AGENT_DASHBOARD_URL"] = agentWs,
+                ["AGENT_API_KEY"] = agentApiKey,
+                ["AGENT_NAME"] = vmNamePreview,
+            };
+            containerLabels = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [DockerComputeProvisioner.ProjectLabel] = tester.ProjectId,
+                [DockerComputeProvisioner.TesterIdLabel] = testerId.ToString(),
+            };
+        }
+        else if (isWindows)
         {
             var raw = CloudInitScripts.RenderWindowsBootstrap(agentWs, agentApiKey, targetTriple);
             // AWS user-data convention: wrap PowerShell in <powershell>...</powershell>.
@@ -346,7 +391,7 @@ public static partial class TesterWriteEndpoints
         logger.LogInformation(
             "Resolved OS image + bootstrap script (cloud-init path): cloud={Cloud} os={Os} variant={Variant} "
             + "image={Image} ssh_user={SshUser} target_triple={Triple} bootstrap_bytes={Bytes}",
-            tester.Cloud, requestedOs, requestedVariant, image, sshUser, targetTriple, bootstrap.Length);
+            tester.Cloud, requestedOs, requestedVariant, image, sshUser, targetTriple, bootstrap?.Length ?? 0);
 
         // TODO(phase3): the Rust path runs a pre-create cloud orphan reaper here
         // (cloud_orphan_reaper::list_orphans/delete_orphans, soft-fail, 30s cap)
@@ -354,9 +399,11 @@ public static partial class TesterWriteEndpoints
         // Not ported yet — the Rust flow soft-fails it, so skipping loses only
         // the pre-emptive quota cleanup, never correctness.
 
-        var createPhaseMsg = isWindows
-            ? "creating VM + running Windows bootstrap via CustomScriptExtension (5-10 min)"
-            : "creating VM + running cloud-init bootstrap (~60-120s)";
+        var createPhaseMsg = isDocker
+            ? "starting runner container (docker run)"
+            : isWindows
+                ? "creating VM + running Windows bootstrap via CustomScriptExtension (5-10 min)"
+                : "creating VM + running cloud-init bootstrap (~60-120s)";
         await TesterState.SetStatusMessageAsync(conn, testerId, createPhaseMsg).ConfigureAwait(false);
 
         // Persist the vm_name BEFORE the cloud create. The orphan reaper's
@@ -382,7 +429,8 @@ public static partial class TesterWriteEndpoints
         }
 
         var created = await provisioner.CreateVmAsync(
-            new VmCreateRequest(tester.Cloud, vmNamePreview, region, vmSize, sshUser, image, bootstrap),
+            new VmCreateRequest(tester.Cloud, vmNamePreview, region, vmSize, sshUser, image, bootstrap,
+                containerEnv, containerLabels),
             creds).ConfigureAwait(false);
         if (!created.Success)
         {
@@ -453,9 +501,11 @@ public static partial class TesterWriteEndpoints
             await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
         }
 
-        var waitHint = isWindows
-            ? "waiting for agent to come online (Windows: 2-5 min after VM boot)"
-            : "waiting for agent to come online (Linux: usually < 30s)";
+        var waitHint = isDocker
+            ? "waiting for agent to come online (container: usually < 15s)"
+            : isWindows
+                ? "waiting for agent to come online (Windows: 2-5 min after VM boot)"
+                : "waiting for agent to come online (Linux: usually < 30s)";
         await TesterState.SetStatusMessageAsync(conn, testerId, waitHint).ConfigureAwait(false);
 
         // Lifecycle events: the VM was created + booted — emit BOTH `created`
@@ -480,7 +530,7 @@ public static partial class TesterWriteEndpoints
         // longer (choco + npcap + wireshark first); Linux is capped at 10 min
         // to absorb slow apt mirrors + GitHub API rate-limit retries — same
         // budgets as the Rust source.
-        var timeoutSecs = isWindows ? 900 : 600;
+        var timeoutSecs = isDocker ? 180 : isWindows ? 900 : 600;
         var stopwatch = Stopwatch.StartNew();
         var observedOnline = false;
         const int statusUpdateEvery = 6; // 6 ticks × 5s = 30s

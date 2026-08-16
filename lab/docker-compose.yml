@@ -48,14 +48,27 @@ services:
       DASHBOARD_CREDENTIAL_KEY: ${LAB_CREDENTIAL_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
       DASHBOARD_ADMIN_EMAIL: ${LAB_ADMIN_EMAIL:-admin@lab.local}
       DASHBOARD_ADMIN_PASSWORD: ${LAB_ADMIN_BOOTSTRAP_PASSWORD:-LabBootstrap-Pass1!}
-      # What provisioning would bake into cloud-init; irrelevant for docker
-      # runners (they are registered directly) but keeps startup warnings quiet.
+      # What provisioning bakes into the agent url — for the compose-started
+      # runners (registered directly) it is cosmetic; for runners the Docker
+      # (local) provider starts, AgentWsUrl(this) = ws://controlplane:5030/ws/agent
+      # is exactly what they connect to (same network, compose DNS).
       DASHBOARD_PUBLIC_URL: ${LAB_PUBLIC_URL:-http://controlplane:5030}
       DASHBOARD_BACKGROUND_SERVICES: "1"
+      # Docker (local) provider: the control plane provisions runner / target
+      # containers on this host's daemon (socket below) through the SAME
+      # create-tester + deployment paths as Azure/AWS/GCP — validate.sh phase 5.
+      # Feature-flagged; prod never sets it.
+      DASHBOARD_DOCKER_PROVIDER: "1"
+      DASHBOARD_DOCKER_NETWORK: nwk-lab_labnet
+      DASHBOARD_DOCKER_RUNNER_IMAGE: nwk-lab/runner:local
+      DASHBOARD_DOCKER_TARGET_IMAGE_PREFIX: nwk-lab/target-
       Logging__LogLevel__Default: ${LAB_CP_LOGLEVEL:-Information}
       Logging__LogLevel__Microsoft.AspNetCore: Warning
     ports:
       - "${LAB_CP_PORT:-5030}:5030"
+    volumes:
+      # Docker (local) provider — the control plane drives the host daemon.
+      - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5030/api/health/ready"]
       interval: 5s

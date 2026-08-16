@@ -62,10 +62,33 @@ mounts). `up` builds anything missing; after code changes run `build` again
 | 2 proxy matrix | for **every** proxy target: `kind=proxy` config (deployment id + stack) → the dispatcher resolves ip:stack-port + injects `insecure`; the deterministic HTTP/TCP/UDP matrix incl. download/upload/pageload*/websocket/udp/stamp, plus `native` | a stack that stops forwarding a route (v0.28.112 class), a mode broken through a proxy (v0.28.118 class), `native` not dropped by dispatch, 404s; HTTP/3 modes are expected only on stacks `shared/http-stacks.json` marks `h3: true` |
 | 3 fan-out | 2×runners launches at once | all complete **and** dispatch spreads across ≥2 workers |
 | 4 cancel | long run → cancel | terminal `cancelled`, not `completed`/stuck |
+| 5 provider | the **Docker (local) cloud provider** through the public API: `POST /testers {cloud:"docker"}` → the control plane `docker run`s a runner and its agent comes online (`running`/`idle`); `POST /deployments` with one `provider:"docker"` endpoint behind nginx → `completed` with an `endpoint_ip`; a proxy-kind config against that deployment pinned to that tester (`LaunchRequest.tester_id`) → run completes with successes on that agent; `DELETE` both → the containers are gone (`docker ps -a --filter label=networker.role`) | the create-tester → provision → agent-online path, the deploy runner, the tester/deployment delete teardown, the proxy resolver — with zero VM cost. Skipped with a note when `GET /api/version` says `docker_provider=false` |
 
 Every assertion failure prints the run id, per-mode ok/total and the first
 distinct error messages; `lab.sh logs runner-N` / `logs controlplane` have the
 rest.
+
+### Docker (local) provider — from the UI or the API
+
+The lab control plane runs with `DASHBOARD_DOCKER_PROVIDER=1`
+(`lab/docker-compose.yml`; `GET /api/version` → `docker_provider: true`), so
+with `up --ui` the Create Runner modal and both deploy wizards offer
+**"Docker (local)"** next to the cloud accounts (no account, region `local`).
+Same thing over the API:
+
+```bash
+. lab/.state/lab.env
+curl -s -X POST -H "Authorization: Bearer $LAB_TOKEN" -H 'Content-Type: application/json'   "$LAB_BASE_URL/api/projects/$LAB_PROJECT_ID/testers" -d '{"name":"my-runner","cloud":"docker","region":"local"}'
+curl -s -X POST -H "Authorization: Bearer $LAB_TOKEN" -H 'Content-Type: application/json'   "$LAB_BASE_URL/api/projects/$LAB_PROJECT_ID/deployments"   -d '{"name":"caddy target","config":{"version":1,"tester":{"provider":"local"},"endpoints":[{"provider":"docker","http_stacks":["caddy"]}],"tests":{"run_tests":false}}}'
+docker ps --filter label=networker.role        # nwk-<project>-tester-local-… / nwk-<project>-ep-caddy-…
+```
+
+Images: `DASHBOARD_DOCKER_RUNNER_IMAGE` (default `nwk-lab/runner:local`) and
+`DASHBOARD_DOCKER_TARGET_IMAGE_PREFIX` + stack + `:` +
+`DASHBOARD_DOCKER_TARGET_IMAGE_TAG` (`nwk-lab/target-caddy:local`) — build the
+stacks you deploy first (`lab.sh build --stacks …`). Other knobs:
+`DASHBOARD_DOCKER_NETWORK`, `DASHBOARD_DOCKER_BIN`, `DASHBOARD_DOCKER_AGENT_URL`
+(control plane on the host: `ws://host.docker.internal:5030/ws/agent`).
 
 ## What is (and isn't) faithful
 
@@ -87,16 +110,34 @@ Faithful — same code paths as production:
   with only the SHA-256 of the key stored — the same INSERT the create-tester
   path performs minus the VM; proxy targets are `completed` deployments with
   `endpoint_ips` + `http_stacks`, exactly what the proxy-kind resolver reads.
+* **Cloud provisioning path — via the Docker (local) provider**: the control
+  plane runs with `DASHBOARD_DOCKER_PROVIDER=1` and the host's docker socket
+  mounted, so a runner created with cloud `docker` (UI: "Docker (local)" in
+  Create Runner / the deploy wizards; API: `POST /testers {cloud:"docker"}`)
+  goes through the REAL create-tester flow (mint key → `IComputeProvisioner
+  .CreateVmAsync` → persist ip/resource id → wait for the agent → running),
+  and a deployment with `provider:"docker"` endpoints goes through the REAL
+  deploy runner (status/log/`endpoint_ips`/`DeployComplete`), start/stop/
+  delete/probe through the same lifecycle handlers, the deployment delete
+  through the same by-endpoint teardown, and orphaned containers through the
+  same reaper tick. Only the last hop differs: `docker run` of the lab images
+  instead of `az vm create` + cloud-init / `install.sh --deploy`. Phase 5
+  validates it.
 
 Not faithful (documented gaps):
 
 * **No systemd** in containers — `lab/images/target/systemctl` is a shim that
   runs unit files' `ExecStart` directly. Unit files themselves are validated
   (they must resolve), but `Restart=`/`After=` semantics are not.
-* **No cloud provisioning path** — `az`/`aws`/`gcloud`, cloud-init, the deploy
-  runner's SSH install. Those stay covered by the nightly canary. (Roadmap:
-  sshd on targets so `install.sh --deploy` with `provider: lan` can be pointed
-  at containers.)
+* **The cloud CLIs themselves** — `az`/`aws`/`gcloud`, cloud-init rendering,
+  the deploy runner's `install.sh --deploy` SSH install. Everything above them
+  is exercised through the Docker (local) provider; the CLI hop stays covered
+  by the nightly canary. (Roadmap: sshd on targets so `install.sh --deploy`
+  with `provider: lan` can be pointed at containers.)
+* **Docker provider limits**: one `http_stack` per docker endpoint (one
+  container = one ip = one stack, which is how the proxy resolver reads
+  `endpoint_ips[0]`); no reference-API `languages` on docker targets (the
+  target images ship the endpoint + proxy stacks only); Linux only.
 * **No Windows targets/runners** (IIS, install.ps1).
 * The bare `rust` target is only reachable as a `network` kind (there is no
   "direct endpoint" proxy stack in the product), so endpoint-only modes run
@@ -108,7 +149,8 @@ Not faithful (documented gaps):
 lab/
   lab.sh                  CLI (build/up/validate/status/logs/shell/psql/tester/down)
   validate.sh             the assertion matrix (also runnable directly)
-  docker-compose.yml      postgres + controlplane (+ ui profile); topology.yml is generated
+  docker-compose.yml      postgres + controlplane (+ ui profile; docker socket mounted for the
+                          Docker (local) provider); topology.yml is generated
   images/
     rust.Dockerfile       cargo build --release --locked → nwk-lab/rustbin (tester + endpoint)
     controlplane.Dockerfile

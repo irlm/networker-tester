@@ -4,6 +4,7 @@ import { testersApi, type TesterRow } from '../api/testers';
 import { api } from '../api/client';
 import { CloudAccountCombobox } from './wizard/CloudAccountCombobox';
 import type { CloudAccountSummary } from '../api/types';
+import { useDockerProvider, DOCKER_CLOUD, DOCKER_REGION, DOCKER_LABEL } from '../hooks/useDockerProvider';
 
 interface CreateTesterModalProps {
   projectId: string;
@@ -51,6 +52,10 @@ const VM_SIZE_PRESETS: Record<string, { value: string; label: string }[]> = {
     { value: 'e2-standard-2', label: 'e2-standard-2 (2 vCPU, 8 GB)' },
     { value: 'e2-standard-4', label: 'e2-standard-4 (4 vCPU, 16 GB)' },
   ],
+  // Docker (local): a container on the control-plane host — no size to pick.
+  docker: [
+    { value: 'container', label: 'container (shares the control-plane host)' },
+  ],
 };
 
 // Recommended default: 2 vCPU / 2-4 GB RAM is plenty for HTTP/TLS/DNS probes
@@ -58,6 +63,7 @@ const DEFAULT_VM_SIZE: Record<string, string> = {
   azure: 'Standard_B2s',
   aws: 't3.small',
   gcp: 'e2-small',
+  docker: 'container',
 };
 
 // OS options per cloud per variant. "--" means not supported.
@@ -81,6 +87,9 @@ const OS_OPTIONS: Record<string, { value: string; label: string; variants: strin
     { value: 'debian-12',    label: 'Debian 12',         variants: ['server'] },
     { value: 'windows-2022', label: 'Windows Server 2022', variants: ['server'] },
   ],
+  docker: [
+    { value: 'ubuntu-24.04', label: 'Ubuntu 24.04 (runner image)', variants: ['server'] },
+  ],
 };
 
 const REGIONS_BY_CLOUD: Record<string, string[]> = {
@@ -102,6 +111,7 @@ const REGIONS_BY_CLOUD: Record<string, string[]> = {
     'asia-east1', 'asia-northeast1', 'asia-southeast1',
     'australia-southeast1',
   ],
+  docker: [DOCKER_REGION],
 };
 
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
@@ -137,6 +147,28 @@ export function CreateTesterModal({
     defaultAutoShutdownHour,
   );
   const [autoProbeEnabled, setAutoProbeEnabled] = useState(false);
+
+  // Docker (local) provider — offered only when the control plane has the
+  // feature flag on. Selecting it drops the cloud account and pins
+  // region/os/size (there is nothing to choose: one host, the runner image).
+  const dockerAvailable = useDockerProvider();
+  const useDocker = cloud === DOCKER_CLOUD;
+  const selectDocker = () => {
+    setSelectedAccountId('');
+    setCloud(DOCKER_CLOUD);
+    setRegion(DOCKER_REGION);
+    setVmSize(DEFAULT_VM_SIZE[DOCKER_CLOUD]);
+    setRequestedOs('ubuntu-24.04');
+    setRequestedVariant('server');
+  };
+  const selectCloudAccount = () => {
+    const first = cloudAccounts[0];
+    const c = first?.provider ?? 'azure';
+    setSelectedAccountId(first?.account_id ?? '');
+    setCloud(c);
+    setVmSize(DEFAULT_VM_SIZE[c] || '');
+    setRegion(first?.region_default || REGIONS_BY_CLOUD[c]?.[0] || '');
+  };
 
   const [availableClouds, setAvailableClouds] = useState<string[]>([]);
   const [cloudAccounts, setCloudAccounts] = useState<CloudAccountSummary[]>([]);
@@ -301,7 +333,9 @@ export function CreateTesterModal({
           ? autoShutdownHour
           : undefined,
         auto_probe_enabled: autoProbeEnabled,
-        cloud_account_id: selectedAccountId || undefined,
+        // Docker (local) never binds an account — the control plane talks to
+        // its own docker daemon.
+        cloud_account_id: useDocker ? undefined : (selectedAccountId || undefined),
         requested_os: requestedOs,
         requested_variant: requestedVariant,
       });
@@ -393,21 +427,57 @@ export function CreateTesterModal({
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
 
+              {/* Provider — cloud account vs the feature-flagged Docker (local) */}
+              {dockerAvailable && (
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Provider</label>
+                  <div className="flex" role="radiogroup" aria-label="Provider">
+                    {([
+                      { id: 'cloud', label: 'Cloud account', on: !useDocker, pick: selectCloudAccount },
+                      { id: 'docker', label: DOCKER_LABEL, on: useDocker, pick: selectDocker },
+                    ]).map((opt, i) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={opt.on}
+                        onClick={opt.pick}
+                        className={`px-3 py-1.5 text-xs border transition-colors ${
+                          opt.on
+                            ? 'bg-cyan-900/40 border-cyan-700 text-cyan-300 z-10'
+                            : 'border-gray-700 text-gray-400 hover:text-gray-300'
+                        } ${i === 0 ? '' : '-ml-px'}`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                  {useDocker && (
+                    <p className="mt-1 text-[11px] text-gray-500">
+                      A runner container on the control-plane host (no cloud account, no cost).
+                      Region <span className="text-gray-300">local</span>, Ubuntu 24.04 runner image.
+                    </p>
+                  )}
+                </div>
+              )}
+
               {/* Cloud Account */}
-              <div>
-                <label className="block text-xs text-gray-400 mb-1">Cloud Account</label>
-                <CloudAccountCombobox
-                  projectId={projectId}
-                  cloudAccounts={cloudAccounts}
-                  selectedAccountId={selectedAccountId}
-                  onSelect={(acct) => {
-                    setSelectedAccountId(acct.account_id);
-                    setCloud(acct.provider);
-                    setVmSize(DEFAULT_VM_SIZE[acct.provider] || '');
-                    setRegion('');
-                  }}
-                />
-              </div>
+              {!useDocker && (
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Cloud Account</label>
+                  <CloudAccountCombobox
+                    projectId={projectId}
+                    cloudAccounts={cloudAccounts}
+                    selectedAccountId={selectedAccountId}
+                    onSelect={(acct) => {
+                      setSelectedAccountId(acct.account_id);
+                      setCloud(acct.provider);
+                      setVmSize(DEFAULT_VM_SIZE[acct.provider] || '');
+                      setRegion('');
+                    }}
+                  />
+                </div>
+              )}
 
               {/* Region */}
               <div>
@@ -418,7 +488,8 @@ export function CreateTesterModal({
                   id="tester-region"
                   value={region}
                   onChange={(e) => setRegion(e.target.value)}
-                  className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
+                  disabled={useDocker}
+                  className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500 disabled:opacity-60"
                 >
                   {regions.length === 0 && <option value="">(no regions)</option>}
                   {regions.map((r) => (
@@ -453,6 +524,7 @@ export function CreateTesterModal({
                   <select
                     id="tester-os"
                     value={requestedOs}
+                    disabled={useDocker}
                     onChange={(e) => {
                       const newOs = e.target.value;
                       setRequestedOs(newOs);
@@ -478,6 +550,7 @@ export function CreateTesterModal({
                   <select
                     id="tester-variant"
                     value={requestedVariant}
+                    disabled={useDocker}
                     onChange={(e) => setRequestedVariant(e.target.value)}
                     className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                   >
@@ -493,11 +566,12 @@ export function CreateTesterModal({
               {/* VM size */}
               <div>
                 <label htmlFor="tester-vmsize" className="block text-xs text-gray-400 mb-1">
-                  {cloud === 'aws' ? 'Instance type' : cloud === 'gcp' ? 'Machine type' : 'VM size'}
+                  {cloud === 'aws' ? 'Instance type' : cloud === 'gcp' ? 'Machine type' : useDocker ? 'Size' : 'VM size'}
                 </label>
                 <select
                   id="tester-vmsize"
                   value={vmSize}
+                  disabled={useDocker}
                   onChange={(e) => setVmSize(e.target.value)}
                   className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500"
                 >

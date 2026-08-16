@@ -34,6 +34,9 @@ namespace Networker.ControlPlane.Provisioning;
 /// transition and return 202 regardless of whether a real cloud CLI exists.
 /// </para>
 /// </summary>
+/// <summary>The power-lifecycle operations shared by every provisioner.</summary>
+public enum LifecycleOp { Start, Stop, Delete, Show }
+
 public interface IComputeProvisioner
 {
     /// <summary>Start a stopped/deallocated VM (Azure <c>vm start</c>, AWS
@@ -135,6 +138,13 @@ public sealed record ResolvedVm(string ResourceId, string Name);
 /// <param name="BootstrapScript">Optional cloud-init / user-data script —
 /// Azure <c>--custom-data</c>, AWS <c>--user-data</c>, GCP
 /// <c>--metadata-from-file startup-script=</c>.</param>
+/// <param name="Environment">Optional process environment for providers that
+/// run the agent directly instead of via a bootstrap script — the docker
+/// provider passes <c>AGENT_DASHBOARD_URL</c> / <c>AGENT_API_KEY</c> /
+/// <c>AGENT_NAME</c> as <c>docker run -e</c>. Ignored by the cloud CLIs.</param>
+/// <param name="Labels">Optional provider labels/tags (docker
+/// <c>--label</c>: <c>networker.project</c>, <c>networker.tester_id</c>) so the
+/// orphan reaper can find what it owns. Ignored by the cloud CLIs.</param>
 public sealed record VmCreateRequest(
     string Cloud,
     string Name,
@@ -142,7 +152,9 @@ public sealed record VmCreateRequest(
     string VmSize,
     string SshUser,
     string Image,
-    string? BootstrapScript);
+    string? BootstrapScript,
+    IReadOnlyDictionary<string, string>? Environment = null,
+    IReadOnlyDictionary<string, string>? Labels = null);
 
 /// <summary>
 /// Result of a VM create — the Rust <c>VmInfo</c> folded into the total-result

@@ -13,6 +13,14 @@
 #   phase 3  fan-out — launch 2×runners runs at once; all complete and ≥2
 #            distinct workers execute them (dispatch spreads across agents).
 #   phase 4  cancel — launch a long run, cancel it, assert terminal `cancelled`.
+#   phase 5  provider — the Docker (local) cloud provider (skipped with a note
+#            when GET /api/version says docker_provider=false): POST a tester
+#            with cloud "docker" → the control plane `docker run`s a runner and
+#            the agent comes online (power_state running / allocation idle);
+#            POST a deployment with one docker endpoint behind nginx → completed
+#            with an endpoint_ip; a proxy-kind config against that deployment
+#            pinned to that tester runs with successes; DELETE both → the
+#            containers are gone (docker ps -a --filter label=networker.role).
 #
 # Exit non-zero on the first failed assertion, printing the run/attempt detail
 # needed to debug it (and `lab.sh logs runner-N` for the rest).
@@ -21,7 +29,7 @@
 #   --modes a,b,c     phase-2 matrix override (default below)
 #   --runs N          runs per mode (default 2)
 #   --timeout SECS    per-run wall-clock budget (default 300)
-#   --skip PHASES     comma list of phase numbers to skip (e.g. --skip 3,4)
+#   --skip PHASES     comma list of phase numbers to skip (e.g. --skip 3,4,5)
 #   --only PHASES     comma list of phase numbers to run
 set -uo pipefail
 
@@ -248,6 +256,164 @@ if run_phase 4; then
   [ "$R_STATUS" = "cancelled" ] || fail "phase 4: expected 'cancelled', got '$R_STATUS' (cancel response: $(head -c 200 <<<"$CRESP"))"
   record "phase 4  cancel → $R_STATUS"
   [ "$R_STATUS" = "cancelled" ] && pass "phase 4"
+fi
+
+# ── phase 5: Docker (local) provider — the managed path end to end ───────────
+if run_phase 5; then
+  DOCKER_PROVIDER="$(api GET /api/version | jq -r '.docker_provider // false')"
+  if [ "$DOCKER_PROVIDER" != "true" ]; then
+    note "phase 5 — Docker (local) provider is OFF on this control plane (GET /api/version docker_provider=false) — skipped"
+    record "phase 5  (skipped: docker_provider=false — set DASHBOARD_DOCKER_PROVIDER=1 on the control plane)"
+  else
+    note "phase 5 — Docker (local) provider: create-tester → agent online → docker deployment → proxy run → delete"
+    P5_FAILS_BEFORE=$FAILS
+    P5_TESTER=""; P5_DEP=""; P5_TESTER_NAME="lab-p5-docker-$STAMP"
+    T_STATE=""; T_ALLOC=""; D_STATUS=""; D_IP=""; D_ERR=""; LEFT=""
+
+    # 5a. POST /testers with cloud "docker" (no cloud account) → 202 + row.
+    TRESP="$(api POST "/api/projects/$PID/testers" "$(jq -nc --arg n "$P5_TESTER_NAME" '{name:$n,cloud:"docker",region:"local"}')")"
+    P5_TESTER="$(jq -r '.tester_id // empty' <<<"$TRESP")"
+    if [ -z "$P5_TESTER" ]; then
+      fail "phase 5a: create tester (cloud=docker) failed: $(head -c 300 <<<"$TRESP")"
+    else
+      note "  tester $P5_TESTER created ($(jq -r '"cloud=\(.cloud) region=\(.region) vm_size=\(.vm_size) power_state=\(.power_state)"' <<<"$TRESP")) — waiting for the runner container + agent"
+      deadline=$((SECONDS + 240)); T_MSG=""; T_IP=""; T_VM=""
+      while :; do
+        TROW="$(api GET "/api/projects/$PID/testers/$P5_TESTER")"
+        T_STATE="$(jq -r '.power_state // empty' <<<"$TROW")"
+        T_ALLOC="$(jq -r '.allocation // empty' <<<"$TROW")"
+        T_MSG="$(jq -r '.status_message // empty' <<<"$TROW")"
+        T_IP="$(jq -r '.public_ip // empty' <<<"$TROW")"
+        T_VM="$(jq -r '.vm_resource_id // .vm_name // empty' <<<"$TROW")"
+        [ "$T_STATE" = "running" ] && [ "$T_ALLOC" = "idle" ] && break
+        [ "$T_STATE" = "error" ] && break
+        [ "$SECONDS" -ge "$deadline" ] && break
+        sleep 3
+      done
+      note "  tester power_state=$T_STATE allocation=$T_ALLOC public_ip=${T_IP:-?} container=${T_VM:-?} ${T_MSG:+msg=\"$T_MSG\"}"
+      if [ "$T_STATE" = "running" ] && [ "$T_ALLOC" = "idle" ]; then
+        pass "phase 5a: docker tester provisioned + agent online"
+      else
+        fail "phase 5a: docker tester did not reach running/idle (power_state=$T_STATE, msg=$T_MSG)"
+        docker ps -a --filter "label=networker.tester_id=$P5_TESTER" --format '    {{.Names}}  {{.Status}}' 2>/dev/null || true
+      fi
+      # The agent row behind the tester must be online (that is what the wait gated on).
+      AGENT_ONLINE="$(api GET "/api/projects/$PID/agents" | jq -r --arg t "$P5_TESTER" '(.agents // .) | [.[]|select(.tester_id==$t and .status=="online")] | length')"
+      [ "${AGENT_ONLINE:-0}" -ge 1 ] || fail "phase 5a: no online agent linked to tester $P5_TESTER"
+      # The container is a runner labelled with the tester id.
+      C_RUN="$(docker ps --filter "label=networker.role=runner" --filter "label=networker.tester_id=$P5_TESTER" --format '{{.Names}}' 2>/dev/null | head -1)"
+      if [ -n "$C_RUN" ]; then pass "phase 5a: runner container $C_RUN (label networker.tester_id) is running"; else fail "phase 5a: no running container labelled networker.tester_id=$P5_TESTER"; fi
+    fi
+
+    # 5b. POST /deployments with ONE docker endpoint behind nginx → completed + endpoint_ips.
+    DRESP="$(api POST "/api/projects/$PID/deployments" "$(jq -nc --arg n "lab-p5-docker-nginx-$STAMP" \
+      '{name:$n,config:{version:1,tester:{provider:"local"},endpoints:[{provider:"docker",label:"p5-nginx",http_stacks:["nginx"],docker:{os:"linux"}}],tests:{run_tests:false}}}')")"
+    P5_DEP="$(jq -r '.deployment_id // empty' <<<"$DRESP")"
+    if [ -z "$P5_DEP" ]; then
+      fail "phase 5b: create docker deployment failed: $(head -c 300 <<<"$DRESP")"
+    else
+      note "  deployment $P5_DEP created — waiting for the target container (nginx) to become healthy"
+      deadline=$((SECONDS + 240)); DROW="{}"
+      while :; do
+        DROW="$(api GET "/api/projects/$PID/deployments/$P5_DEP")"
+        D_STATUS="$(jq -r '.status // empty' <<<"$DROW")"
+        D_IP="$(jq -r '(.endpoint_ips // [])[0] // empty' <<<"$DROW")"
+        D_ERR="$(jq -r '.error_message // empty' <<<"$DROW")"
+        case "$D_STATUS" in completed|failed|cancelled) break;; esac
+        [ "$SECONDS" -ge "$deadline" ] && break
+        sleep 3
+      done
+      note "  deployment status=$D_STATUS endpoint_ip=${D_IP:-?} ${D_ERR:+error=\"$D_ERR\"}"
+      if [ "$D_STATUS" = "completed" ] && [ -n "$D_IP" ]; then
+        pass "phase 5b: docker deployment completed with endpoint_ip $D_IP"
+      else
+        fail "phase 5b: deployment ended '$D_STATUS' (expected completed with an endpoint_ip) ${D_ERR:+— $D_ERR}"
+        jq -r '.log // ""' <<<"$DROW" | tail -15 | sed 's/^/      /'
+      fi
+      C_TGT="$(docker ps --filter "label=networker.role=target" --filter "label=networker.deployment_id=$P5_DEP" --format '{{.Names}}' 2>/dev/null | head -1)"
+      if [ -n "$C_TGT" ]; then pass "phase 5b: target container $C_TGT (label networker.deployment_id) is running"; else fail "phase 5b: no running container labelled networker.deployment_id=$P5_DEP"; fi
+    fi
+
+    # 5c. proxy-kind config against that deployment, pinned to that tester → run completes with successes.
+    if [ -n "$P5_TESTER" ] && [ "$D_STATUS" = "completed" ] && [ -n "$D_IP" ]; then
+      # Dispatch's version gate only admits agents that have reported a version
+      # (first heartbeat — immediate since v0.28.208, one interval before);
+      # wait for it so the tester pin below is a fair assertion.
+      deadline=$((SECONDS + 90)); P5_AGENT_VER=""
+      while :; do
+        P5_AGENT_VER="$(api GET "/api/projects/$PID/agents" | jq -r --arg t "$P5_TESTER" '(.agents // .) | [.[]|select(.tester_id==$t)][0].version // empty')"
+        [ -n "$P5_AGENT_VER" ] && break
+        [ "$SECONDS" -ge "$deadline" ] && break
+        sleep 2
+      done
+      [ -n "$P5_AGENT_VER" ] && note "  docker runner's agent reports version $P5_AGENT_VER" || fail "phase 5c: docker runner's agent never reported a version (dispatch would skip it)"
+      CFG5="$(create_config "lab-p5-proxy-$STAMP" \
+        "$(jq -nc --arg d "$P5_DEP" '{kind:"proxy",proxy_endpoint_id:$d,proxy_stack:"nginx"}')" \
+        "$(jq -nc --argjson r "$RUNS" '{modes:["tcp","tls","http1","http2","download"],runs:$r,concurrency:1,timeout_ms:15000,capture_mode:"headers-only",payload_sizes:[]}')")" || exit 1
+      LRESP="$(api POST "/api/v2/test-configs/$CFG5/launch" "$(jq -nc --arg t "$P5_TESTER" '{tester_id:$t}')")"
+      RUN5="$(jq -r '.run_id // .id // empty' <<<"$LRESP")"
+      if [ -z "$RUN5" ]; then
+        fail "phase 5c: launch pinned to tester $P5_TESTER failed: $(head -c 300 <<<"$LRESP")"
+      else
+        note "  run $RUN5 launched on tester $P5_TESTER (proxy nginx @ $D_IP) — waiting"
+        wait_run "$RUN5" || fail "phase 5c: run $RUN5 did not finish in ${RUN_TIMEOUT}s (last=$R_STATUS)"
+        ATT5="$(attempts_of "$RUN5")"
+        note "  status=$R_STATUS ok=$R_OK fail=$R_FAIL attempts=$(jq length <<<"$ATT5") worker=${R_WORKER:-?}"
+        echo "    $(per_mode_stats "$ATT5")"
+        case "$R_STATUS" in completed|partial) ;; *) fail "phase 5c: status '$R_STATUS' ${R_ERR:+— $R_ERR}";; esac
+        [ "${R_OK:-0}" -gt 0 ] || fail "phase 5c: 0 successful attempts through the docker-provisioned nginx target"
+        B5="$(broken_modes "$ATT5")"
+        if [ -n "$B5" ]; then fail "phase 5c: mode(s) with zero successes: $B5"; first_errors "$ATT5" | sed 's/^/      /'; fi
+        # The run must have executed on the docker runner's agent (tester pin).
+        P5_AGENT="$(api GET "/api/projects/$PID/agents" | jq -r --arg t "$P5_TESTER" '(.agents // .) | [.[]|select(.tester_id==$t)][0].agent_id // empty')"
+        if [ -n "$P5_AGENT" ] && [ -n "$R_WORKER" ] && [ "$R_WORKER" != "$P5_AGENT" ]; then
+          fail "phase 5c: run executed on worker $R_WORKER, not the pinned docker tester's agent $P5_AGENT"
+        fi
+        [ "$FAILS" -eq "$P5_FAILS_BEFORE" ] && pass "phase 5c: proxy run through the docker target on the docker runner"
+      fi
+    else
+      note "  phase 5c skipped (tester or deployment not ready)"
+    fi
+
+    # 5d. DELETE both → containers gone.
+    if [ -n "$P5_TESTER" ]; then
+      DEL="$(api DELETE "/api/projects/$PID/testers/$P5_TESTER")"
+      note "  DELETE tester → $(head -c 120 <<<"$DEL")"
+    fi
+    if [ -n "$P5_DEP" ]; then
+      DEL="$(api DELETE "/api/projects/$PID/deployments/$P5_DEP")"
+      note "  DELETE deployment → $(head -c 120 <<<"$DEL")"
+    fi
+    leftovers() {
+      { [ -n "$P5_TESTER" ] && docker ps -a --filter "label=networker.role" --filter "label=networker.tester_id=$P5_TESTER" --format '{{.Names}}'
+        [ -n "$P5_DEP" ] && docker ps -a --filter "label=networker.role" --filter "label=networker.deployment_id=$P5_DEP" --format '{{.Names}}'
+      } 2>/dev/null | grep . || true
+    }
+    deadline=$((SECONDS + 120))
+    while :; do
+      LEFT="$(leftovers)"
+      [ -z "$LEFT" ] && break
+      [ "$SECONDS" -ge "$deadline" ] && break
+      sleep 3
+    done
+    if [ -z "$LEFT" ]; then
+      pass "phase 5d: containers removed (docker ps -a --filter label=networker.role shows none for tester/deployment)"
+    else
+      fail "phase 5d: containers still present after delete: $(echo "$LEFT" | tr '\n' ' ')"
+    fi
+    if [ -n "$P5_TESTER" ]; then
+      deadline=$((SECONDS + 60)); TGONE="x"
+      while :; do
+        TGONE="$(api GET "/api/projects/$PID/testers/$P5_TESTER" | jq -r '.tester_id // empty')"
+        [ -z "$TGONE" ] && break
+        [ "$SECONDS" -ge "$deadline" ] && break
+        sleep 3
+      done
+      if [ -z "$TGONE" ]; then pass "phase 5d: tester row removed"; else fail "phase 5d: tester row $P5_TESTER still present (power_state=$(api GET "/api/projects/$PID/testers/$P5_TESTER" | jq -r '.power_state'))"; fi
+    fi
+    record "phase 5  docker provider → tester=${T_STATE:-?}/${T_ALLOC:-?} deployment=${D_STATUS:-?}@${D_IP:-?} run=${R_STATUS:-?} ok=${R_OK:-0} cleanup=$([ -z "$LEFT" ] && echo clean || echo LEFTOVERS)"
+    [ "$FAILS" -eq "$P5_FAILS_BEFORE" ] && pass "phase 5"
+  fi
 fi
 
 summary

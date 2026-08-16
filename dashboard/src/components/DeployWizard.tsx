@@ -10,6 +10,8 @@ import {
   type TestbedState,
 } from './wizard/testbed-constants';
 import { useToast } from '../hooks/useToast';
+import { useDockerProvider, DOCKER_CLOUD } from '../hooks/useDockerProvider';
+import { DOCKER_CLOUD_LABEL } from './wizard/testbed-constants';
 
 // ── Prefill: lets the Infrastructure page open the wizard with an existing
 //    target's IP + already-installed proxy stacks selected. The user then
@@ -38,6 +40,7 @@ interface DeployWizardProps {
 
 export function DeployWizard({ projectId, onClose, onCreated, prefill }: DeployWizardProps) {
   const [step, setStep] = useState<1 | 2>(1);
+  const dockerAvailable = useDockerProvider();
   const [cloudAccounts, setCloudAccounts] = useState<CloudAccountSummary[]>([]);
   const [cloudLoading, setCloudLoading] = useState(true);
 
@@ -126,6 +129,7 @@ export function DeployWizard({ projectId, onClose, onCreated, prefill }: DeployW
     return testbeds.length > 0 && testbeds.every(tb => {
       if (tb.proxies.length === 0) return false;
       if (tb.existingVm) return tb.existingVmId.trim().length > 0;
+      if (tb.cloud === DOCKER_CLOUD_LABEL) return true; // account-less provider
       return tb.cloudAccountId !== '';
     });
   }, [testbeds]);
@@ -149,7 +153,7 @@ export function DeployWizard({ projectId, onClose, onCreated, prefill }: DeployW
     // Pick a representative cloud_account_id from the first new (non-existing)
     // testbed. install.sh accepts a single cloud_account_id at the root and
     // applies it to every endpoint that references the same provider.
-    const firstNewCloud = testbeds.find(tb => !tb.existingVm);
+    const firstNewCloud = testbeds.find(tb => !tb.existingVm && tb.cloud !== DOCKER_CLOUD_LABEL);
     const cloudAccountId = firstNewCloud?.cloudAccountId;
 
     const config: Record<string, unknown> = {
@@ -166,6 +170,10 @@ export function DeployWizard({ projectId, onClose, onCreated, prefill }: DeployW
             http_stacks: tb.proxies,
             label: `upgrade-${tb.existingVmId.trim()}`,
           };
+        }
+        if (tb.cloud === DOCKER_CLOUD_LABEL) {
+          // Docker (local): a target container on the control-plane host.
+          return { provider: DOCKER_CLOUD, http_stacks: tb.proxies, docker: { os: 'linux' } };
         }
         const provider = tb.cloud.toLowerCase();
         const vmSize = resolveVmSize(tb.cloud, tb.vmSize);
@@ -250,7 +258,7 @@ export function DeployWizard({ projectId, onClose, onCreated, prefill }: DeployW
                 <p className="text-xs text-gray-400 py-3">Loading cloud accounts...</p>
               ) : cloudAccounts.length === 0 ? (
                 <div className="border border-yellow-500/30 bg-yellow-500/5 rounded p-3 mb-3 text-xs text-yellow-300">
-                  No cloud accounts configured. Add one in Settings → Cloud, or check "Use existing VM" on each testbed to install on a host you already have.
+                  No cloud accounts configured. Add one in Settings → Cloud, {dockerAvailable ? 'pick "Docker (local)" on a testbed, ' : ''}or check "Use existing VM" on each testbed to install on a host you already have.
                 </div>
               ) : null}
 
@@ -265,6 +273,7 @@ export function DeployWizard({ projectId, onClose, onCreated, prefill }: DeployW
                     onUpdate={updateTestbed}
                     onRemove={removeTestbed}
                     hideTesterOs
+                    dockerAvailable={dockerAvailable}
                   />
                 ))}
               </div>

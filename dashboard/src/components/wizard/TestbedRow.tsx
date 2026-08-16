@@ -10,7 +10,9 @@ import {
   windowsProxiesFor,
   PROXY_LABELS,
   TESTER_OS_OPTIONS,
+  DOCKER_CLOUD_LABEL,
 } from './testbed-constants';
+import { DOCKER_LABEL } from '../../hooks/useDockerProvider';
 
 // ── Props ──────────────────────────────────────────────────────────────
 
@@ -25,6 +27,8 @@ export interface TestbedRowProps {
   onRemove: (key: number) => void;
   /** Hide the "Runner VM" picker — used by the deploy wizard where there's no tester VM to pick. */
   hideTesterOs?: boolean;
+  /** Offer the feature-flagged "Docker (local)" provider (no cloud account). */
+  dockerAvailable?: boolean;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -34,6 +38,7 @@ function providerToCloud(provider: string): string {
   if (p === 'azure') return 'Azure';
   if (p === 'aws') return 'AWS';
   if (p === 'gcp') return 'GCP';
+  if (p === 'docker') return DOCKER_CLOUD_LABEL;
   return 'Azure';
 }
 
@@ -47,7 +52,21 @@ export function TestbedRow({
   onUpdate,
   onRemove,
   hideTesterOs,
+  dockerAvailable,
 }: TestbedRowProps) {
+  const isDocker = testbed.cloud === DOCKER_CLOUD_LABEL;
+  const selectDocker = () => {
+    // updateTestbedState resets region/vmSize/proxies for the new cloud.
+    onUpdate(testbed.key, {
+      cloud: DOCKER_CLOUD_LABEL,
+      cloudAccountId: '',
+      os: 'linux',
+      existingVm: false,
+      existingVmId: '',
+      // one container = one stack
+      proxies: testbed.proxies.slice(0, 1),
+    });
+  };
   // When the user picks a card we set both cloudAccountId AND cloud, so the
   // region/proxy/vm-size lookups in updateTestbedState pick up the right
   // provider on the next update.
@@ -75,7 +94,21 @@ export function TestbedRow({
       {/* ── Row 1: Cloud account combobox ──────────────────────────────── */}
       <div className="flex items-center gap-2 mb-2">
         <span className="text-[10px] text-gray-500 w-3">{index + 1}</span>
-        <span className="text-[11px] text-gray-400">Cloud account</span>
+        <span className="text-[11px] text-gray-400">{isDocker ? 'Provider' : 'Cloud account'}</span>
+        {dockerAvailable && (
+          <button
+            type="button"
+            onClick={selectDocker}
+            aria-pressed={isDocker}
+            className={`px-2 py-0.5 text-[11px] border transition-colors ${
+              isDocker
+                ? 'bg-purple-500/10 border-purple-500/50 text-purple-300'
+                : 'border-gray-700 text-gray-400 hover:text-gray-300'
+            }`}
+          >
+            {DOCKER_LABEL}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => onRemove(testbed.key)}
@@ -85,12 +118,18 @@ export function TestbedRow({
         </button>
       </div>
 
-      <CloudAccountCombobox
-        projectId={projectId}
-        cloudAccounts={cloudAccounts}
-        selectedAccountId={testbed.cloudAccountId}
-        onSelect={selectAccount}
-      />
+      {isDocker ? (
+        <p className="text-[11px] text-gray-500">
+          A target container on the control-plane host — no cloud account, no cost. One container = one proxy stack.
+        </p>
+      ) : (
+        <CloudAccountCombobox
+          projectId={projectId}
+          cloudAccounts={cloudAccounts}
+          selectedAccountId={testbed.cloudAccountId}
+          onSelect={selectAccount}
+        />
+      )}
 
       {/* ── Row 2: Region / Topology / Size / OS ───────────────────────── */}
       <div className="mt-3 flex items-center gap-2 flex-wrap">
@@ -130,6 +169,7 @@ export function TestbedRow({
             <button
               key={os}
               type="button"
+              disabled={isDocker && os === 'windows'}
               onClick={() => onUpdate(testbed.key, { os })}
               className={`px-2.5 py-1 text-xs border transition-colors ${
                 testbed.os === os
@@ -146,7 +186,7 @@ export function TestbedRow({
       </div>
 
       {/* ── Existing VM checkbox ───────────────────────────────────────── */}
-      <div className="mt-2">
+      {!isDocker && <div className="mt-2">
         <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
           <input
             type="checkbox"
@@ -165,7 +205,7 @@ export function TestbedRow({
             className="mt-1 bg-[var(--bg-base)] border border-gray-700 px-2 py-1 text-xs text-gray-300 w-64 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
           />
         )}
-      </div>
+      </div>}
 
       {/* ── Reverse Proxies toggle buttons ─────────────────────────────── */}
       <div className="mt-3">
@@ -180,9 +220,12 @@ export function TestbedRow({
               type="button"
               onClick={() => {
                 const current = testbed.proxies;
-                const next = current.includes(p)
-                  ? current.filter(x => x !== p)
-                  : [...current, p];
+                // Docker (local): one container = one stack → single-select.
+                const next = isDocker
+                  ? (current.includes(p) ? [] : [p])
+                  : current.includes(p)
+                    ? current.filter(x => x !== p)
+                    : [...current, p];
                 onUpdate(testbed.key, { proxies: next });
               }}
               className={`px-2.5 py-1 text-xs border transition-colors ${

@@ -4,7 +4,13 @@ export const REGIONS: Record<string, string[]> = {
   Azure: ['eastus', 'eastus2', 'westus2', 'westus3', 'centralus', 'northeurope', 'westeurope', 'southeastasia', 'japaneast', 'australiaeast'],
   AWS: ['us-east-1', 'us-east-2', 'us-west-2', 'eu-west-1', 'eu-central-1', 'ap-southeast-1', 'ap-northeast-1', 'ap-southeast-2'],
   GCP: ['us-central1', 'us-east1', 'us-west1', 'europe-west1', 'europe-west4', 'asia-southeast1', 'asia-northeast1', 'australia-southeast1'],
+  // Docker (local): one host, one "region". Offered only when the control
+  // plane reports docker_provider (see hooks/useDockerProvider).
+  Docker: ['local'],
 };
+
+/** Wizard cloud label for the docker provider (wire value: `docker`). */
+export const DOCKER_CLOUD_LABEL = 'Docker';
 
 export const TOPOLOGIES = ['Loopback', 'Same-region'] as const;
 
@@ -42,6 +48,9 @@ export const INSTANCE_TYPES: Record<string, InstanceType[]> = {
     { id: 'e2-standard-2', hint: '2 vCPU · 8 GiB' },
     { id: 'e2-standard-4', hint: '4 vCPU · 16 GiB' },
     { id: 'e2-standard-8', hint: '8 vCPU · 32 GiB' },
+  ],
+  Docker: [
+    { id: 'container', hint: 'shares the control-plane host' },
   ],
 };
 
