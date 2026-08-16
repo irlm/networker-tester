@@ -131,23 +131,25 @@ jobs:
           pwsh -NoProfile -File lab/native/lab-native.ps1 @labArgs
           exit $LASTEXITCODE
 
-      # Diagnostic: what does the Windows target negotiate for HTTP/2 — bare
-      # endpoint vs through IIS (the first run showed http2 0/2 through IIS while
-      # the bare endpoint passed). curl.exe (schannel) prints the ALPN choice.
+      # Diagnostic: HTTP version the Windows target negotiates — bare endpoint
+      # vs through IIS (this is how the tester's missing :scheme/:authority on
+      # h2 was pinned to http.sys). curl.exe (schannel) prints the ALPN choice.
       - name: HTTP/2 diagnostics (curl --http2 against 8443 and IIS 8445)
         if: always()
         continue-on-error: true
         shell: pwsh
         run: |
-          foreach ($u in 'https://127.0.0.1:8443/health', 'https://127.0.0.1:8445/health', 'https://127.0.0.1:8445/index.html', 'https://localhost:8445/health') {
+          foreach ($u in 'https://127.0.0.1:8443/health', 'https://127.0.0.1:8445/health', 'https://127.0.0.1:8445/index.html') {
             Write-Host "===== curl --http2 $u"
-            & curl.exe -sk --http2 -o NUL -w "http_version=%{http_version} code=%{http_code} ssl=%{ssl_verify_result}`n" $u
-            & curl.exe -skv --http2 -o NUL $u 2>&1 | Select-String -Pattern 'ALPN|HTTP/2|HTTP/1|SSL connection|cipher|GOAWAY|error' | ForEach-Object { "  $_" }
+            $out = & curl.exe -sk --http2 -o NUL -w "http_version=%{http_version} code=%{http_code}" $u 2>&1
+            Write-Host "  $out"
+            $v = & curl.exe -skv --http2 -o NUL $u 2>&1 | Out-String
+            ($v -split "`n") | Where-Object { $_ -match 'ALPN|HTTP/2|HTTP/1\.1|GOAWAY|RST|error' } | ForEach-Object { Write-Host "  $_" }
           }
-          Write-Host "===== schannel cipher suites (first 15)"
-          Get-TlsCipherSuite | Select-Object -First 15 -ExpandProperty Name
           Write-Host "===== HTTPERR log tail"
-          Get-ChildItem C:\Windows\System32\LogFiles\HTTPERR -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1 | ForEach-Object { Get-Content $_.FullName -Tail 30 }
+          $f = Get-ChildItem C:\Windows\System32\LogFiles\HTTPERR -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1
+          if ($f) { Get-Content $f.FullName -Tail 30 } else { Write-Host '  (no HTTPERR log)' }
+          exit 0
 
       - name: Validate (lab/validate.sh through Git Bash)
         run: |
