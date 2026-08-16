@@ -117,7 +117,16 @@ public sealed class AgentWorker(
         var capabilities = RunnerCapabilities.Current;
         try
         {
+            // Heartbeat IMMEDIATELY on connect, then every interval. The control
+            // plane learns the agent's version (and tool inventory) only from
+            // heartbeats and its dispatcher's version gate treats an unknown
+            // version as incompatible — so a freshly (re)connected agent was
+            // undispatchable for up to one full interval (30s): a runner the
+            // create-tester flow had just marked `running` silently lost the
+            // first launches pinned to it (lab phase 5, 2026-08-16). Same lossy
+            // TrySend semantics as the periodic sends below.
             sink.TrySend(new HeartbeatMessage(Load: null, Version: AgentVersion.Current, Capabilities: capabilities));
+
             while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false))
             {
                 // Deliberately lossy: with the outbound channel on

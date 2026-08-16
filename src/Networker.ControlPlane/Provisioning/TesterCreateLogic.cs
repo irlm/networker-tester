@@ -65,6 +65,45 @@ public static class TesterCreateLogic
     }
 
     /// <summary>
+    /// Docker (local) create gating: the provider must be enabled
+    /// (<c>DASHBOARD_DOCKER_PROVIDER=1</c>) and the body must not bind a cloud
+    /// account / connection (there is nothing to authenticate against — the
+    /// control plane talks to its own docker daemon). Returns the 400 message,
+    /// or null when the docker create may proceed.
+    /// </summary>
+    public static string? ValidateDockerCreate(bool dockerEnabled, Guid? cloudAccountId, Guid? cloudConnectionId)
+    {
+        if (!dockerEnabled)
+        {
+            return $"unsupported cloud provider: {DockerProviderOptions.CloudName} "
+                   + $"(the Docker (local) provider is disabled on this control plane — set {DockerProviderOptions.EnableVar}=1)";
+        }
+        if (cloudAccountId is not null || cloudConnectionId is not null)
+        {
+            return "cloud 'docker' does not use a cloud account or connection; omit cloud_account_id / cloud_connection_id";
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Pin the docker-only fields: region <c>local</c>, vm_size <c>container</c>,
+    /// requested_os <c>ubuntu-24.04</c> / <c>server</c> (the runner image), no
+    /// account. Whatever the client sent for those is cosmetic and ignored.
+    /// </summary>
+    public static Endpoints.TesterWriteEndpoints.CreateTesterBody NormalizeDockerBody(
+        Endpoints.TesterWriteEndpoints.CreateTesterBody body) =>
+        body with
+        {
+            Cloud = DockerProviderOptions.CloudName,
+            Region = DockerProviderOptions.Region,
+            VmSize = DockerProviderOptions.VmSize,
+            RequestedOs = DockerProviderOptions.RequestedOs,
+            RequestedVariant = "server",
+            CloudAccountId = null,
+            CloudConnectionId = null,
+        };
+
+    /// <summary>
     /// Resolved column values after the Rust insert's COALESCE defaults
     /// (db/project_testers.rs <c>insert</c>): vm_size 'Standard_B2s', hour 23,
     /// auto_probe FALSE, requested_os 'ubuntu-24.04', requested_variant 'server'.

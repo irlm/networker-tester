@@ -107,6 +107,14 @@ anything touching dispatch, the agent, the tester, or the installer stacks:
 ./lab/lab.sh down --volumes
 ```
 
+The lab also turns on the feature-flagged **Docker (local) cloud provider**
+(`DASHBOARD_DOCKER_PROVIDER=1`; prod never sets it): creating a runner with
+cloud `docker` or deploying a `provider: "docker"` endpoint from the UI/API
+makes the control plane `docker run` the lab images through the SAME
+create-tester / deployment / lifecycle / reaper paths as Azure/AWS/GCP
+(`Provisioning/DockerComputeProvisioner.cs`, routed by
+`RoutingComputeProvisioner`). `validate.sh` phase 5 covers it end to end.
+
 Cross-stack tables live in `shared/` and are drift-guarded on every side:
 `modes.json` (modes), `http-stacks.json` (proxy stack ports + h3), and
 `tester-schema.postgres.sql` (tester V001–V005 DDL the control plane

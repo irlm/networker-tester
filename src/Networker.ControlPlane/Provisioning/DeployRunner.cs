@@ -92,6 +92,24 @@ public sealed class DeployRunner
     public async Task<IReadOnlyList<string>> RunDeploymentAsync(
         Guid deploymentId, string deployJson, CancellationToken ct)
     {
+        // Docker (local) provider: endpoints with provider "docker" become target
+        // containers on the control-plane host — no install.sh, no VM. Same
+        // terminal contract (status/endpoint_ips/log/DeployComplete) as the
+        // shell path so the proxy resolver, the orchestrator's readiness gate
+        // and the UI see no difference.
+        var dockerPlan = DockerDeployPlan.TryParse(deployJson, out var dockerPlanError);
+        if (dockerPlanError is not null)
+        {
+            _logger.LogWarning("Deployment {DeploymentId} rejected: {Error}", deploymentId, dockerPlanError);
+            await FinishAsync(deploymentId, success: false, ips: [], log: dockerPlanError, error: dockerPlanError, ct)
+                .ConfigureAwait(false);
+            return [];
+        }
+        if (dockerPlan is not null)
+        {
+            return await RunDockerDeploymentAsync(deploymentId, dockerPlan, ct).ConfigureAwait(false);
+        }
+
         var deployFile = Path.Combine(Path.GetTempPath(), $"deploy-{deploymentId}.json");
         try
         {
@@ -175,6 +193,136 @@ public sealed class DeployRunner
             deploymentId, success ? "completed" : "failed", string.Join(",", output.EndpointIps));
 
         return output.EndpointIps;
+    }
+
+    // ── Docker (local) provider ──────────────────────────────────────────────
+
+    /// <summary>
+    /// Start one target container per docker endpoint, gate each on its
+    /// healthcheck, and finish the deployment exactly like the shell path
+    /// (<c>completed</c> + <c>endpoint_ips</c> = container ips, log streamed via
+    /// <see cref="DeployLog"/>). Any failure force-removes the containers this
+    /// deployment already started (nothing to bill, but nothing to leak either)
+    /// and records <c>failed</c>.
+    /// </summary>
+    private async Task<IReadOnlyList<string>> RunDockerDeploymentAsync(
+        Guid deploymentId, DockerDeployPlan plan, CancellationToken ct)
+    {
+        var output = new DeployOutput();
+        void Log(string line, string stream = "stdout")
+        {
+            if (output.ProcessLine(line, stream))
+            {
+                _bus.Publish(new DeployLog(deploymentId, line, stream));
+            }
+        }
+
+        DockerComputeProvisioner? docker;
+        string? projectId;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            docker = scope.ServiceProvider.GetService<DockerComputeProvisioner>();
+            var db = scope.ServiceProvider.GetRequiredService<NetworkerDbContext>();
+            projectId = await db.Deployments.AsNoTracking()
+                .Where(d => d.DeploymentId == deploymentId)
+                .Select(d => d.ProjectId)
+                .FirstOrDefaultAsync(ct)
+                .ConfigureAwait(false);
+        }
+
+        if (docker is null || !docker.Options.Enabled)
+        {
+            var msg = $"docker endpoints require the Docker (local) provider ({DockerProviderOptions.EnableVar}=1) on this control plane";
+            _logger.LogWarning("{Message} (deployment {DeploymentId})", msg, deploymentId);
+            await FinishAsync(deploymentId, success: false, ips: [], log: msg, error: msg, ct).ConfigureAwait(false);
+            return [];
+        }
+
+        await SetStatusAsync(deploymentId, "running", ct).ConfigureAwait(false);
+        Log("Deployment started...");
+        var network = await docker.ResolveNetworkAsync(ct).ConfigureAwait(false);
+        Log($"provider: docker (local) — starting {plan.Endpoints.Count} target container(s) on network '{network}'");
+
+        using var flushCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var flusher = FlushLogPeriodicallyAsync(deploymentId, output, flushCts.Token);
+
+        var ips = new List<string>();
+        var created = new List<string>();
+        string? error = null;
+        try
+        {
+            foreach (var ep in plan.Endpoints)
+            {
+                var image = docker.Options.TargetImageFor(ep.Stack);
+                Log($"endpoints[{ep.Index}] {ep.Label}: docker run {image} (TARGET_STACK={DockerComputeProvisioner.TargetStackEnv(ep.Stack)})");
+                var res = await docker.CreateTargetAsync(
+                    new DockerComputeProvisioner.TargetContainerRequest(projectId ?? string.Empty, deploymentId, ep.Label, ep.Stack), ct)
+                    .ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(res.ResourceId))
+                {
+                    created.Add(res.ResourceId);
+                }
+                if (!res.Success)
+                {
+                    error = res.Error ?? "docker run failed";
+                    Log($"ERROR: {error}", "stderr");
+                    break;
+                }
+                Log($"container {res.ResourceId} started at {res.PublicIp} — waiting for health");
+                var healthErr = await docker.WaitHealthyAsync(res.ResourceId!, line => Log(line), ct).ConfigureAwait(false);
+                if (healthErr is not null)
+                {
+                    error = healthErr;
+                    Log($"ERROR: {healthErr}", "stderr");
+                    break;
+                }
+                var stackNote = ep.Stack is null
+                    ? "bare endpoint 8080/8443"
+                    : $"{ep.Stack} on :{ProvisioningOrchestrator.ProxyHttpsPort(ep.Stack)}";
+                Log($"endpoint_ip: {res.PublicIp} ({ep.Label}, {stackNote})");
+                ips.Add(res.PublicIp!);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            foreach (var name in created)
+            {
+                await docker.RemoveContainerAsync(name, CancellationToken.None).ConfigureAwait(false);
+            }
+            await FinishAsync(deploymentId, success: false, ips: [], log: output.FullLog, error: "Deployment cancelled", ct)
+                .ConfigureAwait(false);
+            throw;
+        }
+        finally
+        {
+            flushCts.Cancel();
+            try
+            {
+                await flusher.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // normal
+            }
+        }
+
+        if (error is not null)
+        {
+            foreach (var name in created)
+            {
+                Log($"removing {name} after failure", "stderr");
+                await docker.RemoveContainerAsync(name, CancellationToken.None).ConfigureAwait(false);
+            }
+            await FinishAsync(deploymentId, success: false, ips: [], log: output.FullLog, error: error, ct).ConfigureAwait(false);
+            _logger.LogInformation("Deployment {DeploymentId} (docker) finished status=failed: {Error}", deploymentId, error);
+            return [];
+        }
+
+        Log($"deployed {ips.Count} docker target(s): {string.Join(", ", ips)}");
+        await FinishAsync(deploymentId, success: true, ips, output.FullLog, error: null, ct).ConfigureAwait(false);
+        _logger.LogInformation(
+            "Deployment {DeploymentId} (docker) finished status=completed ips={Ips}", deploymentId, string.Join(",", ips));
+        return ips;
     }
 
     // ── Process shell-out (hardened, streamed) ───────────────────────────────

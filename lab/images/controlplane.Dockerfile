@@ -29,14 +29,27 @@ RUN --mount=type=cache,target=/root/.nuget/packages \
       -c Release --no-restore -o /app
 
 FROM ${DOTNET_RUNTIME_IMAGE} AS runtime
-# curl for the compose healthcheck + `lab.sh` diagnostics; the provisioning
-# code shells out to az/aws/gcloud + install.sh — deliberately NOT installed:
-# cloud provisioning is out of scope for the lab (runners/targets are docker
-# containers registered directly), and a missing CLI is a captured
-# ProvisionResult failure, never a crash.
+# curl for the compose healthcheck + `lab.sh` diagnostics; the cloud
+# provisioning code shells out to az/aws/gcloud + install.sh — deliberately NOT
+# installed: cloud provisioning is out of scope for the lab, and a missing CLI
+# is a captured ProvisionResult failure, never a crash.
+#
+# The docker CLI IS installed (static binary, arch-aware) for the feature-
+# flagged Docker (local) provider: with DASHBOARD_DOCKER_PROVIDER=1 and the
+# host's /var/run/docker.sock mounted, the control plane provisions runner /
+# target containers through the SAME create-tester / deployment paths it uses
+# for Azure/AWS/GCP (validate.sh phase 5). Only the client binary — no daemon.
+ARG DOCKER_CLI_VERSION=27.5.1
 RUN apt-get update -qq \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends curl ca-certificates \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ && arch="$(dpkg --print-architecture)" \
+ && case "$arch" in amd64) darch=x86_64 ;; arm64) darch=aarch64 ;; *) echo "unsupported arch $arch" >&2; exit 1 ;; esac \
+ && curl -fsSL "https://download.docker.com/linux/static/stable/${darch}/docker-${DOCKER_CLI_VERSION}.tgz" -o /tmp/docker.tgz \
+ && tar -xzf /tmp/docker.tgz -C /tmp docker/docker \
+ && install -m 0755 /tmp/docker/docker /usr/local/bin/docker \
+ && rm -rf /tmp/docker /tmp/docker.tgz \
+ && docker --version
 WORKDIR /app
 COPY --from=build /app .
 ENV ASPNETCORE_URLS=http://0.0.0.0:5030 \
