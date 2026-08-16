@@ -12,6 +12,7 @@ import { api } from '../api/client';
 import { testersApi, type CreateTesterBody } from '../api/testers';
 import type { CloudAccountSummary } from '../api/types';
 import { CloudAccountCombobox } from './wizard/CloudAccountCombobox';
+import { useDockerProvider, DOCKER_CLOUD, DOCKER_REGION, DOCKER_LABEL } from '../hooks/useDockerProvider';
 import {
   REGIONS,
   INSTANCE_TYPES,
@@ -51,10 +52,13 @@ export interface InfraDeployWizardProps {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-function providerToCloud(p: string): 'Azure' | 'AWS' | 'GCP' {
+type WizardCloud = 'Azure' | 'AWS' | 'GCP' | 'Docker';
+
+function providerToCloud(p: string): WizardCloud {
   const lp = p.toLowerCase();
   if (lp === 'aws') return 'AWS';
   if (lp === 'gcp') return 'GCP';
+  if (lp === DOCKER_CLOUD) return 'Docker';
   return 'Azure';
 }
 
@@ -101,7 +105,11 @@ export function InfraDeployWizard({
   // Cloud account
   const [cloudAccounts, setCloudAccounts] = useState<CloudAccountSummary[]>([]);
   const [accountId, setAccountId] = useState(prefillUpgrade?.cloudAccountId ?? '');
-  const [cloud, setCloud] = useState<'Azure' | 'AWS' | 'GCP'>(prefillUpgrade?.cloud ?? 'Azure');
+  const [cloud, setCloud] = useState<WizardCloud>(prefillUpgrade?.cloud ?? 'Azure');
+  // Docker (local) — feature-flagged, account-less provider (containers on the
+  // control-plane host). Selected instead of a cloud account on step 2.
+  const dockerAvailable = useDockerProvider();
+  const useDocker = cloud === 'Docker';
 
   // Region / instance / OS
   const [region, setRegion] = useState(prefillUpgrade?.region ?? REGIONS.Azure[0]);
@@ -121,7 +129,7 @@ export function InfraDeployWizard({
   // (user-caught 2026-08-12). Languages are Linux-only in this path. Runs in
   // the OS/cloud CHANGE HANDLERS (not an effect — react-hooks/set-state-in-
   // effect), so it fires exactly when the incompatibility can appear.
-  const pruneForPlatform = (nextOs: 'linux' | 'windows', nextCloud: 'Azure' | 'AWS' | 'GCP') => {
+  const pruneForPlatform = (nextOs: 'linux' | 'windows', nextCloud: WizardCloud) => {
     const valid = nextOs === 'windows' ? windowsProxiesFor(nextCloud) : LINUX_PROXIES;
     setProxies(prev => {
       const kept = prev.filter(p => (valid as readonly string[]).includes(p));
@@ -208,7 +216,7 @@ export function InfraDeployWizard({
   // ── Step validation ────────────────────────────────────────────────────
   const canProceed = useMemo(() => {
     if (step === 0) return true;
-    if (step === 1) return accountId !== '';
+    if (step === 1) return accountId !== '' || useDocker;
     if (step === 2) return region !== '' && vmSize !== '';
     if (step === 3) {
       if (kind === 'target') {
@@ -219,7 +227,7 @@ export function InfraDeployWizard({
       return runnerName.trim().length > 0;
     }
     return true;
-  }, [step, accountId, region, vmSize, kind, proxies, useExistingVm, existingVmIp, runnerName]);
+  }, [step, accountId, useDocker, region, vmSize, kind, proxies, useExistingVm, existingVmIp, runnerName]);
 
   // ── Cloud account select handler ───────────────────────────────────────
   const onSelectAccount = (acct: CloudAccountSummary) => {
@@ -237,6 +245,19 @@ export function InfraDeployWizard({
     setRegion(validRegion);
     setVmSize(validSku);
     pruneForPlatform(os, c);
+  };
+
+  // ── Docker (local) select handler — no account; pin region/size/os ─────
+  const onSelectDocker = () => {
+    setAccountId('');
+    setCloud('Docker');
+    setRegion(DOCKER_REGION);
+    setVmSize(defaultInstanceType('Docker'));
+    setOs('linux');
+    setUseExistingVm(false);
+    // Target images ship the endpoint + proxy stacks only — no reference APIs.
+    setLanguages([]);
+    pruneForPlatform('linux', 'Docker');
   };
 
   // ── Compute the auto-suggested deployment name for the review step ─────
@@ -257,9 +278,13 @@ export function InfraDeployWizard({
         const config: Record<string, unknown> = {
           version: 1,
           tester: { provider: 'local' },
-          cloud_account_id: accountId,
+          ...(useDocker ? {} : { cloud_account_id: accountId }),
           endpoints: [
             (() => {
+              if (useDocker) {
+                // One target container per deployment (one ip = one stack).
+                return { provider: DOCKER_CLOUD, http_stacks: proxies, docker: { os: 'linux' } };
+              }
               // languages ride both OSes since v0.28.204 (per-OS sets are
               // enforced by the picker, the 422 preflight, and install.sh).
               const langs = languages.length > 0 ? { languages } : {};
@@ -311,8 +336,8 @@ export function InfraDeployWizard({
           cloud: cloud.toLowerCase(),
           region,
           vm_size: vmSize,
-          requested_os: os,
-          cloud_account_id: accountId || undefined,
+          requested_os: useDocker ? 'ubuntu-24.04' : os,
+          cloud_account_id: useDocker ? undefined : (accountId || undefined),
           ...(autoShutdownEnabled ? { auto_shutdown_local_hour: autoShutdownHour } : {}),
         };
         const result = await testersApi.createTester(projectId, body);
@@ -438,6 +463,24 @@ export function InfraDeployWizard({
             <div>
               <h4 className="text-base font-semibold text-gray-100 mb-1">Which cloud account?</h4>
               <p className="text-xs text-gray-400 mb-4">Pick from validated accounts. The combobox supports type-ahead — try typing "azure" or "prod".</p>
+              {dockerAvailable && (
+                <button
+                  type="button"
+                  onClick={onSelectDocker}
+                  aria-pressed={useDocker}
+                  className={`w-full text-left border p-3 mb-3 transition-colors ${
+                    useDocker
+                      ? 'bg-purple-500/10 border-purple-500/50'
+                      : 'border-gray-800 hover:border-gray-600'
+                  }`}
+                >
+                  <span className="inline-block text-[9px] tracking-wider px-1.5 py-0.5 border mb-1 bg-purple-500/15 border-purple-500/40 text-purple-300">LOCAL</span>
+                  <h5 className="text-sm font-medium text-gray-100">{DOCKER_LABEL}</h5>
+                  <p className="text-xs text-gray-400">
+                    A container on the control-plane host — no cloud account, no cost. Region <span className="text-gray-300">local</span>; Ubuntu 24.04 images built by the lab.
+                  </p>
+                </button>
+              )}
               <CloudAccountCombobox
                 projectId={projectId}
                 cloudAccounts={cloudAccounts}
@@ -483,6 +526,7 @@ export function InfraDeployWizard({
                       <button
                         key={o}
                         type="button"
+                        disabled={useDocker && o === 'windows'}
                         onClick={() => { setOs(o); pruneForPlatform(o, cloud); }}
                         className={`px-3 py-1.5 text-xs border transition-colors ${
                           os === o
@@ -496,12 +540,17 @@ export function InfraDeployWizard({
                       </button>
                     ))}
                   </div>
-                  {kind === 'target' && (
+                  {useDocker && (
+                    <p className="text-[11px] text-gray-500 mt-2">
+                      ⓘ Docker (local) targets and runners are Linux containers (Ubuntu 24.04 images).
+                    </p>
+                  )}
+                  {kind === 'target' && !useDocker && (
                     <p className="text-[11px] text-gray-500 mt-2">
                       ⓘ Linux unlocks all 5 proxy stacks. Windows offers IIS{cloud === 'Azure' ? ', Caddy, and Traefik' : cloud === 'AWS' ? ' only' : ' (not yet wired on GCP)'} — nginx, HAProxy, and Apache are Linux-only.
                     </p>
                   )}
-                  {kind === 'runner' && (
+                  {kind === 'runner' && !useDocker && (
                     <p className="text-[11px] text-gray-500 mt-2">
                       ⓘ Runners are typically Linux. Windows runners are supported but require additional setup.
                     </p>
@@ -521,7 +570,9 @@ export function InfraDeployWizard({
                 ▢ Target-only fields
               </div>
 
-              <label className="block text-xs text-gray-400 mb-2">Reverse proxies</label>
+              <label className="block text-xs text-gray-400 mb-2">
+                {useDocker ? 'Reverse proxy (one container = one stack)' : 'Reverse proxies'}
+              </label>
               <div className="flex flex-wrap gap-2 mb-4">
                 {validProxyList.map(p => {
                   const active = proxies.includes(p);
@@ -529,7 +580,9 @@ export function InfraDeployWizard({
                     <button
                       key={p}
                       type="button"
-                      onClick={() => setProxies(prev => active ? prev.filter(x => x !== p) : [...prev, p])}
+                      onClick={() => setProxies(prev => useDocker
+                        ? (active ? [] : [p])
+                        : (active ? prev.filter(x => x !== p) : [...prev, p]))}
                       className={`px-3 py-1 text-xs border transition-colors ${
                         active
                           ? 'bg-cyan-900/40 border-cyan-700 text-cyan-300'
@@ -545,7 +598,7 @@ export function InfraDeployWizard({
                 <p className="text-xs text-yellow-500 mb-3">At least one proxy is required</p>
               )}
 
-              <>
+              {!useDocker && <>
                   <label className="block text-xs text-gray-400 mb-1">
                     Reference APIs <span className="text-gray-500">(apibench targets — optional)</span>
                   </label>
@@ -583,9 +636,9 @@ export function InfraDeployWizard({
                       );
                     })}
                   </div>
-              </>
+              </>}
 
-              <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer mb-2">
+              {!useDocker && <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer mb-2">
                 <input
                   type="checkbox"
                   checked={useExistingVm}
@@ -594,7 +647,7 @@ export function InfraDeployWizard({
                   disabled={upgradeMode}
                 />
                 Use existing VM (install over SSH/LAN — no new VM provisioned)
-              </label>
+              </label>}
               {useExistingVm && (
                 <input
                   type="text"
@@ -672,7 +725,7 @@ export function InfraDeployWizard({
                     ? <><span className="text-[9px] px-1.5 py-0.5 bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 mr-2">▢ TARGET</span>Server-under-test</>
                     : <><span className="text-[9px] px-1.5 py-0.5 bg-purple-500/15 border border-purple-500/40 text-purple-300 mr-2">↗ RUNNER</span>Load-generator agent</>
                   },
-                  { k: 'Cloud account', v: cloudAccounts.find(a => a.account_id === accountId)?.name ?? '—' },
+                  { k: 'Cloud account', v: useDocker ? <span className="text-purple-300">{DOCKER_LABEL}</span> : (cloudAccounts.find(a => a.account_id === accountId)?.name ?? '—') },
                   { k: 'Region', v: region },
                   {
                     k: 'Instance type',

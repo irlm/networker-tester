@@ -175,6 +175,8 @@ public static partial class TesterWriteEndpoints
                 "aws" => root.TryGetProperty("State", out var st) && st.TryGetProperty("Name", out var n)
                     ? n.GetString() : null,
                 "gcp" => root.TryGetProperty("status", out var s) ? s.GetString() : null,
+                // DockerComputeProvisioner.NormalizedShowJson: {"powerState": running|stopped}
+                "docker" => root.TryGetProperty("powerState", out var dps) ? dps.GetString() : null,
                 _ => null,
             };
             if (string.IsNullOrEmpty(raw))

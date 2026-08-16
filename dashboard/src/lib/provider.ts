@@ -12,6 +12,9 @@ const TEXT: Record<string, string> = {
   azure: 'text-blue-400',
   aws: 'text-orange-400',
   gcp: 'text-green-400',
+  // Docker (local) — the feature-flagged zero-cost provider (containers on
+  // the control-plane host); brand-ish purple so it never reads as a status.
+  docker: 'text-purple-400',
 };
 
 export function cloudProviderText(provider: string): string {
@@ -23,6 +26,7 @@ export function cloudProviderBadge(provider: string): string {
     case 'azure': return 'bg-blue-500/20 text-blue-400';
     case 'aws': return 'bg-orange-500/20 text-orange-400';
     case 'gcp': return 'bg-green-500/20 text-green-400';
+    case 'docker': return 'bg-purple-500/20 text-purple-400';
     default: return 'bg-gray-500/20 text-gray-400';
   }
 }

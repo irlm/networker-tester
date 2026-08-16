@@ -104,7 +104,10 @@ pub async fn deploy_to_vm(ip: &str, token: &str) -> Result<()> {
     tracing::info!("Deploying API token to VM {}", ip);
 
     // Write token to a local temp file
-    let tmp_path = format!("/tmp/bench-token-{}.tmp", &token[..8]);
+    let tmp_path = std::env::temp_dir()
+        .join(format!("bench-token-{}.tmp", &token[..8]))
+        .to_string_lossy()
+        .into_owned();
     tokio::fs::write(&tmp_path, token)
         .await
         .context("Failed to write temp token file")?;

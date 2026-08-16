@@ -22,43 +22,60 @@ namespace Networker.ControlPlane.Realtime.RawWs;
 /// </summary>
 public static class AttemptPersister
 {
-    /// <summary>The V005 slice of the tester schema (MthroughputResult +
-    /// ServerTimingResult.SrvCpuMs), applied lazily by the INGEST because in
-    /// the streamed-attempt deployment the tester never touches the DB — its
-    /// own migrate() (postgres.rs V005) only runs for DB-backed testers.
-    /// Idempotent DDL, mirrors the tester's V005_MIGRATION exactly.
-    /// Discovered live: v0.28.126 shipped the tester/read sides but nothing
-    /// created the table on the streamed path, so mthroughput/srv_cpu_ms
-    /// silently degraded to null.</summary>
-    private const string V005Ddl = """
-        CREATE TABLE IF NOT EXISTS MthroughputResult (
-            ServerId               UUID              NOT NULL,
-            AttemptId              UUID              NOT NULL,
-            RemoteAddr             VARCHAR(256)      NOT NULL,
-            CapacityDownMbps       DOUBLE PRECISION  NULL,
-            CapacityUpMbps         DOUBLE PRECISION  NULL,
-            ConnsDown              INT               NOT NULL,
-            ConnsUp                INT               NULL,
-            FairShareSpreadDownPct DOUBLE PRECISION  NULL,
-            FairShareSpreadUpPct   DOUBLE PRECISION  NULL,
-            CONSTRAINT PK_MthroughputResult PRIMARY KEY (ServerId),
-            CONSTRAINT FK_MthroughputResult_Attempt FOREIGN KEY (AttemptId)
-                REFERENCES RequestAttempt (AttemptId)
-        );
-        CREATE INDEX IF NOT EXISTS IX_MthroughputResult_AttemptId
-            ON MthroughputResult (AttemptId);
-        ALTER TABLE ServerTimingResult ADD COLUMN IF NOT EXISTS SrvCpuMs DOUBLE PRECISION NULL;
-        """;
+    /// <summary>
+    /// The full tester probe schema (V001–V005, PostgreSQL) — embedded copy of
+    /// <c>shared/tester-schema.postgres.sql</c>, which mirrors the
+    /// <c>networker-tester</c> crate's own migrations (guarded by a Rust unit
+    /// test). Applied lazily by the INGEST because on the streamed-attempt path
+    /// the tester never touches the DB — its own <c>migrate()</c> (postgres.rs)
+    /// only runs for DB-backed testers. Discovered live twice: v0.28.126
+    /// shipped the V005 read/write sides with nothing creating the table on the
+    /// streamed path, and lab/validate.sh showed a FRESH control-plane database
+    /// (docker/dev/new install without the install.sh psql seed) persisting 0
+    /// attempts forever because RequestAttempt did not exist (42P01 swallowed).
+    /// Every statement is idempotent DDL, so re-running on an existing
+    /// tester-created schema is a no-op.
+    /// </summary>
+    private const string TesterSchemaResource = "Networker.ControlPlane.shared.tester-schema.postgres.sql";
 
-    // 0 = unknown, 1 = V005 available, -1 = unavailable (pre-V001 schema
-    // absent or DDL denied) — probed once per process; the writes below are
-    // gated on it so a pre-V005 DB degrades exactly as before instead of
-    // aborting the whole attempt insert.
-    private static int _v005State;
+    /// <summary>Same advisory-lock key the tester's <c>PostgresBackend::migrate()</c>
+    /// takes, so a DB-backed tester and this ingest never run the DDL
+    /// concurrently (concurrent CREATE TABLE IF NOT EXISTS can still race on
+    /// pg_type). Taken as a transaction-scoped lock.</summary>
+    private const long TesterSchemaLockKey = 0x4E54505747524D31;
 
-    private static async Task<bool> EnsureV005Async(NpgsqlConnection conn, CancellationToken ct)
+    private static readonly Lazy<string> TesterSchemaSql = new(() =>
     {
-        var s = Volatile.Read(ref _v005State);
+        var asm = typeof(AttemptPersister).Assembly;
+        using var stream = asm.GetManifestResourceStream(TesterSchemaResource)
+            ?? throw new InvalidOperationException(
+                $"Embedded tester schema '{TesterSchemaResource}' missing — check the csproj EmbeddedResource entry.");
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    });
+
+    // 0 = unknown, 1 = schema present (V001–V005 ensured), -1 = unavailable
+    // (DDL denied / not Postgres) — probed once per process; the writes below
+    // are gated on it so a locked-down DB degrades exactly as before (skip,
+    // never abort the whole attempt insert or the live stream).
+    private static int _schemaState;
+
+    /// <summary>Test hook: forget the per-process probe result.</summary>
+    internal static void ResetSchemaProbeForTests() => Volatile.Write(ref _schemaState, 0);
+
+    /// <summary>The embedded schema text (for tests / diagnostics).</summary>
+    internal static string EmbeddedTesterSchema => TesterSchemaSql.Value;
+
+    /// <summary>
+    /// Ensure the tester probe schema exists (idempotent DDL under the tester's
+    /// migration advisory lock, one transaction) and record V001–V005 in the
+    /// tester's <c>_schema_versions</c> bookkeeping so a DB-backed tester that
+    /// later points at this database skips them. Returns whether the schema
+    /// (incl. V005) is available for the writes.
+    /// </summary>
+    private static async Task<bool> EnsureTesterSchemaAsync(NpgsqlConnection conn, CancellationToken ct)
+    {
+        var s = Volatile.Read(ref _schemaState);
         if (s != 0)
         {
             return s == 1;
@@ -66,29 +83,37 @@ public static class AttemptPersister
 
         try
         {
-            await using var cmd = new NpgsqlCommand(V005Ddl, conn);
-            await cmd.ExecuteNonQueryAsync(ct);
-            // Record the version for the tester-side migrator's bookkeeping;
-            // best-effort (the table exists on any tester-created schema).
-            try
+            await using (var tx = await conn.BeginTransactionAsync(ct))
             {
-                await using var rec = new NpgsqlCommand(
-                    "INSERT INTO _schema_versions (version) VALUES ('V005') ON CONFLICT DO NOTHING",
-                    conn);
-                await rec.ExecuteNonQueryAsync(ct);
+                await using (var lockCmd = new NpgsqlCommand("SELECT pg_advisory_xact_lock(@k)", conn, tx))
+                {
+                    lockCmd.Parameters.AddWithValue("k", TesterSchemaLockKey);
+                    await lockCmd.ExecuteNonQueryAsync(ct);
+                }
+                await using (var ddl = new NpgsqlCommand(TesterSchemaSql.Value, conn, tx))
+                {
+                    await ddl.ExecuteNonQueryAsync(ct);
+                }
+                // Bookkeeping for the tester-side migrator (same table + rows
+                // postgres.rs writes). Best-effort inside the same transaction.
+                await using (var rec = new NpgsqlCommand(
+                    "CREATE TABLE IF NOT EXISTS _schema_versions (version VARCHAR(20) NOT NULL PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now()); "
+                    + "INSERT INTO _schema_versions (version) VALUES ('V001'),('V002'),('V003'),('V004'),('V005') ON CONFLICT DO NOTHING",
+                    conn, tx))
+                {
+                    await rec.ExecuteNonQueryAsync(ct);
+                }
+                await tx.CommitAsync(ct);
             }
-            catch (PostgresException)
-            {
-                // No _schema_versions table (schema bootstrapped by this
-                // ingest, not a tester) — the IF NOT EXISTS DDL above is the
-                // real idempotence guard.
-            }
-            Volatile.Write(ref _v005State, 1);
+            Volatile.Write(ref _schemaState, 1);
             return true;
         }
         catch (PostgresException)
         {
-            Volatile.Write(ref _v005State, -1);
+            // Insufficient privilege / read-only replica / not our database:
+            // remember and degrade to the pre-existing behaviour (persist into
+            // whatever exists; 42P01 is skipped in PersistAsync).
+            Volatile.Write(ref _schemaState, -1);
             return false;
         }
     }
@@ -101,40 +126,41 @@ public static class AttemptPersister
             await conn.OpenAsync(ct);
         }
 
-        var v005 = await EnsureV005Async(conn, ct);
+        var v005 = await EnsureTesterSchemaAsync(conn, ct);
+
+        // RequestAttempt.RunId FKs to the tester-owned V001 `testrun` table
+        // (runid PK) — a DIFFERENT table from the control plane's `test_run`.
+        // DB-backed testers used to create it; the C# agent path never does,
+        // so the FK would fail (E2E dry-run finding). Upsert a minimal row in
+        // its own autocommit statement (idempotent, so it is safe outside the
+        // attempt transaction) BEFORE the attempt insert.
+        try
+        {
+            await EnsureTestRunRowAsync(conn, a, ct);
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+        {
+            // Tester probe schema absent and not creatable (DDL denied) —
+            // nothing to persist into; same skip posture as the reads.
+            return;
+        }
 
         await using var tx = await conn.BeginTransactionAsync(ct);
         try
         {
-            // RequestAttempt.RunId FKs to the tester-owned V001 `testrun` table
-            // (runid PK) — a DIFFERENT table from the control plane's `test_run`.
-            // DB-backed testers used to create it; the C# agent path never does,
-            // so the FK would fail (E2E dry-run finding). Upsert a minimal row
-            // (only runid/targeturl/targethost are NOT NULL) — nothing reads its
-            // target columns (the URL-test history joins on RunId only), so a
-            // best-effort host/url from the attempt is sufficient.
-            await ExecAsync(conn, tx, ct,
-                "INSERT INTO testrun (runid, targeturl, targethost) VALUES (@run, @url, @host) "
-                + "ON CONFLICT (runid) DO NOTHING",
-                p =>
-                {
-                    p.AddWithValue("run", a.RunId);
-                    p.AddWithValue("url", a.TargetUrl);
-                    p.AddWithValue("host", a.TargetHost);
-                });
-
             // Idempotent on AttemptId: a re-delivered attempt_event must not
             // duplicate rows. Only when the RequestAttempt is NEW do we write
             // its phase rows (their PKs are fresh uuids, so a conflict-skip on
             // the parent is the guard).
+            var shape = await DetectShapeAsync(conn, ct);
+            var extraCol = shape.ExtraJsonColumn is { } ec ? $", {ec}" : string.Empty;
+            var extraVal = shape.ExtraJsonColumn is not null ? ", @extra" : string.Empty;
             var inserted = await ExecAsync(conn, tx, ct,
-                """
-                INSERT INTO RequestAttempt
-                    (AttemptId, RunId, Protocol, SequenceNum, StartedAt, FinishedAt,
-                     Success, ErrorMessage, RetryCount, extrajson)
-                VALUES (@id, @run, @proto, @seq, @started, @finished, @ok, @err, @retry, @extra)
-                ON CONFLICT (AttemptId) DO NOTHING
-                """,
+                "INSERT INTO RequestAttempt "
+                + "(AttemptId, RunId, Protocol, SequenceNum, StartedAt, FinishedAt, "
+                + $"Success, ErrorMessage, RetryCount{extraCol}) "
+                + $"VALUES (@id, @run, @proto, @seq, @started, @finished, @ok, @err, @retry{extraVal}) "
+                + "ON CONFLICT (AttemptId) DO NOTHING",
                 p =>
                 {
                     p.AddWithValue("id", a.AttemptId);
@@ -146,8 +172,11 @@ public static class AttemptPersister
                     p.AddWithValue("ok", a.Success);
                     AddNullable(p, "err", a.ErrorMessage);
                     p.AddWithValue("retry", a.RetryCount);
-                    p.Add(new NpgsqlParameter("extra", NpgsqlDbType.Jsonb)
-                    { Value = (object?)a.ExtraJson ?? DBNull.Value });
+                    if (shape.ExtraJsonColumn is not null)
+                    {
+                        p.Add(new NpgsqlParameter("extra", NpgsqlDbType.Jsonb)
+                        { Value = (object?)a.ExtraJson ?? DBNull.Value });
+                    }
                 });
 
             if (inserted > 0)
@@ -164,6 +193,108 @@ public static class AttemptPersister
             // persist into; roll back and move on, same posture as the reads.
             await tx.RollbackAsync(ct);
         }
+    }
+
+    /// <summary>
+    /// The two places the fielded probe schema is known to diverge from the
+    /// tester's V001 DDL, detected once per process from
+    /// <c>information_schema.columns</c> instead of hard-coding either shape:
+    /// <list type="bullet">
+    ///   <item><see cref="ExtraJsonColumn"/>: the raw-attempt JSON column on
+    ///   <c>RequestAttempt</c> — <c>extrajson</c> on the live prod schema (dry-run
+    ///   verified 2026-07-28), <c>extra_json</c> where install.sh's psql seed
+    ///   created the tables, absent on a schema bootstrapped from the tester's
+    ///   V001–V005 (which never adds it). Null = don't write it.</item>
+    ///   <item><see cref="TestRunColumns"/>: which of the V001 NOT NULL
+    ///   <c>testrun</c> columns (startedat/modes/clientos/clientversion) exist,
+    ///   so the parent-row upsert satisfies them where they are declared (a fresh
+    ///   bootstrap rejects the historical 3-column insert with 23502 — lab
+    ///   finding) and stays minimal where they are not.</item>
+    /// </list>
+    /// </summary>
+    internal sealed record ProbeSchemaShape(string? ExtraJsonColumn, IReadOnlySet<string> TestRunColumns);
+
+    private static ProbeSchemaShape? _shape;
+
+    /// <summary>Test hook: forget the cached shape.</summary>
+    internal static void ResetShapeForTests() => Volatile.Write(ref _shape, null);
+
+    /// <summary>Pure shape derivation from lower-cased (table, column) pairs — unit-tested.</summary>
+    internal static ProbeSchemaShape DeriveShape(IEnumerable<(string Table, string Column)> columns)
+    {
+        var attempt = new HashSet<string>(StringComparer.Ordinal);
+        var testRun = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (table, column) in columns)
+        {
+            var t = table.ToLowerInvariant();
+            var c = column.ToLowerInvariant();
+            if (t == "requestattempt") attempt.Add(c);
+            else if (t == "testrun") testRun.Add(c);
+        }
+
+        var extra = attempt.Contains("extrajson") ? "extrajson"
+            : attempt.Contains("extra_json") ? "extra_json"
+            : null;
+        var wanted = new HashSet<string>(StringComparer.Ordinal) { "startedat", "modes", "clientos", "clientversion" };
+        wanted.IntersectWith(testRun);
+        return new ProbeSchemaShape(extra, wanted);
+    }
+
+    private static async Task<ProbeSchemaShape> DetectShapeAsync(NpgsqlConnection conn, CancellationToken ct)
+    {
+        if (Volatile.Read(ref _shape) is { } cached)
+        {
+            return cached;
+        }
+
+        var cols = new List<(string, string)>();
+        await using (var cmd = new NpgsqlCommand(
+            "SELECT table_name, column_name FROM information_schema.columns "
+            + "WHERE table_schema = current_schema() AND lower(table_name) IN ('requestattempt', 'testrun')",
+            conn))
+        await using (var reader = await cmd.ExecuteReaderAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+            {
+                cols.Add((reader.GetString(0), reader.GetString(1)));
+            }
+        }
+
+        var shape = DeriveShape(cols);
+        Volatile.Write(ref _shape, shape);
+        return shape;
+    }
+
+    /// <summary>
+    /// Upsert the tester-owned <c>testrun</c> parent row the RequestAttempt FK
+    /// needs, filling whichever of the V001 NOT NULL columns the live table
+    /// declares (see <see cref="ProbeSchemaShape"/>). Nothing reads these
+    /// columns beyond the FK / RunId (URL-test history), so best-effort values
+    /// from the attempt are sufficient. Autocommit + idempotent (ON CONFLICT
+    /// DO NOTHING), so it is safe outside the attempt transaction.
+    /// </summary>
+    private static async Task EnsureTestRunRowAsync(NpgsqlConnection conn, ParsedAttempt a, CancellationToken ct)
+    {
+        var shape = await DetectShapeAsync(conn, ct);
+        var cols = "runid, targeturl, targethost";
+        var vals = "@run, @url, @host";
+        if (shape.TestRunColumns.Contains("startedat")) { cols += ", startedat"; vals += ", @started"; }
+        if (shape.TestRunColumns.Contains("modes")) { cols += ", modes"; vals += ", @modes"; }
+        if (shape.TestRunColumns.Contains("clientos")) { cols += ", clientos"; vals += ", @os"; }
+        if (shape.TestRunColumns.Contains("clientversion")) { cols += ", clientversion"; vals += ", @ver"; }
+
+        await ExecAsync(conn, null, ct,
+            $"INSERT INTO testrun ({cols}) VALUES ({vals}) ON CONFLICT (runid) DO NOTHING",
+            p =>
+            {
+                p.AddWithValue("run", a.RunId);
+                p.AddWithValue("url", a.TargetUrl);
+                p.AddWithValue("host", a.TargetHost);
+                if (shape.TestRunColumns.Contains("startedat")) p.AddWithValue("started", a.StartedAt ?? DateTime.UtcNow);
+                if (shape.TestRunColumns.Contains("modes")) p.AddWithValue("modes", a.Protocol);
+                if (shape.TestRunColumns.Contains("clientos")) p.AddWithValue("os", "unknown");
+                if (shape.TestRunColumns.Contains("clientversion")) p.AddWithValue("ver", "unknown");
+            });
     }
 
     private static async Task WritePhasesAsync(
@@ -317,7 +448,7 @@ public static class AttemptPersister
     }
 
     private static async Task<int> ExecAsync(
-        NpgsqlConnection conn, NpgsqlTransaction tx, CancellationToken ct,
+        NpgsqlConnection conn, NpgsqlTransaction? tx, CancellationToken ct,
         string sql, Action<NpgsqlParameterCollection> bind)
     {
         await using var cmd = new NpgsqlCommand(sql, conn, tx);

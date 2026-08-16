@@ -59,7 +59,7 @@ use crate::metrics::{
     ResponsivenessResult,
 };
 use crate::runner::load_gen::{
-    connect_h2, empty_body, host_header, load_download_once, load_upload_once, mean, stddev,
+    absolute_uri, connect_h2, empty_body, load_download_once, load_upload_once, mean, stddev,
     H2Sender, H2Target, LoadDirection,
 };
 use crate::runner::throughput::ThroughputConfig;
@@ -642,11 +642,10 @@ async fn self_probe(cfg: &ResponsivenessConfig, state: &SharedState) -> Option<P
 
 /// GET the draft's 1-byte object (`/download?bytes=1`) and drain the response.
 async fn one_byte_get(cfg: &ResponsivenessConfig, mut sender: H2Sender) -> Result<(), String> {
-    let host = host_header(&cfg.base_url);
+    // Absolute URI: HTTP/2 needs :scheme/:authority (RFC 9113 §8.3.1).
     let req = Request::builder()
         .method("GET")
-        .uri("/download?bytes=1")
-        .header("host", &host)
+        .uri(absolute_uri(&cfg.base_url, "/download?bytes=1"))
         .header("user-agent", "networker-tester/responsiveness")
         .body(empty_body())
         .map_err(|e| e.to_string())?;

@@ -350,6 +350,18 @@ public sealed class AgentMessageProcessor
 
         agent.LastHeartbeat = DateTime.UtcNow;
         agent.Status = "online";
+        if (hb.Capabilities is { } caps)
+        {
+            // Runner tool inventory → agent.tags.capabilities (JSONB; additive,
+            // merged into whatever else the tags object carries). Guarded write:
+            // only when the stored inventory differs, so the steady-state
+            // heartbeat stays write-free.
+            var merged = AgentCapabilityTags.Merge(agent.Tags, caps);
+            if (merged != agent.Tags)
+            {
+                agent.Tags = merged;
+            }
+        }
         if (!string.IsNullOrEmpty(hb.Version))
         {
             agent.Version = hb.Version;

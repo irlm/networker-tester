@@ -3,7 +3,11 @@ use std::time::Duration;
 
 const SSH_CONNECT_TIMEOUT: &str = "15";
 const SSH_COMMAND_TIMEOUT: Duration = Duration::from_secs(1200); // 20 min — Chrome install on fresh VMs needs apt-get update + 50+ deps
-const SSH_CONTROL_DIR: &str = "/tmp/ssh-bench-ctl";
+/// SSH ControlMaster socket directory — under the OS temp dir (`/tmp` on
+/// Linux/macOS, `%TEMP%` on Windows) rather than a hard-coded `/tmp`.
+fn ssh_control_dir() -> std::path::PathBuf {
+    std::env::temp_dir().join("ssh-bench-ctl")
+}
 
 /// Resolve the SSH private key path. Overridable via `ORCH_SSH_KEY`; otherwise
 /// picks whichever of `$HOME/.ssh/id_ed25519`, `$HOME/.ssh/id_rsa`,
@@ -14,7 +18,10 @@ fn ssh_key_path() -> String {
     if let Ok(p) = std::env::var("ORCH_SSH_KEY") {
         return p;
     }
-    let home = std::env::var("HOME").unwrap_or_default();
+    // HOME on Unix, USERPROFILE on Windows.
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default();
     let candidates = [
         format!("{home}/.ssh/id_ed25519"),
         format!("{home}/.ssh/id_rsa"),
@@ -38,8 +45,11 @@ fn ssh_user() -> String {
 /// Get SSH args that enable ControlMaster multiplexing.
 /// All SSH/SCP connections to the same host reuse one TCP connection.
 fn ssh_control_args(ip: &str) -> Vec<String> {
-    let _ = std::fs::create_dir_all(SSH_CONTROL_DIR);
-    let socket = format!("{SSH_CONTROL_DIR}/ssh-{ip}");
+    let _ = std::fs::create_dir_all(ssh_control_dir());
+    let socket = ssh_control_dir()
+        .join(format!("ssh-{ip}"))
+        .to_string_lossy()
+        .into_owned();
     let key_path = ssh_key_path();
     vec![
         "-i".to_string(),

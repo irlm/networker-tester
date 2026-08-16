@@ -385,7 +385,13 @@ Assert-Equal $script:ReleaseTarget "x86_64-pc-windows-msvc" "Invoke-DiscoverSyst
 Assert-Equal $script:NetworkerVersion "v0.12.90" "Invoke-DiscoverSystem gets version from gh release list"
 Assert-True $script:RustExists "Invoke-DiscoverSystem detects Rust when cargo mock is present"
 
-# Test: gh auth fails -> falls back to source + InstallerVersion
+# Since v0.28.208 the installer no longer needs gh for release mode: when gh
+# is missing/unauthenticated it resolves the latest tag through the
+# unauthenticated GitHub API (Get-LatestReleaseTag) — the same fallback
+# install.sh has always had, and what a fresh Windows VM hits (no gh in-box).
+# These tests mock Invoke-RestMethod so they never touch the network.
+
+# Test: gh auth fails, GitHub API reachable -> still release mode via the API tag
 Reset-InstallerState
 $env:PROCESSOR_ARCHITECTURE = "AMD64"
 
@@ -398,22 +404,26 @@ function global:gh {
     }
     $global:LASTEXITCODE = 1
 }
+function global:Invoke-RestMethod { param($Uri) Record-MockCall "Invoke-RestMethod" @($Uri); return [pscustomobject]@{ tag_name = "v0.12.91" } }
 
 Invoke-DiscoverSystem
 
-Assert-Equal $script:InstallMethod "source" "Invoke-DiscoverSystem falls back to source when gh auth fails"
-Assert-False $script:ReleaseAvailable "ReleaseAvailable is false when gh auth fails"
-Assert-Equal $script:NetworkerVersion $InstallerVersion "NetworkerVersion falls back to InstallerVersion when gh unavailable"
+Assert-Equal $script:InstallMethod "release" "Invoke-DiscoverSystem stays in release mode via the GitHub API when gh auth fails"
+Assert-True $script:ReleaseAvailable "ReleaseAvailable is true when the GitHub API answers"
+Assert-Equal $script:NetworkerVersion "v0.12.91" "NetworkerVersion comes from the GitHub API tag when gh is unauthenticated"
+Assert-True ((Get-MockCalls "Invoke-RestMethod").Count -ge 1) "Get-LatestReleaseTag queried the GitHub API"
 
-# Test: gh not installed at all
+# Test: gh not installed AND the GitHub API unreachable -> source + InstallerVersion
 Reset-InstallerState
 $env:PROCESSOR_ARCHITECTURE = "AMD64"
 if (Test-Path Function:\global:gh) { Remove-Item Function:\global:gh }
+function global:Invoke-RestMethod { param($Uri) Record-MockCall "Invoke-RestMethod" @($Uri); throw "offline" }
 
 Invoke-DiscoverSystem
 
-Assert-Equal $script:InstallMethod "source" "Invoke-DiscoverSystem uses source when gh not installed"
-Assert-Equal $script:NetworkerVersion $InstallerVersion "NetworkerVersion = InstallerVersion when gh missing"
+Assert-Equal $script:InstallMethod "source" "Invoke-DiscoverSystem uses source when gh is missing and the API is unreachable"
+Assert-Equal $script:NetworkerVersion $InstallerVersion "NetworkerVersion = InstallerVersion when gh missing and offline"
+if (Test-Path Function:\global:Invoke-RestMethod) { Remove-Item Function:\global:Invoke-RestMethod }
 
 # Test: FromSource flag forces source mode even when gh works
 Reset-InstallerState

@@ -182,6 +182,7 @@ public static class ComparisonGroupsEndpoints
             var now = DateTime.UtcNow;
             var launched = new List<Guid>(cells.Count);
             var failures = new List<string>();
+            var adjustments = new List<string>();
             // UNIQUE(project_id, name): the index keeps cells within one launch
             // distinct, but a RE-launch of the same group regenerates the same
             // (group, index) pairs — without a per-launch nonce every cell of a
@@ -201,6 +202,28 @@ public static class ComparisonGroupsEndpoints
                     failures.Add($"{cell.Label}: {why}");
                     continue;
                 }
+                // Per-cell capability trim: a matrix over nginx + apache must not
+                // run the HTTP/3 modes on the apache cell (no QUIC per
+                // shared/http-stacks.json — measured 0/N in the lab). Drop them
+                // for THAT cell and keep the group running; the response and the
+                // log say what was dropped. A cell left with no modes fails
+                // with the reason instead of provisioning a VM for nothing.
+                var (cellWorkload, dropped) = TrimH3ModesForCell(group.BaseWorkload, cell);
+                if (dropped.Count > 0)
+                {
+                    var stack = CellProxyStack(cell) ?? "?";
+                    var note = $"{cell.Label}: dropped {string.Join(", ", dropped)} — {stack} has no HTTP/3 (see shared/http-stacks.json)";
+                    adjustments.Add(note);
+                    ctx.RequestServices.GetService<ILoggerFactory>()?
+                        .CreateLogger("ComparisonGroups.launch")
+                        .LogInformation("Comparison group {GroupId} cell '{Cell}': dropped h3 modes {Modes} ({Stack} has no HTTP/3)",
+                            id, cell.Label, string.Join(",", dropped), stack);
+                    if (cellWorkload is null)
+                    {
+                        failures.Add($"{cell.Label}: every selected mode needs HTTP/3, which {stack} does not serve (see shared/http-stacks.json)");
+                        continue;
+                    }
+                }
                 try
                 {
                     var cfg = new Data.Entities.TestConfig
@@ -210,7 +233,7 @@ public static class ComparisonGroupsEndpoints
                         Name = CellConfigName(cell.Label, id, i, launchNonce),
                         EndpointKind = cell.EndpointKind,
                         EndpointRef = cell.EndpointRaw,
-                        Workload = group.BaseWorkload,
+                        Workload = cellWorkload ?? group.BaseWorkload,
                         Methodology = group.Methodology,
                         MaxDurationSecs = CellMaxDurationSecs(group.BaseWorkload),
                         CreatedBy = user.UserId,
@@ -244,10 +267,86 @@ public static class ComparisonGroupsEndpoints
                 total = cells.Count,
                 failed = failures.Count,
                 errors = failures.Count > 0 ? failures : null,
+                // Per-cell mode drops (h3 modes on stacks without QUIC) — the
+                // launch still succeeded; this says what each cell will not run.
+                adjustments = adjustments.Count > 0 ? adjustments : null,
             });
         }).RequireAuthorization();
 
         return app;
+    }
+
+    /// <summary>The proxy stack a cell resolves to: <c>pending.proxy_stack</c>,
+    /// or a <c>proxy_stack</c> override on a <c>proxy</c> endpoint. Null when
+    /// unknown (the h3 trim then does nothing).</summary>
+    internal static string? CellProxyStack(CellSpec cell)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(cell.EndpointRaw);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("proxy_stack", out var ps)
+                && ps.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(ps.GetString()))
+            {
+                return ps.GetString()!.Trim();
+            }
+        }
+        catch (JsonException)
+        {
+            // unknown → no trim
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Rewrite the group's <c>base_workload</c> for one cell, dropping the
+    /// HTTP/3 modes when the cell's proxy stack has no QUIC
+    /// (<see cref="ModeTargetCompatibility.SplitH3ModesForStack"/>). Returns
+    /// (<c>null</c>, dropped) when nothing changed and dropped is empty; the
+    /// rewritten workload JSON when some modes were dropped; and
+    /// (<c>null</c>, dropped) with a NON-empty list when every mode was dropped
+    /// (the cell has nothing left to run).
+    /// </summary>
+    internal static (string? Workload, IReadOnlyList<string> Dropped) TrimH3ModesForCell(string? baseWorkloadJson, CellSpec cell)
+    {
+        var stack = CellProxyStack(cell);
+        if (string.IsNullOrEmpty(baseWorkloadJson) || HttpStackCatalog.HasH3(stack) != false)
+        {
+            return (null, []);
+        }
+
+        System.Text.Json.Nodes.JsonNode? node;
+        try
+        {
+            node = System.Text.Json.Nodes.JsonNode.Parse(baseWorkloadJson);
+        }
+        catch (JsonException)
+        {
+            return (null, []);
+        }
+        if (node is not System.Text.Json.Nodes.JsonObject obj
+            || obj["modes"] is not System.Text.Json.Nodes.JsonArray modesArr)
+        {
+            return (null, []);
+        }
+
+        var modes = modesArr
+            .Select(m => m?.GetValue<string>())
+            .Where(m => !string.IsNullOrWhiteSpace(m))
+            .Select(m => m!)
+            .ToList();
+        var (kept, dropped) = ModeTargetCompatibility.SplitH3ModesForStack(modes, stack);
+        if (dropped.Count == 0)
+        {
+            return (null, []);
+        }
+        if (kept.Count == 0)
+        {
+            return (null, dropped);
+        }
+        obj["modes"] = new System.Text.Json.Nodes.JsonArray(kept.Select(k => (System.Text.Json.Nodes.JsonNode)k).ToArray());
+        return (obj.ToJsonString(), dropped);
     }
 
     /// <summary>A comparison-group cell resolved for launch.</summary>

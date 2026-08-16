@@ -38,6 +38,7 @@ public static class AccountEndpoints
             ChangePasswordRequest req,
             HttpContext http,
             NetworkerDbContext db,
+            Microsoft.Extensions.Caching.Memory.IMemoryCache statusCache,
             CancellationToken ct) =>
         {
             var user = http.GetAuthUser();
@@ -83,6 +84,9 @@ public static class AccountEndpoints
             row.PasswordHash = BCrypt.Net.BCrypt.HashPassword(req.NewPassword);
             row.MustChangePassword = false;
             await db.SaveChangesAsync(ct);
+            // The status middleware caches must_change_password for 10s; the
+            // user's very next request must see the cleared flag.
+            UserStatusMiddleware.Invalidate(statusCache, user.UserId);
 
             return Results.Ok(new { success = true });
         }).RequireAuthorization();

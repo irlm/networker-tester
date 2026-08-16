@@ -73,7 +73,8 @@ public static class AgentsEndpoints
                     a.LastHeartbeat,
                     a.RegisteredAt,
                     ParseJson(a.Tags),
-                    a.TesterId))
+                    a.TesterId,
+                    Realtime.AgentCapabilityTags.Read(a.Tags)))
                 .ToList();
 
             return Results.Ok(new AgentListResponse(shaped));
@@ -131,6 +132,7 @@ public static class AgentsEndpoints
                 registered_at = a.RegisteredAt,
                 tags = ParseJson(a.Tags),
                 tester_id = a.TesterId,
+                capabilities = Realtime.AgentCapabilityTags.Read(a.Tags),
                 online,
             });
         })
@@ -187,4 +189,7 @@ public sealed record AgentListItem(
     [property: JsonPropertyName("last_heartbeat")] DateTime? LastHeartbeat,
     [property: JsonPropertyName("registered_at")] DateTime RegisteredAt,
     [property: JsonPropertyName("tags")] JsonNode? Tags,
-    [property: JsonPropertyName("tester_id")] Guid? TesterId);
+    [property: JsonPropertyName("tester_id")] Guid? TesterId,
+    // Runner tool inventory from the agent heartbeat (v0.28.208+):
+    // {chrome, tshark}; null until a capability-reporting agent heartbeats.
+    [property: JsonPropertyName("capabilities")] Realtime.AgentCapabilities? Capabilities = null);

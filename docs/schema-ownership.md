@@ -48,6 +48,19 @@ names, ids generated from the same inputs
 migrations only ever touched those tables behind
 `IF EXISTS (… 'testrun' …)` guards, and the ported scripts keep those guards.
 
+**…but the control plane bootstraps it when it is missing.** On the
+streamed-attempt path (every C# agent) the tester never touches the DB, so a
+fresh control-plane database had no `RequestAttempt` table and the ingest
+silently persisted nothing (found by `lab/validate.sh`). The tester's V001–V005
+DDL is mirrored verbatim in `shared/tester-schema.postgres.sql` (a Rust unit
+test fails if it drifts from `postgres.rs`; a C# test checks the embedded copy),
+and `AttemptPersister` applies it once per process — idempotent
+`IF NOT EXISTS` DDL under the tester's own migration advisory lock, plus the
+`_schema_versions` bookkeeping rows — before the first attempt insert. On
+databases where the tables already exist (prod, install.sh's psql seed) this is
+a no-op; the persister also detects the fielded shape (`extrajson` vs
+`extra_json`, which `testrun` NOT NULL columns exist) instead of hard-coding one.
+
 ## Bookkeeping-table compatibility guarantee
 
 `SchemaMigrator` uses **the same bookkeeping table the Rust runner used**:

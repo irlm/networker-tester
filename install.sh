@@ -331,7 +331,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.208"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.209"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -5017,6 +5017,10 @@ step_setup_caddy() {
         print_info "Installing Caddy…"
         case "$pkg_mgr" in
             apt-get)
+                # Fresh VMs/containers may have no package lists yet — without an
+                # update the keyring/apache2/haproxy installs below fail with
+                # "Unable to locate package" (nginx already updates first).
+                sudo apt-get update -qq < /dev/null 2>&1 || true
                 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
                     debian-keyring debian-archive-keyring apt-transport-https curl < /dev/null
                 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
@@ -5231,6 +5235,7 @@ step_setup_apache() {
 
     case "$pkg_mgr" in
         apt-get)
+            sudo apt-get update -qq < /dev/null 2>&1 || true
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq apache2 < /dev/null
             # Enable modules we need; a2enmod is idempotent.
             sudo a2enmod ssl headers proxy proxy_http proxy_wstunnel http2 rewrite >/dev/null 2>&1 || true
@@ -5392,7 +5397,8 @@ step_setup_haproxy() {
     fi
 
     case "$pkg_mgr" in
-        apt-get) sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq haproxy < /dev/null ;;
+        apt-get) sudo apt-get update -qq < /dev/null 2>&1 || true
+                 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq haproxy < /dev/null ;;
         dnf)     sudo dnf install -y haproxy < /dev/null ;;
         pacman)  sudo pacman -S --noconfirm haproxy ;;
         zypper)  sudo zypper install -y haproxy ;;
@@ -5585,8 +5591,11 @@ _iis_setup_powershell() {
 \$fqdn = "${fqdn}"
 
 # 1. Install IIS + URL Rewrite + ARR (for reverse-proxy of /page, /asset)
+#    Web-WebSockets: without the WebSocket protocol feature ARR cannot forward
+#    the /ws Upgrade handshake and the websocket probe mode 404s through IIS
+#    (the Linux stacks all proxy /ws — lab/native parity, 2026-08).
 Write-Host "Installing IIS..."
-Install-WindowsFeature -Name Web-Server -IncludeManagementTools | Out-Null
+Install-WindowsFeature -Name Web-Server,Web-WebSockets -IncludeManagementTools | Out-Null
 IIS_PS1_HEADER
     cat <<'IIS_PS1'
 
@@ -5697,8 +5706,8 @@ $webConfig = @"
           </conditions>
           <action type="Rewrite" url="http://127.0.0.1:8080/asset?{C:0}" appendQueryString="false" />
         </rule>
-        <rule name="Proxy throughput + info + apibench to endpoint" stopProcessing="true">
-          <match url="^(download|upload|info|api|health)(.*)" />
+        <rule name="Proxy throughput + info + apibench + websocket to endpoint" stopProcessing="true">
+          <match url="^(download|upload|info|api|health|ws)(.*)" />
           <action type="Rewrite" url="http://127.0.0.1:8080/{R:1}{R:2}" />
         </rule>
       </rules>
@@ -5707,7 +5716,7 @@ $webConfig = @"
 </configuration>
 "@
 $webConfig | Out-File "$siteRoot\web.config" -Encoding UTF8
-Write-Host "web.config created (with reverse-proxy rules for /page, /asset, /download, /upload, /info, /api, /health)"
+Write-Host "web.config created (with reverse-proxy rules for /page, /asset, /download, /upload, /info, /api, /health, /ws)"
 
 # 4. Generate self-signed certificate (include FQDN in SAN for SNI/H3)
 Write-Host "Creating self-signed certificate..."

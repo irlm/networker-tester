@@ -42,11 +42,30 @@ namespace Networker.Agent;
 [JsonDerivedType(typeof(CommandResultMessage), "command_result")]
 public abstract record AgentMessage;
 
-/// <summary><c>{"type":"heartbeat","load":?,"version":?}</c></summary>
+/// <summary><c>{"type":"heartbeat","load":?,"version":?,"capabilities":{...}?}</c>.
+/// <c>capabilities</c> (additive, v0.28.208+) is the runner's self-detected
+/// tool inventory (<see cref="AgentCapabilities"/>) — omitted when null so an
+/// older control plane sees the pre-0.28.208 shape byte-for-byte; a newer
+/// control plane persists it on the agent row so pickers can gate the
+/// <c>browser*</c> modes (need Chrome) and packet capture (needs tshark) on
+/// the pinned runner.</summary>
 public sealed record HeartbeatMessage(
     [property: JsonPropertyName("load")] double? Load,
-    [property: JsonPropertyName("version")] string? Version
+    [property: JsonPropertyName("version")] string? Version,
+    [property: JsonPropertyName("capabilities")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    AgentCapabilities? Capabilities = null
 ) : AgentMessage;
+
+/// <summary>Runner tool inventory carried on the heartbeat:
+/// <c>{"chrome":bool,"tshark":bool}</c>. <c>chrome</c> = a Chrome/Chromium
+/// binary the tester's <c>find_chrome()</c> would locate (the <c>browser*</c>
+/// modes need it); <c>tshark</c> = a tshark binary on PATH (packet capture
+/// needs it). Detected once at startup by <see cref="RunnerCapabilities"/>.</summary>
+public sealed record AgentCapabilities(
+    [property: JsonPropertyName("chrome")] bool Chrome,
+    [property: JsonPropertyName("tshark")] bool Tshark
+);
 
 /// <summary><c>{"type":"run_started","run_id":...,"started_at":...}</c></summary>
 public sealed record RunStartedMessage(

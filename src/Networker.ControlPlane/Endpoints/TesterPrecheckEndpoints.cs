@@ -46,6 +46,7 @@ public static class TesterPrecheckEndpoints
             PrecheckRequest? body,
             NetworkerDbContext db,
             CredentialCipher cipher,
+            HttpContext http,
             CancellationToken ct) =>
         {
             if (body is null || body.cloud is null || body.region is null)
@@ -54,6 +55,24 @@ public static class TesterPrecheckEndpoints
             }
 
             var resp = new PrecheckResponse { status = "ok" };
+
+            // Docker (local): no account, no cloud — only the feature flag gates it.
+            if (Provisioning.DockerProviderOptions.IsDocker(body.cloud))
+            {
+                var dockerOptions = http.RequestServices.GetService<Provisioning.DockerProviderOptions>()
+                                    ?? Provisioning.DockerProviderOptions.Disabled;
+                if (!dockerOptions.Enabled)
+                {
+                    resp.blockers.Add(new PrecheckIssue
+                    {
+                        code = "docker_provider_disabled",
+                        message = "The Docker (local) provider is not enabled on this control plane",
+                        resolution = $"Set {Provisioning.DockerProviderOptions.EnableVar}=1 on the control plane (dev/lab only)",
+                    });
+                    resp.status = "blocked";
+                }
+                return Results.Ok(resp);
+            }
 
             // Load the active cloud_account for this cloud (oldest first).
             var account = await db.CloudAccounts

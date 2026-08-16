@@ -61,6 +61,8 @@ export type TesterRow = {
   api_key_expires_at?: string | null;
   /** Live agent connection state ("online"/"offline"; null = no agent linked). */
   agent_status?: string | null;
+  /** The linked agent's tool inventory (heartbeat, v0.28.208+): browser* modes need chrome. null = unknown. */
+  agent_capabilities?: { chrome: boolean; tshark: boolean } | null;
   avg_benchmark_duration_seconds: number | null;
   benchmark_run_count: number;
   created_by: string;

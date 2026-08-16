@@ -1,0 +1,13 @@
+{
+  "$comment": "Canonical port layout + capabilities of the comparison HTTP stacks install.sh / install.ps1 set up on endpoint VMs. Guarded on every side of the seam: Rust (crates/networker-tester/src/http_stacks.rs — used by pageload/throughput/browser https→http rewrites and --http-stacks), C# (ProvisioningOrchestrator.ProxyHttpsPort — ProxyHttpsPortTests; HttpStackCatalog — embedded, served by GET /api/http-stacks + /api/modes `stacks`, drives the mode⇄target h3 gate — HttpStacksManifestTests), dashboard (lib/http-stacks.ts — http-stacks-manifest.test.ts), and lab/validate.sh (expects h3 modes only where h3 is true). `h3_modes` lists the probe modes that need HTTP/3 on the target: the gates refuse them on stacks with h3=false. The bare networker-endpoint is 8080/8443 (h3 true) and is listed as `endpoint`. Change a port here AND in the installer in the same PR.",
+  "h3_modes": ["http3", "pageload3", "browser3", "download3", "upload3"],
+  "stacks": [
+    { "id": "endpoint", "http_port": 8080, "https_port": 8443, "h3": true,  "installer": "networker-endpoint (no proxy)" },
+    { "id": "nginx",    "http_port": 8081, "https_port": 8444, "h3": true,  "installer": "install.sh step_setup_nginx (mainline, quic)" },
+    { "id": "iis",      "http_port": 8082, "https_port": 8445, "h3": false, "installer": "install.ps1 -Setup iis / install.sh _iis_setup_powershell (Windows Server 2022+; http.sys serves HTTP/3 on 8445 ONLY to clients that send TLS SNI — the platform addresses endpoint VMs by IP, so the tester's QUIC handshake carries no SNI and http.sys closes it with INTERNAL_ERROR; measured in the lab's Windows target, v0.28.208. Flip back when proxy targets are resolved by hostname)" },
+    { "id": "caddy",    "http_port": 8091, "https_port": 8454, "h3": true,  "installer": "install.sh step_setup_caddy (protocols h1 h2 h3)" },
+    { "id": "traefik",  "http_port": 8092, "https_port": 8455, "h3": false, "installer": "install.sh step_setup_traefik (h1/h2)" },
+    { "id": "haproxy",  "http_port": 8093, "https_port": 8456, "h3": false, "installer": "install.sh step_setup_haproxy (alpn h2,http/1.1)" },
+    { "id": "apache",   "http_port": 8094, "https_port": 8457, "h3": false, "installer": "install.sh step_setup_apache (h2)" }
+  ]
+}

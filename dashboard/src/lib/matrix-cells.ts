@@ -1,5 +1,6 @@
 import type { ComparisonCell } from '../api/types';
 import type { TestbedState } from '../components/wizard/testbed-constants';
+import { isH3Mode, stackHasH3 } from './http-stacks';
 import {
   PROXY_LABELS,
   resolveVmSize,
@@ -56,4 +57,39 @@ export function countCells(testbeds: TestbedState[]): number {
 
 export function isMatrixRun(testbeds: TestbedState[]): boolean {
   return countCells(testbeds) > 1;
+}
+
+/** One cell's HTTP/3 trim: the modes the server will NOT run on it. */
+export interface CellModeDrop {
+  /** Cell label as buildComparisonCells() names it. */
+  label: string;
+  stack: string;
+  dropped: string[];
+}
+
+/**
+ * Per-cell HTTP/3 drop preview — mirrors what the comparison-group launch does
+ * server-side (ComparisonGroupsEndpoints.TrimH3ModesForCell): on a cell whose
+ * proxy stack has no QUIC (shared/http-stacks.json h3=false), the h3 modes are
+ * dropped for THAT cell only and the group still runs. A matrix over nginx +
+ * apache runs http3 on the nginx cell and skips it on the apache cell.
+ * Returns only cells that lose something; empty when nothing is dropped.
+ */
+export function h3DropsPerCell(testbeds: TestbedState[], modes: Iterable<string>): CellModeDrop[] {
+  const selected = [...modes];
+  const h3 = selected.filter(isH3Mode);
+  if (h3.length === 0) return [];
+  const drops: CellModeDrop[] = [];
+  for (const tb of testbeds) {
+    for (const proxy of tb.proxies) {
+      if (stackHasH3(proxy) === false) {
+        drops.push({
+          label: `${tb.cloud}/${tb.region} ${tb.os} · ${PROXY_LABELS[proxy] ?? proxy}`,
+          stack: proxy,
+          dropped: h3,
+        });
+      }
+    }
+  }
+  return drops;
 }

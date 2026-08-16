@@ -220,6 +220,16 @@ deployment, see [`docs/setup-guide.md`](docs/setup-guide.md).
 
 ## Development
 
+First time on a machine — checks/installs every prerequisite (Docker, Rust,
+.NET 10, Node, jq, cmake, …), picks a free Postgres port and records
+machine quirks in `.dev.env`:
+
+```bash
+./scripts/dev-setup.sh          # macOS (Homebrew), Ubuntu/Debian, Fedora, Arch
+scripts\dev-setup.ps1           # Windows (winget); then run dev.sh from Git Bash / WSL
+./dev.sh                        # endpoint + C# control plane :5030 + Vite :5173
+```
+
 ```bash
 # Rust (probe engine + endpoint)
 cargo test -p networker-tester -p networker-endpoint --lib
@@ -229,6 +239,11 @@ dotnet test Networker.sln
 
 # Frontend
 cd dashboard && npm install && npm run build
+
+# Whole managed path in Docker — control plane + N runners + M targets
+# (real install.sh proxy stacks), then an end-to-end run matrix through the API.
+# Validate here before provisioning cloud VMs. See lab/README.md.
+./lab/lab.sh up --runners 3 --targets rust,nginx,caddy && ./lab/lab.sh validate
 ```
 
 For more usage, deployment, and benchmarking guidance, start with

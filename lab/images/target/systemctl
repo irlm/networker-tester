@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# ─── systemctl shim for the lab target container ──────────────────────────────
+# The target image runs the REAL install.sh (--setup-stack <stack>) so the
+# proxy configs that reach cloud endpoint VMs are validated byte-for-byte here.
+# install.sh drives services through systemctl; containers have no systemd, so
+# this shim implements the verbs install.sh uses on top of the unit files the
+# installer/package writes:
+#   daemon-reload | enable | disable | is-enabled  → no-op (success)
+#   start | restart | reload | stop | is-active | status
+#     → parse ExecStartPre/ExecStart/ExecReload/PIDFile from the unit and run
+#       the process directly (background), tracking the pid under /run/lab-systemctl.
+# LAB_SYSTEMCTL_NOSTART=1 (set during `docker build`) makes start/restart no-op
+# but still validates that the unit resolves — nothing should linger in a layer.
+set -uo pipefail
+
+STATE_DIR=/run/lab-systemctl
+mkdir -p "$STATE_DIR"
+
+verb=""; unit=""
+for a in "$@"; do
+  case "$a" in
+    --*) ;;                       # --now, --no-pager, --quiet … ignored
+    *) if [ -z "$verb" ]; then verb="$a"; else unit="${a%.service}"; fi ;;
+  esac
+done
+
+unit_file() {
+  local u="$1" f
+  for f in "/etc/systemd/system/$u.service" "/lib/systemd/system/$u.service" "/usr/lib/systemd/system/$u.service"; do
+    [ -f "$f" ] && { echo "$f"; return 0; }
+  done
+  return 1
+}
+unit_field() { # unit_field FILE KEY → all values (one per line), prefix chars (-,+,@,!) stripped
+  sed -n -E "s/^[[:space:]]*$2=(.*)$/\1/p" "$1" | sed -E 's/^[-+@!:]+//'
+}
+pid_of() {
+  local u="$1" f pf
+  f="$(unit_file "$u" 2>/dev/null || true)"
+  pf="$( [ -n "$f" ] && unit_field "$f" PIDFile | head -1 || true)"
+  if [ -n "$pf" ] && [ -f "$pf" ]; then cat "$pf"; return 0; fi
+  [ -f "$STATE_DIR/$u.pid" ] && cat "$STATE_DIR/$u.pid" && return 0
+  return 1
+}
+alive() {
+  local u="$1" p
+  p="$(pid_of "$u" 2>/dev/null || true)"
+  if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then return 0; fi
+  # Forking daemons without PIDFile (apache2: apachectl execs apache2) — match
+  # the live process by the unit's base name.
+  pgrep -x "${u#networker-}" >/dev/null 2>&1
+}
+nostart() { [ "${LAB_SYSTEMCTL_NOSTART:-0}" = "1" ] || [ -f "$STATE_DIR/nostart" ]; }
+
+do_start() {
+  local u="$1" f pre cmd env_line
+  f="$(unit_file "$u")" || { echo "Failed to start $u.service: Unit $u.service not found." >&2; return 5; }
+  # `sudo` resets the environment, so the build-time flag also lives on disk
+  # (Dockerfile touches $STATE_DIR/nostart around the install.sh run).
+  if nostart; then
+    echo "lab-systemctl: (build) would start $u: $(unit_field "$f" ExecStart | head -1)"
+    return 0
+  fi
+  if alive "$u"; then return 0; fi
+  # Environment= lines → exported for the child.
+  while IFS= read -r env_line; do
+    [ -n "$env_line" ] && eval "export $env_line"
+  done < <(unit_field "$f" Environment)
+  while IFS= read -r pre; do
+    [ -n "$pre" ] && { eval "$pre" >/dev/null 2>&1 || true; }
+  done < <(unit_field "$f" ExecStartPre)
+  cmd="$(unit_field "$f" ExecStart | head -1)"
+  [ -n "$cmd" ] || { echo "lab-systemctl: $u has no ExecStart" >&2; return 1; }
+  # Run detached; forking services (Type=forking, e.g. nginx/apache2) exit the
+  # wrapper immediately and are tracked via PIDFile / process name instead.
+  ( eval "exec $cmd" ) >>"/var/log/lab-$u.log" 2>&1 &
+  echo $! > "$STATE_DIR/$u.pid"
+  # Give forking daemons a moment, then report.
+  sleep 0.5
+  if alive "$u" || pgrep -f "$(echo "$cmd" | awk '{print $1}')" >/dev/null 2>&1; then
+    return 0
+  fi
+  # Slow forkers (apache2 under apachectl) can take a beat longer.
+  sleep 1.5
+  alive "$u" && return 0
+  echo "lab-systemctl: $u failed to start — tail of /var/log/lab-$u.log:" >&2
+  tail -n 20 "/var/log/lab-$u.log" >&2 || true
+  return 1
+}
+do_stop() {
+  local u="$1" p f cmd
+  f="$(unit_file "$u" 2>/dev/null || true)"
+  p="$(pid_of "$u" 2>/dev/null || true)"
+  if [ -n "$p" ]; then kill "$p" 2>/dev/null || true; fi
+  # Forking daemons: also stop by executable name.
+  if [ -n "$f" ]; then
+    cmd="$(unit_field "$f" ExecStop | head -1)"
+    [ -n "$cmd" ] && { eval "$cmd" >/dev/null 2>&1 || true; }
+    pkill -f "$(unit_field "$f" ExecStart | head -1 | awk '{print $1}')" 2>/dev/null || true
+  fi
+  rm -f "$STATE_DIR/$u.pid"
+  return 0
+}
+do_reload() {
+  local u="$1" f cmd p
+  f="$(unit_file "$u")" || return 5
+  cmd="$(unit_field "$f" ExecReload | head -1)"
+  if [ -n "$cmd" ]; then
+    p="$(pid_of "$u" 2>/dev/null || echo 0)"
+    cmd="${cmd//\$MAINPID/$p}"
+    eval "$cmd"
+  else
+    p="$(pid_of "$u" 2>/dev/null || true)"
+    [ -n "$p" ] && kill -HUP "$p" 2>/dev/null || true
+  fi
+}
+
+case "$verb" in
+  daemon-reload|enable|disable|is-enabled|mask|unmask|preset|reset-failed) exit 0 ;;
+  start)   do_start "$unit" ;;
+  stop)    do_stop "$unit" ;;
+  restart) do_stop "$unit"; sleep 0.3; do_start "$unit" ;;
+  reload|reload-or-restart) alive "$unit" && do_reload "$unit" || do_start "$unit" ;;
+  is-active)
+    if alive "$unit"; then echo active; exit 0; else echo inactive; exit 3; fi ;;
+  status)
+    if alive "$unit"; then echo "● $unit.service — active (running) [lab shim]"; exit 0
+    else echo "○ $unit.service — inactive (dead) [lab shim]"; exit 3; fi ;;
+  show|list-units|list-unit-files) exit 0 ;;
+  "") echo "lab-systemctl: usage: systemctl VERB UNIT" >&2; exit 1 ;;
+  *)  echo "lab-systemctl: unsupported verb '$verb' (unit '$unit') — treating as success" >&2; exit 0 ;;
+esac

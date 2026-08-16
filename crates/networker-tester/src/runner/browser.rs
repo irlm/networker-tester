@@ -152,21 +152,19 @@ pub fn build_page_url(base: &url::Url, asset_sizes: &[usize]) -> String {
 /// Uses `http://` so there is no TLS ALPN negotiation — Chrome physically
 /// cannot use HTTP/2 or HTTP/3 over plain HTTP.
 ///
-/// Port derivation: 8443 → 8080 (endpoint), 8444 → 8081 (nginx),
-/// 8445 → 8082 (IIS); 443 / no port → 80 (HTTP default, omitted from URL).
-/// Any other explicit port is kept as-is.
+/// Port derivation comes from `shared/http-stacks.json` (crate::http_stacks):
+/// 8443 → 8080 (endpoint), 8444 → 8081 (nginx), 8445 → 8082 (IIS),
+/// 8454 → 8091 (caddy), 8455 → 8092 (traefik), 8456 → 8093 (haproxy),
+/// 8457 → 8094 (apache); 443 / no port → 80 (omitted). Any other explicit
+/// port is kept as-is.
 pub fn build_browser_http1_url(base: &url::Url, asset_sizes: &[usize]) -> String {
-    let mut target = base.clone();
-    let _ = target.set_scheme("http");
-    // Derive plain HTTP port from the HTTPS port.
-    let http_port: Option<u16> = match base.port_or_known_default() {
-        Some(8443) => Some(8080), // endpoint
-        Some(8444) => Some(8081), // nginx stack
-        Some(8445) => Some(8082), // IIS stack
-        Some(443) | None => None, // use HTTP default (80, omit from URL)
-        Some(p) => Some(p),       // non-standard port: keep as-is
-    };
-    let _ = target.set_port(http_port);
+    // Derive the plain-HTTP listener from the HTTPS port via the shared stack
+    // table (8443→8080, 8444→8081, 8454→8091, …); 443/no port → 80 (omitted);
+    // an unknown explicit port is kept as-is.
+    let mut target = crate::http_stacks::rewrite_to_http(base);
+    if base.scheme() != "https" {
+        let _ = target.set_scheme("http");
+    }
     target.set_path("/browser-page");
     if !asset_sizes.is_empty() {
         let n = asset_sizes.len();

@@ -32,6 +32,10 @@
          linked (not copied) so ModesManifestTests always guards the real
          file. See the manifest's $comment for the guard topology. -->
     <Content Include="..\..\shared\modes.json" Link="shared\modes.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Cross-stack HTTP-stack port table (see ProxyHttpsPortTests). -->
+    <Content Include="..\..\shared\http-stacks.json" Link="shared\http-stacks.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Tester probe schema (see TesterSchemaBootstrapTests). -->
+    <Content Include="..\..\shared\tester-schema.postgres.sql" Link="shared\tester-schema.postgres.sql" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

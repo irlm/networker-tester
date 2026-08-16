@@ -327,18 +327,19 @@ public static partial class TesterWriteEndpoints
     private static async Task<IResult> DeleteTester(
         string projectId,
         Guid testerId,
+        HttpContext http,
+        NetworkerDbContext db,
+        IServiceScopeFactory scopeFactory,
+        ILoggerFactory loggerFactory,
+        CancellationToken ct,
         // ?force=true removes the tester record even if the cloud VM delete fails
         // (e.g. the cloud creds are gone / unreachable, so the VM can't be
         // verified or destroyed). The escape hatch for a tester that would
         // otherwise be un-deletable — at the cost of possibly orphaning a VM the
         // operator must clean up in their cloud console. Bound from the query
-        // string (absent → false).
-        bool force,
-        HttpContext http,
-        NetworkerDbContext db,
-        IServiceScopeFactory scopeFactory,
-        ILoggerFactory loggerFactory,
-        CancellationToken ct)
+        // string; OPTIONAL (absent → false) — a required non-nullable bool made
+        // a plain `DELETE /testers/{id}` answer 400 (lab phase 5, 2026-08-16).
+        bool force = false)
     {
         var user = http.GetAuthUser();
         var logger = loggerFactory.CreateLogger("TesterWrite.Delete");

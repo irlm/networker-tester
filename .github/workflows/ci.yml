@@ -487,6 +487,35 @@ jobs:
         run: sccache --show-stats
 
   # ──────────────────────────────────────────────────────────────────────────
+  # macOS unit tests: the primary DEV platform, but until now compiled only at
+  # release-tag time — every #[cfg(target_os = "macos")] block (host_statistics
+  # CPU ticks, TCP_CONNECTION_INFO socket info, en0 capture default, IP_DONTFRAG
+  # pmtud) and its macOS-gated tests ran nowhere in CI. Lib tests only (no
+  # browser feature — no Chrome on the runner; no integration suite — the
+  # ubuntu/windows jobs own that). Not a required check.
+  # ──────────────────────────────────────────────────────────────────────────
+  test-macos:
+    name: Test (macos-latest)
+    runs-on: macos-latest
+    needs: lint
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.1
+        with:
+          key: macos-test
+          cache-on-failure: "true"
+      - name: Tester unit tests (no browser)
+        run: cargo test -p networker-tester --lib --no-default-features --features http3,db-mssql
+      - name: Endpoint + log unit tests
+        run: cargo test -p networker-endpoint -p networker-log --lib
+
+  # ──────────────────────────────────────────────────────────────────────────
   # Dashboard frontend
   # ──────────────────────────────────────────────────────────────────────────
   frontend:

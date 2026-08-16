@@ -33,6 +33,10 @@ set -u
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR" || { echo "FATAL: cannot cd to $ROOT_DIR" >&2; exit 255; }
+# Machine-specific dev settings (scripts/dev-setup.sh): postgres host port etc.
+# shellcheck disable=SC1091
+[ -f "$ROOT_DIR/.dev.env" ] && . "$ROOT_DIR/.dev.env"
+DEV_PG_PORT="${DEV_PG_PORT:-5432}"
 
 HTTP_PORT="${SMOKE_ENDPOINT_HTTP_PORT:-18080}"
 HTTPS_PORT="${SMOKE_ENDPOINT_HTTPS_PORT:-18443}"
@@ -293,21 +297,29 @@ stop_dashboard() {
 # Verify postgres (docker-compose.dashboard.yml) is up on 127.0.0.1:5432.
 # Returns 0 if reachable, 1 otherwise. Does NOT start it — operator-owned.
 check_postgres_up() {
-    wait_for_port 127.0.0.1 5432 4
+    wait_for_port 127.0.0.1 "$DEV_PG_PORT" 4
 }
 
-# Start dashboard in background. Assumes postgres is reachable.
-# On success: $DASHBOARD_PID is set, port 3000 is listening.
+# Start the C# control plane in background. Assumes postgres is reachable.
+# On success: $DASHBOARD_PID is set, port $DASHBOARD_PORT_USED is listening.
+# (The Rust networker-dashboard is retired; the control plane owns migrations.)
 start_dashboard() {
     local log_file="$SMOKE_DIR/dashboard.log"
-    log "Starting networker-dashboard on port $DASHBOARD_PORT_USED (log: $log_file)"
+    log "Starting Networker.ControlPlane on port $DASHBOARD_PORT_USED (log: $log_file)"
+    if ! command -v dotnet >/dev/null 2>&1; then
+        log "dotnet SDK not found — cannot start the control plane"
+        return 1
+    fi
     (
-        DASHBOARD_DB_URL="postgres://networker:networker@127.0.0.1:5432/networker_core" \
+        DASHBOARD_DB_URL_NPGSQL="Host=127.0.0.1;Port=${DEV_PG_PORT};Database=networker_core;Username=networker;Password=networker" \
         DASHBOARD_ADMIN_EMAIL="$DASHBOARD_ADMIN_EMAIL_USED" \
         DASHBOARD_ADMIN_PASSWORD="$DASHBOARD_ADMIN_PASSWORD_USED" \
-        DASHBOARD_JWT_SECRET="smoke-test-secret-not-for-production-use-only" \
-        DASHBOARD_PORT="$DASHBOARD_PORT_USED" \
-        cargo run ${CARGO_BUILD_FLAGS[@]+"${CARGO_BUILD_FLAGS[@]}"} --quiet -p networker-dashboard \
+        DASHBOARD_JWT_SECRET="smoke-test-secret-not-for-production-use-only-0123456789" \
+        DASHBOARD_CREDENTIAL_KEY="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" \
+        DASHBOARD_BACKGROUND_SERVICES=0 \
+        ASPNETCORE_ENVIRONMENT=Development \
+        ASPNETCORE_URLS="http://127.0.0.1:$DASHBOARD_PORT_USED" \
+        dotnet run --project "$ROOT_DIR/src/Networker.ControlPlane" ${DOTNET_BUILD_EXTRA_ARGS:-} \
             >"$log_file" 2>&1 \
             </dev/null
     ) &
@@ -366,7 +378,7 @@ scenario_7_dashboard_phases() {
 
     if ! check_postgres_up; then
         record_skip "s7-dashboard-phases" \
-            "postgres :5432 unreachable — run: docker compose -f docker-compose.dashboard.yml up -d postgres"
+            "postgres :$DEV_PG_PORT unreachable — run: docker compose -f docker-compose.dashboard.yml up -d postgres"
         return
     fi
 
@@ -428,7 +440,7 @@ scenario_8_e2e_persistent_tester() {
     fi
     if ! check_postgres_up; then
         record_skip "s8-e2e-persistent-tester" \
-            "postgres :5432 unreachable — run: docker compose -f docker-compose.dashboard.yml up -d postgres"
+            "postgres :$DEV_PG_PORT unreachable — run: docker compose -f docker-compose.dashboard.yml up -d postgres"
         return
     fi
 

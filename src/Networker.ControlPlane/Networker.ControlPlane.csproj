@@ -21,6 +21,26 @@
                       Link="shared\cloud-costs.json"
                       LogicalName="Networker.ControlPlane.shared.cloud-costs.json" />
 
+    <!-- Canonical HTTP-stack layout + capabilities (Endpoints/HttpStackCatalog.cs):
+         which proxy stacks the installers configure with HTTP/3, and which
+         probe modes need it. Served by GET /api/http-stacks (+ /api/modes
+         `stacks`) and drives the mode⇄target h3 gate. Same JSON the Rust
+         tester embeds and lab/validate.sh reads. -->
+    <EmbeddedResource Include="..\..\shared\http-stacks.json"
+                      Link="shared\http-stacks.json"
+                      LogicalName="Networker.ControlPlane.shared.http-stacks.json" />
+
+    <!-- The networker-tester probe-result schema (V001–V005, PostgreSQL),
+         mirrored from crates/networker-tester/src/output/db/postgres.rs (a Rust
+         unit test guards the copy). AttemptPersister applies it lazily on the
+         first streamed attempt so a FRESH control-plane database gets the
+         RequestAttempt/… tables — the C# agent path never runs a DB-backed
+         tester, and without this a new install persisted 0 attempts forever
+         (caught by lab/validate.sh). -->
+    <EmbeddedResource Include="..\..\shared\tester-schema.postgres.sql"
+                      Link="shared\tester-schema.postgres.sql"
+                      LogicalName="Networker.ControlPlane.shared.tester-schema.postgres.sql" />
+
     <!-- LagHound brand SVGs for the report exporters (Reports/Documents/).
          Embedded so a deploy can't lose them; the assets/brand/ copies stay
          the editable source of truth. -->

@@ -220,19 +220,37 @@ public sealed class OrphanReaperService : BackgroundService
         // is why the reaper never ran on prod.
         var scopes = await ResolveAzureScopesAsync(db, cipher, ct).ConfigureAwait(false);
 
-        if (scopes.Count == 0)
-        {
-            // No configured Azure scope → nothing to list. AWS/GCP are stubs
-            // (Rust returns empty Vec), so the sweep is a no-op.
-            _logger.LogDebug(
-                "Orphan-reaper: no Azure cloud_account or cloud_connection configured; nothing to scan");
-            _monitor.ReportTick(OpsServiceNames.OrphanReaper, 0, "no azure cloud_account or connection configured");
-            return;
-        }
-
         var totalDeleted = 0;
         var totalFailed = 0;
         var totalWouldReap = 0;
+
+        // Docker (local) provider: containers labelled networker.role whose
+        // owning tester / deployment row is gone (or was never recorded) are
+        // orphans — the container twin of the Azure name-prefix sweep. Only
+        // runs when the provider is enabled; a missing docker CLI soft-fails
+        // inside the provisioner (empty list), never here.
+        var docker = scope.ServiceProvider.GetService<Provisioning.DockerComputeProvisioner>();
+        if (docker is not null && docker.Options.Enabled)
+        {
+            var (dDeleted, dFailed, dWouldReap) = await ReapDockerAsync(docker, db, ct).ConfigureAwait(false);
+            totalDeleted += dDeleted;
+            totalFailed += dFailed;
+            totalWouldReap += dWouldReap;
+        }
+
+        if (scopes.Count == 0)
+        {
+            // No configured Azure scope → nothing to list. AWS/GCP are stubs
+            // (Rust returns empty Vec), so the cloud sweep is a no-op.
+            _logger.LogDebug(
+                "Orphan-reaper: no Azure cloud_account or cloud_connection configured; nothing to scan");
+            _monitor.ReportTick(
+                OpsServiceNames.OrphanReaper, totalDeleted,
+                totalWouldReap > 0 || totalDeleted > 0
+                    ? $"docker: identified={totalWouldReap} deleted={totalDeleted} failed={totalFailed}; no azure cloud_account or connection configured"
+                    : "no azure cloud_account or connection configured");
+            return;
+        }
 
         foreach (var scopeInfo in scopes)
         {
@@ -254,6 +272,100 @@ public sealed class OrphanReaperService : BackgroundService
             OpsServiceNames.OrphanReaper,
             totalDeleted,
             $"scanned {scopes.Count} scope(s): identified={totalWouldReap} deleted={totalDeleted} failed={totalFailed}");
+    }
+
+    /// <summary>Containers younger than this are never reaped — a tester create
+    /// or a docker deployment may still be between <c>docker run</c> and the DB
+    /// write that claims the container (the same timing hole the Azure sweep
+    /// closes with the vm_name-before-create write).</summary>
+    internal static readonly TimeSpan DockerMinAge = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// Pure orphan decision for one docker container: a <c>runner</c> is owned
+    /// while its <c>networker.tester_id</c> label matches a tester row (or its
+    /// name is some tester's vm_resource_id); a <c>target</c> is owned while its
+    /// <c>networker.deployment_id</c> label matches a live (not torn_down /
+    /// failed / cancelled) deployment. Unknown roles are never touched; young
+    /// containers are never touched.
+    /// </summary>
+    internal static bool IsDockerOrphan(
+        Provisioning.DockerComputeProvisioner.ContainerInfo c,
+        IReadOnlySet<string> knownTesterIds,
+        IReadOnlySet<string> knownResourceIds,
+        IReadOnlySet<string> liveDeploymentIds,
+        DateTime nowUtc)
+    {
+        if (c.CreatedUtc is null || nowUtc - c.CreatedUtc.Value < DockerMinAge)
+        {
+            return false;
+        }
+        switch (c.Role)
+        {
+            case Provisioning.DockerComputeProvisioner.RoleRunner:
+                if (knownResourceIds.Contains(c.Name))
+                {
+                    return false;
+                }
+                return c.TesterId is null || !knownTesterIds.Contains(c.TesterId);
+            case Provisioning.DockerComputeProvisioner.RoleTarget:
+                return c.DeploymentId is null || !liveDeploymentIds.Contains(c.DeploymentId);
+            default:
+                return false;
+        }
+    }
+
+    private async Task<(int Deleted, int Failed, int WouldReap)> ReapDockerAsync(
+        Provisioning.DockerComputeProvisioner docker, NetworkerDbContext db, CancellationToken ct)
+    {
+        var containers = await docker.ListManagedContainersAsync(ct).ConfigureAwait(false);
+        if (containers.Count == 0)
+        {
+            return (0, 0, 0);
+        }
+
+        var testerIds = await db.ProjectTesters
+            .Select(t => t.TesterId.ToString())
+            .ToListAsync(ct).ConfigureAwait(false);
+        var resourceIds = await db.ProjectTesters
+            .Where(t => t.VmResourceId != null)
+            .Select(t => t.VmResourceId!)
+            .ToListAsync(ct).ConfigureAwait(false);
+        var liveDeployments = await db.Deployments
+            .Where(d => d.Status != "torn_down" && d.Status != "failed" && d.Status != "cancelled")
+            .Select(d => d.DeploymentId.ToString())
+            .ToListAsync(ct).ConfigureAwait(false);
+
+        var knownTesters = new HashSet<string>(testerIds, StringComparer.OrdinalIgnoreCase);
+        var knownResources = new HashSet<string>(resourceIds, StringComparer.Ordinal);
+        var liveDeps = new HashSet<string>(liveDeployments, StringComparer.OrdinalIgnoreCase);
+        var now = DateTime.UtcNow;
+
+        var deleted = 0;
+        var failed = 0;
+        var wouldReap = 0;
+        foreach (var c in containers)
+        {
+            if (!IsDockerOrphan(c, knownTesters, knownResources, liveDeps, now))
+            {
+                continue;
+            }
+            wouldReap++;
+            var res = await docker.RemoveContainerAsync(c.Name, ct).ConfigureAwait(false);
+            if (res.Success)
+            {
+                deleted++;
+                _logger.LogInformation(
+                    "Orphan-reaper: removed docker {Role} container {Name} (tester={TesterId} deployment={DeploymentId})",
+                    c.Role, c.Name, c.TesterId ?? "-", c.DeploymentId ?? "-");
+            }
+            else
+            {
+                failed++;
+                _logger.LogWarning(
+                    "Orphan-reaper: failed to remove docker container {Name}: {Err}", c.Name, res.Error ?? res.StdErr);
+            }
+        }
+        return (deleted, failed, wouldReap);
     }
 
     /// <summary>

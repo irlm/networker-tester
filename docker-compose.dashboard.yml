@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   postgres:
     image: timescale/timescaledb-ha:pg16.6-ts2.17.2
@@ -8,7 +6,9 @@ services:
       POSTGRES_USER: networker
       POSTGRES_PASSWORD: networker
     ports:
-      - "5432:5432"
+      # Host port is configurable: scripts/dev-setup.sh picks a free one into
+      # .dev.env when 5432 is already taken by a local PostgreSQL.
+      - "${DEV_PG_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./scripts/init-logs-db.sql:/docker-entrypoint-initdb.d/01-logs-db.sql

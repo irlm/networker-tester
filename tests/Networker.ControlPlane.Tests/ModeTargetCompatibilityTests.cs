@@ -136,4 +136,89 @@ public class ModeTargetCompatibilityTests
         Assert.Empty(ModeTargetCompatibility.IncompatibleModes([], "network"));
         Assert.Empty(ModeTargetCompatibility.IncompatibleModes(["", "  "], "network"));
     }
+
+    // ── Rule 2: HTTP/3 by proxy stack (shared/http-stacks.json h3) ───────────
+
+    private static readonly string[] H3Modes = ["http3", "pageload3", "browser3", "download3", "upload3"];
+
+    [Theory]
+    [InlineData("nginx")]
+    [InlineData("caddy")]
+    [InlineData("endpoint")]
+    public void Stacks_with_quic_allow_the_h3_modes(string stack)
+    {
+        Assert.Empty(ModeTargetCompatibility.IncompatibleModes(H3Modes, "proxy", stack));
+        Assert.Empty(ModeTargetCompatibility.IncompatibleModes(H3Modes, "pending", stack));
+    }
+
+    [Theory]
+    [InlineData("apache")]
+    [InlineData("haproxy")]
+    [InlineData("traefik")]
+    [InlineData("iis")] // http.sys HTTP/3 needs SNI; proxy targets are addressed by IP (lab-measured)
+    public void Stacks_without_quic_reject_exactly_the_h3_modes(string stack)
+    {
+        // proxy kind: h3 modes rejected with the stack named in the reason; the
+        // H1/H2 siblings and everything else stay allowed.
+        var modes = new[] { "http1", "http2", "http3", "pageload", "pageload2", "pageload3", "browser1", "browser2", "browser3", "download", "download3", "upload3", "tcp" };
+        var bad = ModeTargetCompatibility.IncompatibleModes(modes, "proxy", stack);
+        Assert.Equal(H3Modes.OrderBy(m => m), bad.Select(b => b.Mode).OrderBy(m => m));
+        Assert.All(bad, b =>
+        {
+            Assert.Equal(ModeTargetCompatibility.H3Requirement, b.Requirement);
+            Assert.Contains($"{stack} has no HTTP/3", b.Reason);
+            Assert.Contains("shared/http-stacks.json", b.Reason);
+        });
+    }
+
+    [Fact]
+    public void Pending_with_a_quic_less_proxy_stack_rejects_h3_but_still_fails_open_on_kind()
+    {
+        // The pending kind stays fail-open for the kind rule (apibench / sdkprobe /
+        // throughput all pass), but the stack rule IS decidable and applies.
+        var bad = ModeTargetCompatibility.IncompatibleModes(
+            ["apibench", "sdkprobe", "download", "http1", "http3", "pageload3"], "pending", "apache");
+        Assert.Equal(["http3", "pageload3"], bad.Select(b => b.Mode).ToArray());
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("envoy")]
+    [InlineData("lighttpd")]
+    public void Unknown_or_absent_stack_fails_open_on_h3(string? stack)
+    {
+        Assert.Empty(ModeTargetCompatibility.IncompatibleModes(H3Modes, "proxy", stack));
+        Assert.Empty(ModeTargetCompatibility.IncompatibleModes(H3Modes, "pending", stack));
+        // A raw URL never has a stack — http3 against a URL is fine (rule 1 only).
+        Assert.Empty(ModeTargetCompatibility.IncompatibleModes(["http3", "browser3"], "network", stack));
+    }
+
+    [Fact]
+    public void Kind_rule_wins_when_both_apply_and_each_mode_is_reported_once()
+    {
+        // download3 against a raw URL is rejected for needing an endpoint (rule 1);
+        // even with a quic-less stack hint it must appear exactly once.
+        var bad = ModeTargetCompatibility.IncompatibleModes(["download3"], "network", "apache");
+        Assert.Single(bad);
+        Assert.Equal("networker-endpoint", bad[0].Requirement);
+    }
+
+    [Fact]
+    public void SplitH3ModesForStack_drops_only_h3_modes_on_quic_less_stacks()
+    {
+        var (kept, dropped) = ModeTargetCompatibility.SplitH3ModesForStack(
+            ["http1", "http2", "http3", "pageload3", "download"], "apache");
+        Assert.Equal(["http1", "http2", "download"], kept);
+        Assert.Equal(["http3", "pageload3"], dropped);
+
+        var (keptNginx, droppedNginx) = ModeTargetCompatibility.SplitH3ModesForStack(
+            ["http1", "http3"], "nginx");
+        Assert.Equal(["http1", "http3"], keptNginx);
+        Assert.Empty(droppedNginx);
+
+        var (keptUnknown, droppedUnknown) = ModeTargetCompatibility.SplitH3ModesForStack(["http3"], null);
+        Assert.Equal(["http3"], keptUnknown);
+        Assert.Empty(droppedUnknown);
+    }
 }

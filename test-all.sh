@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# test-all.sh — Run ALL tests across the entire project from macOS.
+# test-all.sh — Run ALL tests across the entire project (macOS or Linux).
 #
 # Usage:
 #   ./test-all.sh          # run everything
 #   ./test-all.sh rust     # only rust tests
+#   ./test-all.sh dotnet   # only the C# solution (build + xUnit)
 #   ./test-all.sh frontend # only frontend
 #   ./test-all.sh orch     # only orchestrator
 #   ./test-all.sh apis     # only reference API tests
@@ -47,9 +48,20 @@ if should_run rust; then
     run_suite "cargo fmt --check"              cargo fmt --all -- --check
     run_suite "cargo clippy"                   cargo clippy --all-targets -- -D warnings
     run_suite "workspace lib tests"            cargo test --workspace --lib
-    run_suite "dashboard all tests"            cargo test -p networker-dashboard
     run_suite "endpoint tests"                 cargo test -p networker-endpoint --lib
     run_suite "no-default-features build"      cargo build -p networker-tester --no-default-features
+fi
+
+# ── C# solution (control plane, agent, contracts, data, security, endpoint) ──
+if should_run dotnet; then
+    echo ""
+    echo "━━━ .NET ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    if command -v dotnet &>/dev/null; then
+        run_suite "dotnet build (Release)"    dotnet build Networker.sln -c Release -v quiet -nologo
+        run_suite "dotnet test"               dotnet test Networker.sln -c Release --no-build -v quiet -nologo
+    else
+        printf "${YELLOW}▶ %-40s SKIP (dotnet not installed)${NC}\n" "dotnet"
+    fi
 fi
 
 # ── Orchestrator ────────────────────────────────────────────────────────

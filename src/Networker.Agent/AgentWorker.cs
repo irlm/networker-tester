@@ -55,6 +55,9 @@ public sealed class AgentWorker(
 
         logger.LogInformation(
             "Networker agent starting dashboard_url={DashboardUrl}", options.DashboardUrl);
+        logger.LogInformation(
+            "Runner capabilities: chrome={Chrome} tshark={Tshark}",
+            RunnerCapabilities.Current.Chrome, RunnerCapabilities.Current.Tshark);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -106,8 +109,24 @@ public sealed class AgentWorker(
     {
         var interval = TimeSpan.FromSeconds(options.HeartbeatIntervalSeconds);
         using var timer = new PeriodicTimer(interval);
+        // Runner tool inventory (chrome / tshark), detected once per process and
+        // carried on every heartbeat so the control plane can gate browser* /
+        // capture options on this runner. Sent immediately on connect too — the
+        // periodic timer's first tick is a full interval away, and pickers should
+        // not show a stale inventory for 30s after a (re)connect.
+        var capabilities = RunnerCapabilities.Current;
         try
         {
+            // Heartbeat IMMEDIATELY on connect, then every interval. The control
+            // plane learns the agent's version (and tool inventory) only from
+            // heartbeats and its dispatcher's version gate treats an unknown
+            // version as incompatible — so a freshly (re)connected agent was
+            // undispatchable for up to one full interval (30s): a runner the
+            // create-tester flow had just marked `running` silently lost the
+            // first launches pinned to it (lab phase 5, 2026-08-16). Same lossy
+            // TrySend semantics as the periodic sends below.
+            sink.TrySend(new HeartbeatMessage(Load: null, Version: AgentVersion.Current, Capabilities: capabilities));
+
             while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false))
             {
                 // Deliberately lossy: with the outbound channel on
@@ -116,7 +135,7 @@ public sealed class AgentWorker(
                 // full-channel drop must not kill the heartbeat loop for the
                 // rest of the connection, so the result is ignored (the sink
                 // logs the drop) and teardown ends this loop via `token`.
-                sink.TrySend(new HeartbeatMessage(Load: null, Version: AgentVersion.Current));
+                sink.TrySend(new HeartbeatMessage(Load: null, Version: AgentVersion.Current, Capabilities: capabilities));
             }
         }
         catch (OperationCanceledException)

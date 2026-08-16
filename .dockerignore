@@ -1,0 +1,32 @@
+# Docker build context filter for lab/ images (context = repo root).
+# Keep the context small: only sources + the few shared assets the builds need.
+.git
+.github
+.claude
+.superpowers
+.worktrees
+target
+benchmarks/orchestrator/target
+benchmarks/metrics-agent/target
+benchmarks/reference-apis/cpp/build
+benchmarks/reference-apis/**/bin
+benchmarks/reference-apis/**/obj
+benchmarks/reference-apis/**/publish
+src/**/bin
+src/**/obj
+tests/**/bin
+tests/**/obj
+dashboard/node_modules
+dashboard/dist
+dashboard/e2e/test-results
+dashboard/playwright-report
+output
+docs
+supply-chain
+sdk
+lab/.generated
+lab/.state
+*.log
+.env
+*.env
+.DS_Store

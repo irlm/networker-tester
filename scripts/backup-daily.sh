@@ -94,7 +94,12 @@ else
     FILE_SIZE=$(stat -f%z "$DUMP_FILE")
 fi
 
-CHECKSUM_SHA256=$(shasum -a 256 "$DUMP_FILE" | cut -d' ' -f1)
+# sha256sum (GNU coreutils) on Linux; shasum (perl) is what macOS ships.
+if command -v sha256sum > /dev/null 2>&1; then
+    CHECKSUM_SHA256=$(sha256sum "$DUMP_FILE" | cut -d' ' -f1)
+else
+    CHECKSUM_SHA256=$(shasum -a 256 "$DUMP_FILE" | cut -d' ' -f1)
+fi
 log "Size: ${FILE_SIZE} bytes, SHA256: ${CHECKSUM_SHA256}"
 
 # ── Step 3: Upload daily backup ───────────────────────────────────────────────

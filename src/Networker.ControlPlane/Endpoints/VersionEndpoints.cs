@@ -44,9 +44,14 @@ public static class VersionEndpoints
 {
     public static IEndpointRouteBuilder MapVersionEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/api/version", async (NetworkerDbContext db, LatestVersionCache cache) =>
+        app.MapGet("/api/version", async (NetworkerDbContext db, LatestVersionCache cache, HttpContext http) =>
         {
             var dashboardVersion = DashboardVersion;
+
+            // Docker (local) provider flag — the frontend shows/hides the
+            // "Docker (local)" cloud choice on it. Prod never sets it.
+            var dockerProvider = (http.RequestServices.GetService<Provisioning.DockerProviderOptions>()
+                                  ?? Provisioning.DockerProviderOptions.Disabled).Enabled;
 
             // The local tester binary's version never changes at runtime — probe
             // it once (subprocess), then serve from the memoised task on every
@@ -110,7 +115,8 @@ public static class VersionEndpoints
                 testerVersion,
                 latestRelease,
                 updateAvailable,
-                endpoints));
+                endpoints,
+                dockerProvider));
         })
         .RequireAuthorization();
 
@@ -387,7 +393,8 @@ public static class VersionEndpoints
         string? tester_version,
         string? latest_release,
         bool update_available,
-        EndpointVersionDto[] endpoints);
+        EndpointVersionDto[] endpoints,
+        bool docker_provider);
 
     internal sealed record EndpointVersionDto(
         string host,
