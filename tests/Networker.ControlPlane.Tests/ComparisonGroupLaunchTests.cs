@@ -99,7 +99,6 @@ public class ComparisonGroupLaunchTests
     [Theory]
     [InlineData("nginx")]
     [InlineData("caddy")]
-    [InlineData("iis")]
     [InlineData("envoy")] // unknown → fail open, run everything
     public void Quic_capable_or_unknown_stacks_keep_the_base_workload(string stack)
     {

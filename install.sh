@@ -1337,7 +1337,7 @@ _lan_install_binary_windows() {
     ssh "${_LAN_SSH_OPTS[@]}" "${_LAN_DEST}" \
         "powershell -ExecutionPolicy Bypass -Command \"& { \
             Invoke-WebRequest -Uri '${installer_url}' -OutFile C:\\networker-install.ps1; \
-            & C:\\networker-install.ps1 -Component ${comp_arg} -AutoYes \
+            & C:\\networker-install.ps1 -Component ${comp_arg} -Yes \
         }\""
 
     local remote_ver
@@ -5590,9 +5590,9 @@ _iis_setup_powershell() {
 \$ErrorActionPreference = 'Stop'
 \$fqdn = "${fqdn}"
 
-# 1. Install IIS + URL Rewrite + ARR (for reverse-proxy of /page, /asset)
+# 1. Install IIS + WebSocket protocol + URL Rewrite + ARR (reverse-proxy of /page, /asset, /ws, ...)
 Write-Host "Installing IIS..."
-Install-WindowsFeature -Name Web-Server -IncludeManagementTools | Out-Null
+Install-WindowsFeature -Name Web-Server,Web-WebSockets -IncludeManagementTools | Out-Null
 IIS_PS1_HEADER
     cat <<'IIS_PS1'
 
@@ -5703,8 +5703,8 @@ $webConfig = @"
           </conditions>
           <action type="Rewrite" url="http://127.0.0.1:8080/asset?{C:0}" appendQueryString="false" />
         </rule>
-        <rule name="Proxy throughput + info + apibench to endpoint" stopProcessing="true">
-          <match url="^(download|upload|info|api|health)(.*)" />
+        <rule name="Proxy throughput + info + apibench + ws to endpoint" stopProcessing="true">
+          <match url="^(download|upload|info|api|health|ws)(.*)" />
           <action type="Rewrite" url="http://127.0.0.1:8080/{R:1}{R:2}" />
         </rule>
       </rules>
@@ -5713,7 +5713,7 @@ $webConfig = @"
 </configuration>
 "@
 $webConfig | Out-File "$siteRoot\web.config" -Encoding UTF8
-Write-Host "web.config created (with reverse-proxy rules for /page, /asset, /download, /upload, /info, /api, /health)"
+Write-Host "web.config created (with reverse-proxy rules for /page, /asset, /download, /upload, /info, /api, /health, /ws)"
 
 # 4. Generate self-signed certificate (include FQDN in SAN for SNI/H3)
 Write-Host "Creating self-signed certificate..."

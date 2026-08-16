@@ -57,6 +57,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fan-out across runners, cancel — with a non-zero exit and run/attempt detail
   on any regression. bash-3.2/macOS clean; needs only docker + curl + jq.
   See `lab/README.md`.
+- **`lab/` — Windows Server (IIS) target.** `./lab/lab.sh up --targets
+  rust,nginx,windows` (alias `iis`) adds a real Windows Server 2022 eval VM
+  (dockur/windows: QEMU + KVM in a container on `labnet`, same `.10N` IP
+  scheme — the container's IP is the VM's, dockur DNATs every TCP/UDP port to
+  the guest). On first boot the VM runs the checkout's **`install.ps1`**
+  (copied in through `/oem`): `-Yes -Component endpoint` (downloads the released
+  `networker-endpoint.exe` — Windows binaries can't be cross-built on the Linux
+  host — and starts it like the cloud bootstraps: hidden process + `schtasks`
+  ONSTART as SYSTEM) then `-Setup iis` (IIS 8082/8445, HTTP/3, ARR reverse
+  proxy to :8080), plus OpenSSH + a fixed lab admin password + firewall; it
+  reboots once for http.sys HTTP/3. Progress streams to the host share
+  (`lab.sh windows-log`, `windows-ssh`, the dockur console on :8006);
+  `up` polls `:8080/health` + IIS `:8445/health` with a loud, bounded budget
+  (`LAB_WINDOWS_TIMEOUT`, default 3600 s; `--windows-async` + `wait-windows`
+  to not block). The disk is a named volume so the second `up` boots the
+  installed VM in 1-2 min. The target registers as a completed deployment
+  with `http_stacks:["iis"]`, os `windows`, so `validate` phase 2 runs the
+  full mode matrix through IIS on :8445 (h3 modes per the manifest — see
+  Fixed: iis is `h3: false`), plus the network modes incl. `http3` against the
+  bare Windows endpoint on :8443 (kind=network).
+  Linux + `/dev/kvm` only (skipped with a message elsewhere); runners stay
+  Linux. See `lab/README.md` "Windows (IIS) target".
+- `install.ps1`: **`-Setup iis` is now the real IIS setup** (was a placeholder
+  binding :8082 only — HTTPS 8445 / HTTP/3 / the ARR reverse-proxy rules
+  lived solely in install.sh's `_iis_setup_powershell` az-run-command payload):
+  IIS + URL Rewrite + ARR, `EnableHttp3`/`EnableHttp2*` in http.sys (prints
+  `REBOOT_NEEDED` the first time), the generated static site at
+  `C:\networker-static` with the same web.config (`/page /asset /download
+  /upload /info /api /health` → endpoint :8080), self-signed cert, HTTPS 8445
+  IP binding (+ optional **`-Fqdn`** SNI binding), alt-svc h3 header, firewall
+  TCP 8082/8445 + UDP 8445. **Release install without `gh`**: when gh is not
+  authenticated the installer resolves the latest tag through the
+  unauthenticated GitHub API and downloads the public asset with
+  `Invoke-WebRequest` (the fallback install.sh already had) instead of
+  silently falling into a Rust/MSVC source compile that a Windows Server VM
+  can't do; installs the VC++ runtime when `vcruntime140.dll` is missing
+  (release exes link it dynamically). `-AutoYes` (what the LAN/remote
+  Windows paths passed — an unknown parameter, i.e. a hard error) is now an
+  alias of `-Yes` and the callers say `-Yes`.
 - `shared/http-stacks.json` — one table for the comparison stacks' HTTP/HTTPS
   ports + HTTP/3 capability, embedded by the tester (pageload/throughput/
   browser HTTPS→HTTP rewrites, `--http-stacks` — now knows caddy/traefik/
@@ -109,6 +148,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     without Chrome greys out the `browser*` modes.
 
 ### Fixed
+- **Every HTTP/2 probe failed against IIS** (`http2`, `download2`, `upload2`,
+  `pageload2`, the `rpm`/responsiveness load generator): the tester built h2
+  requests with a path-only URI, so hyper sent them **without the `:scheme`
+  and `:authority` pseudo-headers** RFC 9113 §8.3.1 requires. nginx / caddy /
+  hyper / quinn tolerate it; http.sys answers `RST_STREAM PROTOCOL_ERROR`.
+  Found by the lab's Windows target; h2 requests now use the absolute form
+  (`https://host:port/path`, no `Host` header next to `:authority`).
+- **`websocket` through IIS got 404**: the ARR web.config (install.ps1
+  `-Setup iis` and install.sh `_iis_setup_powershell`) had no rule for the
+  endpoint's `/ws` echo and IIS lacked the WebSocket Protocol feature; both
+  now proxy `/ws` (`Web-WebSockets` installed).
+- **`shared/http-stacks.json`: `iis` is `h3: false`** (was `true`, unproven).
+  Measured on the lab's Windows Server 2022 target: http.sys does listen for
+  QUIC on :8445 after `install.ps1 -Setup iis`, but completes the handshake
+  **only when the client sends TLS SNI** — without SNI it closes the
+  connection with transport `INTERNAL_ERROR`. The platform addresses endpoint
+  VMs by IP (`endpoint_ips[0]` → `kind=network host=<ip>`), an IP literal
+  carries no SNI (RFC 6066), so `http3`/`pageload3`/`browser3`/… through IIS
+  can never succeed on the proxy path. The mode gates (API 422, UI grey-out,
+  matrix trimming) and the lab now refuse/skip h3 modes for `iis`; the
+  manifest entry documents the condition to flip it back (proxy targets
+  resolved by hostname). With SNI (`--resolve`-style hostname) http.sys did
+  serve HTTP/3 200s to the tester, but with a ~1 s QUIC handshake and
+  sporadic `H3_INTERNAL_ERROR` — noted, not chased.
 - **Fresh control-plane databases persisted zero attempts, forever.** The
   tester-owned `RequestAttempt`/… tables only existed where a DB-backed
   tester or install.sh's psql seed had created them; the streamed-attempt

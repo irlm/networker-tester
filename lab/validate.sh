@@ -9,7 +9,11 @@
 #            deterministic HTTP/TCP/UDP modes through the stack install.sh set
 #            up (kind=proxy → dispatcher resolves ip:stack-port + insecure);
 #            every mode must have ≥1 successful attempt; `native` must be DROPPED
-#            by dispatch (0 attempts), never failed.
+#            by dispatch (0 attempts), never failed. A `windows` target is
+#            validated as proxy stack `iis` (:8445; h3 modes only if
+#            shared/http-stacks.json says iis h3=true — it says false: http.sys
+#            needs SNI, targets are addressed by IP) AND, mirroring phase 1,
+#            its bare networker-endpoint on :8443 (kind=network, incl. http3).
 #   phase 3  fan-out — launch 2×runners runs at once; all complete and ≥2
 #            distinct workers execute them (dispatch spreads across agents).
 #   phase 4  cancel — launch a long run, cancel it, assert terminal `cancelled`.
@@ -103,6 +107,8 @@ stack_h3() { # stack_h3 STACK → 0 (true) / 1 (false); unknown → assume true
 H3_MODES="http3,pageload3,browser3"
 strip_h3_modes() { echo "$1" | tr ',' '\n' | grep -vxF -e http3 -e pageload3 -e browser3 | paste -sd, -; }
 stack_of() { echo "$TARGETS" | tr ',' '\n' | sed -n "${1}p"; }
+# lab.sh registers the windows target as its proxy stack (iis); the rest are 1:1.
+proxy_stack_of() { case "$1" in windows) echo iis;; *) echo "$1";; esac; }
 target_count() { echo "$TARGETS" | tr ',' '\n' | grep -c .; }
 target_ip() { echo "${NET_PREFIX}.$((100 + $1))"; }
 list_of() { jq -c 'if type=="array" then . else (.attempts // .items // .data // .configs // .runs // .test_runs // []) end' <<<"$1"; }
@@ -187,31 +193,55 @@ if run_phase 2; then
     st="$(stack_of "$i")"
     if [ "$st" != "rust" ]; then
       any_proxy=1
-      DEP="$(api GET "/api/projects/$PID/deployments?limit=100" | jq -r --arg n "lab-target-${i}-${st}" \
+      pst="$(proxy_stack_of "$st")"   # windows → iis
+      lbl="$st"; [ "$pst" != "$st" ] && lbl="$st/$pst"
+      DEP="$(api GET "/api/projects/$PID/deployments?limit=100" | jq -r --arg n "lab-target-${i}-${pst}" \
         '(if type=="array" then . else (.deployments // .items // []) end) | [.[]|select(.name==$n)][0] | (.id // .deployment_id) // empty')"
-      [ -n "$DEP" ] || { fail "phase 2: deployment for target-$i ($st) not found (lab.sh up registers it)"; i=$((i+1)); continue; }
-      note "phase 2 — mode matrix through target-$i ($st) deployment ${DEP:0:8} at $(target_ip "$i")"
+      [ -n "$DEP" ] || { fail "phase 2: deployment for target-$i ($lbl) not found (lab.sh up registers it)"; i=$((i+1)); continue; }
+      note "phase 2 — mode matrix through target-$i ($lbl) deployment ${DEP:0:8} at $(target_ip "$i"):$(jq -r --arg s "$pst" '[.stacks[]|select(.id==$s)][0].https_port // "?"' "$STACKS_JSON")"
       STACK_MATRIX="$MATRIX"
-      if ! stack_h3 "$st"; then STACK_MATRIX="$(strip_h3_modes "$MATRIX")"; note "  ($st has no HTTP/3 per shared/http-stacks.json — h3 modes excluded)"; fi
+      if ! stack_h3 "$pst"; then STACK_MATRIX="$(strip_h3_modes "$MATRIX")"; note "  ($pst has no HTTP/3 per shared/http-stacks.json — h3 modes excluded)"; fi
       MODES_JSON="$(jq -nc --arg m "$STACK_MATRIX" '($m|split(",")) + ["native"]')"
-      CFG2="$(create_config "lab-p2-${st}-t${i}-$STAMP" \
-        "$(jq -nc --arg d "$DEP" --arg s "$st" '{kind:"proxy",proxy_endpoint_id:$d,proxy_stack:$s}')" \
+      CFG2="$(create_config "lab-p2-${pst}-t${i}-$STAMP" \
+        "$(jq -nc --arg d "$DEP" --arg s "$pst" '{kind:"proxy",proxy_endpoint_id:$d,proxy_stack:$s}')" \
         "$(jq -nc --argjson modes "$MODES_JSON" --argjson r "$RUNS" '{modes:$modes,runs:$r,concurrency:1,timeout_ms:15000,capture_mode:"headers-only",payload_sizes:[]}')")" || exit 1
       RUN2="$(launch "$CFG2")" || exit 1
       note "  run $RUN2 launched — waiting (matrix: $STACK_MATRIX + native)"
-      wait_run "$RUN2" || fail "phase 2 ($st): run $RUN2 did not finish in ${RUN_TIMEOUT}s (last=$R_STATUS)"
+      wait_run "$RUN2" || fail "phase 2 ($lbl): run $RUN2 did not finish in ${RUN_TIMEOUT}s (last=$R_STATUS)"
       ATT2="$(attempts_of "$RUN2")"
       note "  status=$R_STATUS ok=$R_OK fail=$R_FAIL attempts=$(jq length <<<"$ATT2") worker=${R_WORKER:-?}"
       echo "    $(per_mode_stats "$ATT2")"
-      case "$R_STATUS" in completed|partial) ;; *) fail "phase 2 ($st): status '$R_STATUS' ${R_ERR:+— $R_ERR}";; esac
+      case "$R_STATUS" in completed|partial) ;; *) fail "phase 2 ($lbl): status '$R_STATUS' ${R_ERR:+— $R_ERR}";; esac
       B2="$(broken_modes "$ATT2")"
-      if [ -n "$B2" ]; then fail "phase 2 ($st): mode(s) with ZERO successes through $st: $B2"; first_errors "$ATT2" | sed 's/^/      /'; fi
+      if [ -n "$B2" ]; then fail "phase 2 ($lbl): mode(s) with ZERO successes through $pst: $B2"; first_errors "$ATT2" | sed 's/^/      /'; fi
       NATIVE="$(jq '[.[]|select(.protocol=="native")]|length' <<<"$ATT2")"
-      [ "$NATIVE" -eq 0 ] || fail "phase 2 ($st): 'native' produced $NATIVE attempt(s) — dispatch must DROP it (v0.28.120 filter)"
+      [ "$NATIVE" -eq 0 ] || fail "phase 2 ($lbl): 'native' produced $NATIVE attempt(s) — dispatch must DROP it (v0.28.120 filter)"
       NOTFOUND="$(jq '[.[]|select(.success==false and ((.error_message // "")|test("404")))]|length' <<<"$ATT2")"
-      [ "$NOTFOUND" -eq 0 ] || fail "phase 2 ($st): $NOTFOUND attempt(s) got HTTP 404 through $st — the proxy is not forwarding a route (v0.28.112 class)"
-      record "phase 2  $st matrix → $R_STATUS ok=$R_OK fail=$R_FAIL${B2:+ BROKEN=$B2}"
-      [ -z "$B2" ] && [ "$NATIVE" -eq 0 ] && [ "$NOTFOUND" -eq 0 ] && pass "phase 2 ($st)"
+      [ "$NOTFOUND" -eq 0 ] || fail "phase 2 ($lbl): $NOTFOUND attempt(s) got HTTP 404 through $pst — the proxy is not forwarding a route (v0.28.112 class)"
+      record "phase 2  $lbl matrix → $R_STATUS ok=$R_OK fail=$R_FAIL${B2:+ BROKEN=$B2}"
+      [ -z "$B2" ] && [ "$NATIVE" -eq 0 ] && [ "$NOTFOUND" -eq 0 ] && pass "phase 2 ($lbl)"
+
+      # Windows target: also the BARE Windows networker-endpoint on :8443
+      # (kind=network, like phase 1 against the rust target) — proves the
+      # Windows build of the endpoint offers the same tests as the Linux one.
+      if [ "$st" = "windows" ]; then
+        note "phase 2 — network probe (kind=network) against target-$i (windows networker-endpoint) at $(target_ip "$i"):8443"
+        CFG2W="$(create_config "lab-p2-windows-endpoint-t${i}-$STAMP" \
+          "$(jq -nc --arg h "$(target_ip "$i")" '{kind:"network",host:$h,port:8443}')" \
+          "$(jq -nc --arg m "$NETWORK_MODES" --argjson r "$RUNS" '{modes:($m|split(",")),runs:$r,concurrency:1,timeout_ms:8000,insecure:true}')")" || exit 1
+        RUN2W="$(launch "$CFG2W")" || exit 1
+        note "  run $RUN2W launched — waiting (modes: $NETWORK_MODES)"
+        wait_run "$RUN2W" || fail "phase 2 (windows endpoint): run $RUN2W did not finish in ${RUN_TIMEOUT}s (last=$R_STATUS)"
+        ATT2W="$(attempts_of "$RUN2W")"
+        note "  status=$R_STATUS ok=$R_OK fail=$R_FAIL attempts=$(jq length <<<"$ATT2W") worker=${R_WORKER:-?}"
+        echo "    $(per_mode_stats "$ATT2W")"
+        [ "$R_STATUS" = "completed" ] || fail "phase 2 (windows endpoint): status '$R_STATUS' (expected completed) ${R_ERR:+— $R_ERR}"
+        [ "${R_OK:-0}" -gt 0 ] || fail "phase 2 (windows endpoint): 0 successful attempts"
+        B2W="$(broken_modes "$ATT2W")"
+        if [ -n "$B2W" ]; then fail "phase 2 (windows endpoint): mode(s) with zero successes: $B2W"; first_errors "$ATT2W" | sed 's/^/      /'; fi
+        record "phase 2  windows endpoint :8443 → $R_STATUS ok=$R_OK fail=$R_FAIL${B2W:+ BROKEN=$B2W}"
+        [ -z "$B2W" ] && [ "$R_STATUS" = "completed" ] && pass "phase 2 (windows endpoint)"
+      fi
     fi
     i=$((i + 1))
   done

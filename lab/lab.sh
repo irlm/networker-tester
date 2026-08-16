@@ -8,12 +8,15 @@
 #
 #   ./lab/lab.sh build                        # build images from this checkout
 #   ./lab/lab.sh up --runners 3 --targets rust,nginx,caddy [--ui]
+#   ./lab/lab.sh up --runners 1 --targets rust,nginx,windows   # + a Windows Server VM (IIS) target
 #   ./lab/lab.sh validate                     # end-to-end run matrix (like the prod canary)
 #   ./lab/lab.sh status | logs [svc] | shell <svc> | psql | down [--volumes]
 #
 # Portable: bash 3.2 (macOS), Linux; needs docker (compose v2), curl, jq.
 # Nothing here touches your host toolchains — Rust + .NET + Node build inside
 # Docker (linux/amd64 or linux/arm64, whatever your Docker runs natively).
+# The optional `windows` target is a real Windows Server VM (dockur/windows,
+# QEMU+KVM in a container) — Linux with /dev/kvm only; see README "Windows".
 set -euo pipefail
 
 LAB_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -34,6 +37,19 @@ LAB_ADMIN_PASSWORD="${LAB_ADMIN_PASSWORD:-LabAdmin-Pass1!}"   # set on first log
 LAB_PROJECT_NAME="${LAB_PROJECT_NAME:-Local Lab}"
 LAB_STARTUP_TIMEOUT="${LAB_STARTUP_TIMEOUT:-240}"     # s for control plane readiness
 LAB_AGENT_TIMEOUT="${LAB_AGENT_TIMEOUT:-120}"         # s for all runners to come online
+# Windows (IIS) target — a Windows Server VM via dockur/windows (KVM). First
+# boot downloads the eval ISO (~6 GB) + installs Windows + runs install.ps1
+# (endpoint + IIS): 20-40 min. The disk lives in a named volume, so the next
+# `up` boots the installed VM in ~1-2 min.
+LAB_WINDOWS_IMAGE="${LAB_WINDOWS_IMAGE:-dockurr/windows:latest}"
+LAB_WINDOWS_VERSION="${LAB_WINDOWS_VERSION:-2022}"     # dockur VERSION: 2022 | 2025 (Windows Server eval)
+LAB_WINDOWS_RAM="${LAB_WINDOWS_RAM:-6G}"
+LAB_WINDOWS_CPUS="${LAB_WINDOWS_CPUS:-4}"
+LAB_WINDOWS_DISK="${LAB_WINDOWS_DISK:-40G}"
+LAB_WINDOWS_USER="${LAB_WINDOWS_USER:-Docker}"
+LAB_WINDOWS_PASSWORD="${LAB_WINDOWS_PASSWORD:-LabWindows-Pass1!}"   # local admin, SSH (lab only — NOT a secret)
+LAB_WINDOWS_TIMEOUT="${LAB_WINDOWS_TIMEOUT:-3600}"     # s to wait for the VM's endpoint + IIS on first boot
+LAB_WINDOWS_VIEWER_PORT="${LAB_WINDOWS_VIEWER_PORT:-8006}"  # dockur web viewer (VM console) on the host
 export LAB_NET_PREFIX LAB_CP_PORT LAB_UI_PORT LAB_PG_PORT LAB_ADMIN_EMAIL LAB_ADMIN_BOOTSTRAP_PASSWORD
 
 BASE_URL="http://127.0.0.1:${LAB_CP_PORT}"
@@ -59,6 +75,7 @@ Commands:
      [--netem "delay 40ms 5ms"]              WAN emulation on runners (tc netem)
      [--agents-via-ui]                       Runners connect through the nginx UI proxy (needs --ui)
      [--no-build]                            Skip image build (default builds what is missing)
+     [--windows-async]                       Don't wait for the Windows VM (use wait-windows later)
   validate [--modes m1,m2] [--runs N]        Drive real runs through the API + assert (see validate.sh)
   scale --runners N | --targets SPEC         Change topology (re-registers as needed)
   status                                     Runners/targets/agents/health at a glance
@@ -66,13 +83,18 @@ Commands:
   shell <service>                            bash inside a container
   psql                                       psql into the lab database
   tester <runner> -- <args>                  Run networker-tester directly inside a runner (bypasses the CP)
-  down [--volumes]                           Stop (and optionally wipe the DB)
+  wait-windows                               Block until the Windows target(s) serve :8080 + IIS :8445
+  windows-log [target-N] [-f]                Show the Windows VM's setup log/status (from the host share)
+  windows-ssh [target-N] [-- cmd]            SSH into the Windows VM (user/password printed)
+  down [--volumes]                           Stop (and optionally wipe the DB + the Windows VM disk)
   env                                        Print the saved lab env (token, project id, urls)
 
 Targets SPEC = comma list of stacks; one container each:
   rust      networker-endpoint only (8080/8443 + UDP 9997-9999)
   nginx|caddy|apache|haproxy|traefik
             networker-endpoint + that proxy set up by install.sh --setup-stack
+  windows   (alias: iis) a Windows Server VM: install.ps1 endpoint (8080/8443)
+            + IIS 8082/8445 with HTTP/3 — Linux + /dev/kvm only, first boot 20-40 min
   Default: rust,nginx        Runners default: 2
 EOF
 }
@@ -90,6 +112,9 @@ save_state() {
     echo "LAB_NETEM='${LAB_NETEM:-}'"
     echo "LAB_AGENTS_VIA_UI='${LAB_AGENTS_VIA_UI:-0}'"
     echo "LAB_BASE_URL='${BASE_URL}'"
+    echo "LAB_WINDOWS_USER='${LAB_WINDOWS_USER}'"
+    echo "LAB_WINDOWS_PASSWORD='${LAB_WINDOWS_PASSWORD}'"
+    echo "LAB_WINDOWS_TIMEOUT='${LAB_WINDOWS_TIMEOUT}'"
   } > "$STATE_ENV"
 }
 runner_key_file() { echo "$STATE_DIR/runner-$1.key"; }
@@ -186,17 +211,19 @@ SQL
 # Register target N (stack != rust) as a COMPLETED deployment so test configs
 # of kind "proxy" (proxy_endpoint_id = deployment id, proxy_stack = <stack>)
 # resolve to <target ip>:<stack https port> exactly like a cloud endpoint VM.
+# The Windows target registers as stack "iis" (its proxy stack) with os windows.
 register_target_deployment() {
-  local n="$1" stack="$2" ip name id
-  ip="${LAB_NET_PREFIX}.$((100 + n))"; name="lab-target-${n}-${stack}"
+  local n="$1" stack="$2" ip name id os pstack
+  ip="${LAB_NET_PREFIX}.$((100 + n))"; pstack="$(proxy_stack_of_target "$stack")"; name="lab-target-${n}-${pstack}"
+  os="ubuntu-24.04"; [ "$stack" = windows ] && os="windows"
   id="$(psql_q "SELECT deployment_id FROM deployment WHERE name='${name}' AND project_id='${LAB_PROJECT_ID}' LIMIT 1" || true)"
   if [ -z "$id" ]; then
     psql_stdin <<SQL
 INSERT INTO deployment (deployment_id, name, status, config, endpoint_ips, project_id, created_at, started_at, finished_at, log)
 VALUES (gen_random_uuid(), '${name}', 'completed',
-        '{"lab":true,"tester":{"provider":"local"},"endpoints":[{"label":"target-${n}","provider":"lan","lan":{"ip":"${ip}","user":"lab"},"http_stacks":["${stack}"],"os":"ubuntu-24.04"}]}'::jsonb,
+        '{"lab":true,"tester":{"provider":"local"},"endpoints":[{"label":"target-${n}","provider":"lan","lan":{"ip":"${ip}","user":"lab"},"http_stacks":["${pstack}"],"os":"${os}"}]}'::jsonb,
         '["${ip}"]'::jsonb, '${LAB_PROJECT_ID}', now(), now(), now(),
-        'seeded by lab.sh — docker target ${n} (${stack}) at ${ip}');
+        'seeded by lab.sh — docker target ${n} (${stack} → ${pstack}) at ${ip}');
 SQL
     id="$(psql_q "SELECT deployment_id FROM deployment WHERE name='${name}' AND project_id='${LAB_PROJECT_ID}' LIMIT 1")"
   fi
@@ -207,11 +234,39 @@ SQL
 # Runners: runner-1..N at .201+; targets: target-1..M at .101+.
 stack_of() { echo "$LAB_TARGETS" | tr ',' '\n' | sed -n "${1}p"; }
 target_count() { [ -z "${LAB_TARGETS:-}" ] && echo 0 || echo "$LAB_TARGETS" | tr ',' '\n' | grep -c .; }
+# The proxy stack a target is registered/validated as: windows → iis, else itself.
+proxy_stack_of_target() { case "$1" in windows) echo iis;; *) echo "$1";; esac; }
+normalize_stacks() { echo "$1" | tr ',' '\n' | sed 's/^iis$/windows/' | grep . | paste -sd, -; }
 validate_stacks() {
   local s
   for s in $(echo "$1" | tr ',' ' '); do
-    case "$s" in rust|nginx|caddy|apache|haproxy|traefik) ;; *) die "unknown target stack '$s' (rust|nginx|caddy|apache|haproxy|traefik)";; esac
+    case "$s" in rust|nginx|caddy|apache|haproxy|traefik|windows) ;; *) die "unknown target stack '$s' (rust|nginx|caddy|apache|haproxy|traefik|windows)";; esac
   done
+}
+has_windows_target() { echo ",${LAB_TARGETS:-}," | grep -q ',windows,'; }
+windows_ok() { # KVM-backed VMs need Linux + /dev/kvm (Docker Desktop on macOS/Windows can't); dockerd (root) opens it
+  [ "$(uname -s)" = Linux ] && [ -e /dev/kvm ]
+}
+windows_gen_dir() { echo "$GEN_DIR/windows-$1"; }
+# Stage the /oem folder for target N: the repo's oem scripts + THE CHECKOUT'S
+# install.ps1 (so what runs inside the VM is the installer you are shipping) +
+# the generated lab.env.ps1 (password, stacks). /shared is where the VM writes
+# its setup log + status for the host.
+stage_windows_target() {
+  local n="$1" d; d="$(windows_gen_dir "$n")"
+  mkdir -p "$d/oem" "$d/shared"
+  cp "$LAB_DIR/images/windows/oem/"* "$d/oem/"
+  cp "$REPO_ROOT/install.ps1" "$d/oem/install.ps1"
+  {
+    echo "# GENERATED by lab.sh"
+    echo "\$LabUser     = \"${LAB_WINDOWS_USER}\""
+    echo "\$LabPassword = \"${LAB_WINDOWS_PASSWORD}\""
+    echo "\$LabStacks   = \"iis\""
+  } > "$d/oem/lab.env.ps1"
+  # cmd.exe wants CRLF in .bat files (git may have checked it out LF).
+  awk '{ sub(/\r$/, ""); printf "%s\r\n", $0 }' "$LAB_DIR/images/windows/oem/install.bat" > "$d/oem/install.bat"
+  # The VM's log/status files must be writable by the container's samba user.
+  chmod 0777 "$d/shared" 2>/dev/null || true
 }
 write_topology() {
   mkdir -p "$GEN_DIR"
@@ -224,6 +279,37 @@ write_topology() {
     i=0
     for stack in $(echo "$LAB_TARGETS" | tr ',' ' '); do
       i=$((i + 1))
+      if [ "$stack" = windows ]; then
+        stage_windows_target "$i"
+        cat <<YML
+  target-${i}:
+    # Windows Server VM (dockur/windows: QEMU + KVM). The container's IP is the
+    # VM's IP: dockur DNATs every TCP/UDP port (except its :8006 web console)
+    # to the guest, so runners reach the endpoint/IIS at ${LAB_NET_PREFIX}.$((100 + i)).
+    image: ${LAB_WINDOWS_IMAGE}
+    hostname: target-${i}
+    environment:
+      VERSION: "${LAB_WINDOWS_VERSION}"
+      RAM_SIZE: "${LAB_WINDOWS_RAM}"
+      CPU_CORES: "${LAB_WINDOWS_CPUS}"
+      DISK_SIZE: "${LAB_WINDOWS_DISK}"
+      USERNAME: "${LAB_WINDOWS_USER}"
+      PASSWORD: "${LAB_WINDOWS_PASSWORD}"
+    devices: [/dev/kvm, /dev/net/tun]
+    cap_add: [NET_ADMIN]
+    ports:
+      - "${LAB_WINDOWS_VIEWER_PORT}:8006"
+    stop_grace_period: 2m
+    volumes:
+      - windows-storage-${i}:/storage
+      - $(windows_gen_dir "$i")/oem:/oem
+      - $(windows_gen_dir "$i")/shared:/shared
+    networks:
+      labnet:
+        ipv4_address: ${LAB_NET_PREFIX}.$((100 + i))
+YML
+        continue
+      fi
       cat <<YML
   target-${i}:
     image: nwk-lab/target-${stack}:local
@@ -266,6 +352,16 @@ YML
 YML
       n=$((n + 1))
     done
+    if has_windows_target; then
+      # The Windows VM disk: a named volume per target index, so a plain
+      # `down` + `up` boots the installed VM instead of reinstalling
+      # (`down --volumes` wipes it).
+      echo "volumes:"
+      i=0
+      for stack in $(echo "$LAB_TARGETS" | tr ',' ' '); do
+        i=$((i + 1)); [ "$stack" = windows ] && echo "  windows-storage-${i}: {}"
+      done
+    fi
   } > "$TOPOLOGY"
   COMPOSE=(docker compose -f "$LAB_DIR/docker-compose.yml" -f "$TOPOLOGY")
 }
@@ -285,6 +381,7 @@ build_images() { # build_images STACKS(csv) UI(0|1)
   docker build ${BUILD_FLAGS[@]+"${BUILD_FLAGS[@]}"} -f "$LAB_DIR/images/runner.Dockerfile" -t nwk-lab/runner:local "$REPO_ROOT"
   local arg
   for s in $(echo "$stacks" | tr ',' ' ' | tr ' ' '\n' | sort -u); do
+    [ "$s" = windows ] && continue          # windows = dockur/windows image, pulled at up
     arg="$s"; [ "$s" = rust ] && arg=none   # rust = bare endpoint, no proxy stack
     note "building target image for '$s'$([ "$arg" = none ] || echo " (install.sh --setup-stack $s runs at build time)")"
     docker build ${BUILD_FLAGS[@]+"${BUILD_FLAGS[@]}"} -f "$LAB_DIR/images/target.Dockerfile" --build-arg "STACK=$arg" -t "nwk-lab/target-$s:local" "$REPO_ROOT"
@@ -321,10 +418,57 @@ wait_agents_online() { # wait_agents_online N
     sleep 3
   done
 }
+windows_status() { # windows_status N → the VM's status word (installing|endpoint|iis|rebooting|ready|failed:*) or "-"
+  local f; f="$(windows_gen_dir "$1")/shared/status"
+  [ -f "$f" ] && tr -d '\r\n' < "$f" || echo "-"
+}
+windows_http_ok() { curl -fsS --max-time 4 "http://${LAB_NET_PREFIX}.$((100 + $1)):8080/health" >/dev/null 2>&1; }
+windows_iis_ok()  { curl -fsSk --max-time 6 "https://${LAB_NET_PREFIX}.$((100 + $1)):8445/health" >/dev/null 2>&1; }
+# Wait for Windows target N: endpoint :8080 AND IIS :8445 answering, with a
+# progress line every 30 s (VM status word from the share, last dockur log
+# line) — a first install takes 20-40 min, so this is deliberately chatty.
+wait_windows_target() {
+  local n="$1" ip start deadline st last="" line st_ep st_iis
+  ip="${LAB_NET_PREFIX}.$((100 + n))"; start=$SECONDS; deadline=$((SECONDS + LAB_WINDOWS_TIMEOUT))
+  note "waiting for target-${n} (windows) at ${ip}: endpoint :8080 + IIS :8445 (≤${LAB_WINDOWS_TIMEOUT}s — first boot installs Windows + runs install.ps1; console: http://127.0.0.1:${LAB_WINDOWS_VIEWER_PORT} · log: ./lab/lab.sh windows-log target-${n})"
+  while :; do
+    st_ep=0; st_iis=0
+    windows_http_ok "$n" && st_ep=1
+    [ "$st_ep" = 1 ] && windows_iis_ok "$n" && st_iis=1
+    st="$(windows_status "$n")"
+    if [ "$st_ep" = 1 ] && [ "$st_iis" = 1 ] && [ "$st" != rebooting ]; then
+      ok "target-${n} (windows) ready at ${ip}: endpoint :8080 + IIS :8445 answering (status=${st}, $((SECONDS - start))s)"
+      return 0
+    fi
+    case "$st" in failed:*)
+      warn "target-${n} (windows) reports '${st}' — see: ./lab/lab.sh windows-log target-${n}"
+      "$LAB_DIR/lab.sh" windows-log "target-${n}" 2>/dev/null | tail -25 || true
+      die "windows target setup failed (${st})";;
+    esac
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      "$LAB_DIR/lab.sh" windows-log "target-${n}" 2>/dev/null | tail -25 || true
+      die "target-${n} (windows) not ready after ${LAB_WINDOWS_TIMEOUT}s (endpoint=${st_ep} iis=${st_iis} status=${st}) — raise LAB_WINDOWS_TIMEOUT or watch http://127.0.0.1:${LAB_WINDOWS_VIEWER_PORT}"
+    fi
+    line="$(docker logs --tail 1 "nwk-lab-target-${n}-1" 2>&1 | tr -d '\r' | sed 's/\x1b\[[0-9;]*m//g' | tail -1 | cut -c1-90)"
+    if [ "$line" != "$last" ] || [ $(( (SECONDS - start) % 60 )) -lt 30 ]; then
+      printf '%s    … %4ds  vm-status=%-12s endpoint=%s iis=%s  %s%s\n' "$C_D" "$((SECONDS - start))" "$st" "$st_ep" "$st_iis" "$line" "$C_0"
+      last="$line"
+    fi
+    sleep 30
+  done
+}
 wait_targets_healthy() {
   local i total; total="$(target_count)"; i=1
   while [ "$i" -le "$total" ]; do
     local deadline=$((SECONDS + 90)) st
+    if [ "$(stack_of "$i")" = windows ]; then
+      if [ "${LAB_WINDOWS_ASYNC:-0}" = 1 ]; then
+        note "target-${i} (windows) left installing in the background (--windows-async) — later: ./lab/lab.sh wait-windows"
+      else
+        wait_windows_target "$i"
+      fi
+      i=$((i + 1)); continue
+    fi
     while :; do
       st="$(docker inspect --format '{{.State.Health.Status}}' "nwk-lab-target-${i}-1" 2>/dev/null || echo missing)"
       [ "$st" = "healthy" ] && break
@@ -367,12 +511,22 @@ cmd_up() {
       --netem) shift; LAB_NETEM="$1" ;;
       --agents-via-ui) LAB_AGENTS_VIA_UI=1 ;;
       --no-build) no_build=1 ;;
+      --windows-async) LAB_WINDOWS_ASYNC=1 ;;
       *) die "up: unknown flag $1" ;;
     esac; shift
   done
   case "$runners" in ''|*[!0-9]*) die "--runners must be an integer";; esac
   [ "$runners" -ge 1 ] || die "--runners must be ≥ 1"
+  targets="$(normalize_stacks "$targets")"
   validate_stacks "$targets"
+  # Windows target preflight: a KVM-backed VM only runs on Linux with /dev/kvm
+  # (Docker Desktop on macOS/Windows does not expose KVM). Drop it with a
+  # clear message rather than failing the whole lab.
+  if echo ",$targets," | grep -q ',windows,' && ! windows_ok; then
+    warn "target 'windows' skipped: it needs Linux with /dev/kvm (uname=$(uname -s), /dev/kvm missing). Docker Desktop on macOS/Windows cannot run it; on Linux load kvm_intel/kvm_amd or enable nested virtualisation."
+    targets="$(echo "$targets" | tr ',' '\n' | grep -vx windows | paste -sd, -)"
+    [ -n "$targets" ] || die "no targets left after dropping windows"
+  fi
   [ "$LAB_AGENTS_VIA_UI" = "1" ] && ui=1
   LAB_RUNNERS="$runners"; LAB_TARGETS="$targets"; LAB_UI="$ui"
 
@@ -420,10 +574,14 @@ cmd_up() {
     st="$(stack_of "$i")"
     if [ "$st" != rust ]; then
       dep="$(register_target_deployment "$i" "$st")"
-      ok "target-${i} (${st}) registered as deployment ${dep}"
+      ok "target-${i} (${st}$([ "$st" = windows ] && echo ' → proxy stack iis, os windows')) registered as deployment ${dep}"
     fi
     i=$((i + 1))
   done
+  if has_windows_target; then
+    docker image inspect "$LAB_WINDOWS_IMAGE" >/dev/null 2>&1 || { note "pulling ${LAB_WINDOWS_IMAGE}"; docker pull "$LAB_WINDOWS_IMAGE" >/dev/null; }
+    note "windows target: VM user ${LAB_WINDOWS_USER} / ${LAB_WINDOWS_PASSWORD}; console http://127.0.0.1:${LAB_WINDOWS_VIEWER_PORT}; Windows Server ${LAB_WINDOWS_VERSION} eval (Microsoft licence terms apply)"
+  fi
 
   note "starting $(target_count) target(s) + ${runners} runner(s)"
   "${COMPOSE[@]}" ${profiles[@]+"${profiles[@]}"} up -d --remove-orphans $(target_services) $(runner_services)
@@ -452,8 +610,12 @@ cmd_status() {
   local i=1 st ip port
   while [ "$i" -le "$(target_count)" ]; do
     st="$(stack_of "$i")"; ip="${LAB_NET_PREFIX}.$((100 + i))"
-    case "$st" in rust) port=8443;; nginx) port=8444;; caddy) port=8454;; traefik) port=8455;; haproxy) port=8456;; apache) port=8457;; esac
-    printf '  %-12s %-9s %-16s http://%s:8080  https://%s:%s\n' "target-$i" "$st" "$ip" "$ip" "$ip" "$port"
+    case "$st" in rust) port=8443;; nginx) port=8444;; caddy) port=8454;; traefik) port=8455;; haproxy) port=8456;; apache) port=8457;; windows) port=8445;; esac
+    if [ "$st" = windows ]; then
+      printf '  %-12s %-9s %-16s http://%s:8080  https://%s:8443  iis https://%s:%s  [vm %s · console :%s]\n' "target-$i" "$st" "$ip" "$ip" "$ip" "$ip" "$port" "$(windows_status "$i")" "$LAB_WINDOWS_VIEWER_PORT"
+    else
+      printf '  %-12s %-9s %-16s http://%s:8080  https://%s:%s\n' "target-$i" "$st" "$ip" "$ip" "$ip" "$port"
+    fi
     i=$((i + 1))
   done
   echo
@@ -480,6 +642,50 @@ cmd_tester() {
   [ "${1:-}" = "--" ] && shift
   "${COMPOSE[@]}" exec "$r" /usr/local/bin/networker-tester "$@"
 }
+windows_target_index() { # windows_target_index [target-N] → N (default: first windows target)
+  local arg="${1:-}" i st
+  if [ -n "$arg" ]; then echo "$arg" | sed 's/^target-//'; return 0; fi
+  i=1
+  while [ "$i" -le "$(target_count)" ]; do
+    st="$(stack_of "$i")"; [ "$st" = windows ] && { echo "$i"; return 0; }
+    i=$((i + 1))
+  done
+  die "no windows target in this lab (LAB_TARGETS=${LAB_TARGETS:-})"
+}
+cmd_wait_windows() {
+  load_state
+  local i=1 any=0
+  while [ "$i" -le "$(target_count)" ]; do
+    [ "$(stack_of "$i")" = windows ] && { any=1; wait_windows_target "$i"; }
+    i=$((i + 1))
+  done
+  [ "$any" = 1 ] || die "no windows target in this lab (LAB_TARGETS=${LAB_TARGETS:-})"
+}
+cmd_windows_log() {
+  load_state
+  local n follow=0 a d
+  for a in "$@"; do [ "$a" = "-f" ] && follow=1; done
+  n="$(windows_target_index "$(echo "$*" | tr ' ' '\n' | grep '^target-' | head -1)")"
+  d="$(windows_gen_dir "$n")/shared"
+  printf '%starget-%s (windows) status: %s%s\n' "$C_B" "$n" "$(windows_status "$n")" "$C_0"
+  if [ ! -f "$d/lab-setup.log" ]; then
+    warn "no setup log yet at $d/lab-setup.log — Windows is still installing (watch http://127.0.0.1:${LAB_WINDOWS_VIEWER_PORT} or 'lab.sh logs target-${n}')"
+    docker logs --tail 5 "nwk-lab-target-${n}-1" 2>&1 | tr -d '\r' || true
+    [ "$follow" = 1 ] || return 0
+    until [ -f "$d/lab-setup.log" ]; do sleep 5; done
+  fi
+  if [ "$follow" = 1 ]; then tail -n 50 -f "$d/lab-setup.log"; else tail -n 200 "$d/lab-setup.log"; fi
+}
+cmd_windows_ssh() {
+  load_state
+  local n ip
+  n="$(windows_target_index "$(echo "$*" | tr ' ' '\n' | grep '^target-' | head -1)")"
+  ip="${LAB_NET_PREFIX}.$((100 + n))"
+  while [ $# -gt 0 ] && [ "$1" != "--" ]; do shift; done
+  [ "${1:-}" = "--" ] && shift
+  note "ssh ${LAB_WINDOWS_USER}@${ip}  (password: ${LAB_WINDOWS_PASSWORD}; shell is PowerShell)"
+  exec ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "${LAB_WINDOWS_USER}@${ip}" "$@"
+}
 cmd_down() {
   load_state
   local vols=()
@@ -501,6 +707,9 @@ case "$cmd" in
   shell)    cmd_shell "$@" ;;
   psql)     cmd_psql "$@" ;;
   tester)   cmd_tester "$@" ;;
+  wait-windows) cmd_wait_windows ;;
+  windows-log)  cmd_windows_log "$@" ;;
+  windows-ssh)  cmd_windows_ssh "$@" ;;
   env)      cmd_env ;;
   down)     cmd_down "$@" ;;
   ""|-h|--help|help) usage ;;

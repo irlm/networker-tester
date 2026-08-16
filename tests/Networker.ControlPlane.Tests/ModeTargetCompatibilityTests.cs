@@ -144,7 +144,6 @@ public class ModeTargetCompatibilityTests
     [Theory]
     [InlineData("nginx")]
     [InlineData("caddy")]
-    [InlineData("iis")]
     [InlineData("endpoint")]
     public void Stacks_with_quic_allow_the_h3_modes(string stack)
     {
@@ -156,6 +155,7 @@ public class ModeTargetCompatibilityTests
     [InlineData("apache")]
     [InlineData("haproxy")]
     [InlineData("traefik")]
+    [InlineData("iis")] // http.sys HTTP/3 needs SNI; proxy targets are addressed by IP (lab-measured)
     public void Stacks_without_quic_reject_exactly_the_h3_modes(string stack)
     {
         // proxy kind: h3 modes rejected with the stack named in the reason; the

@@ -31,13 +31,15 @@ public class HttpStacksManifestTests
     [Fact]
     public void Manifest_lists_every_installer_stack_with_the_lab_measured_h3_capability()
     {
-        // nginx (mainline+quic), caddy (h1 h2 h3), iis (http.sys) and the bare
-        // endpoint serve HTTP/3; traefik / haproxy / apache are configured
-        // h1/h2 only (measured 0/N on http3/pageload3 in the lab).
+        // nginx (mainline+quic), caddy (h1 h2 h3) and the bare endpoint serve
+        // HTTP/3; traefik / haproxy / apache are configured h1/h2 only
+        // (measured 0/N on http3/pageload3 in the lab). iis: http.sys serves
+        // HTTP/3 only to clients sending TLS SNI, and the platform addresses
+        // proxy targets by IP — measured on the lab's Windows target (v0.28.208).
         Assert.True(HttpStackCatalog.HasH3("endpoint"));
         Assert.True(HttpStackCatalog.HasH3("nginx"));
         Assert.True(HttpStackCatalog.HasH3("caddy"));
-        Assert.True(HttpStackCatalog.HasH3("iis"));
+        Assert.False(HttpStackCatalog.HasH3("iis"));
         Assert.False(HttpStackCatalog.HasH3("traefik"));
         Assert.False(HttpStackCatalog.HasH3("haproxy"));
         Assert.False(HttpStackCatalog.HasH3("apache"));

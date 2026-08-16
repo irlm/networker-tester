@@ -1057,10 +1057,15 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
     let representative_bytes = cfg.asset_sizes.first().copied().unwrap_or(10_240);
     let manifest_path = format!("/page?assets={n}&bytes={representative_bytes}");
     let t_manifest = Instant::now();
+    // Absolute URI: HTTP/2 needs :scheme/:authority (h2_absolute_uri).
     let manifest_req = Request::builder()
         .method("GET")
-        .uri(&manifest_path)
-        .header("host", &host)
+        .uri(crate::runner::http::h2_absolute_uri(
+            "https",
+            &host,
+            port,
+            &manifest_path,
+        ))
         .header("user-agent", "networker-tester/0.1")
         .header("accept", "*/*")
         .body(Full::new(Bytes::new()))
@@ -1143,15 +1148,10 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
     let asset_futures: Vec<_> = asset_urls
         .iter()
         .map(|url| {
-            let path = format!(
-                "{}{}",
-                url.path(),
-                url.query().map(|q| format!("?{q}")).unwrap_or_default()
-            );
+            // Absolute asset URL → :scheme/:authority on the wire (RFC 9113 §8.3.1).
             let req = Request::builder()
                 .method("GET")
-                .uri(&path)
-                .header("host", &host)
+                .uri(url.as_str())
                 .header("user-agent", "networker-tester/0.1")
                 .header("accept", "*/*")
                 .body(Full::new(Bytes::new()))
@@ -2193,6 +2193,7 @@ pub async fn warmup_pageload2(
         cfg,
         sender,
         &host,
+        port,
         dns_result,
         Some(tcp_result),
         Some(tls_result),
@@ -2226,6 +2227,7 @@ pub async fn run_pageload2_warm(
         cfg,
         conn.sender.clone(),
         &conn.host,
+        conn.addr.port(),
         None,
         None,
         None,
@@ -2247,6 +2249,7 @@ async fn fetch_h2_pageload(
     cfg: &PageLoadConfig,
     sender: hyper::client::conn::http2::SendRequest<Full<Bytes>>,
     host: &str,
+    port: u16,
     dns_result: Option<crate::metrics::DnsResult>,
     tcp_result: Option<crate::metrics::TcpResult>,
     tls_result: Option<crate::metrics::TlsResult>,
@@ -2260,10 +2263,15 @@ async fn fetch_h2_pageload(
     let representative_bytes = cfg.asset_sizes.first().copied().unwrap_or(10_240);
     let manifest_path = format!("/page?assets={n}&bytes={representative_bytes}");
     let t_manifest = Instant::now();
+    // Absolute URI: HTTP/2 needs :scheme/:authority (h2_absolute_uri).
     let manifest_req = Request::builder()
         .method("GET")
-        .uri(&manifest_path)
-        .header("host", host)
+        .uri(crate::runner::http::h2_absolute_uri(
+            "https",
+            host,
+            port,
+            &manifest_path,
+        ))
         .header("user-agent", "networker-tester/0.1")
         .header("accept", "*/*")
         .body(Full::new(Bytes::new()))
@@ -2345,15 +2353,10 @@ async fn fetch_h2_pageload(
     let asset_futures: Vec<_> = asset_urls
         .iter()
         .map(|url| {
-            let path = format!(
-                "{}{}",
-                url.path(),
-                url.query().map(|q| format!("?{q}")).unwrap_or_default()
-            );
+            // Absolute asset URL → :scheme/:authority on the wire (RFC 9113 §8.3.1).
             let req = Request::builder()
                 .method("GET")
-                .uri(&path)
-                .header("host", host)
+                .uri(url.as_str())
                 .header("user-agent", "networker-tester/0.1")
                 .header("accept", "*/*")
                 .body(Full::new(Bytes::new()))

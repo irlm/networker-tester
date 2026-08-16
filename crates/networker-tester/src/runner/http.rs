@@ -595,6 +595,9 @@ async fn run_http_or_tcp(
     // HTTP through proxy requires an absolute-form URI:
     //   GET http://example.com:80/path HTTP/1.1
     // HTTPS through proxy uses a tunnel so we keep the origin-form URI.
+    // HTTP/2 needs the absolute form: hyper derives `:scheme`/`:authority`
+    // from the request URI (see `h2_absolute_uri`).
+    let h2_uri = h2_absolute_uri(scheme, &host, port, &full_path);
     let request_uri = if proxy_url.is_some() && scheme != "https" {
         format!("http://{}:{}{}", host, port, full_path)
     } else {
@@ -625,7 +628,7 @@ async fn run_http_or_tcp(
             send_http2(
                 io_box,
                 &host,
-                &request_uri,
+                &h2_uri,
                 cfg,
                 http_started_at,
                 t_http,
@@ -898,11 +901,26 @@ fn make_upload_body(total_bytes: usize) -> BoxBody<Bytes, Infallible> {
     BoxBody::new(StreamBody::new(s))
 }
 
+/// Absolute-form request URI for HTTP/2 requests.
+///
+/// RFC 9113 §8.3.1: every HTTP/2 request (except CONNECT) MUST carry the
+/// `:scheme` and `:authority` pseudo-headers. hyper derives both from the
+/// request URI, so a path-only URI (`/health`) goes on the wire WITHOUT them.
+/// nginx, caddy, hyper and quinn-based servers tolerate that; **http.sys (IIS
+/// on Windows) answers `RST_STREAM PROTOCOL_ERROR`** — every http2 /
+/// download2 / upload2 / pageload2 / rpm probe failed against an IIS target
+/// until the lab's Windows target caught it (v0.28.208). The port is always
+/// spelled out (`:authority` = `host:port`), which is what the endpoint URL
+/// says and avoids default-port guessing per scheme.
+pub(crate) fn h2_absolute_uri(scheme: &str, host: &str, port: u16, path_and_query: &str) -> String {
+    format!("{scheme}://{host}:{port}{path_and_query}")
+}
+
 fn build_request(
     host: &str,
     path: &str,
     cfg: &RunConfig,
-    _version_hint: &str,
+    version_hint: &str,
     attempt_id: Uuid,
 ) -> anyhow::Result<Request<BoxBody<Bytes, Infallible>>> {
     // Explicit request body (apibench workloads) takes precedence over the
@@ -929,10 +947,15 @@ fn build_request(
     let mut builder = Request::builder()
         .method(method)
         .uri(path)
-        .header("host", host)
         .header("user-agent", "networker-tester/0.1")
         .header("accept", "*/*")
         .header("x-networker-request-id", attempt_id.to_string());
+    // HTTP/2 conveys the authority in `:authority` (from the absolute URI);
+    // a `host` header next to it that differs (no port) is what RFC 9113
+    // §8.3.1 lets servers treat as malformed. HTTP/1.1 keeps `Host`.
+    if version_hint != "HTTP/2" {
+        builder = builder.header("host", host);
+    }
 
     // Opt-in compression negotiation (--accept-encoding). Default sends NO
     // Accept-Encoding header at all (identity), so historical byte counts
@@ -1592,6 +1615,47 @@ mod tests {
     fn init_crypto() {
         // rustls 0.23 requires a global CryptoProvider; install once per process.
         let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+
+    #[test]
+    fn h2_absolute_uri_carries_scheme_authority_and_port() {
+        assert_eq!(
+            h2_absolute_uri("https", "172.31.100.104", 8445, "/health"),
+            "https://172.31.100.104:8445/health"
+        );
+        assert_eq!(
+            h2_absolute_uri("https", "[::1]", 8443, "/page?assets=3&bytes=10"),
+            "https://[::1]:8443/page?assets=3&bytes=10"
+        );
+        // hyper takes :scheme/:authority from an absolute URI (RFC 9113 §8.3.1)
+        let req = build_request(
+            "172.31.100.104",
+            &h2_absolute_uri("https", "172.31.100.104", 8445, "/health"),
+            &RunConfig::default(),
+            "HTTP/2",
+            Uuid::nil(),
+        )
+        .unwrap();
+        assert_eq!(req.uri().scheme_str(), Some("https"));
+        assert_eq!(
+            req.uri().authority().map(|a| a.as_str()),
+            Some("172.31.100.104:8445")
+        );
+        assert!(
+            req.headers().get("host").is_none(),
+            "h2 requests must not carry Host next to :authority"
+        );
+        // HTTP/1.1 keeps origin-form + Host
+        let req1 = build_request(
+            "example.com",
+            "/health",
+            &RunConfig::default(),
+            "HTTP/1.1",
+            Uuid::nil(),
+        )
+        .unwrap();
+        assert_eq!(req1.uri().scheme_str(), None);
+        assert_eq!(req1.headers().get("host").unwrap(), "example.com");
     }
 
     #[test]

@@ -22,7 +22,7 @@ export interface HttpStackInfo {
 export const HTTP_STACKS: readonly HttpStackInfo[] = [
   { id: 'endpoint', h3: true },
   { id: 'nginx', h3: true },
-  { id: 'iis', h3: true },
+  { id: 'iis', h3: false }, // http.sys needs SNI; proxy targets are addressed by IP (lab-measured)
   { id: 'caddy', h3: true },
   { id: 'traefik', h3: false },
   { id: 'haproxy', h3: false },
