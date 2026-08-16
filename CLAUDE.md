@@ -115,6 +115,13 @@ create-tester / deployment / lifecycle / reaper paths as Azure/AWS/GCP
 (`Provisioning/DockerComputeProvisioner.cs`, routed by
 `RoutingComputeProvisioner`). `validate.sh` phase 5 covers it end to end.
 
+Native Windows twin: `lab/native/lab-native.ps1 build | up | validate | down`
+(elevated PowerShell) runs the same path as Windows processes — Windows runner
++ Windows target (endpoint bare + IIS via the cloud payload) — and drives the
+same `validate.sh`; CI runs it weekly (`lab-windows-native.yml`). See
+`lab/README.md` § "Native Windows lab" for what legitimately differs (h3
+through IIS on IP-literal targets, no tshark/Chrome).
+
 Cross-stack tables live in `shared/` and are drift-guarded on every side:
 `modes.json` (modes), `http-stacks.json` (proxy stack ports + h3), and
 `tester-schema.postgres.sql` (tester V001–V005 DDL the control plane

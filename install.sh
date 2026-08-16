@@ -5591,8 +5591,11 @@ _iis_setup_powershell() {
 \$fqdn = "${fqdn}"
 
 # 1. Install IIS + URL Rewrite + ARR (for reverse-proxy of /page, /asset)
+#    Web-WebSockets: without the WebSocket protocol feature ARR cannot forward
+#    the /ws Upgrade handshake and the websocket probe mode 404s through IIS
+#    (the Linux stacks all proxy /ws — lab/native parity, 2026-08).
 Write-Host "Installing IIS..."
-Install-WindowsFeature -Name Web-Server -IncludeManagementTools | Out-Null
+Install-WindowsFeature -Name Web-Server,Web-WebSockets -IncludeManagementTools | Out-Null
 IIS_PS1_HEADER
     cat <<'IIS_PS1'
 
@@ -5703,8 +5706,8 @@ $webConfig = @"
           </conditions>
           <action type="Rewrite" url="http://127.0.0.1:8080/asset?{C:0}" appendQueryString="false" />
         </rule>
-        <rule name="Proxy throughput + info + apibench to endpoint" stopProcessing="true">
-          <match url="^(download|upload|info|api|health)(.*)" />
+        <rule name="Proxy throughput + info + apibench + websocket to endpoint" stopProcessing="true">
+          <match url="^(download|upload|info|api|health|ws)(.*)" />
           <action type="Rewrite" url="http://127.0.0.1:8080/{R:1}{R:2}" />
         </rule>
       </rules>
@@ -5713,7 +5716,7 @@ $webConfig = @"
 </configuration>
 "@
 $webConfig | Out-File "$siteRoot\web.config" -Encoding UTF8
-Write-Host "web.config created (with reverse-proxy rules for /page, /asset, /download, /upload, /info, /api, /health)"
+Write-Host "web.config created (with reverse-proxy rules for /page, /asset, /download, /upload, /info, /api, /health, /ws)"
 
 # 4. Generate self-signed certificate (include FQDN in SAN for SNI/H3)
 Write-Host "Creating self-signed certificate..."

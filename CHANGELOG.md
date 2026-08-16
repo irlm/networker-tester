@@ -14,6 +14,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.28.208] - 2026-08-15
 
 ### Added
+- **Native Windows lab** (`lab/native/lab-native.ps1`, Windows PowerShell
+  5.1 + pwsh): the Docker lab's native-Windows twin — the whole managed path
+  as plain Windows **processes** built from the checkout: PostgreSQL (existing
+  server / `docker-compose.dashboard.yml` / CI `action-setup-postgres`),
+  control plane (`dotnet publish`), a Windows **runner** (`networker-agent.exe`
+  self-contained win-x64 + `networker-tester.exe` with the Windows CI feature
+  set `http3,db-mssql`), and a Windows **target** (`networker-endpoint.exe`
+  bare on :8443 **and behind IIS :8082/:8445** set up by the SAME payload every
+  cloud Windows endpoint VM gets — `install.sh _iis_setup_powershell`, rendered
+  through Git Bash and run under Windows PowerShell). Registers the runner as a
+  standalone `agent` row (sha256 key) and the IIS target as a completed
+  `deployment` (`http_stacks:["iis"]`) with the same SQL as `lab.sh`, then
+  drives the SAME `lab/validate.sh` matrix through Git Bash. `build | up |
+  validate | status | logs | env | down`, `-NoIis`, `-Fqdn`, `-IisSetup
+  cloud|installer`, `-DebugBuild`, `-DryRun` (walks the orchestration under
+  pwsh on Linux). Weekly + on-demand CI: `.github/workflows/lab-windows-native.yml`
+  on `windows-latest` (sccache + rust-cache, logs artifact, validate summary in
+  the job summary; not a required check). `lab/validate.sh` gained additive env
+  overrides — `LAB_STATE_ENV`, `LAB_TARGET_HOSTS`/`LAB_TARGET_IPS`,
+  `LAB_H3_OFF_STACKS` — Linux behaviour unchanged. **HTTP/3 through IIS is
+  reported honestly**: http.sys binds QUIC on SNI hostname bindings only and
+  the `EnableHttp3` keys need a reboot, so with an IP-literal target (the
+  default / hosted runner) the h3 modes are excluded for `iis` and the job
+  summary says so; with `-Fqdn` the built tester probes http3 and h3 stays in
+  the iis matrix only when confirmed. `lab/README.md` § "Native Windows lab".
+- **IIS payload proxies `/ws`** (`install.sh _iis_setup_powershell`): installs
+  `Web-WebSockets` and adds `ws` to the ARR rewrite allowlist so the
+  `websocket` probe mode works through IIS like it does through every Linux
+  stack (found while wiring the native Windows lab: the first run would have
+  failed phase 2 on it).
 - **Docker (local) cloud provider** (feature-flagged, `DASHBOARD_DOCKER_PROVIDER=1`,
   default OFF — prod never shows it). From the dashboard/API you can now
   create a runner (project tester) or deploy an endpoint target with cloud
