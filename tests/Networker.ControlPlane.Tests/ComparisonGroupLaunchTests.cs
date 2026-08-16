@@ -72,4 +72,70 @@ public class ComparisonGroupLaunchTests
         Assert.Equal("cell", cells[0].Label);
         Assert.Equal("pending", cells[0].EndpointKind);
     }
+
+    // ── Per-cell HTTP/3 trim (shared/http-stacks.json h3) ────────────────────
+
+    private const string MatrixWorkload =
+        """{"modes":["http1","http2","http3","pageload3","download","upload"],"runs":10,"concurrency":1,"timeout_ms":5000,"payload_sizes":[1048576],"capture_mode":"metrics-only"}""";
+
+    private static ComparisonGroupsEndpoints.CellSpec Cell(string stack, string kind = "pending") =>
+        new($"linux · {stack}", $$"""{"kind":"{{kind}}","cloud_account_id":"57ecde0d-5e00-49de-8142-2b14bba24347","region":"eastus","vm_size":"Standard_B2s","os":"linux","proxy_stack":"{{stack}}","topology":"loopback"}""", kind, null);
+
+    [Fact]
+    public void Apache_cell_drops_h3_modes_and_keeps_the_rest()
+    {
+        var (workload, dropped) = ComparisonGroupsEndpoints.TrimH3ModesForCell(MatrixWorkload, Cell("apache"));
+
+        Assert.Equal(["http3", "pageload3"], dropped);
+        Assert.NotNull(workload);
+        using var doc = System.Text.Json.JsonDocument.Parse(workload!);
+        var modes = doc.RootElement.GetProperty("modes").EnumerateArray().Select(m => m.GetString()).ToArray();
+        Assert.Equal(["http1", "http2", "download", "upload"], modes);
+        // Everything else in the workload survives untouched.
+        Assert.Equal(10, doc.RootElement.GetProperty("runs").GetInt32());
+        Assert.Equal(1048576, doc.RootElement.GetProperty("payload_sizes")[0].GetInt32());
+    }
+
+    [Theory]
+    [InlineData("nginx")]
+    [InlineData("caddy")]
+    [InlineData("iis")]
+    [InlineData("envoy")] // unknown → fail open, run everything
+    public void Quic_capable_or_unknown_stacks_keep_the_base_workload(string stack)
+    {
+        var (workload, dropped) = ComparisonGroupsEndpoints.TrimH3ModesForCell(MatrixWorkload, Cell(stack));
+        Assert.Null(workload);
+        Assert.Empty(dropped);
+    }
+
+    [Fact]
+    public void Cell_whose_every_mode_needs_h3_reports_all_dropped_and_no_workload()
+    {
+        var (workload, dropped) = ComparisonGroupsEndpoints.TrimH3ModesForCell(
+            """{"modes":["http3","browser3"],"runs":3}""", Cell("haproxy"));
+        Assert.Null(workload);
+        Assert.Equal(["http3", "browser3"], dropped);
+    }
+
+    [Fact]
+    public void Proxy_kind_cell_with_a_stack_override_is_trimmed_too()
+    {
+        var cell = new ComparisonGroupsEndpoints.CellSpec(
+            "existing traefik", """{"kind":"proxy","proxy_endpoint_id":"2a1cafc1-9f0b-4c9a-8fcc-aa99ea06137a","proxy_stack":"traefik"}""", "proxy", null);
+        var (_, dropped) = ComparisonGroupsEndpoints.TrimH3ModesForCell(MatrixWorkload, cell);
+        Assert.Equal(["http3", "pageload3"], dropped);
+        Assert.Equal("traefik", ComparisonGroupsEndpoints.CellProxyStack(cell));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("not json")]
+    [InlineData("""{"runs":3}""")]
+    public void Malformed_or_mode_less_workloads_are_left_alone(string? workload)
+    {
+        var (rewritten, dropped) = ComparisonGroupsEndpoints.TrimH3ModesForCell(workload, Cell("apache"));
+        Assert.Null(rewritten);
+        Assert.Empty(dropped);
+    }
 }

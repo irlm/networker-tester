@@ -366,7 +366,8 @@ public static class TestersEndpoints
         DateTime? ApiKeyLastUsedAt,
         string? ApiKeyLastUsedIp,
         DateTime? ApiKeyExpiresAt,
-        string? Status);
+        string? Status,
+        string? Tags);
 
     /// <summary>
     /// EF-translatable correlated sub-query: the api-key lifecycle fields of the
@@ -376,7 +377,7 @@ public static class TestersEndpoints
     private static AgentKeyInfo? AgentKeyInfoFor(NetworkerDbContext db, string projectId, Guid testerId) =>
         db.Agents
             .Where(a => a.TesterId == testerId && a.ProjectId == projectId)
-            .Select(a => new AgentKeyInfo(a.ApiKeyLastUsedAt, a.ApiKeyLastUsedIp, a.ApiKeyExpiresAt, a.Status))
+            .Select(a => new AgentKeyInfo(a.ApiKeyLastUsedAt, a.ApiKeyLastUsedIp, a.ApiKeyExpiresAt, a.Status, a.Tags))
             .FirstOrDefault();
 
     private static object ToListDto(ProjectTester t, AgentKeyInfo? agent) => new
@@ -401,6 +402,10 @@ public static class TestersEndpoints
         // linked). Lets the UI stop calling a runner "ready" when its VM is
         // powered on but nothing is listening (2026-08 UI pass).
         agent_status = agent != null ? agent.Status : null,
+        // Runner tool inventory from the linked agent's heartbeat (v0.28.208+):
+        // {chrome, tshark}; null = no agent / agent predates capability reports.
+        // Lets the wizards grey out browser* modes on a pinned runner without Chrome.
+        agent_capabilities = agent != null ? Realtime.AgentCapabilityTags.Read(agent.Tags) : null,
         created_at = t.CreatedAt,
         updated_at = t.UpdatedAt,
     };
@@ -437,6 +442,7 @@ public static class TestersEndpoints
         api_key_last_used_ip = agent != null ? agent.ApiKeyLastUsedIp : null,
         api_key_expires_at = agent != null ? agent.ApiKeyExpiresAt : null,
         agent_status = agent != null ? agent.Status : null,
+        agent_capabilities = agent != null ? Realtime.AgentCapabilityTags.Read(agent.Tags) : null,
         avg_benchmark_duration_seconds = t.AvgBenchmarkDurationSeconds,
         benchmark_run_count = t.BenchmarkRunCount,
         created_by = t.CreatedBy,

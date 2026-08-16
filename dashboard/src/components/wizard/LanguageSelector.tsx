@@ -8,10 +8,12 @@ import {
   requiresWindows,
 } from './testbed-constants';
 import type { TestbedState } from './testbed-constants';
+import { H3_MODES } from '../../lib/http-stacks';
 
 // Modes that imply a direct h2/h3 negotiation with the language's own server.
+// The h3 list is the shared/http-stacks.json `h3_modes` table (lib/http-stacks).
 const H2_MODE_IDS = new Set(['http2', 'pageload2', 'browser2', 'download2', 'upload2']);
-const H3_MODE_IDS = new Set(['http3', 'pageload3', 'browser3', 'download3', 'upload3']);
+const H3_MODE_IDS = new Set(H3_MODES);
 
 export interface LanguageSelectorProps {
   selectedLangs: Set<string>;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildComparisonCells, countCells, isMatrixRun } from './matrix-cells';
+import { buildComparisonCells, countCells, isMatrixRun, h3DropsPerCell } from './matrix-cells';
 import { makeTestbed } from '../components/wizard/testbed-constants';
 
 /**
@@ -111,5 +111,35 @@ describe('countCells / isMatrixRun', () => {
   it('an empty testbed list is not a matrix', () => {
     expect(countCells([])).toBe(0);
     expect(isMatrixRun([])).toBe(false);
+  });
+});
+
+describe('h3DropsPerCell (per-cell HTTP/3 trim preview)', () => {
+  const base = { ...makeTestbed(1, 'Azure', 'linux', ['nginx']), cloudAccountId: 'a', region: 'eastus' };
+  const modes = ['http1', 'http2', 'http3', 'pageload3', 'download'];
+
+  it('a matrix over nginx + apache drops the h3 modes on the apache cell only', () => {
+    const drops = h3DropsPerCell([{ ...base, proxies: ['nginx', 'apache'] }], modes);
+    expect(drops).toHaveLength(1);
+    expect(drops[0].stack).toBe('apache');
+    expect(drops[0].label).toBe('Azure/eastus linux · Apache');
+    expect(drops[0].dropped).toEqual(['http3', 'pageload3']);
+  });
+
+  it('nothing is dropped when every stack serves QUIC or no h3 mode is selected', () => {
+    expect(h3DropsPerCell([{ ...base, proxies: ['nginx', 'caddy'] }], modes)).toEqual([]);
+    expect(h3DropsPerCell([{ ...base, proxies: ['apache', 'haproxy'] }], ['http1', 'download'])).toEqual([]);
+    expect(h3DropsPerCell([], modes)).toEqual([]);
+  });
+
+  it('lists one entry per quic-less cell across testbeds, in cell order', () => {
+    const drops = h3DropsPerCell(
+      [{ ...base, proxies: ['haproxy'] }, { ...base, region: 'westus', proxies: ['nginx', 'traefik'] }],
+      ['http3'],
+    );
+    expect(drops.map(d => `${d.label}|${d.stack}`)).toEqual([
+      'Azure/eastus linux · HAProxy|haproxy',
+      'Azure/westus linux · Traefik|traefik',
+    ]);
   });
 });

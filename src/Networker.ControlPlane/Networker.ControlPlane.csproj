@@ -21,6 +21,15 @@
                       Link="shared\cloud-costs.json"
                       LogicalName="Networker.ControlPlane.shared.cloud-costs.json" />
 
+    <!-- Canonical HTTP-stack layout + capabilities (Endpoints/HttpStackCatalog.cs):
+         which proxy stacks the installers configure with HTTP/3, and which
+         probe modes need it. Served by GET /api/http-stacks (+ /api/modes
+         `stacks`) and drives the mode⇄target h3 gate. Same JSON the Rust
+         tester embeds and lab/validate.sh reads. -->
+    <EmbeddedResource Include="..\..\shared\http-stacks.json"
+                      Link="shared\http-stacks.json"
+                      LogicalName="Networker.ControlPlane.shared.http-stacks.json" />
+
     <!-- The networker-tester probe-result schema (V001–V005, PostgreSQL),
          mirrored from crates/networker-tester/src/output/db/postgres.rs (a Rust
          unit test guards the copy). AttemptPersister applies it lazily on the

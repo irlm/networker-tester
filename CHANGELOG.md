@@ -44,6 +44,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI: `Test (macos-latest)` unit-test job — the primary dev platform's
   `#[cfg(target_os = "macos")]` code and tests were compiled only at release
   time until now.
+- **After selecting the target, only the tests it supports are offered / accepted**
+  — end to end, one manifest. `shared/http-stacks.json` gained `h3_modes`
+  (`http3`, `pageload3`, `browser3`, `download3`, `upload3`); the control plane
+  embeds the file (`HttpStackCatalog`), serves it as **`GET /api/http-stacks`**
+  and as `stacks` / `h3_modes` on `GET /api/modes`, and the dashboard mirrors it
+  in `lib/http-stacks.ts` (drift-guarded on every side: `HttpStacksManifestTests`,
+  `http-stacks-manifest.test.ts`, the Rust `http_stacks` tests, `lab/validate.sh`).
+  - **API gate:** `POST /api/v2/projects/{id}/test-configs` resolves the target's
+    proxy stack (`endpoint.proxy_stack`, the referenced deployment's
+    `http_stacks[0]`, or `pending.proxy_stack`) and returns **422**
+    `incompatible mode(s) for endpoint kind 'proxy' (stack 'apache'): 'http3'
+    needs HTTP/3 (QUIC): apache has no HTTP/3 (see shared/http-stacks.json)`
+    for h3 modes on apache / haproxy / traefik (measured 0/N in the lab).
+    `pending` stays fail-open on the kind rule but the stack rule applies;
+    unknown stacks fail open. **Comparison groups / matrix runs** drop the h3
+    modes **per cell** at launch (an nginx+apache matrix runs http3 on the nginx
+    cell only) — logged and reported in the launch response as `adjustments`;
+    a cell left with no runnable mode fails with the reason.
+  - **UI:** the Full Stack, Application Benchmark and Network Test pickers grey
+    out h3 modes (tooltip = the reason) and pre-uncheck them when the chosen
+    target / every chosen proxy has no QUIC; mixed matrices keep them and the
+    Review step lists what each quic-less cell will skip. Network Test folds the
+    target's live `/health` self-report in through the same gate.
+    `GET …/deployments/{id}/capabilities` now also returns `stacks`, `stack`,
+    `stack_h3`, `h3_modes`.
+  - **Runner capabilities:** the agent detects Chrome/Chromium and tshark at
+    startup (same search as the tester's `find_chrome()`) and reports
+    `capabilities: {chrome, tshark}` on the heartbeat (additive; older control
+    planes ignore it). The control plane persists it under
+    `agent.tags.capabilities` and exposes it on `GET /api/projects/{id}/agents`
+    (`capabilities`) and the tester rows (`agent_capabilities`); pinning a runner
+    without Chrome greys out the `browser*` modes.
 
 ### Fixed
 - **Fresh control-plane databases persisted zero attempts, forever.** The

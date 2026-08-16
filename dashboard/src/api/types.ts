@@ -182,8 +182,10 @@ export interface Agent {
   arch: string | null;
   last_heartbeat: string | null;
   registered_at: string;
-  tags: Record<string, string> | null;
+  tags: Record<string, unknown> | null;
   tester_id: string | null;
+  /** Runner tool inventory from the agent heartbeat (v0.28.208+); null until reported. */
+  capabilities?: { chrome: boolean; tshark: boolean } | null;
 }
 
 /** @deprecated Use TestRun */
@@ -647,6 +649,12 @@ export interface TargetCapabilityReport {
 
 export interface TargetCapabilitiesResponse {
   endpoints: TargetCapabilityReport[];
+  /** The proxy stacks the deployment installed (config http_stacks) + h3 per shared/http-stacks.json (null = unknown stack). */
+  stacks?: { id: string; h3: boolean | null }[];
+  /** http_stacks[0] — the listener a `proxy` config resolves to. */
+  stack?: string | null;
+  stack_h3?: boolean | null;
+  h3_modes?: string[];
 }
 
 export interface DeploymentCostEstimate {

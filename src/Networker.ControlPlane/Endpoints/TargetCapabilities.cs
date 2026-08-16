@@ -68,6 +68,41 @@ public static class TargetCapabilities
     }
 
     /// <summary>
+    /// The proxy stacks a deployment installed — <c>config.endpoints[0].http_stacks</c>
+    /// (a wizard-authored deploy.json). Empty when the config carries none
+    /// (bare endpoint / ssh / lan targets). The first entry is the listener a
+    /// <c>proxy</c> config is dispatched to.
+    /// </summary>
+    public static IReadOnlyList<string> StacksOf(string? deploymentConfig)
+    {
+        if (string.IsNullOrWhiteSpace(deploymentConfig))
+        {
+            return [];
+        }
+        try
+        {
+            using var doc = JsonDocument.Parse(deploymentConfig);
+            if (doc.RootElement.TryGetProperty("endpoints", out var eps)
+                && eps.ValueKind == JsonValueKind.Array
+                && eps.GetArrayLength() > 0
+                && eps[0].TryGetProperty("http_stacks", out var stacks)
+                && stacks.ValueKind == JsonValueKind.Array)
+            {
+                return stacks.EnumerateArray()
+                    .Where(s => s.ValueKind == JsonValueKind.String)
+                    .Select(s => s.GetString()!.Trim())
+                    .Where(s => s.Length > 0)
+                    .ToList();
+            }
+        }
+        catch (JsonException)
+        {
+            // fall through
+        }
+        return [];
+    }
+
+    /// <summary>
     /// Probe one deployment host's /health (HTTPS :8443 then HTTP :8080,
     /// concurrently under the shared budget, self-signed accepted — the
     /// <see cref="VersionEndpoints.ProbeEndpointVersionAsync"/> posture) and

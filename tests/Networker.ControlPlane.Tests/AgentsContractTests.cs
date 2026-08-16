@@ -58,9 +58,13 @@ public sealed class AgentsContractTests
         {
             "agent_id", "name", "region", "provider", "status", "version",
             "os", "arch", "last_heartbeat", "registered_at", "tags", "tester_id",
+            // v0.28.208: runner tool inventory from the heartbeat (null until a
+            // capability-reporting agent heartbeats — never fabricated).
+            "capabilities",
         };
 
         Assert.Equal(expected, item.Select(p => p.Key).ToArray());
+        Assert.Equal(JsonValueKind.Null, JsonDocument.Parse(json).RootElement.GetProperty("capabilities").ValueKind);
         Assert.Equal("6f9619ff-8b86-d011-b42d-00c04fc964ff", item["agent_id"]!.GetValue<string>());
         Assert.Equal("agent-eastus-1", item["name"]!.GetValue<string>());
         Assert.Equal("default", item["tags"]!["pool"]!.GetValue<string>());

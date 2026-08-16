@@ -579,7 +579,17 @@ export const api = {
   // Modes (NOT project-scoped). language_capabilities is optional so the UI
   // degrades gracefully against control planes that predate the matrix.
   getModes: () =>
-    request<{ groups: ModeGroup[]; language_capabilities?: import('./types').LanguageCapability[] }>('/modes'),
+    request<{
+      groups: ModeGroup[];
+      language_capabilities?: import('./types').LanguageCapability[];
+      /** shared/http-stacks.json (v0.28.208+): per-stack h3 + the modes that need it. */
+      stacks?: { id: string; http_port: number; https_port: number; h3: boolean }[];
+      h3_modes?: string[];
+    }>('/modes'),
+  // The canonical HTTP-stack manifest the mode⇄target h3 gate enforces
+  // (same table as /modes `stacks`, with installer notes).
+  getHttpStacks: () =>
+    request<{ h3_modes: string[]; stacks: { id: string; http_port: number; https_port: number; h3: boolean; installer?: string | null }[] }>('/http-stacks'),
 
   // Updates (NOT project-scoped)
   updateDashboard: () =>

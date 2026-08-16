@@ -3,7 +3,7 @@ import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { useSearchParams } from 'react-router';
 import { api } from '../api/client';
 import type { Workload, ModeGroup } from '../api/types';
-import { buildComparisonCells as buildCells, countCells } from '../lib/matrix-cells';
+import { buildComparisonCells as buildCells, countCells, h3DropsPerCell } from '../lib/matrix-cells';
 import { WizardShell } from '../components/wizard/WizardShell';
 import { TestbedMatrix } from '../components/wizard/TestbedMatrix';
 import { WorkloadPanel } from '../components/wizard/WorkloadPanel';
@@ -14,7 +14,7 @@ import { useComparisonSubmit } from '../components/wizard/useComparisonSubmit';
 import { unsupportedReason } from '../lib/mode-capabilities';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
-import { testersApi } from '../api/testers';
+import { testersApi, type TesterRow } from '../api/testers';
 import type { CloudAccountSummary, Methodology } from '../api/types';
 import type { TestbedState } from '../components/wizard/testbed-constants';
 import {
@@ -41,6 +41,8 @@ export function FullStackPage() {
   const [proxyWarning, setProxyWarning] = useState(false);
   const [runnerMode, setRunnerMode] = useState<'auto' | 'specific'>('auto');
   const [selectedTesterId, setSelectedTesterId] = useState<string | null>(null);
+  // Runner rows (for the online count + the pinned runner's tool inventory).
+  const [testerRows, setTesterRows] = useState<TesterRow[]>([]);
 
   // Step 1: Workload
   const [modeGroups, setModeGroups] = useState<ModeGroup[]>([]);
@@ -67,10 +69,25 @@ export function FullStackPage() {
   // A full-stack run always targets a provisioned networker-endpoint (a proxy
   // stack), so gate the mode picker to that target kind — greys out sdkprobe
   // (needs an SDK endpoint) and apibench (needs the Application Benchmark's
-  // reference APIs), which would only ever fail here.
+  // reference APIs), which would only ever fail here. The chosen proxies add
+  // the HTTP/3 axis (shared/http-stacks.json): when EVERY selected proxy lacks
+  // QUIC (apache / haproxy / traefik) the h3 modes are greyed out with the
+  // reason; a mixed matrix keeps them and the server drops them per cell
+  // (h3DropsPerCell previews that on Review). A pinned runner without Chrome
+  // greys out the browser modes.
+  const selectedProxies = useMemo(
+    () => [...new Set(testbeds.flatMap(tb => tb.proxies))],
+    [testbeds],
+  );
+  const pinnedRunner = useMemo(
+    () => (runnerMode === 'specific' && selectedTesterId
+      ? testerRows.find(t => t.tester_id === selectedTesterId)?.agent_capabilities ?? null
+      : null),
+    [runnerMode, selectedTesterId, testerRows],
+  );
   const modeUnsupported = useMemo(
-    () => (id: string) => unsupportedReason(id, { kind: 'endpoint' }),
-    [],
+    () => (id: string) => unsupportedReason(id, { kind: 'endpoint', stack: selectedProxies, runner: pinnedRunner }),
+    [selectedProxies, pinnedRunner],
   );
 
   // Defensively drop any unsupported mode (e.g. from a prefilled/saved config)
@@ -103,7 +120,10 @@ export function FullStackPage() {
     api.getModes().then(r => setModeGroups(r.groups)).catch(() => {});
     api.getCloudAccounts(projectId).then(setCloudAccounts).catch(() => {});
     testersApi.listTesters(projectId)
-      .then(rows => setOnlineRunners(rows.filter(t => t.power_state === 'running' && t.agent_status === 'online').length))
+      .then(rows => {
+        setTesterRows(rows);
+        setOnlineRunners(rows.filter(t => t.power_state === 'running' && t.agent_status === 'online').length);
+      })
       .catch(() => {});
   }, [projectId]);
 
@@ -176,6 +196,8 @@ export function FullStackPage() {
   const buildComparisonCells = () => buildCells(testbeds, selectedTesterId);
   const totalCells = countCells(testbeds);
   const isMatrixRun = totalCells > 1;
+  // Cells that will not run the h3 modes (server-side per-cell drop preview).
+  const h3Drops = useMemo(() => h3DropsPerCell(testbeds, selectedModes), [testbeds, selectedModes]);
 
   // Name defaults to the placeholder when left blank — requiring a retype of
   // the suggested default left Launch silently disabled (E2E P3-11).
@@ -292,8 +314,17 @@ export function FullStackPage() {
           workloadLine={
             <>{runs} runs x {concurrency} concurrency / {timeoutMs}ms timeout / {[...selectedModes].join(' ')}</>
           }
-          matrixNote={isMatrixRun
-            ? <>Comparison group: {totalCells} cell{totalCells !== 1 ? 's' : ''} across {testbeds.length} testbed{testbeds.length !== 1 ? 's' : ''}</>
+          matrixNote={isMatrixRun || h3Drops.length > 0
+            ? (
+              <>
+                {isMatrixRun && <>Comparison group: {totalCells} cell{totalCells !== 1 ? 's' : ''} across {testbeds.length} testbed{testbeds.length !== 1 ? 's' : ''}</>}
+                {h3Drops.map(d => (
+                  <div key={d.label} data-testid="h3-drop-note" className="text-amber-400/90">
+                    {d.label}: {d.dropped.join(', ')} skipped — {d.stack} has no HTTP/3 (see shared/http-stacks.json)
+                  </div>
+                ))}
+              </>
+            )
             : undefined}
           afterWorkload={
             // Provisioning cost + runner-readiness — the last check before spend

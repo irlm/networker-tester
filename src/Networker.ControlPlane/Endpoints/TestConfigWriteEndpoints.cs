@@ -69,17 +69,24 @@ public static class TestConfigWriteEndpoints
 
             // Phase 2 capability enforcement: reject (mode, target) combos that
             // can only ever fail — e.g. throughput / sdkprobe / apibench against a
-            // raw URL (endpoint.kind "network"). Mirrors the frontend gate; the
-            // `pending` provisioning kind fails open (see ModeTargetCompatibility).
+            // raw URL (endpoint.kind "network"), or an HTTP/3 mode through a
+            // proxy stack the installer configures without QUIC (apache /
+            // haproxy / traefik per shared/http-stacks.json). Mirrors the
+            // frontend gate; the `pending` provisioning kind fails open on the
+            // kind rule but its proxy_stack still decides the h3 rule (see
+            // ModeTargetCompatibility).
+            var proxyStack = await ResolveProxyStackAsync(db, projectId, endpointKind, req.Endpoint, ct);
             var incompatible = ModeTargetCompatibility.IncompatibleModes(
-                ExtractModes(req.Workload), endpointKind);
+                ExtractModes(req.Workload), endpointKind, proxyStack);
             if (incompatible.Count > 0)
             {
-                var detail = string.Join("; ", incompatible.Select(
-                    x => $"'{x.Mode}' {ModeTargetCompatibility.ReasonFor(x.Requirement)}"));
+                var detail = string.Join("; ", incompatible.Select(x => $"'{x.Mode}' {x.Reason}"));
+                var target = proxyStack is not null
+                    ? $"endpoint kind '{endpointKind}' (stack '{proxyStack}')"
+                    : $"endpoint kind '{endpointKind}'";
                 return ApiError.Status(
                     StatusCodes.Status422UnprocessableEntity,
-                    $"incompatible mode(s) for endpoint kind '{endpointKind}': {detail}");
+                    $"incompatible mode(s) for {target}: {detail}");
             }
 
             var now = DateTime.UtcNow;
@@ -373,6 +380,67 @@ public static class TestConfigWriteEndpoints
         {
             var value = kind.GetString();
             return string.IsNullOrWhiteSpace(value) ? null : value;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The proxy stack a target resolves to, for the HTTP/3-by-stack gate
+    /// (<see cref="ModeTargetCompatibility"/>): <c>endpoint.proxy_stack</c> when
+    /// the endpoint carries one (<c>pending</c> always does; <c>proxy</c> may as
+    /// an override), else — for <c>proxy</c> — the referenced deployment's
+    /// <c>config.endpoints[0].http_stacks[0]</c>, exactly the listener the
+    /// dispatcher resolves the run to (<c>RunDispatcher.ResolveProxyEndpointAsync</c>).
+    /// Null when unknown (raw <c>network</c> / <c>runtime</c> targets, missing
+    /// deployment) — the gate then fails open on the stack rule.
+    /// </summary>
+    internal static async Task<string?> ResolveProxyStackAsync(
+        NetworkerDbContext db, string projectId, string endpointKind, JsonElement endpoint, CancellationToken ct)
+    {
+        if (endpoint.TryGetProperty("proxy_stack", out var ps) && ps.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(ps.GetString()))
+        {
+            return ps.GetString()!.Trim();
+        }
+
+        if (endpointKind != "proxy"
+            || !endpoint.TryGetProperty("proxy_endpoint_id", out var idProp)
+            || idProp.ValueKind != JsonValueKind.String
+            || !Guid.TryParse(idProp.GetString(), out var deploymentId))
+        {
+            return null;
+        }
+
+        var config = await db.Deployments
+            .AsNoTracking()
+            .Where(d => d.ProjectId == projectId && d.DeploymentId == deploymentId)
+            .Select(d => d.Config)
+            .FirstOrDefaultAsync(ct);
+        return config is null ? null : ProxyStackFromDeploymentConfig(config);
+    }
+
+    /// <summary>The Rust path <c>deployment.config.endpoints[0].http_stacks[0]</c>
+    /// (same walk as the dispatcher's proxy resolution).</summary>
+    internal static string? ProxyStackFromDeploymentConfig(string configText)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(configText);
+            if (doc.RootElement.TryGetProperty("endpoints", out var eps) &&
+                eps.ValueKind == JsonValueKind.Array &&
+                eps.GetArrayLength() > 0 &&
+                eps[0].TryGetProperty("http_stacks", out var stacks) &&
+                stacks.ValueKind == JsonValueKind.Array &&
+                stacks.GetArrayLength() > 0 &&
+                stacks[0].ValueKind == JsonValueKind.String)
+            {
+                var s = stacks[0].GetString();
+                return string.IsNullOrWhiteSpace(s) ? null : s;
+            }
+        }
+        catch (JsonException)
+        {
+            // fall through
         }
         return null;
     }

@@ -9,6 +9,7 @@ import { MethodologyPanel } from '../components/wizard/MethodologyPanel';
 import { LanguageSelector } from '../components/wizard/LanguageSelector';
 import { ReviewStep } from '../components/wizard/ReviewStep';
 import { useComparisonSubmit } from '../components/wizard/useComparisonSubmit';
+import { h3DropsPerCell } from '../lib/matrix-cells';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
 import type { TestbedState } from '../components/wizard/testbed-constants';
@@ -231,6 +232,10 @@ export function AppBenchmarkPage() {
   };
 
   const isMatrixRun = buildComparisonCells().length > 1;
+  // Cells whose proxy stack has no QUIC will not run the h3 modes — the
+  // comparison-group launch drops them per cell (shared/http-stacks.json);
+  // say so on Review instead of surprising the user with N/A columns.
+  const h3Drops = useMemo(() => h3DropsPerCell(testbeds, selectedModes), [testbeds, selectedModes]);
 
   // Name defaults to the placeholder when left blank — requiring a retype
   // left Launch silently disabled with no disabled styling.
@@ -369,8 +374,17 @@ export function AppBenchmarkPage() {
           workloadLine={
             <>{runs} runs x {concurrency} concurrency / {timeoutMs}ms timeout / {[...selectedModes].join(' ')}</>
           }
-          matrixNote={isMatrixRun
-            ? <>Comparison group: {testbeds.length} testbed{testbeds.length !== 1 ? 's' : ''} x {selectedLangs.size} language{selectedLangs.size !== 1 ? 's' : ''} = {buildComparisonCells().length} runs</>
+          matrixNote={isMatrixRun || h3Drops.length > 0
+            ? (
+              <>
+                {isMatrixRun && <>Comparison group: {testbeds.length} testbed{testbeds.length !== 1 ? 's' : ''} x {selectedLangs.size} language{selectedLangs.size !== 1 ? 's' : ''} = {buildComparisonCells().length} runs</>}
+                {h3Drops.map(d => (
+                  <div key={d.label} data-testid="h3-drop-note" className="text-amber-400/90">
+                    {d.label}: {d.dropped.join(', ')} skipped — {d.stack} has no HTTP/3 (see shared/http-stacks.json)
+                  </div>
+                ))}
+              </>
+            )
             : undefined}
           afterWorkload={
             <div className="mb-4">

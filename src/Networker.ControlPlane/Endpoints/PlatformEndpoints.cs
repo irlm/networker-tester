@@ -48,7 +48,16 @@ public static class PlatformEndpoints
         // Extended (audit C5): "language_capabilities" carries the per-language
         // protocol/workload matrix (BenchmarkLanguageCapabilities) so the
         // Application Benchmark wizard can gate mode × language combos.
+        // Extended (v0.28.208): "stacks" + "h3_modes" carry shared/http-stacks.json
+        // (HttpStackCatalog) so pickers know which proxy stacks serve HTTP/3.
         app.MapGet("/api/modes", () => Results.Ok(BuildModes()))
+            .RequireAuthorization();
+
+        // GET /api/http-stacks — the canonical HTTP-stack manifest
+        // (shared/http-stacks.json, embedded): per-stack ports + h3 capability
+        // and the probe modes that need HTTP/3. The same table the config-create
+        // gate (ModeTargetCompatibility) and the comparison-group launch enforce.
+        app.MapGet("/api/http-stacks", () => Results.Ok(HttpStackCatalog.ToWire()))
             .RequireAuthorization();
 
         return app;
@@ -204,6 +213,14 @@ public static class PlatformEndpoints
             })
             .ToArray();
 
-        return new { groups, language_capabilities = languageCapabilities };
+        return new
+        {
+            groups,
+            language_capabilities = languageCapabilities,
+            // shared/http-stacks.json — which proxy stacks serve HTTP/3 and
+            // which modes need it (the mode⇄target h3 gate's table).
+            stacks = HttpStackCatalog.Stacks.Select(s => new { id = s.Id, http_port = s.HttpPort, https_port = s.HttpsPort, h3 = s.H3 }).ToArray(),
+            h3_modes = HttpStackCatalog.H3Modes.ToArray(),
+        };
     }
 }
