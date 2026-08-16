@@ -29,12 +29,13 @@ BEGIN
     ('a0000001-aaaa-4000-8000-000000000003', pid, 'tester-westeurope-dev03', 'azure', 'westeurope', 'Standard_B2s', 'stopped', 'idle', uid)
   ON CONFLICT DO NOTHING;
 
-  -- WS-connected agents (linked to persistent testers)
-  INSERT INTO agent (agent_id, name, region, provider, status, version, os, arch, api_key, project_id, tester_id)
+  -- WS-connected agents (linked to persistent testers). Only the SHA-256 of
+  -- the api key is stored (V040/V045): plaintext keys are dev-key-agent-0N.
+  INSERT INTO agent (agent_id, name, region, provider, status, version, os, arch, api_key_hash, project_id, tester_id)
   VALUES
-    ('b0000001-bbbb-4000-8000-000000000001', 'tester-us-east-1-dev01', 'us-east-1', 'aws', 'online', '0.28.0', 'ubuntu-22.04', 'x86_64', 'dev-key-agent-01', pid, 'a0000001-aaaa-4000-8000-000000000001'),
-    ('b0000001-bbbb-4000-8000-000000000002', 'tester-us-east-1-dev02', 'us-east-1', 'aws', 'online', '0.28.0', 'ubuntu-22.04', 'x86_64', 'dev-key-agent-02', pid, 'a0000001-aaaa-4000-8000-000000000002'),
-    ('b0000001-bbbb-4000-8000-000000000003', 'tester-westeurope-dev03', 'westeurope', 'azure', 'offline', '0.27.25', 'ubuntu-22.04', 'x86_64', 'dev-key-agent-03', pid, 'a0000001-aaaa-4000-8000-000000000003')
+    ('b0000001-bbbb-4000-8000-000000000001', 'tester-us-east-1-dev01', 'us-east-1', 'aws', 'online', '0.28.0', 'ubuntu-22.04', 'x86_64', encode(sha256(convert_to('dev-key-agent-01','UTF8')),'hex'), pid, 'a0000001-aaaa-4000-8000-000000000001'),
+    ('b0000001-bbbb-4000-8000-000000000002', 'tester-us-east-1-dev02', 'us-east-1', 'aws', 'online', '0.28.0', 'ubuntu-22.04', 'x86_64', encode(sha256(convert_to('dev-key-agent-02','UTF8')),'hex'), pid, 'a0000001-aaaa-4000-8000-000000000002'),
+    ('b0000001-bbbb-4000-8000-000000000003', 'tester-westeurope-dev03', 'westeurope', 'azure', 'offline', '0.27.25', 'ubuntu-22.04', 'x86_64', encode(sha256(convert_to('dev-key-agent-03','UTF8')),'hex'), pid, 'a0000001-aaaa-4000-8000-000000000003')
   ON CONFLICT DO NOTHING;
 
   -- ── Test configs ───────────────────────────────────────────────────

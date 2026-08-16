@@ -245,8 +245,6 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         return false;
     }
 
-    private enum LifecycleOp { Start, Stop, Delete, Show }
-
     private async Task<ProvisionResult> DispatchAsync(
         ProjectTester tester, ProviderCredentials? credentials, LifecycleOp op, CancellationToken ct)
     {

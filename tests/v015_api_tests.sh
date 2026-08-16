@@ -16,8 +16,8 @@ R='\033[0;31m'
 Y='\033[0;33m'
 N='\033[0m'
 
-ok() { ((PASS++)); echo -e "  ${G}✓${N} $1"; }
-fail() { ((FAIL++)); ERRORS+=("$1: $2"); echo -e "  ${R}✗${N} $1 — $2"; }
+ok() { PASS=$((PASS + 1)); echo -e "  ${G}✓${N} $1"; }
+fail() { FAIL=$((FAIL + 1)); ERRORS+=("$1: $2"); echo -e "  ${R}✗${N} $1 — $2"; }
 
 assert_status() {
   local desc="$1" expected="$2" actual="$3"

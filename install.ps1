@@ -7,8 +7,9 @@
 #   remotely – provisioned on a cloud VM (Azure, AWS, and GCP supported)
 #
 # Two local install modes (auto-detected, or choose in customize flow):
-#   release  – download pre-built binary from the latest GitHub release via
-#              gh CLI (fast, ~10 s); requires: gh installed + gh auth login
+#   release  – download pre-built binary from the latest GitHub release
+#              (fast, ~10 s); via gh when authenticated, else the public
+#              release URL resolved through the unauthenticated GitHub API
 #   source   – compile from source via cargo install (slower, ~5-10 min);
 #              requires: Rust/cargo  (repo is public – no SSH key needed)
 #
@@ -33,6 +34,9 @@
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingConvertToSecureStringWithPlainText', '')]
 param(
     [string]$Component  = "",
+    # -AutoYes is the historical spelling the LAN/remote paths pass; keep it
+    # binding (an unknown parameter is a hard error in PowerShell).
+    [Alias('AutoYes')]
     [switch]$Yes,
     [switch]$FromSource,
     [switch]$SkipRust,
@@ -51,6 +55,10 @@ param(
     # deploy path (az vm run-command) so the same Invoke-SetupXxx functions
     # are reused for cloud VMs instead of being duplicated as inline PowerShell.
     [string]$Setup      = "",
+    # -Fqdn <name>  Optional public DNS name for -Setup iis: adds a hostname
+    # (SNI) HTTPS binding next to the IP binding, the same as install.sh's
+    # remote Windows deploy passes (AZURE_ENDPOINT_FQDN). Empty = IP binding only.
+    [string]$Fqdn       = "",
     # -BenchmarkServer <lang>  Install ONLY the named reference-API language
     # server (apibench then measures the LANGUAGE behind this endpoint) and
     # exit. Windows-viable set: csharp-net48, csharp-net8, csharp-net9,
@@ -68,7 +76,7 @@ $ErrorActionPreference = "Stop"
 $RepoHttps     = "https://github.com/irlm/networker-tester"
 $RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"
-$InstallerVersion = "v0.28.207"  # fallback when gh is unavailable
+$InstallerVersion = "v0.28.208"  # fallback when gh is unavailable
 
 # ── Print helpers ──────────────────────────────────────────────────────────────
 function Write-Ok   ($msg) { Write-Host "  v " -NoNewline -ForegroundColor Green;   Write-Host $msg }
@@ -107,8 +115,8 @@ function Show-Help {
     Write-Host "               both      Install both binaries"
     Write-Host ""
     Write-Host "Install modes (auto-detected; override in customize flow or via flag):"
-    Write-Host "  release   Download pre-built binary via gh CLI -- fast (~10 s)"
-    Write-Host "            Requires: gh installed and authenticated (gh auth login)"
+    Write-Host "  release   Download pre-built binary from the GitHub release -- fast (~10 s)"
+    Write-Host "            Uses gh when authenticated, else the public release URL"
     Write-Host "  source    Compile from source via cargo install -- slower (~5-10 min)"
     Write-Host "            Repo is public -- no SSH key required"
     Write-Host ""
@@ -139,6 +147,7 @@ function Show-Help {
 # ── Script-level state ────────────────────────────────────────────────────────
 $script:InstallMethod     = "source"   # "release" | "source"
 $script:ReleaseAvailable  = $false
+$script:ReleaseViaGh      = $false   # gh release download vs direct asset URL
 $script:ReleaseTarget     = ""
 $script:NetworkerVersion  = ""
 $script:DoRustInstall     = $false
@@ -232,6 +241,28 @@ $script:GcpShutdownAsked  = $false
 
 $script:ConfigFilePath    = ""
 
+# ── Network helpers ───────────────────────────────────────────────────────────
+function Invoke-EnsureTls12 {
+    # Windows PowerShell 5.1 defaults to TLS 1.0/1.1 for WebRequest — GitHub
+    # and download.microsoft.com require 1.2.
+    try {
+        [System.Net.ServicePointManager]::SecurityProtocol = `
+            [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
+    } catch { $script:Tls12Warned = $true }
+}
+
+function Get-LatestReleaseTag {
+    # Latest release tag via the unauthenticated GitHub API (60 req/h per IP
+    # is plenty for an installer). Empty string when offline / rate-limited.
+    Invoke-EnsureTls12
+    try {
+        $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$RepoGh/releases/latest" `
+            -UseBasicParsing -TimeoutSec 15 -Headers @{ "User-Agent" = "networker-install.ps1" }
+        if ($rel -and $rel.tag_name) { return [string]$rel.tag_name }
+    } catch { Write-Dim "GitHub API not reachable ($($_.Exception.Message)) -- release mode unavailable" }
+    return ""
+}
+
 # ── Target triple detection ────────────────────────────────────────────────────
 function Get-ReleaseTarget {
     switch ($env:PROCESSOR_ARCHITECTURE) {
@@ -324,7 +355,13 @@ function Invoke-DiscoverSystem {
         "endpoint" { $script:DoInstallTester   = $false }
     }
 
-    # Release mode: available when gh is authenticated AND platform is in release matrix
+    # Release mode: available when the platform is in the release matrix AND
+    # either gh is authenticated (gh release download) or the latest release
+    # tag resolves through the unauthenticated GitHub API (direct download of
+    # the public asset with Invoke-WebRequest — the same fallback install.sh
+    # has had; a fresh Windows Server VM has neither gh nor Rust, so without
+    # it `-Yes -Component endpoint` silently fell into a 10-minute source
+    # compile that needs MSVC + winget, absent on Server SKUs).
     if (-not $FromSource) {
         $target = Get-ReleaseTarget
         $ghCmd  = Get-Command gh -ErrorAction SilentlyContinue
@@ -337,9 +374,20 @@ function Invoke-DiscoverSystem {
             if ($ghOk) {
                 $script:ReleaseTarget    = $target
                 $script:ReleaseAvailable = $true
+                $script:ReleaseViaGh     = $true
                 $script:InstallMethod    = "release"
                 $script:NetworkerVersion = (& gh release list --repo $RepoGh `
                     --limit 1 --json tagName --jq ".[0].tagName" 2>$null) -join ""
+            }
+        }
+        if ($target -and -not $script:ReleaseAvailable) {
+            $apiTag = Get-LatestReleaseTag
+            if ($apiTag) {
+                $script:ReleaseTarget    = $target
+                $script:ReleaseAvailable = $true
+                $script:ReleaseViaGh     = $false
+                $script:InstallMethod    = "release"
+                $script:NetworkerVersion = $apiTag
             }
         }
     }
@@ -432,7 +480,11 @@ function Show-SystemInfo {
     }
     Write-Host ("    {0,-22} {1}" -f "Install to:",   $CargoBin)
     if ($script:ReleaseAvailable) {
-        Write-Host ("    {0,-22} {1}" -f "gh CLI:", "authenticated v")
+        if ($script:ReleaseViaGh) {
+            Write-Host ("    {0,-22} {1}" -f "gh CLI:", "authenticated v")
+        } else {
+            Write-Host ("    {0,-22} {1}" -f "Release:", "$($script:NetworkerVersion) via GitHub API (no gh)")
+        }
     }
     if ($script:AzureCliAvailable) {
         $azLabel = if ($script:AzureLoggedIn) { "authenticated v" } else { "installed  (run: az login)" }
@@ -876,7 +928,7 @@ function Invoke-LanInstallBinaryWindows ($binary, $role) {
     $prevErr = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     & ssh -o StrictHostKeyChecking=no -p $port "${user}@${ip}" `
-        "powershell -ExecutionPolicy Bypass -Command `"& { Invoke-WebRequest -Uri '${installerUrl}' -OutFile C:\networker-install.ps1; & C:\networker-install.ps1 -Component ${component} -AutoYes }`""
+        "powershell -ExecutionPolicy Bypass -Command `"& { Invoke-WebRequest -Uri '${installerUrl}' -OutFile C:\networker-install.ps1; & C:\networker-install.ps1 -Component ${component} -Yes }`""
     $ErrorActionPreference = $prevErr
 
     $prevErr = $ErrorActionPreference
@@ -1682,14 +1734,30 @@ function Invoke-DownloadReleaseStep ($binary) {
 
     $prevErr = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
-    & gh release download --repo $RepoGh --latest `
-        --pattern $archive --dir $tmpDir --clobber
-    $ok = ($LASTEXITCODE -eq 0)
+    if ($script:ReleaseViaGh) {
+        & gh release download --repo $RepoGh --latest `
+            --pattern $archive --dir $tmpDir --clobber
+        $ok = ($LASTEXITCODE -eq 0)
+    } else {
+        # No gh: fetch the public asset straight from the release page (the
+        # same URL install.sh's remote Windows bootstraps use).
+        $ver = if ($script:NetworkerVersion) { $script:NetworkerVersion } else { "latest" }
+        $url = if ($ver -eq "latest") { "$RepoHttps/releases/latest/download/$archive" } `
+               else { "$RepoHttps/releases/download/$ver/$archive" }
+        Invoke-EnsureTls12
+        $ok = $false
+        try {
+            Invoke-WebRequest -Uri $url -OutFile (Join-Path $tmpDir $archive) -UseBasicParsing -TimeoutSec 300
+            $ok = Test-Path (Join-Path $tmpDir $archive)
+        } catch {
+            Write-Warn "download failed: $($_.Exception.Message)"
+        }
+    }
     $ErrorActionPreference = $prevErr
 
     if (-not $ok) {
         Write-Host ""
-        Write-Err "gh release download failed."
+        if ($script:ReleaseViaGh) { Write-Err "gh release download failed." } else { Write-Err "release download failed." }
         Write-Host "  Expected asset: $archive"
         Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
         exit 1
@@ -1698,12 +1766,31 @@ function Invoke-DownloadReleaseStep ($binary) {
     New-Item -ItemType Directory -Force $CargoBin | Out-Null
     Expand-Archive -Path "$tmpDir\$archive" -DestinationPath $CargoBin -Force
     Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+    Invoke-EnsureVcRuntime
 
     $installedCmd  = Get-Command $binary -ErrorAction SilentlyContinue
     $installedPath = if ($installedCmd) { $installedCmd.Source } else { "$CargoBin\$binary.exe" }
     $installedVer  = if ($installedCmd) { (& $binary --version 2>&1) } else { "unknown" }
     Write-Host ""
     Write-Ok "$binary installed -> $installedPath  ($installedVer)"
+}
+
+function Invoke-EnsureVcRuntime {
+    # The release exes are MSVC builds that link vcruntime140.dll dynamically;
+    # a fresh Windows Server image does not ship it. Same check the AWS/GCP
+    # Windows endpoint bootstraps in install.sh perform before first start.
+    if (Test-Path (Join-Path $env:SystemRoot "System32\vcruntime140.dll")) { return }
+    Write-Info "Installing Visual C++ Redistributable (vcruntime140.dll missing)..."
+    Invoke-EnsureTls12
+    $redist = Join-Path $env:TEMP "vc_redist.x64.exe"
+    try {
+        Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile $redist -UseBasicParsing -TimeoutSec 300
+        Start-Process -FilePath $redist -ArgumentList @("/install","/quiet","/norestart") -Wait -WindowStyle Hidden
+        Remove-Item $redist -Force -ErrorAction SilentlyContinue
+        Write-Ok "VC++ Redistributable installed"
+    } catch {
+        Write-Warn "VC++ Redistributable install failed ($($_.Exception.Message)) -- the binaries may not start until it is present."
+    }
 }
 
 function Invoke-MsvcInstallStep {
@@ -1910,7 +1997,7 @@ function Invoke-CargoInstallStep ($binary) {
 #
 # Port map (aligned with install.sh):
 #   nginx    8081 / 8444   (Linux only — handled by install.sh)
-#   iis      8082 / 8445   (Windows — handled by install.sh PowerShell payload)
+#   iis      8082 / 8445   (Windows — Invoke-SetupIIS, twin of install.sh _iis_setup_powershell)
 #   caddy    8091 / 8454
 #   traefik  8092 / 8455
 #   haproxy  8093 / 8456
@@ -2491,24 +2578,183 @@ LogLevel warn
     Write-Ok "Apache serving test page on ports 8094 (HTTP) / 8457 (HTTPS). HTTP/3 not available in Apache httpd."
 }
 
-# ── IIS placeholder (the full IIS payload lives in install.sh) ───────────────
+# ── IIS (ports 8082 / 8445, HTTP/3 via http.sys) ─────────────────────────────
+# The PowerShell twin of install.sh `_iis_setup_powershell` (the payload the
+# remote Windows deploy pushes through `az vm run-command`), so a LOCAL
+# `install.ps1 -Setup iis` yields the same site the cloud endpoint VMs get:
+# IIS + URL Rewrite + ARR, EnableHttp3/EnableHttp2* in http.sys (reboot needed
+# the first time — the caller sees "REBOOT_NEEDED"), the generated static test
+# site at C:\networker-static with the reverse-proxy web.config for
+# /page /asset /download /upload /info /api /health /ws → networker-endpoint :8080,
+# a self-signed cert, HTTPS 8445 (IP binding + optional -Fqdn SNI binding),
+# the alt-svc h3 header and the firewall rules (TCP 8082/8445, UDP 8445).
+# Until v0.28.208 this function was a placeholder that only bound :8082 —
+# lab/ (Windows target) runs the real thing and validates :8445 incl. HTTP/3.
 function Invoke-SetupIIS {
     Invoke-NextStep "Set up IIS for HTTP stack comparison (ports 8082/8445)"
-    Invoke-EnsureStaticSite
-    Write-Info "Installing IIS + URL Rewrite + ARR..."
-    # IIS is handled by the Linux-orchestrated PowerShell payload (install.sh
-    # _iis_setup_powershell). For local Windows installs we replicate the
-    # minimum: enable the Web-Server feature and drop the static site.
-    Install-WindowsFeature -Name Web-Server -IncludeManagementTools -ErrorAction SilentlyContinue | Out-Null
-    Import-Module WebAdministration -ErrorAction SilentlyContinue
+    Invoke-EnsureTls12
+    $siteRoot = "C:\networker-static"
+    $fqdn = if ($Fqdn) { $Fqdn.Trim() } else { "" }
 
-    if (Get-Website -Name "networker-iis" -ErrorAction SilentlyContinue) {
-        Remove-Website -Name "networker-iis" -ErrorAction SilentlyContinue
+    # 1. IIS + URL Rewrite + ARR (reverse proxy for the dynamic endpoint routes)
+    Write-Info "Installing IIS (Web-Server + WebSocket protocol)..."
+    Import-Module ServerManager -ErrorAction SilentlyContinue
+    # Web-WebSockets: ARR only tunnels WebSocket upgrades (the endpoint's /ws
+    # echo used by the websocket probe) when the IIS WebSocket Protocol
+    # feature is installed.
+    Install-WindowsFeature -Name Web-Server,Web-WebSockets -IncludeManagementTools | Out-Null
+
+    Write-Info "Installing URL Rewrite Module..."
+    $urlRewriteMsi = Join-Path $env:TEMP "urlrewrite.msi"
+    Invoke-WebRequest -Uri "https://download.microsoft.com/download/1/2/8/128E2E22-C1B9-44A4-BE2A-5859ED1D4592/rewrite_amd64_en-US.msi" `
+        -OutFile $urlRewriteMsi -UseBasicParsing
+    Start-Process msiexec.exe -ArgumentList "/i `"$urlRewriteMsi`" /quiet /norestart" -Wait -WindowStyle Hidden
+
+    Write-Info "Installing ARR (Application Request Routing)..."
+    $arrMsi = Join-Path $env:TEMP "arr.msi"
+    Invoke-WebRequest -Uri "https://download.microsoft.com/download/E/9/8/E9849D6A-020E-47E4-9FD0-A023E99B54EB/requestRouter_amd64.msi" `
+        -OutFile $arrMsi -UseBasicParsing
+    Start-Process msiexec.exe -ArgumentList "/i `"$arrMsi`" /quiet /norestart" -Wait -WindowStyle Hidden
+
+    Import-Module WebAdministration
+    Set-WebConfigurationProperty -pspath "MACHINE/WEBROOT/APPHOST" `
+        -filter "system.webServer/proxy" -name "enabled" -value "True"
+
+    # 2. HTTP/3 + HTTP/2 in http.sys (Windows Server 2022+; needs a reboot once)
+    Write-Info "Enabling HTTP/3 in http.sys (registry)..."
+    $httpParams = "HKLM:\SYSTEM\CurrentControlSet\Services\HTTP\Parameters"
+    if (-not (Test-Path $httpParams)) { New-Item -Path $httpParams -Force | Out-Null }
+    $needsReboot = $false
+    foreach ($prop in @("EnableHttp3","EnableHttp2Tls","EnableHttp2Cleartext")) {
+        $cur = (Get-ItemProperty -Path $httpParams -Name $prop -ErrorAction SilentlyContinue).$prop
+        if ($cur -ne 1) {
+            Set-ItemProperty -Path $httpParams -Name $prop -Value 1 -Type DWord
+            $needsReboot = $true
+        }
     }
-    New-Website -Name "networker-iis" -PhysicalPath $script:NetworkerSiteRoot `
-        -Port 8082 -Force -ErrorAction SilentlyContinue | Out-Null
-    Invoke-EnsureFirewallRule "Networker-IIS-HTTP" "TCP" @(8082)
-    Write-Ok "IIS serving test page on port 8082. For HTTPS/H3 + ARR reverse-proxy use the install.sh remote flow."
+
+    # 3. Static test site (generated by networker-endpoint when present)
+    New-Item -ItemType Directory -Path $siteRoot -Force | Out-Null
+    $epExe = ""
+    foreach ($cand in @("C:\networker\networker-endpoint.exe", (Join-Path $CargoBin "networker-endpoint.exe"))) {
+        if (Test-Path $cand) { $epExe = $cand; break }
+    }
+    if (-not $epExe) {
+        $epCmd = Get-Command networker-endpoint -ErrorAction SilentlyContinue
+        if ($epCmd) { $epExe = $epCmd.Source }
+    }
+    $genSite = $false
+    if ($epExe) {
+        $prevErr = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $genSiteHelp = (& $epExe --help 2>&1) -join "`n"
+        if ($genSiteHelp -match 'generate-site') {
+            Write-Info "Generating static test site via networker-endpoint..."
+            & $epExe generate-site $siteRoot --preset mixed --stack iis 2>&1 | Out-Null
+            $genSite = Test-Path (Join-Path $siteRoot "index.html")
+        }
+        $ErrorActionPreference = $prevErr
+    }
+    if (-not $genSite) {
+        Write-Info "Creating static test page (50 assets, mixed sizes)..."
+        $html = "<!DOCTYPE html>`n<html><head><title>Networker Page Load Test</title>`n"
+        $html += "<link rel=`"stylesheet`" href=`"style.css`">`n<link rel=`"icon`" href=`"data:,`">`n</head><body>`n"
+        for ($i = 0; $i -lt 50; $i++) { $html += "<img src=`"asset-$i.bin`" width=`"1`" height=`"1`" alt=`"`">`n" }
+        $html += "</body></html>"
+        [IO.File]::WriteAllText("$siteRoot\index.html", $html, [Text.Encoding]::UTF8)
+        [IO.File]::WriteAllText("$siteRoot\style.css", "body{margin:0}", [Text.Encoding]::UTF8)
+        [IO.File]::WriteAllText("$siteRoot\health", '{"status":"ok","stack":"iis"}', [Text.Encoding]::UTF8)
+        $sizes = @(512,512,512,512,512,2048,2048,2048,2048,2048,
+                   4096,4096,4096,4096,4096,8192,8192,8192,8192,8192,
+                   16384,16384,16384,16384,16384,32768,32768,32768,32768,32768,
+                   65536,65536,65536,65536,65536,102400,102400,102400,102400,102400,
+                   204800,204800,204800,204800,204800,409600,409600,614400,614400,1048576)
+        $rng = New-Object Random
+        for ($i = 0; $i -lt $sizes.Count; $i++) {
+            $bytes = New-Object byte[] $sizes[$i]
+            $rng.NextBytes($bytes)
+            [IO.File]::WriteAllBytes("$siteRoot\asset-$i.bin", $bytes)
+        }
+    }
+
+    # 3b. web.config: default doc, MIME types, reverse-proxy rules to the endpoint
+    $webConfig = @"
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <system.webServer>
+    <defaultDocument>
+      <files>
+        <clear />
+        <add value="index.html" />
+      </files>
+    </defaultDocument>
+    <staticContent>
+      <remove fileExtension="." />
+      <mimeMap fileExtension="." mimeType="application/json" />
+      <remove fileExtension=".bin" />
+      <mimeMap fileExtension=".bin" mimeType="application/octet-stream" />
+    </staticContent>
+    <rewrite>
+      <rules>
+        <rule name="Proxy /page to endpoint" stopProcessing="true">
+          <match url="^page(.*)" />
+          <action type="Rewrite" url="http://127.0.0.1:8080/page{R:1}" />
+        </rule>
+        <rule name="Proxy /asset to endpoint" stopProcessing="true">
+          <match url="^asset$" />
+          <conditions>
+            <add input="{QUERY_STRING}" pattern=".+" />
+          </conditions>
+          <action type="Rewrite" url="http://127.0.0.1:8080/asset?{C:0}" appendQueryString="false" />
+        </rule>
+        <rule name="Proxy throughput + info + apibench + ws to endpoint" stopProcessing="true">
+          <match url="^(download|upload|info|api|health|ws)(.*)" />
+          <action type="Rewrite" url="http://127.0.0.1:8080/{R:1}{R:2}" />
+        </rule>
+      </rules>
+    </rewrite>
+  </system.webServer>
+</configuration>
+"@
+    [IO.File]::WriteAllText("$siteRoot\web.config", $webConfig, (New-Object System.Text.UTF8Encoding $false))
+
+    # 4. Self-signed certificate (SAN: localhost, hostname[, fqdn])
+    $dnsNames = @("localhost", $env:COMPUTERNAME)
+    if ($fqdn) { $dnsNames += $fqdn }
+    $cert = New-SelfSignedCertificate -DnsName $dnsNames -CertStoreLocation "Cert:\LocalMachine\My" `
+        -NotAfter (Get-Date).AddYears(1) -FriendlyName "Networker IIS Test"
+    $thumbprint = $cert.Thumbprint
+
+    # 5. Site + bindings
+    if (Get-Website -Name "Default Web Site" -ErrorAction SilentlyContinue) { Remove-Website -Name "Default Web Site" }
+    if (Get-Website -Name "networker-iis"    -ErrorAction SilentlyContinue) { Remove-Website -Name "networker-iis" }
+    New-Website -Name "networker-iis" -PhysicalPath $siteRoot -Port 8082 -Force | Out-Null
+    if ($fqdn) {
+        New-WebBinding -Name "networker-iis" -Protocol "https" -Port 8445 -HostHeader $fqdn -SslFlags 1
+        $sniBinding = Get-WebBinding -Name "networker-iis" -Protocol "https" -Port 8445 | Where-Object { $_.sslFlags -eq 1 }
+        $sniBinding.AddSslCertificate($thumbprint, "My")
+        Write-Info "HTTPS binding: hostname=$fqdn (SNI)"
+    }
+    New-WebBinding -Name "networker-iis" -Protocol "https" -Port 8445 -SslFlags 0
+    $ipBinding = Get-WebBinding -Name "networker-iis" -Protocol "https" -Port 8445 | Where-Object { $_.sslFlags -eq 0 }
+    $ipBinding.AddSslCertificate($thumbprint, "My")
+    Set-WebConfigurationProperty -pspath "IIS:\Sites\networker-iis" `
+        -filter "system.webServer/httpProtocol/customHeaders" -name "." `
+        -value @{name="alt-svc"; value="h3="":8445""; ma=86400"}
+    Start-Website -Name "networker-iis"
+
+    # 6. Firewall
+    Invoke-EnsureFirewallRule "Networker-IIS-HTTP"  "TCP" @(8082)
+    Invoke-EnsureFirewallRule "Networker-IIS-HTTPS" "TCP" @(8445)
+    Invoke-EnsureFirewallRule "Networker-IIS-QUIC"  "UDP" @(8445)
+
+    Write-Ok "IIS serving test page on ports 8082 (HTTP) / 8445 (HTTPS + HTTP/3), proxying dynamic routes to networker-endpoint :8080."
+    if ($needsReboot) {
+        Write-Warn "HTTP/3 registry keys were just set -- http.sys needs a REBOOT before :8445 answers QUIC."
+        Write-Host "REBOOT_NEEDED"
+    } else {
+        Write-Info "HTTP/3 registry already set -- no reboot needed"
+    }
 }
 
 # ── Dispatcher: map http_stacks names to setup functions ──────────────────────

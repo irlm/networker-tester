@@ -322,6 +322,41 @@ pub async fn resolve_detailed(
     let started_at = Utc::now();
     let t0 = Instant::now();
 
+    // IP literal: there is nothing to resolve. `resolve()` already short-circuits
+    // literals; the typed A/AAAA lookups below have no such fast path — hickory
+    // appends the search domain and asks for `172.31.100.101.localdomain.` A,
+    // which NXDOMAINs — so every standalone `dns` probe against an IP target
+    // (the common case for provisioned endpoint VMs) failed. Report an
+    // honest, instant success with no per-record timing (lab finding).
+    if let Ok(ip) = hostname.parse::<IpAddr>() {
+        if (ipv4_only && !ip.is_ipv4()) || (ipv6_only && !ip.is_ipv6()) {
+            return Err(ErrorRecord {
+                category: ErrorCategory::Dns,
+                message: format!(
+                    "IP literal {ip} excluded by address-family filter (ipv4_only={ipv4_only}, ipv6_only={ipv6_only})"
+                ),
+                detail: None,
+                occurred_at: Utc::now(),
+            });
+        }
+        let result = DnsResult {
+            query_name: hostname.to_string(),
+            resolved_ips: vec![ip.to_string()],
+            duration_ms: t0.elapsed().as_secs_f64() * 1000.0,
+            started_at,
+            success: true,
+            resolver: Some("none (IP literal, no lookup)".to_string()),
+            a_ms: None,
+            aaaa_ms: None,
+            a_record_count: None,
+            aaaa_record_count: None,
+            cname_chain: Vec::new(),
+            a_ttl_secs: None,
+            aaaa_ttl_secs: None,
+        };
+        return Ok((vec![ip], result));
+    }
+
     let a = if ipv6_only {
         None
     } else {
@@ -554,6 +589,33 @@ mod tests {
     async fn ip_literal_with_mismatched_family_pin_errors() {
         assert!(resolve("127.0.0.1", false, true).await.is_err());
         assert!(resolve("::1", true, false).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn resolve_detailed_ip_literal_succeeds_without_lookup() {
+        let (ips, res) = resolve_detailed("172.31.100.101", false, false)
+            .await
+            .expect("IP literal must not hit the resolver");
+        assert_eq!(ips, vec!["172.31.100.101".parse::<IpAddr>().unwrap()]);
+        assert!(res.success);
+        assert_eq!(res.resolved_ips, vec!["172.31.100.101".to_string()]);
+        assert!(res.a_ms.is_none() && res.aaaa_ms.is_none());
+        assert!(res.cname_chain.is_empty());
+        assert!(res.resolver.as_deref().unwrap_or("").contains("literal"));
+
+        let (ips6, res6) = resolve_detailed("::1", false, true)
+            .await
+            .expect("v6 literal");
+        assert!(ips6[0].is_ipv6() && res6.success);
+    }
+
+    #[tokio::test]
+    async fn resolve_detailed_ip_literal_respects_family_filter() {
+        let err = resolve_detailed("172.31.100.101", false, true)
+            .await
+            .expect_err("v4 literal under --ipv6-only must be rejected");
+        assert_eq!(err.category, ErrorCategory::Dns);
+        assert!(err.message.contains("excluded"), "{}", err.message);
     }
 
     #[tokio::test]

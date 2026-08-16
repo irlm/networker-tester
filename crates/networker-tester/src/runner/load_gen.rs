@@ -155,11 +155,14 @@ pub async fn load_download_once(
     bytes: &AtomicU64,
     request_bytes: usize,
 ) -> Result<(), String> {
-    let host = host_header(&target.base_url);
+    // Absolute URI: HTTP/2 needs :scheme/:authority (RFC 9113 §8.3.1;
+    // http.sys rejects path-only requests) — see runner::http::h2_absolute_uri.
     let req = Request::builder()
         .method("GET")
-        .uri(format!("/download?bytes={request_bytes}"))
-        .header("host", &host)
+        .uri(absolute_uri(
+            &target.base_url,
+            &format!("/download?bytes={request_bytes}"),
+        ))
         .header("user-agent", "networker-tester/load-gen")
         .body(empty_body())
         .map_err(|e| e.to_string())?;
@@ -182,12 +185,10 @@ pub async fn load_upload_once(
     bytes: &Arc<AtomicU64>,
     request_bytes: usize,
 ) -> Result<(), String> {
-    let host = host_header(&target.base_url);
     let body = CountedUploadBody::new(request_bytes, bytes.clone());
     let req = Request::builder()
         .method("POST")
-        .uri("/upload")
-        .header("host", &host)
+        .uri(absolute_uri(&target.base_url, "/upload"))
         .header("user-agent", "networker-tester/load-gen")
         .header("content-length", request_bytes.to_string())
         .body(BoxBody::new(body))
@@ -248,6 +249,17 @@ pub fn empty_body() -> ProbeBody {
     BoxBody::new(Full::new(Bytes::new()).map_err(|never| match never {}))
 }
 
+/// `scheme://host:port/path` for an HTTP/2 request on `base` (RFC 9113 §8.3.1
+/// pseudo-headers come from the URI; the port is spelled out).
+pub fn absolute_uri(base: &url::Url, path_and_query: &str) -> String {
+    let scheme = base.scheme();
+    let host = base.host_str().unwrap_or("localhost");
+    let port = base
+        .port()
+        .unwrap_or(if scheme == "https" { 443 } else { 80 });
+    crate::runner::http::h2_absolute_uri(scheme, host, port, path_and_query)
+}
+
 pub fn host_header(url: &url::Url) -> String {
     let host = url.host_str().unwrap_or("localhost");
     match url.port() {
@@ -295,6 +307,17 @@ mod tests {
         let counter = Arc::new(AtomicU64::new(0));
         let body = CountedUploadBody::new(1_000_000, counter);
         assert_eq!(body.size_hint().exact(), Some(1_000_000));
+    }
+
+    #[test]
+    fn absolute_uri_spells_out_scheme_host_port() {
+        let u = url::Url::parse("https://10.0.0.5:8445/").unwrap();
+        assert_eq!(
+            absolute_uri(&u, "/download?bytes=1"),
+            "https://10.0.0.5:8445/download?bytes=1"
+        );
+        let d = url::Url::parse("http://example.com/").unwrap();
+        assert_eq!(absolute_uri(&d, "/upload"), "http://example.com:80/upload");
     }
 
     #[test]

@@ -11,6 +11,243 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.208] - 2026-08-15
+
+### Added
+- **Native Windows lab** (`lab/native/lab-native.ps1`, Windows PowerShell
+  5.1 + pwsh): the Docker lab's native-Windows twin — the whole managed path
+  as plain Windows **processes** built from the checkout: PostgreSQL (existing
+  server / `docker-compose.dashboard.yml` / CI `action-setup-postgres`),
+  control plane (`dotnet publish`), a Windows **runner** (`networker-agent.exe`
+  self-contained win-x64 + `networker-tester.exe` with the Windows CI feature
+  set `http3,db-mssql`), and a Windows **target** (`networker-endpoint.exe`
+  bare on :8443 **and behind IIS :8082/:8445** set up by the SAME payload every
+  cloud Windows endpoint VM gets — `install.sh _iis_setup_powershell`, rendered
+  through Git Bash and run under Windows PowerShell). Registers the runner as a
+  standalone `agent` row (sha256 key) and the IIS target as a completed
+  `deployment` (`http_stacks:["iis"]`) with the same SQL as `lab.sh`, then
+  drives the SAME `lab/validate.sh` matrix through Git Bash. `build | up |
+  validate | status | logs | env | down`, `-NoIis`, `-Fqdn`, `-IisSetup
+  cloud|installer`, `-DebugBuild`, `-DryRun` (walks the orchestration under
+  pwsh on Linux). Weekly + on-demand CI: `.github/workflows/lab-windows-native.yml`
+  on `windows-latest` (sccache + rust-cache, logs artifact, validate summary in
+  the job summary; not a required check). `lab/validate.sh` gained additive env
+  overrides — `LAB_STATE_ENV`, `LAB_TARGET_HOSTS`/`LAB_TARGET_IPS`,
+  `LAB_H3_OFF_STACKS` — Linux behaviour unchanged. **HTTP/3 through IIS is
+  reported honestly**: http.sys binds QUIC on SNI hostname bindings only and
+  the `EnableHttp3` keys need a reboot, so with an IP-literal target (the
+  default / hosted runner) the h3 modes are excluded for `iis` and the job
+  summary says so; with `-Fqdn` the built tester probes http3 and h3 stays in
+  the iis matrix only when confirmed. `lab/README.md` § "Native Windows lab".
+- **IIS payload proxies `/ws`** (`install.sh _iis_setup_powershell`): installs
+  `Web-WebSockets` and adds `ws` to the ARR rewrite allowlist so the
+  `websocket` probe mode works through IIS like it does through every Linux
+  stack (found while wiring the native Windows lab: the first run would have
+  failed phase 2 on it).
+- **Docker (local) cloud provider** (feature-flagged, `DASHBOARD_DOCKER_PROVIDER=1`,
+  default OFF — prod never shows it). From the dashboard/API you can now
+  create a runner (project tester) or deploy an endpoint target with cloud
+  `docker` and the control plane provisions them as containers on its own
+  Docker daemon through the **exact same product paths** used for
+  Azure/AWS/GCP: create-tester → `docker run` of the runner image with the
+  minted agent key → agent online → runs; deployments with
+  `provider: "docker"` endpoints → target container (`nwk-lab/target-<stack>`,
+  `TARGET_STACK`) gated on its healthcheck → `completed` with `endpoint_ips`
+  (log streamed via the deploy log bus); start/stop/delete/probe (`docker
+  start|stop|rm -f|inspect`, missing = success); deployment DELETE tears the
+  container down by ip; the orphan reaper removes labelled containers
+  (`networker.role`, `networker.tester_id`, `networker.deployment_id`) whose
+  row is gone; the orchestrator's `pending` endpoint kind accepts
+  `provider: "docker"` without a cloud account. `IComputeProvisioner` is now a
+  routing shim (`RoutingComputeProvisioner`: docker → `DockerComputeProvisioner`,
+  else the az/aws/gcloud `CliComputeProvisioner`). No cloud account or
+  connection is required (create-tester validation accepts cloud `docker`
+  account-less; region pinned to `local`, vm_size `container`, os
+  `ubuntu-24.04`). `GET /api/version` exposes `docker_provider`; the
+  frontend shows "Docker (local)" in the create-runner modal and both deploy
+  wizards only when it is on. Config: `DASHBOARD_DOCKER_BIN`,
+  `DASHBOARD_DOCKER_NETWORK` (default: the control plane's own container
+  network → `nwk-lab_labnet` → `bridge`), `DASHBOARD_DOCKER_RUNNER_IMAGE`,
+  `DASHBOARD_DOCKER_TARGET_IMAGE_PREFIX`, `DASHBOARD_DOCKER_AGENT_URL`
+  (`ws://host.docker.internal:5030/ws/agent` when the control plane runs on
+  the host; `--add-host host-gateway` is added on Linux). The lab enables it
+  (`lab/docker-compose.yml` mounts the docker socket; the control-plane image
+  ships the docker CLI) and `lab/validate.sh` phase 5 drives the whole
+  managed flow — tester → deployment → pinned proxy run → delete → containers
+  gone — closing the lab's "no cloud provisioning path" gap.
+- **`lab/` — the managed path in Docker, before any cloud VM.** `./lab/lab.sh
+  up --runners N --targets rust,nginx,caddy,apache,haproxy,traefik` builds
+  everything from the checkout (Rust release binaries, C# control plane and
+  self-contained agent, ubuntu:24.04 runtime images) and starts control plane
+  + Postgres + N runner containers + M target containers — the proxy stacks
+  are installed **by the unmodified `install.sh --setup-stack`** at image
+  build, so their configs are byte-identical to a cloud endpoint VM.
+  `./lab/lab.sh validate` is the local twin of the prod canary: network probe,
+  the full mode matrix through every proxy (h3 only where the stack has it),
+  fan-out across runners, cancel — with a non-zero exit and run/attempt detail
+  on any regression. bash-3.2/macOS clean; needs only docker + curl + jq.
+  See `lab/README.md`.
+- **`lab/` — Windows Server (IIS) target.** `./lab/lab.sh up --targets
+  rust,nginx,windows` (alias `iis`) adds a real Windows Server 2022 eval VM
+  (dockur/windows: QEMU + KVM in a container on `labnet`, same `.10N` IP
+  scheme — the container's IP is the VM's, dockur DNATs every TCP/UDP port to
+  the guest). On first boot the VM runs the checkout's **`install.ps1`**
+  (copied in through `/oem`): `-Yes -Component endpoint` (downloads the released
+  `networker-endpoint.exe` — Windows binaries can't be cross-built on the Linux
+  host — and starts it like the cloud bootstraps: hidden process + `schtasks`
+  ONSTART as SYSTEM) then `-Setup iis` (IIS 8082/8445, HTTP/3, ARR reverse
+  proxy to :8080), plus OpenSSH + a fixed lab admin password + firewall; it
+  reboots once for http.sys HTTP/3. Progress streams to the host share
+  (`lab.sh windows-log`, `windows-ssh`, the dockur console on :8006);
+  `up` polls `:8080/health` + IIS `:8445/health` with a loud, bounded budget
+  (`LAB_WINDOWS_TIMEOUT`, default 3600 s; `--windows-async` + `wait-windows`
+  to not block). The disk is a named volume so the second `up` boots the
+  installed VM in 1-2 min. The target registers as a completed deployment
+  with `http_stacks:["iis"]`, os `windows`, so `validate` phase 2 runs the
+  full mode matrix through IIS on :8445 (h3 modes per the manifest — see
+  Fixed: iis is `h3: false`), plus the network modes incl. `http3` against the
+  bare Windows endpoint on :8443 (kind=network).
+  Linux + `/dev/kvm` only (skipped with a message elsewhere); runners stay
+  Linux. See `lab/README.md` "Windows (IIS) target".
+- `install.ps1`: **`-Setup iis` is now the real IIS setup** (was a placeholder
+  binding :8082 only — HTTPS 8445 / HTTP/3 / the ARR reverse-proxy rules
+  lived solely in install.sh's `_iis_setup_powershell` az-run-command payload):
+  IIS + URL Rewrite + ARR, `EnableHttp3`/`EnableHttp2*` in http.sys (prints
+  `REBOOT_NEEDED` the first time), the generated static site at
+  `C:\networker-static` with the same web.config (`/page /asset /download
+  /upload /info /api /health` → endpoint :8080), self-signed cert, HTTPS 8445
+  IP binding (+ optional **`-Fqdn`** SNI binding), alt-svc h3 header, firewall
+  TCP 8082/8445 + UDP 8445. **Release install without `gh`**: when gh is not
+  authenticated the installer resolves the latest tag through the
+  unauthenticated GitHub API and downloads the public asset with
+  `Invoke-WebRequest` (the fallback install.sh already had) instead of
+  silently falling into a Rust/MSVC source compile that a Windows Server VM
+  can't do; installs the VC++ runtime when `vcruntime140.dll` is missing
+  (release exes link it dynamically). `-AutoYes` (what the LAN/remote
+  Windows paths passed — an unknown parameter, i.e. a hard error) is now an
+  alias of `-Yes` and the callers say `-Yes`.
+- `shared/http-stacks.json` — one table for the comparison stacks' HTTP/HTTPS
+  ports + HTTP/3 capability, embedded by the tester (pageload/throughput/
+  browser HTTPS→HTTP rewrites, `--http-stacks` — now knows caddy/traefik/
+  haproxy/apache with the ports the installer actually uses), guarded by a
+  C# test against `ProxyHttpsPort`, and read by the lab.
+- `shared/tester-schema.postgres.sql` — the tester's V001–V005 probe schema,
+  drift-guarded against `postgres.rs`, embedded by the control plane (below).
+- `scripts/dev-setup.sh` (macOS/Ubuntu/Fedora/Arch) + `scripts/dev-setup.ps1`
+  (Windows, winget): idempotent dev-machine setup — checks/installs Docker,
+  Rust (+cmake/cc), .NET 10, Node, jq, optional shellcheck/bats; picks a free
+  Postgres host port when :5432 is taken; detects .NET SDKs whose RID has no
+  nuget apphost (Arch `arch-x64` → NU1101) and writes `.dev.env`, which
+  `dev.sh`, `scripts/seed-dev.sh`, `tests/cli_smoke.sh` and
+  `docker-compose.dashboard.yml` honour (`DEV_PG_PORT`,
+  `DOTNET_BUILD_EXTRA_ARGS`). `dev.sh` now fails loudly on Postgres/build errors.
+- CI: `Test (macos-latest)` unit-test job — the primary dev platform's
+  `#[cfg(target_os = "macos")]` code and tests were compiled only at release
+  time until now.
+- **After selecting the target, only the tests it supports are offered / accepted**
+  — end to end, one manifest. `shared/http-stacks.json` gained `h3_modes`
+  (`http3`, `pageload3`, `browser3`, `download3`, `upload3`); the control plane
+  embeds the file (`HttpStackCatalog`), serves it as **`GET /api/http-stacks`**
+  and as `stacks` / `h3_modes` on `GET /api/modes`, and the dashboard mirrors it
+  in `lib/http-stacks.ts` (drift-guarded on every side: `HttpStacksManifestTests`,
+  `http-stacks-manifest.test.ts`, the Rust `http_stacks` tests, `lab/validate.sh`).
+  - **API gate:** `POST /api/v2/projects/{id}/test-configs` resolves the target's
+    proxy stack (`endpoint.proxy_stack`, the referenced deployment's
+    `http_stacks[0]`, or `pending.proxy_stack`) and returns **422**
+    `incompatible mode(s) for endpoint kind 'proxy' (stack 'apache'): 'http3'
+    needs HTTP/3 (QUIC): apache has no HTTP/3 (see shared/http-stacks.json)`
+    for h3 modes on apache / haproxy / traefik (measured 0/N in the lab).
+    `pending` stays fail-open on the kind rule but the stack rule applies;
+    unknown stacks fail open. **Comparison groups / matrix runs** drop the h3
+    modes **per cell** at launch (an nginx+apache matrix runs http3 on the nginx
+    cell only) — logged and reported in the launch response as `adjustments`;
+    a cell left with no runnable mode fails with the reason.
+  - **UI:** the Full Stack, Application Benchmark and Network Test pickers grey
+    out h3 modes (tooltip = the reason) and pre-uncheck them when the chosen
+    target / every chosen proxy has no QUIC; mixed matrices keep them and the
+    Review step lists what each quic-less cell will skip. Network Test folds the
+    target's live `/health` self-report in through the same gate.
+    `GET …/deployments/{id}/capabilities` now also returns `stacks`, `stack`,
+    `stack_h3`, `h3_modes`.
+  - **Runner capabilities:** the agent detects Chrome/Chromium and tshark at
+    startup (same search as the tester's `find_chrome()`) and reports
+    `capabilities: {chrome, tshark}` on the heartbeat (additive; older control
+    planes ignore it). The control plane persists it under
+    `agent.tags.capabilities` and exposes it on `GET /api/projects/{id}/agents`
+    (`capabilities`) and the tester rows (`agent_capabilities`); pinning a runner
+    without Chrome greys out the `browser*` modes.
+
+### Fixed
+- **Every HTTP/2 probe failed against IIS** (`http2`, `download2`, `upload2`,
+  `pageload2`, the `rpm`/responsiveness load generator): the tester built h2
+  requests with a path-only URI, so hyper sent them **without the `:scheme`
+  and `:authority` pseudo-headers** RFC 9113 §8.3.1 requires. nginx / caddy /
+  hyper / quinn tolerate it; http.sys answers `RST_STREAM PROTOCOL_ERROR`.
+  Found by the lab's Windows target; h2 requests now use the absolute form
+  (`https://host:port/path`, no `Host` header next to `:authority`).
+- **`websocket` through IIS got 404**: the ARR web.config (install.ps1
+  `-Setup iis` and install.sh `_iis_setup_powershell`) had no rule for the
+  endpoint's `/ws` echo and IIS lacked the WebSocket Protocol feature; both
+  now proxy `/ws` (`Web-WebSockets` installed).
+- **`shared/http-stacks.json`: `iis` is `h3: false`** (was `true`, unproven).
+  Measured on the lab's Windows Server 2022 target: http.sys does listen for
+  QUIC on :8445 after `install.ps1 -Setup iis`, but completes the handshake
+  **only when the client sends TLS SNI** — without SNI it closes the
+  connection with transport `INTERNAL_ERROR`. The platform addresses endpoint
+  VMs by IP (`endpoint_ips[0]` → `kind=network host=<ip>`), an IP literal
+  carries no SNI (RFC 6066), so `http3`/`pageload3`/`browser3`/… through IIS
+  can never succeed on the proxy path. The mode gates (API 422, UI grey-out,
+  matrix trimming) and the lab now refuse/skip h3 modes for `iis`; the
+  manifest entry documents the condition to flip it back (proxy targets
+  resolved by hostname). With SNI (`--resolve`-style hostname) http.sys did
+  serve HTTP/3 200s to the tester, but with a ~1 s QUIC handshake and
+  sporadic `H3_INTERNAL_ERROR` — noted, not chased.
+- **Fresh control-plane databases persisted zero attempts, forever.** The
+  tester-owned `RequestAttempt`/… tables only existed where a DB-backed
+  tester or install.sh's psql seed had created them; the streamed-attempt
+  ingest swallowed 42P01. `AttemptPersister` now bootstraps the schema lazily
+  (idempotent DDL under the tester's migration lock) and adapts to the fielded
+  shapes (`extrajson` vs `extra_json`; `testrun` NOT NULL columns) instead of
+  hard-coding one. Persisted failures now carry the tester's structured
+  `error.message — detail` (the extractor read a flat `error_message` that is
+  never on the wire).
+- **Dispatch spreads across idle runners** — least-loaded among compatible
+  same-project agents (tester affinity still wins); every run of a project
+  used to go to `compatible[0]` while the other online runners idled.
+- **`dns` mode against an IP-literal target** no longer fails (the standalone
+  probe appended the search domain to `172.31.100.101` and NXDOMAINed);
+  reports an instant literal resolution.
+- **`pageload` (forced HTTP/1.1) through caddy/apache/haproxy/traefik** fetched
+  0/N assets — the HTTPS→HTTP port rewrite knew only nginx/IIS (see
+  `shared/http-stacks.json`).
+- **Catalog `pageload` (H1) is sent to the tester as `pageload1`** — the tester
+  CLI's `pageload` is the all-three shorthand, so every "H1 page load" run
+  also executed H2 + H3 attempts (and failed the H3 one on non-QUIC stacks).
+- **First login**: `change-password` now invalidates the 10 s user-status
+  cache — the very next request no longer 403s "Password change required".
+- `install.sh --setup-stack caddy|apache|haproxy` runs `apt-get update` before
+  installing (fresh hosts without package lists failed "Unable to locate
+  package"; nginx already did).
+- `networker-endpoint` handles SIGTERM (systemd stop/restart, `docker stop`)
+  through the graceful-shutdown path instead of the default disposition.
+- Portability sweep (dev on macOS, runs on Linux/Windows): `dev.sh` /
+  `test-all.sh` / `scripts/seed-dev.sh` / `tests/cli_smoke.sh` no longer
+  reference the removed Rust `networker-dashboard` crate (dev.sh now starts
+  the C# control plane; DB name matched to the compose file; `lsof` guarded
+  with `ss`/`fuser` fallbacks; container names resolved via `docker compose ps`);
+  `scripts/seed-dev.sql` writes `agent.api_key_hash` (the plaintext column
+  was dropped in V045); bash-4 guard for `tests/test_install_sh.sh`;
+  `nproc`/`sysctl` fallbacks; `LANG` no longer clobbered by
+  `benchmarks/ci/run-language.sh`; Linux-only netem script exits cleanly on
+  macOS; `sha256sum`/`shasum` both accepted; obsolete compose `version:` key
+  removed. Tester: `COMPUTERNAME` hostname + PATHEXT-aware `tshark` lookup
+  (incl. `%ProgramFiles%\Wireshark`) on Windows. Agent: uptime from the OS
+  tick counter off-Linux instead of a fabricated 0. Control plane: `az`/
+  `aws`/`gcloud` resolve to their `.cmd` shims on Windows. Orchestrator:
+  temp/home dirs and `.exe` suffix resolved portably.
+
+---
+
 ## [0.28.207] - 2026-08-14
 
 ### Fixed

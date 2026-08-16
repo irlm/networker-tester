@@ -1,0 +1,210 @@
+name: Lab native Windows (managed path as processes)
+
+# The native-Windows twin of lab-smoke.yml: on a hosted windows-latest runner
+# it builds the control plane, agent, tester and endpoint FROM THIS CHECKOUT
+# and runs the whole managed path as plain Windows PROCESSES — PostgreSQL +
+# control plane + a Windows RUNNER (Networker.Agent + networker-tester.exe) +
+# a Windows TARGET (networker-endpoint.exe bare on :8443 and behind IIS on
+# :8082/:8445 via the SAME IIS payload every cloud Windows endpoint VM gets,
+# install.sh _iis_setup_powershell) — then drives lab/validate.sh through Git
+# Bash: the same assertion matrix the Docker lab and the prod canary use.
+#
+# What this proves on every run: a Windows target offers and passes the same
+# probe matrix as the Linux targets (h1/h2 through IIS+ARR, download/upload,
+# pageload*, websocket, udp/stamp, and h3 against the bare endpoint) and a
+# Windows runner executes it end to end through dispatch.
+#
+# Known, deliberate exclusions (documented in lab/README.md § Native Windows):
+#   * HTTP/3 THROUGH IIS — http.sys binds QUIC on SNI hostname bindings only,
+#     the target here is 127.0.0.1, and the EnableHttp3 registry keys need a
+#     reboot a hosted runner cannot do. lab-native.ps1 detects this and drops
+#     the h3 modes for the iis stack (LAB_H3_OFF_STACKS=iis) instead of faking
+#     a pass; the bare endpoint still exercises http3/pageload3 in phase 1.
+#   * capture (no tshark) and browser* (no Chrome) modes are not in the matrix.
+#
+# Weekly + on demand (~35-50 min cold; the Rust release build dominates and is
+# sccache/rust-cache warm after the first run). Not a required check.
+
+on:
+  schedule:
+    - cron: '17 7 * * 1'   # Mondays 07:17 UTC (an hour after the docker lab smoke)
+  # Also on pushes that touch the native lab itself (any branch) — a change to
+  # the orchestrator/validate scripts gets a real windows-latest run without
+  # waiting for Monday (workflow_dispatch only registers once it is on main).
+  push:
+    paths:
+      - 'lab/native/**'
+      - 'lab/validate.sh'
+      - '.github/workflows/lab-windows-native.yml'
+  workflow_dispatch:
+    inputs:
+      no_iis:
+        description: 'Skip the IIS target (rust endpoint only)'
+        default: false
+        type: boolean
+      fqdn:
+        description: 'Hostname for the IIS SNI binding + target registration (empty = 127.0.0.1; try "localhost" to attempt h3 through IIS)'
+        default: ''
+        type: string
+      validate_args:
+        description: 'Extra lab/validate.sh args (e.g. --only 1 --runs 1)'
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lab-windows-native
+  cancel-in-progress: false
+
+jobs:
+  lab:
+    name: lab-native.ps1 build + up + validate (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      # Same Windows build knobs as ci.yml's test-windows job.
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      # Lab wiring: the PostgreSQL the step below starts, psql on PATH.
+      LAB_PG_MODE: psql
+      LAB_PG_HOST: 127.0.0.1
+      LAB_PG_PORT: "55432"
+      LAB_PG_USER: networker
+      LAB_PG_PASSWORD: networker
+      LAB_PG_DB: networker_core
+      LAB_FQDN: ${{ inputs.fqdn || '' }}
+      LAB_NO_IIS: ${{ inputs.no_iis && '1' || '0' }}
+      LAB_VALIDATE_ARGS: ${{ inputs.validate_args || '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.1
+        with:
+          key: windows-lab-native
+          cache-on-failure: "true"
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: "10.0.x"
+
+      # Cross-platform PostgreSQL server (choco postgresql16 on Windows) with
+      # the lab's user/db; adds psql to PATH — lab-native.ps1 seeds the runner
+      # + deployment rows with it (same SQL as lab/lab.sh).
+      - name: Set up PostgreSQL 16
+        uses: ikalnytskyi/action-setup-postgres@c4dda34aae1c821e3a771b68b73b13af3198a7ee # v8
+        with:
+          username: networker
+          password: networker
+          database: networker_core
+          port: 55432
+          postgres-version: "16"
+
+      - name: Tool versions
+        run: |
+          rustc --version; cargo --version; dotnet --version
+          & 'C:\Program Files\Git\bin\bash.exe' --version | Select-Object -First 1
+          jq --version; curl.exe --version | Select-Object -First 1; psql --version
+          Write-Host "OS: $([Environment]::OSVersion.VersionString)  admin: $(([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))"
+
+      - name: Build (cargo release, Windows CI feature set + dotnet publish)
+        run: pwsh -NoProfile -File lab/native/lab-native.ps1 build
+
+      - name: Up (postgres → control plane → endpoint → IIS → register → agent online)
+        run: |
+          $labArgs = @('up')
+          if ($env:LAB_NO_IIS -eq '1') { $labArgs += '-NoIis' }
+          if ($env:LAB_FQDN) { $labArgs += @('-Fqdn', $env:LAB_FQDN) }
+          pwsh -NoProfile -File lab/native/lab-native.ps1 @labArgs
+          exit $LASTEXITCODE
+
+      # Diagnostic: HTTP version the Windows target negotiates — bare endpoint
+      # vs through IIS (this is how the tester's missing :scheme/:authority on
+      # h2 was pinned to http.sys). curl.exe (schannel) prints the ALPN choice.
+      - name: HTTP/2 diagnostics (curl --http2 against 8443 and IIS 8445)
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          foreach ($u in 'https://127.0.0.1:8443/health', 'https://127.0.0.1:8445/health', 'https://127.0.0.1:8445/index.html') {
+            Write-Host "===== curl --http2 $u"
+            $out = & curl.exe -sk --http2 -o NUL -w "http_version=%{http_version} code=%{http_code}" $u 2>&1
+            Write-Host "  $out"
+            $v = & curl.exe -skv --http2 -o NUL $u 2>&1 | Out-String
+            ($v -split "`n") | Where-Object { $_ -match 'ALPN|HTTP/2|HTTP/1\.1|GOAWAY|RST|error' } | ForEach-Object { Write-Host "  $_" }
+          }
+          Write-Host "===== HTTPERR log tail"
+          $f = Get-ChildItem C:\Windows\System32\LogFiles\HTTPERR -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1
+          if ($f) { Get-Content $f.FullName -Tail 30 } else { Write-Host '  (no HTTPERR log)' }
+          exit 0
+
+      - name: Validate (lab/validate.sh through Git Bash)
+        run: |
+          $extra = @()
+          if ($env:LAB_VALIDATE_ARGS) { $extra = $env:LAB_VALIDATE_ARGS -split ' ' | Where-Object { $_ } }
+          pwsh -NoProfile -File lab/native/lab-native.ps1 validate @extra
+          exit $LASTEXITCODE
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### Lab native Windows — targets=\`$([ "$LAB_NO_IIS" = 1 ] && echo rust || echo rust,iis)\` host=\`${LAB_FQDN:-127.0.0.1}\`"
+            echo '```'
+            if [ -f lab/native/.state/logs/validate.log ]; then
+              sed -n '/══ lab validation summary/,$p' lab/native/.state/logs/validate.log
+              [ -s lab/native/.state/logs/validate.log ] || echo "(validate log empty)"
+            else
+              echo "(no summary — validate did not run; see the Up step / uploaded logs)"
+            fi
+            echo '```'
+            if [ -f lab/native/.state/lab.env ]; then
+              echo
+              echo "state: \`$(grep -E '^LAB_(TARGETS|TARGET_HOSTS|H3_OFF_STACKS)=' lab/native/.state/lab.env | tr '\n' ' ')\`"
+              if grep -q "^LAB_H3_OFF_STACKS='iis'" lab/native/.state/lab.env; then
+                echo
+                echo "> **HTTP/3 through IIS was NOT exercised on this host** (IP-literal target / no reboot after EnableHttp3) — the iis matrix ran h1/h2 only; http3/pageload3 were exercised against the bare Windows endpoint in phase 1. See lab/README.md § Native Windows lab."
+              fi
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect logs
+        if: always()
+        run: |
+          New-Item -ItemType Directory -Force lab-native-logs | Out-Null
+          if (Test-Path lab/native/.state/logs) { Copy-Item lab/native/.state/logs/* lab-native-logs/ -Force }
+          foreach ($f in @('lab/native/.state/iis-setup.ps1', 'lab/native/.state/pids.json')) { if (Test-Path $f) { Copy-Item $f lab-native-logs/ -Force } }
+          # lab.env holds the admin JWT — keep only the non-secret lines.
+          if (Test-Path lab/native/.state/lab.env) { Get-Content lab/native/.state/lab.env | Where-Object { $_ -notmatch '^LAB_(TOKEN|ADMIN_PASSWORD)=' } | Set-Content lab-native-logs/lab.env.redacted }
+          try { Get-Website | Format-Table Name, State, PhysicalPath -AutoSize | Out-String | Set-Content lab-native-logs/iis-sites.txt } catch { "no IIS: $_" | Set-Content lab-native-logs/iis-sites.txt }
+          try { netsh http show sslcert | Set-Content lab-native-logs/netsh-sslcert.txt } catch { }
+          Get-ChildItem lab-native-logs | Format-Table Name, Length -AutoSize
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: lab-native-windows-logs
+          path: lab-native-logs/
+          retention-days: 14
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
+
+      - name: Down
+        if: always()
+        run: pwsh -NoProfile -File lab/native/lab-native.ps1 down

@@ -606,6 +606,19 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             : $"{scheme}://{host}/health";
     }
 
+    /// <summary>
+    /// Map a catalog mode id (shared/modes.json — what the control plane
+    /// stores and the UI shows) to the tester's <c>--modes</c> token. They are
+    /// identical except for one seam: the catalog's <c>pageload</c> is the
+    /// HTTP/1.1 page-load ("H1"), while the tester CLI keeps <c>pageload</c> as
+    /// the human shorthand for all three versions and offers <c>pageload1</c>
+    /// as the explicit H1 alias (since v0.28.20). Passing <c>pageload</c> through
+    /// made every "H1 page load" run also execute H2 + H3 attempts — and fail
+    /// the H3 one on non-QUIC stacks (apache/haproxy/traefik; lab finding).
+    /// </summary>
+    internal static string TesterModeArg(string catalogMode) =>
+        string.Equals(catalogMode, "pageload", StringComparison.OrdinalIgnoreCase) ? "pageload1" : catalogMode;
+
     // ── build_args (Rust parity) ─────────────────────────────────────────────────
     internal static List<string> BuildArgs(TestConfigView config, string target)
     {
@@ -613,7 +626,7 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         // (the tester would silently drop it). Its workloads run as separate
         // invocations built by ApibenchWorkloads.BuildArgs.
         var modesCsv = string.Join(
-            ",", config.Modes.Where(m => !ApibenchWorkloads.IsApibenchMode(m)));
+            ",", config.Modes.Where(m => !ApibenchWorkloads.IsApibenchMode(m)).Select(TesterModeArg));
         // timeout_ms.div_ceil(1000).max(1) — round up to whole seconds, floor 1.
         var timeoutSecs = Math.Max(1u, (config.TimeoutMs + 999) / 1000);
 

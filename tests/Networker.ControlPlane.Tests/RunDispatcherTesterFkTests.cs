@@ -380,6 +380,78 @@ public sealed class RunDispatcherTesterFkTests
         Assert.Null(run.TesterId);
     }
 
+    [Fact]
+    public async Task Dispatch_spreads_runs_across_idle_agents_least_loaded_first()
+    {
+        using var sp = BuildHost(nameof(Dispatch_spreads_runs_across_idle_agents_least_loaded_first));
+        var db = Db(sp);
+        var registry = sp.GetRequiredService<AgentConnectionRegistry>();
+
+        SeedProject(db);
+        var agentA = SeedAgent(db, boundTesterId: null);
+        var agentB = SeedAgent(db, boundTesterId: null);
+        var agentC = SeedAgent(db, boundTesterId: null);
+        var configId = SeedConfig(db);
+        await db.SaveChangesAsync();
+
+        foreach (var id in new[] { agentA, agentB, agentC })
+        {
+            registry.Register(id, $"raw-{id}", (_, _) => Task.CompletedTask);
+        }
+
+        var dispatcher = new RunDispatcher(
+            db, registry,
+            sp.GetRequiredService<EventBus>(),
+            sp.GetRequiredService<ILogger<RunDispatcher>>(),
+            TestCipher());
+
+        // Six launches with nothing finishing in between: every online agent
+        // must end up with claims (2 each) — not all six on the first agent.
+        var workers = new List<string?>();
+        for (var i = 0; i < 6; i++)
+        {
+            var runId = await dispatcher.LaunchAsync(configId, null, null, Caller(), default);
+            workers.Add((await db.TestRuns.AsNoTracking().FirstAsync(r => r.Id == runId)).WorkerId);
+        }
+
+        var perAgent = workers.GroupBy(w => w).ToDictionary(g => g.Key!, g => g.Count());
+        Assert.Equal(3, perAgent.Count);
+        Assert.All(perAgent.Values, n => Assert.Equal(2, n));
+    }
+
+    [Fact]
+    public async Task Dispatch_prefers_bound_tester_over_least_loaded()
+    {
+        using var sp = BuildHost(nameof(Dispatch_prefers_bound_tester_over_least_loaded));
+        var db = Db(sp);
+        var registry = sp.GetRequiredService<AgentConnectionRegistry>();
+
+        SeedProject(db);
+        var testerId = SeedTester(db);
+        var boundAgent = SeedAgent(db, boundTesterId: testerId);
+        var idleAgent = SeedAgent(db, boundTesterId: null);
+        var configId = SeedConfig(db);
+        await db.SaveChangesAsync();
+
+        registry.Register(boundAgent, $"raw-{boundAgent}", (_, _) => Task.CompletedTask);
+        registry.Register(idleAgent, $"raw-{idleAgent}", (_, _) => Task.CompletedTask);
+
+        var dispatcher = new RunDispatcher(
+            db, registry,
+            sp.GetRequiredService<EventBus>(),
+            sp.GetRequiredService<ILogger<RunDispatcher>>(),
+            TestCipher());
+
+        // Pinned to the tester: affinity wins even when the bound agent is
+        // already busier than the idle one.
+        for (var i = 0; i < 3; i++)
+        {
+            var runId = await dispatcher.LaunchAsync(configId, null, testerId, Caller(), default);
+            var run = await db.TestRuns.AsNoTracking().FirstAsync(r => r.Id == runId);
+            Assert.Equal(boundAgent.ToString(), run.WorkerId);
+        }
+    }
+
     // ── 2. run_started stamp ─────────────────────────────────────────────────
 
     [Fact]

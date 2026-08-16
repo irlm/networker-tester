@@ -838,7 +838,10 @@ fn resolve_tester_path() -> String {
             .and_then(|p| p.parent())
             .and_then(|p| p.parent())
             .and_then(|p| p.parent())
-            .map(|root| root.join("target/release/networker-tester"))
+            .map(|root| {
+                root.join("target/release")
+                    .join(format!("networker-tester{}", std::env::consts::EXE_SUFFIX))
+            })
             .unwrap_or_default();
         if candidate.exists() {
             return candidate.to_string_lossy().to_string();

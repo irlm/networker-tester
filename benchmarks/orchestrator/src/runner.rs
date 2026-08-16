@@ -22,7 +22,10 @@ fn resolve_tester_path() -> String {
             .and_then(|p| p.parent()) // .../orchestrator
             .and_then(|p| p.parent()) // .../benchmarks
             .and_then(|p| p.parent()) // workspace root
-            .map(|root| root.join("target/release/networker-tester"))
+            .map(|root| {
+                root.join("target/release")
+                    .join(format!("networker-tester{}", std::env::consts::EXE_SUFFIX))
+            })
             .unwrap_or_default();
         if candidate.exists() {
             tracing::debug!("Using tester at {}", candidate.display());

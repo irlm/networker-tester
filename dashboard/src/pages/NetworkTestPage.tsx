@@ -11,6 +11,7 @@ import { useProject } from '../hooks/useProject';
 import { useToast } from '../hooks/useToast';
 import { familyOf, modeLabel } from '../components/common/mode-family';
 import { RunResult } from '../components/common/RunResult';
+import { unsupportedModes } from '../lib/mode-capabilities';
 
 // ── Mode families (source of truth is ModeChip.tsx) ────────────────────
 
@@ -142,12 +143,17 @@ export function NetworkTestPage() {
   const urlParams = new URLSearchParams(window.location.search);
   const urlModes = (urlParams.get('modes') ?? '')
     .split(',').map(m => m.trim()).filter(m => ALL_MODES.has(m));
-  const [selectedModes, setSelectedModes] = useState<Set<string>>(() => new Set(urlModes));
+  // `rawSelectedModes` is the user's intent; `selectedModes` (below) is the
+  // DERIVED subset the chosen target/runner can actually run, so switching
+  // to an apache target silently un-checks http3 and switching back restores it.
+  const [rawSelectedModes, setSelectedModes] = useState<Set<string>>(() => new Set(urlModes));
   const [activePreset, setActivePreset] = useState<string | null>(null);
   const [payloadSizes, setPayloadSizes] = useState<Set<number>>(new Set(DEFAULT_PAYLOADS));
   const [selectedTargetId, setSelectedTargetId] = useState<string>(
     () => urlParams.get('target') ?? '',
   );
+  const [runnerMode, setRunnerMode] = useState<'auto' | 'specific'>('auto');
+  const [selectedTesterId, setSelectedTesterId] = useState<string | null>(null);
 
   // Per-target capability filter ("the target must return the tests
   // supported"): modes the SELECTED target's live self-report marks
@@ -156,9 +162,39 @@ export function NetworkTestPage() {
   // setState-in-effect; only ever narrows on POSITIVE knowledge — no report
   // (unreachable / pre-0.28.202) means no filtering.
   const [targetCaps, setTargetCaps] = useState<{ targetId: string; off: Map<string, string> } | null>(null);
-  const targetUnsupported = useMemo(
+  const liveUnsupported = useMemo(
     () => (targetCaps?.targetId === selectedTargetId ? targetCaps.off : new Map<string, string>()),
     [targetCaps, selectedTargetId],
+  );
+  // The full gate (lib/mode-capabilities): the manifest `requires` rule for an
+  // endpoint target, the HTTP/3-by-stack rule for the deployment's proxy stack
+  // (shared/http-stacks.json — apache / haproxy / traefik have no QUIC; the
+  // config-create API rejects those with 422 too), the live self-report above,
+  // and the pinned runner's Chrome for the browser modes.
+  const selectedDeploymentForCaps = useMemo(
+    () => deployments.find(d => d.deployment_id === selectedTargetId) ?? null,
+    [deployments, selectedTargetId],
+  );
+  const pinnedRunner = useMemo(
+    () => (runnerMode === 'specific' && selectedTesterId
+      ? testers.find(t => t.tester_id === selectedTesterId)?.agent_capabilities ?? null
+      : null),
+    [runnerMode, selectedTesterId, testers],
+  );
+  const targetUnsupported = useMemo(
+    () => unsupportedModes(ALL_MODES, {
+      kind: 'endpoint',
+      // http_stacks[0] is the listener a `proxy` config resolves to (the
+      // dispatcher's rule); a deployment without stacks is the bare endpoint.
+      stack: selectedDeploymentForCaps?.config?.endpoints?.[0]?.http_stacks?.[0] ?? null,
+      unsupported: liveUnsupported,
+      runner: pinnedRunner,
+    }),
+    [selectedDeploymentForCaps, liveUnsupported, pinnedRunner],
+  );
+  const selectedModes = useMemo(
+    () => new Set([...rawSelectedModes].filter(m => !targetUnsupported.has(m))),
+    [rawSelectedModes, targetUnsupported],
   );
   useEffect(() => {
     if (!selectedTargetId) return;
@@ -175,21 +211,16 @@ export function NetworkTestPage() {
             off.set(u.mode, u.reason);
           }
         }
+        // No pruning of the user's picks here: `selectedModes` is DERIVED from
+        // rawSelectedModes minus targetUnsupported, so the launch can never
+        // include an off mode and switching target restores the intent.
         setTargetCaps({ targetId: selectedTargetId, off });
-        if (off.size > 0) {
-          setSelectedModes(prev => {
-            const next = new Set([...prev].filter(m => !off.has(m)));
-            return next.size === prev.size ? prev : next;
-          });
-        }
       })
       .catch(() => { /* no report — no filtering */ });
     return () => { cancelled = true; };
   }, [projectId, selectedTargetId]);
   const [targetSearch, setTargetSearch] = useState('');
   const [targetPopoverOpen, setTargetPopoverOpen] = useState(false);
-  const [runnerMode, setRunnerMode] = useState<'auto' | 'specific'>('auto');
-  const [selectedTesterId, setSelectedTesterId] = useState<string | null>(null);
   const [runnerExpanded, setRunnerExpanded] = useState(false);
 
   // Scope tab for recent runs. "Mine only" is intentionally absent — the
@@ -228,10 +259,7 @@ export function NetworkTestPage() {
   // ── Derived ──────────────────────────────────────────────────────────
 
   const lastRun = recentRuns[0] ?? null;
-  const selectedDeployment = useMemo(
-    () => deployments.find(d => d.deployment_id === selectedTargetId) ?? null,
-    [deployments, selectedTargetId],
-  );
+  const selectedDeployment = selectedDeploymentForCaps;
   const runnerStats = useMemo(() => {
     // "online" requires a CONNECTED agent, not just a powered-on VM —
     // matches the Infrastructure page and the dashboard KPI (2026-08 UI
@@ -627,7 +655,9 @@ export function NetworkTestPage() {
 
           {/* Mode families */}
           {MODE_FAMILIES.map(family => {
-            const allSelected = family.modes.every(m => selectedModes.has(m));
+            // "select all" counts only what THIS target/runner can run.
+            const eligible = family.modes.filter(m => !targetUnsupported.has(m));
+            const allSelected = eligible.length > 0 && eligible.every(m => selectedModes.has(m));
             return (
               <div key={family.id} className="mb-2">
                 <div className="flex items-center justify-between mb-1">
@@ -636,7 +666,7 @@ export function NetworkTestPage() {
                     onClick={() => toggleFamily(family)}
                     className="text-[10px] text-gray-500 hover:text-cyan-300"
                   >
-                    {allSelected ? 'clear' : `select all (${family.modes.length})`}
+                    {allSelected ? 'clear' : `select all (${eligible.length})`}
                   </button>
                 </div>
                 <div className="flex gap-1 flex-wrap">

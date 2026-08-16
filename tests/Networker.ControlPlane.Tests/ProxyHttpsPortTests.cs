@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Networker.ControlPlane.Dispatch;
 
 namespace Networker.ControlPlane.Tests;
@@ -31,6 +32,35 @@ public class ProxyHttpsPortTests
     [InlineData("envoy")]
     public void Unknown_stacks_default_to_443(string stack)
         => Assert.Equal(443, RunDispatcher.ProxyHttpsPort(stack));
+
+    /// <summary>
+    /// Drift guard: the C# table must agree with <c>shared/http-stacks.json</c>,
+    /// the canonical layout the Rust tester embeds (its pageload/throughput/
+    /// browser HTTPS→HTTP rewrites and <c>--http-stacks</c>) and lab/validate.sh
+    /// reads. Every proxy stack in the manifest must resolve to its https_port
+    /// here, and every stack this table knows must be in the manifest.
+    /// </summary>
+    [Fact]
+    public void Table_matches_shared_http_stacks_manifest()
+    {
+        using var doc = JsonDocument.Parse(
+            File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "shared", "http-stacks.json")));
+        var manifest = doc.RootElement.GetProperty("stacks").EnumerateArray()
+            .Select(s => (Id: s.GetProperty("id").GetString()!, Https: s.GetProperty("https_port").GetInt32()))
+            .Where(s => s.Id != "endpoint")
+            .ToList();
+        Assert.NotEmpty(manifest);
+        foreach (var (id, https) in manifest)
+        {
+            Assert.Equal(https, RunDispatcher.ProxyHttpsPort(id));
+        }
+        // Every stack the C# switch names must be listed (a new arm here needs a
+        // manifest row so the tester + lab learn its ports too).
+        foreach (var known in new[] { "nginx", "caddy", "traefik", "haproxy", "apache", "iis" })
+        {
+            Assert.Contains(manifest, s => s.Id == known);
+        }
+    }
 
     [Fact]
     public void Table_is_case_sensitive_matching_the_rust_match_arms()

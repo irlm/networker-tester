@@ -64,7 +64,7 @@ public static class DeploymentsEndpoints
             var d = await db.Deployments
                 .AsNoTracking()
                 .Where(x => x.ProjectId == projectId && x.DeploymentId == deploymentId)
-                .Select(x => new { x.EndpointIps })
+                .Select(x => new { x.EndpointIps, x.Config })
                 .FirstOrDefaultAsync();
 
             if (d is null)
@@ -74,7 +74,20 @@ public static class DeploymentsEndpoints
 
             var hosts = DeploymentWriteEndpoints.ParseHosts(d.EndpointIps);
             var reports = await Task.WhenAll(hosts.Select(TargetCapabilities.ProbeHostAsync));
-            return Results.Ok(new { endpoints = reports });
+            // Static half of the answer: the proxy stack(s) this deployment
+            // installed and whether each serves HTTP/3 (shared/http-stacks.json).
+            // `stack` is http_stacks[0] — the listener a `proxy` config resolves
+            // to (RunDispatcher) — so the UI can grey out h3 modes up front.
+            var stacks = TargetCapabilities.StacksOf(d.Config);
+            var primary = stacks.FirstOrDefault();
+            return Results.Ok(new
+            {
+                endpoints = reports,
+                stacks = stacks.Select(s => new { id = s, h3 = HttpStackCatalog.HasH3(s) }).ToArray(),
+                stack = primary,
+                stack_h3 = HttpStackCatalog.HasH3(primary),
+                h3_modes = HttpStackCatalog.H3Modes.ToArray(),
+            });
         })
         .RequireAuthorization(AuthPolicies.ProjectMember);
 

@@ -30,7 +30,8 @@ workspace) ships as `alethabench`; benchmark reference APIs have their own
 solution at `benchmarks/reference-apis/benchmarks.sln`.
 
 **Migration status: complete.** The C# control plane serves production; the
-retired Rust crates are off the release train and stay in-tree only for the
+retired Rust crates are off the release train (already removed from
+`crates/`; the full-Rust snapshot lives on the branch/tag below) and were kept only for the
 decommission soak/rollback window (`docs/phase2-cutover-runbook.md` §7; nightly
 `Prod soak check` workflow). Do NOT add features to the retired crates. The
 full-Rust snapshot is on the `legacy/rust` branch and the `rust-legacy-*` tag;
@@ -89,7 +90,50 @@ dotnet test Networker.sln
 cd dashboard && npm install && npm run build && npm run lint
 ```
 
+## Local Lab (Docker) — validate before cloud VMs
+
+`lab/lab.sh` builds everything from the checkout and runs the managed path in
+Docker: control plane + Postgres + N runners (Networker.Agent + tester on
+ubuntu:24.04) + M targets (networker-endpoint, optionally behind
+nginx/caddy/apache/haproxy/traefik set up by the REAL `install.sh
+--setup-stack`). `lab/validate.sh` drives runs through the API and asserts
+(twin of `scripts/soak-canary.sh`). Run it before provisioning cloud VMs for
+anything touching dispatch, the agent, the tester, or the installer stacks:
+
+```bash
+./lab/lab.sh build --stacks rust,nginx,caddy,apache,haproxy,traefik
+./lab/lab.sh up --runners 3 --targets rust,nginx,caddy,apache,haproxy,traefik
+./lab/lab.sh validate          # ALL PHASES PASSED or a non-zero exit with the run/attempt detail
+./lab/lab.sh down --volumes
+```
+
+The lab also turns on the feature-flagged **Docker (local) cloud provider**
+(`DASHBOARD_DOCKER_PROVIDER=1`; prod never sets it): creating a runner with
+cloud `docker` or deploying a `provider: "docker"` endpoint from the UI/API
+makes the control plane `docker run` the lab images through the SAME
+create-tester / deployment / lifecycle / reaper paths as Azure/AWS/GCP
+(`Provisioning/DockerComputeProvisioner.cs`, routed by
+`RoutingComputeProvisioner`). `validate.sh` phase 5 covers it end to end.
+
+Native Windows twin: `lab/native/lab-native.ps1 build | up | validate | down`
+(elevated PowerShell) runs the same path as Windows processes — Windows runner
++ Windows target (endpoint bare + IIS via the cloud payload) — and drives the
+same `validate.sh`; CI runs it weekly (`lab-windows-native.yml`). See
+`lab/README.md` § "Native Windows lab" for what legitimately differs (h3
+through IIS on IP-literal targets, no tshark/Chrome).
+
+Cross-stack tables live in `shared/` and are drift-guarded on every side:
+`modes.json` (modes), `http-stacks.json` (proxy stack ports + h3), and
+`tester-schema.postgres.sql` (tester V001–V005 DDL the control plane
+bootstraps lazily). See `lab/README.md` for fidelity gaps.
+
 ## Control Plane Local Dev (C#)
+
+First time on a machine: `./scripts/dev-setup.sh` (macOS/Ubuntu/Fedora/Arch) or
+`scripts/dev-setup.ps1` (Windows; then use Git Bash/WSL) — checks/installs the
+toolchain and writes `.dev.env` (free `DEV_PG_PORT` when :5432 is taken,
+`DOTNET_BUILD_EXTRA_ARGS=-p:UseAppHost=false` for SDKs with a non-nuget RID such as
+Arch's `arch-x64`). Then `./dev.sh` runs the whole thing; the manual steps are:
 
 ```bash
 # 1. PostgreSQL
@@ -104,8 +148,9 @@ DASHBOARD_CREDENTIAL_KEY=$(openssl rand -hex 32) \
 ASPNETCORE_URLS=http://0.0.0.0:5030 \
   dotnet run --project src/Networker.ControlPlane
 
-# 4. Agent (C#)
-AGENT_API_KEY=dev-key AGENT_DASHBOARD_URL=ws://localhost:5030/ws/agent \
+# 4. Agent (C#) — the key must be a registered agent row (sha256 in agent.api_key_hash);
+#    ./dev.sh with DEV_WITH_AGENT=1 registers + starts one for you
+AGENT_API_KEY=<key> AGENT_DASHBOARD_URL=ws://localhost:5030/ws/agent \
   dotnet run --project src/Networker.Agent
 
 # 5. Frontend (port 5173, proxies /api and /ws to the control plane)

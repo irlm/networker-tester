@@ -1756,6 +1756,36 @@ mod tests {
 
     // ── Migration SQL content tests (no database required) ────────────────────
 
+    /// `shared/tester-schema.postgres.sql` is the copy of THIS crate's V001–V005
+    /// migrations that the C# control plane embeds and applies lazily on first
+    /// attempt ingest (AttemptPersister) — that is how a fresh control-plane
+    /// database gets the RequestAttempt/… tables when no DB-backed tester ever
+    /// runs against it. Guard: the file's body must equal the concatenated
+    /// constants byte-for-byte. Regenerate on drift (see the file header).
+    #[test]
+    fn shared_tester_schema_matches_embedded_migrations() {
+        const SHARED: &str = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../shared/tester-schema.postgres.sql"
+        ));
+        let body: String = [
+            V001_MIGRATION,
+            V002_MIGRATION,
+            V003_MIGRATION,
+            V004_MIGRATION,
+            V005_MIGRATION,
+        ]
+        .concat();
+        let idx = SHARED
+            .find("\n-- V001:")
+            .expect("shared/tester-schema.postgres.sql: header followed by V001");
+        assert_eq!(
+            &SHARED[idx..],
+            body,
+            "shared/tester-schema.postgres.sql drifted from postgres.rs V001–V005 — regenerate it from the constants"
+        );
+    }
+
     /// The migration SQL must declare all 9 tables with CREATE TABLE IF NOT EXISTS.
     #[test]
     fn v001_migration_contains_all_table_definitions() {

@@ -19,8 +19,11 @@ public class CloudCliTests
     [InlineData("gcloud", "GCLOUD_CMD")]
     public void Resolve_returns_the_default_when_the_override_is_unset_or_empty(string bin, string var)
     {
-        Assert.Equal(bin, CloudCli.Resolve(bin, var, _ => null));
-        Assert.Equal(bin, CloudCli.Resolve(bin, var, _ => string.Empty));
+        Assert.Equal(bin, CloudCli.Resolve(bin, var, _ => null, isWindows: false));
+        Assert.Equal(bin, CloudCli.Resolve(bin, var, _ => string.Empty, isWindows: false));
+        // Windows: the CLIs are .cmd shims — the bare name does not spawn with UseShellExecute=false.
+        Assert.Equal(bin + ".cmd", CloudCli.Resolve(bin, var, _ => null, isWindows: true));
+        Assert.Equal("C:\\tools\\az.cmd", CloudCli.Resolve(bin, var, _ => "C:\\tools\\az.cmd", isWindows: true));
     }
 
     [Fact]

@@ -110,6 +110,35 @@ public class AttemptExtractTests
     }
 
     [Fact]
+    public void Failed_attempt_reads_the_testers_structured_error_record()
+    {
+        // What networker-tester actually emits (metrics.rs ErrorRecord) — there
+        // is no flat error_message on the wire.
+        var a = AttemptExtract.Parse(Guid.NewGuid(), Json("""
+            {
+              "attempt_id": "44444444-4444-4444-4444-444444444444",
+              "protocol": "dns", "sequence_num": 1, "success": false,
+              "error": { "category": "dns", "message": "no records found",
+                         "detail": "A/AAAA lookups for 10.0.0.1 failed",
+                         "occurred_at": "2026-08-15T00:00:00Z" },
+              "retry_count": 0
+            }
+            """))!;
+
+        Assert.False(a.Success);
+        Assert.Equal("no records found — A/AAAA lookups for 10.0.0.1 failed", a.ErrorMessage);
+    }
+
+    [Fact]
+    public void Error_record_message_only_and_detail_only_shapes()
+    {
+        Assert.Equal("boom", AttemptExtract.ErrorFromRecord(Json("""{"message":"boom"}""")));
+        Assert.Equal("ctx", AttemptExtract.ErrorFromRecord(Json("""{"detail":"ctx"}""")));
+        Assert.Null(AttemptExtract.ErrorFromRecord(Json("""{"category":"tcp"}""")));
+        Assert.Null(AttemptExtract.ErrorFromRecord(null));
+    }
+
+    [Fact]
     public void Missing_attempt_id_is_dropped_not_persisted_with_random_id()
     {
         Assert.Null(AttemptExtract.Parse(Guid.NewGuid(), Json("""{ "protocol": "http2" }""")));

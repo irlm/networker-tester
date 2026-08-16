@@ -1064,7 +1064,18 @@ fn detect_hostname() -> Option<String> {
             }
         }
     }
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "windows")]
+    {
+        // Windows never sets HOSTNAME; COMPUTERNAME is the equivalent (the
+        // endpoint's routes.rs already reads it). Without this the tester-side
+        // hostname was None in every report/DB row on Windows.
+        if let Ok(h) = std::env::var("COMPUTERNAME") {
+            if !h.is_empty() {
+                return Some(h);
+            }
+        }
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     {
         let out = std::process::Command::new("hostname").output().ok()?;
         let h = String::from_utf8_lossy(&out.stdout).trim().to_string();

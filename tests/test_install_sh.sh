@@ -10,6 +10,20 @@
 # Usage:
 #   bash tests/test_install_sh.sh
 # ──────────────────────────────────────────────────────────────────────────────
+
+# This harness uses associative arrays (bash 4+). macOS ships bash 3.2 at
+# /bin/bash; re-exec under a newer bash if one is on PATH (brew install bash),
+# otherwise say so instead of dying on the first `declare -A`.
+if [ "${BASH_VERSINFO[0]:-3}" -lt 4 ]; then
+    for _b in /opt/homebrew/bin/bash /usr/local/bin/bash "$(command -v bash 2>/dev/null)"; do
+        if [ -n "$_b" ] && [ -x "$_b" ] && [ "$("$_b" -c 'echo ${BASH_VERSINFO[0]}')" -ge 4 ] 2>/dev/null; then
+            exec "$_b" "$0" "$@"
+        fi
+    done
+    echo "tests/test_install_sh.sh needs bash 4+ (found ${BASH_VERSION}); on macOS: brew install bash" >&2
+    exit 1
+fi
+
 set -o pipefail
 # NOTE: We intentionally do NOT use set -e or set -u here.
 # set -e would cause the test harness to exit on the first assertion failure.

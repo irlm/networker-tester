@@ -473,7 +473,7 @@ pub struct Cli {
     // ── HTTP Stacks ────────────────────────────────────────────────────────
     /// Compare HTTP stacks: run browser/pageload probes against additional
     /// servers installed on the same VM. Comma-separated list.
-    /// Valid: nginx, iis (e.g. --http-stacks nginx,iis)
+    /// Valid: nginx, iis, caddy, traefik, haproxy, apache (e.g. --http-stacks nginx,iis)
     #[arg(long, value_delimiter = ',')]
     pub http_stacks: Option<Vec<String>>,
 
@@ -765,30 +765,20 @@ pub struct HttpStack {
 }
 
 impl HttpStack {
+    /// Resolve a stack by name from the shared table (`shared/http-stacks.json`)
+    /// — the same ports install.sh / install.ps1 configure and the control
+    /// plane resolves proxy targets to. Case-insensitive; the bare endpoint is
+    /// not a comparison stack.
     pub fn from_name(name: &str) -> anyhow::Result<Self> {
-        match name.to_lowercase().as_str() {
-            "nginx" => Ok(Self {
-                name: "nginx".into(),
-                http_port: 8081,
-                https_port: 8444,
+        match crate::http_stacks::by_name(name) {
+            Some(s) if s.id != "endpoint" => Ok(Self {
+                name: s.id.clone(),
+                http_port: s.http_port,
+                https_port: s.https_port,
             }),
-            "iis" => Ok(Self {
-                name: "iis".into(),
-                http_port: 8082,
-                https_port: 8445,
-            }),
-            "caddy" => Ok(Self {
-                name: "caddy".into(),
-                http_port: 8083,
-                https_port: 8446,
-            }),
-            "apache" => Ok(Self {
-                name: "apache".into(),
-                http_port: 8084,
-                https_port: 8447,
-            }),
-            other => Err(anyhow::anyhow!(
-                "Unknown HTTP stack '{other}'. Valid: nginx, iis, caddy, apache"
+            _ => Err(anyhow::anyhow!(
+                "Unknown HTTP stack '{name}'. Valid: {}",
+                crate::http_stacks::proxy_stack_names()
             )),
         }
     }
@@ -2457,16 +2447,16 @@ mod tests {
     fn http_stack_caddy_ports() {
         let stack = HttpStack::from_name("caddy").unwrap();
         assert_eq!(stack.name, "caddy");
-        assert_eq!(stack.http_port, 8083);
-        assert_eq!(stack.https_port, 8446);
+        assert_eq!(stack.http_port, 8091);
+        assert_eq!(stack.https_port, 8454);
     }
 
     #[test]
     fn http_stack_apache_ports() {
         let stack = HttpStack::from_name("apache").unwrap();
         assert_eq!(stack.name, "apache");
-        assert_eq!(stack.http_port, 8084);
-        assert_eq!(stack.https_port, 8447);
+        assert_eq!(stack.http_port, 8094);
+        assert_eq!(stack.https_port, 8457);
     }
 
     #[test]
@@ -2489,23 +2479,23 @@ mod tests {
     fn http_stack_caddy_case_insensitive_upper() {
         let stack = HttpStack::from_name("CADDY").unwrap();
         assert_eq!(stack.name, "caddy");
-        assert_eq!(stack.https_port, 8446);
+        assert_eq!(stack.https_port, 8454);
     }
 
     #[test]
     fn http_stack_apache_case_insensitive_mixed() {
         let stack = HttpStack::from_name("Apache").unwrap();
         assert_eq!(stack.name, "apache");
-        assert_eq!(stack.https_port, 8447);
+        assert_eq!(stack.https_port, 8457);
     }
 
     #[test]
     fn http_stack_unknown_name_returns_error() {
-        let result = HttpStack::from_name("haproxy");
+        let result = HttpStack::from_name("lighttpd");
         assert!(result.is_err(), "unknown stack name should return Err");
         let msg = result.unwrap_err().to_string();
         assert!(
-            msg.contains("haproxy"),
+            msg.contains("lighttpd"),
             "error message should mention the unknown name; got: {msg}"
         );
     }

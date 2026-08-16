@@ -105,6 +105,49 @@ public class ProtocolWireTests
     }
 
     [Fact]
+    public void Heartbeat_omits_capabilities_when_null_and_writes_them_flat_when_set()
+    {
+        // Pre-0.28.208 shape byte-for-byte when no inventory is attached…
+        var bare = Encode(new HeartbeatMessage(Load: null, Version: "0.28.208"));
+        using (var doc = JsonDocument.Parse(bare))
+        {
+            Assert.False(doc.RootElement.TryGetProperty("capabilities", out _));
+        }
+
+        // …and {"capabilities":{"chrome":..,"tshark":..}} when the runner reports.
+        var json = Encode(new HeartbeatMessage(Load: null, Version: "0.28.208",
+            Capabilities: new AgentCapabilities(Chrome: true, Tshark: false)));
+        using var withCaps = JsonDocument.Parse(json);
+        var caps = withCaps.RootElement.GetProperty("capabilities");
+        Assert.True(caps.GetProperty("chrome").GetBoolean());
+        Assert.False(caps.GetProperty("tshark").GetBoolean());
+    }
+
+    [Fact]
+    public void RunnerCapabilities_detection_never_throws_and_honours_the_chrome_env_override()
+    {
+        // Detection is best-effort on any box (CI has no Chrome); it must simply
+        // return a bool. With NETWORKER_CHROME_PATH pointing at an existing file
+        // it must report chrome=true (the tester's find_chrome() honours the same
+        // variable first).
+        _ = RunnerCapabilities.DetectChrome();
+        _ = RunnerCapabilities.DetectTshark();
+
+        var tmp = Path.GetTempFileName();
+        var prev = Environment.GetEnvironmentVariable("NETWORKER_CHROME_PATH");
+        try
+        {
+            Environment.SetEnvironmentVariable("NETWORKER_CHROME_PATH", tmp);
+            Assert.True(RunnerCapabilities.DetectChrome());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("NETWORKER_CHROME_PATH", prev);
+            File.Delete(tmp);
+        }
+    }
+
+    [Fact]
     public void RunStarted_serializes_type_and_fields()
     {
         var runId = Guid.NewGuid();

@@ -105,6 +105,26 @@ public class ConfigAndArgsTests
         }, args);
     }
 
+    [Theory]
+    [InlineData("pageload", "pageload1")]   // catalog H1 → explicit tester alias (not the all-3 shorthand)
+    [InlineData("pageload2", "pageload2")]
+    [InlineData("pageload3", "pageload3")]
+    [InlineData("http1", "http1")]
+    [InlineData("browser1", "browser1")]
+    public void Catalog_mode_maps_to_tester_mode_token(string catalog, string expected)
+        => Assert.Equal(expected, RunExecutor.TesterModeArg(catalog));
+
+    [Fact]
+    public void BuildArgs_sends_pageload1_for_catalog_pageload()
+    {
+        var view = TestConfigView.From(Config(NetworkDnsHttp2.Replace(
+            "\"modes\": [\"dns\", \"tcp\", \"tls\", \"http2\"]",
+            "\"modes\": [\"pageload\", \"pageload2\"]")));
+        var args = RunExecutor.BuildArgs(view, "https://10.0.0.5:8457/health");
+        var modes = args[args.IndexOf("--modes") + 1];
+        Assert.Equal("pageload1,pageload2", modes);
+    }
+
     [Fact]
     public void BuildArgs_timeout_rounds_up_and_floors_at_one()
     {

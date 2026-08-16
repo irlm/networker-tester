@@ -19,6 +19,13 @@
 # ==============================================================================
 set -uo pipefail
 
+# tc/netem is Linux-only (sch_netem). On macOS/other, exit 0 with a clear
+# message instead of failing deep inside apply_netem.
+if [[ "$(uname -s)" != "Linux" ]]; then
+    echo "measurement-accuracy.sh: Linux-only (needs tc qdisc netem) — skipping on $(uname -s)." >&2
+    exit 0
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IFACE="${NETEM_IFACE:-lo}"
 HTTP_PORT="${NETEM_HTTP_PORT:-18080}"

@@ -410,17 +410,36 @@ public sealed class ProvisioningOrchestrator : BackgroundService
         // Resolve the concrete provider from the cloud account. install.sh has no
         // DB access, so `provider: "auto"` is never resolvable there — every
         // Pending deploy must carry the real provider. Mirrors kick_provisioning.
-        var provider = await db.CloudAccounts
-            .AsNoTracking()
-            .Where(a => a.AccountId == pending.CloudAccountId)
-            .Select(a => a.Provider)
-            .FirstOrDefaultAsync(ct);
-        if (string.IsNullOrEmpty(provider))
+        // Docker (local): no account — the pending ref names the provider itself
+        // and the deploy runner starts a target container instead of install.sh.
+        string? provider;
+        if (DockerProviderOptions.IsDocker(pending.Provider))
         {
-            _logger.LogWarning(
-                "Cloud account {AccountId} not found for run {RunId} — cannot provision",
-                pending.CloudAccountId, run.Id);
-            return false;
+            using var kickScope = _scopeFactory.CreateScope();
+            var dockerOptions = kickScope.ServiceProvider.GetService<DockerProviderOptions>() ?? DockerProviderOptions.Disabled;
+            if (!dockerOptions.Enabled)
+            {
+                _logger.LogWarning(
+                    "Run {RunId} pending endpoint asks for the docker provider but {Var} is not enabled — cannot provision",
+                    run.Id, DockerProviderOptions.EnableVar);
+                return false;
+            }
+            provider = DockerProviderOptions.CloudName;
+        }
+        else
+        {
+            provider = await db.CloudAccounts
+                .AsNoTracking()
+                .Where(a => a.AccountId == pending.CloudAccountId)
+                .Select(a => a.Provider)
+                .FirstOrDefaultAsync(ct);
+            if (string.IsNullOrEmpty(provider))
+            {
+                _logger.LogWarning(
+                    "Cloud account {AccountId} not found for run {RunId} — cannot provision",
+                    pending.CloudAccountId, run.Id);
+                return false;
+            }
         }
 
         var deployJson = BuildDeployJson(pending, provider, cfg.Name, run.Id);
@@ -908,6 +927,11 @@ public sealed class ProvisioningOrchestrator : BackgroundService
 
         JsonObject providerBlock = provider switch
         {
+            DockerProviderOptions.CloudName => new JsonObject
+            {
+                ["os"] = string.IsNullOrEmpty(p.Os) ? "linux" : p.Os,
+                ["container_name"] = vmLabel,
+            },
             "aws" => new JsonObject
             {
                 ["region"] = p.Region,
@@ -945,14 +969,18 @@ public sealed class ProvisioningOrchestrator : BackgroundService
             endpoint["languages"] = new JsonArray(p.Language);
         }
 
-        return new JsonObject
+        var root = new JsonObject
         {
             ["version"] = 1,
             ["tester"] = new JsonObject { ["provider"] = "local" },
-            ["cloud_account_id"] = p.CloudAccountId.ToString(),
-            ["endpoints"] = new JsonArray(endpoint),
-            ["tests"] = new JsonObject { ["run_tests"] = false },
         };
+        if (p.CloudAccountId is { } accountId)
+        {
+            root["cloud_account_id"] = accountId.ToString();
+        }
+        root["endpoints"] = new JsonArray(endpoint);
+        root["tests"] = new JsonObject { ["run_tests"] = false };
+        return root;
     }
 
     /// <summary>Human-readable "provider region + ..." summary, mirroring the Rust
@@ -1003,7 +1031,19 @@ public sealed class ProvisioningOrchestrator : BackgroundService
                 return null;
             }
 
-            var cloudAccountId = root.GetProperty("cloud_account_id").GetGuid();
+            // provider is optional and only meaningful for account-less providers
+            // (docker); cloud endpoints resolve it from the account at kick time.
+            var pendingProvider = root.TryGetProperty("provider", out var pv) && pv.ValueKind == JsonValueKind.String
+                ? pv.GetString()
+                : null;
+            Guid? cloudAccountId = root.TryGetProperty("cloud_account_id", out var ca) && ca.ValueKind == JsonValueKind.String
+                && Guid.TryParse(ca.GetString(), out var caGuid)
+                ? caGuid
+                : null;
+            if (cloudAccountId is null && !DockerProviderOptions.IsDocker(pendingProvider))
+            {
+                throw new JsonException("pending endpoint has no cloud_account_id");
+            }
             var region = root.TryGetProperty("region", out var r) ? r.GetString() ?? "" : "";
             var vmSize = root.TryGetProperty("vm_size", out var v) ? v.GetString() ?? "" : "";
             var os = root.TryGetProperty("os", out var o) ? o.GetString() ?? "" : "";
@@ -1012,7 +1052,7 @@ public sealed class ProvisioningOrchestrator : BackgroundService
                 ? l.GetString()
                 : null;
 
-            return new PendingEndpoint(cloudAccountId, region, vmSize, os, proxyStack, language);
+            return new PendingEndpoint(cloudAccountId, region, vmSize, os, proxyStack, language, pendingProvider);
         }
         catch (Exception ex)
         {
@@ -1121,11 +1161,14 @@ public sealed class ProvisioningOrchestrator : BackgroundService
     }
 
     /// <summary>Parsed <c>EndpointRef::Pending</c> payload.</summary>
+    /// <param name="Provider">Only set for account-less providers (docker);
+    /// null for cloud endpoints, whose provider comes from the account.</param>
     internal sealed record PendingEndpoint(
-        Guid CloudAccountId,
+        Guid? CloudAccountId,
         string Region,
         string VmSize,
         string Os,
         string ProxyStack,
-        string? Language);
+        string? Language,
+        string? Provider = null);
 }

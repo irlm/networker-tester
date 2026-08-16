@@ -41,9 +41,18 @@ public static class CloudCli
     /// <summary>Resolve the gcloud CLI binary (<c>GCLOUD_CMD</c> override, else <c>gcloud</c>).</summary>
     public static string GcloudBin() => Resolve("gcloud", GcloudOverrideVar, Environment.GetEnvironmentVariable);
 
-    /// <summary>Testable core of the Bin() resolvers.</summary>
+    /// <summary>Testable core of the Bin() resolvers. On Windows the cloud CLIs
+    /// ship as <c>az.cmd</c> / <c>aws.cmd</c> / <c>gcloud.cmd</c>; with
+    /// <c>UseShellExecute=false</c> the bare name is not resolved through
+    /// PATHEXT, so every provisioning/reaper shell-out soft-failed with
+    /// SpawnError on a Windows dev box unless the override var was set.</summary>
     internal static string Resolve(string defaultName, string overrideVar, Func<string, string?> getEnv) =>
-        getEnv(overrideVar) is { Length: > 0 } o ? o : defaultName;
+        Resolve(defaultName, overrideVar, getEnv, OperatingSystem.IsWindows());
+
+    internal static string Resolve(string defaultName, string overrideVar, Func<string, string?> getEnv, bool isWindows) =>
+        getEnv(overrideVar) is { Length: > 0 } o ? o
+        : isWindows ? defaultName + ".cmd"
+        : defaultName;
 
     /// <summary>
     /// The override env var for a (possibly already overridden) CLI file name,

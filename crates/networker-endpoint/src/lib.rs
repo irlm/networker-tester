@@ -10,7 +10,7 @@ use axum_server::tls_rustls::{RustlsAcceptor, RustlsConfig};
 pub use routes::{build_router, AppState, SystemMeta};
 use std::net::SocketAddr;
 use tokio::sync::oneshot;
-use tracing::info;
+use tracing::{info, warn};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public configuration
@@ -234,16 +234,50 @@ pub async fn run_with_shutdown(
     Ok(())
 }
 
-/// Run forever (used by the binary).
+/// Run forever (used by the binary). Stops on Ctrl-C everywhere and, on Unix,
+/// also on SIGTERM — what systemd `stop`/`restart` and `docker stop` send. Without
+/// the SIGTERM arm the process died on the default disposition, skipping the
+/// graceful path (in-flight transfers cut, UDP/QUIC tasks not aborted) and
+/// making `systemctl restart networker-endpoint` a hard kill.
 pub async fn run(cfg: ServerConfig) -> anyhow::Result<()> {
-    let (_tx, rx) = oneshot::channel();
-    // This awaits the (never-resolving) shutdown channel, keeping the server alive.
+    let (tx, rx) = oneshot::channel();
+    let server = run_with_shutdown(cfg, rx);
+    tokio::pin!(server);
     tokio::select! {
-        res = run_with_shutdown(cfg, rx) => res,
-        _ = tokio::signal::ctrl_c() => {
-            info!("Ctrl-C received, shutting down");
+        res = &mut server => res,
+        _ = shutdown_signal() => {
+            // Fire the shutdown channel and give run_with_shutdown a moment to
+            // abort its listener tasks, then return regardless.
+            let _ = tx.send(());
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), &mut server).await;
             Ok(())
         }
+    }
+}
+
+/// Resolves on Ctrl-C (all platforms) or SIGTERM (Unix).
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut term = match signal(SignalKind::terminate()) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("cannot install SIGTERM handler ({e}); Ctrl-C only");
+                let _ = tokio::signal::ctrl_c().await;
+                info!("Ctrl-C received, shutting down");
+                return;
+            }
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => info!("Ctrl-C received, shutting down"),
+            _ = term.recv() => info!("SIGTERM received, shutting down"),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+        info!("Ctrl-C received, shutting down");
     }
 }
 

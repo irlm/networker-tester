@@ -60,8 +60,23 @@ public abstract record AgentMessage;
 /// </summary>
 public sealed record HeartbeatMessage(
     [property: JsonPropertyName("load")] double? Load,
-    [property: JsonPropertyName("version")] string? Version
+    [property: JsonPropertyName("version")] string? Version,
+    // Additive (v0.28.208+): the runner's self-detected tool inventory. Absent
+    // from pre-0.28.208 agents (null) — the row's stored inventory is left as is.
+    [property: JsonPropertyName("capabilities")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    AgentCapabilities? Capabilities = null
 ) : AgentMessage;
+
+/// <summary>Runner tool inventory (<c>{"chrome":bool,"tshark":bool}</c>) —
+/// mirror of the agent's <c>AgentCapabilities</c>. Persisted under
+/// <c>agent.tags.capabilities</c> (JSONB) by the heartbeat handler and exposed
+/// on the agent / tester read DTOs so pickers can gate the <c>browser*</c>
+/// modes (Chrome) and packet capture (tshark) on the pinned runner.</summary>
+public sealed record AgentCapabilities(
+    [property: JsonPropertyName("chrome")] bool Chrome,
+    [property: JsonPropertyName("tshark")] bool Tshark
+);
 
 /// <summary>
 /// <c>{"type":"run_started", "run_id":..., "started_at":...}</c> — agent picked
