@@ -39,7 +39,7 @@ LAB_STARTUP_TIMEOUT="${LAB_STARTUP_TIMEOUT:-240}"     # s for control plane read
 LAB_AGENT_TIMEOUT="${LAB_AGENT_TIMEOUT:-120}"         # s for all runners to come online
 # Windows (IIS) target — a Windows Server VM via dockur/windows (KVM). First
 # boot downloads the eval ISO (~6 GB) + installs Windows + runs install.ps1
-# (endpoint + IIS): 20-40 min. The disk lives in a named volume, so the next
+# (endpoint + IIS): 15-40 min (14 min measured). The disk lives in a named volume, so the next
 # `up` boots the installed VM in ~1-2 min.
 LAB_WINDOWS_IMAGE="${LAB_WINDOWS_IMAGE:-dockurr/windows:latest}"
 LAB_WINDOWS_VERSION="${LAB_WINDOWS_VERSION:-2022}"     # dockur VERSION: 2022 | 2025 (Windows Server eval)
@@ -94,7 +94,7 @@ Targets SPEC = comma list of stacks; one container each:
   nginx|caddy|apache|haproxy|traefik
             networker-endpoint + that proxy set up by install.sh --setup-stack
   windows   (alias: iis) a Windows Server VM: install.ps1 endpoint (8080/8443)
-            + IIS 8082/8445 with HTTP/3 — Linux + /dev/kvm only, first boot 20-40 min
+            + IIS 8082/8445 — Linux + /dev/kvm only, first boot 15-40 min
   Default: rust,nginx        Runners default: 2
 EOF
 }
@@ -267,6 +267,9 @@ stage_windows_target() {
   awk '{ sub(/\r$/, ""); printf "%s\r\n", $0 }' "$LAB_DIR/images/windows/oem/install.bat" > "$d/oem/install.bat"
   # The VM's log/status files must be writable by the container's samba user.
   chmod 0777 "$d/shared" 2>/dev/null || true
+  # A stale failed:* status from a previous attempt must not fail this `up`
+  # before the (possibly re-run) setup had a chance to overwrite it.
+  case "$(windows_status "$n")" in failed:*) rm -f "$d/shared/status";; esac
 }
 write_topology() {
   mkdir -p "$GEN_DIR"
@@ -426,7 +429,7 @@ windows_http_ok() { curl -fsS --max-time 4 "http://${LAB_NET_PREFIX}.$((100 + $1
 windows_iis_ok()  { curl -fsSk --max-time 6 "https://${LAB_NET_PREFIX}.$((100 + $1)):8445/health" >/dev/null 2>&1; }
 # Wait for Windows target N: endpoint :8080 AND IIS :8445 answering, with a
 # progress line every 30 s (VM status word from the share, last dockur log
-# line) — a first install takes 20-40 min, so this is deliberately chatty.
+# line) — a first install takes 15-40 min, so this is deliberately chatty.
 wait_windows_target() {
   local n="$1" ip start deadline st last="" line st_ep st_iis
   ip="${LAB_NET_PREFIX}.$((100 + n))"; start=$SECONDS; deadline=$((SECONDS + LAB_WINDOWS_TIMEOUT))
@@ -541,7 +544,7 @@ cmd_up() {
     image_exists nwk-lab/rustbin:local || missing=1
     image_exists nwk-lab/controlplane:local || missing=1
     image_exists nwk-lab/runner:local || missing=1
-    for s in $(echo "$targets" | tr ',' ' ' | sort -u); do image_exists "nwk-lab/target-$s:local" || missing=1; done
+    for s in $(echo "$targets" | tr ',' ' ' | sort -u); do [ "$s" = windows ] || image_exists "nwk-lab/target-$s:local" || missing=1; done   # windows = pulled dockur image, not built
     [ "$ui" = 1 ] && { image_exists nwk-lab/ui:local || missing=1; }
     if [ "$missing" = 1 ]; then
       build_images "$targets" "$ui"

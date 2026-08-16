@@ -49,7 +49,7 @@ mounts). `up` builds anything missing; after code changes run `build` again
 | Command / flag | What it does |
 |---|---|
 | `up --targets rust,nginx,caddy,apache,haproxy,traefik` | one target container per entry; `rust` = bare endpoint, others = endpoint + that proxy set up **by the real `install.sh --setup-stack`** at image build |
-| `up --targets rust,nginx,windows` (`iis` = alias) | + a **Windows Server VM** running the real `install.ps1` (endpoint + IIS with HTTP/3) — see [Windows (IIS) target](#windows-iis-target); Linux + KVM only, first boot 20-40 min; `--windows-async` returns immediately, `wait-windows` / `windows-log [-f]` / `windows-ssh` afterwards |
+| `up --targets rust,nginx,windows` (`iis` = alias) | + a **Windows Server VM** running the real `install.ps1` (endpoint + IIS; h1/h2 through IIS, h3 on the bare endpoint) — see [Windows (IIS) target](#windows-iis-target); Linux + KVM only, first boot 15-40 min (14 min measured: 6 GB ISO at ~35 MB/s + install + install.ps1 + reboot); `--windows-async` returns immediately, `wait-windows` / `windows-log [-f]` / `windows-ssh` afterwards |
 | `up --netem "delay 40ms 5ms loss 0.1%"` | WAN emulation on every runner (`tc netem`, NET_ADMIN is granted) |
 | `up --ui` | build + serve the React SPA at http://127.0.0.1:8088 (nginx proxies /api + /ws like prod) — login `admin@lab.local` / `LabAdmin-Pass1!` |
 | `up --agents-via-ui` | runners connect through the nginx WS proxy (`ws://ui/ws/agent`) instead of the control plane directly — exercises the proxied WebSocket path |
@@ -123,7 +123,7 @@ the UDP ports exactly like any other target.
   the rest of the lab keeps working.
 * ~**15 GB** disk (6 GB Windows Server 2022 eval ISO + the VM disk, `LAB_WINDOWS_DISK`
   40G sparse), 6 GB RAM / 4 vCPUs by default (`LAB_WINDOWS_RAM`, `LAB_WINDOWS_CPUS`).
-* **First boot 20-40 min**: ISO download from Microsoft, unattended install,
+* **First boot 15-40 min** (14 min measured here; the disk boots in ~30 s afterwards): ISO download from Microsoft, unattended install,
   then `install.ps1` (endpoint download + IIS/ARR/URL-Rewrite MSIs from GitHub
   / microsoft.com — the VM has NAT internet), one reboot for http.sys HTTP/3.
   The disk is a **named volume** (`nwk-lab_windows-storage-N`), so a plain
@@ -338,6 +338,23 @@ lab/
     lab-native.ps1        native Windows twin (build/up/validate/status/logs/env/down) — drives validate.sh via Git Bash
     .state/               (git-ignored) bin/, publish/, logs/, lab.env, runner-1.key, iis-setup.ps1, pids.json
 ```
+
+## Bugs the first Windows-target run found (fixed in the same PR)
+
+* **Every HTTP/2 probe failed through IIS** (`http2`, `download2`, `upload2`,
+  `pageload2`, the rpm load generator): the tester built h2 requests with a
+  path-only URI, so hyper sent them without the `:scheme`/`:authority`
+  pseudo-headers RFC 9113 §8.3.1 requires; nginx/caddy/hyper/quinn tolerate
+  it, http.sys answers `RST_STREAM PROTOCOL_ERROR` (curl `--http2` worked, which
+  is what pointed at the request). Now absolute-form URIs.
+* **`websocket` through IIS 404'd**: no `/ws` ARR rule + no WebSocket Protocol
+  feature in either IIS payload.
+* **`install.ps1 -Setup iis` was a stub** (8082 only) and `install.ps1 -Yes
+  -Component endpoint` on a fresh Server VM (no `gh`) fell into a source
+  compile that needs MSVC — release download without gh + VC++ runtime now.
+* **`iis` was `h3: true` on faith**: http.sys does QUIC on :8445 only with TLS
+  SNI; by IP (how proxy targets are addressed) it closes the connection —
+  manifest flipped to `false`, gates follow.
 
 ## Bugs the first lab run found (all fixed in the same PR)
 
