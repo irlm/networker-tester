@@ -48,8 +48,44 @@ public sealed class DeployRunner
     // install.sh cloud provisioning (az/aws/gcloud VM create + apt/choco installs)
     // is slow; give it a generous ceiling but still bound it so a hung install
     // can't pin a background worker forever. The Rust runner has no explicit
-    // timeout (it relies on install.sh's own guards); 30m is a safe C# backstop.
-    private static readonly TimeSpan DeployTimeout = TimeSpan.FromMinutes(30);
+    // timeout (it relies on install.sh's own guards). The base is a safe
+    // backstop for stack-only deploys; reference-API languages each add a
+    // serial install (on Windows: an az run-command round-trip + SDK-sized
+    // downloads — the .NET 10 SDK alone is 300 MB), so the budget scales per
+    // language. A 3-stack + 8-language Windows deploy was killed at the flat
+    // 30m ceiling mid-install (field, 2026-08-16).
+    private static readonly TimeSpan BaseDeployTimeout = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan PerLanguageBudget = TimeSpan.FromMinutes(8);
+    private static readonly TimeSpan MaxDeployTimeout = TimeSpan.FromMinutes(120);
+
+    /// <summary>Workload-scaled install.sh budget: base + 8m per requested
+    /// reference-API language across all endpoints, capped at 2h.</summary>
+    internal static TimeSpan DeployTimeoutFor(string deployJson)
+    {
+        var languages = 0;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(deployJson);
+            if (doc.RootElement.TryGetProperty("endpoints", out var eps)
+                && eps.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                foreach (var ep in eps.EnumerateArray())
+                {
+                    if (ep.TryGetProperty("languages", out var langs)
+                        && langs.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    {
+                        languages += langs.GetArrayLength();
+                    }
+                }
+            }
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            // Unparseable config fails validation inside install.sh anyway.
+        }
+        var total = BaseDeployTimeout + languages * PerLanguageBudget;
+        return total > MaxDeployTimeout ? MaxDeployTimeout : total;
+    }
 
     // Matches "hostname.eastus.cloudapp.azure.com (20.127.36.61)" — FQDN + IP in
     // parens. Ported verbatim from Rust DeployOutput::fqdn_re.
@@ -198,8 +234,9 @@ public sealed class DeployRunner
         psi.ArgumentList.Add("--deploy");
         psi.ArgumentList.Add(deployFile);
 
+        var deployTimeout = DeployTimeoutFor(await File.ReadAllTextAsync(deployFile, ct).ConfigureAwait(false));
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(DeployTimeout);
+        timeoutCts.CancelAfter(deployTimeout);
         var runCt = timeoutCts.Token;
 
         using var process = new Process { StartInfo = psi };
@@ -231,7 +268,7 @@ public sealed class DeployRunner
                                                  && !ct.IsCancellationRequested)
         {
             KillTree(process);
-            var msg = $"install.sh timed out after {DeployTimeout.TotalMinutes:0}m and was killed";
+            var msg = $"install.sh timed out after {deployTimeout.TotalMinutes:0}m and was killed";
             _logger.LogWarning("{Message} (deployment {DeploymentId})", msg, deploymentId);
             output.AppendRaw(msg);
             return -1;

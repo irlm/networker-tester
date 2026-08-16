@@ -331,7 +331,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.207"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.208"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -6075,7 +6075,7 @@ _local_setup_languages() {
 # run-command per language. The language server binds localhost:8085 only —
 # traffic reaches it through the endpoint's /api proxy, so no NSG rule.
 _azure_win_setup_language() {
-    local rg="$1" vm="$2" lang="$3" port="${4:-8085}"
+    local rg="$1" vm="$2" lang="$3" port="${4:-8085}" ip="${5:-}"
     print_info "Installing ${lang} reference API on Windows VM ($vm) via install.ps1 -BenchmarkServer…"
     local installer_url="https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.ps1"
     local ps_script
@@ -6095,6 +6095,18 @@ PS_BENCH
     if echo "$out" | grep -q "endpoint /api now measures"; then
         print_ok "${lang} reference API running behind ${vm}'s /api"
         return 0
+    fi
+    # az run-command TRUNCATES output (~4KB) — SDK download chatter can push
+    # the success marker out of the window (field false-alarm: csharp-net10
+    # reported unconfirmed while actually wired, 2026-08-16). The endpoint's
+    # own capability self-report is the truncation-proof source of truth.
+    if [[ -n "$ip" ]]; then
+        local health
+        health="$(curl -sf --max-time 8 "http://${ip}:8080/health" 2>/dev/null || true)"
+        if echo "$health" | grep -q "\"api_upstream\":\"127.0.0.1:${port}\""; then
+            print_ok "${lang} reference API confirmed via ${vm}'s capability self-report (run-command output was truncated)"
+            return 0
+        fi
     fi
     print_warn "${lang} reference API install did not confirm on ${vm} — apibench will not measure ${lang}"
     echo "$out" | tail -5
@@ -9568,7 +9580,7 @@ _deploy_validate_config() {
                 # Validate languages per endpoint (reference-API servers for
                 # apibench) — PER-OS sets, matching the deploy arms:
                 # Linux = install.sh deploy_benchmark_server; Windows =
-                # install.ps1 -BenchmarkServer (v0.28.207). net48 is
+                # install.ps1 -BenchmarkServer (v0.28.208). net48 is
                 # Windows-ONLY (.NET Framework); cpp/ruby/php + AOT variants
                 # are Linux-only (MSVC/devkit/swoole constraints).
                 local langs_count; langs_count="$(jq ".endpoints[$i].languages | length // 0" "$cfg" 2>/dev/null)"
@@ -10831,7 +10843,8 @@ deploy_from_config() {
                             [[ -z "$_wl" ]] && continue
                             next_step "Install $_wl reference API (Azure Windows)"
                             _azure_win_setup_language \
-                                "$AZURE_ENDPOINT_RG" "$AZURE_ENDPOINT_VM" "$_wl" || true
+                                "$AZURE_ENDPOINT_RG" "$AZURE_ENDPOINT_VM" "$_wl" \
+                                8085 "$AZURE_ENDPOINT_IP" || true
                         done
                     fi
                 fi
