@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.209] - 2026-08-16
+
+### Fixed
+- **Deploy budget scales with the workload** (user-caught: a 3-stack +
+  8-language Windows target was killed by the flat 30-minute install.sh
+  ceiling at step 18 of 20 — each Windows language is a serial
+  run-command with SDK-sized downloads). The budget is now 30m + 8m per
+  requested reference-API language, capped at 2h.
+- **Language installs are no longer false-flagged by run-command output
+  truncation** (csharp-net10 reported "did not confirm" while actually
+  wired — Azure caps run-command output at ~4 KB and the .NET SDK
+  download chatter pushed the success marker out of the window). The
+  deploy now confirms against the endpoint's own capability self-report
+  (`/health` `services.api_upstream`), which cannot be truncated.
+- **The wizard makes Windows language selection single-choice**, with
+  the reason stated: a target serves `/api` from ONE language at a time
+  (the last installed wins the `--api-upstream` slot), so multi-select
+  spent ~8 minutes per language installing things `/api` would never
+  measure. Per-language comparison belongs to the comparison matrix.
+
+---
+
 ## [0.28.208] - 2026-08-15
 
 ### Added

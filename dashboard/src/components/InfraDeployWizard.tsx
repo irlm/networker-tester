@@ -605,7 +605,7 @@ export function InfraDeployWizard({
                   <p className="text-[11px] text-gray-500 mb-2">
                     Installs the language&apos;s reference API on the target; apibench then
                     measures it {os === 'windows' ? 'behind the endpoint (/api routed via --api-upstream)' : 'behind the proxy'} instead of the built-in endpoint /api.
-                    {os === 'windows' && ' Windows offers the .NET family (incl. Framework 4.8), Go, Node.js, Python, and Java — C++/Ruby/PHP and AOT variants are Linux-only.'}
+                    {os === 'windows' && ' Windows offers the .NET family (incl. Framework 4.8), Go, Node.js, Python, and Java — C++/Ruby/PHP and AOT variants are Linux-only. Pick ONE: a target serves /api from a single language (last installed wins), and each install adds ~8 min.'}
                   </p>
                   <div className="flex flex-wrap gap-2 mb-4">
                     {apibenchLangsFor(os).map(l => {
@@ -614,7 +614,17 @@ export function InfraDeployWizard({
                         <button
                           key={l.id}
                           type="button"
-                          onClick={() => setLanguages(prev => active ? prev.filter(x => x !== l.id) : [...prev, l.id])}
+                          onClick={() => setLanguages(prev => {
+                            if (active) return prev.filter(x => x !== l.id);
+                            // One language serves /api at a time (the last
+                            // installed wins the --api-upstream slot), and
+                            // each Windows language install costs ~8 min of
+                            // serial run-command — single-select on Windows
+                            // (field lesson: an 8-language pick spent ~40 min
+                            // installing 7 things /api would never measure,
+                            // then blew the deploy budget, 2026-08-16).
+                            return os === 'windows' ? [l.id] : [...prev, l.id];
+                          })}
                           className={`px-3 py-1 text-xs border transition-colors ${
                             active
                               ? 'bg-cyan-900/40 border-cyan-700 text-cyan-300'
