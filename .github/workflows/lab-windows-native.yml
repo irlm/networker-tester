@@ -28,6 +28,14 @@ name: Lab native Windows (managed path as processes)
 on:
   schedule:
     - cron: '17 7 * * 1'   # Mondays 07:17 UTC (an hour after the docker lab smoke)
+  # Also on pushes that touch the native lab itself (any branch) — a change to
+  # the orchestrator/validate scripts gets a real windows-latest run without
+  # waiting for Monday (workflow_dispatch only registers once it is on main).
+  push:
+    paths:
+      - 'lab/native/**'
+      - 'lab/validate.sh'
+      - '.github/workflows/lab-windows-native.yml'
   workflow_dispatch:
     inputs:
       no_iis:
