@@ -658,6 +658,42 @@ public sealed class AgentMessageProcessor
             return;
         }
 
+        // Authoritative end-of-run counters (v0.28.214). run_progress - until
+        // now the ONLY source for success_count/failure_count - rides the lossy
+        // fast path, so a saturated agent channel produced runs that finished
+        // "completed ok=0 fail=0" while the tester had measured 22 successes
+        // (native Windows lab, 2026-08-17). The terminal frame is delivered on
+        // the critical path, so its totals win when present.
+        if (rf.AttemptsOk is { } reportedOk && rf.AttemptsFailed is { } reportedFail)
+        {
+            await _db.TestRuns
+                .Where(r => r.Id == rf.RunId)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(r => r.SuccessCount, reportedOk)
+                    .SetProperty(r => r.FailureCount, reportedFail), ct);
+
+            // The agent measured attempts but none of them reached the database:
+            // every attempt frame was dropped (channel saturation) or the probe
+            // schema rejected them. Such a run must NOT read as a clean success
+            // with an empty attempts list - stamp the reason where the UI, the
+            // API and lab/validate.sh all see it.
+            if (reportedOk + reportedFail > 0
+                && _db.Database.GetDbConnection() is NpgsqlConnection countConn
+                && await AttemptPersister.CountForRunAsync(countConn, rf.RunId, ct) == 0)
+            {
+                var lost = reportedOk + reportedFail;
+                var msg = $"The agent measured {lost} attempt(s) but none of them reached the database - "
+                    + "the attempt frames were lost in transit or rejected on ingest, so this run has "
+                    + "counters but no data. Check the agent log for dropped frames.";
+                await _db.TestRuns
+                    .Where(r => r.Id == rf.RunId)
+                    .ExecuteUpdateAsync(s => s.SetProperty(r => r.ErrorMessage, msg), ct);
+                _logger.LogError(
+                    "Run {RunId} finished '{Status}' with {Lost} measured attempt(s) but ZERO persisted - frames lost in transit or rejected on ingest",
+                    rf.RunId, rf.Status, lost);
+            }
+        }
+
         if (rf.Artifact is { } art)
         {
             try

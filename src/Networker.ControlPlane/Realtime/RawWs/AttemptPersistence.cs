@@ -456,6 +456,32 @@ public static class AttemptPersister
         return await cmd.ExecuteNonQueryAsync(ct);
     }
 
+    /// <summary>Attempts actually stored for a run, or <c>null</c> when the probe
+    /// schema is absent/unreadable (never throws). Used by
+    /// <c>AgentMessageProcessor.OnRunFinished</c> to notice a run that finished
+    /// with measured attempts none of which reached the database.</summary>
+    public static async Task<int?> CountForRunAsync(
+        NpgsqlConnection conn, Guid runId, CancellationToken ct)
+    {
+        try
+        {
+            if (conn.State != System.Data.ConnectionState.Open)
+            {
+                await conn.OpenAsync(ct);
+            }
+
+            await using var cmd = new NpgsqlCommand(
+                "SELECT COUNT(*) FROM RequestAttempt WHERE RunId = @run", conn);
+            cmd.Parameters.AddWithValue("run", runId);
+            var scalar = await cmd.ExecuteScalarAsync(ct);
+            return scalar is null or DBNull ? null : Convert.ToInt32(scalar, CultureInfo.InvariantCulture);
+        }
+        catch (Exception)
+        {
+            return null; // missing schema / no privilege / not Postgres - not a run failure
+        }
+    }
+
     private static void AddNullable(NpgsqlParameterCollection p, string name, object? value) =>
         p.AddWithValue(name, value ?? DBNull.Value);
 }

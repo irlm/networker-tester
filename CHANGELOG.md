@@ -11,6 +11,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.214] - 2026-08-17
+
+### Added
+
+- **Lab: an SDK (`sdkprobe`) target** — `lab.sh up --targets rust,nginx,sdk`
+  runs the repo's own `sdk/csharp/Example` app with `LagHound.Endpoint` mounted
+  at `/laghound` and registers it exactly as the product does
+  (`POST /api/projects/{id}/sdk-endpoints`, token encrypted by the control
+  plane), plus a wrong-token twin for the negative test. New `validate.sh`
+  phase 8 asserts a successful probe with the app's `Server-Timing` persisted,
+  the token/mount diagnosis on a bad token, and the mode gate refusing
+  `sdkprobe` against a non-SDK target. `lab/images/sdk.Dockerfile`.
+- **Lab: `lab.sh windows-agent-refresh [runner-K]`** — publishes this
+  checkout's `Networker.Agent` (win-x64) into a *running* Windows VM, restarts
+  the `NetworkerAgent` task and waits for it to come back online (~40 s instead
+  of a 15-40 min Windows reinstall). Non-interactive SSH via
+  `SSH_ASKPASS_REQUIRE=force` (no `sshpass` dependency).
+- `run_finished` carries `attempts_ok` / `attempts_failed` (additive; older
+  agents omit them) so the run counters have a source that is not droppable.
+- **Lab: `lab.sh windows-tester-version [runner-K]`** and skew-aware phase 6 —
+  a Windows VM runner executes the *released* `networker-tester.exe`, so modes
+  that fail only there are ambiguous. When the VM's tester is older than the
+  checkout, phase 6 now reports the affected modes as a **warning naming both
+  versions** ("fixes not yet released cannot pass here") instead of a failure;
+  a Windows-only failure on an up-to-date tester still fails.
+
+### Fixed
+
+- **A Windows runner mangled non-ASCII tester output.** `RunExecutor`
+  redirected the tester's stdout/stderr without an encoding, so .NET decoded
+  its UTF-8 output with the console OEM code page and persisted mojibake into
+  `attempt.error_message` (`… returned 404 ΓÇö check token …`). Both streams are
+  now pinned to UTF-8.
+- **A chatty tester could delete a whole run's data.** Relayed stderr lines
+  shared the lossy fast path with attempt frames; 1757 log frames filled the
+  agent's outbound channel and dropped 883 attempt frames and every progress
+  frame with them, so the run landed as `completed ok=0 fail=0` with no
+  attempts. Log frames now use a low-priority tier that refuses to enqueue
+  above half the channel, the stderr relay is capped at 400 lines per run
+  (with a truncation notice), and the drop warning is rate-limited.
+- **Run counters no longer depend on droppable frames**: the control plane
+  takes `success_count`/`failure_count` from the terminal `run_finished` when
+  present, and a run whose agent measured attempts of which **none** were
+  persisted is stamped "The agent measured N attempt(s) but none reached the
+  control plane" instead of reading as a clean success.
+- **Windows runner VMs disable virtio UDP Segmentation Offload** like the
+  Windows *target* VMs already did (`lab-runner-setup.ps1` for fresh installs,
+  `windows-agent-refresh` for existing disks): with USO on, every multi-packet
+  QUIC *send* stalled on dockur's tap/DNAT path, so a Windows runner could
+  download over h3 fine while `upload3` timed out ("h3 send_data: Connection
+  error: Timeout"). The refresh path applies it through a SYSTEM scheduled task,
+  because setting it resets the adapter and kills the SSH session that asked
+  for it (a detached child dies with the session).
+- **`lab/validate.sh`: the HTTP/3 mode list now comes from
+  `shared/http-stacks.json` `h3_modes`** (the same source the C# and dashboard
+  gates use) instead of a hardcoded triple. With the phase-2 matrix expanded to
+  every catalog mode, `download3`/`upload3` were left in on h3-less hosts and
+  reported as regressions (red `lab-native.ps1` check on windows-latest).
+  Phase 6 also fails now on a finished run with zero attempts.
+
+---
+
 ## [0.28.213] - 2026-08-17
 
 ### Fixed

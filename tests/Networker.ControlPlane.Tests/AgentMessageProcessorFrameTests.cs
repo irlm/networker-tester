@@ -62,6 +62,34 @@ public sealed class AgentMessageProcessorFrameTests
         Assert.Null(rf.Artifact);
     }
 
+    /// <summary>attempts_ok/attempts_failed (v0.28.214) are the authoritative
+    /// end-of-run counters: run_progress is droppable, so a saturated agent
+    /// channel used to leave a finished run at ok=0 even though the tester had
+    /// measured successes. Old agents omit them - decoding must still work and
+    /// yield nulls (the counters then come from run_progress alone).</summary>
+    [Fact]
+    public void Run_finished_frame_carries_the_agents_attempt_totals()
+    {
+        var runId = Guid.NewGuid();
+        var msg = AgentMessageProcessor.Decode(
+            $$"""{"type":"run_finished","run_id":"{{runId}}","status":"completed","artifact":null,"attempts_ok":22,"attempts_failed":3}""");
+
+        var rf = Assert.IsType<RunFinishedMessage>(msg);
+        Assert.Equal(22, rf.AttemptsOk);
+        Assert.Equal(3, rf.AttemptsFailed);
+    }
+
+    [Fact]
+    public void Run_finished_frame_from_an_older_agent_has_null_attempt_totals()
+    {
+        var msg = AgentMessageProcessor.Decode(
+            $$"""{"type":"run_finished","run_id":"{{Guid.NewGuid()}}","status":"completed","artifact":null}""");
+
+        var rf = Assert.IsType<RunFinishedMessage>(msg);
+        Assert.Null(rf.AttemptsOk);
+        Assert.Null(rf.AttemptsFailed);
+    }
+
     [Fact]
     public void Run_finished_frame_with_artifact_carries_all_sections()
     {

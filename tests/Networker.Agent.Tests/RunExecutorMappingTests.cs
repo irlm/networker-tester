@@ -24,16 +24,31 @@ public class RunExecutorMappingTests : IDisposable
     private sealed class CollectingSink : RawWebSocketClient.IFrameSink
     {
         public List<AgentMessage> Messages { get; } = [];
+
+        /// <summary>Frames offered on the LOW-priority tier (relayed tester log
+        /// lines). The real sink drops these once the outbound backlog passes
+        /// its high-water mark so they cannot starve attempt frames.</summary>
+        public List<AgentMessage> LowPriority { get; } = [];
+
         public bool TrySend(AgentMessage message)
         {
             Messages.Add(message);
             return true;
         }
+
+        public bool TrySendLowPriority(AgentMessage message)
+        {
+            LowPriority.Add(message);
+            return TrySend(message);
+        }
     }
 
     /// <summary>Write a fake tester that echoes <paramref name="stdout"/> and
     /// exits with <paramref name="exitCode"/>. Cross-platform (sh / cmd).</summary>
-    private string WriteFakeTester(string stdout, int exitCode = 0, string? stderr = null)
+    /// <param name="stderrScript">Raw shell/cmd emitted verbatim after the JSON -
+    /// used to make the fake tester chatty on stderr (relay-cap test).</param>
+    private string WriteFakeTester(
+        string stdout, int exitCode = 0, string? stderr = null, string? stderrScript = null)
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
@@ -44,6 +59,8 @@ public class RunExecutorMappingTests : IDisposable
                 lines.Add($"echo {line.Replace("%", "%%").Replace("^", "^^").Replace("&", "^&").Replace("<", "^<").Replace(">", "^>").Replace("|", "^|")}");
             if (stderr is not null)
                 lines.Add($"echo {stderr} 1>&2");
+            if (stderrScript is not null)
+                lines.Add(stderrScript);
             lines.Add($"exit /b {exitCode}");
             File.WriteAllText(path, string.Join("\r\n", lines));
             return path;
@@ -54,6 +71,8 @@ public class RunExecutorMappingTests : IDisposable
             var script = "#!/bin/sh\ncat <<'NWEOF'\n" + stdout + "\nNWEOF\n";
             if (stderr is not null)
                 script += $"echo '{stderr}' 1>&2\n";
+            if (stderrScript is not null)
+                script += stderrScript + "\n";
             script += $"exit {exitCode}\n";
             File.WriteAllText(path, script);
             // chmod +x
@@ -296,5 +315,64 @@ public class RunExecutorMappingTests : IDisposable
         var finished = Assert.IsType<RunFinishedMessage>(sink.Messages[^1]);
         Assert.Equal("completed", finished.Status);
         Assert.Null(finished.Envelope);
+    }
+
+    /// <summary>The terminal frame must carry the run's own totals. The control
+    /// plane used to derive success_count/failure_count from run_progress ONLY,
+    /// and progress rides the lossy fast path: when the agent's outbound channel
+    /// saturated, a run with 22 measured successes reached the dashboard as
+    /// "completed ok=0 fail=0" (native Windows lab, 2026-08-17).</summary>
+    [Fact]
+    public async Task Run_finished_carries_the_authoritative_attempt_totals()
+    {
+        var testerJson = """
+            {"schema_version":"1.0","run_id":"r","target_url":"https://example.com/health",
+             "attempts":[{"attempt_id":"a1","protocol":"http1","success":true},
+                         {"attempt_id":"a2","protocol":"http1","success":true},
+                         {"attempt_id":"a3","protocol":"http1","success":false}]}
+            """;
+        var exec = MakeExecutor(WriteFakeTester(testerJson));
+        var sink = new CollectingSink();
+
+        await exec.ExecuteAsync(Guid.NewGuid(), NetworkConfig(), sink, CancellationToken.None);
+
+        var progress = sink.Messages.OfType<RunProgressMessage>().Last();
+        var finished = Assert.IsType<RunFinishedMessage>(sink.Messages[^1]);
+        Assert.Equal(2u, finished.AttemptsOk);
+        Assert.Equal(1u, finished.AttemptsFailed);
+        // Same numbers as the (droppable) progress frame - the difference is that
+        // run_finished is delivered on the critical, non-droppable path.
+        Assert.Equal(progress.Success, finished.AttemptsOk);
+        Assert.Equal(progress.Failure, finished.AttemptsFailed);
+    }
+
+    /// <summary>Relayed stderr goes out on the LOW-priority tier and is capped
+    /// per run: a chatty tester (RUST_LOG=debug) must not be able to fill the
+    /// outbound channel and take the run's attempt frames down with it.</summary>
+    [Fact]
+    public async Task Stderr_relay_is_low_priority_capped_and_announces_truncation()
+    {
+        var testerJson = """{"schema_version":"1.0","attempts":[{"attempt_id":"a1","success":true}]}""";
+        var noisy = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+            ? "for /L %%i in (1,1,600) do @echo chatty line %%i 1>&2"
+            : "i=0; while [ $i -lt 600 ]; do echo \"chatty line $i\" 1>&2; i=$((i+1)); done";
+        var exec = MakeExecutor(WriteFakeTester(testerJson, stderrScript: noisy));
+        var sink = new CollectingSink();
+
+        await exec.ExecuteAsync(Guid.NewGuid(), NetworkConfig(), sink, CancellationToken.None);
+
+        var relayed = sink.LowPriority.OfType<ErrorMessage>().ToList();
+        Assert.NotEmpty(relayed);
+        // 400 lines + one truncation notice, never all 600.
+        Assert.InRange(relayed.Count, 2, 401);
+        Assert.Contains(relayed, m => m.Message.Contains("stderr relay truncated", StringComparison.Ordinal));
+        // Every relayed log line used the low-priority tier, not the plain one.
+        Assert.All(
+            sink.Messages.OfType<ErrorMessage>().Where(m => m.Message.Contains("chatty line", StringComparison.Ordinal)),
+            m => Assert.Contains(m, sink.LowPriority));
+        // And the run still reports its attempt.
+        var finished = Assert.IsType<RunFinishedMessage>(sink.Messages[^1]);
+        Assert.Equal("completed", finished.Status);
+        Assert.Equal(1u, finished.AttemptsOk);
     }
 }

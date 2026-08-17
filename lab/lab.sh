@@ -132,6 +132,8 @@ Commands:
   windows-log [target-N|runner-K] [-f]       Show a Windows VM's setup log/status (from the host share)
   windows-ssh [target-N|runner-K] [-- cmd]   SSH into a Windows VM (user/password printed)
   windows-iis-refresh [target-N]             Re-run install.ps1 -Setup iis -Fqdn target-N.lab inside the VM (SNI/H3 binding)
+  windows-agent-refresh [runner-K]           Publish this checkout's agent into the running Windows VM and restart it
+  windows-tester-version [runner-K]          Print the RELEASED networker-tester version installed in the VM
   down [--volumes]                           Stop (and optionally wipe the DB + the Windows VM disks)
   env                                        Print the saved lab env (token, project id, urls)
 
@@ -163,6 +165,9 @@ save_state() {
     echo "LAB_NETEM='${LAB_NETEM:-}'"
     echo "LAB_AGENTS_VIA_UI='${LAB_AGENTS_VIA_UI:-0}'"
     echo "LAB_BASE_URL='${BASE_URL}'"
+    echo "LAB_SDK_CONFIG_ID='${LAB_SDK_CONFIG_ID:-}'"
+    echo "LAB_SDK_BADTOKEN_CONFIG_ID='${LAB_SDK_BADTOKEN_CONFIG_ID:-}'"
+    echo "LAB_SDK_ROUTE='${LAB_SDK_ROUTE:-}'"
     echo "LAB_NET_PREFIX='${LAB_NET_PREFIX}'"
     echo "LAB_INSTANCE='${LAB_INSTANCE}'"
     echo "LAB_COMPOSE_PROJECT='${LAB_PROJECT}'"
@@ -323,6 +328,36 @@ SQL
   echo "$id"
 }
 
+# Register the SDK target as an SDK endpoint via the API. Idempotent: the name is
+# unique-constrained, so an existing row is reused (its id lands in lab.env as
+# LAB_SDK_CONFIG_ID, which validate.sh launches for the sdkprobe phase).
+register_sdk_endpoint() {
+  local i="$1" ip name resp id
+  ip="${LAB_NET_PREFIX}.$((100 + i))"; name="lab-sdk-target-${i}"
+  id="$(api GET "/api/projects/$LAB_PROJECT_ID/sdk-endpoints" \
+        | jq -r --arg n "$name" '(if type=="array" then . else (.endpoints // .items // []) end)|[.[]|select(.name==$n)][0].id // empty')"
+  if [ -z "$id" ]; then
+    resp="$(api POST "/api/projects/$LAB_PROJECT_ID/sdk-endpoints" \
+      "$(jq -nc --arg n "$name" --arg u "http://${ip}:${LAB_SDK_PORT}" --arg t "$LAB_SDK_TOKEN" --arg r "$LAB_SDK_ROUTE" \
+         '{name:$n, description:"lab SDK target (sdk/csharp/Example)", url:$u, token:$t, route:$r, runs:2, concurrency:1, timeout_ms:10000}')")"
+    id="$(jq -r '.id // empty' <<<"$resp")"
+    [ -n "$id" ] || die "SDK endpoint registration failed: $(head -c 300 <<<"$resp")"
+  fi
+  LAB_SDK_CONFIG_ID="$id"
+  # A second endpoint with a WRONG token, so validate.sh can assert the negative
+  # path too (the SDK answers 404 to an unauthenticated caller by design, which
+  # the tester reports as a token/mount problem rather than a generic 404).
+  LAB_SDK_BADTOKEN_CONFIG_ID="$(api GET "/api/projects/$LAB_PROJECT_ID/sdk-endpoints" \
+        | jq -r --arg n "${name}-badtoken" '(if type=="array" then . else (.endpoints // .items // []) end)|[.[]|select(.name==$n)][0].id // empty')"
+  if [ -z "$LAB_SDK_BADTOKEN_CONFIG_ID" ]; then
+    LAB_SDK_BADTOKEN_CONFIG_ID="$(api POST "/api/projects/$LAB_PROJECT_ID/sdk-endpoints" \
+      "$(jq -nc --arg n "${name}-badtoken" --arg u "http://${ip}:${LAB_SDK_PORT}" --arg r "$LAB_SDK_ROUTE" \
+         '{name:$n, description:"lab SDK target with a deliberately wrong token", url:$u, token:"wrong-token-0123456789abcdef", route:$r, runs:1, concurrency:1, timeout_ms:10000}')" \
+      | jq -r '.id // empty')"
+  fi
+  ok "target-${i} (sdk) registered as SDK endpoint ${LAB_SDK_CONFIG_ID} (+ a wrong-token twin for the negative test)"
+}
+
 # ── Topology generation ──────────────────────────────────────────────────────
 # Runners: runner-1..N at .201+; targets: target-1..M at .101+.
 stack_of() { echo "$LAB_TARGETS" | tr ',' '\n' | sed -n "${1}p"; }
@@ -335,10 +370,17 @@ normalize_stacks() { echo "$1" | tr ',' '\n' | sed 's/^iis$/windows/' | grep . |
 validate_stacks() {
   local s
   for s in $(echo "$1" | tr ',' ' '); do
-    case "$s" in rust|nginx|caddy|apache|haproxy|traefik|windows) ;; *) die "unknown target stack '$s' (rust|nginx|caddy|apache|haproxy|traefik|windows)";; esac
+    case "$s" in rust|nginx|caddy|apache|haproxy|traefik|windows|sdk) ;; *) die "unknown target stack '$s' (rust|nginx|caddy|apache|haproxy|traefik|windows|sdk)";; esac
   done
 }
 has_windows_target() { echo ",${LAB_TARGETS:-}," | grep -q ',windows,'; }
+has_sdk_target() { echo ",${LAB_TARGETS:-}," | grep -q ',sdk,'; }
+sdk_target_index() { echo "$LAB_TARGETS" | tr ',' '\n' | grep -n '^sdk$' | head -1 | cut -d: -f1; }
+# The SDK sample's shared secret. NOT a secret (lab only) but it must be >= 16
+# bytes — the SDK middleware refuses shorter tokens (contract v1 §2).
+LAB_SDK_TOKEN="${LAB_SDK_TOKEN:-lab-sdk-token-0123456789abcdef}"
+LAB_SDK_PORT="${LAB_SDK_PORT:-8081}"
+LAB_SDK_ROUTE="${LAB_SDK_ROUTE:-/laghound/echo}"
 windows_ok() { # KVM-backed VMs need Linux + /dev/kvm (Docker Desktop on macOS/Windows can't); dockerd (root) opens it
   [ "$(uname -s)" = Linux ] && [ -e /dev/kvm ]
 }
@@ -404,8 +446,80 @@ stage_windows_runner() {
   elif [ "$WIN_AGENT_PUBLISHED" != "$d/oem/agent" ]; then
     rm -rf "$d/oem/agent"; cp -R "$WIN_AGENT_PUBLISHED" "$d/oem/agent"
   fi
+  write_agent_refresh_script "$d"
   chmod 0777 "$d/shared" 2>/dev/null || true
   case "$(windows_runner_status "$k")" in failed:*) rm -f "$d/shared/status";; esac
+}
+# The runner share (\\host.lan\Data inside the VM) carries this script so a
+# rebuilt agent can replace the running one on an ALREADY INSTALLED VM disk
+# (windows-agent-refresh): verifying an agent fix on Windows must not cost a
+# 15-40 min Windows reinstall. ASCII only - Windows PowerShell 5.1 reads
+# BOM-less .ps1 as ANSI.
+write_agent_refresh_script() { # write_agent_refresh_script GEN_DIR
+  {
+    echo "# GENERATED by lab.sh - run inside the VM (windows-agent-refresh)."
+    echo "\$ErrorActionPreference = 'Continue'"
+    echo "schtasks /End /TN 'NetworkerAgent' 2>&1 | Out-Null"
+    echo "Stop-Process -Name 'networker-agent' -Force -ErrorAction SilentlyContinue"
+    echo "Start-Sleep 2"
+    echo "New-Item -ItemType Directory -Force -Path 'C:\\networker\\agent' | Out-Null"
+    echo "Copy-Item -Force -Recurse '\\\\host.lan\\Data\\agent\\*' 'C:\\networker\\agent'"
+    echo "\$exe = 'C:\\networker\\agent\\networker-agent.exe'"
+    echo "if (-not (Test-Path \$exe)) { Write-Output 'refresh: no networker-agent.exe in the share'; exit 1 }"
+    echo "Write-Output (\"refresh: staged \" + (Get-Item \$exe).Length + \" bytes, \" + (Get-Item \$exe).LastWriteTime)"
+    echo "# Same launch path as first boot: the scheduled task wrapper (SYSTEM)."
+    echo "schtasks /Run /TN 'NetworkerAgent' 2>&1 | Out-Null"
+    echo "\$up = \$false"
+    echo "foreach (\$i in 1..30) { if (Get-Process -Name 'networker-agent' -ErrorAction SilentlyContinue) { \$up = \$true; break }; Start-Sleep 2 }"
+    echo "if (\$up) { Write-Output (\"refresh: networker-agent running (pid \" + ((Get-Process -Name 'networker-agent').Id -join ',') + \")\") } else { Write-Output 'refresh: agent did not start'; Get-Content 'C:\\lab\\agent.log' -Tail 20 -ErrorAction SilentlyContinue; exit 1 }"
+    # Same virtio USO disable lab-runner-setup.ps1 does on fresh installs, for
+    # disks installed before that existed (h3 UPLOADS stall otherwise). Setting it
+    # resets the adapter, which kills this SSH session mid-command - and a
+    # Start-Process child dies with the session, so it must be handed to a SYSTEM
+    # scheduled task (the shape the agent already uses). ONSTART so it also
+    # survives reboots; the setting itself is idempotent.
+    echo "\$uso = @(Get-NetAdapter -Physical | ForEach-Object { Get-NetAdapterUso -Name \$_.Name } | Where-Object { \$_.IPv4Enabled -or \$_.IPv6Enabled })"
+    echo "if (\$uso) {"
+    echo "  Write-Output 'refresh: disabling virtio UDP Segmentation Offload via a SYSTEM task (the adapter blips)'"
+    echo "  \$cmd = 'powershell.exe -NoProfile -NonInteractive -Command \"Get-NetAdapter -Physical | ForEach-Object { Set-NetAdapterUso -Name \$_.Name -IPv4Enabled \$false -IPv6Enabled \$false -ErrorAction SilentlyContinue }\"'"
+    echo "  schtasks /Create /TN 'LabUsoOff' /TR \$cmd /SC ONSTART /RU SYSTEM /RL HIGHEST /F 2>&1 | Out-Null"
+    echo "  schtasks /Run /TN 'LabUsoOff' 2>&1 | Out-Null"
+    echo "} else { Write-Output 'refresh: USO already off' }"
+  } > "$1/shared/agent-refresh.ps1"
+}
+# Push the checkout's freshly published agent into a RUNNING Windows runner VM
+# and restart it there (no Windows reinstall). Used to validate agent fixes on
+# Windows: the VM disk survives `up`, so its agent is whatever was published
+# when the disk was first installed.
+windows_agent_refresh() {
+  local k="$1" d ip; d="$(windows_runner_gen_dir "$k")"; ip="${LAB_NET_PREFIX}.$((200 + k))"
+  mkdir -p "$d/shared/agent"
+  write_agent_refresh_script "$d"   # also for disks staged before this command existed
+  publish_windows_agent "$d/shared/agent"
+  chmod -R 0777 "$d/shared" 2>/dev/null || true
+  note "restarting the agent inside runner-${k} with the checkout's build"
+  windows_ssh_exec "$ip" \
+    "powershell -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \\\\host.lan\\Data\\agent-refresh.ps1" \
+    || die "agent refresh failed inside runner-${k} (try: ./lab/lab.sh windows-ssh runner-${k})"
+}
+# Non-interactive ssh into a lab Windows VM (password auth, no sshpass): OpenSSH
+# reads the password from SSH_ASKPASS when SSH_ASKPASS_REQUIRE=force, which is
+# the only way to script it without a tty. The helper lives in a 0700 temp dir
+# and is deleted right after (a lab-only password, but it never lands in a
+# world-readable file or in the process list).
+windows_ssh_exec() { # windows_ssh_exec IP COMMAND…
+  local ip="$1"; shift
+  local tmp ap rc
+  tmp="$(mktemp -d)"; chmod 700 "$tmp"; ap="$tmp/askpass"
+  printf '#!/bin/sh\nprintf %%s "$LAB_WINDOWS_PASSWORD"\n' > "$ap"
+  chmod 700 "$ap"
+  LAB_WINDOWS_PASSWORD="$LAB_WINDOWS_PASSWORD" SSH_ASKPASS="$ap" SSH_ASKPASS_REQUIRE=force DISPLAY=":0" \
+    ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+      -o NumberOfPasswordPrompts=1 -o PreferredAuthentications=password,keyboard-interactive \
+      "${LAB_WINDOWS_USER}@${ip}" "$@" < /dev/null
+  rc=$?
+  rm -rf "$tmp"
+  return $rc
 }
 # Stage the /oem folder for target N: the repo's oem scripts + THE CHECKOUT'S
 # install.ps1 (so what runs inside the VM is the installer you are shipping) +
@@ -482,6 +596,25 @@ write_topology() {
       - windows-storage-${i}:/storage
       - $(windows_gen_dir "$i")/oem:/oem
       - $(windows_gen_dir "$i")/shared:/shared
+    networks:
+      labnet:
+        ipv4_address: ${LAB_NET_PREFIX}.$((100 + i))
+        aliases: [$(target_host "$i")]
+YML
+        continue
+      fi
+      if [ "$stack" = sdk ]; then
+        cat <<YML
+  target-${i}:
+    # A CUSTOMER app carrying the LagHound SDK (sdk/csharp/Example): the only
+    # target shape sdkprobe can measure -- it reads the Server-Timing the SDK
+    # middleware emits on ${LAB_SDK_ROUTE}. Plain HTTP on ${LAB_SDK_PORT}; no
+    # networker-endpoint and no proxy stack are involved.
+    image: nwk-lab/sdk:${LAB_IMAGE_TAG}
+    hostname: target-${i}
+    environment:
+      PORT: "${LAB_SDK_PORT}"
+      LAGHOUND_TOKEN: "${LAB_SDK_TOKEN}"
     networks:
       labnet:
         ipv4_address: ${LAB_NET_PREFIX}.$((100 + i))
@@ -862,7 +995,14 @@ cmd_up() {
     image_exists nwk-lab/rustbin:${LAB_IMAGE_TAG} || missing=1
     image_exists nwk-lab/controlplane:${LAB_IMAGE_TAG} || missing=1
     image_exists nwk-lab/runner:${LAB_IMAGE_TAG} || missing=1
-    for s in $(echo "$targets" | tr ',' ' ' | sort -u); do [ "$s" = windows ] || image_exists "nwk-lab/target-$s:${LAB_IMAGE_TAG}" || missing=1; done   # windows = pulled dockur image, not built
+    # windows = pulled dockur image (not built); sdk = its own image name.
+    for s in $(echo "$targets" | tr ',' ' ' | sort -u); do
+      case "$s" in
+        windows) ;;
+        sdk) image_exists "nwk-lab/sdk:${LAB_IMAGE_TAG}" || missing=1 ;;
+        *) image_exists "nwk-lab/target-$s:${LAB_IMAGE_TAG}" || missing=1 ;;
+      esac
+    done
     [ "$ui" = 1 ] && { image_exists nwk-lab/ui:${LAB_IMAGE_TAG} || missing=1; }
     if [ "$missing" = 1 ]; then
       build_images "$targets" "$ui"
@@ -889,14 +1029,21 @@ cmd_up() {
   while [ "$n" -le "$LAB_RUNNERS" ]; do register_runner "$n"; n=$((n + 1)); done
   ok "${runners} runner key(s) registered as standalone agents in project ${LAB_PROJECT_ID}$([ "$win_runners" -ge 1 ] && echo " + ${win_runners} windows runner(s) as agents bound to a project_tester row (pinnable via tester_id)")"
 
-  # Register proxy targets as completed deployments (kind=proxy configs).
+  # Register proxy targets as completed deployments (kind=proxy configs); the SDK
+  # target is registered through the PUBLIC API instead, because an SDK endpoint
+  # is a test_config carrying the customer token ENCRYPTED with the credential
+  # cipher — exactly the shape dispatch decrypts and splices into an sdkprobe run.
   local i=1 st dep
   while [ "$i" -le "$(target_count)" ]; do
     st="$(stack_of "$i")"
-    if [ "$st" != rust ]; then
-      dep="$(register_target_deployment "$i" "$st")"
-      ok "target-${i} (${st}$([ "$st" = windows ] && echo ' → proxy stack iis, os windows')) registered as deployment ${dep}"
-    fi
+    case "$st" in
+      rust) ;;
+      sdk) register_sdk_endpoint "$i" ;;
+      *)
+        dep="$(register_target_deployment "$i" "$st")"
+        ok "target-${i} (${st}$([ "$st" = windows ] && echo ' → proxy stack iis, os windows')) registered as deployment ${dep}"
+        ;;
+    esac
     i=$((i + 1))
   done
   if has_windows_target || has_windows_runner; then
@@ -933,7 +1080,11 @@ cmd_status() {
   local i=1 st ip port
   while [ "$i" -le "$(target_count)" ]; do
     st="$(stack_of "$i")"; ip="${LAB_NET_PREFIX}.$((100 + i))"
-    case "$st" in rust) port=8443;; nginx) port=8444;; caddy) port=8454;; traefik) port=8455;; haproxy) port=8456;; apache) port=8457;; windows) port=8445;; esac
+    case "$st" in rust) port=8443;; nginx) port=8444;; caddy) port=8454;; traefik) port=8455;; haproxy) port=8456;; apache) port=8457;; windows) port=8445;; sdk) port="$LAB_SDK_PORT";; esac
+    if [ "$st" = sdk ]; then
+      printf '  %-12s %-9s %-16s http://%s:%s%s  (sdk endpoint %s)\n' "target-$i" "$st" "$ip" "$ip" "$port" "$LAB_SDK_ROUTE" "${LAB_SDK_CONFIG_ID:0:8}"
+      i=$((i + 1)); continue
+    fi
     if [ "$st" = windows ]; then
       printf '  %-12s %-9s %-16s http://%s:8080  https://%s:8443  iis https://%s:%s (SNI, h3)  [vm %s · console :%s]\n' "target-$i" "$st" "$ip" "$ip" "$ip" "$(target_host "$i")" "$port" "$(windows_status "$i")" "$(windows_target_viewer_port "$i")"
     else
@@ -1037,6 +1188,41 @@ cmd_windows_iis_refresh() {
   windows_iis_refresh "$n"
   windows_iis_sni_ok "$n" && ok "IIS on target-${n} serves $(target_host "$n") (SNI/SAN)" || die "IIS on target-${n} still has no SNI binding for $(target_host "$n")"
 }
+# The Windows runner's TESTER is the RELEASED networker-tester.exe (install.ps1
+# -Component tester; there is no cross-toolchain here), so it lags the checkout
+# until a release catches up. Reading it lets validate.sh tell version skew
+# apart from a real Windows regression.
+windows_tester_version() { # windows_tester_version K -> "0.28.209" | ""
+  local k="$1" ip out; ip="${LAB_NET_PREFIX}.$((200 + k))"
+  out="$(windows_ssh_exec "$ip" '& C:\networker\networker-tester.exe --version' 2>/dev/null | tr -d '\r')"
+  echo "$out" | sed -n 's/^networker-tester \([0-9][0-9.]*\).*/\1/p' | head -1
+}
+cmd_windows_tester_version() {
+  load_state
+  local k arg v
+  arg="$(echo "$*" | tr ' ' '\n' | grep '^runner-' | head -1)"
+  if [ -n "$arg" ]; then k="${arg#runner-}"; else k="$(first_windows_runner_index)"; fi
+  [ -n "$k" ] || die "no windows runner in this lab"
+  v="$(windows_tester_version "$k")"
+  [ -n "$v" ] || die "could not read the tester version inside runner-${k}"
+  echo "$v"
+}
+cmd_windows_agent_refresh() {
+  load_state
+  local k arg deadline
+  arg="$(echo "$*" | tr ' ' '\n' | grep '^runner-' | head -1)"
+  if [ -n "$arg" ]; then k="${arg#runner-}"; else k="$(first_windows_runner_index)"; fi
+  [ -n "$k" ] || die "no windows runner in this lab (LAB_WINDOWS_RUNNERS=${LAB_WINDOWS_RUNNERS:-0})"
+  [ "$(runner_os "$k")" = windows ] || die "runner-${k} is not a Windows VM runner"
+  windows_agent_refresh "$k"
+  deadline=$((SECONDS + 180))
+  while ! agent_online "runner-${k}"; do
+    [ "$SECONDS" -lt "$deadline" ] || die "runner-${k} did not come back online within 180s after the agent refresh (./lab/lab.sh windows-ssh runner-${k} -- Get-Content C:\\lab\\agent.log -Tail 30)"
+    sleep 5
+  done
+  ok "runner-${k} is back online on the checkout's agent build"
+  note "  ./lab/lab.sh status shows its reported version"
+}
 cmd_windows_ssh() {
   load_state
   local n ip kind
@@ -1073,6 +1259,8 @@ case "$cmd" in
   windows-log)  cmd_windows_log "$@" ;;
   windows-ssh)  cmd_windows_ssh "$@" ;;
   windows-iis-refresh) cmd_windows_iis_refresh "$@" ;;
+  windows-agent-refresh) cmd_windows_agent_refresh "$@" ;;
+  windows-tester-version) cmd_windows_tester_version "$@" ;;
   env)      cmd_env ;;
   down)     cmd_down "$@" ;;
   ""|-h|--help|help) usage ;;
