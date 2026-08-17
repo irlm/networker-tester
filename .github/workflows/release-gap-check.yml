@@ -1,0 +1,88 @@
+# Every version tag should have a release behind it. Twice on 2026-08-17 one did
+# not: `Auto-tag & deploy` pushes the tag and dispatches release.yml in two
+# separate API calls, and a GitHub 503 between them strands the tag. v0.28.214
+# was lost that way permanently; v0.28.217 hit the identical failure an hour
+# after the recovery path shipped and was only caught because someone looked.
+#
+# This check looks, on a schedule, so a stranded tag surfaces by itself.
+name: Release gap check
+
+on:
+  schedule:
+    - cron: '31 7 * * *'   # daily 07:31 UTC — off-minute, clear of the soak/canary crons
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  gaps:
+    name: tags without a release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+        with:
+          fetch-depth: 0
+
+      - name: Compare tags against releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+
+          # The API is exactly what fails in these incidents, so retry it rather
+          # than reporting a phantom gap when GitHub is having a bad minute.
+          releases=""
+          for attempt in 1 2 3 4 5; do
+            if releases="$(gh release list --limit 200 --json tagName --jq '.[].tagName' 2>&1)"; then
+              break
+            fi
+            echo "release list attempt ${attempt} failed: ${releases}"
+            releases=""
+            sleep $((attempt * 10))
+          done
+          if [ -z "${releases}" ]; then
+            echo "::error::Could not list releases after 5 attempts — not guessing. Re-run this job."
+            exit 1
+          fi
+
+          version="$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')"
+          current="v${version}"
+          echo "main is at ${current}"
+
+          gaps=""
+          while read -r tag; do
+            [ -n "${tag}" ] || continue
+            if ! printf '%s\n' "${releases}" | grep -qxF "${tag}"; then
+              gaps="${gaps} ${tag}"
+            fi
+          done <<< "$(git tag -l 'v*')"
+
+          if [ -z "${gaps}" ]; then
+            echo "Every v* tag has a release."
+            exit 0
+          fi
+
+          echo "Tags with no release:${gaps}"
+
+          # Only the CURRENT version is safe to recover: re-running Auto-tag
+          # dispatches release.yml, whose deploy job checks out the tag it is
+          # given. Dispatching an OLD tag would roll production back to it, so
+          # historical gaps are reported and deliberately left alone
+          # (docs/release-flow.md §3).
+          for tag in ${gaps}; do
+            if [ "${tag}" = "${current}" ]; then
+              echo "::error::${tag} is main's current version and has NO release."
+              echo "::error::Recover by re-running the 'Auto-tag & deploy' job on main (it re-dispatches), or: gh workflow run release.yml --field tag=${tag}"
+              actionable=1
+            else
+              echo "::warning::${tag} has no release. It is superseded, so LEAVE IT: dispatching release.yml for an old tag would deploy that version over production."
+            fi
+          done
+
+          # An explicit `if`: GitHub runs steps with `bash -e`, so a trailing
+          # `[ ... ] && exit 1` would fail the job on the FALSE branch too.
+          if [ "${actionable:-0}" = "1" ]; then
+            exit 1
+          fi
+          exit 0
