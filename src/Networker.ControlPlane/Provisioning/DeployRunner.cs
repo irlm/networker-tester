@@ -230,7 +230,19 @@ public sealed class DeployRunner
         output.RunFallbackIpScan();
 
         var success = exitCode == 0;
-        var error = success ? null : $"install.sh exited with code {exitCode ?? -1}";
+        // 143 = SIGTERM: install.sh is a CHILD of this process, so a control-plane
+        // restart (every deploy) kills any in-flight deployment — prod produced a
+        // bare "install.sh exited with code 143" plus an orphan Azure VM, with no
+        // hint that the cause was a restart rather than the customer's config
+        // (prod sweep, v0.28.213). Say so, and point at the retry.
+        var interrupted = exitCode is 143 or 137;
+        var error = success
+            ? null
+            : interrupted
+                ? $"Deployment interrupted (install.sh received {(exitCode == 137 ? "SIGKILL" : "SIGTERM")}, exit {exitCode}) — "
+                  + "the control plane restarted or was shut down while deploying. Any VM it had already created is "
+                  + "reaped by the orphan sweep; retry the deployment."
+                : $"install.sh exited with code {exitCode ?? -1}";
         await FinishAsync(deploymentId, success, output.EndpointIps, output.FullLog, error, ct, output.EndpointHosts)
             .ConfigureAwait(false);
 

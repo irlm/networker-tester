@@ -1,8 +1,10 @@
+use chrono::Utc;
+use std::time::Duration;
 use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::cli::ResolvedConfig;
-use crate::metrics::{Protocol, RequestAttempt};
+use crate::metrics::{ErrorCategory, Protocol, RequestAttempt};
 use crate::runner::{
     browser::run_browser_probe,
     curl::run_curl_probe,
@@ -70,8 +72,134 @@ pub fn apply_impairment_target(
     delayed
 }
 
+/// Per-attempt safety cap for the SHORT diagnostic modes — every one of them is
+/// bounded by construction (a request timeout, or max_ttl × per-hop timeout), so
+/// exceeding this means the probe stopped making progress rather than "the work
+/// takes a while". Without it a wedged probe hangs the whole run until the
+/// agent's overall budget expires: prod hit exactly that when `path` (runs=2,
+/// ICMP fully blocked) returned an error on iteration 1 and then never returned
+/// on iteration 2 — the run sat `running` with no attempts for 22 minutes
+/// (prod mode sweep, v0.28.213).
+///
+/// Deliberately NOT applied to the long-by-design families (throughput,
+/// page-load, browser, rpm/responsiveness/mthroughput): a 1 GB transfer or a
+/// saturation ramp on a slow link legitimately outlives any fixed cap, and they
+/// carry their own budgets.
+fn attempt_cap(proto: &Protocol, cfg: &RunConfig) -> Option<Duration> {
+    let short = matches!(
+        proto,
+        Protocol::Tcp
+            | Protocol::Dns
+            | Protocol::Tls
+            | Protocol::TlsResume
+            | Protocol::Http1
+            | Protocol::Http2
+            | Protocol::Http3
+            | Protocol::Curl
+            | Protocol::Native
+            | Protocol::Ping
+            | Protocol::Path
+            | Protocol::Pmtud
+            | Protocol::DualStack
+            | Protocol::Udp
+            | Protocol::Stamp
+            | Protocol::WebSocket
+            | Protocol::SdkProbe
+    );
+    if !short {
+        return None;
+    }
+    // 10× the per-request timeout (a single attempt may legitimately do several
+    // round-trips: DNS + connect + TLS + request, or 30 TTL probes), floored at
+    // 120s so a tiny --timeout can never make the cap trip on a healthy probe.
+    let ms = cfg.timeout_ms.saturating_mul(10).max(120_000);
+    Some(Duration::from_millis(ms))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn dispatch_once(
+    proto: &Protocol,
+    payload_sz: Option<usize>,
+    run_id: Uuid,
+    seq: u32,
+    target: &url::Url,
+    resolved_cfg: &ResolvedConfig,
+    cfg: &RunConfig,
+    udp_cfg: &UdpProbeConfig,
+    udp_throughput_cfg: &UdpThroughputConfig,
+    throughput_cfg: &ThroughputConfig,
+    pageload_cfg: &PageLoadConfig,
+) -> RequestAttempt {
+    match attempt_cap(proto, cfg) {
+        Some(cap) => {
+            let started_at = Utc::now();
+            match tokio::time::timeout(
+                cap,
+                dispatch_once_inner(
+                    proto,
+                    payload_sz,
+                    run_id,
+                    seq,
+                    target,
+                    resolved_cfg,
+                    cfg,
+                    udp_cfg,
+                    udp_throughput_cfg,
+                    throughput_cfg,
+                    pageload_cfg,
+                ),
+            )
+            .await
+            {
+                Ok(attempt) => attempt,
+                Err(_) => stalled_attempt(proto, run_id, seq, started_at, cap),
+            }
+        }
+        None => {
+            dispatch_once_inner(
+                proto,
+                payload_sz,
+                run_id,
+                seq,
+                target,
+                resolved_cfg,
+                cfg,
+                udp_cfg,
+                udp_throughput_cfg,
+                throughput_cfg,
+                pageload_cfg,
+            )
+            .await
+        }
+    }
+}
+
+/// The failed attempt recorded when a short diagnostic probe blows its cap —
+/// an honest, actionable row instead of a run that silently stops progressing.
+fn stalled_attempt(
+    proto: &Protocol,
+    run_id: Uuid,
+    seq: u32,
+    started_at: chrono::DateTime<Utc>,
+    cap: Duration,
+) -> RequestAttempt {
+    let secs = cap.as_secs();
+    crate::runner::pageload::error_attempt_proto(
+        Uuid::new_v4(),
+        run_id,
+        seq,
+        started_at,
+        proto.clone(),
+        ErrorCategory::Timeout,
+        format!(
+            "{proto} probe made no progress within {secs}s (per-attempt cap) — \
+             the probe was abandoned so the rest of the run could continue"
+        ),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_once_inner(
     proto: &Protocol,
     payload_sz: Option<usize>,
     run_id: Uuid,
@@ -886,5 +1014,92 @@ mod attempt_stream_tests {
         assert_eq!(v["event"], "attempt");
         assert_eq!(v["attempt"]["attempt_id"], a.attempt_id.to_string());
         assert_eq!(v["attempt"]["success"], a.success);
+    }
+}
+
+#[cfg(test)]
+mod attempt_cap_tests {
+    use super::{attempt_cap, stalled_attempt};
+    use crate::metrics::{ErrorCategory, Protocol};
+    use crate::runner::http::RunConfig;
+    use chrono::Utc;
+    use std::time::Duration;
+    use uuid::Uuid;
+
+    // ── per-attempt cap (prod sweep v0.28.213) ────────────────────────────────
+
+    #[test]
+    fn attempt_cap_applies_to_short_diagnostics_only() {
+        let cfg = RunConfig {
+            timeout_ms: 20_000,
+            ..RunConfig::default()
+        };
+        for p in [
+            Protocol::Tcp,
+            Protocol::Dns,
+            Protocol::Path,
+            Protocol::Pmtud,
+            Protocol::Ping,
+            Protocol::Http3,
+            Protocol::Stamp,
+            Protocol::WebSocket,
+        ] {
+            assert_eq!(
+                attempt_cap(&p, &cfg),
+                Some(Duration::from_millis(200_000)),
+                "{p:?} must be capped at 10x the request timeout"
+            );
+        }
+        // Long-by-design families keep running: a big transfer or a saturation
+        // ramp must never be cut short by a fixed cap.
+        for p in [
+            Protocol::Download,
+            Protocol::Download3,
+            Protocol::Upload2,
+            Protocol::PageLoad,
+            Protocol::PageLoad3,
+            Protocol::Browser1,
+            Protocol::Rpm,
+            Protocol::Responsiveness,
+            Protocol::Mthroughput,
+            Protocol::UdpDownload,
+        ] {
+            assert_eq!(attempt_cap(&p, &cfg), None, "{p:?} must stay uncapped");
+        }
+    }
+
+    #[test]
+    fn attempt_cap_has_a_two_minute_floor() {
+        let cfg = RunConfig {
+            timeout_ms: 1_000,
+            ..RunConfig::default()
+        };
+        assert_eq!(
+            attempt_cap(&Protocol::Path, &cfg),
+            Some(Duration::from_secs(120))
+        );
+    }
+
+    #[test]
+    fn stalled_attempt_is_an_explained_failure() {
+        // The prod symptom: `path` never returned and the run stopped making
+        // progress. With the cap the run records a failed, explained attempt.
+        let a = stalled_attempt(
+            &Protocol::Path,
+            Uuid::nil(),
+            7,
+            Utc::now(),
+            Duration::from_secs(120),
+        );
+        assert!(!a.success);
+        assert_eq!(a.protocol, Protocol::Path);
+        assert_eq!(a.sequence_num, 7);
+        let err = a.error.expect("stalled attempt carries an error");
+        assert_eq!(err.category, ErrorCategory::Timeout);
+        assert!(
+            err.message.contains("no progress within 120s"),
+            "{}",
+            err.message
+        );
     }
 }

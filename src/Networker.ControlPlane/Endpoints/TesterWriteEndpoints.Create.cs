@@ -241,6 +241,11 @@ public static partial class TesterWriteEndpoints
         _ = Task.Run(async () =>
         {
             await CreateSemaphore.WaitAsync().ConfigureAwait(false);
+            // Own this tester's `provisioning` row for the lifetime of the flow, so
+            // the heartbeat reconcile knows the difference between "install still
+            // running here" and "the owner died with the process" (a deploy restart
+            // used to strand the row forever — prod sweep, v0.28.213).
+            using var provisioningOwnership = TesterState.OwnProvisioning(testerId);
             try
             {
                 using var scope = scopeFactory.CreateScope();

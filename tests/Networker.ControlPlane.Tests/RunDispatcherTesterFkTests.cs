@@ -593,6 +593,116 @@ public sealed class RunDispatcherTesterFkTests
     }
 
     [Fact]
+    public async Task Heartbeat_recovers_a_tester_stranded_in_provisioning_by_a_restart()
+    {
+        // Prod: a deploy restarted the control plane while a tester was in
+        // `provisioning`; the create-path task died with the process, the agent
+        // came online anyway, and the row stayed `provisioning` forever (unusable,
+        // and auto-shutdown — which only acts on `running` — never billed it down).
+        using var sp = BuildHost(nameof(Heartbeat_recovers_a_tester_stranded_in_provisioning_by_a_restart));
+        var db = Db(sp);
+        SeedProject(db);
+        var testerId = SeedTester(db);
+        var agentId = SeedAgent(db, boundTesterId: testerId);
+        await db.SaveChangesAsync();
+        await db.ProjectTesters.Where(t => t.TesterId == testerId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(t => t.PowerState, "provisioning")
+                .SetProperty(t => t.StatusMessage, "waiting for agent (145s elapsed, up to 455s remaining)"));
+
+        // No create-path task owns it in this process (exactly the post-restart state).
+        Assert.False(Networker.ControlPlane.Provisioning.TesterState.IsProvisioningOwnedHere(testerId));
+
+        using var scope = sp.CreateScope();
+        var processor = ActivatorUtilities.CreateInstance<AgentMessageProcessor>(scope.ServiceProvider);
+        await processor.OnHeartbeatForTests(agentId);
+
+        var tester = await Db(sp).ProjectTesters.AsNoTracking().FirstAsync(t => t.TesterId == testerId);
+        Assert.Equal("running", tester.PowerState);
+        Assert.Contains("recovered", tester.StatusMessage ?? "", StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Heartbeat_leaves_provisioning_alone_while_the_create_path_owns_it()
+    {
+        using var sp = BuildHost(nameof(Heartbeat_leaves_provisioning_alone_while_the_create_path_owns_it));
+        var db = Db(sp);
+        SeedProject(db);
+        var testerId = SeedTester(db);
+        var agentId = SeedAgent(db, boundTesterId: testerId);
+        await db.SaveChangesAsync();
+        await db.ProjectTesters.Where(t => t.TesterId == testerId)
+            .ExecuteUpdateAsync(s => s.SetProperty(t => t.PowerState, "provisioning"));
+
+        // A live create-path task holds ownership → install may still be mid-flight
+        // (the agent can be online before the flow finishes its own steps).
+        using (Networker.ControlPlane.Provisioning.TesterState.OwnProvisioning(testerId))
+        {
+            using var scope = sp.CreateScope();
+            var processor = ActivatorUtilities.CreateInstance<AgentMessageProcessor>(scope.ServiceProvider);
+            await processor.OnHeartbeatForTests(agentId);
+        }
+
+        var tester = await Db(sp).ProjectTesters.AsNoTracking().FirstAsync(t => t.TesterId == testerId);
+        Assert.Equal("provisioning", tester.PowerState);
+    }
+
+    [Theory]
+    // Parsing/clamping of DASHBOARD_RUN_NO_PROGRESS_SECS (prod sweep v0.28.213).
+    [InlineData(null, 15 * 60)]
+    [InlineData("900", 900)]
+    [InlineData("60", 120)]          // clamped up to the 120s floor
+    [InlineData("99999999", 6 * 60 * 60)]  // clamped down to 6h
+    [InlineData("garbage", 15 * 60)]
+    public void NoProgressCutoff_parses_and_clamps(string? raw, int expectedSecs)
+        => Assert.Equal(TimeSpan.FromSeconds(expectedSecs), WatchdogService.ResolveNoProgressCutoff(raw));
+
+    [Fact]
+    public void NoProgressCutoff_zero_disables_the_sweep()
+        => Assert.Equal(TimeSpan.MaxValue, WatchdogService.ResolveNoProgressCutoff("0"));
+
+    [Fact]
+    public async Task Watchdog_reaps_a_wedged_run_whose_agent_is_still_online()
+    {
+        // The prod symptom: the tester hung mid-run (a `path` probe that never
+        // returned), the agent kept heartbeating, and the run held its runner
+        // for 22 minutes until it was cancelled by hand. With no progress for
+        // longer than the cutoff the watchdog must fail it even though the agent
+        // is online — and say so.
+        using var sp = BuildHost(nameof(Watchdog_reaps_a_wedged_run_whose_agent_is_still_online));
+        var db = Db(sp);
+        var registry = sp.GetRequiredService<AgentConnectionRegistry>();
+
+        SeedProject(db);
+        var agentId = SeedAgent(db, boundTesterId: null);
+        var configId = SeedConfig(db);
+        var runId = Guid.NewGuid();
+        db.TestRuns.Add(new TestRun
+        {
+            Id = runId,
+            TestConfigId = configId,
+            ProjectId = ProjectId,
+            Status = "running",
+            WorkerId = agentId.ToString(),
+            CreatedAt = DateTime.UtcNow.AddHours(-1),
+            StartedAt = DateTime.UtcNow.AddHours(-1),
+            // Last progress 30 minutes ago — twice the default 15-minute cutoff.
+            LastHeartbeat = DateTime.UtcNow.AddMinutes(-30),
+        });
+        await db.SaveChangesAsync();
+
+        // Agent is ONLINE (the whole point of the case).
+        registry.Register(agentId, $"raw-{agentId}", (_, _) => Task.CompletedTask);
+
+        await WatchdogTickHarness.RunOnceAsync(sp, registry);
+
+        var run = await db.TestRuns.AsNoTracking().FirstAsync(r => r.Id == runId);
+        Assert.Equal("failed", run.Status);
+        Assert.Contains("no progress", run.ErrorMessage ?? "", StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(run.FinishedAt);
+    }
+
+    [Fact]
     public async Task Watchdog_spares_running_run_whose_worker_is_online()
     {
         using var sp = BuildHost(nameof(Watchdog_spares_running_run_whose_worker_is_online));

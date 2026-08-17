@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Security;
 using Npgsql;
+using Networker.ControlPlane.Provisioning;
 using Networker.Data;
 using Networker.Data.Entities;
 
@@ -340,6 +341,11 @@ public sealed class AgentMessageProcessor
     /// heartbeat AgentStatus would be a redundant flap, so it is omitted to stay
     /// byte-for-byte with the Rust bus output).
     /// </summary>
+    /// <summary>Test seam: drive one heartbeat (no wire frame) — used by the
+    /// provisioning-recovery regression tests.</summary>
+    internal Task OnHeartbeatForTests(Guid agentId, CancellationToken ct = default) =>
+        OnHeartbeat(agentId, new HeartbeatMessage(Load: null, Version: null, Capabilities: null), ct);
+
     private async Task OnHeartbeat(Guid agentId, HeartbeatMessage hb, CancellationToken ct)
     {
         var agent = await _db.Agents.AsTracking().FirstOrDefaultAsync(a => a.AgentId == agentId, ct);
@@ -419,6 +425,32 @@ public sealed class AgentMessageProcessor
                     .SetProperty(t => t.PowerState, "running")
                     .SetProperty(t => t.StatusMessage, (string?)null)
                     .SetProperty(t => t.UpdatedAt, DateTime.UtcNow), ct);
+
+            // `provisioning` is normally owned by the create-path task, which does
+            // this transition itself — but when that task is GONE (the control
+            // plane restarted mid-provision: every deploy does this) nothing ever
+            // finished the flow, and the tester stayed `provisioning` forever:
+            // unusable in the UI, skipped by auto-shutdown (so the VM billed on),
+            // while its agent heartbeated happily. A heartbeat is proof the VM is
+            // up AND the install produced a working agent, so an UNOWNED
+            // provisioning row converges to running here (prod sweep, v0.28.213).
+            if (!TesterState.IsProvisioningOwnedHere(reconTesterId))
+            {
+                var recovered = await _db.ProjectTesters
+                    .Where(t => t.TesterId == reconTesterId && t.PowerState == "provisioning")
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(t => t.PowerState, "running")
+                        .SetProperty(t => t.StatusMessage,
+                            "recovered: the agent came online but the provisioning task was lost "
+                            + "(control plane restart) — power state reconciled from the heartbeat")
+                        .SetProperty(t => t.UpdatedAt, DateTime.UtcNow), ct);
+                if (recovered > 0)
+                {
+                    _logger.LogWarning(
+                        "Tester {TesterId} was stuck in provisioning with no owning task; reconciled to "
+                        + "running from agent {AgentId}'s heartbeat", reconTesterId, agent.AgentId);
+                }
+            }
         }
 
         await _db.SaveChangesAsync(ct);
