@@ -341,7 +341,9 @@ public sealed class ProvisioningOrchestrator : BackgroundService
 
             // Defer while ANY active run's config references one of this
             // deployment's hosts — its endpoint is being reused as a target.
-            var candidateHosts = Endpoints.DeploymentWriteEndpoints.ParseHosts(c.Dep.EndpointIps);
+            // Both forms: dispatch hands the tester the recorded hostname when
+            // there is one, so the active ref may carry either (V050).
+            var candidateHosts = EndpointAddressing.AllHosts(c.Dep.EndpointIps, c.Dep.EndpointHosts);
             var referenced = candidateHosts.Any(h => activeRefs.Any(er =>
                 er is not null && er.Contains(h, StringComparison.OrdinalIgnoreCase)));
             if (referenced)
@@ -709,7 +711,8 @@ public sealed class ProvisioningOrchestrator : BackgroundService
             return;
         }
 
-        var host = FirstEndpointHost(deployment.EndpointIps);
+        // Recorded DNS name first (SNI → HTTP/3 through IIS), IP otherwise (V050).
+        var host = EndpointAddressing.PreferredHost(deployment.EndpointIps, deployment.EndpointHosts);
         if (host is null)
         {
             // A completed deployment with no captured endpoint IPs is a PERMANENT
@@ -1065,42 +1068,6 @@ public sealed class ProvisioningOrchestrator : BackgroundService
                 endpointRef.Length);
             return null;
         }
-    }
-
-    /// <summary>First usable host (FQDN preferred, bare IP otherwise) from the
-    /// deployment's JSON <c>endpoint_ips</c> array text. Mirrors Rust
-    /// <c>first_endpoint_host</c>.</summary>
-    internal static string? FirstEndpointHost(string? endpointIps)
-    {
-        if (string.IsNullOrWhiteSpace(endpointIps))
-        {
-            return null;
-        }
-
-        try
-        {
-            using var doc = JsonDocument.Parse(endpointIps);
-            if (doc.RootElement.ValueKind != JsonValueKind.Array)
-            {
-                return null;
-            }
-            foreach (var el in doc.RootElement.EnumerateArray())
-            {
-                if (el.ValueKind == JsonValueKind.String)
-                {
-                    var s = el.GetString()?.Trim();
-                    if (!string.IsNullOrEmpty(s))
-                    {
-                        return s;
-                    }
-                }
-            }
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-        return null;
     }
 
     // ── Proxy port + label helpers (port of test_config.rs) ───────────────────

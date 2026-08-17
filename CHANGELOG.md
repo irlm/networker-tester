@@ -11,6 +11,140 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.211] - 2026-08-16
+
+### Added
+- **HTTP/3 through IIS on the managed path** — proxy targets are now
+  dispatched **by hostname**, so the tester's TLS/QUIC ClientHello carries SNI
+  and http.sys completes the QUIC handshake (it never does for an IP literal —
+  RFC 6066 has no SNI for IPs; lab-measured in v0.28.208). Pieces:
+  - **Schema V050** `deployment.endpoint_hosts` (JSONB, nullable): array
+    **parallel** to `endpoint_ips` — element *i* is endpoint *i*'s resolvable
+    DNS name (Azure `<label>.<region>.cloudapp.azure.com` from the public-IP
+    DNS label, AWS `ec2-….compute.amazonaws.com`, the docker provider's
+    container name, the lab's `target-N.lab`) or null when the provider gave
+    none (GCP, lan). `endpoint_ips` is untouched (UI cards, health/version
+    probes, the teardown reverse lookup keep keying off it); pre-V050 rows
+    keep resolving by IP.
+  - **DeployRunner** records the hostname: install.sh's deploy prints one
+    machine-readable `endpoint_host: <fqdn> (<ip>)` line per endpoint that has
+    a cloud DNS name (Azure/AWS; nothing for GCP), the docker provider records
+    the container name; `FinishAsync` persists both arrays.
+  - **Dispatch** (`RunDispatcher.ResolveProxyEndpointAsync`, the orchestrator's
+    pending→network rewrite + readiness gate) resolve through
+    `EndpointAddressing.PreferredHost`: `endpoint_hosts[i]` when recorded for
+    the first addressed endpoint, else `endpoint_ips[i]`. The teardown-deferral
+    reference match considers both forms. `GET …/deployments` exposes
+    `endpoint_hosts`.
+  - **Installer**: the IIS payload (`install.sh _iis_setup_powershell` — Azure
+    run-command + AWS UserData — and `install.ps1 -Setup iis`) already binds
+    an SNI hostname listener + certificate SAN when given a name; AWS never
+    had one at UserData time, so with no `-Fqdn` the payload now asks EC2 IMDS
+    (IMDSv2, 2 s budget) for the instance's public DNS — the exact name the
+    control plane records and dispatches to.
+  - **`shared/http-stacks.json`: `iis` back to `h3: true`** (C#/TS/Rust
+    manifest tests, `docs/probes.md`); the config-create 422 / UI grey-out /
+    matrix trimming gates now offer `http3`/`pageload3`/`browser3`/
+    `download3`/`upload3` on IIS.
+  - **Lab**: every target gets a labnet DNS alias `target-N.lab`; the Windows
+    VM's IIS is set up with `install.ps1 -Setup iis -Fqdn target-N.lab` and its
+    deployment is registered with `endpoint_hosts:["target-N.lab"]`, so
+    validate phase 2 runs the full iis matrix incl. h3 by hostname
+    (`http3 2/2 · pageload3 2/2` measured). A VM disk installed by an older
+    `lab.sh` is upgraded in place — `up` checks the certificate served for
+    SNI `target-N.lab` and re-runs the installer's IIS setup inside the VM
+    over SSH when the name is missing (`lab.sh windows-iis-refresh`).
+
+- **Lab: Windows Server VM runners** — `lab.sh up --runners N
+  --windows-runners M` adds M dockur/windows (QEMU + KVM) VMs numbered
+  `runner-(N+1)..runner-(N+M)` next to the Linux runner containers, on the
+  same pattern as the Windows target: first boot runs the checkout's
+  `install.ps1 -Yes -Component tester` (the RELEASED
+  `networker-tester.exe` — Windows binaries can't be cross-built on the Linux
+  host) plus **the C# agent published from the checkout** (`Networker.Agent`
+  win-x64 self-contained, built in the dotnet SDK image with BuildKit
+  `--output`, or with the host dotnet via `LAB_WIN_AGENT_BUILD=host`), then
+  runs the agent as a **SYSTEM `schtasks /SC ONSTART` task** with the cloud
+  bootstraps' `AGENT_DASHBOARD_URL` / `AGENT_API_KEY` (+ `AGENT_NAME`,
+  `AGENT_TESTER_PATH`) contract, so a `down` + `up` reboot reconnects on its
+  own. `lab.sh` mints the key and agent row like for Linux runners AND binds
+  the agent to a `project_tester` row (cloud docker, region lab, power_state
+  running, os windows), because the public launch API pins a run to a runner
+  only through `LaunchRequest.tester_id`. `status` shows os / capabilities /
+  tester per runner; `wait-windows`, `windows-log runner-K`, `windows-ssh
+  runner-K` cover runners too. Persistent disk `nwk-lab[N]_windows-runner-
+  storage-K`; console `LAB_WINDOWS_VIEWER_PORT+10+K-1`. Files:
+  `lab/images/windows/oem-runner/`, `lab/images/agent-win.Dockerfile`.
+- **Lab: `validate.sh` phase 6 — Windows runner runs the same tests.** For
+  every online agent with `os=windows` (bound tester): asserts the heartbeat
+  reports `os=windows` and `capabilities {chrome:false,tshark:false}`, then
+  launches the phase-1 network modes (tcp,dns,tls,tlsresume,http1,http2,
+  http3,curl,ping — ping via IcmpSendEcho on Windows) and the phase-2 proxy
+  matrix through the first Linux proxy target (nginx: incl. http3/pageload3,
+  websocket, udp, stamp) **pinned to it** (`tester_id`), asserts the run
+  executed on that agent (`worker_id`) with every mode ≥1 success, `native`
+  dropped, and prints any mode whose verdict differs from the Linux runner's
+  phase-1/2 runs on the same target. Skipped with a note without a Windows
+  runner. Phases 1-5 unchanged (fan-out now spreads across Linux + Windows).
+- **Lab: multiple instances** — `LAB_INSTANCE=N` (default 1) → compose
+  project `nwk-lab` / `nwk-labN`, `LAB_NET_PREFIX` `172.31.(99+N)`, host ports
+  5030 / 8088 / 55432 shifted by N-1 (Windows consoles by 100·(N-1)), state
+  in `lab/.state[-N]`, topology in `lab/.generated[-N]`, per-project volume
+  names, and the control plane's Docker (local) provider joins that
+  instance's network (`DASHBOARD_DOCKER_NETWORK=${LAB_PROJECT}_labnet`).
+  `validate.sh` follows `LAB_INSTANCE` too. Everything else — `LAB_CP_PORT`
+  & co — still overrides. Plus `LAB_IMAGE_TAG` (default `local`) to give a
+  checkout its own image tags, and `lab.sh compose <args>` (raw compose with
+  the instance's project/files/env).
+- **Agent heartbeat carries `os` + `arch`** (additive, omitted when null;
+  the `health` verb's vocabulary: `windows|linux|macos`, `x86_64|aarch64|…`);
+  the control plane persists them on `agent.os` / `agent.arch` (guarded,
+  steady-state heartbeat stays write-free) so a mixed Linux + Windows runner
+  pool is visible per runner in `GET /api/projects/{id}/agents` — nothing had
+  ever written those columns.
+
+### Fixed
+- **Lab Windows VM: multi-packet QUIC stalled** (`pageload3` 0/N against IIS
+  and the bare Windows endpoint, ~1 s QUIC handshakes — the "sporadic
+  H3_INTERNAL_ERROR" noted in v0.28.208): the guest's virtio NIC ships with
+  UDP Segmentation Offload on and the USO super-datagrams msquic emits do not
+  survive dockur's tap/DNAT path. `lab-setup.ps1` and the refresh script now
+  disable USO on the adapter (persists across reboots); QUIC handshakes are
+  ~1-2 ms and pageload3 is 50/50. dockur/virtio-specific — cloud VMs
+  (Hyper-V netvsc / ENA) are not affected.
+- **Config-create gate applies the target's LIVE capabilities** (rule 3,
+  `POST /api/v2/projects/{id}/test-configs`). For `proxy` targets the
+  server now also consults the endpoint's `/health` `services`
+  self-report — the udp / stamp / UDP-throughput listeners can be
+  disabled per instance, and IIS / other proxies may not forward every
+  route — and rejects a mode the target cannot serve with **422** and the
+  endpoint's own reason (the text the wizard already shows, e.g.
+  `'udp' UDP echo listener disabled on this target`); the message names
+  the reporting host(s) and the report's age. The kind and HTTP/3-by-stack
+  rules are unchanged and still win when they apply.
+- **Never slow, never flaky**: the create path reads a per-host cache
+  only (`LiveCapabilityCache`, 90 s TTL) and never probes — a miss or a
+  stale entry fails OPEN (kind / stack rules still apply) and queues ONE
+  background refresh so the next attempt is informed. The deployment
+  `GET …/deployments/{id}/capabilities` route (the wizard's live probe)
+  writes through to the cache, so a config created from the UI is
+  normally gated at zero network cost; a multi-host deployment is
+  narrowed only when EVERY host has a fresh report and all of them say a
+  mode is off (the wizard's rule). The response now also carries
+  `live_capabilities_age_secs` / `live_capabilities_ttl_secs` so a client
+  knows how long the server will trust that snapshot.
+- Docs: `docs/probes.md` capability table names the third axis and its
+  fail-open contract.
+
+### Changed
+- `lab.sh up --runners N` keeps meaning N **Linux** runners; the state file's
+  `LAB_RUNNERS` is the total (N + Windows), `LAB_WINDOWS_RUNNERS` the Windows
+  count. Windows target consoles: the first target on
+  `LAB_WINDOWS_VIEWER_PORT`, further Windows targets +1 each (was: every
+  Windows target on the same host port).
+
+---
+
 ## [0.28.209] - 2026-08-16
 
 ### Fixed

@@ -124,6 +124,29 @@ public class ProtocolWireTests
     }
 
     [Fact]
+    public void Heartbeat_omits_os_arch_when_null_and_writes_the_host_words_when_set()
+    {
+        // Additive (v0.28.210+): absent → previous shape byte-for-byte…
+        var bare = Encode(new HeartbeatMessage(Load: null, Version: "0.28.210"));
+        using (var doc = JsonDocument.Parse(bare))
+        {
+            Assert.False(doc.RootElement.TryGetProperty("os", out _));
+            Assert.False(doc.RootElement.TryGetProperty("arch", out _));
+        }
+
+        // …and flat "os"/"arch" strings when the runner reports its host.
+        var json = Encode(new HeartbeatMessage(Load: null, Version: "0.28.210",
+            Os: RunnerCapabilities.HostOs, Arch: RunnerCapabilities.HostArch));
+        using var withHost = JsonDocument.Parse(json);
+        Assert.Equal(RunnerCapabilities.HostOs, withHost.RootElement.GetProperty("os").GetString());
+        Assert.Equal(RunnerCapabilities.HostArch, withHost.RootElement.GetProperty("arch").GetString());
+        // The words are the health-verb vocabulary, never a raw runtime string on
+        // the platforms CI runs on.
+        Assert.Contains(RunnerCapabilities.HostOs, new[] { "windows", "linux", "macos" });
+        Assert.Contains(RunnerCapabilities.HostArch, new[] { "x86_64", "aarch64", "x86", "arm" });
+    }
+
+    [Fact]
     public void RunnerCapabilities_detection_never_throws_and_honours_the_chrome_env_override()
     {
         // Detection is best-effort on any box (CI has no Chrome); it must simply

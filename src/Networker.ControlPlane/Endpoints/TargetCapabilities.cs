@@ -103,12 +103,61 @@ public static class TargetCapabilities
     }
 
     /// <summary>
+    /// One host's capability report — the typed form of the wire object the
+    /// deployment <c>/capabilities</c> route returns (<see cref="ToWire"/>) and
+    /// what <see cref="LiveCapabilityCache"/> stores for the config-create
+    /// gate. <see cref="Unsupported"/> is null when the host is unreachable or
+    /// runs a pre-0.28.202 endpoint (no <c>services</c> self-report) — "no
+    /// knowledge", never "everything supported".
+    /// </summary>
+    public sealed record HostCapabilityReport(
+        string Host,
+        bool Reachable,
+        string? Version,
+        JsonElement? Services,
+        IReadOnlyList<string>? Supported,
+        IReadOnlyList<KeyValuePair<string, string>>? Unsupported)
+    {
+        /// <summary>True when the host self-reported its listeners (the live
+        /// gate may narrow modes); false = unreachable or too old to report.</summary>
+        public bool HasReport => Unsupported is not null;
+
+        /// <summary>mode → reason for the modes this host reports off; empty when
+        /// there is no report.</summary>
+        public IReadOnlyDictionary<string, string> UnsupportedMap()
+        {
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (Unsupported is not null)
+            {
+                foreach (var kv in Unsupported)
+                {
+                    map.TryAdd(kv.Key, kv.Value);
+                }
+            }
+            return map;
+        }
+
+        /// <summary>The snake_case wire shape (<c>host / reachable / version /
+        /// services / supported_modes / unsupported_modes</c>).</summary>
+        public object ToWire() => new
+        {
+            host = Host,
+            reachable = Reachable,
+            version = Version,
+            services = Services is { } s ? (object?)s : null,
+            supported_modes = Supported,
+            unsupported_modes = Unsupported?.Select(kv => new { mode = kv.Key, reason = kv.Value }).ToList(),
+        };
+    }
+
+    /// <summary>
     /// Probe one deployment host's /health (HTTPS :8443 then HTTP :8080,
     /// concurrently under the shared budget, self-signed accepted — the
     /// <see cref="VersionEndpoints.ProbeEndpointVersionAsync"/> posture) and
-    /// return its capability report. Never throws.
+    /// return its capability report. Never throws; a dead host resolves in
+    /// ~1.5s as <c>reachable: false</c>.
     /// </summary>
-    public static async Task<object> ProbeHostAsync(string host)
+    public static async Task<HostCapabilityReport> ProbeHostAsync(string host)
     {
         using var handler = new HttpClientHandler
         {
@@ -125,31 +174,38 @@ public static class TargetCapabilities
         var body = Array.Find(bodies, b => b is not null);
         if (body is null)
         {
-            return new { host, reachable = false, version = (string?)null, services = (object?)null, supported_modes = (object?)null, unsupported_modes = (object?)null };
+            return new HostCapabilityReport(host, false, null, null, null, null);
         }
 
-        using var doc = JsonDocument.Parse(body);
-        var root = doc.RootElement;
-        var version = root.TryGetProperty("version", out var v) && v.ValueKind == JsonValueKind.String
-            ? v.GetString()
-            : null;
+        return ParseHealth(host, body);
+    }
 
-        if (!root.TryGetProperty("services", out var services) || services.ValueKind != JsonValueKind.Object)
+    /// <summary>Map a /health body onto a <see cref="HostCapabilityReport"/>
+    /// (reachable = true). A body without <c>services</c> (pre-0.28.202) yields
+    /// a report with no capability knowledge; a malformed body likewise.</summary>
+    public static HostCapabilityReport ParseHealth(string host, string body)
+    {
+        try
         {
-            // Pre-0.28.202 endpoint: reachable, but it cannot self-report yet.
-            return new { host, reachable = true, version, services = (object?)null, supported_modes = (object?)null, unsupported_modes = (object?)null };
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            var version = root.TryGetProperty("version", out var v) && v.ValueKind == JsonValueKind.String
+                ? v.GetString()
+                : null;
+
+            if (!root.TryGetProperty("services", out var services) || services.ValueKind != JsonValueKind.Object)
+            {
+                // Pre-0.28.202 endpoint: reachable, but it cannot self-report yet.
+                return new HostCapabilityReport(host, true, version, null, null, null);
+            }
+
+            var (supported, unsupported) = MapServices(services);
+            return new HostCapabilityReport(host, true, version, services.Clone(), supported, unsupported);
         }
-
-        var (supported, unsupported) = MapServices(services);
-        return new
+        catch (JsonException)
         {
-            host,
-            reachable = true,
-            version,
-            services = services.Clone(),
-            supported_modes = supported,
-            unsupported_modes = unsupported.Select(kv => new { mode = kv.Key, reason = kv.Value }).ToList(),
-        };
+            return new HostCapabilityReport(host, true, null, null, null, null);
+        }
     }
 
     private static async Task<string?> FetchOneAsync(HttpClient client, string url)

@@ -17,17 +17,21 @@ network exactly like the cloud VMs will run it.
 │  target-2 .102  nginx     endpoint + nginx 8081/8444 (install.sh --setup-stack)  │
 │  target-3 .103  caddy     endpoint + caddy 8091/8454   … apache/haproxy/traefik  │
 │  target-4 .104  windows   Windows Server VM (KVM): install.ps1 endpoint 8080/8443 │
-│                           + IIS 8082/8445 (h1/h2; h3 needs SNI) [Linux + KVM] │
+│      = target-4.lab       + IIS 8082/8445 (h1/h2/h3 — SNI binding target-4.lab) [KVM] │
 │                                                                                  │
 │  runner-1 .201  Networker.Agent + networker-tester  (AGENT_API_KEY, WS to CP)     │
 │  runner-2 .202  …                                                                 │
+│  runner-3 .203  windows   Windows Server VM (KVM): install.ps1 tester (release exe)│
+│                           + the checkout's agent as a SYSTEM ONSTART task        │
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 Works on macOS (Apple Silicon or Intel) and Linux. Needs **Docker (compose
 v2), curl, jq** — nothing else; Rust, .NET and Node build inside Docker for
 the container's native arch. `lab.sh` is bash-3.2-clean. The optional
-[Windows (IIS) target](#windows-iis-target) additionally needs Linux + KVM.
+[Windows (IIS) target](#windows-iis-target) and [Windows runners](#windows-runners)
+additionally need Linux + KVM. Several labs can run side by side
+([`LAB_INSTANCE`](#multiple-instances-lab_instance)).
 
 ## Quick start
 
@@ -49,24 +53,28 @@ mounts). `up` builds anything missing; after code changes run `build` again
 | Command / flag | What it does |
 |---|---|
 | `up --targets rust,nginx,caddy,apache,haproxy,traefik` | one target container per entry; `rust` = bare endpoint, others = endpoint + that proxy set up **by the real `install.sh --setup-stack`** at image build |
-| `up --targets rust,nginx,windows` (`iis` = alias) | + a **Windows Server VM** running the real `install.ps1` (endpoint + IIS; h1/h2 through IIS, h3 on the bare endpoint) — see [Windows (IIS) target](#windows-iis-target); Linux + KVM only, first boot 15-40 min (14 min measured: 6 GB ISO at ~35 MB/s + install + install.ps1 + reboot); `--windows-async` returns immediately, `wait-windows` / `windows-log [-f]` / `windows-ssh` afterwards |
+| `up --targets rust,nginx,windows` (`iis` = alias) | + a **Windows Server VM** running the real `install.ps1` (endpoint + IIS with an SNI hostname binding → h1/h2/h3 through IIS) — see [Windows (IIS) target](#windows-iis-target); Linux + KVM only, first boot 15-40 min (14 min measured: 6 GB ISO at ~35 MB/s + install + install.ps1 + reboot); `--windows-async` returns immediately, `wait-windows` / `windows-log [-f]` / `windows-ssh` afterwards |
+| `up --runners 1 --windows-runners 1` | + one **Windows Server VM runner** (`runner-2`): the checkout's `install.ps1 -Component tester` (released `networker-tester.exe`) + the checkout's `Networker.Agent` (win-x64 publish) as a SYSTEM ONSTART task, registered + bound to a `project_tester` row so runs can be pinned to it — see [Windows runners](#windows-runners); Linux + KVM only, first boot ~15 min, reboot ~1 min |
+| `LAB_INSTANCE=2 ./lab/lab.sh up …` | a second, fully independent lab (project `nwk-lab2`, `172.31.101.0/24`, ports 5031/8089/55433, `lab/.state-2`) — see [Multiple instances](#multiple-instances-lab_instance) |
 | `up --netem "delay 40ms 5ms loss 0.1%"` | WAN emulation on every runner (`tc netem`, NET_ADMIN is granted) |
 | `up --ui` | build + serve the React SPA at http://127.0.0.1:8088 (nginx proxies /api + /ws like prod) — login `admin@lab.local` / `LabAdmin-Pass1!` |
 | `up --agents-via-ui` | runners connect through the nginx WS proxy (`ws://ui/ws/agent`) instead of the control plane directly — exercises the proxied WebSocket path |
 | `validate --modes tcp,http1 --runs 5 --only 2 / --skip 3,4` | shrink or select phases |
 | `tester runner-1 -- --target https://172.31.100.102:8444/health --modes http3 --insecure` | run `networker-tester` directly inside a runner (bypasses the control plane) |
-| `logs [svc] -f`, `shell <svc>`, `psql`, `env` | the usual |
-| `LAB_CP_PORT / LAB_UI_PORT / LAB_PG_PORT / LAB_NET_PREFIX` | host ports and the /24 (defaults 5030 / 8088 / 55432 / 172.31.100) |
+| `logs [svc] -f`, `shell <svc>`, `psql`, `env`, `compose <args>` | the usual (`compose` = raw `docker compose` with this instance's project, files and env) |
+| `LAB_IMAGE_TAG=mybranch` | tag for the `nwk-lab/*` images (default `local`, shared by every instance). Set one per checkout when two labs build from different trees at once — a concurrent `lab.sh build` elsewhere re-tags `:local` |
+| `LAB_CP_PORT / LAB_UI_PORT / LAB_PG_PORT / LAB_NET_PREFIX` | host ports and the /24 (defaults 5030 / 8088 / 55432 / 172.31.100 for instance 1; shifted per `LAB_INSTANCE`) |
 
 ## What `validate` asserts
 
 | Phase | Drives | Catches |
 |---|---|---|
 | 1 network probe | `kind=network` config → target-1 rust endpoint :8443 (insecure); tcp,dns,tls,tlsresume,http1,http2,http3,curl,ping | run reaches `completed`, attempts persisted, every mode ≥1 success (P0-1/P0-2 class) |
-| 2 proxy matrix | for **every** proxy target: `kind=proxy` config (deployment id + stack) → the dispatcher resolves ip:stack-port + injects `insecure`; the deterministic HTTP/TCP/UDP matrix incl. download/upload/pageload*/websocket/udp/stamp, plus `native`. A `windows` target is validated as stack **`iis`** (:8445; the manifest says `h3: false` for iis, so h3 modes are excluded there) **and** as a bare Windows endpoint on :8443 (`kind=network`, the phase-1 modes incl. `http3`) | a stack that stops forwarding a route (v0.28.112 class), a mode broken through a proxy (v0.28.118 class), `native` not dropped by dispatch, 404s; HTTP/3 modes are expected only on stacks `shared/http-stacks.json` marks `h3: true` — the `iis` entry was measured here (see below) |
+| 2 proxy matrix | for **every** proxy target: `kind=proxy` config (deployment id + stack) → the dispatcher resolves ip:stack-port + injects `insecure`; the deterministic HTTP/TCP/UDP matrix incl. download/upload/pageload*/websocket/udp/stamp, plus `native`. A `windows` target is validated as stack **`iis`** (:8445, dispatched **by hostname** `target-N.lab` — the deployment's `endpoint_hosts[0]` — so the QUIC handshake carries SNI and `http3`/`pageload3` are in the matrix) **and** as a bare Windows endpoint on :8443 (`kind=network`, the phase-1 modes incl. `http3`) | a stack that stops forwarding a route (v0.28.112 class), a mode broken through a proxy (v0.28.118 class), `native` not dropped by dispatch, 404s; HTTP/3 modes are expected only on stacks `shared/http-stacks.json` marks `h3: true` — the `iis` entry was measured here (see below) |
 | 3 fan-out | 2×runners launches at once | all complete **and** dispatch spreads across ≥2 workers |
 | 4 cancel | long run → cancel | terminal `cancelled`, not `completed`/stuck |
 | 5 provider | the **Docker (local) cloud provider** through the public API: `POST /testers {cloud:"docker"}` → the control plane `docker run`s a runner and its agent comes online (`running`/`idle`); `POST /deployments` with one `provider:"docker"` endpoint behind nginx → `completed` with an `endpoint_ip`; a proxy-kind config against that deployment pinned to that tester (`LaunchRequest.tester_id`) → run completes with successes on that agent; `DELETE` both → the containers are gone (`docker ps -a --filter label=networker.role`) | the create-tester → provision → agent-online path, the deploy runner, the tester/deployment delete teardown, the proxy resolver — with zero VM cost. Skipped with a note when `GET /api/version` says `docker_provider=false` |
+| 6 windows runner | for every online agent with `os=windows` ([Windows runners](#windows-runners)): the heartbeat reports `os=windows` + `capabilities {chrome:false,tshark:false}`; the phase-1 network modes and the phase-2 proxy matrix through the first Linux proxy target (nginx) launched **pinned to it** (`tester_id` of the bound `project_tester`) execute on that agent (`worker_id`) with every mode ≥1 success, `native` dropped; modes whose verdict differs from the Linux runner's phase-1/2 runs on the same target are listed | "a Windows runner runs the same tests as a Linux runner": the Windows tester build (ping via `IcmpSendEcho`, http3, websocket, udp/stamp through nginx), the C# agent on Windows (process spawning, path handling, ONSTART persistence), tester pinning. Skipped with a note without a Windows runner |
 
 Every assertion failure prints the run id, per-mode ok/total and the first
 distinct error messages; `lab.sh logs runner-N` / `logs controlplane` have the
@@ -104,11 +112,21 @@ and what IIS as set up by the installer really serves on :8445. The first run
 (v0.28.208) settled the `iis` row of `shared/http-stacks.json`, which gates
 the UI/API mode pickers: **HTTP/1.1 and HTTP/2 yes** (after fixing the
 tester's h2 requests, which http.sys rejected for missing `:scheme`/`:authority`),
-**websocket yes** (after adding the `/ws` ARR rule), **HTTP/3 no on the proxy
-path** — http.sys answers QUIC only to clients sending TLS SNI, and the
-platform addresses endpoint VMs by IP, so `iis` is `h3: false` until proxy
-targets are resolved by hostname. With SNI the tester did get HTTP/3 200s from
-IIS, so the installer's HTTP/3 setup itself is sound.
+**websocket yes** (after adding the `/ws` ARR rule), and — since v0.28.211 —
+**HTTP/3 yes**: http.sys answers QUIC only to clients sending TLS SNI, so the
+platform now addresses the target **by hostname**. The lab gives every target
+a labnet DNS alias `target-N.lab` (docker's embedded DNS answers it for the
+runners and the control plane), the Windows VM's IIS is set up with
+`install.ps1 -Setup iis -Fqdn target-N.lab` (SNI binding + certificate SAN),
+and `lab.sh up` registers the deployment with `endpoint_hosts:["target-N.lab"]`
+(V050) — exactly what a cloud Windows VM gets from its Azure DNS label / AWS
+public DNS. The proxy resolver hands the tester `https://target-N.lab:8445`,
+the QUIC ClientHello carries SNI, and validate phase 2 measures
+`http3 2/2 · pageload3 2/2` through IIS. A VM disk installed by an older
+`lab.sh` (IIS bound without a hostname) is upgraded in place: `up` checks the
+certificate served for SNI `target-N.lab` and, if the name is missing, re-runs
+the installer's IIS setup inside the VM over SSH (`windows-iis-refresh`, ~2-4
+min, no reinstall).
 
 Docker on Linux cannot run Windows containers, so the target is a VM inside a
 container: [dockur/windows](https://github.com/dockur/windows) (QEMU + KVM),
@@ -136,8 +154,8 @@ the UDP ports exactly like any other target.
   cross-built on the Linux host). What IS the checkout's is `install.ps1`
   itself (copied in through `/oem`) — its endpoint install path (release
   download without `gh`, VC++ runtime) and its `-Setup iis` are the code under test.
-* Runners stay Linux; a Windows **runner** (tester + agent on Windows) is out
-  of scope for the lab.
+* Runners are Linux containers unless you add [Windows runners](#windows-runners)
+  (`--windows-runners M`) — Windows Server VMs on the same dockur pattern.
 
 **What runs inside the VM** (`lab/images/windows/oem/lab-setup.ps1`, invoked
 once by dockur from `C:\OEM\install.bat` after setup): fixed local admin
@@ -156,13 +174,102 @@ says so), so there is no nginx-on-Windows target.
 ./lab/lab.sh up … --windows-async && ./lab/lab.sh wait-windows # or don't block
 ./lab/lab.sh windows-log target-3 -f     # the VM's setup log + status (installing|endpoint|iis|rebooting|ready|failed:*)
 ./lab/lab.sh windows-ssh target-3        # ssh Docker@172.31.100.103 (password printed) — PowerShell prompt
+./lab/lab.sh windows-iis-refresh target-3 # re-run install.ps1 -Setup iis -Fqdn target-3.lab inside the VM (SNI/H3 binding)
 open http://127.0.0.1:8006               # dockur's VM console (LAB_WINDOWS_VIEWER_PORT)
-./lab/lab.sh validate                    # phase 2: matrix through iis :8445 (h1/h2 modes) + network modes incl. http3 on :8443
+./lab/lab.sh validate                    # phase 2: matrix through iis :8445 (h1/h2/h3 by hostname) + network modes incl. http3 on :8443
 ```
 
 `lab.sh up` registers the target as a completed deployment named
-`lab-target-N-iis` with `http_stacks:["iis"]`, os `windows`, so a proxy-kind
-config resolves to `<ip>:8445` exactly like a cloud Windows endpoint VM.
+`lab-target-N-iis` with `http_stacks:["iis"]`, os `windows`,
+`endpoint_ips:["<ip>"]` and `endpoint_hosts:["target-N.lab"]`, so a
+proxy-kind config resolves to `target-N.lab:8445` exactly like a cloud Windows
+endpoint VM whose deploy recorded its DNS name (`LAB_TARGET_DOMAIN` changes
+the suffix).
+
+## Windows runners
+
+`--windows-runners M` adds M **Windows Server VM runners** — the tester side
+of the Windows story: does the Windows build of `networker-tester` + the C#
+agent *on Windows* execute the same probe matrix a Linux runner does, driven
+by the real control plane through the real agent protocol? (The
+[native Windows lab](#native-windows-lab) answers this on a Windows host; this
+answers it from a Linux box, next to Linux runners, in one lab.)
+
+```bash
+./lab/lab.sh up --ui --runners 1 --windows-runners 1 --targets rust,nginx   # runner-1 linux, runner-2 windows VM
+./lab/lab.sh status                       # RUNNER … OS … CAPABILITIES … tester <id>; windows VM status line
+./lab/lab.sh windows-log runner-2 -f      # the VM's setup log (installing|tester|agent|ready|failed:*)
+./lab/lab.sh windows-ssh runner-2 -- 'Get-Content C:\lab\agent.log -Tail 30'
+./lab/lab.sh validate                     # phases 1-5 as before (fan-out spreads over both) + phase 6 pinned to the Windows runner
+./lab/lab.sh down && ./lab/lab.sh up …    # the VM disk persists: reboot ~1 min, the agent (ONSTART task) reconnects by itself
+```
+
+Runners are numbered Linux first: `--runners N --windows-runners M` gives
+`runner-1..N` (containers, `.201+`) and `runner-(N+1)..runner-(N+M)` (VMs,
+same `.20K` IPs). Same VM plumbing as the target — `dockurr/windows`, KVM,
+`/oem` first-boot hook, `/shared` status share, a persistent named volume
+`nwk-lab[N]_windows-runner-storage-K`, console on
+`LAB_WINDOWS_VIEWER_PORT+10+K-1` (8016 for runner-2, instance 1) — sized
+`LAB_WINDOWS_RUNNER_RAM/CPUS/DISK` (4G / 2 / 32G).
+
+**What runs inside** (`lab/images/windows/oem-runner/lab-runner-setup.ps1`,
+once, from `C:\OEM\install.bat`): password + OpenSSH + firewall (SSH only —
+a runner dials out); **`install.ps1 -Yes -Component tester`** (the checkout's
+installer, copied in via `/oem`) → the **released** `networker-tester.exe`
+(+ VC++ runtime) — copied to `C:\networker\networker-tester.exe`; the
+**checkout's `Networker.Agent`** (published win-x64 self-contained by
+`lab.sh` into `/oem/agent` — inside the dotnet SDK image with BuildKit
+`--output`, `lab/images/agent-win.Dockerfile`; or with your host dotnet when
+`LAB_WIN_AGENT_BUILD=host`) → `C:\networker\agent\`; then the cloud Windows
+tester VMs' env contract (`AGENT_DASHBOARD_URL=ws://<cp ip>:5030/ws/agent`,
+`AGENT_API_KEY`, `AGENT_NAME=runner-K`, `AGENT_TESTER_PATH`) as machine env
+vars + a wrapper `C:\networker\run-agent.cmd`, persisted as **`schtasks
+/SC ONSTART /RU SYSTEM` task `NetworkerAgent`** and started through that same
+task (log `C:\lab\agent.log`). Status/log go to `\\host.lan\Data` =
+`lab/.generated[-N]/windows-runner-K/shared/`; `lab.sh up` waits until the
+agent is **online at the control plane** (≤ `LAB_WINDOWS_TIMEOUT`).
+
+**Registration**: `lab.sh` mints the key and inserts the `agent` row exactly
+like for Linux runners (tags `{"lab":true,"os":"windows"}`), and additionally
+inserts a `project_tester` row (`lab-runner-K-windows`, cloud `docker`, region
+`lab`, `power_state running`, `requested_os windows`, auto-shutdown off) and
+sets `agent.tester_id` to it — because the public launch API pins a run to a
+runner only through `LaunchRequest.tester_id` (`RunDispatcher` tester
+affinity: the agent *bound* to that project_tester wins). That is what
+validate.sh phase 6 uses; the Linux runners stay standalone so fan-out spreads
+freely.
+
+**Not built from the checkout**: the Windows *tester* is the released
+`networker-tester.exe` (x86_64-pc-windows-msvc is built on `windows-latest`
+in release.yml; there is no cross-toolchain here). The *installer*
+(`install.ps1 -Component tester`), the *agent* (published from `src/`) and
+the *control plane* it talks to are the checkout's.
+
+**Expected Windows differences** (phase 6 prints them; the native lab lists
+the same): no Chrome / no tshark → `capabilities {chrome:false,tshark:false}`
+(browser* modes are not in the matrix; `capture_mode: headers-only` degrades
+to a warning inside the tester and the attempt still succeeds); `ping` uses
+`IcmpSendEcho` (works without elevation, no `ping_group_range`); the h3 modes
+through nginx and against the bare endpoint DO run (the release build carries
+`http3`).
+
+## Multiple instances (`LAB_INSTANCE`)
+
+`LAB_INSTANCE=N` (default 1) makes every command act on an independent lab:
+
+| | instance 1 (default) | instance N |
+|---|---|---|
+| compose project / containers | `nwk-lab` / `nwk-lab-runner-1-1` … | `nwk-labN` / `nwk-labN-runner-1-1` … |
+| network | `172.31.100.0/24` (`nwk-lab_labnet`) | `172.31.(99+N).0/24` (`nwk-labN_labnet`) |
+| host ports cp / ui / pg | 5030 / 8088 / 55432 | +N-1 each |
+| Windows consoles | 8006+ | +100·(N-1) |
+| state / topology | `lab/.state/`, `lab/.generated/` | `lab/.state-N/`, `lab/.generated-N/` |
+| Windows VM volumes | `nwk-lab_windows-storage-N`, `…_windows-runner-storage-K` | `nwk-labN_…` |
+| Docker (local) provider containers | join `nwk-lab_labnet` | join `nwk-labN_labnet` (`DASHBOARD_DOCKER_NETWORK`) |
+
+Images (`nwk-lab/*:local`) are shared — pass `LAB_IMAGE_TAG` per checkout
+when two trees build concurrently. All `LAB_*` overrides still apply on top;
+`validate.sh` follows `LAB_INSTANCE` too (`lab.sh validate` passes it).
 
 ## What is (and isn't) faithful
 
@@ -183,7 +290,8 @@ Faithful — same code paths as production:
 * **Registration**: runners are `agent` rows (standalone, no `project_tester`)
   with only the SHA-256 of the key stored — the same INSERT the create-tester
   path performs minus the VM; proxy targets are `completed` deployments with
-  `endpoint_ips` + `http_stacks`, exactly what the proxy-kind resolver reads.
+  `endpoint_ips` + `http_stacks` (+ `endpoint_hosts` for the Windows target),
+  exactly what the proxy-kind resolver reads.
 * **Cloud provisioning path — via the Docker (local) provider**: the control
   plane runs with `DASHBOARD_DOCKER_PROVIDER=1` and the host's docker socket
   mounted, so a runner created with cloud `docker` (UI: "Docker (local)" in
@@ -210,12 +318,15 @@ Not faithful (documented gaps):
   with `provider: lan` can be pointed at containers.)
 * **Docker provider limits**: one `http_stack` per docker endpoint (one
   container = one ip = one stack, which is how the proxy resolver reads
-  `endpoint_ips[0]`); no reference-API `languages` on docker targets (the
+  `endpoint_hosts[0]` / `endpoint_ips[0]` — docker deployments record the
+  container name as the hostname, resolvable on the lab network); no reference-API `languages` on docker targets (the
   target images ship the endpoint + proxy stacks only); Linux only.
-* **Windows target ≠ built from the checkout**: the Windows endpoint binary is
-  the released one (see above); the Windows *installer* is the checkout's.
-  No Windows **runners** in Docker — that is what the [native Windows lab](#native-windows-lab)
-  below is for (IIS via the real cloud payload, Windows runner).
+* **Windows target / runner ≠ fully built from the checkout**: the Windows
+  endpoint and tester binaries are the released ones (see above); the Windows
+  *installer*, the *agent* (Windows runners) and the control plane are the
+  checkout's. The [native Windows lab](#native-windows-lab) below builds the
+  Windows tester from source on a Windows host (and uses the real cloud IIS
+  payload).
 * The bare `rust` target is only reachable as a `network` kind (there is no
   "direct endpoint" proxy stack in the product), so endpoint-only modes run
   through the proxy targets.
@@ -290,12 +401,12 @@ What legitimately differs on Windows / on a hosted runner — surfaced, not hidd
   `-Fqdn` it restarts http.sys (best effort) and **probes** http3 with the
   built tester — h3 modes stay in the iis matrix only when that probe
   succeeds. `http3`/`pageload3` are still exercised against the bare Windows
-  endpoint in phase 1. (The Docker lab's Windows VM measured the same thing
-  the other way round — with SNI the tester gets HTTP/3 200s from IIS, by
-  IP it never can — so `shared/http-stacks.json` now says `iis: h3=false`:
-  the proxy resolver hands the tester `endpoint_ips[0]`, an IP literal, and
-  an IP literal carries no SNI. Flip it back when proxy targets are resolved
-  by hostname; see the [Windows (IIS) target](#windows-iis-target) section.)
+  endpoint in phase 1. (The Docker lab's Windows VM is dispatched by its
+  labnet hostname with a matching SNI binding, which is why `shared/http-stacks.json`
+  says `iis: h3=true` — the manifest describes what the managed path does;
+  the native lab's IP-literal default is the exception it documents. With
+  `-Fqdn` the native lab registers the target under that name too; see the
+  [Windows (IIS) target](#windows-iis-target) section.)
 * **`install.ps1 -Setup iis`** was an HTTP-only stub until v0.28.208 (site on
   8082, no 8445 / ARR / H3); it is now the twin of the cloud payload (the
   Docker lab's Windows VM runs it), so `-IisSetup installer` is a valid
@@ -327,17 +438,37 @@ lab/
     target.Dockerfile     endpoint (+ install.sh --setup-stack $STACK at build) on ubuntu:24.04
     target/systemctl      the systemd shim
     target/entrypoint.sh  starts endpoint, then the stack via the shim; keeps both alive
-    windows/oem/          the Windows VM's first-boot hook (install.bat → lab-setup.ps1 →
+    windows/oem/          the Windows TARGET VM's first-boot hook (install.bat → lab-setup.ps1 →
                           install.ps1 endpoint + -Setup iis; lab-postboot.ps1 after the reboot);
                           staged with the checkout's install.ps1 into .generated/windows-N/oem
+    windows/oem-runner/   the Windows RUNNER VM's first-boot hook (install.bat → lab-runner-setup.ps1 →
+                          install.ps1 tester + the checkout's agent as a SYSTEM ONSTART task);
+                          staged with install.ps1 + the agent publish into .generated/windows-runner-K/oem
+    agent-win.Dockerfile  Networker.Agent win-x64 self-contained publish (BuildKit --output → oem/agent)
     runner/entrypoint.sh  optional netem, then exec networker-agent
     ui.Dockerfile, ui/nginx.conf
-  .generated/topology.yml, .state/   (git-ignored) generated services, keys, token, project id
-  .generated/windows-N/{oem,shared}  (git-ignored) the VM's /oem payload + its log/status share
+  .generated[-N]/topology.yml, .state[-N]/   (git-ignored) generated services, keys, token, project id
+  .generated[-N]/windows-N/{oem,shared}      (git-ignored) the target VM's /oem payload + its log/status share
+  .generated[-N]/windows-runner-K/{oem,shared} (git-ignored) the runner VM's /oem payload (+ agent/) + share
   native/
     lab-native.ps1        native Windows twin (build/up/validate/status/logs/env/down) — drives validate.sh via Git Bash
     .state/               (git-ignored) bin/, publish/, logs/, lab.env, runner-1.key, iis-setup.ps1, pids.json
 ```
+
+## Bugs the hostname/HTTP/3 run found (v0.28.211, fixed in the same PR)
+
+* **Every multi-packet QUIC exchange with the Windows VM stalled** — QUIC
+  handshakes took exactly ~1 s (one PTO retransmit), `pageload3` got 0/50
+  assets and any h3 response larger than one packet hung until the idle
+  timeout, against IIS *and* the bare Windows endpoint alike, while `/health`
+  over h3 (one packet) was fine. Cause: the guest's virtio NIC has **UDP
+  Segmentation Offload** on and msquic uses it; the USO super-datagrams never
+  make it through dockur's tap/DNAT path. `lab-setup.ps1` (fresh installs) and
+  the `windows-iis-refresh` script (existing disks) now run
+  `Set-NetAdapterUso -IPv4Enabled $false -IPv6Enabled $false`; handshakes drop
+  to ~1-2 ms and pageload3 is 50/50 in ~25 ms. This is a dockur/virtio quirk,
+  not a Windows or http.sys one — the earlier "~1 s QUIC handshake, sporadic
+  H3_INTERNAL_ERROR" note (v0.28.208) was this.
 
 ## Bugs the first Windows-target run found (fixed in the same PR)
 
@@ -353,8 +484,10 @@ lab/
   -Component endpoint` on a fresh Server VM (no `gh`) fell into a source
   compile that needs MSVC — release download without gh + VC++ runtime now.
 * **`iis` was `h3: true` on faith**: http.sys does QUIC on :8445 only with TLS
-  SNI; by IP (how proxy targets are addressed) it closes the connection —
-  manifest flipped to `false`, gates follow.
+  SNI; by IP (how proxy targets were addressed) it closes the connection —
+  manifest flipped to `false` in v0.28.208, then back to `true` in v0.28.211
+  once proxy targets are dispatched by their recorded hostname
+  (`deployment.endpoint_hosts`, V050) and the lab measured h3 2/2 through IIS.
 
 ## Bugs the first lab run found (all fixed in the same PR)
 
