@@ -48,6 +48,14 @@
 #   CANARY_MODE_COVERAGE   "1" → also run the full mode matrix through the proxy
 #                          (default "1"; requires the apibench phase since it
 #                          reuses that endpoint)
+#   CANARY_WINDOWS         "1" → PHASE 5: provision ONE Windows Server + IIS
+#                          endpoint cell (pending kind, os windows, proxy_stack
+#                          iis) and run the deterministic proxy matrix through
+#                          it, asserting every mode succeeds — in particular
+#                          http2/pageload2 (the tester's h2 :scheme/:authority
+#                          fix, v0.28.208 — http.sys RST every h2 probe before)
+#                          and websocket (IIS payload /ws route). Off by default
+#                          (a Windows VM is ~2× the cost/time of a Linux cell).
 set -uo pipefail
 
 BASE="${LAGHOUND_URL:-https://laghound.com}"
@@ -60,6 +68,8 @@ MODE_COVERAGE="${CANARY_MODE_COVERAGE:-1}"
 # Phase 4 (matrix flow) is OFF by default: it provisions several VMs at once,
 # so it runs on the weekly schedule, not nightly. CANARY_MATRIX=1 enables it.
 MATRIX="${CANARY_MATRIX:-0}"
+WINDOWS="${CANARY_WINDOWS:-0}"
+WINDOWS_TIMEOUT=2400    # s for a Windows VM to provision (+ IIS setup) and run
 
 PROVISION_TIMEOUT=480   # s to wait for a fresh runner to come online (~5-7 min)
 RUN_TIMEOUT=240         # s to wait for the run to reach a terminal state
@@ -453,10 +463,10 @@ summary "✅ phase 3 (mode coverage): all matrix modes returned successful attem
 # check has ever exercised. This phase launches a small mixed matrix and
 # asserts the flow-level invariants: every cell gets its own config, its own
 # VM name, and reaches a terminal state without the group aborting.
+run_phase4() {
 if [ "$MATRIX" != "1" ]; then
   note "matrix-flow phase disabled (CANARY_MATRIX=$MATRIX) — skipping"
-  note "CANARY PASS (phases 1 + 2 + 3)"
-  exit 0
+  return 0
 fi
 
 note "phase 4: multi-cell matrix flow (concurrent provisioning)"
@@ -515,4 +525,62 @@ summary "- cells completed: ${MX_DONE}/3"
 [ "$MX_DONE" -ge 2 ] || fail "phase 4: only ${MX_DONE}/3 matrix cells completed — the multi-cell flow regressed: ${MX_ERRS}"
 
 summary "✅ phase 4 (matrix flow): ${MX_DONE}/3 concurrent cells completed with distinct configs."
-note "CANARY PASS (phases 1 + 2 + 3 + 4)"
+note "phase 4 PASS"
+}
+run_phase4
+
+# ── PHASE 5: WINDOWS SERVER + IIS ENDPOINT CELL ──────────────────────────────
+# Everything above is Linux. The Windows/IIS target has its own failure class:
+# http.sys rejected every tester HTTP/2 request until v0.28.208 (missing
+# :scheme/:authority — http2/pageload2/download2/upload2 0/N against IIS in
+# prod, invisible to the Linux canary), the IIS payload lacked /ws (websocket
+# 404), and IIS serves HTTP/3 only via SNI hostname bindings. This phase
+# provisions one Windows+IIS cell through the real deploy path and asserts
+# every deterministic proxy mode succeeds. h3 modes are excluded (the gate
+# drops them for iis; see shared/http-stacks.json). Torn down with the group.
+if [ "$WINDOWS" != "1" ]; then
+  note "windows/iis phase disabled (CANARY_WINDOWS=$WINDOWS) — skipping"
+  note "CANARY PASS (phases 1 + 2 + 3$([ "$MATRIX" = "1" ] && echo " + 4"))"
+  exit 0
+fi
+
+note "phase 5: Windows Server + IIS endpoint cell (provision ~10-15 min)"
+WIN_NAME="soak-canary-windows-iis-$(date -u +%Y%m%dT%H%M%SZ)"
+WIN_MODES='["tcp","dns","tls","tlsresume","http1","http2","curl","download","upload","pageload","pageload2","websocket","udp"]'   # stamp: UDP 9997 is not in the Windows NSG openings (8443-8445, 9998, 9999)
+WIN_CELLS=$(jq -nc --arg acct "$ACCOUNT_ID" '[
+  {label:"canary windows · iis", endpoint:{kind:"pending", cloud_account_id:$acct, region:"eastus", vm_size:"Standard_B2s", os:"windows", proxy_stack:"iis", language:"rust"}}
+]')
+WIN_CG=$(api POST "/api/v2/projects/$PID/comparison-groups"   "$(jq -nc --arg n "$WIN_NAME" --argjson cells "$WIN_CELLS" --argjson modes "$WIN_MODES"      '{name:$n, base_workload:{modes:$modes, runs:2, concurrency:1, timeout_ms:15000, capture_mode:"headers-only", payload_sizes:[]}, cells:$cells}')")
+WIN_CG_ID=$(jq -r '.id // empty' <<<"$WIN_CG")
+[ -n "$WIN_CG_ID" ] || fail "phase 5: windows group create failed: $(head -c 200 <<<"$WIN_CG")"
+APIBENCH_CGS="${APIBENCH_CGS:-} ${WIN_CG_ID}"   # torn down by the EXIT trap
+
+WIN_LAUNCH=$(api POST "/api/v2/comparison-groups/$WIN_CG_ID/launch" '{}')
+[ "$(jq -r '.launched // 0' <<<"$WIN_LAUNCH")" = "1" ] || fail "phase 5: windows cell did not launch: $(jq -c '.errors // []' <<<"$WIN_LAUNCH")"
+note "  windows group ${WIN_CG_ID:0:8} launched; adjustments: $(jq -c '.adjustments // []' <<<"$WIN_LAUNCH")"
+
+deadline=$((SECONDS + WINDOWS_TIMEOUT)); WIN_RUN=""; WIN_STATUS=""
+while :; do
+  WIN_RUNS=$(api GET "/api/v2/test-runs?comparison_group_id=$WIN_CG_ID&limit=5")
+  WIN_RUN=$(jq -r '(if type=="array" then . else (.runs // .items // .data // []) end)[0].id // empty' <<<"$WIN_RUNS")
+  WIN_STATUS=$(jq -r '(if type=="array" then . else (.runs // .items // .data // []) end)[0].status // "?"' <<<"$WIN_RUNS")
+  note "    windows cell: $WIN_STATUS"
+  case "$WIN_STATUS" in completed|failed|partial|cancelled|error) break;; esac
+  [ "$SECONDS" -ge "$deadline" ] && { capture_deploy_log "$WIN_CG_ID"; fail "phase 5: windows cell did not settle within ${WINDOWS_TIMEOUT}s (last=$WIN_STATUS)"; }
+  sleep 30
+done
+[ -n "$WIN_RUN" ] || fail "phase 5: no run for the windows cell"
+[ "$WIN_STATUS" = "completed" ] || { capture_deploy_log "$WIN_CG_ID"; fail "phase 5: windows cell ended '$WIN_STATUS' — $(api GET "/api/v2/test-runs/$WIN_RUN" | jq -r '.error_message // ""' | head -c 200)"; }
+
+WIN_ATT=$(api GET "/api/v2/test-runs/$WIN_RUN/attempts?limit=300")
+WIN_STATS=$(jq -c '(if type=="array" then . else (.attempts // .items // .data // []) end)
+  | group_by(.protocol) | map({m:.[0].protocol, ok:(map(select(.success==true))|length), n:length})' <<<"$WIN_ATT")
+WIN_LINE=$(jq -r 'map("\(.m) \(.ok)/\(.n)")|join(" · ")' <<<"$WIN_STATS")
+WIN_BROKEN=$(jq -r '[.[]|select(.ok==0)|.m]|join(", ")' <<<"$WIN_STATS")
+WIN_H2=$(jq -r '[.[]|select(.m=="http2" or .m=="pageload2")|.ok]|add // 0' <<<"$WIN_STATS")
+summary "### Phase 5 (Windows Server + IIS cell) — run \`$WIN_RUN\`"
+summary "- $WIN_LINE"
+[ -z "$WIN_BROKEN" ] || fail "phase 5: mode(s) with ZERO successes through IIS: $WIN_BROKEN"
+[ "$WIN_H2" -gt 0 ] || fail "phase 5: HTTP/2 through IIS produced no successes (h2 :scheme/:authority regression?)"
+summary "✅ phase 5 (windows/iis): every mode succeeded through IIS (h2 ok=$WIN_H2)."
+note "CANARY PASS (phases 1 + 2 + 3$([ "$MATRIX" = "1" ] && echo " + 4") + 5)"
