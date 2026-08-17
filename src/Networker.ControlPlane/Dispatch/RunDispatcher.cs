@@ -526,7 +526,9 @@ public sealed class RunDispatcher : IRunDispatcher
     /// <c>Network { host, port }</c> the standalone agent can probe — the port of
     /// the Rust <c>resolve_proxy_endpoint</c> (provisioning.rs). The UI stores
     /// the DEPLOYMENT id in <c>proxy_endpoint_id</c>; the deployed target's host
-    /// lives in <c>deployment.endpoint_ips[0]</c> and the proxy stack (which
+    /// is <c>deployment.endpoint_hosts[0]</c> (its DNS name, when the deploy
+    /// recorded one — see <see cref="Provisioning.EndpointAddressing"/>) else
+    /// <c>deployment.endpoint_ips[0]</c>, and the proxy stack (which
     /// selects the HTTPS listener port) in
     /// <c>deployment.config.endpoints[0].http_stacks[0]</c>. Without this rewrite
     /// every Network Test against a deployed target fails with "Unsupported
@@ -574,7 +576,11 @@ public sealed class RunDispatcher : IRunDispatcher
             return null;
         }
 
-        var host = FirstEndpointIp(dep.EndpointIps);
+        // The recorded DNS name of the first endpoint when the deploy captured
+        // one (endpoint_hosts, V050), else its endpoint_ips entry. By hostname
+        // the tester's TLS/QUIC ClientHello carries SNI, which is the only way
+        // http.sys (IIS) serves HTTP/3; the Linux stacks answer either way.
+        var host = Provisioning.EndpointAddressing.PreferredHost(dep.EndpointIps, dep.EndpointHosts);
         if (host is null)
         {
             _logger.LogWarning(
@@ -594,40 +600,6 @@ public sealed class RunDispatcher : IRunDispatcher
             port = ProxyHttpsPort(stack),
         };
         return JsonSerializer.SerializeToElement(resolved);
-    }
-
-    /// <summary>First non-empty string in the <c>endpoint_ips</c> JSON array.</summary>
-    private static string? FirstEndpointIp(string? endpointIps)
-    {
-        if (string.IsNullOrWhiteSpace(endpointIps))
-        {
-            return null;
-        }
-
-        try
-        {
-            using var doc = JsonDocument.Parse(endpointIps);
-            if (doc.RootElement.ValueKind != JsonValueKind.Array)
-            {
-                return null;
-            }
-            foreach (var el in doc.RootElement.EnumerateArray())
-            {
-                if (el.ValueKind == JsonValueKind.String)
-                {
-                    var s = el.GetString()?.Trim();
-                    if (!string.IsNullOrEmpty(s))
-                    {
-                        return s;
-                    }
-                }
-            }
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-        return null;
     }
 
     /// <summary>

@@ -14,6 +14,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.28.210] - 2026-08-16
 
 ### Added
+- **HTTP/3 through IIS on the managed path** — proxy targets are now
+  dispatched **by hostname**, so the tester's TLS/QUIC ClientHello carries SNI
+  and http.sys completes the QUIC handshake (it never does for an IP literal —
+  RFC 6066 has no SNI for IPs; lab-measured in v0.28.208). Pieces:
+  - **Schema V050** `deployment.endpoint_hosts` (JSONB, nullable): array
+    **parallel** to `endpoint_ips` — element *i* is endpoint *i*'s resolvable
+    DNS name (Azure `<label>.<region>.cloudapp.azure.com` from the public-IP
+    DNS label, AWS `ec2-….compute.amazonaws.com`, the docker provider's
+    container name, the lab's `target-N.lab`) or null when the provider gave
+    none (GCP, lan). `endpoint_ips` is untouched (UI cards, health/version
+    probes, the teardown reverse lookup keep keying off it); pre-V050 rows
+    keep resolving by IP.
+  - **DeployRunner** records the hostname: install.sh's deploy prints one
+    machine-readable `endpoint_host: <fqdn> (<ip>)` line per endpoint that has
+    a cloud DNS name (Azure/AWS; nothing for GCP), the docker provider records
+    the container name; `FinishAsync` persists both arrays.
+  - **Dispatch** (`RunDispatcher.ResolveProxyEndpointAsync`, the orchestrator's
+    pending→network rewrite + readiness gate) resolve through
+    `EndpointAddressing.PreferredHost`: `endpoint_hosts[i]` when recorded for
+    the first addressed endpoint, else `endpoint_ips[i]`. The teardown-deferral
+    reference match considers both forms. `GET …/deployments` exposes
+    `endpoint_hosts`.
+  - **Installer**: the IIS payload (`install.sh _iis_setup_powershell` — Azure
+    run-command + AWS UserData — and `install.ps1 -Setup iis`) already binds
+    an SNI hostname listener + certificate SAN when given a name; AWS never
+    had one at UserData time, so with no `-Fqdn` the payload now asks EC2 IMDS
+    (IMDSv2, 2 s budget) for the instance's public DNS — the exact name the
+    control plane records and dispatches to.
+  - **`shared/http-stacks.json`: `iis` back to `h3: true`** (C#/TS/Rust
+    manifest tests, `docs/probes.md`); the config-create 422 / UI grey-out /
+    matrix trimming gates now offer `http3`/`pageload3`/`browser3`/
+    `download3`/`upload3` on IIS.
+  - **Lab**: every target gets a labnet DNS alias `target-N.lab`; the Windows
+    VM's IIS is set up with `install.ps1 -Setup iis -Fqdn target-N.lab` and its
+    deployment is registered with `endpoint_hosts:["target-N.lab"]`, so
+    validate phase 2 runs the full iis matrix incl. h3 by hostname
+    (`http3 2/2 · pageload3 2/2` measured). A VM disk installed by an older
+    `lab.sh` is upgraded in place — `up` checks the certificate served for
+    SNI `target-N.lab` and re-runs the installer's IIS setup inside the VM
+    over SSH when the name is missing (`lab.sh windows-iis-refresh`).
+
+### Fixed
+- **Lab Windows VM: multi-packet QUIC stalled** (`pageload3` 0/N against IIS
+  and the bare Windows endpoint, ~1 s QUIC handshakes — the "sporadic
+  H3_INTERNAL_ERROR" noted in v0.28.208): the guest's virtio NIC ships with
+  UDP Segmentation Offload on and the USO super-datagrams msquic emits do not
+  survive dockur's tap/DNAT path. `lab-setup.ps1` and the refresh script now
+  disable USO on the adapter (persists across reboots); QUIC handshakes are
+  ~1-2 ms and pageload3 is 50/50. dockur/virtio-specific — cloud VMs
+  (Hyper-V netvsc / ENA) are not affected.
 - **Config-create gate applies the target's LIVE capabilities** (rule 3,
   `POST /api/v2/projects/{id}/test-configs`). For `proxy` targets the
   server now also consults the endpoint's `/health` `services`

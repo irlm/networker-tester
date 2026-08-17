@@ -2595,6 +2595,18 @@ function Invoke-SetupIIS {
     Invoke-EnsureTls12
     $siteRoot = "C:\networker-static"
     $fqdn = if ($Fqdn) { $Fqdn.Trim() } else { "" }
+    # No -Fqdn: on EC2 ask IMDS (IMDSv2) for the public DNS name — the SNI
+    # binding must carry the exact name the control plane dispatches to
+    # (deployment.endpoint_hosts); http.sys serves HTTP/3 only with SNI.
+    if (-not $fqdn) {
+        try {
+            $imdsTok = Invoke-RestMethod -Method Put -Uri 'http://169.254.169.254/latest/api/token' `
+                -Headers @{ 'X-aws-ec2-metadata-token-ttl-seconds' = '60' } -TimeoutSec 2
+            $imdsDns = Invoke-RestMethod -Uri 'http://169.254.169.254/latest/meta-data/public-hostname' `
+                -Headers @{ 'X-aws-ec2-metadata-token' = $imdsTok } -TimeoutSec 2
+            if ($imdsDns -and "$imdsDns" -match '\.amazonaws\.com$') { $fqdn = "$imdsDns".Trim(); Write-Info "FQDN from EC2 IMDS: $fqdn" }
+        } catch { }
+    }
 
     # 1. IIS + URL Rewrite + ARR (reverse proxy for the dynamic endpoint routes)
     Write-Info "Installing IIS (Web-Server + WebSocket protocol)..."
