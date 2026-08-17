@@ -655,6 +655,11 @@ export interface TargetCapabilitiesResponse {
   stack?: string | null;
   stack_h3?: boolean | null;
   h3_modes?: string[];
+  /** Age of the live report in this response (0 = probed now) — v0.28.210+. */
+  live_capabilities_age_secs?: number;
+  /** How long the server's config-create gate trusts this snapshot before it
+   * fails open (kind / stack rules only) and re-probes in the background. */
+  live_capabilities_ttl_secs?: number;
 }
 
 export interface DeploymentCostEstimate {

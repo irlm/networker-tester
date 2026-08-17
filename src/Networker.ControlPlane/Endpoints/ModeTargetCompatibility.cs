@@ -15,7 +15,7 @@ namespace Networker.ControlPlane.Endpoints;
 /// <para><b>endpoint.kind → TargetKind:</b> <c>network → url</c>,
 /// <c>proxy → endpoint</c>, <c>runtime → sdk</c>.</para>
 ///
-/// <para><b>Two rules.</b> (1) <i>Requirement by kind</i>: throughput / UDP /
+/// <para><b>Three rules.</b> (1) <i>Requirement by kind</i>: throughput / UDP /
 /// page-load need a networker-endpoint (not a raw URL), <c>sdkprobe</c> needs
 /// an SDK endpoint, <c>apibench</c> needs the reference APIs. (2) <i>HTTP/3 by
 /// stack</i>: the h3 modes (<c>http3</c>, <c>pageload3</c>, <c>browser3</c>,
@@ -24,7 +24,11 @@ namespace Networker.ControlPlane.Endpoints;
 /// (apache / haproxy / traefik: the lab measured them 0/N). The stack comes
 /// from the resolved target descriptor — <c>endpoint.proxy_stack</c>, the
 /// deployment's <c>http_stacks[0]</c> (the listener the dispatcher resolves
-/// <c>proxy</c> endpoints to), or <c>pending.proxy_stack</c>.</para>
+/// <c>proxy</c> endpoints to), or <c>pending.proxy_stack</c>. (3) <i>Live
+/// self-report</i>: the endpoint's <c>/health</c> <c>services</c> map — udp /
+/// stamp / h3 listeners can be disabled per instance, and IIS / other proxies
+/// may not forward every route — read from <see cref="LiveCapabilityCache"/>
+/// (never probed on the request path); no fresh report → fail open.</para>
 ///
 /// <para><b>Fail-open for <c>pending</c> (and any unknown kind) — rule 1 only.</b>
 /// A <c>pending</c> endpoint is a provisioning request whose real capability
@@ -40,6 +44,11 @@ public static class ModeTargetCompatibility
 {
     /// <summary>Requirement id reported for an HTTP/3-by-stack rejection.</summary>
     public const string H3Requirement = "h3";
+
+    /// <summary>Requirement id reported when the target's LIVE self-report
+    /// (<c>/health</c> <c>services</c>, via <see cref="LiveCapabilityCache"/>)
+    /// says the mode's listener / route is off on this instance.</summary>
+    public const string LiveRequirement = "live";
 
     /// <summary>One rejected (mode, target) pair with its human-readable reason.</summary>
     public sealed record Incompatibility(string Mode, string Requirement, string Reason);
@@ -101,8 +110,14 @@ public static class ModeTargetCompatibility
     /// <param name="proxyStack">The proxy stack the target resolves to (an id
     /// from <c>shared/http-stacks.json</c>), or null when unknown / not a proxy
     /// target. Unknown ids fail open.</param>
+    /// <param name="liveUnsupported">Rule 3 — the target's live self-report:
+    /// mode → reason for the modes the endpoint instance reports OFF
+    /// (<see cref="TargetCapabilities.MapServices"/>, folded across hosts by
+    /// <see cref="FoldLiveReports"/>). Null / empty = no knowledge → fail open.
+    /// The reason text is relayed verbatim (the same vocabulary the UI shows).</param>
     public static IReadOnlyList<Incompatibility> IncompatibleModes(
-        IEnumerable<string>? modes, string? endpointKind, string? proxyStack = null)
+        IEnumerable<string>? modes, string? endpointKind, string? proxyStack = null,
+        IReadOnlyDictionary<string, string>? liveUnsupported = null)
     {
         if (modes is null)
         {
@@ -112,7 +127,8 @@ public static class ModeTargetCompatibility
         var targetKind = TargetKindFor(endpointKind);
         var stack = HttpStackCatalog.Find(proxyStack);
         var stackLacksH3 = stack is { H3: false };
-        if (targetKind is null && !stackLacksH3)
+        var live = liveUnsupported is { Count: > 0 } ? liveUnsupported : null;
+        if (targetKind is null && !stackLacksH3 && live is null)
         {
             return [];
         }
@@ -138,10 +154,71 @@ public static class ModeTargetCompatibility
             if (stackLacksH3 && HttpStackCatalog.IsH3Mode(mode))
             {
                 bad.Add(new Incompatibility(mode, H3Requirement, H3ReasonFor(stack!.Id)));
+                continue;
+            }
+
+            if (live is not null && LookupLive(live, mode) is { } liveReason)
+            {
+                bad.Add(new Incompatibility(mode, LiveRequirement, liveReason));
             }
         }
 
         return bad;
+    }
+
+    private static string? LookupLive(IReadOnlyDictionary<string, string> live, string mode)
+    {
+        if (live.TryGetValue(mode, out var r) && !string.IsNullOrWhiteSpace(r))
+        {
+            return r;
+        }
+        // Tolerate case-sensitive dictionaries: mode ids are lower-case in the
+        // manifest, but the API accepts any casing.
+        foreach (var kv in live)
+        {
+            if (string.Equals(kv.Key, mode, StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(kv.Value))
+            {
+                return kv.Value;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Fold the live reports of a deployment's hosts into ONE mode → reason map
+    /// for rule 3, with the same semantics as the wizard
+    /// (<c>NetworkTestPage</c>): a mode is off only when EVERY host says so — a
+    /// multi-endpoint deployment supports what any of its hosts serves. Any
+    /// host WITHOUT a self-report (unreachable / pre-0.28.202 / no fresh probe
+    /// — passed as <c>null</c>) makes the whole answer unknown → <c>null</c>
+    /// (fail open); an empty host list is likewise unknown.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string>? FoldLiveReports(
+        IEnumerable<TargetCapabilities.HostCapabilityReport?> reports)
+    {
+        Dictionary<string, string>? off = null;
+        foreach (var r in reports)
+        {
+            if (r is null || !r.HasReport)
+            {
+                return null;
+            }
+            var mine = r.UnsupportedMap();
+            if (off is null)
+            {
+                off = new Dictionary<string, string>(mine, StringComparer.OrdinalIgnoreCase);
+                continue;
+            }
+            foreach (var key in off.Keys.ToList())
+            {
+                if (!mine.ContainsKey(key))
+                {
+                    off.Remove(key);
+                }
+            }
+        }
+        return off;
     }
 
     /// <summary>

@@ -11,6 +11,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.210] - 2026-08-16
+
+### Added
+- **Config-create gate applies the target's LIVE capabilities** (rule 3,
+  `POST /api/v2/projects/{id}/test-configs`). For `proxy` targets the
+  server now also consults the endpoint's `/health` `services`
+  self-report — the udp / stamp / UDP-throughput listeners can be
+  disabled per instance, and IIS / other proxies may not forward every
+  route — and rejects a mode the target cannot serve with **422** and the
+  endpoint's own reason (the text the wizard already shows, e.g.
+  `'udp' UDP echo listener disabled on this target`); the message names
+  the reporting host(s) and the report's age. The kind and HTTP/3-by-stack
+  rules are unchanged and still win when they apply.
+- **Never slow, never flaky**: the create path reads a per-host cache
+  only (`LiveCapabilityCache`, 90 s TTL) and never probes — a miss or a
+  stale entry fails OPEN (kind / stack rules still apply) and queues ONE
+  background refresh so the next attempt is informed. The deployment
+  `GET …/deployments/{id}/capabilities` route (the wizard's live probe)
+  writes through to the cache, so a config created from the UI is
+  normally gated at zero network cost; a multi-host deployment is
+  narrowed only when EVERY host has a fresh report and all of them say a
+  mode is off (the wizard's rule). The response now also carries
+  `live_capabilities_age_secs` / `live_capabilities_ttl_secs` so a client
+  knows how long the server will trust that snapshot.
+- Docs: `docs/probes.md` capability table names the third axis and its
+  fail-open contract.
+
+---
+
 ## [0.28.209] - 2026-08-16
 
 ### Fixed

@@ -40,6 +40,7 @@ public static class TestConfigWriteEndpoints
             [FromBody] CreateTestConfigRequest req,
             HttpContext http,
             NetworkerDbContext db,
+            LiveCapabilityCache liveCaps,
             CancellationToken ct) =>
         {
             var user = http.GetAuthUser();
@@ -75,15 +76,27 @@ public static class TestConfigWriteEndpoints
             // frontend gate; the `pending` provisioning kind fails open on the
             // kind rule but its proxy_stack still decides the h3 rule (see
             // ModeTargetCompatibility).
-            var proxyStack = await ResolveProxyStackAsync(db, projectId, endpointKind, req.Endpoint, ct);
+            var proxyTarget = await ResolveProxyTargetAsync(db, projectId, endpointKind, req.Endpoint, ct);
+            var proxyStack = proxyTarget.Stack;
+            // Rule 3 — the target's LIVE self-report (/health `services`), read
+            // from the cache ONLY (a create must never wait on a probe): with a
+            // fresh report for every host of the deployment the modes it cannot
+            // serve are rejected with the endpoint's own reason; otherwise the
+            // gate fails open and the cache miss has already queued a
+            // background refresh so the next attempt is informed.
+            var live = ResolveLiveCapabilities(liveCaps, proxyTarget.Hosts);
             var incompatible = ModeTargetCompatibility.IncompatibleModes(
-                ExtractModes(req.Workload), endpointKind, proxyStack);
+                ExtractModes(req.Workload), endpointKind, proxyStack, live.Unsupported);
             if (incompatible.Count > 0)
             {
                 var detail = string.Join("; ", incompatible.Select(x => $"'{x.Mode}' {x.Reason}"));
                 var target = proxyStack is not null
                     ? $"endpoint kind '{endpointKind}' (stack '{proxyStack}')"
                     : $"endpoint kind '{endpointKind}'";
+                if (live.Unsupported is not null && incompatible.Any(x => x.Requirement == ModeTargetCompatibility.LiveRequirement))
+                {
+                    target += $" [live self-report from {string.Join(", ", proxyTarget.Hosts)}, {live.AgeSecs}s old]";
+                }
                 return ApiError.Status(
                     StatusCodes.Status422UnprocessableEntity,
                     $"incompatible mode(s) for {target}: {detail}");
@@ -396,11 +409,22 @@ public static class TestConfigWriteEndpoints
     /// </summary>
     internal static async Task<string?> ResolveProxyStackAsync(
         NetworkerDbContext db, string projectId, string endpointKind, JsonElement endpoint, CancellationToken ct)
+        => (await ResolveProxyTargetAsync(db, projectId, endpointKind, endpoint, ct)).Stack;
+
+    /// <summary>What the gate knows about a <c>proxy</c> target: the stack (see
+    /// <see cref="ResolveProxyStackAsync"/>) and the deployment's endpoint
+    /// hosts (<c>endpoint_ips</c>) whose live self-reports rule 3 consults.
+    /// Hosts is empty for non-proxy targets / unknown deployments.</summary>
+    internal sealed record ProxyTarget(string? Stack, IReadOnlyList<string> Hosts);
+
+    internal static async Task<ProxyTarget> ResolveProxyTargetAsync(
+        NetworkerDbContext db, string projectId, string endpointKind, JsonElement endpoint, CancellationToken ct)
     {
+        string? overrideStack = null;
         if (endpoint.TryGetProperty("proxy_stack", out var ps) && ps.ValueKind == JsonValueKind.String
             && !string.IsNullOrWhiteSpace(ps.GetString()))
         {
-            return ps.GetString()!.Trim();
+            overrideStack = ps.GetString()!.Trim();
         }
 
         if (endpointKind != "proxy"
@@ -408,15 +432,46 @@ public static class TestConfigWriteEndpoints
             || idProp.ValueKind != JsonValueKind.String
             || !Guid.TryParse(idProp.GetString(), out var deploymentId))
         {
-            return null;
+            return new ProxyTarget(overrideStack, []);
         }
 
-        var config = await db.Deployments
+        var dep = await db.Deployments
             .AsNoTracking()
             .Where(d => d.ProjectId == projectId && d.DeploymentId == deploymentId)
-            .Select(d => d.Config)
+            .Select(d => new { d.Config, d.EndpointIps })
             .FirstOrDefaultAsync(ct);
-        return config is null ? null : ProxyStackFromDeploymentConfig(config);
+        if (dep is null)
+        {
+            return new ProxyTarget(overrideStack, []);
+        }
+        return new ProxyTarget(
+            overrideStack ?? ProxyStackFromDeploymentConfig(dep.Config),
+            DeploymentWriteEndpoints.ParseHosts(dep.EndpointIps));
+    }
+
+    /// <summary>The folded live self-report of the target's hosts from the
+    /// cache — never probing on the request path. <c>Unsupported</c> is null
+    /// (fail open) unless EVERY host has a fresh report; <c>AgeSecs</c> is the
+    /// oldest report's age.</summary>
+    internal static (IReadOnlyDictionary<string, string>? Unsupported, int AgeSecs) ResolveLiveCapabilities(
+        LiveCapabilityCache cache, IReadOnlyList<string> hosts)
+    {
+        if (hosts.Count == 0)
+        {
+            return (null, 0);
+        }
+        var reports = new List<TargetCapabilities.HostCapabilityReport?>(hosts.Count);
+        var age = TimeSpan.Zero;
+        foreach (var host in hosts)
+        {
+            var snap = cache.TryGetFresh(host);
+            reports.Add(snap?.Report);
+            if (snap is { } s && s.Age > age)
+            {
+                age = s.Age;
+            }
+        }
+        return (ModeTargetCompatibility.FoldLiveReports(reports), (int)age.TotalSeconds);
     }
 
     /// <summary>The Rust path <c>deployment.config.endpoints[0].http_stacks[0]</c>
