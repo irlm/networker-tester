@@ -63,18 +63,30 @@ public class LeaderLockKeysTests
     [Fact]
     public void OpsServiceNames_All_covers_every_named_constant()
     {
-        var expected = new[]
-        {
-            OpsServiceNames.Scheduler,
-            OpsServiceNames.QueuedRedispatch,
-            OpsServiceNames.Watchdog,
-            OpsServiceNames.AgentReaper,
-            OpsServiceNames.AutoShutdown,
-            OpsServiceNames.OrphanReaper,
-            OpsServiceNames.WorkspaceInactivity,
-            OpsServiceNames.ProvisioningOrchestrator,
-            OpsServiceNames.AgentAutoUpgrade,
-        };
-        Assert.Equal(expected, OpsServiceNames.All);
+        // This used to assert `All` equalled a hand-copied list of the same
+        // constants — two manual lists checking each other, so a constant missing
+        // from BOTH passed happily. `system-health` was missing from both for
+        // months: production reported `all_healthy: false` for half of every hour
+        // and the nightly soak check failed five nights running (v0.28.221).
+        // Derive the expectation from the constants instead, so the test cannot
+        // share the omission it is meant to catch.
+        var declared = typeof(OpsServiceNames)
+            .GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            .Where(f => f.IsLiteral && f.FieldType == typeof(string))
+            .Select(f => (string)f.GetRawConstantValue()!)
+            .ToList();
+
+        Assert.NotEmpty(declared);
+        Assert.Equal(declared.Count, declared.Distinct(StringComparer.Ordinal).Count());
+
+        var missing = declared.Except(OpsServiceNames.All, StringComparer.Ordinal).ToList();
+        Assert.True(
+            missing.Count == 0,
+            $"constant(s) missing from OpsServiceNames.All: {string.Join(", ", missing)}");
+
+        var stray = OpsServiceNames.All.Except(declared, StringComparer.Ordinal).ToList();
+        Assert.True(
+            stray.Count == 0,
+            $"OpsServiceNames.All contains name(s) with no constant: {string.Join(", ", stray)}");
     }
 }
