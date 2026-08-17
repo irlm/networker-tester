@@ -25,6 +25,17 @@
 #            with an endpoint_ip; a proxy-kind config against that deployment
 #            pinned to that tester runs with successes; DELETE both → the
 #            containers are gone (docker ps -a --filter label=networker.role).
+#   phase 6  windows runner — for every online agent whose os is windows
+#            (lab.sh up --windows-runners M: a Windows Server VM running the
+#            checkout's agent + the released tester, bound to a project_tester
+#            row so LaunchRequest.tester_id pins to it): its heartbeat carries
+#            os=windows + capabilities {chrome:false,tshark:false}; the phase-1
+#            network modes (incl. ping via IcmpSendEcho, http3) and the phase-2
+#            proxy matrix through the first Linux proxy target (nginx) run
+#            PINNED to it, execute on that agent (worker_id) and every mode
+#            has ≥1 success — "a Windows runner runs the same tests as a Linux
+#            runner"; modes that differ from the Linux runs are listed.
+#            Skipped with a note when the lab has no Windows runner.
 #
 # Exit non-zero on the first failed assertion, printing the run/attempt detail
 # needed to debug it (and `lab.sh logs runner-N` for the rest).
@@ -33,13 +44,14 @@
 #   --modes a,b,c     phase-2 matrix override (default below)
 #   --runs N          runs per mode (default 2)
 #   --timeout SECS    per-run wall-clock budget (default 300)
-#   --skip PHASES     comma list of phase numbers to skip (e.g. --skip 3,4,5)
+#   --skip PHASES     comma list of phase numbers to skip (e.g. --skip 3,4,5,6)
 #   --only PHASES     comma list of phase numbers to run
 #
 # Env overrides (all optional — set by lab.sh or by other lab front-ends such
 # as lab/native/lab-native.ps1, which drives this same matrix against native
 # Windows processes through Git Bash):
-#   LAB_STATE_ENV      path of the lab.env to source (default lab/.state/lab.env)
+#   LAB_STATE_ENV      path of the lab.env to source (default lab/.state/lab.env,
+#                      or lab/.state-N/lab.env for LAB_INSTANCE=N)
 #   LAB_TARGET_HOSTS   comma list: host of target-1, target-2, … (overrides the
 #                      NET_PREFIX+index addressing; LAB_TARGET_IPS is an alias)
 #   LAB_H3_OFF_STACKS  comma list of stacks whose HTTP/3 modes must be EXCLUDED
@@ -49,7 +61,9 @@
 set -uo pipefail
 
 LAB_DIR="$(cd "$(dirname "$0")" && pwd)"
-STATE_ENV="${LAB_STATE_ENV:-$LAB_DIR/.state/lab.env}"
+LAB_INSTANCE="${LAB_INSTANCE:-1}"
+STATE_SUFFIX=""; [ "$LAB_INSTANCE" != 1 ] && STATE_SUFFIX="-${LAB_INSTANCE}"
+STATE_ENV="${LAB_STATE_ENV:-$LAB_DIR/.state${STATE_SUFFIX}/lab.env}"
 [ -f "$STATE_ENV" ] || { echo "no lab state — run ./lab/lab.sh up first (or set LAB_STATE_ENV)" >&2; exit 2; }
 # shellcheck disable=SC1090
 . "$STATE_ENV"
@@ -78,7 +92,7 @@ while [ $# -gt 0 ]; do
     --timeout) shift; RUN_TIMEOUT="$1" ;;
     --skip) shift; SKIP=",$1," ;;
     --only) shift; ONLY=",$1," ;;
-    -h|--help) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,39p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown flag $1" >&2; exit 2 ;;
   esac; shift
 done
@@ -235,6 +249,8 @@ if run_phase 2; then
       ATT2="$(attempts_of "$RUN2")"
       note "  status=$R_STATUS ok=$R_OK fail=$R_FAIL attempts=$(jq length <<<"$ATT2") worker=${R_WORKER:-?}"
       echo "    $(per_mode_stats "$ATT2")"
+      # Remembered for phase 6 (Windows runner vs Linux runner, same target).
+      if [ -z "${P2_LINUX_ATT:-}" ] && [ "$st" != windows ]; then P2_LINUX_ATT="$ATT2"; P2_LINUX_STACK="$pst"; P2_LINUX_WORKER="$R_WORKER"; fi
       case "$R_STATUS" in completed|partial) ;; *) fail "phase 2 ($lbl): status '$R_STATUS' ${R_ERR:+— $R_ERR}";; esac
       B2="$(broken_modes "$ATT2")"
       if [ -n "$B2" ]; then fail "phase 2 ($lbl): mode(s) with ZERO successes through $pst: $B2"; first_errors "$ATT2" | sed 's/^/      /'; fi
@@ -467,6 +483,121 @@ if run_phase 5; then
     fi
     record "phase 5  docker provider → tester=${T_STATE:-?}/${T_ALLOC:-?} deployment=${D_STATUS:-?}@${D_IP:-?} run=${R_STATUS:-?} ok=${R_OK:-0} cleanup=$([ -z "$LEFT" ] && echo clean || echo LEFTOVERS)"
     [ "$FAILS" -eq "$P5_FAILS_BEFORE" ] && pass "phase 5"
+  fi
+fi
+
+# ── phase 6: Windows runner — the same tests, executed on Windows ────────────
+if run_phase 6; then
+  # Windows runners: agents whose heartbeat says os=windows (v0.28.210+) or that
+  # lab.sh tagged so at registration, online, and bound to a project_tester
+  # (agent.tester_id) — the only handle the launch API pins with.
+  WIN_AGENTS="$(api GET "/api/projects/$PID/agents" | jq -c '(.agents // .) | [.[]|select(.status=="online" and ((.os // "")=="windows" or (.tags.os // "")=="windows"))]')"
+  WIN_N="$(jq length <<<"$WIN_AGENTS")"
+  if [ "${WIN_N:-0}" -eq 0 ]; then
+    note "phase 6 — no online Windows runner in this lab (lab.sh up --windows-runners 1) — skipped"
+    record "phase 6  (skipped: no windows runner)"
+  else
+    note "phase 6 — windows runner: $WIN_N online Windows agent(s): $(jq -r '[.[]|"\(.name)@\(.version // "?")"]|join(", ")' <<<"$WIN_AGENTS")"
+    P6_FAILS_BEFORE=$FAILS
+    # Modes whose verdict differs between the Linux and the Windows runner
+    # (same target) — reported per runner; a mode broken ONLY on Windows fails.
+    diff_modes() { # diff_modes LINUX_ATT WINDOWS_ATT → "mode: linux ok/n vs windows ok/n" per differing mode
+      jq -rn --argjson l "$1" --argjson w "$2" '
+        def stats: group_by(.protocol) | map({key:.[0].protocol, value:{ok:(map(select(.success==true))|length), n:length}}) | from_entries;
+        ($l|stats) as $L | ($w|stats) as $W
+        | [(($L|keys) + ($W|keys)) | unique[] | . as $m
+           | {m:$m, l:($L[$m] // {ok:-1,n:0}), w:($W[$m] // {ok:-1,n:0})}
+           | select((.l.ok > 0) != (.w.ok > 0))
+           | "\(.m): linux \(if .l.ok < 0 then "-" else "\(.l.ok)/\(.l.n)" end) vs windows \(if .w.ok < 0 then "-" else "\(.w.ok)/\(.w.n)" end)"] | .[]'
+    }
+    w=0
+    while [ "$w" -lt "$WIN_N" ]; do
+      WA="$(jq -c ".[$w]" <<<"$WIN_AGENTS")"; w=$((w + 1))
+      WNAME="$(jq -r '.name' <<<"$WA")"; WID="$(jq -r '.agent_id' <<<"$WA")"; WTESTER="$(jq -r '.tester_id // empty' <<<"$WA")"
+      WOS="$(jq -r '.os // empty' <<<"$WA")"; WARCH="$(jq -r '.arch // empty' <<<"$WA")"; WCAPS="$(jq -c '.capabilities // null' <<<"$WA")"
+      note "  $WNAME: agent $WID os=${WOS:-?} arch=${WARCH:-?} capabilities=$WCAPS tester=${WTESTER:-<none>}"
+      # 6a. identity: the heartbeat reports os=windows + an inventory without Chrome/tshark
+      [ "$WOS" = "windows" ] || fail "phase 6 ($WNAME): agent.os is '${WOS:-null}' — the heartbeat should report os=windows (v0.28.210 agent + control plane)"
+      if [ "$WCAPS" = "null" ]; then
+        fail "phase 6 ($WNAME): no capabilities reported on the heartbeat"
+      else
+        [ "$(jq -r '.chrome' <<<"$WCAPS")" = "false" ] || fail "phase 6 ($WNAME): capabilities.chrome=true on a lab Windows runner (no Chrome is installed there — detection wrong?)"
+        [ "$(jq -r '.tshark' <<<"$WCAPS")" = "false" ] || fail "phase 6 ($WNAME): capabilities.tshark=true on a lab Windows runner (no Wireshark there — detection wrong?)"
+      fi
+      if [ -z "$WTESTER" ]; then
+        fail "phase 6 ($WNAME): agent has no tester_id — lab.sh registers Windows runners bound to a project_tester row so LaunchRequest.tester_id can pin runs to it"
+        continue
+      fi
+      TROW="$(api GET "/api/projects/$PID/testers/$WTESTER")"
+      note "  tester $(jq -r '"\(.name) cloud=\(.cloud) power_state=\(.power_state) allocation=\(.allocation) installer_version=\(.installer_version // "?")"' <<<"$TROW")"
+
+      # 6b. the phase-1 network modes, pinned to the Windows runner (target-1 rust endpoint).
+      CFG6N="$(create_config "lab-p6-win-network-${WNAME}-$STAMP" \
+        "$(jq -nc --arg h "$(target_ip 1)" '{kind:"network",host:$h,port:8443}')" \
+        "$(jq -nc --arg m "$NETWORK_MODES" --argjson r "$RUNS" '{modes:($m|split(",")),runs:$r,concurrency:1,timeout_ms:8000,insecure:true}')")" || exit 1
+      LRESP="$(api POST "/api/v2/test-configs/$CFG6N/launch" "$(jq -nc --arg t "$WTESTER" '{tester_id:$t}')")"
+      RUN6N="$(jq -r '.run_id // .id // empty' <<<"$LRESP")"
+      if [ -z "$RUN6N" ]; then
+        fail "phase 6 ($WNAME): launch pinned to tester $WTESTER failed: $(head -c 300 <<<"$LRESP")"
+      else
+        note "  run $RUN6N (network modes $NETWORK_MODES → target-1 $(stack_of 1)) pinned to $WNAME — waiting"
+        wait_run "$RUN6N" || fail "phase 6 ($WNAME): network run $RUN6N did not finish in ${RUN_TIMEOUT}s (last=$R_STATUS)"
+        ATT6N="$(attempts_of "$RUN6N")"
+        note "  status=$R_STATUS ok=$R_OK fail=$R_FAIL attempts=$(jq length <<<"$ATT6N") worker=${R_WORKER:-?}"
+        echo "    $(per_mode_stats "$ATT6N")"
+        [ "$R_STATUS" = "completed" ] || fail "phase 6 ($WNAME): network run status '$R_STATUS' (expected completed) ${R_ERR:+— $R_ERR}"
+        [ "$R_WORKER" = "$WID" ] || fail "phase 6 ($WNAME): network run executed on worker ${R_WORKER:-?}, not the pinned Windows agent $WID (tester affinity broken?)"
+        B6N="$(broken_modes "$ATT6N")"
+        if [ -n "$B6N" ]; then fail "phase 6 ($WNAME): network mode(s) with zero successes on Windows: $B6N"; first_errors "$ATT6N" | sed 's/^/      /'; fi
+        if [ -n "${ATT1:-}" ]; then
+          D6N="$(diff_modes "$ATT1" "$ATT6N")"
+          if [ -n "$D6N" ]; then note "  differs from the Linux runner (phase 1):"; echo "$D6N" | sed 's/^/      /'; else note "  network verdicts identical to the Linux runner (phase 1) mode for mode"; fi
+        fi
+        record "phase 6  $WNAME network → $R_STATUS ok=$R_OK fail=$R_FAIL${B6N:+ BROKEN=$B6N} ($(per_mode_stats "$ATT6N"))"
+      fi
+
+      # 6c. the phase-2 proxy matrix through the FIRST Linux proxy target, pinned to the Windows runner.
+      PT=""; i=1; total="$(target_count)"
+      while [ "$i" -le "$total" ]; do st="$(stack_of "$i")"; if [ "$st" != rust ] && [ "$st" != windows ]; then PT="$i"; break; fi; i=$((i + 1)); done
+      if [ -z "$PT" ]; then
+        note "  no Linux proxy target in this lab (targets=$TARGETS) — proxy matrix on the Windows runner skipped; use: lab.sh up --targets rust,nginx"
+        record "phase 6  $WNAME proxy → (skipped: no linux proxy target)"
+      else
+        pst="$(stack_of "$PT")"
+        DEP="$(api GET "/api/projects/$PID/deployments?limit=100" | jq -r --arg n "lab-target-${PT}-${pst}" \
+          '(if type=="array" then . else (.deployments // .items // []) end) | [.[]|select(.name==$n)][0] | (.id // .deployment_id) // empty')"
+        if [ -z "$DEP" ]; then fail "phase 6 ($WNAME): deployment for target-$PT ($pst) not found"; else
+          STACK_MATRIX="$MATRIX"; stack_h3 "$pst" || STACK_MATRIX="$(strip_h3_modes "$MATRIX")"
+          MODES_JSON="$(jq -nc --arg m "$STACK_MATRIX" '($m|split(",")) + ["native"]')"
+          CFG6P="$(create_config "lab-p6-win-${pst}-${WNAME}-$STAMP" \
+            "$(jq -nc --arg d "$DEP" --arg s "$pst" '{kind:"proxy",proxy_endpoint_id:$d,proxy_stack:$s}')" \
+            "$(jq -nc --argjson modes "$MODES_JSON" --argjson r "$RUNS" '{modes:$modes,runs:$r,concurrency:1,timeout_ms:15000,capture_mode:"headers-only",payload_sizes:[]}')")" || exit 1
+          LRESP="$(api POST "/api/v2/test-configs/$CFG6P/launch" "$(jq -nc --arg t "$WTESTER" '{tester_id:$t}')")"
+          RUN6P="$(jq -r '.run_id // .id // empty' <<<"$LRESP")"
+          if [ -z "$RUN6P" ]; then
+            fail "phase 6 ($WNAME): proxy launch pinned to tester $WTESTER failed: $(head -c 300 <<<"$LRESP")"
+          else
+            note "  run $RUN6P (matrix $STACK_MATRIX + native → target-$PT $pst at $(target_ip "$PT")) pinned to $WNAME — waiting"
+            wait_run "$RUN6P" || fail "phase 6 ($WNAME): proxy run $RUN6P did not finish in ${RUN_TIMEOUT}s (last=$R_STATUS)"
+            ATT6P="$(attempts_of "$RUN6P")"
+            note "  status=$R_STATUS ok=$R_OK fail=$R_FAIL attempts=$(jq length <<<"$ATT6P") worker=${R_WORKER:-?}"
+            echo "    $(per_mode_stats "$ATT6P")"
+            case "$R_STATUS" in completed|partial) ;; *) fail "phase 6 ($WNAME): proxy run status '$R_STATUS' ${R_ERR:+— $R_ERR}";; esac
+            [ "$R_WORKER" = "$WID" ] || fail "phase 6 ($WNAME): proxy run executed on worker ${R_WORKER:-?}, not the pinned Windows agent $WID"
+            B6P="$(broken_modes "$ATT6P")"
+            if [ -n "$B6P" ]; then fail "phase 6 ($WNAME): proxy mode(s) with ZERO successes through $pst from Windows: $B6P"; first_errors "$ATT6P" | sed 's/^/      /'; fi
+            NATIVE6="$(jq '[.[]|select(.protocol=="native")]|length' <<<"$ATT6P")"
+            [ "$NATIVE6" -eq 0 ] || fail "phase 6 ($WNAME): 'native' produced $NATIVE6 attempt(s) — dispatch must DROP it"
+            if [ -n "${P2_LINUX_ATT:-}" ] && [ "${P2_LINUX_STACK:-}" = "$pst" ]; then
+              D6P="$(diff_modes "$P2_LINUX_ATT" "$ATT6P")"
+              if [ -n "$D6P" ]; then note "  differs from the Linux runner (phase 2, $pst):"; echo "$D6P" | sed 's/^/      /'; else note "  proxy verdicts identical to the Linux runner (phase 2, $pst) mode for mode"; fi
+            fi
+            record "phase 6  $WNAME proxy/$pst → $R_STATUS ok=$R_OK fail=$R_FAIL${B6P:+ BROKEN=$B6P} ($(per_mode_stats "$ATT6P"))"
+          fi
+        fi
+      fi
+    done
+    [ "$FAILS" -eq "$P6_FAILS_BEFORE" ] && pass "phase 6 (windows runner)"
   fi
 fi
 

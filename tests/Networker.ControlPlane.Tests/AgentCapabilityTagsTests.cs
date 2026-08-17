@@ -33,6 +33,21 @@ public class AgentCapabilityTagsTests
     }
 
     [Fact]
+    public void Heartbeat_with_os_and_arch_decodes_the_host_words_and_older_frames_leave_them_null()
+    {
+        // Additive (v0.28.210+): a Windows runner's heartbeat carries its host.
+        var hb = Assert.IsType<HeartbeatMessage>(AgentMessageProcessor.Decode(
+            """{"type":"heartbeat","load":null,"version":"0.28.210","capabilities":{"chrome":false,"tshark":false},"os":"windows","arch":"x86_64"}"""));
+        Assert.Equal("windows", hb.Os);
+        Assert.Equal("x86_64", hb.Arch);
+
+        var old = Assert.IsType<HeartbeatMessage>(AgentMessageProcessor.Decode(
+            """{"type":"heartbeat","load":0.1,"version":"0.28.208"}"""));
+        Assert.Null(old.Os);
+        Assert.Null(old.Arch);
+    }
+
+    [Fact]
     public void Merge_writes_capabilities_under_the_key_and_preserves_other_tags()
     {
         var merged = AgentCapabilityTags.Merge("""{"env":"lab","zone":"eu"}""", new AgentCapabilities(true, false));

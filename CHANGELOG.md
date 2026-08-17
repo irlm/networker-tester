@@ -11,6 +11,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.210] - 2026-08-16
+
+### Added
+- **Lab: Windows Server VM runners** — `lab.sh up --runners N
+  --windows-runners M` adds M dockur/windows (QEMU + KVM) VMs numbered
+  `runner-(N+1)..runner-(N+M)` next to the Linux runner containers, on the
+  same pattern as the Windows target: first boot runs the checkout's
+  `install.ps1 -Yes -Component tester` (the RELEASED
+  `networker-tester.exe` — Windows binaries can't be cross-built on the Linux
+  host) plus **the C# agent published from the checkout** (`Networker.Agent`
+  win-x64 self-contained, built in the dotnet SDK image with BuildKit
+  `--output`, or with the host dotnet via `LAB_WIN_AGENT_BUILD=host`), then
+  runs the agent as a **SYSTEM `schtasks /SC ONSTART` task** with the cloud
+  bootstraps' `AGENT_DASHBOARD_URL` / `AGENT_API_KEY` (+ `AGENT_NAME`,
+  `AGENT_TESTER_PATH`) contract, so a `down` + `up` reboot reconnects on its
+  own. `lab.sh` mints the key and agent row like for Linux runners AND binds
+  the agent to a `project_tester` row (cloud docker, region lab, power_state
+  running, os windows), because the public launch API pins a run to a runner
+  only through `LaunchRequest.tester_id`. `status` shows os / capabilities /
+  tester per runner; `wait-windows`, `windows-log runner-K`, `windows-ssh
+  runner-K` cover runners too. Persistent disk `nwk-lab[N]_windows-runner-
+  storage-K`; console `LAB_WINDOWS_VIEWER_PORT+10+K-1`. Files:
+  `lab/images/windows/oem-runner/`, `lab/images/agent-win.Dockerfile`.
+- **Lab: `validate.sh` phase 6 — Windows runner runs the same tests.** For
+  every online agent with `os=windows` (bound tester): asserts the heartbeat
+  reports `os=windows` and `capabilities {chrome:false,tshark:false}`, then
+  launches the phase-1 network modes (tcp,dns,tls,tlsresume,http1,http2,
+  http3,curl,ping — ping via IcmpSendEcho on Windows) and the phase-2 proxy
+  matrix through the first Linux proxy target (nginx: incl. http3/pageload3,
+  websocket, udp, stamp) **pinned to it** (`tester_id`), asserts the run
+  executed on that agent (`worker_id`) with every mode ≥1 success, `native`
+  dropped, and prints any mode whose verdict differs from the Linux runner's
+  phase-1/2 runs on the same target. Skipped with a note without a Windows
+  runner. Phases 1-5 unchanged (fan-out now spreads across Linux + Windows).
+- **Lab: multiple instances** — `LAB_INSTANCE=N` (default 1) → compose
+  project `nwk-lab` / `nwk-labN`, `LAB_NET_PREFIX` `172.31.(99+N)`, host ports
+  5030 / 8088 / 55432 shifted by N-1 (Windows consoles by 100·(N-1)), state
+  in `lab/.state[-N]`, topology in `lab/.generated[-N]`, per-project volume
+  names, and the control plane's Docker (local) provider joins that
+  instance's network (`DASHBOARD_DOCKER_NETWORK=${LAB_PROJECT}_labnet`).
+  `validate.sh` follows `LAB_INSTANCE` too. Everything else — `LAB_CP_PORT`
+  & co — still overrides. Plus `LAB_IMAGE_TAG` (default `local`) to give a
+  checkout its own image tags, and `lab.sh compose <args>` (raw compose with
+  the instance's project/files/env).
+- **Agent heartbeat carries `os` + `arch`** (additive, omitted when null;
+  the `health` verb's vocabulary: `windows|linux|macos`, `x86_64|aarch64|…`);
+  the control plane persists them on `agent.os` / `agent.arch` (guarded,
+  steady-state heartbeat stays write-free) so a mixed Linux + Windows runner
+  pool is visible per runner in `GET /api/projects/{id}/agents` — nothing had
+  ever written those columns.
+
+### Changed
+- `lab.sh up --runners N` keeps meaning N **Linux** runners; the state file's
+  `LAB_RUNNERS` is the total (N + Windows), `LAB_WINDOWS_RUNNERS` the Windows
+  count. Windows target consoles: the first target on
+  `LAB_WINDOWS_VIEWER_PORT`, further Windows targets +1 each (was: every
+  Windows target on the same host port).
+
+---
+
 ## [0.28.209] - 2026-08-16
 
 ### Fixed

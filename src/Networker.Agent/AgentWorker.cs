@@ -125,7 +125,7 @@ public sealed class AgentWorker(
             // create-tester flow had just marked `running` silently lost the
             // first launches pinned to it (lab phase 5, 2026-08-16). Same lossy
             // TrySend semantics as the periodic sends below.
-            sink.TrySend(new HeartbeatMessage(Load: null, Version: AgentVersion.Current, Capabilities: capabilities));
+            sink.TrySend(new HeartbeatMessage(Load: null, Version: AgentVersion.Current, Capabilities: capabilities, Os: RunnerCapabilities.HostOs, Arch: RunnerCapabilities.HostArch));
 
             while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false))
             {
@@ -135,7 +135,7 @@ public sealed class AgentWorker(
                 // full-channel drop must not kill the heartbeat loop for the
                 // rest of the connection, so the result is ignored (the sink
                 // logs the drop) and teardown ends this loop via `token`.
-                sink.TrySend(new HeartbeatMessage(Load: null, Version: AgentVersion.Current, Capabilities: capabilities));
+                sink.TrySend(new HeartbeatMessage(Load: null, Version: AgentVersion.Current, Capabilities: capabilities, Os: RunnerCapabilities.HostOs, Arch: RunnerCapabilities.HostArch));
             }
         }
         catch (OperationCanceledException)
