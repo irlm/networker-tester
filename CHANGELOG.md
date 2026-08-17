@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.219] - 2026-08-17
+
+### Added
+
+- **`Release gap check`** (daily 07:31 UTC + `workflow_dispatch`) — compares every
+  `v*` tag against the published releases. A tag can outlive its release when the
+  auto-tag dispatch fails, which happened twice on 2026-08-17: `v0.28.214` was
+  lost permanently, and `v0.28.217` hit the identical failure an hour after the
+  recovery path shipped and was caught only because someone looked. Now nothing
+  has to look.
+  The check **fails** only when main's CURRENT version is the stranded one — the
+  case that re-running `Auto-tag & deploy` recovers. Older gaps are warnings and
+  are deliberately left alone, because dispatching `release.yml` for an old tag
+  would deploy that version over production. A GitHub API outage fails the job
+  rather than reporting phantom gaps. All four states were exercised against
+  stubbed `gh`/`git`, including the `bash -e` trap where a trailing
+  `[ ... ] && exit 1` would have failed the job on its false branch.
+
+---
+
 ## [0.28.218] - 2026-08-17
 
 ### Fixed

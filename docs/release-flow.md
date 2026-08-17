@@ -155,6 +155,13 @@ relevant only during the decommission soak window.
 - The nightly `Prod soak check` workflow (06:47 UTC) validates `/api/health`,
   `/api/health/background` (`all_healthy`), and the queue depth. It also confirms
   that the retired Rust services stay inactive.
+- The daily `Release gap check` (07:31 UTC, also `workflow_dispatch`) compares
+  every `v*` tag against the published releases, because a tag can outlive its
+  release when the dispatch fails (§3). It **fails** only when main's CURRENT
+  version is the stranded one — that case is recoverable by re-running
+  `Auto-tag & deploy`. Older gaps are reported as warnings and must be left
+  alone: dispatching `release.yml` for an old tag deploys that version over
+  production. Known historical gap: `v0.28.214`.
 
 ## Dependency updates (Dependabot)
 
