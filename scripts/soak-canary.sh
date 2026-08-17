@@ -28,7 +28,9 @@
 #      (/ws not proxied) reached prod unflagged. Also asserts dispatch DROPS
 #      native (v0.28.120) rather than failing it.
 #   6. tear the runner AND the endpoint down (validates P1-16 teardown), ALWAYS
-#      — even on failure.
+#      — even on failure — and, on a GREEN run, delete the test-configs it
+#      created. The canary must leave no residue: it used to leak several
+#      configs a night, which is what eventually broke it (see the teardown).
 #
 # Any assertion miss exits non-zero → the workflow goes red → watchers are
 # alerted. Self-contained: no standing infra, ~$0.03 of VM time per run.
@@ -48,6 +50,11 @@
 #   CANARY_MODE_COVERAGE   "1" → also run the full mode matrix through the proxy
 #                          (default "1"; requires the apibench phase since it
 #                          reuses that endpoint)
+#   CANARY_CONFIG_TTL_DAYS days before a leftover `soak-canary*` config is
+#                          reaped at startup (default 7; "0" disables). Only
+#                          the canary's own rows are ever matched.
+#   CANARY_KEEP_CONFIGS    "1" → never delete this run's configs, even on green
+#                          (default "0"; failures always keep them)
 #   CANARY_WINDOWS         "1" → PHASE 5: provision ONE Windows Server + IIS
 #                          endpoint cell (pending kind, os windows, proxy_stack
 #                          iis) and run the deterministic proxy matrix through
@@ -129,6 +136,7 @@ ACCT=$(api GET "/api/projects/$PID/cloud-accounts" \
 # ── ensure a runner ──────────────────────────────────────────────────────────
 PROVISIONED=""
 APIBENCH_CGS=""  # space-separated apibench comparison-group ids to reap (phase 2)
+CREATED_CFGS=""  # space-separated test-config ids THIS run created (reaped on green)
 RUNNER_ID=$(api GET "/api/projects/$PID/testers" \
   | jq -r '[.[]|select(.power_state=="running" and .allocation=="idle")][0].tester_id // empty')
 
@@ -183,29 +191,68 @@ cleanup() {
     note "tearing down ephemeral runner ${PROVISIONED} ..."
     api DELETE "/api/projects/${PID:-}/testers/${PROVISIONED}?force=true" >/dev/null 2>&1 || true
   fi
+  # Delete the test-configs THIS run created. Nothing used to, so the project
+  # grew by several configs a night (probe + modes + every apibench/matrix cell)
+  # until the GET list — hard-capped at the 200 NEWEST rows — could no longer
+  # see the long-lived `soak-canary-probe` row, while UNIQUE(project_id,name)
+  # still rejected re-creating it: every run from 2026-08-13 on died with
+  # "a test config with this name already exists".
+  # test_run cascades from test_config, so a FAILED run keeps its configs —
+  # a red night stays inspectable in the UI — and only green runs sweep.
+  if [ -n "${CREATED_CFGS:-}" ] && [ -n "${PID:-}" ]; then
+    if [ "$code" = "0" ] && [ "${CANARY_KEEP_CONFIGS:-0}" != "1" ]; then
+      local c n=0
+      for c in ${CREATED_CFGS}; do
+        api DELETE "/api/v2/test-configs/${c}" >/dev/null 2>&1 && n=$((n + 1))
+      done
+      note "deleted ${n} canary test-config(s)"
+    else
+      note "keeping canary test-config(s) for inspection: ${CREATED_CFGS}"
+    fi
+  fi
   exit "$code"
 }
 trap cleanup EXIT
 
-# ── find-or-create a lightweight probe config ────────────────────────────────
+# ── reap canary configs leaked by earlier runs ───────────────────────────────
+# Everything the canary creates is named `soak-canary*`, so this only ever
+# touches its own rows — a human's configs in the same project are untouched.
+# Bounded by the same 200-newest list, which is fine: the leaked rows ARE the
+# newest, so a backlog drains at up to 200/run. Deleting a config cascades to
+# its runs, hence the TTL — recent nights stay inspectable.
+CFG_TTL_DAYS="${CANARY_CONFIG_TTL_DAYS:-7}"
+if [ "$CFG_TTL_DAYS" != "0" ]; then
+  CUTOFF=$(date -u -d "${CFG_TTL_DAYS} days ago" +%Y-%m-%d 2>/dev/null \
+    || date -u -v-"${CFG_TTL_DAYS}"d +%Y-%m-%d)
+  REAPED=0
+  for stale in $(api GET "/api/v2/projects/$PID/test-configs" \
+      | jq -r --arg c "$CUTOFF" \
+        '(if type=="array" then . else (.configs // .items // []) end)
+         | .[]? | select((.name // "") | startswith("soak-canary"))
+                | select(((.created_at // "")[0:10]) < $c) | .id // empty' 2>/dev/null); do
+    api DELETE "/api/v2/test-configs/$stale" >/dev/null 2>&1 && REAPED=$((REAPED + 1))
+  done
+  [ "$REAPED" -gt 0 ] && note "reaped $REAPED canary config(s) older than ${CFG_TTL_DAYS}d"
+fi
+
+# ── create a lightweight probe config (unique per run) ───────────────────────
 # dns+tcp+tls against a stable public host on :443 — produces attempt rows with
 # per-phase results without depending on an HTTP path (avoids the P1-4 class).
-# The config NAME is unique-constrained, so REUSE one canary config across runs
-# (creating one every night collides after the first and accumulates rows).
-CFG_NAME="soak-canary-probe"
-CFG_ID=$(api GET "/api/v2/projects/$PID/test-configs" \
-  | jq -r --arg n "$CFG_NAME" \
-    '(if type=="array" then . else (.configs // .items // []) end) | [.[]|select(.name==$n)][0].id // empty')
-if [ -z "$CFG_ID" ]; then
-  CFG=$(api POST "/api/v2/projects/$PID/test-configs" \
-    "$(jq -nc --arg n "$CFG_NAME" --arg h "$TARGET_HOST" \
-       '{name:$n,endpoint:{kind:"network",host:$h,port:443},workload:{modes:["dns","tcp","tls"],runs:2,concurrency:1,timeout_ms:5000}}')")
-  CFG_ID=$(jq -r '.id // empty' <<<"$CFG")
-  [ -n "$CFG_ID" ] || fail "config create failed: $(head -c 200 <<<"$CFG")"
-  note "created canary config $CFG_ID"
-else
-  note "reusing canary config $CFG_ID"
-fi
+#
+# This used to find-or-create ONE long-lived `soak-canary-probe` row. That is
+# unsound against this API: the list is capped at the 200 newest configs while
+# the name is unique per project, so once 200 newer rows existed the lookup
+# missed a row the create then collided with — unrecoverable, and exactly how
+# the canary died every night from 2026-08-13. A per-run name plus the teardown
+# sweep needs no lookup at all, and cannot collide.
+CFG_NAME="soak-canary-probe-$(date -u +%Y%m%dT%H%M%SZ)"
+CFG=$(api POST "/api/v2/projects/$PID/test-configs" \
+  "$(jq -nc --arg n "$CFG_NAME" --arg h "$TARGET_HOST" \
+     '{name:$n,endpoint:{kind:"network",host:$h,port:443},workload:{modes:["dns","tcp","tls"],runs:2,concurrency:1,timeout_ms:5000}}')")
+CFG_ID=$(jq -r '.id // empty' <<<"$CFG")
+[ -n "$CFG_ID" ] || fail "config create failed: $(head -c 200 <<<"$CFG")"
+CREATED_CFGS="${CREATED_CFGS} ${CFG_ID}"
+note "created canary config $CFG_ID ($CFG_NAME)"
 
 RUN=$(api POST "/api/v2/test-configs/$CFG_ID/launch" '{}')
 RUN_ID=$(jq -r '.run_id // .id // empty' <<<"$RUN")
@@ -422,6 +469,7 @@ MC_CFG=$(api POST "/api/v2/projects/$PID/test-configs" \
        workload:{modes:$modes, runs:2, concurrency:1, timeout_ms:8000, capture_mode:"headers-only", payload_sizes:[]}}')")
 MC_CFG_ID=$(jq -r '.id // empty' <<<"$MC_CFG")
 [ -n "$MC_CFG_ID" ] || fail "phase 3: mode-coverage config create failed: $(head -c 200 <<<"$MC_CFG")"
+CREATED_CFGS="${CREATED_CFGS} ${MC_CFG_ID}"   # reaped on green by the EXIT trap
 
 MC_RUN=$(api POST "/api/v2/test-configs/$MC_CFG_ID/launch" '{}')
 MC_RUN_ID=$(jq -r '.run_id // .id // empty' <<<"$MC_RUN")

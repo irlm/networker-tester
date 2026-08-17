@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The prod run-execution canary has been red for five straight nights (#728)
+  on a healthy production** — every run since 2026-08-13 died before it probed
+  anything, at `❌ CANARY FAIL: config create failed: {"error":"a test config
+  with this name already exists"}`. The canary is what proves runs actually
+  execute end to end, so prod has had no run-execution signal since 08-12.
+
+  The canary did find-or-create on one long-lived `soak-canary-probe` config.
+  That cannot work against this API: `GET /test-configs` returns only the **200
+  newest** rows while the name is `UNIQUE(project_id, name)` — so once 200 newer
+  configs existed the lookup missed a row the create then collided with, with no
+  way out. What supplied those 200 rows was the canary itself: it created a
+  config every night (probe, mode-coverage, and one per apibench/matrix cell)
+  and **never deleted any of them**, so it slowly buried its own probe config
+  and then wedged permanently.
+
+  - The probe config now takes a per-run unique name — no lookup, so nothing to
+    miss and nothing to collide with.
+  - The EXIT trap deletes the configs the run created. Only on **green**: runs
+    cascade from configs, so a red night stays inspectable.
+  - A startup reaper deletes leftover `soak-canary*` configs older than
+    `CANARY_CONFIG_TTL_DAYS` (default 7), draining the backlog already in prod —
+    including the wedged `soak-canary-probe` row — without touching anything a
+    human made.
+
+  Note the underlying trap is still there for other clients: a find-or-create
+  built on that 200-row list is unsound, and the list gives no way to ask
+  whether one name exists. Worth an exact-`name` filter on the endpoint.
+
 ---
 
 ## [0.28.223] - 2026-08-17
