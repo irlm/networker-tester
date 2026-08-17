@@ -38,6 +38,10 @@ const CMD_ACK: u8 = 0x10;
 const CMD_REPORT: u8 = 0x11;
 const CTRL_LEN: usize = 12;
 const DATA_HDR_LEN: usize = 8;
+/// How long to keep receiving after CMD_DONE, for datagrams the path reordered
+/// behind it. Bounded so a lossy path cannot extend the probe: the transfer
+/// window is measured to the last DATA packet regardless.
+const DONE_DRAIN: Duration = Duration::from_millis(150);
 const CHUNK_SIZE: usize = 1400;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -98,22 +102,38 @@ pub async fn run_udpdownload_probe(
         );
     }
 
-    // Wait for CMD_ACK
-    if let Err(msg) = wait_for_ack(&sock, cfg.timeout_ms).await {
-        return udp_tp_failed(
-            run_id,
-            attempt_id,
-            sequence_num,
-            Protocol::UdpDownload,
-            started_at,
-            msg,
-        );
-    }
+    // Wait for CMD_ACK (a data packet arriving first means the transfer is
+    // already underway — see AckOutcome).
+    let ack = match wait_for_ack(&sock, cfg.timeout_ms).await {
+        Ok(outcome) => outcome,
+        Err(msg) => {
+            return udp_tp_failed(
+                run_id,
+                attempt_id,
+                sequence_num,
+                Protocol::UdpDownload,
+                started_at,
+                msg,
+            );
+        }
+    };
 
     // Receive data packets until CMD_DONE (or timeout).
     let total_seqs_hint = payload_bytes.div_ceil(CHUNK_SIZE) as u32;
-    let (received_seqs, received_bytes, transfer_ms) =
-        recv_download(&sock, total_seqs_hint, cfg.timeout_ms).await;
+    let (received_seqs, received_bytes, transfer_ms) = match ack {
+        // CMD_DONE beat the data: nothing is left on the wire to receive.
+        AckOutcome::Done => (HashSet::new(), 0usize, 0.0f64),
+        AckOutcome::Ack => recv_download(&sock, total_seqs_hint, cfg.timeout_ms, None).await,
+        AckOutcome::EarlyData { seq, data_len, at } => {
+            recv_download(
+                &sock,
+                total_seqs_hint,
+                cfg.timeout_ms,
+                Some((seq, data_len, at)),
+            )
+            .await
+        }
+    };
 
     let datagrams_sent = total_seqs_hint;
     let datagrams_received = received_seqs.len() as u32;
@@ -213,7 +233,9 @@ pub async fn run_udpupload_probe(
     }
 
     // Wait for CMD_ACK
-    if let Err(msg) = wait_for_ack(&sock, cfg.timeout_ms).await {
+    // Upload: the server answers a CMD_UPLOAD with the ACK only, so any outcome
+    // other than an error means it is listening for our data.
+    if let Err(msg) = wait_for_ack(&sock, cfg.timeout_ms).await.map(|_| ()) {
         return udp_tp_failed(
             run_id,
             attempt_id,
@@ -345,20 +367,79 @@ async fn connect_udp(cfg: &UdpThroughputConfig) -> Result<(UdpSocket, SocketAddr
     Ok((sock, target_addr))
 }
 
-/// Wait for CMD_ACK from the server; return Err with a message on timeout/error.
-async fn wait_for_ack(sock: &UdpSocket, timeout_ms: u64) -> Result<(), String> {
-    let mut buf = vec![0u8; CTRL_LEN * 2];
-    match tokio::time::timeout(Duration::from_millis(timeout_ms), sock.recv(&mut buf)).await {
-        Ok(Ok(n)) if n == CTRL_LEN => {
-            if buf[..4] == *MAGIC && buf[4] == CMD_ACK {
-                Ok(())
-            } else {
-                Err(format!("Unexpected response to CMD: {:?}", &buf[..n]))
-            }
+/// What ended the wait for the server's CMD_ACK.
+///
+/// On a WAN the ACK is NOT reliably the first datagram back: the server sends it
+/// microseconds before the data burst, so any path that reorders (jitter, ECMP,
+/// LTE/Wi-Fi) can deliver a data packet first — and the ACK itself can be lost
+/// outright. Both mean "the transfer is underway", not "the probe failed".
+#[derive(Debug)]
+enum AckOutcome {
+    /// CMD_ACK arrived, the normal case.
+    Ack,
+    /// A DATA packet arrived before the ACK (reordered) or instead of it (ACK
+    /// lost). Carried through so its bytes are counted rather than discarded.
+    EarlyData {
+        seq: u32,
+        data_len: usize,
+        at: Instant,
+    },
+    /// CMD_DONE arrived first: the whole download was lost or reordered past
+    /// the end of the stream, so there is nothing left to receive.
+    Done,
+}
+
+/// Wait for the server's CMD_ACK, tolerating a reordered path.
+///
+/// Two WAN-only bugs lived here (found under `tc netem … reorder`, matching the
+/// production sweep's "Short response: 24 bytes"):
+///   * the buffer was `CTRL_LEN * 2` = 24 bytes, and `recv()` TRUNCATES a
+///     datagram to the buffer and returns the buffer length — so a 1408-byte
+///     data packet that overtook the ACK was reported as a 24-byte "short
+///     response". The message was echoing our own buffer size.
+///   * the first datagram was the only one considered: anything that was not
+///     the ACK failed the probe outright, instead of being skipped or
+///     recognised as the transfer having already started.
+async fn wait_for_ack(sock: &UdpSocket, timeout_ms: u64) -> Result<AckOutcome, String> {
+    // Full-size buffer: never truncate, so a datagram's real length is known.
+    let mut buf = vec![0u8; CTRL_LEN + CHUNK_SIZE + 64];
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    let mut ignored: u32 = 0;
+
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(timed_out_waiting_for_ack(ignored));
         }
-        Ok(Ok(n)) => Err(format!("Short response: {n} bytes")),
-        Ok(Err(e)) => Err(format!("recv error: {e}")),
-        Err(_) => Err("Timed out waiting for CMD_ACK".into()),
+
+        match tokio::time::timeout(remaining, sock.recv(&mut buf)).await {
+            Ok(Ok(n)) if n == CTRL_LEN && buf[..4] == *MAGIC && buf[4] == CMD_ACK => {
+                return Ok(AckOutcome::Ack);
+            }
+            Ok(Ok(n)) if n == CTRL_LEN && buf[..4] == *MAGIC && buf[4] == CMD_DONE => {
+                return Ok(AckOutcome::Done);
+            }
+            Ok(Ok(n)) if n > DATA_HDR_LEN => {
+                return Ok(AckOutcome::EarlyData {
+                    seq: u32::from_le_bytes(buf[..4].try_into().unwrap_or([0; 4])),
+                    data_len: n - DATA_HDR_LEN,
+                    at: Instant::now(),
+                });
+            }
+            // A stray or unrecognised datagram is not a verdict on the probe —
+            // keep waiting for the ACK until the deadline.
+            Ok(Ok(_)) => ignored += 1,
+            Ok(Err(e)) => return Err(format!("recv error: {e}")),
+            Err(_) => return Err(timed_out_waiting_for_ack(ignored)),
+        }
+    }
+}
+
+fn timed_out_waiting_for_ack(ignored: u32) -> String {
+    if ignored == 0 {
+        "Timed out waiting for CMD_ACK".into()
+    } else {
+        format!("Timed out waiting for CMD_ACK ({ignored} unrelated datagram(s) arrived)")
     }
 }
 
@@ -369,26 +450,59 @@ async fn recv_download(
     sock: &UdpSocket,
     expected_seqs: u32,
     timeout_ms: u64,
+    early: Option<(u32, usize, Instant)>,
 ) -> (HashSet<u32>, usize, f64) {
     let mut received_seqs: HashSet<u32> = HashSet::new();
     let mut received_bytes: usize = 0;
     let mut t_first: Option<Instant> = None;
     let mut t_last = Instant::now();
+    // A data packet that overtook the ACK was already read off the socket; count
+    // it here or the transfer would be short by one datagram through no fault
+    // of the path.
+    if let Some((seq, data_len, at)) = early {
+        received_seqs.insert(seq);
+        received_bytes += data_len;
+        t_first = Some(at);
+        t_last = at;
+    }
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     let mut buf = vec![0u8; CTRL_LEN + CHUNK_SIZE + 64];
+    // CMD_DONE is the LAST datagram the server sends, so on a reordering path it
+    // routinely arrives while data is still in flight. Breaking on it counted
+    // those in-flight datagrams as path loss (a 47-datagram download reported
+    // 40% loss under `netem … reorder 50%`). Drain briefly instead; the
+    // throughput window still ends at the last DATA packet, not at the drain.
+    let mut drain_until: Option<Instant> = None;
 
     loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
+        let mut remaining = deadline.saturating_duration_since(Instant::now());
+        if let Some(until) = drain_until {
+            remaining = remaining.min(until.saturating_duration_since(Instant::now()));
+        }
         if remaining.is_zero() {
             break;
         }
 
         match tokio::time::timeout(remaining, sock.recv(&mut buf)).await {
             Ok(Ok(n)) if n == CTRL_LEN && buf[..4] == *MAGIC && buf[4] == CMD_DONE => {
-                // Server signals end of stream.
-                debug!("UDP download: CMD_DONE received");
-                t_last = Instant::now();
-                break;
+                // Server signals end of stream: everything still in flight is
+                // arriving now, so give it a bounded grace period.
+                debug!("UDP download: CMD_DONE received; draining stragglers");
+                if t_first.is_none() {
+                    t_last = Instant::now();
+                }
+                drain_until = Some(Instant::now() + DONE_DRAIN);
+            }
+            // A CONTROL packet is 12 bytes and starts with the magic — longer
+            // than DATA_HDR_LEN, so without this guard a late or duplicated
+            // CMD_ACK (routine on a reordering path) was counted as a data
+            // packet whose "sequence number" was the magic itself: 48 received
+            // datagrams out of 47 sent, plus 4 phantom bytes.
+            Ok(Ok(n)) if n == CTRL_LEN && buf[..4] == *MAGIC => {
+                debug!(
+                    "UDP download: late control packet cmd={:#x} ignored",
+                    buf[4]
+                );
             }
             Ok(Ok(n)) if n > DATA_HDR_LEN => {
                 let seq = u32::from_le_bytes(buf[..4].try_into().unwrap_or([0; 4]));
@@ -474,17 +588,38 @@ async fn send_upload(
 }
 
 /// Wait for CMD_REPORT; return the server's acknowledged byte count (or None on timeout).
+///
+/// Same reordering tolerance as [`wait_for_ack`]: only the FIRST datagram used to
+/// be considered, so an ACK that arrived late (routine on a jittery path, since
+/// we stop sending long before the ACK's flight time is up) made the probe drop
+/// the server's byte count and fall back to locally-sent bytes.
 async fn wait_for_report(sock: &UdpSocket, timeout_ms: u64) -> Option<usize> {
-    let mut buf = vec![0u8; CTRL_LEN * 2];
-    match tokio::time::timeout(Duration::from_millis(timeout_ms), sock.recv(&mut buf)).await {
-        Ok(Ok(n)) if n == CTRL_LEN && buf[..4] == *MAGIC && buf[4] == CMD_REPORT => {
-            let value = u32::from_le_bytes(buf[8..12].try_into().unwrap_or([0; 4])) as usize;
-            debug!("UDP upload: CMD_REPORT bytes_received={value}");
-            Some(value)
-        }
-        _ => {
+    let mut buf = vec![0u8; CTRL_LEN + CHUNK_SIZE + 64];
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
             debug!("UDP upload: no CMD_REPORT received");
-            None
+            return None;
+        }
+
+        match tokio::time::timeout(remaining, sock.recv(&mut buf)).await {
+            Ok(Ok(n)) if n == CTRL_LEN && buf[..4] == *MAGIC && buf[4] == CMD_REPORT => {
+                let value = u32::from_le_bytes(buf[8..12].try_into().unwrap_or([0; 4])) as usize;
+                debug!("UDP upload: CMD_REPORT bytes_received={value}");
+                return Some(value);
+            }
+            // Any other datagram (a late ACK, a straggler) is not the report.
+            Ok(Ok(_)) => continue,
+            Ok(Err(e)) => {
+                debug!("UDP upload: recv error waiting for CMD_REPORT: {e}");
+                return None;
+            }
+            Err(_) => {
+                debug!("UDP upload: no CMD_REPORT received");
+                return None;
+            }
         }
     }
 }
@@ -877,5 +1012,118 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ── reordering tolerance (WAN-only failures) ─────────────────────────────
+    // The production sweep saw `udpdownload` fail from a cloud runner with
+    // "Short response: 24 bytes" while every LAN run passed. Reproduced in the
+    // Docker lab with `tc netem delay 20ms 10ms reorder 50% 50%` on the
+    // server->client direction: 4 of 8 attempts failed. These tests pin the
+    // three defects that combination exposed.
+
+    /// A client socket connected to a fake server socket, both on loopback.
+    async fn socket_pair() -> (UdpSocket, UdpSocket) {
+        let server = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        client.connect(server.local_addr().unwrap()).await.unwrap();
+        server.connect(client.local_addr().unwrap()).await.unwrap();
+        (client, server)
+    }
+
+    fn data_pkt(seq: u32, payload: usize) -> Vec<u8> {
+        let mut pkt = vec![0u8; DATA_HDR_LEN + payload];
+        pkt[..4].copy_from_slice(&seq.to_le_bytes());
+        pkt
+    }
+
+    #[tokio::test]
+    async fn wait_for_ack_takes_the_ack() {
+        let (client, server) = socket_pair().await;
+        server.send(&make_ctrl(CMD_ACK, 0)).await.unwrap();
+        assert!(matches!(
+            wait_for_ack(&client, 2000).await,
+            Ok(AckOutcome::Ack)
+        ));
+    }
+
+    /// The regression: a full-size DATA packet that overtook the ACK was read
+    /// into a 24-byte buffer, truncated by recv(), and reported as
+    /// "Short response: 24 bytes" — a hard probe failure on a healthy transfer.
+    #[tokio::test]
+    async fn a_data_packet_that_overtakes_the_ack_starts_the_transfer() {
+        let (client, server) = socket_pair().await;
+        server.send(&data_pkt(7, CHUNK_SIZE)).await.unwrap();
+
+        match wait_for_ack(&client, 2000).await {
+            Ok(AckOutcome::EarlyData { seq, data_len, .. }) => {
+                assert_eq!(seq, 7);
+                assert_eq!(data_len, CHUNK_SIZE, "the datagram must not be truncated");
+            }
+            other => panic!("expected EarlyData, got {other:?}"),
+        }
+    }
+
+    /// A stray datagram is not a verdict on the probe: keep waiting for the ACK.
+    #[tokio::test]
+    async fn wait_for_ack_skips_stray_datagrams() {
+        let (client, server) = socket_pair().await;
+        server.send(&[0xAA, 0xBB]).await.unwrap();
+        server.send(&make_ctrl(CMD_ACK, 0)).await.unwrap();
+        assert!(matches!(
+            wait_for_ack(&client, 2000).await,
+            Ok(AckOutcome::Ack)
+        ));
+    }
+
+    #[tokio::test]
+    async fn cmd_done_before_the_ack_means_nothing_is_left_to_receive() {
+        let (client, server) = socket_pair().await;
+        server.send(&make_ctrl(CMD_DONE, 0)).await.unwrap();
+        assert!(matches!(
+            wait_for_ack(&client, 2000).await,
+            Ok(AckOutcome::Done)
+        ));
+    }
+
+    /// CMD_DONE is the last datagram the server sends, so a reordering path
+    /// delivers it while data is still in flight. Breaking on it counted those
+    /// datagrams as path loss (47 sent, 27 "received" in the lab). It must
+    /// drain instead — and a late CMD_ACK must not be mistaken for a data
+    /// packet whose sequence number is the magic (48 received out of 47 sent).
+    #[tokio::test]
+    async fn cmd_done_drains_stragglers_and_late_control_packets_are_not_data() {
+        let (client, server) = socket_pair().await;
+        server.send(&data_pkt(0, 100)).await.unwrap();
+        server.send(&make_ctrl(CMD_DONE, 300)).await.unwrap(); // reordered ahead
+        server.send(&data_pkt(1, 100)).await.unwrap();
+        server.send(&make_ctrl(CMD_ACK, 0)).await.unwrap(); // late ACK
+        server.send(&data_pkt(2, 100)).await.unwrap();
+
+        let (seqs, bytes, _ms) = recv_download(&client, 3, 2000, None).await;
+        assert_eq!(seqs.len(), 3, "stragglers after CMD_DONE must be counted");
+        assert_eq!(bytes, 300, "a late CMD_ACK must not add phantom bytes");
+    }
+
+    /// The data packet consumed while waiting for the ACK still belongs to the
+    /// transfer.
+    #[tokio::test]
+    async fn early_data_is_counted_by_the_receiver() {
+        let (client, server) = socket_pair().await;
+        server.send(&data_pkt(1, 50)).await.unwrap();
+        server.send(&make_ctrl(CMD_DONE, 100)).await.unwrap();
+
+        let early = Some((0u32, 50usize, Instant::now()));
+        let (seqs, bytes, _ms) = recv_download(&client, 2, 2000, early).await;
+        assert_eq!(seqs.len(), 2);
+        assert_eq!(bytes, 100);
+    }
+
+    /// A late ACK must not be returned as the server's byte report.
+    #[tokio::test]
+    async fn wait_for_report_skips_a_late_ack() {
+        let (client, server) = socket_pair().await;
+        server.send(&make_ctrl(CMD_ACK, 0)).await.unwrap();
+        server.send(&make_ctrl(CMD_REPORT, 4096)).await.unwrap();
+        assert_eq!(wait_for_report(&client, 2000).await, Some(4096));
     }
 }

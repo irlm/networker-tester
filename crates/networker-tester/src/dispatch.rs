@@ -311,6 +311,10 @@ async fn dispatch_once_inner(
                 // Zero-info traces get classified against the probe URL's own
                 // port: reachable-over-TCP ⇒ the environment ate the ICMP.
                 verify_tcp_port: Some(target.port_or_known_default().unwrap_or(443)),
+                // Honour the run's timeout: a filtered path used to cost
+                // max_ttl x per-hop (30 x 1 s) no matter what the caller asked
+                // for, which read as a hang from the second iteration on.
+                total_budget_ms: cfg.timeout_ms,
                 ..PathProbeConfig::default()
             };
             run_path_probe(run_id, seq, &path_cfg).await
