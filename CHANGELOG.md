@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.210] - 2026-08-16
+
+### Added
+- **Prod canary: optional Windows Server + IIS cell (phase 5).** `CANARY_WINDOWS=1`
+  / workflow input `windows=1` (on by default on the weekly Sunday run)
+  provisions one Windows+IIS endpoint through the real deploy path and asserts
+  every deterministic proxy mode succeeds through IIS — in particular
+  `http2`/`pageload2` (the tester's h2 `:scheme`/`:authority` fix in 0.28.208:
+  http.sys had been RST-ing every HTTP/2 probe, invisible to the Linux-only
+  canary) and `websocket` (IIS payload `/ws` route). h3 modes are excluded
+  (IIS QUIC needs an SNI hostname binding — see `shared/http-stacks.json`).
+
+---
+
 ## [0.28.209] - 2026-08-16
 
 ### Fixed
