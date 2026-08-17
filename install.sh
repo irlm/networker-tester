@@ -331,7 +331,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.210"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.212"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -5589,6 +5589,20 @@ _iis_setup_powershell() {
 # -- IIS setup for HTTP stack comparison --------------------------------------
 \$ErrorActionPreference = 'Stop'
 \$fqdn = "${fqdn}"
+# No hostname passed (AWS bakes this payload into UserData before the
+# instance's public DNS exists): ask EC2 IMDS (IMDSv2). The SNI binding must
+# carry the exact name the control plane records as endpoint_hosts and
+# dispatches to (ec2-….compute.amazonaws.com) — that name is what makes
+# http.sys complete the QUIC handshake (HTTP/3 needs SNI; an IP has none).
+if (-not \$fqdn) {
+    try {
+        \$imdsTok = Invoke-RestMethod -Method Put -Uri 'http://169.254.169.254/latest/api/token' \`
+            -Headers @{ 'X-aws-ec2-metadata-token-ttl-seconds' = '60' } -TimeoutSec 2
+        \$imdsDns = Invoke-RestMethod -Uri 'http://169.254.169.254/latest/meta-data/public-hostname' \`
+            -Headers @{ 'X-aws-ec2-metadata-token' = \$imdsTok } -TimeoutSec 2
+        if (\$imdsDns -and "\$imdsDns" -match '\.amazonaws\.com\$') { \$fqdn = "\$imdsDns".Trim(); Write-Host "FQDN from EC2 IMDS: \$fqdn" }
+    } catch { }
+}
 
 # 1. Install IIS + URL Rewrite + ARR (for reverse-proxy of /page, /asset)
 #    Web-WebSockets: without the WebSocket protocol feature ARR cannot forward
@@ -10244,6 +10258,16 @@ _deploy_display_plan() {
     echo ""
 }
 
+# One machine-readable line per endpoint that has a DNS name — the control
+# plane's DeployRunner (EndpointHostRe) records it as deployment.endpoint_hosts[i]
+# next to the ip and dispatches proxy runs to the NAME (TLS SNI → HTTP/3
+# through IIS's hostname binding). Silent when the cloud gave no name (GCP).
+# $1 = ip, $2 = fqdn (may be empty)
+_deploy_report_endpoint_host() {
+    [[ -n "${2:-}" && -n "${1:-}" ]] || return 0
+    print_info "endpoint_host: ${2} (${1})"
+}
+
 # Generate the tester config JSON from deployed endpoint IPs + test params.
 _deploy_generate_tester_config() {
     local cfg="$DEPLOY_CONFIG_PATH"
@@ -10798,6 +10822,7 @@ deploy_from_config() {
                 step_azure_deploy_endpoint
                 DEPLOY_EP_IPS[$i]="$AZURE_ENDPOINT_IP"
                 DEPLOY_EP_FQDNS[$i]="${AZURE_ENDPOINT_FQDN:-}"
+                _deploy_report_endpoint_host "$AZURE_ENDPOINT_IP" "${AZURE_ENDPOINT_FQDN:-}"
                 # Set up http_stacks requested for this Azure endpoint
                 local ep_stacks="${DEPLOY_EP_HTTP_STACKS[$i]}"
                 if [[ -n "$ep_stacks" ]]; then
@@ -10862,6 +10887,7 @@ deploy_from_config() {
                 step_aws_deploy_endpoint
                 DEPLOY_EP_IPS[$i]="$AWS_ENDPOINT_IP"
                 DEPLOY_EP_FQDNS[$i]="${AWS_ENDPOINT_FQDN:-}"
+                _deploy_report_endpoint_host "$AWS_ENDPOINT_IP" "${AWS_ENDPOINT_FQDN:-}"
                 # Set up http_stacks requested for this AWS endpoint
                 local ep_stacks="${DEPLOY_EP_HTTP_STACKS[$i]}"
                 if [[ -n "$ep_stacks" ]]; then
@@ -10909,6 +10935,7 @@ deploy_from_config() {
                 step_gcp_deploy_endpoint
                 DEPLOY_EP_IPS[$i]="$GCP_ENDPOINT_IP"
                 DEPLOY_EP_FQDNS[$i]="${GCP_ENDPOINT_FQDN:-}"
+                _deploy_report_endpoint_host "$GCP_ENDPOINT_IP" "${GCP_ENDPOINT_FQDN:-}"
                 # Set up http_stacks requested for this GCP endpoint
                 local ep_stacks="${DEPLOY_EP_HTTP_STACKS[$i]}"
                 if [[ -n "$ep_stacks" ]]; then

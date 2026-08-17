@@ -77,6 +77,7 @@ public class SchedulerAndThrottleLoopTests
                 started_at TEXT,
                 finished_at TEXT,
                 endpoint_ips TEXT,
+                endpoint_hosts TEXT,
                 agent_id TEXT,
                 error_message TEXT,
                 log TEXT,

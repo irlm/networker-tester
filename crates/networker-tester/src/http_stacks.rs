@@ -147,6 +147,9 @@ mod tests {
     fn h3_capability_matches_installer_configs() {
         assert!(by_name("nginx").unwrap().h3);
         assert!(by_name("caddy").unwrap().h3);
+        // http.sys serves HTTP/3 to SNI clients; the installer binds an SNI
+        // hostname listener and the control plane dispatches by hostname (V050).
+        assert!(by_name("iis").unwrap().h3);
         assert!(!by_name("apache").unwrap().h3);
         assert!(!by_name("haproxy").unwrap().h3);
         assert!(!by_name("traefik").unwrap().h3);

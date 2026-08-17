@@ -56,6 +56,8 @@ test-results/
 # Local dev / lab state (dev.sh, lab/lab.sh)
 /.dev-agent.key
 /lab/.generated/
+/lab/.generated-*/
 /lab/.state/
+/lab/.state-*/
 /lab/native/.state/
 /.dev.env

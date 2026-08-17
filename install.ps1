@@ -76,7 +76,7 @@ $ErrorActionPreference = "Stop"
 $RepoHttps     = "https://github.com/irlm/networker-tester"
 $RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"
-$InstallerVersion = "v0.28.210"  # fallback when gh is unavailable
+$InstallerVersion = "v0.28.212"  # fallback when gh is unavailable
 
 # ── Print helpers ──────────────────────────────────────────────────────────────
 function Write-Ok   ($msg) { Write-Host "  v " -NoNewline -ForegroundColor Green;   Write-Host $msg }
@@ -2595,6 +2595,21 @@ function Invoke-SetupIIS {
     Invoke-EnsureTls12
     $siteRoot = "C:\networker-static"
     $fqdn = if ($Fqdn) { $Fqdn.Trim() } else { "" }
+    # No -Fqdn: on EC2 ask IMDS (IMDSv2) for the public DNS name — the SNI
+    # binding must carry the exact name the control plane dispatches to
+    # (deployment.endpoint_hosts); http.sys serves HTTP/3 only with SNI.
+    if (-not $fqdn) {
+        try {
+            $imdsTok = Invoke-RestMethod -Method Put -Uri 'http://169.254.169.254/latest/api/token' `
+                -Headers @{ 'X-aws-ec2-metadata-token-ttl-seconds' = '60' } -TimeoutSec 2
+            $imdsDns = Invoke-RestMethod -Uri 'http://169.254.169.254/latest/meta-data/public-hostname' `
+                -Headers @{ 'X-aws-ec2-metadata-token' = $imdsTok } -TimeoutSec 2
+            if ($imdsDns -and "$imdsDns" -match '\.amazonaws\.com$') { $fqdn = "$imdsDns".Trim(); Write-Info "FQDN from EC2 IMDS: $fqdn" }
+        } catch {
+            # Not on EC2 (no IMDS) or no public DNS: IP-only binding (h1/h2), no h3.
+            Write-Dim "EC2 IMDS not reachable ($($_.Exception.Message)) -- IIS gets an IP-only binding (no HTTP/3)"
+        }
+    }
 
     # 1. IIS + URL Rewrite + ARR (reverse proxy for the dynamic endpoint routes)
     Write-Info "Installing IIS (Web-Server + WebSocket protocol)..."

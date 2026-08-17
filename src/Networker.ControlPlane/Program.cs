@@ -109,6 +109,10 @@ builder.Services.AddScoped<BenchmarkRegressionDetector>();
 // Floor = the real assembly version (Directory.Build.props, single-sourced
 // with Cargo.toml) — never a hardcoded string.
 builder.Services.AddVersionRefresh(VersionEndpoints.DashboardVersion);
+// Per-host cache of the endpoints' live /health `services` self-report — the
+// config-create gate reads it (never probes on the request path) and the
+// deployment /capabilities route writes through to it.
+builder.Services.AddSingleton<LiveCapabilityCache>();
 // M6 cutover: raw-WebSocket bridges (the React frontend + fielded Rust agents
 // speak raw WS JSON, not SignalR) + per-tick pg-advisory leader election and
 // tick observability for the background loops. AddRawWebSockets must come
