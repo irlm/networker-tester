@@ -114,4 +114,64 @@ public class OpsHealthTests
         Assert.True(OpsEndpoints.IsHealthy(
             s, OpsEndpoints.ExpectedIntervalFor(OpsServiceNames.WorkspaceInactivity), Now));
     }
+
+    /// Every background loop must declare its expected tick interval. The map is
+    /// kept in sync BY HAND with each service's private `TickInterval`, and
+    /// `system-health` was left out: it ticks hourly, fell back to the 10-minute
+    /// default, and the 3x rule then reported it unhealthy for 30 of every 60
+    /// minutes. Production served `all_healthy: false` about half the time and
+    /// the nightly soak check failed five nights running (2026-08-12..16) — on a
+    /// loop that was working perfectly. An omission must fail the build, not
+    /// produce a nightly false alarm.
+    [Fact]
+    public void OpsServiceNamesHaveExpectedIntervals()
+    {
+        // Reflection over the CONSTANTS, deliberately not over `All`: `All` had the
+        // same omission, so a test driven by it was blind in exactly the case it
+        // existed to catch.
+        var declared = typeof(OpsServiceNames)
+            .GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            .Where(f => f.IsLiteral && f.FieldType == typeof(string))
+            .Select(f => (string)f.GetRawConstantValue()!)
+            .ToList();
+
+        Assert.NotEmpty(declared);
+
+        var missingInterval = declared
+            .Where(name => !OpsEndpoints.ExpectedIntervals.ContainsKey(name))
+            .ToList();
+        Assert.True(
+            missingInterval.Count == 0,
+            $"background loop(s) with no ExpectedIntervals entry: {string.Join(", ", missingInterval)}. "
+                + "Add each one with the SAME value as its service's TickInterval constant, "
+                + "or it will be judged against the 10-minute default and alarm falsely.");
+
+        var missingFromAll = declared.Where(name => !OpsServiceNames.All.Contains(name)).ToList();
+        Assert.True(
+            missingFromAll.Count == 0,
+            $"background loop(s) missing from OpsServiceNames.All: {string.Join(", ", missingFromAll)}. "
+                + "Everything keyed on All silently skips them.");
+    }
+
+    /// The value that actually bit us: hourly loop, hourly expectation.
+    [Fact]
+    public void System_health_is_judged_against_its_real_hourly_interval()
+    {
+        Assert.Equal(
+            TimeSpan.FromHours(1),
+            OpsEndpoints.ExpectedIntervalFor(OpsServiceNames.SystemHealth));
+
+        // 35 minutes since the last tick is normal for an hourly loop and must
+        // NOT read as unhealthy (it did, under the 10-minute default).
+        var s = Snapshot(
+            OpsServiceNames.SystemHealth, startedAt: Now.AddHours(-6), lastTickAt: Now.AddMinutes(-35));
+        Assert.True(OpsEndpoints.IsHealthy(
+            s, OpsEndpoints.ExpectedIntervalFor(OpsServiceNames.SystemHealth), Now));
+
+        // Genuinely stuck (over 3 hours) still alarms.
+        var stuck = Snapshot(
+            OpsServiceNames.SystemHealth, startedAt: Now.AddHours(-9), lastTickAt: Now.AddHours(-4));
+        Assert.False(OpsEndpoints.IsHealthy(
+            stuck, OpsEndpoints.ExpectedIntervalFor(OpsServiceNames.SystemHealth), Now));
+    }
 }

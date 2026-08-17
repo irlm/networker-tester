@@ -44,6 +44,14 @@ public static class OpsEndpoints
             [OpsServiceNames.WorkspaceInactivity] = TimeSpan.FromHours(24),
             [OpsServiceNames.ProvisioningOrchestrator] = TimeSpan.FromSeconds(5),
             [OpsServiceNames.AgentAutoUpgrade] = TimeSpan.FromMinutes(10),
+            // SystemHealthService.TickInterval is ONE HOUR. Missing here, it fell
+            // back to the 10-minute default and the 3x rule then called it
+            // unhealthy for 30 of every 60 minutes: prod reported
+            // `all_healthy: false` about half the time and the nightly soak check
+            // failed five nights running (2026-08-12..16) on a loop that was
+            // working perfectly. `OpsServiceNamesHaveExpectedIntervals` now fails
+            // the build if a service is ever left out again.
+            [OpsServiceNames.SystemHealth] = TimeSpan.FromHours(1),
         };
 
     /// <summary>Healthy = ticked within this many expected intervals. 3× rides

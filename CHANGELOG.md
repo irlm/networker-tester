@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.221] - 2026-08-17
+
+### Fixed
+
+- **Production reported `all_healthy: false` roughly half of every hour, and the
+  nightly soak check failed five nights running (2026-08-12..16), on a background
+  loop that was working perfectly.** `SystemHealthService.TickInterval` is one
+  hour, but `system-health` was missing from `OpsEndpoints.ExpectedIntervals`, so
+  it fell back to the 10-minute default; the "healthy = ticked within 3x the
+  expected interval" rule then called an hourly loop stale after 30 minutes. Each
+  failed soak check also opened an issue — alert fatigue on a false alarm, which
+  is how a real outage gets missed.
+- **`system-health` was missing from `OpsServiceNames.All` too**, so every
+  consumer keyed on that array silently skipped it — including the first version
+  of the regression test, which iterated `All` and was therefore blind in exactly
+  the case it existed to catch. The test now derives the expected set by
+  **reflection over the name constants** and asserts each appears in BOTH
+  `ExpectedIntervals` and `All`. Verified by removing each entry in turn and
+  watching the test fail with the right message.
+
+---
+
 ## [0.28.220] - 2026-08-17
 
 ### Fixed
