@@ -88,6 +88,17 @@ Run-Logged "OpenSSH server" {
         -Value 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -PropertyType String -Force | Out-Null
     "sshd: $((Get-Service sshd).Status)"
 }
+# Same virtio quirk the Windows TARGET VM has (lab-setup.ps1), on the sending
+# side this time: the guest NIC ships with UDP Segmentation Offload on, and the
+# USO super-datagrams msquic emits for multi-packet sends never survive dockur's
+# tap/DNAT path - a Windows RUNNER could receive h3 fine (download3 2/2) but
+# every h3 upload stalled with "h3 send_data: Connection error: Timeout"
+# (upload3 0/2, v0.28.213 lab run). Turn it off; it persists across reboots.
+Run-Logged "NIC: disable UDP Segmentation Offload (virtio USO vs dockur DNAT - QUIC/h3 multi-packet sends)" {
+    Get-NetAdapter -Physical | ForEach-Object { Set-NetAdapterUso -Name $_.Name -IPv4Enabled $false -IPv6Enabled $false -ErrorAction SilentlyContinue }
+    Start-Sleep -Seconds 5
+    (Get-NetAdapterUso | Format-Table Name,IPv4Enabled,IPv6Enabled -AutoSize | Out-String).Trim()
+}
 Run-Logged "firewall" {
     if (-not (Get-NetFirewallRule -DisplayName 'Lab-SSH' -ErrorAction SilentlyContinue)) {
         New-NetFirewallRule -DisplayName 'Lab-SSH' -Direction Inbound -Protocol TCP -LocalPort 22 -Action Allow | Out-Null

@@ -54,6 +54,7 @@ mounts). `up` builds anything missing; after code changes run `build` again
 |---|---|
 | `up --targets rust,nginx,caddy,apache,haproxy,traefik` | one target container per entry; `rust` = bare endpoint, others = endpoint + that proxy set up **by the real `install.sh --setup-stack`** at image build |
 | `up --targets rust,nginx,windows` (`iis` = alias) | + a **Windows Server VM** running the real `install.ps1` (endpoint + IIS with an SNI hostname binding → h1/h2/h3 through IIS) — see [Windows (IIS) target](#windows-iis-target); Linux + KVM only, first boot 15-40 min (14 min measured: 6 GB ISO at ~35 MB/s + install + install.ps1 + reboot); `--windows-async` returns immediately, `wait-windows` / `windows-log [-f]` / `windows-ssh` afterwards |
+| `up --targets rust,nginx,sdk` | + an **SDK target**: the repo's own `sdk/csharp/Example` app with `LagHound.Endpoint` mounted at `/laghound`, registered through `POST /api/projects/{id}/sdk-endpoints` (so the token is encrypted by the control plane, like a real customer app) — drives the `sdkprobe` mode end to end, see [SDK (`sdkprobe`) target](#sdk-sdkprobe-target) |
 | `up --runners 1 --windows-runners 1` | + one **Windows Server VM runner** (`runner-2`): the checkout's `install.ps1 -Component tester` (released `networker-tester.exe`) + the checkout's `Networker.Agent` (win-x64 publish) as a SYSTEM ONSTART task, registered + bound to a `project_tester` row so runs can be pinned to it — see [Windows runners](#windows-runners); Linux + KVM only, first boot ~15 min, reboot ~1 min |
 | `LAB_INSTANCE=2 ./lab/lab.sh up …` | a second, fully independent lab (project `nwk-lab2`, `172.31.101.0/24`, ports 5031/8089/55433, `lab/.state-2`) — see [Multiple instances](#multiple-instances-lab_instance) |
 | `up --netem "delay 40ms 5ms loss 0.1%"` | WAN emulation on every runner (`tc netem`, NET_ADMIN is granted) |
@@ -75,6 +76,8 @@ mounts). `up` builds anything missing; after code changes run `build` again
 | 4 cancel | long run → cancel | terminal `cancelled`, not `completed`/stuck |
 | 5 provider | the **Docker (local) cloud provider** through the public API: `POST /testers {cloud:"docker"}` → the control plane `docker run`s a runner and its agent comes online (`running`/`idle`); `POST /deployments` with one `provider:"docker"` endpoint behind nginx → `completed` with an `endpoint_ip`; a proxy-kind config against that deployment pinned to that tester (`LaunchRequest.tester_id`) → run completes with successes on that agent; `DELETE` both → the containers are gone (`docker ps -a --filter label=networker.role`) | the create-tester → provision → agent-online path, the deploy runner, the tester/deployment delete teardown, the proxy resolver — with zero VM cost. Skipped with a note when `GET /api/version` says `docker_provider=false` |
 | 6 windows runner | for every online agent with `os=windows` ([Windows runners](#windows-runners)): the heartbeat reports `os=windows` + `capabilities {chrome:false,tshark:false}`; the phase-1 network modes and the phase-2 proxy matrix through the first Linux proxy target (nginx) launched **pinned to it** (`tester_id` of the bound `project_tester`) execute on that agent (`worker_id`) with every mode ≥1 success, `native` dropped; modes whose verdict differs from the Linux runner's phase-1/2 runs on the same target are listed | "a Windows runner runs the same tests as a Linux runner": the Windows tester build (ping via `IcmpSendEcho`, http3, websocket, udp/stamp through nginx), the C# agent on Windows (process spawning, path handling, ONSTART persistence), tester pinning. Skipped with a note without a Windows runner |
+| 7 labelled throughput | a workload of **only labelled** throughput modes (`download1/2`, `upload1/2`, `udpdownload`, `udpupload`) with no bare `download`/`upload` and no `payload_sizes` in the config — what the UI's "HTTP/3 throughput" style selections produce | the agent must supply `--payload-sizes` for *every* throughput mode, not just the two bare names: prod aborted the whole run with "unparseable JSON" until v0.28.213 |
+| 8 sdkprobe | the [SDK target](#sdk-sdkprobe-target): a `sdkprobe` run through the registered SDK endpoint, a twin config with a WRONG token, and a `sdkprobe` config against a *proxy* target | the SDK seam end to end — successful probe with the app's `Server-Timing` persisted (`server_timing.total_server_ms`), a bad token rejected with the token/mount diagnosis (and that message arriving **un-mangled**, which is how the Windows UTF-8 pipe bug surfaced), and the mode⇄target gate refusing `sdkprobe` on a non-SDK endpoint |
 
 Every assertion failure prints the run id, per-mode ok/total and the first
 distinct error messages; `lab.sh logs runner-N` / `logs controlplane` have the
@@ -186,6 +189,30 @@ proxy-kind config resolves to `target-N.lab:8445` exactly like a cloud Windows
 endpoint VM whose deploy recorded its DNS name (`LAB_TARGET_DOMAIN` changes
 the suffix).
 
+## SDK (`sdkprobe`) target
+
+`--targets rust,nginx,sdk` adds a container running **this repo's own SDK
+sample** — `sdk/csharp/Example` with `LagHound.Endpoint` mounted at `/laghound`
+(`PORT=8081`, `LAGHOUND_TOKEN` = the lab token, >= 16 bytes as the contract
+requires) — i.e. what a customer app looks like after installing the SDK.
+
+`lab.sh up` registers it the way the product does, `POST
+/api/projects/{id}/sdk-endpoints`, so the control plane encrypts the token into
+`TokenEnc/TokenNonce` and produces a `TestConfig` with
+`workload.modes = ["sdkprobe"]` + `laghound_route`. It also registers a second,
+identical endpoint with a **deliberately wrong token** for the negative test.
+`lab.sh status` prints the route and the config id:
+
+```
+  target-3     sdk       172.31.100.103   http://172.31.100.103:8081/laghound/echo  (sdk endpoint 3f01a133)
+```
+
+What phase 8 proves, and nothing else in the lab does: the probe reaches a real
+`LagHound.Endpoint`, the app's `Server-Timing` header is parsed and persisted
+(`server_timing.total_server_ms` on the attempt — the whole point of
+`sdkprobe`), a wrong token fails with the token/mount diagnosis instead of a
+false pass, and the mode gate refuses `sdkprobe` against a plain proxy target.
+
 ## Windows runners
 
 `--windows-runners M` adds M **Windows Server VM runners** — the tester side
@@ -245,6 +272,12 @@ in release.yml; there is no cross-toolchain here). The *installer*
 (`install.ps1 -Component tester`), the *agent* (published from `src/`) and
 the *control plane* it talks to are the checkout's.
 
+**Version skew is expected** (phase 6 says so explicitly): because the tester
+is the released build, any fix newer than the last release cannot pass on a
+Windows runner. `lab.sh windows-tester-version runner-K` prints what is
+installed, and phase 6 turns Windows-only failures into a warning naming both
+versions while the VM's tester is older than the checkout.
+
 **Expected Windows differences** (phase 6 prints them; the native lab lists
 the same): no Chrome / no tshark → `capabilities {chrome:false,tshark:false}`
 (browser* modes are not in the matrix; `capture_mode: headers-only` degrades
@@ -252,6 +285,16 @@ to a warning inside the tester and the attempt still succeeds); `ping` uses
 `IcmpSendEcho` (works without elevation, no `ping_group_range`); the h3 modes
 through nginx and against the bare endpoint DO run (the release build carries
 `http3`).
+
+**Iterating on an agent fix** (`windows-agent-refresh runner-K`): the VM disk
+survives `down`/`up`, so its agent stays whatever was published when the disk
+was installed. This command publishes the checkout's `Networker.Agent`
+(win-x64, self-contained) into the VM share, stops the running agent, copies it
+into `C:\networker\agent`, restarts the `NetworkerAgent` ONSTART task and waits
+for the control plane to list the runner `online` again — ~40 s instead of a
+15-40 min Windows reinstall. It is how the UTF-8 pipe fix below was verified on
+a real Windows runner. (SSH is password auth; the command drives it
+non-interactively through `SSH_ASKPASS_REQUIRE=force`, no `sshpass` needed.)
 
 ## Multiple instances (`LAB_INSTANCE`)
 
@@ -444,6 +487,8 @@ lab/
     windows/oem-runner/   the Windows RUNNER VM's first-boot hook (install.bat → lab-runner-setup.ps1 →
                           install.ps1 tester + the checkout's agent as a SYSTEM ONSTART task);
                           staged with install.ps1 + the agent publish into .generated/windows-runner-K/oem
+    sdk.Dockerfile        sdk/csharp/Example + LagHound.Endpoint (dotnet SDK 10 → aspnet 10) → nwk-lab/sdk
+                          (the sdkprobe target; PORT=8081, /laghound mounted, LAGHOUND_TOKEN from lab.sh)
     agent-win.Dockerfile  Networker.Agent win-x64 self-contained publish (BuildKit --output → oem/agent)
     runner/entrypoint.sh  optional netem, then exec networker-agent
     ui.Dockerfile, ui/nginx.conf
@@ -454,6 +499,61 @@ lab/
     lab-native.ps1        native Windows twin (build/up/validate/status/logs/env/down) — drives validate.sh via Git Bash
     .state/               (git-ignored) bin/, publish/, logs/, lab.env, runner-1.key, iis-setup.ps1, pids.json
 ```
+
+## Bugs the SDK target + the native Windows lab found (v0.28.214, fixed in the same PR)
+
+* **A Windows runner mangled every non-ASCII byte the tester printed.** The
+  wrong-token `sdkprobe` message came back as `SDK endpoint returned 404 ΓÇö
+  check token …` and *that* is what was persisted into
+  `attempt.error_message`. The agent redirected the tester's stdout/stderr
+  without setting an encoding, so .NET decoded UTF-8 output with the console's
+  OEM code page (437/850). `RunExecutor` now pins
+  `StandardOutputEncoding`/`StandardErrorEncoding` to UTF-8; phase 8 asserts the
+  persisted message is not mojibake (signatures built with `printf`, so the file
+  stays ASCII-only for PowerShell 5.1).
+
+* **A chatty tester silently deleted a whole run's data.** Relayed stderr lines
+  went out on the same lossy fast path as attempt frames: 1757 log frames filled
+  the agent's 4096-frame outbound channel and took **883 attempt frames + every
+  progress frame** with them. The run reached the control plane as
+  `completed ok=0 fail=0 attempts=0` — a green, empty, believable lie (native
+  Windows CI, v0.28.213). Three fixes: log frames now use a **low-priority
+  tier** that refuses to enqueue above half the channel (they can never starve
+  attempts), the stderr relay is **capped per run** (400 lines + a truncation
+  notice), and the drop warning is rate-limited instead of one ERROR line per
+  dropped frame.
+
+* **The run counters had no non-droppable source.** `success_count` /
+  `failure_count` came *only* from `run_progress`, which is droppable — hence
+  `ok=0` above. `run_finished` (delivered on the critical path) now carries
+  `attempts_ok`/`attempts_failed`, and the control plane trusts those. If the
+  agent reports attempts but **zero** were persisted, the run is stamped with
+  "The agent measured N attempt(s) but none reached the control plane" instead of
+  reading as a clean success. validate.sh phase 6 now fails on a finished run
+  with zero attempts.
+
+* **A Windows runner could not upload over HTTP/3.** `download3` was 2/2 while
+  `upload3` timed out in `h3 send_data` — the same virtio **USO** quirk the
+  Windows *target* VMs were fixed for in v0.28.211, now on the sending side.
+  Fresh runner installs disable it in `lab-runner-setup.ps1`;
+  `windows-agent-refresh` fixes existing disks, through a SYSTEM scheduled task
+  (setting it resets the adapter, which kills the SSH session that asked for it,
+  and a detached child dies with that session). `upload3` went 0/2 → 2/2.
+
+* **Phase 6 could not tell version skew from a regression.** The Windows VM's
+  *tester* is the released `networker-tester.exe` (0.28.209 at the time), so the
+  h2-ALPN fix that shipped in v0.28.213 could not possibly pass there —
+  `download2`/`upload2` failed 0/2 and the lab called it a Windows regression.
+  `lab.sh windows-tester-version` now reads that version and phase 6 downgrades
+  Windows-only breakage to a **warning naming both versions** when the VM's
+  tester is older than the checkout; on an up-to-date tester it still fails.
+
+* **The h3 mode gate had drifted from the manifest.** `shared/http-stacks.json`
+  lists `h3_modes` = `http3, pageload3, browser3, download3, upload3`, but
+  validate.sh hardcoded the first three. Once the phase-2 matrix grew to every
+  catalog mode, `download3`/`upload3` were left in on h3-less hosts and reported
+  as regressions (that was the red `lab-native.ps1` check on windows-latest).
+  The list now comes from the manifest, like the C# and dashboard gates.
 
 ## Bugs the hostname/HTTP/3 run found (v0.28.211, fixed in the same PR)
 

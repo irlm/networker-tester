@@ -136,7 +136,12 @@ public sealed record RunFinishedMessage(
     [property: JsonPropertyName("run_id")] Guid RunId,
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("artifact")] BenchmarkArtifactPayload? Artifact,
-    [property: JsonPropertyName("envelope")] JsonElement? Envelope = null
+    [property: JsonPropertyName("envelope")] JsonElement? Envelope = null,
+    // Authoritative end-of-run totals (additive, v0.28.214+): the agent's own
+    // count of parsed attempts. Null from older agents, in which case the
+    // counters keep coming from the (lossy) run_progress stream only.
+    [property: JsonPropertyName("attempts_ok")] int? AttemptsOk = null,
+    [property: JsonPropertyName("attempts_failed")] int? AttemptsFailed = null
 ) : AgentMessage;
 
 /// <summary>

@@ -117,7 +117,20 @@ public sealed record RunFinishedMessage(
     BenchmarkArtifactPayload? Artifact,
     [property: JsonPropertyName("envelope")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    JsonElement? Envelope = null
+    JsonElement? Envelope = null,
+    // Authoritative end-of-run totals (additive, v0.28.214+). run_progress -
+    // which the control plane used as its ONLY source for the counters - rides
+    // the LOSSY fast path: when the outbound channel saturates every progress
+    // frame is dropped and a finished run reports ok=0/fail=0 even though the
+    // tester measured 22 successes (native Windows lab, 2026-08-17). The
+    // terminal frame is delivered on the critical path, so carrying the totals
+    // here makes the counters self-sufficient. Null from older agents.
+    [property: JsonPropertyName("attempts_ok")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    uint? AttemptsOk = null,
+    [property: JsonPropertyName("attempts_failed")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    uint? AttemptsFailed = null
 ) : AgentMessage;
 
 /// <summary><c>{"type":"error","run_id":?,"message":...}</c> — <c>run_id</c> omitted

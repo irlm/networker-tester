@@ -180,7 +180,9 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
                 logger.LogInformation(
                     "Run {RunId}: relaying run_finished status=failed (ok={Ok} fail={Fail})",
                     runId, successCount, failureCount);
-                await SendFinishedAsync(sink, runId, "failed", artifact: null).ConfigureAwait(false);
+                await SendFinishedAsync(
+                    sink, runId, "failed", artifact: null,
+                    attemptsOk: successCount, attemptsFailed: failureCount).ConfigureAwait(false);
                 return;
             }
         }
@@ -195,7 +197,9 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         logger.LogInformation(
             "Run {RunId}: relaying run_finished status=completed (ok={Ok} fail={Fail})",
             runId, successCount, failureCount);
-        await SendFinishedAsync(sink, runId, "completed", artifact, envelope).ConfigureAwait(false);
+        await SendFinishedAsync(
+            sink, runId, "completed", artifact, envelope,
+            attemptsOk: successCount, attemptsFailed: failureCount).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -340,6 +344,13 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             RedirectStandardInput = true, // closed immediately → stdin null (Rust: Stdio::null)
             UseShellExecute = false,
             CreateNoWindow = true,
+            // The tester always writes UTF-8 (Rust's println!/eprintln!). Without
+            // these, .NET decodes the redirected pipes with the process' console
+            // code page, which on Windows runners is an OEM page (437/850) - every
+            // non-ASCII byte in an error message came back mojibake ("ΓÇö" for an
+            // em-dash), and that corruption was persisted into attempt.error_message.
+            StandardOutputEncoding = new UTF8Encoding(false),
+            StandardErrorEncoding = new UTF8Encoding(false),
         };
         // Ask the tester (>= 0.28.117) to emit per-attempt NDJSON event lines
         // on stdout ahead of the final artifact so attempts stream LIVE instead
@@ -371,6 +382,7 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         // if the log sink is unavailable (the prod sweep hit exactly this: a
         // "--payload-sizes required" abort surfaced only as "unparseable JSON").
         var stderrTail = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var relayed = 0;
         var stderrTask = Task.Run(async () =>
         {
             try
@@ -378,7 +390,26 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
                 string? line;
                 while ((line = await process.StandardError.ReadLineAsync(invocationToken).ConfigureAwait(false)) is not null)
                 {
-                    sink.TrySend(new ErrorMessage(runId, $"[{label}] {line}"));
+                    // Relayed log lines are LOW priority and capped per run: a
+                    // tester run with RUST_LOG=debug emits thousands of them, and
+                    // on the lossy fast path they used to fill the outbound
+                    // channel and take the run's attempt frames down with them
+                    // (native Windows lab 2026-08-17: a run reached the control
+                    // plane "completed" with 0 of its 22 attempts). The last
+                    // lines are kept in stderrTail regardless, so the diagnosis
+                    // of a tester that dies before writing JSON is never lost.
+                    if (relayed < StderrRelayMaxLines)
+                    {
+                        relayed++;
+                        sink.TrySendLowPriority(new ErrorMessage(runId, $"[{label}] {line}"));
+                    }
+                    else if (relayed == StderrRelayMaxLines)
+                    {
+                        relayed++;
+                        sink.TrySendLowPriority(new ErrorMessage(
+                            runId,
+                            $"[{label}] ... stderr relay truncated after {StderrRelayMaxLines} lines (the run's own attempts keep streaming; the last lines are reported on failure)"));
+                    }
                     if (!string.IsNullOrWhiteSpace(line))
                     {
                         stderrTail.Enqueue(line.Length > 300 ? line[..300] : line);
@@ -628,6 +659,11 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
     /// <summary>How many stderr lines to keep for the failure message.</summary>
     private const int StderrTailLines = 5;
 
+    /// <summary>Cap on tester stderr lines relayed to the control plane per run.
+    /// Beyond this the relay stops (one truncation notice is sent) - log volume
+    /// must never compete with attempt frames for the outbound channel.</summary>
+    private const int StderrRelayMaxLines = 400;
+
     /// <summary>The kept stderr lines, newest last, joined for one message.</summary>
     internal static string StderrTail(System.Collections.Concurrent.ConcurrentQueue<string> q) =>
         string.Join(" | ", q.ToArray());
@@ -807,8 +843,11 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
     /// failed/cancelled runs never parsed a full TestRun.</summary>
     private static async Task SendFinishedAsync(
         RawWebSocketClient.IFrameSink sink, Guid runId, string status,
-        BenchmarkArtifactPayload? artifact, JsonElement? envelope = null)
-        => await sink.TrySendCriticalAsync(new RunFinishedMessage(runId, status, artifact, envelope)).ConfigureAwait(false);
+        BenchmarkArtifactPayload? artifact, JsonElement? envelope = null,
+        uint? attemptsOk = null, uint? attemptsFailed = null)
+        => await sink.TrySendCriticalAsync(
+            new RunFinishedMessage(runId, status, artifact, envelope, attemptsOk, attemptsFailed))
+            .ConfigureAwait(false);
 
     private static async Task WaitAndDrainAsync(Process process, Task stderrTask)
     {
