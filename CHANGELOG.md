@@ -11,6 +11,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.218] - 2026-08-17
+
+### Fixed
+
+- **`pageload3` now says WHY an asset is missing.** Every per-asset failure on the
+  HTTP/3 path collapsed into `None`, so a 49/50 page load reached the operator as
+  "1 asset request(s) did not complete" with no status code, no error, nothing —
+  the state the v0.28.213 note on `page_load_error` complained about. Each failure
+  mode now reports itself (`send_request`, request-stream `finish`,
+  `recv_response`, `recv_data`, or a non-2xx status with its body size), the
+  attempt's message names the first reason and its `detail` lists every distinct
+  one, deduplicated.
+- **A mid-body stream error no longer counts as a complete fetch.** `recv_data`
+  was read with `.ok().flatten()`, which makes an error indistinguishable from
+  end-of-body — a stream reset half-way through counted as a successful 2xx asset
+  with a short body. It is now reported with how many bytes had arrived.
+
+### Documented
+
+- **The IIS `pageload3` "dropped h3 stream" is ARR, not http.sys and not the
+  tester.** Measured against the lab's Windows/IIS target: 41 of 5250 HTTP/3 asset
+  requests (0.78%) get `502.7` / win32 `87` — an ARR *forwarder* failure in 1-5 ms
+  with no `SERVER-STATUS` in the IIS log, i.e. the backend was never contacted.
+  The same IIS serves 2300 h1/h2 tester requests and 633 curl requests (including
+  50 concurrent streams on one h2 connection) with zero failures, and `pageload3`
+  against the bare endpoint is 1000/1000 clean. ARR's `httpVersion=Http11` makes
+  no difference. The deciding experiment: the SAME 50 assets served by IIS as
+  STATIC files over h3 — http.sys only, no ARR — are 20/20 runs clean
+  (1000/1000 assets), while the dynamic ones through ARR drop in 10 of 20 runs.
+  So http.sys serves HTTP/3 correctly and the loss is in ARR's forwarder, where
+  its own `502.7` substatus says it is. A customer reverse-proxying h3 through
+  IIS loses ~0.8% of requests and the probe is right to report it. See
+  `lab/README.md` and `docs/probes.md`.
+
+---
+
 ## [0.28.217] - 2026-08-17
 
 ### Fixed

@@ -377,6 +377,14 @@ networker-tester --target https://127.0.0.1:8443/health \
 
 ---
 
+> **Through IIS**, expect the occasional 49/50: ARR answers roughly 0.8% of
+> HTTP/3-originated asset requests with `502.7` / win32 `87` before it ever
+> reaches the backend (measured in the lab, v0.28.218). It is ARR's
+> reverse-proxy hop, not http.sys: the same 50 assets served by IIS as STATIC
+> files over h3 are 1000/1000 clean, while h1/h2 through the same ARR and h3
+> against a non-IIS target are clean too. The attempt now names the status per
+> failing asset, so a partial page load is diagnosable from the run.
+
 ## `native` — System TLS Stack
 
 This mode works like `http1`, but it uses the platform's native TLS library, not

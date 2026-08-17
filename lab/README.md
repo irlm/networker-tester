@@ -500,6 +500,60 @@ lab/
     .state/               (git-ignored) bin/, publish/, logs/, lab.env, runner-1.key, iis-setup.ps1, pids.json
 ```
 
+## What the IIS `pageload3` drop turned out to be (v0.28.218)
+
+The lab had an open question: `pageload3` through IIS reports 49/50 assets every
+few runs, and it was filed as "http.sys investigation". Measured against the
+lab's real Windows/IIS target, it is **neither http.sys nor our tester** — it is
+**ARR**, and IIS says so itself in `C:\inetpub\logs\LogFiles\W3SVC1`:
+
+```
+GET /asset id=1&bytes=51200&X-ARR-CACHE-HIT=0&X-ARR-LOG-ID=…   502 7 87 4
+                                                          ↑    ↑ ↑  ↑
+                                              sc-status ──┘    │ │  time-taken (ms)
+                        sc-substatus 7 = ARR forwarder failure ┘ │
+                       sc-win32-status 87 = ERROR_INVALID_PARAMETER
+```
+
+Successful lines carry `&SERVER-STATUS=200` in the logged query; the failing ones
+have no `SERVER-STATUS` at all, so **ARR never reached the backend** — it failed
+inside the forwarder in 1-5 ms.
+
+| client (same IIS, same 50-asset burst) | requests | 502.7 |
+|---|---|---|
+| tester `pageload3` (HTTP/3) | 5250 | **41 (0.78%)** |
+| tester `pageload`/`pageload2` (h1/h2) | 2300 | 0 |
+| `curl` h1 and h2, incl. 50 concurrent streams on one connection | 633 | 0 |
+| tester `pageload3` against the **bare** endpoint (quinn h3, no IIS) | 1000 | 0 |
+
+0.78% of asset requests × 50 assets ≈ one dropped asset every ~2.5 runs, which is
+exactly what the lab sees. Setting ARR's `httpVersion` to `Http11` (instead of the
+default `PassThrough`) changes nothing. So: only **HTTP/3-originated** requests
+that ARR reverse-proxies fail, and they fail before the backend is contacted.
+
+The probe is therefore *right* to report it — a customer whose IIS reverse-proxies
+h3 traffic loses the same ~0.8% of requests. What was wrong was the reporting:
+`pageload3` said "1 asset request(s) did not complete" without the status code.
+It now names the reason (`first failure: asset 5: HTTP 502 …`) and lists the
+distinct ones, so this is diagnosable from the run instead of requiring a
+Windows login.
+
+**It is ARR, not http.sys.** The deciding experiment: serve the SAME 50 assets as
+IIS *static* files over h3 (http.sys answers directly, no ARR in the path) and
+compare against the dynamic ones, same tester binary, same QUIC connection
+pattern, same 20 runs:
+
+| 50 assets over HTTP/3, through the same IIS | runs clean |
+|---|---|
+| **static files** (http.sys only) | **20/20 — 1000/1000 assets** |
+| **dynamic** (ARR → networker-endpoint) | 10/20 |
+
+So http.sys serves HTTP/3 correctly; the loss is in ARR's forwarder, exactly
+where its own `502.7` substatus says it is. (An earlier attempt to confirm this
+with Failed Request Tracing took the site down — `Web-Http-Tracing` registers no
+usable schema on this image and every request then returned `500 0 87`; recovery
+is `./lab/lab.sh windows-iis-refresh target-3`.)
+
 ## Bugs the SDK target + the native Windows lab found (v0.28.214, fixed in the same PR)
 
 * **A Windows runner mangled every non-ASCII byte the tester printed.** The
