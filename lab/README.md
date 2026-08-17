@@ -112,7 +112,7 @@ and what IIS as set up by the installer really serves on :8445. The first run
 (v0.28.208) settled the `iis` row of `shared/http-stacks.json`, which gates
 the UI/API mode pickers: **HTTP/1.1 and HTTP/2 yes** (after fixing the
 tester's h2 requests, which http.sys rejected for missing `:scheme`/`:authority`),
-**websocket yes** (after adding the `/ws` ARR rule), and — since v0.28.210 —
+**websocket yes** (after adding the `/ws` ARR rule), and — since v0.28.211 —
 **HTTP/3 yes**: http.sys answers QUIC only to clients sending TLS SNI, so the
 platform now addresses the target **by hostname**. The lab gives every target
 a labnet DNS alias `target-N.lab` (docker's embedded DNS answers it for the
@@ -455,7 +455,7 @@ lab/
     .state/               (git-ignored) bin/, publish/, logs/, lab.env, runner-1.key, iis-setup.ps1, pids.json
 ```
 
-## Bugs the hostname/HTTP/3 run found (v0.28.210, fixed in the same PR)
+## Bugs the hostname/HTTP/3 run found (v0.28.211, fixed in the same PR)
 
 * **Every multi-packet QUIC exchange with the Windows VM stalled** — QUIC
   handshakes took exactly ~1 s (one PTO retransmit), `pageload3` got 0/50
@@ -485,7 +485,7 @@ lab/
   compile that needs MSVC — release download without gh + VC++ runtime now.
 * **`iis` was `h3: true` on faith**: http.sys does QUIC on :8445 only with TLS
   SNI; by IP (how proxy targets were addressed) it closes the connection —
-  manifest flipped to `false` in v0.28.208, then back to `true` in v0.28.210
+  manifest flipped to `false` in v0.28.208, then back to `true` in v0.28.211
   once proxy targets are dispatched by their recorded hostname
   (`deployment.endpoint_hosts`, V050) and the lab measured h3 2/2 through IIS.
 

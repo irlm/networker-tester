@@ -491,7 +491,7 @@ fi
 
 # ── phase 6: Windows runner — the same tests, executed on Windows ────────────
 if run_phase 6; then
-  # Windows runners: agents whose heartbeat says os=windows (v0.28.210+) or that
+  # Windows runners: agents whose heartbeat says os=windows (v0.28.211+) or that
   # lab.sh tagged so at registration, online, and bound to a project_tester
   # (agent.tester_id) — the only handle the launch API pins with.
   WIN_AGENTS="$(api GET "/api/projects/$PID/agents" | jq -c '(.agents // .) | [.[]|select(.status=="online" and ((.os // "")=="windows" or (.tags.os // "")=="windows"))]')"
@@ -520,7 +520,7 @@ if run_phase 6; then
       WOS="$(jq -r '.os // empty' <<<"$WA")"; WARCH="$(jq -r '.arch // empty' <<<"$WA")"; WCAPS="$(jq -c '.capabilities // null' <<<"$WA")"
       note "  $WNAME: agent $WID os=${WOS:-?} arch=${WARCH:-?} capabilities=$WCAPS tester=${WTESTER:-<none>}"
       # 6a. identity: the heartbeat reports os=windows + an inventory without Chrome/tshark
-      [ "$WOS" = "windows" ] || fail "phase 6 ($WNAME): agent.os is '${WOS:-null}' — the heartbeat should report os=windows (v0.28.210 agent + control plane)"
+      [ "$WOS" = "windows" ] || fail "phase 6 ($WNAME): agent.os is '${WOS:-null}' — the heartbeat should report os=windows (v0.28.211 agent + control plane)"
       if [ "$WCAPS" = "null" ]; then
         fail "phase 6 ($WNAME): no capabilities reported on the heartbeat"
       else

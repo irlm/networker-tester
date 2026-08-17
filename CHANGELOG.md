@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.28.210] - 2026-08-16
+## [0.28.211] - 2026-08-16
 
 ### Added
 - **HTTP/3 through IIS on the managed path** — proxy targets are now
