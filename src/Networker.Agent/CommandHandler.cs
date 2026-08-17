@@ -55,19 +55,8 @@ public sealed class CommandHandler(ILogger<CommandHandler> logger)
         _ = cmd;
         _ = sink; // health has nothing to stream — channel kept for parity
 
-        var os = OperatingSystem.IsWindows() ? "windows"
-            : OperatingSystem.IsMacOS() ? "macos"
-            : OperatingSystem.IsLinux() ? "linux"
-            : RuntimeInformation.OSDescription;
-
-        var arch = RuntimeInformation.ProcessArchitecture switch
-        {
-            Architecture.X64 => "x86_64",
-            Architecture.X86 => "x86",
-            Architecture.Arm64 => "aarch64",
-            Architecture.Arm => "arm",
-            _ => RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(),
-        };
+        var os = RunnerCapabilities.HostOs;
+        var arch = RunnerCapabilities.HostArch;
 
         var payload = new Dictionary<string, object?>
         {

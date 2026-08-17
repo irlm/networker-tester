@@ -362,6 +362,16 @@ public sealed class AgentMessageProcessor
                 agent.Tags = merged;
             }
         }
+        // Host OS / arch (additive, v0.28.210+): persisted once, then only on a
+        // real change — the steady-state heartbeat stays write-free.
+        if (!string.IsNullOrEmpty(hb.Os) && !string.Equals(agent.Os, hb.Os, StringComparison.Ordinal))
+        {
+            agent.Os = hb.Os;
+        }
+        if (!string.IsNullOrEmpty(hb.Arch) && !string.Equals(agent.Arch, hb.Arch, StringComparison.Ordinal))
+        {
+            agent.Arch = hb.Arch;
+        }
         if (!string.IsNullOrEmpty(hb.Version))
         {
             agent.Version = hb.Version;
