@@ -11,6 +11,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.222] - 2026-08-17
+
+### Fixed
+
+- **main was red:** `LeaderLockKeysTests.OpsServiceNames_All_covers_every_named_constant`
+  asserted `OpsServiceNames.All` equalled a **hand-copied list of the same
+  constants** — two manual lists checking each other, so a name missing from both
+  passed happily. That is precisely how `system-health` stayed missing long enough
+  to cost five nights of false soak-check failures (v0.28.221), and adding it to
+  `All` then broke the copy. The test now derives the expectation by reflection
+  over the constants and asserts `All` contains exactly them, no duplicates,
+  nothing stray. Verified by removing the entry and watching it fail.
+- **A manually started tester was deallocated within a minute.** `POST /start`
+  never touched `next_shutdown_at`, and the auto-shutdown sweep selects
+  `running AND idle AND next_shutdown_at < now` — so a tester stopped yesterday
+  still carried yesterday's slot and was shut down as soon as it came up
+  (reproduced against production: started, agent online, "auto-shutdown
+  completed" ~60 s later, which made a manual run impossible without disabling
+  the schedule). A stale or missing `next_shutdown_at` is now rolled forward to
+  the region's next slot on manual start.
+
+### Notes
+
+- A production sweep on the same day re-validated every catalog mode end to end
+  against Azure. With the runner's tester at v0.28.202 it reproduced exactly the
+  defects fixed earlier that day — `download2`/`upload2` "http2 error" (v0.28.213)
+  and `udpdownload` "Short response: 24 bytes" (v0.28.215) — and after the
+  auto-upgrade lifted it to v0.28.220 all four went 3/3, with `path` now honouring
+  the run timeout ("scan stopped at the 20000ms budget"). `path` itself stays 0/2
+  from an Azure runner by design: SLB SNAT eats ICMP, which the probe reports as
+  an environment verdict rather than a path failure.
+
+---
+
 ## [0.28.221] - 2026-08-17
 
 ### Fixed

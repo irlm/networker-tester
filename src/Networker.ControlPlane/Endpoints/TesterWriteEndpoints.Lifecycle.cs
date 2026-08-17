@@ -48,6 +48,23 @@ public static partial class TesterWriteEndpoints
 
         tester.PowerState = "starting";
         tester.StatusMessage = "Start requested";
+
+        // Roll a STALE shutdown time forward, or auto-shutdown deallocates the VM
+        // within a minute of it coming up. The sweep query is
+        // `running AND idle AND next_shutdown_at < now`, and a tester stopped
+        // yesterday still carries yesterday's slot — so a manual start was undone
+        // before it could be used (measured against prod 2026-08-17: started,
+        // agent came online, "auto-shutdown completed" ~60s later).
+        if (tester.AutoShutdownEnabled
+            && (tester.NextShutdownAt is null || tester.NextShutdownAt <= DateTime.UtcNow))
+        {
+            tester.NextShutdownAt = NextShutdownAtForProvider(
+                tester.Cloud, tester.Region, tester.AutoShutdownLocalHour, DateTime.UtcNow);
+            logger.LogInformation(
+                "tester {TesterId}: stale next_shutdown_at rolled forward to {Next} on manual start",
+                testerId, tester.NextShutdownAt);
+        }
+
         tester.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
 
