@@ -362,7 +362,7 @@ public sealed class AgentMessageProcessor
                 agent.Tags = merged;
             }
         }
-        // Host OS / arch (additive, v0.28.210+): persisted once, then only on a
+        // Host OS / arch (additive, v0.28.211+): persisted once, then only on a
         // real change — the steady-state heartbeat stays write-free.
         if (!string.IsNullOrEmpty(hb.Os) && !string.Equals(agent.Os, hb.Os, StringComparison.Ordinal))
         {

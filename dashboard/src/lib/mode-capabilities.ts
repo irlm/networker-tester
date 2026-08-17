@@ -15,7 +15,7 @@
 //     apache / haproxy / traefik have no QUIC, so http3 / pageload3 / browser3 /
 //     download3 / upload3 are off for them (the server rejects with 422 too);
 //   - the target's LIVE self-report (GET …/deployments/{id}/capabilities) — the
-//     server applies it at config-create too (v0.28.210, cache-only, fail-open);
+//     server applies it at config-create too (v0.28.211, cache-only, fail-open);
 //   - the pinned RUNNER's tool inventory (agent heartbeat `capabilities`):
 //     browser* modes need Chrome on the runner.
 // The server mirror is Endpoints/ModeTargetCompatibility.cs.
