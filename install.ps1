@@ -76,7 +76,7 @@ $ErrorActionPreference = "Stop"
 $RepoHttps     = "https://github.com/irlm/networker-tester"
 $RepoGh        = "irlm/networker-tester"
 $CargoBin      = Join-Path $env:USERPROFILE ".cargo\bin"
-$InstallerVersion = "v0.28.212"  # fallback when gh is unavailable
+$InstallerVersion = "v0.28.213"  # fallback when gh is unavailable
 
 # ── Print helpers ──────────────────────────────────────────────────────────────
 function Write-Ok   ($msg) { Write-Host "  v " -NoNewline -ForegroundColor Green;   Write-Host $msg }
@@ -992,7 +992,7 @@ function Invoke-LanCreateEndpointServiceWindows ($role) {
     $prevErr = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     & ssh -o StrictHostKeyChecking=no -p $port "${user}@${ip}" `
-        "powershell -ExecutionPolicy Bypass -Command `"& { if (-not (Get-Service networker-endpoint -EA SilentlyContinue)) { sc.exe create networker-endpoint binPath= 'C:\networker\networker-endpoint.exe' start= auto }; sc.exe start networker-endpoint 2>`$null; New-NetFirewallRule -Name 'NetworkerEndpoint-TCP' -DisplayName 'Networker Endpoint TCP' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 8080,8443 -EA SilentlyContinue; New-NetFirewallRule -Name 'NetworkerEndpoint-UDP' -DisplayName 'Networker Endpoint UDP' -Enabled True -Direction Inbound -Protocol UDP -Action Allow -LocalPort 8443,9998,9999 -EA SilentlyContinue }`""
+        "powershell -ExecutionPolicy Bypass -Command `"& { if (-not (Get-Service networker-endpoint -EA SilentlyContinue)) { sc.exe create networker-endpoint binPath= 'C:\networker\networker-endpoint.exe' start= auto }; sc.exe start networker-endpoint 2>`$null; New-NetFirewallRule -Name 'NetworkerEndpoint-TCP' -DisplayName 'Networker Endpoint TCP' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 8080,8443 -EA SilentlyContinue; New-NetFirewallRule -Name 'NetworkerEndpoint-UDP' -DisplayName 'Networker Endpoint UDP' -Enabled True -Direction Inbound -Protocol UDP -Action Allow -LocalPort 8443,9997,9998,9999 -EA SilentlyContinue }`""
     $ErrorActionPreference = $prevErr
     Write-Ok "networker-endpoint Windows service created and started"
 }
@@ -3782,7 +3782,7 @@ function Invoke-GcpWinCreateEndpointService ($name) {
         --zone $script:GcpZone `
         --quiet `
         --ssh-flag="-o StrictHostKeyChecking=no" `
-        --command "powershell -Command `"`$ErrorActionPreference='Continue'; sc.exe create networker-endpoint binPath='C:\networker\networker-endpoint.exe' start=auto; sc.exe description networker-endpoint 'Networker Endpoint diagnostics server'; sc.exe start networker-endpoint; netsh advfirewall firewall add rule name='Networker-HTTP' protocol=TCP dir=in action=allow localport=8080; netsh advfirewall firewall add rule name='Networker-HTTPS' protocol=TCP dir=in action=allow localport=8443; netsh advfirewall firewall add rule name='Networker-UDP' protocol=UDP dir=in action=allow localport='8443,9998,9999'`""
+        --command "powershell -Command `"`$ErrorActionPreference='Continue'; sc.exe create networker-endpoint binPath='C:\networker\networker-endpoint.exe' start=auto; sc.exe description networker-endpoint 'Networker Endpoint diagnostics server'; sc.exe start networker-endpoint; netsh advfirewall firewall add rule name='Networker-HTTP' protocol=TCP dir=in action=allow localport=8080; netsh advfirewall firewall add rule name='Networker-HTTPS' protocol=TCP dir=in action=allow localport=8443; netsh advfirewall firewall add rule name='Networker-UDP' protocol=UDP dir=in action=allow localport='8443,9997,9998,9999'`""
     Write-Ok "networker-endpoint service created on GCE Windows VM"
 }
 

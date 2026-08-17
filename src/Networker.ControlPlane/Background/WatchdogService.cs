@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Realtime;
 using Networker.Data;
@@ -62,6 +63,29 @@ public sealed class WatchdogService : BackgroundService
     /// <c>find_stale_assigned(client, 120)</c> cutoff.
     /// </summary>
     private static readonly TimeSpan RunningStaleCutoff = TimeSpan.FromSeconds(120);
+
+    /// <summary>
+    /// How long a <c>running</c> run may make NO progress (no streamed attempt,
+    /// no heartbeat) before it is failed even though its agent is online.
+    /// Override with <c>DASHBOARD_RUN_NO_PROGRESS_SECS</c> (clamped 120s…6h; 0
+    /// disables the sweep for operators who prefer the old behaviour).
+    /// </summary>
+    private static readonly TimeSpan NoProgressCutoff = ResolveNoProgressCutoff(
+        Environment.GetEnvironmentVariable("DASHBOARD_RUN_NO_PROGRESS_SECS"));
+
+    /// <summary>Parse + clamp the no-progress cutoff (testable).</summary>
+    internal static TimeSpan ResolveNoProgressCutoff(string? raw)
+    {
+        if (raw is not null && int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var secs))
+        {
+            if (secs <= 0)
+            {
+                return TimeSpan.MaxValue;   // disabled
+            }
+            return TimeSpan.FromSeconds(Math.Clamp(secs, 120, 6 * 60 * 60));
+        }
+        return TimeSpan.FromMinutes(15);
+    }
 
     /// <summary>
     /// How long a deployment may sit in <c>pending</c>/<c>running</c> (or a run in
@@ -172,7 +196,7 @@ public sealed class WatchdogService : BackgroundService
             .Where(r => r.Status == "running" &&
                 ((r.LastHeartbeat != null && r.LastHeartbeat < runningStaleBefore) ||
                  (r.LastHeartbeat == null && r.StartedAt != null && r.StartedAt < runningStaleBefore)))
-            .Select(r => new { r.Id, r.WorkerId })
+            .Select(r => new { r.Id, r.WorkerId, r.LastHeartbeat, r.StartedAt, r.CreatedAt })
             .ToListAsync(ct)
             .ConfigureAwait(false);
 
@@ -188,17 +212,34 @@ public sealed class WatchdogService : BackgroundService
             // null/unparseable despite 120s of silence — a run that was never
             // claimed by any live agent).
             Guid? workerAgentId = Guid.TryParse(run.WorkerId, out var parsed) ? parsed : null;
-            if (workerAgentId is Guid agentId && _registry.IsOnline(agentId))
+            var lastProgress = run.LastHeartbeat ?? run.StartedAt ?? run.CreatedAt;
+            var noProgressFor = now - lastProgress;
+            var agentOnline = workerAgentId is Guid onlineId && _registry.IsOnline(onlineId);
+            // An ONLINE agent normally means "slow, not dead" — but the agent
+            // streams an attempt event (which refreshes last_heartbeat) per
+            // attempt, so total silence for NoProgressCutoff means the tester
+            // itself is wedged: prod had a `path` probe hang with the agent
+            // heartbeating happily, and the run sat `running` for 22 minutes
+            // holding its runner until it was cancelled by hand (prod mode sweep,
+            // v0.28.213). Reap those too, with a message that says which it was.
+            if (agentOnline && noProgressFor < NoProgressCutoff)
             {
                 continue;
             }
+            var reapError = agentOnline
+                ? string.Format(
+                    CultureInfo.InvariantCulture,
+                    "Run made no progress for {0:F0} minutes while its agent stayed online — the tester "
+                    + "process appears wedged; the run was failed so the runner could be released.",
+                    noProgressFor.TotalMinutes)
+                : RunningReapedError;
 
             var affected = await db.TestRuns
                 .Where(r => r.Id == run.Id && r.Status == "running")
                 .ExecuteUpdateAsync(
                     s => s
                         .SetProperty(r => r.Status, "failed")
-                        .SetProperty(r => r.ErrorMessage, RunningReapedError)
+                        .SetProperty(r => r.ErrorMessage, reapError)
                         .SetProperty(r => r.FinishedAt, now),
                     ct)
                 .ConfigureAwait(false);

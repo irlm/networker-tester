@@ -449,7 +449,7 @@ pub async fn run_pageload_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) ->
         tls: conn0.tls_result.clone(),
         http: conn0.manifest_http.clone(),
         udp: None,
-        error: None,
+        error: page_load_error(assets_fetched, n),
         retry_count: 0,
         server_timing: conn0.server_timing.clone(),
         udp_throughput: None,
@@ -1228,7 +1228,7 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         tls: Some(tls_result),
         http: Some(manifest_http),
         udp: None,
-        error: None,
+        error: page_load_error(assets_fetched, n),
         retry_count: 0,
         server_timing,
         udp_throughput: None,
@@ -1338,7 +1338,33 @@ fn error_attempt(
     )
 }
 
-fn error_attempt_proto(
+/// The error a page-load attempt carries when some assets did not arrive.
+///
+/// A page-load attempt only succeeds when EVERY asset was fetched, but the three
+/// attempt builders left `error: None` — so a 49/50 attempt landed as
+/// "failed, reason unknown" in the run's attempt list and in the DB (prod +
+/// lab both hit this on `pageload3` through IIS, where http.sys occasionally
+/// drops one of 50 concurrent h3 streams; the operator had nothing to go on).
+fn page_load_error(assets_fetched: usize, n: usize) -> Option<ErrorRecord> {
+    if n > 0 && assets_fetched == n {
+        return None;
+    }
+    let missing = n.saturating_sub(assets_fetched);
+    Some(ErrorRecord {
+        category: ErrorCategory::Http,
+        message: if n == 0 {
+            "page manifest listed no assets".to_string()
+        } else {
+            format!(
+                "{assets_fetched}/{n} assets fetched — {missing} asset request(s) did not complete                  with a drained 2xx body (see per-asset timings in the attempt's page_load block)"
+            )
+        },
+        detail: None,
+        occurred_at: Utc::now(),
+    })
+}
+
+pub(crate) fn error_attempt_proto(
     attempt_id: Uuid,
     run_id: Uuid,
     seq: u32,
@@ -1819,7 +1845,7 @@ pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         tls: Some(tls_result),
         http: Some(manifest_http),
         udp: None,
-        error: None,
+        error: page_load_error(assets_fetched, n),
         retry_count: 0,
         server_timing: None,
         udp_throughput: None,
@@ -2435,7 +2461,7 @@ async fn fetch_h2_pageload(
         tls: tls_result,
         http: Some(manifest_http),
         udp: None,
-        error: None,
+        error: page_load_error(assets_fetched, n),
         retry_count: 0,
         server_timing,
         udp_throughput: None,
@@ -3008,7 +3034,7 @@ async fn fetch_h3_pageload(
         },
         http: Some(manifest_http),
         udp: None,
-        error: None,
+        error: page_load_error(assets_fetched, n),
         retry_count: 0,
         server_timing: None,
         udp_throughput: None,
@@ -3953,6 +3979,20 @@ mod tests {
         assert!(!asset_fetch_ok(404));
         assert!(!asset_fetch_ok(500));
         assert!(!asset_fetch_ok(199));
+    }
+
+    #[test]
+    fn page_load_error_explains_a_partial_fetch() {
+        assert!(
+            page_load_error(50, 50).is_none(),
+            "a complete page load has no error"
+        );
+        let e = page_load_error(49, 50).expect("a partial fetch must be explained");
+        assert_eq!(e.category, ErrorCategory::Http);
+        assert!(e.message.contains("49/50 assets fetched"), "{}", e.message);
+        assert!(e.message.contains("1 asset request(s)"), "{}", e.message);
+        let none = page_load_error(0, 0).expect("an empty manifest is also a failure");
+        assert!(none.message.contains("no assets"), "{}", none.message);
     }
 
     #[test]

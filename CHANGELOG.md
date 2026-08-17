@@ -11,6 +11,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.213] - 2026-08-17
+
+### Fixed
+- **`download2` / `upload2` never worked over TLS — on any target, ever.** The
+  ALPN advertisement matched only `Protocol::Http2`, so the labelled HTTP/2
+  throughput probes offered `http/1.1`, the server negotiated h1, and the h2
+  client then spoke h2 on that connection: instant `http2 error`. ALPN and the
+  `send_http2` dispatch now read one predicate (`speaks_http2`), with a test that
+  walks every protocol. Found by the production mode sweep (all five Linux
+  stacks + IIS), reproduced in the lab in 0.4 s, verified fixed at 223 MB/s
+  (`download2`) / 71 MB/s (`upload2`).
+- **A workload of only labelled throughput modes aborted the whole run.** The
+  agent's `--payload-sizes` fallback triggered on the bare names `download` /
+  `upload` only, so e.g. the UI's HTTP/3-throughput selection
+  (`http3,download3,upload3,pageload3`) shipped without sizes, the tester exited 1
+  before writing JSON, and the run failed as "unparseable JSON". The fallback now
+  covers every mode the tester's `has_throughput` covers, and lab validation
+  gained a phase (7) that runs exactly such a workload.
+- **A tester exiting before it writes JSON now reports WHY.** The agent keeps the
+  last stderr lines and puts them in the run's error (`Tester exited with code 1:
+  Error: --payload-sizes required …`) instead of only complaining about
+  unparseable stdout.
+- **`stamp` could never work on any cloud endpoint.** The endpoint listens on UDP
+  9997 (STAMP Session-Reflector) and self-reports it, but no provider opened that
+  port: Azure NSG / AWS security group / GCP firewall and all Windows firewall
+  rules now include 9997. Prod showed "All 50 STAMP probes lost" on every target;
+  the canary's Windows cell re-enables `stamp`.
+- **A tester stranded in `provisioning` by a control-plane restart now recovers.**
+  Every deploy restarts the control plane, killing the create-path task; the row
+  stayed `provisioning` forever — unusable in the UI and skipped by auto-shutdown
+  (which only acts on `running`), so the VM billed on. The create path now owns
+  its row for the flow's lifetime, and a heartbeat from the bound agent
+  reconciles an UNOWNED `provisioning` row to `running` (install is provably done
+  when its agent is talking). Seen live in prod during the 0.28.211 deploy.
+- **A deployment interrupted by a control-plane restart says so.** `install.sh` is
+  a child process, so a restart kills it mid-deploy; the run reported a bare
+  "install.sh exited with code 143". It now reports the signal, the cause and the
+  retry, and points at the orphan sweep for any VM already created.
+- **A wedged probe can no longer stall a run indefinitely.** Short diagnostic
+  modes (tcp/dns/tls/http*/ping/path/pmtud/dualstack/udp/stamp/websocket/curl/
+  sdkprobe) get a per-attempt cap (10× the request timeout, floor 120 s) and
+  record an explained failure instead of hanging: prod had a `path` probe (runs=2,
+  ICMP fully blocked) return an error on iteration 1 and never return on
+  iteration 2, leaving the run `running` with no progress for 22 minutes.
+  Long-by-design families (throughput, page-load, browser, rpm, responsiveness,
+  mthroughput) stay uncapped.
+- **The watchdog now reaps a run that stops progressing even when its agent is
+  online** (`DASHBOARD_RUN_NO_PROGRESS_SECS`, default 15 min, clamped 120 s…6 h,
+  `0` disables) — the counterpart to the cap above, and the reason that 22-minute
+  hang needed a manual cancel.
+- **`GET /api/logs` and `/api/logs/stats` returned 500 in every installation**, so
+  the Logs page was dead everywhere (and hid the tester stderr this very sweep
+  needed). `service_log` is the retired Rust dashboard's table and no C# migration
+  creates it; both routes now degrade to an empty, `log_sink: "unconfigured"`
+  result on 42P01/42703/insufficient-privilege, like `UrlTestsEndpoints` already
+  did, and `/api/logs/pipeline-status` reports `unconfigured` instead of a
+  hard-coded `healthy`.
+- **A failed page-load attempt now carries an error.** A 49/50-asset page load is
+  a failure by the all-assets rule but landed with `error: null` and nothing to
+  act on; all five page-load attempt builders now attach
+  "49/50 assets fetched — 1 asset request(s) did not complete…". Surfaced by
+  `pageload3` through IIS, where http.sys occasionally drops one of 50 concurrent
+  h3 streams (prod and lab both).
+
+### Changed
+- `lab/validate.sh` phase 2 runs **every** endpoint-capable catalog mode (was a
+  hand-picked subset that excluded `download1/2/3`, `upload1/2/3`, `webdownload`,
+  `webupload`, `udpdownload`, `udpupload`, `mthroughput`, `rpm`,
+  `responsiveness`) and the network phase adds `pmtud` + `dualstack`, with
+  explicit `payload_sizes`. Those gaps are exactly why the two tester/agent bugs
+  above reached production while the lab stayed green.
+
+---
+
 ## [0.28.212] - 2026-08-17
 
 ### Added

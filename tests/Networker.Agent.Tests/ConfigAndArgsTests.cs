@@ -125,6 +125,58 @@ public class ConfigAndArgsTests
         Assert.Equal("pageload1,pageload2", modes);
     }
 
+    [Theory]
+    // Every throughput mode the tester's `has_throughput` covers must trigger the
+    // payload-size fallback — a workload of ONLY labelled variants used to ship
+    // without --payload-sizes and abort the whole run (prod sweep, v0.28.213).
+    [InlineData("download")]
+    [InlineData("upload")]
+    [InlineData("download1")]
+    [InlineData("download2")]
+    [InlineData("download3")]
+    [InlineData("upload1")]
+    [InlineData("upload2")]
+    [InlineData("upload3")]
+    [InlineData("webdownload")]
+    [InlineData("webupload")]
+    [InlineData("udpdownload")]
+    [InlineData("udpupload")]
+    public void Throughput_modes_require_payload_sizes(string mode)
+        => Assert.True(RunExecutor.RequiresPayloadSizes(mode));
+
+    [Theory]
+    [InlineData("http1")]
+    [InlineData("http3")]
+    [InlineData("pageload3")]
+    [InlineData("mthroughput")]   // derives its own stream sizes
+    [InlineData("udp")]
+    public void Non_throughput_modes_do_not_require_payload_sizes(string mode)
+        => Assert.False(RunExecutor.RequiresPayloadSizes(mode));
+
+    [Fact]
+    public void BuildArgs_defaults_payload_sizes_for_a_labelled_only_workload()
+    {
+        // The exact prod-sweep workload: h3 + labelled throughput, no sizes.
+        var view = TestConfigView.From(Config(NetworkDnsHttp2.Replace(
+            "\"modes\": [\"dns\", \"tcp\", \"tls\", \"http2\"]",
+            "\"modes\": [\"http3\", \"download3\", \"upload3\", \"pageload3\"]")));
+        var args = RunExecutor.BuildArgs(view, "https://10.0.0.5:8444/health");
+        var i = args.IndexOf("--payload-sizes");
+        Assert.True(i >= 0, "labelled throughput modes must still get a payload size");
+        Assert.Equal("65536", args[i + 1]);
+    }
+
+    [Fact]
+    public void StderrTail_joins_the_kept_lines_newest_last()
+    {
+        var q = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        Assert.Equal(string.Empty, RunExecutor.StderrTail(q));
+        q.Enqueue("Error: --payload-sizes required for download/upload modes");
+        q.Enqueue("second line");
+        Assert.Equal("Error: --payload-sizes required for download/upload modes | second line",
+            RunExecutor.StderrTail(q));
+    }
+
     [Fact]
     public void BuildArgs_timeout_rounds_up_and_floors_at_one()
     {

@@ -331,7 +331,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.212"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.213"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -1447,7 +1447,7 @@ _lan_create_endpoint_service_windows() {
             -LocalPort 8080,8443 -ErrorAction SilentlyContinue
         New-NetFirewallRule -Name 'NetworkerEndpoint-UDP' -DisplayName 'Networker Endpoint UDP' \`
             -Enabled True -Direction Inbound -Protocol UDP -Action Allow \`
-            -LocalPort 8443,9998,9999 -ErrorAction SilentlyContinue
+            -LocalPort 8443,9997,9998,9999 -ErrorAction SilentlyContinue
         # Start endpoint as detached process (SSH waits for child processes sharing console)
         Start-Process -FilePath \\\$exe -WindowStyle Hidden
         # Scheduled task for reboot persistence
@@ -6715,7 +6715,7 @@ Stop-Process -Name 'networker-endpoint' -Force -ErrorAction SilentlyContinue
 # Windows Firewall rules (before starting the binary)
 netsh advfirewall firewall add rule name='Networker-HTTP'  protocol=TCP dir=in action=allow localport='8080,8081,8082'  | Out-Null
 netsh advfirewall firewall add rule name='Networker-HTTPS' protocol=TCP dir=in action=allow localport='8443,8444,8445'  | Out-Null
-netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,9998,9999' | Out-Null
+netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,9997,9998,9999' | Out-Null
 Write-Host 'Firewall rules added'
 # Start endpoint as detached process (-WindowStyle Hidden, NOT -NoNewWindow,
 # because az vm run-command waits for all child processes sharing the console)
@@ -7056,7 +7056,11 @@ step_azure_create_vm() {
     fi
 }
 
-# Open TCP 80/443/8080-8082/8443-8445 and UDP 8443/9998/9999 on the NSG for the endpoint VM.
+# Open TCP 80/443/8080-8082/8443-8445 and UDP 8443-8445/8454/9997-9999 on the NSG for the endpoint VM.
+# 9997 = STAMP Session-Reflector (RFC 8762): the endpoint listens and self-reports
+# it, so leaving it closed made the `stamp` mode fail 100% on every cloud target
+# ("All 50 STAMP probes lost") while passing in the container lab — prod sweep,
+# v0.28.213.
 # Uses az network nsg rule create (not az vm open-port) to avoid priority conflicts
 # with the default-allow-ssh rule that Azure always places at priority 1000.
 step_azure_open_endpoint_ports() {
@@ -7085,7 +7089,7 @@ step_azure_open_endpoint_ports() {
         print_warn "    --priority 1100 --destination-port-ranges 80 443 8080-8082 8443-8445 --access Allow"
         print_warn "  az network nsg rule create --resource-group $rg --nsg-name <nsg> \\"
         print_warn "    --name Networker-UDP --protocol Udp --direction Inbound \\"
-        print_warn "    --priority 1110 --destination-port-ranges 8443 9998 9999 --access Allow"
+        print_warn "    --priority 1110 --destination-port-ranges 8443-8445 8454 9997 9998 9999 --access Allow"
         return 0
     fi
 
@@ -7106,7 +7110,7 @@ step_azure_open_endpoint_ports() {
         --output none
     print_ok "TCP 80, 443, 8080-8082, 8091-8094, 8443-8445, 8454-8457 open"
 
-    print_info "Opening UDP 8443-8445, 8454, 9998, 9999…"
+    print_info "Opening UDP 8443-8445, 8454, 9997 (STAMP), 9998, 9999…"
     az network nsg rule create \
         --resource-group "$rg" \
         --nsg-name "$nsg_name" \
@@ -7114,10 +7118,10 @@ step_azure_open_endpoint_ports() {
         --protocol Udp \
         --direction Inbound \
         --priority 1110 \
-        --destination-port-ranges 8443-8445 8454 9998 9999 \
+        --destination-port-ranges 8443-8445 8454 9997 9998 9999 \
         --access Allow \
         --output none
-    print_ok "UDP 8443-8445, 8454, 9998, 9999 open"
+    print_ok "UDP 8443-8445, 8454, 9997, 9998, 9999 open"
 }
 
 # Set Azure auto-shutdown policy (04:00 UTC = 11 PM EST).
@@ -7513,7 +7517,7 @@ Log "Starting networker-endpoint bootstrap…"
 Log "Configuring firewall rules…"
 netsh advfirewall firewall add rule name='Networker-HTTP'  protocol=TCP dir=in action=allow localport='80,443,8080,8081,8082'  | Out-Null
 netsh advfirewall firewall add rule name='Networker-HTTPS' protocol=TCP dir=in action=allow localport='8443,8444,8445'  | Out-Null
-netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,8444,8445,9998,9999' | Out-Null
+netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,8444,8445,9997,9998,9999' | Out-Null
 Log "Firewall rules added"
 
 # 2. Install VC++ Redistributable if missing (MSVC-built binaries need vcruntime140.dll)
@@ -7614,7 +7618,7 @@ Log "Starting networker-endpoint Windows bootstrap…"
 Log "Configuring firewall rules…"
 netsh advfirewall firewall add rule name='Networker-HTTP'  protocol=TCP dir=in action=allow localport='80,443,8080,8081,8082'  | Out-Null
 netsh advfirewall firewall add rule name='Networker-HTTPS' protocol=TCP dir=in action=allow localport='8443,8444,8445'  | Out-Null
-netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,8444,8445,9998,9999' | Out-Null
+netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,8444,8445,9997,9998,9999' | Out-Null
 Log "Firewall rules added"
 
 # ── VC++ Redistributable ────────────────────────────────────────────────────
@@ -7765,14 +7769,18 @@ _aws_create_security_group() {
             --protocol udp --port 8443-8445 --cidr 0.0.0.0/0 --output text >/dev/null
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$_sg_created" \
-            --protocol udp --port 8454 --cidr 0.0.0.0/0 --output text >/dev/null
+            --protocol udp --port 8454 --cidr 0.0.0.0/0 --output text >/dev/null || true
+        # 9997 = STAMP Session-Reflector (see the Azure NSG note).
+        aws ec2 authorize-security-group-ingress \
+            --region "$AWS_REGION" --group-id "$sg_id" \
+            --protocol udp --port 9997 --cidr 0.0.0.0/0 --output text >/dev/null
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$_sg_created" \
             --protocol udp --port 9998 --cidr 0.0.0.0/0 --output text >/dev/null
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$_sg_created" \
             --protocol udp --port 9999 --cidr 0.0.0.0/0 --output text >/dev/null
-        print_ok "Security group created: $_sg_created  (TCP 22/3389/80/443/8080-8082/8443-8445, UDP 8443-8445/9998/9999)"
+        print_ok "Security group created: $_sg_created  (TCP 22/3389/80/443/8080-8082/8443-8445, UDP 8443-8445/8454/9997-9999)"
     else
         print_ok "Security group created: $_sg_created  (TCP 22/3389)"
     fi
@@ -8208,7 +8216,7 @@ _gcp_create_firewall_rule() {
         --priority=1000 \
         --network=default \
         --action=ALLOW \
-        --rules=tcp:22,tcp:80,tcp:443,tcp:3389,tcp:8080-8082,tcp:8091-8094,tcp:8443-8445,tcp:8454-8457,udp:8443-8445,udp:8454,udp:9998,udp:9999 \
+        --rules=tcp:22,tcp:80,tcp:443,tcp:3389,tcp:8080-8082,tcp:8091-8094,tcp:8443-8445,tcp:8454-8457,udp:8443-8445,udp:8454,udp:9997,udp:9998,udp:9999 \
         --source-ranges=0.0.0.0/0 \
         --target-tags=networker-endpoint \
         --quiet
@@ -8759,7 +8767,7 @@ if (-not $downloaded) {
 # Firewall — add rules before starting the binary
 netsh advfirewall firewall add rule name='Networker-HTTP'  protocol=TCP dir=in action=allow localport=8080 2>$null
 netsh advfirewall firewall add rule name='Networker-HTTPS' protocol=TCP dir=in action=allow localport=8443 2>$null
-netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,9998,9999' 2>$null
+netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,9997,9998,9999' 2>$null
 Log 'Firewall rules added'
 
 # Start the endpoint as a detached process (-WindowStyle Hidden creates a fully
@@ -8849,7 +8857,7 @@ _gcp_win_create_endpoint_service() {
             Stop-Process -Name 'networker-endpoint' -Force -ErrorAction SilentlyContinue; \
             netsh advfirewall firewall add rule name='Networker-HTTP'  protocol=TCP dir=in action=allow localport=8080; \
             netsh advfirewall firewall add rule name='Networker-HTTPS' protocol=TCP dir=in action=allow localport=8443; \
-            netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,9998,9999'; \
+            netsh advfirewall firewall add rule name='Networker-UDP'   protocol=UDP dir=in action=allow localport='8443,9997,9998,9999'; \
             Start-Process -FilePath 'C:\\networker\\networker-endpoint.exe' -WindowStyle Hidden; \
             schtasks /Create /TN 'NetworkerEndpoint' /TR 'C:\\networker\\networker-endpoint.exe' /SC ONSTART /RU SYSTEM /F 2>\\\$null\"" < /dev/null
 

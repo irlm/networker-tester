@@ -84,9 +84,22 @@ POLL=3
 SKIP=""; ONLY=""
 # Deterministic + proxy-reachable modes. UDP modes (udp/stamp) go straight to
 # the endpoint's UDP ports on the same container, like the opened cloud ports.
-MATRIX_DEFAULT="tcp,dns,tls,tlsresume,http1,http2,http3,curl,download,upload,pageload,pageload2,pageload3,websocket,udp,stamp"
+MATRIX_DEFAULT="tcp,dns,tls,tlsresume,http1,http2,http3,curl,download,upload,download1,download2,download3,upload1,upload2,upload3,webdownload,webupload,udpdownload,udpupload,mthroughput,rpm,responsiveness,pageload,pageload2,pageload3,websocket,udp,stamp"
+# ↑ EVERY endpoint-capable catalog mode, not a hand-picked subset: the prod sweep
+# (v0.28.213) found download2/upload2 broken on every target since forever
+# (ALPN never advertised h2 for them) and a whole run aborting for
+# labelled-throughput-only workloads — both invisible here because the matrix
+# only ran `download`/`upload`. `browser*` are covered separately (they need
+# Chrome in the runner image), `path` separately (needs runs>=2 + blocked ICMP),
+# `apibench` is a runner-level mode and `sdkprobe` needs an SDK endpoint.
 MATRIX="$MATRIX_DEFAULT"
-NETWORK_MODES="tcp,dns,tls,tlsresume,http1,http2,http3,curl,ping"
+# Explicit sizes: every throughput mode needs them, and passing them here means a
+# regression in the agent's own fallback shows up as a FAILED PHASE, not a silent
+# skip (that fallback was the v0.28.213 bug).
+MATRIX_PAYLOADS="${MATRIX_PAYLOADS:-65536}"
+NETWORK_MODES="tcp,dns,tls,tlsresume,http1,http2,http3,curl,ping,pmtud,dualstack"
+# ↑ + pmtud/dualstack: L3 probes that work against a lab target (ICMP is allowed
+# on labnet) and regressed unnoticed in prod for lack of coverage.
 while [ $# -gt 0 ]; do
   case "$1" in
     --modes) shift; MATRIX="$1" ;;
@@ -187,6 +200,29 @@ broken_modes() { jq -r 'group_by(.protocol) | map({m:.[0].protocol, ok:(map(sele
 first_errors() { jq -r '[.[]|select(.success==false)|"\(.protocol): \(.error_message // "?")"] | unique | .[0:6][]' <<<"$1"; }
 
 RESULTS=""
+# ── phase 7: labelled-throughput-only workload ───────────────────────────────
+# A workload with NO bare `download`/`upload` (e.g. the UI's "HTTP/3 throughput"
+# selection) must still run: the agent has to supply --payload-sizes for every
+# throughput mode, not just those two names. Prod aborted the whole run here
+# ("unparseable JSON") until v0.28.213.
+phase7_labelled_throughput() {
+  local ep="$1" label="$2" cfg run att broken
+  note "phase 7 — labelled-throughput-only workload through $label (no bare download/upload, no payload_sizes in the config)"
+  cfg="$(create_config "lab-p7-labelled-$label-$STAMP" "$ep" \
+    "$(jq -nc '{modes:["download1","download2","upload1","upload2","udpdownload","udpupload"],runs:1,concurrency:1,timeout_ms:15000}')")" || return 1
+  run="$(launch "$cfg")" || return 1
+  wait_run "$run" || fail "phase 7: run $run did not finish (last=$R_STATUS)"
+  att="$(attempts_of "$run")"
+  note "  status=$R_STATUS ok=$R_OK fail=$R_FAIL attempts=$(jq length <<<"$att")"
+  echo "    $(per_mode_stats "$att")"
+  [ "$R_STATUS" = "completed" ] || fail "phase 7: status '$R_STATUS' ${R_ERR:+— $R_ERR} (the agent must default --payload-sizes for labelled throughput modes)"
+  [ "$(jq length <<<"$att")" -gt 0 ] || fail "phase 7: no attempts — the tester aborted before writing JSON (payload-sizes regression?)"
+  broken="$(broken_modes "$att")"
+  [ -z "$broken" ] || { fail "phase 7: mode(s) with zero successes: $broken"; first_errors "$att" | sed 's/^/      /'; }
+  record "phase 7  labelled-throughput ($label) → $R_STATUS ok=$R_OK fail=$R_FAIL${broken:+ BROKEN=$broken}"
+  [ -z "$broken" ] && [ "$R_STATUS" = "completed" ] && pass "phase 7 ($label)"
+}
+
 summary() {
   echo
   printf '%s══ lab validation summary (%s) ══%s\n' "$C" "$STAMP" "$N"
@@ -248,7 +284,7 @@ if run_phase 2; then
       MODES_JSON="$(jq -nc --arg m "$STACK_MATRIX" '($m|split(",")) + ["native"]')"
       CFG2="$(create_config "lab-p2-${pst}-t${i}-$STAMP" \
         "$(jq -nc --arg d "$DEP" --arg s "$pst" '{kind:"proxy",proxy_endpoint_id:$d,proxy_stack:$s}')" \
-        "$(jq -nc --argjson modes "$MODES_JSON" --argjson r "$RUNS" '{modes:$modes,runs:$r,concurrency:1,timeout_ms:15000,capture_mode:"headers-only",payload_sizes:[]}')")" || exit 1
+        "$(jq -nc --argjson modes "$MODES_JSON" --argjson r "$RUNS" --argjson ps "[$MATRIX_PAYLOADS]" '{modes:$modes,runs:$r,concurrency:1,timeout_ms:15000,capture_mode:"headers-only",payload_sizes:$ps}')")" || exit 1
       RUN2="$(launch "$CFG2")" || exit 1
       note "  run $RUN2 launched — waiting (matrix: $STACK_MATRIX + native)"
       wait_run "$RUN2" || fail "phase 2 ($lbl): run $RUN2 did not finish in ${RUN_TIMEOUT}s (last=$R_STATUS)"
@@ -292,6 +328,24 @@ if run_phase 2; then
     i=$((i + 1))
   done
   [ "$any_proxy" = 1 ] || { note "phase 2 — no proxy targets (all rust) — skipped; use: lab.sh up --targets rust,nginx"; record "phase 2  (skipped: no proxy targets)"; }
+fi
+
+# ── phase 7 (runs with phase 2's first proxy target) ─────────────────────────
+if run_phase 7; then
+  i=1; t="$(target_count)"; done7=0
+  while [ "$i" -le "$t" ]; do
+    st="$(stack_of "$i")"
+    if [ "$st" != rust ] && [ "$done7" = 0 ]; then
+      DEP7="$(api GET "/api/projects/$PID/deployments?limit=100" | jq -r --arg n "lab-target-${i}-${st}" \
+        '(if type=="array" then . else (.deployments // .items // []) end) | [.[]|select(.name==$n)][0] | (.id // .deployment_id) // empty')"
+      if [ -n "$DEP7" ]; then
+        phase7_labelled_throughput "$(jq -nc --arg d "$DEP7" --arg s "$st" '{kind:"proxy",proxy_endpoint_id:$d,proxy_stack:$s}')" "$st"
+        done7=1
+      fi
+    fi
+    i=$((i + 1))
+  done
+  [ "$done7" = 1 ] || { note "phase 7 — no proxy target available — skipped"; record "phase 7  (skipped: no proxy target)"; }
 fi
 
 # ── phase 3: fan-out across runners ──────────────────────────────────────────
@@ -597,7 +651,7 @@ if run_phase 6; then
           MODES_JSON="$(jq -nc --arg m "$STACK_MATRIX" '($m|split(",")) + ["native"]')"
           CFG6P="$(create_config "lab-p6-win-${pst}-${WNAME}-$STAMP" \
             "$(jq -nc --arg d "$DEP" --arg s "$pst" '{kind:"proxy",proxy_endpoint_id:$d,proxy_stack:$s}')" \
-            "$(jq -nc --argjson modes "$MODES_JSON" --argjson r "$RUNS" '{modes:$modes,runs:$r,concurrency:1,timeout_ms:15000,capture_mode:"headers-only",payload_sizes:[]}')")" || exit 1
+            "$(jq -nc --argjson modes "$MODES_JSON" --argjson r "$RUNS" --argjson ps "[$MATRIX_PAYLOADS]" '{modes:$modes,runs:$r,concurrency:1,timeout_ms:15000,capture_mode:"headers-only",payload_sizes:$ps}')")" || exit 1
           LRESP="$(api POST "/api/v2/test-configs/$CFG6P/launch" "$PIN_BODY")"
           RUN6P="$(jq -r '.run_id // .id // empty' <<<"$LRESP")"
           if [ -z "$RUN6P" ]; then

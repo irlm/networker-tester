@@ -546,7 +546,7 @@ fi
 
 note "phase 5: Windows Server + IIS endpoint cell (provision ~10-15 min)"
 WIN_NAME="soak-canary-windows-iis-$(date -u +%Y%m%dT%H%M%SZ)"
-WIN_MODES='["tcp","dns","tls","tlsresume","http1","http2","curl","download","upload","pageload","pageload2","websocket","udp"]'   # stamp: UDP 9997 is not in the Windows NSG openings (8443-8445, 9998, 9999)
+WIN_MODES='["tcp","dns","tls","tlsresume","http1","http2","curl","download","upload","pageload","pageload2","websocket","udp","stamp"]'   # stamp needs UDP 9997, opened since v0.28.213
 WIN_CELLS=$(jq -nc --arg acct "$ACCOUNT_ID" '[
   {label:"canary windows · iis", endpoint:{kind:"pending", cloud_account_id:$acct, region:"eastus", vm_size:"Standard_B2s", os:"windows", proxy_stack:"iis", language:"rust"}}
 ]')
