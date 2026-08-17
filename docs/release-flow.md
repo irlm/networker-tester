@@ -156,12 +156,23 @@ relevant only during the decommission soak window.
   `/api/health/background` (`all_healthy`), and the queue depth. It also confirms
   that the retired Rust services stay inactive.
 - The daily `Release gap check` (07:31 UTC, also `workflow_dispatch`) compares
-  every `v*` tag against the published releases, because a tag can outlive its
-  release when the dispatch fails (§3). It **fails** only when main's CURRENT
-  version is the stranded one — that case is recoverable by re-running
-  `Auto-tag & deploy`. Older gaps are reported as warnings and must be left
-  alone: dispatching `release.yml` for an old tag deploys that version over
-  production. Known historical gap: `v0.28.214`.
+  every `v*` tag against the published releases, because a release can go missing
+  in two ways (§3):
+
+  | shape | cause |
+  |---|---|
+  | tag exists, no release | the tag pushed and the `release.yml` dispatch failed |
+  | no tag at all | the auto-tag job died or was cancelled before tagging |
+
+  It **fails** only for main's CURRENT version, in either shape — that is the
+  recoverable case (re-run `Auto-tag & deploy`). Older gaps are warnings and must
+  be left alone: dispatching `release.yml` for an old tag deploys that version
+  over production. Tags older than the first published release (`v0.28.12`) are
+  ignored; this repo carries ~225 of them.
+
+  Known historical gaps, all superseded and deliberately left alone: `v0.28.76`,
+  `v0.28.182`, `v0.28.191`, `v0.28.214` (tag, no release) and `v0.28.210`
+  (merged, never tagged).
 
 ## Dependency updates (Dependabot)
 
