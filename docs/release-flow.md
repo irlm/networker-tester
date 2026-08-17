@@ -45,8 +45,25 @@ missing or inconsistent. Branch protection also requires these checks:
 On every push to `main`, the `Auto-tag & deploy` job (ci.yml) reads the version
 from `Cargo.toml`. If the tag `vX.Y.Z` does not exist yet, the job creates and
 pushes it. The job then dispatches `release.yml` with that tag. A tag that the
-Actions token pushes does not trigger a workflow on its own. If the tag already
-exists — for example, after a docs-only merge with no bump — nothing happens.
+Actions token pushes does not trigger a workflow on its own.
+
+The job keys on whether the **release** exists, not the tag, because tagging and
+dispatching are two API calls that can half-succeed. On 2026-08-17 the tag
+`v0.28.214` pushed and `gh workflow run` then died on a GitHub 503, and the old
+"tag exists → skip" guard meant every re-run walked straight past the missing
+release: **v0.28.214 has a tag and no release, permanently.** Now:
+
+| state | what happens |
+|---|---|
+| release published | nothing (a docs-only merge with no bump lands here) |
+| tag exists, no release | re-dispatch `release.yml` — re-running the job is the recovery |
+| no tag | tag, push, dispatch (5 attempts with backoff) |
+| release lookup itself failing (API down) | job fails without guessing; re-run it later |
+
+**Do not** dispatch `release.yml` for an OLD tag to fill a gap: its `deploy` job
+is unconditional and checks out that tag, so it would roll production back to
+that version. A superseded gap (like v0.28.214, whose code shipped in v0.28.215)
+is better left alone.
 
 ## 4. The release graph (release.yml)
 
