@@ -311,6 +311,12 @@ loss/jitter control yet.
 > macOS/Windows hop addresses are not observable without raw sockets, so the
 > probe degrades honestly to a hop-count estimate + destination reachability
 > with `hops: []` (`method: "udp-ttl-estimate"`) — it never fabricates hops.
+> The scan is bounded by the run's per-attempt timeout, not just by
+> `max_ttl x per-hop timeout`: on a path where nothing answers (cloud SNAT or a
+> firewall eating every ICMP error) it used to spend the full 30 x 1 s no matter
+> what `--timeout` said. It now stops at the timeout and names the extent it
+> covered — "no ICMP responses for any TTL 1..=10 (scan stopped at the 10000ms
+> budget, before TTL 30)".
 
 > `dualstack` resolves A and AAAA separately, runs one HTTP/1.1 GET pinned to
 > IPv4 and one pinned to IPv6, and compares per-phase timing (DNS, TCP, TLS,

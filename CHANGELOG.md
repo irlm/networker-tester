@@ -11,6 +11,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.215] - 2026-08-17
+
+Two WAN-only probe defects from the production sweep, reproduced locally in the
+Docker lab with `tc netem` (no cloud VMs) and fixed with the measurement in
+hand.
+
+### Fixed
+
+- **`udpdownload`/`udpupload` failed on any path that reorders packets.** The
+  server sends CMD_ACK microseconds before the data burst, so a jittery path
+  routinely delivers a data packet first — and `wait_for_ack` failed the probe on
+  the first datagram that was not the ACK. Worse, it read into a 24-byte buffer,
+  and `recv()` truncates a datagram to the buffer and returns the buffer length,
+  so a 1408-byte data packet was reported as the production sweep's
+  `Short response: 24 bytes`. The ACK wait now uses a full-size buffer, skips
+  stray datagrams until its deadline, and treats an early data packet as the
+  transfer having started (counting its bytes). Reproduced with
+  `netem delay 20ms 10ms reorder 50% 50%`: **4 of 8 attempts failed before, 8 of
+  8 pass after.**
+- **Reordering also fabricated packet loss.** `CMD_DONE` is the last datagram the
+  server sends, so it arrives while data is still in flight; the receiver broke
+  on it and counted everything in flight as path loss (47 datagrams sent,
+  "27 received", 40% loss, and a truncated transfer window that reported
+  300 MB/s over a 2 MB/s link). It now drains briefly after `CMD_DONE`, with the
+  throughput window still ending at the last data packet: **0.0% loss, 47/47.**
+- **A late CMD_ACK was counted as a data packet** whose sequence number was the
+  protocol magic — 48 datagrams "received" out of 47 sent, plus phantom bytes.
+  Control packets are now excluded from the data path, and `wait_for_report`
+  skips a late ACK instead of returning no server byte count.
+- **`path` ignored the run's timeout.** A filtered path (no ICMP anywhere) always
+  cost `max_ttl x per_hop_timeout` = 30 x 1 s per attempt, which is what the
+  sweep saw as a "hang" from the second iteration on; because the trace runs in
+  `spawn_blocking` it cannot be cancelled from outside, so it now bounds itself.
+  `PathProbeConfig.total_budget_ms` (set by the dispatcher from the per-attempt
+  timeout; `0` keeps the unbounded classic behaviour for direct library/CLI use)
+  stops the scan at the budget and reports honestly how far it got —
+  "no ICMP responses for any TTL 1..=10 (scan stopped at the 10000ms budget,
+  before TTL 30)". Measured with inbound ICMP dropped: **61 s → 20 s for
+  `--runs 2 --timeout 10`.**
+
+---
+
 ## [0.28.214] - 2026-08-17
 
 ### Added

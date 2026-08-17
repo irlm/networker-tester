@@ -59,6 +59,16 @@ pub struct PathProbeConfig {
     /// verdict is "environment-blocked", not "path down". `None` skips the
     /// check.
     pub verify_tcp_port: Option<u16>,
+    /// Wall-clock budget for the WHOLE trace (ms); `0` = unbounded.
+    ///
+    /// Without this the probe always cost `max_ttl * per_hop_timeout_ms`: a
+    /// filtered path (no ICMP at all) burned 30 x 1 s = 30 s per attempt while
+    /// the caller had asked for `--timeout 10`, which is what the production
+    /// sweep saw as a "hang" on the second iteration (measured in the Docker lab
+    /// with inbound ICMP dropped: 61 s for `--runs 2`). The dispatcher passes
+    /// the run's per-attempt timeout; the scan stops at the budget and reports
+    /// the hops it did discover.
+    pub total_budget_ms: u64,
 }
 
 pub const DEFAULT_PATH_MAX_TTL: u32 = 30;
@@ -73,6 +83,7 @@ impl Default for PathProbeConfig {
             per_hop_timeout_ms: DEFAULT_PATH_HOP_TIMEOUT_MS,
             base_port: DEFAULT_PATH_BASE_PORT,
             verify_tcp_port: Some(443),
+            total_budget_ms: 0, // unbounded unless the caller sets one
         }
     }
 }
@@ -106,8 +117,17 @@ pub async fn run_path_probe(
     let max_ttl = cfg.max_ttl.clamp(1, 64);
     let per_hop_timeout_ms = cfg.per_hop_timeout_ms.max(1);
     let base_port = cfg.base_port;
+    // spawn_blocking tasks cannot be cancelled, so the trace has to bound
+    // ITSELF: an outer timeout would return while the thread kept probing.
+    let total_budget_ms = cfg.total_budget_ms;
     let outcome = tokio::task::spawn_blocking(move || {
-        platform::trace_blocking(addr, max_ttl, per_hop_timeout_ms, base_port)
+        platform::trace_blocking(
+            addr,
+            max_ttl,
+            per_hop_timeout_ms,
+            base_port,
+            total_budget_ms,
+        )
     })
     .await;
 
@@ -133,6 +153,18 @@ pub async fn run_path_probe(
                 format!("path worker task failed: {e}"),
             )
         }
+    };
+
+    // How far the scan actually got: with a budget, "no ICMP for TTL 1..=30" is
+    // a lie when only 10 TTLs were probed.
+    let scanned = if trace.budget_truncated {
+        format!(
+            "1..={probed} (scan stopped at the {budget}ms budget, before TTL {max_ttl})",
+            probed = trace.probed_ttls,
+            budget = cfg.total_budget_ms,
+        )
+    } else {
+        format!("1..={max_ttl}")
     };
 
     let result = PathResult {
@@ -161,7 +193,7 @@ pub async fn run_path_probe(
                     ErrorCategory::Config,
                     format!(
                         "Hop discovery blocked by this runner's environment, not the path: \
-                         no ICMP responses for any TTL 1..={max_ttl} ({method}), but the \
+                         no ICMP responses for any TTL {scanned} ({method}), but the \
                          destination IS reachable — TCP connect to port {port} in {rtt_ms:.1}ms. \
                          Cloud SNAT layers (e.g. Azure SLB) drop ICMP; run path from a \
                          runner with a direct public IP to see hops.",
@@ -171,7 +203,7 @@ pub async fn run_path_probe(
                 None => (
                     ErrorCategory::Udp,
                     format!(
-                        "No ICMP responses for any TTL 1..={max_ttl} and the destination \
+                        "No ICMP responses for any TTL {scanned} and the destination \
                          never answered (also unreachable on TCP port {port}) — path \
                          blocked or target down ({})",
                         result.method
@@ -181,7 +213,7 @@ pub async fn run_path_probe(
             None => (
                 ErrorCategory::Udp,
                 format!(
-                    "No ICMP responses for any TTL 1..={max_ttl} and the destination never \
+                    "No ICMP responses for any TTL {scanned} and the destination never \
                      answered — path blocked or ICMP filtered ({})",
                     result.method
                 ),
@@ -311,12 +343,17 @@ fn path_failed(
 // Platform implementations
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[derive(Debug)]
 pub(crate) struct TraceOutcome {
     pub hops: Vec<PathHop>,
     pub hop_count: Option<u32>,
     pub destination_reached: bool,
     pub destination_rtt_ms: Option<f64>,
     pub method: String,
+    /// Highest TTL actually probed, and whether the total budget cut the scan
+    /// short. Used for honest messaging only - NOT part of the JSON contract.
+    pub probed_ttls: u32,
+    pub budget_truncated: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -354,7 +391,10 @@ pub(crate) mod linux_impl {
         max_ttl: u32,
         per_hop_timeout_ms: u64,
         base_port: u16,
+        total_budget_ms: u64,
     ) -> Result<TraceOutcome, String> {
+        let budget_deadline =
+            (total_budget_ms > 0).then(|| Instant::now() + Duration::from_millis(total_budget_ms));
         let bind: SocketAddr = match addr {
             IpAddr::V4(_) => (Ipv4Addr::UNSPECIFIED, 0).into(),
             IpAddr::V6(_) => (Ipv6Addr::UNSPECIFIED, 0).into(),
@@ -373,7 +413,16 @@ pub(crate) mod linux_impl {
         // per-TTL port demultiplexing is needed (module docs).
         let dest = SocketAddr::new(addr, base_port);
 
+        let mut probed_ttls = 0u32;
+        let mut budget_truncated = false;
         for ttl in 1..=max_ttl {
+            // Stop at the caller's budget rather than always spending
+            // max_ttl x per_hop_timeout_ms on a path that answers nothing.
+            if budget_deadline.is_some_and(|d| Instant::now() >= d) {
+                budget_truncated = true;
+                break;
+            }
+            probed_ttls = ttl;
             set_ttl(&socket, &addr, ttl).map_err(|e| format!("set TTL={ttl} failed: {e}"))?;
             let sent_at = Instant::now();
             if let Err(e) = socket.send_to(&[0u8; 8], dest) {
@@ -383,7 +432,10 @@ pub(crate) mod linux_impl {
                 tracing::debug!("path probe ttl={ttl} send error: {e}");
             }
 
-            let deadline = sent_at + Duration::from_millis(per_hop_timeout_ms);
+            let mut deadline = sent_at + Duration::from_millis(per_hop_timeout_ms);
+            if let Some(budget) = budget_deadline {
+                deadline = deadline.min(budget);
+            }
             match wait_icmp_event(&socket, deadline) {
                 Some(IcmpEvent::TimeExceeded { offender }) => {
                     hops.push(PathHop {
@@ -438,6 +490,8 @@ pub(crate) mod linux_impl {
             destination_reached,
             destination_rtt_ms,
             method: METHOD.to_string(),
+            probed_ttls,
+            budget_truncated,
         })
     }
 
@@ -637,7 +691,10 @@ pub(crate) mod portable_impl {
         max_ttl: u32,
         per_hop_timeout_ms: u64,
         base_port: u16,
+        total_budget_ms: u64,
     ) -> Result<TraceOutcome, String> {
+        let budget_deadline =
+            (total_budget_ms > 0).then(|| Instant::now() + Duration::from_millis(total_budget_ms));
         let bind: SocketAddr = match addr {
             IpAddr::V4(_) => (Ipv4Addr::UNSPECIFIED, 0).into(),
             IpAddr::V6(_) => (Ipv6Addr::UNSPECIFIED, 0).into(),
@@ -647,7 +704,16 @@ pub(crate) mod portable_impl {
         let mut destination_rtt_ms = None;
         let mut hop_count = None;
 
+        let mut probed_ttls = 0u32;
+        let mut budget_truncated = false;
         for ttl in 1..=max_ttl {
+            // Same budget rule as the Linux path: never spend more than the
+            // caller allowed on a destination that answers nothing.
+            if budget_deadline.is_some_and(|d| Instant::now() >= d) {
+                budget_truncated = true;
+                break;
+            }
+            probed_ttls = ttl;
             // Fresh socket per TTL so a queued ICMP error from a previous
             // probe cannot be misattributed to this one.
             let socket = UdpSocket::bind(bind).map_err(|e| format!("UDP bind failed: {e}"))?;
@@ -707,6 +773,8 @@ pub(crate) mod portable_impl {
             destination_reached,
             destination_rtt_ms,
             method: METHOD.to_string(),
+            probed_ttls,
+            budget_truncated,
         })
     }
 
@@ -774,6 +842,7 @@ mod tests {
             max_ttl: 4,
             per_hop_timeout_ms: 1000,
             base_port: DEFAULT_PATH_BASE_PORT,
+            total_budget_ms: 0,
             verify_tcp_port: None,
         };
         let attempt = run_path_probe(Uuid::new_v4(), 0, &cfg).await;
@@ -815,5 +884,45 @@ mod tests {
             attempt.error.expect("error must be set").category,
             ErrorCategory::Dns
         );
+    }
+
+    /// The trace must respect the caller's total budget instead of always
+    /// spending `max_ttl * per_hop_timeout_ms`. Regression for the "path hangs
+    /// on the second iteration" report: with every ICMP error filtered, each
+    /// attempt cost 30 x 1 s regardless of `--timeout` (measured in the Docker
+    /// lab: 61 s for `--runs 2`, 20 s after this fix with `--timeout 10`).
+    ///
+    /// Deliberately hermetic: TEST-NET-1 (RFC 5737) is not routable, so nothing
+    /// answers - and whatever the environment does, the budget is the ceiling.
+    #[test]
+    fn a_total_budget_bounds_the_whole_trace() {
+        let unbounded_cost = std::time::Duration::from_millis(8 * 5_000);
+        let start = std::time::Instant::now();
+        let outcome = platform::trace_blocking(
+            "192.0.2.1".parse().unwrap(),
+            8,     // max_ttl
+            5_000, // per-hop: 8 x 5 s = 40 s if the budget were ignored
+            DEFAULT_PATH_BASE_PORT,
+            400, // total budget
+        );
+        let elapsed = start.elapsed();
+
+        assert!(outcome.is_ok(), "trace errored: {outcome:?}");
+        assert!(
+            elapsed < unbounded_cost / 4,
+            "budget ignored: the trace took {elapsed:?}"
+        );
+        let trace = outcome.unwrap();
+        assert!(
+            trace.budget_truncated || trace.destination_reached,
+            "a scan cut short must say so (probed {} TTL(s))",
+            trace.probed_ttls
+        );
+    }
+
+    /// `0` keeps the classic traceroute behaviour for direct library/CLI users.
+    #[test]
+    fn the_default_config_is_unbounded() {
+        assert_eq!(PathProbeConfig::default().total_budget_ms, 0);
     }
 }
