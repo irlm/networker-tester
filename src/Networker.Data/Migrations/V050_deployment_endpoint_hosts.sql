@@ -1,0 +1,22 @@
+-- V050: deployment.endpoint_hosts — the DNS name of each deployed endpoint.
+--
+-- endpoint_ips (V003) is what the deploy captured as the address of each
+-- endpoint (a public IP, or the cloud FQDN when install.sh printed one) and
+-- everything — UI cards, health/version probes, the teardown reverse lookup —
+-- keys off it. Dispatch used it verbatim as the target host, so an IIS target
+-- was probed by IP literal: an IP literal carries no TLS SNI (RFC 6066) and
+-- http.sys completes the QUIC handshake only with SNI, so HTTP/3 through IIS
+-- could never succeed on the proxy path (lab-measured, v0.28.208).
+--
+-- endpoint_hosts — JSONB array PARALLEL to endpoint_ips: element i is the
+--   resolvable DNS name of endpoint i (Azure `<label>.<region>.cloudapp.azure.com`
+--   from the public-IP DNS label, AWS `ec2-…compute.amazonaws.com`, the docker
+--   provider's container name, the lab's `target-N.lab` alias), or null when
+--   the provider gave none (GCP, lan). The proxy resolver / pending→network
+--   rewrite prefer it over endpoint_ips[i] so the tester connects by hostname
+--   and IIS's SNI binding (the same name in the certificate SAN) serves HTTP/3.
+--
+-- Idempotent (ADD COLUMN IF NOT EXISTS); no backfill — pre-V050 deployments
+-- keep resolving by endpoint_ips exactly as before.
+ALTER TABLE deployment
+    ADD COLUMN IF NOT EXISTS endpoint_hosts JSONB;

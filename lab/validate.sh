@@ -10,10 +10,12 @@
 #            up (kind=proxy → dispatcher resolves ip:stack-port + insecure);
 #            every mode must have ≥1 successful attempt; `native` must be DROPPED
 #            by dispatch (0 attempts), never failed. A `windows` target is
-#            validated as proxy stack `iis` (:8445; h3 modes only if
-#            shared/http-stacks.json says iis h3=true — it says false: http.sys
-#            needs SNI, targets are addressed by IP) AND, mirroring phase 1,
-#            its bare networker-endpoint on :8443 (kind=network, incl. http3).
+#            validated as proxy stack `iis` (:8445 — the deployment carries
+#            endpoint_hosts=[target-N.lab], so dispatch hands the tester the
+#            hostname, the QUIC ClientHello carries SNI and IIS's SNI binding
+#            serves HTTP/3: http3/pageload3 are in the iis matrix) AND,
+#            mirroring phase 1, its bare networker-endpoint on :8443
+#            (kind=network, incl. http3).
 #   phase 3  fan-out — launch 2×runners runs at once; all complete and ≥2
 #            distinct workers execute them (dispatch spreads across agents).
 #   phase 4  cancel — launch a long run, cancel it, assert terminal `cancelled`.
@@ -216,7 +218,8 @@ if run_phase 2; then
       DEP="$(api GET "/api/projects/$PID/deployments?limit=100" | jq -r --arg n "lab-target-${i}-${pst}" \
         '(if type=="array" then . else (.deployments // .items // []) end) | [.[]|select(.name==$n)][0] | (.id // .deployment_id) // empty')"
       [ -n "$DEP" ] || { fail "phase 2: deployment for target-$i ($lbl) not found (lab.sh up registers it)"; i=$((i+1)); continue; }
-      note "phase 2 — mode matrix through target-$i ($lbl) deployment ${DEP:0:8} at $(target_ip "$i"):$(jq -r --arg s "$pst" '[.stacks[]|select(.id==$s)][0].https_port // "?"' "$STACKS_JSON")"
+      DEP_HOST="$(api GET "/api/projects/$PID/deployments/$DEP" | jq -r '(.endpoint_hosts // [])[0] // empty')"
+      note "phase 2 — mode matrix through target-$i ($lbl) deployment ${DEP:0:8} at ${DEP_HOST:-$(target_ip "$i")}:$(jq -r --arg s "$pst" '[.stacks[]|select(.id==$s)][0].https_port // "?"' "$STACKS_JSON")${DEP_HOST:+ (endpoint_hosts → hostname dispatch, TLS SNI)}"
       STACK_MATRIX="$MATRIX"
       if ! stack_h3 "$pst"; then
         STACK_MATRIX="$(strip_h3_modes "$MATRIX")"

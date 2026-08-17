@@ -277,7 +277,15 @@ export function DeployDetailPage() {
         </span>
         <span className="text-gray-400">
           Targets <span className="text-gray-200 ml-1">
-            {hasEndpoints ? (deployment?.endpoint_ips || []).join(', ') : '\u2014'}
+            {hasEndpoints
+              ? (deployment?.endpoint_ips || []).map((ip, i) => {
+                  // Show the dispatched hostname next to the ip when the deploy
+                  // recorded one (endpoint_hosts, V050) — that is what a proxy
+                  // run connects to (SNI → HTTP/3 through IIS).
+                  const host = deployment?.endpoint_hosts?.[i];
+                  return host && host !== ip ? `${host} (${ip})` : ip;
+                }).join(', ')
+              : '\u2014'}
           </span>
         </span>
         <span className="text-gray-400">

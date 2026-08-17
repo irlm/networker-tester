@@ -274,7 +274,7 @@ public static class DeploymentsEndpoints
 
     /// <summary>Shape a <see cref="Data.Entities.Deployment"/> to the snake_case
     /// DeploymentRow JSON contract, decoding the JSON-text columns (config,
-    /// endpoint_ips) to real JSON nodes rather than escaped strings.</summary>
+    /// endpoint_ips, endpoint_hosts) to real JSON nodes rather than escaped strings.</summary>
     private static object ShapeDeployment(Data.Entities.Deployment d) => new
     {
         deployment_id = d.DeploymentId,
@@ -287,6 +287,9 @@ public static class DeploymentsEndpoints
         started_at = d.StartedAt,
         finished_at = d.FinishedAt,
         endpoint_ips = ParseJson(d.EndpointIps),
+        // V050: per-endpoint DNS names, parallel to endpoint_ips (null entries
+        // where the provider gave none) — what a proxy run connects to.
+        endpoint_hosts = ParseJson(d.EndpointHosts),
         agent_id = d.AgentId,
         error_message = d.ErrorMessage,
         log = d.Log,

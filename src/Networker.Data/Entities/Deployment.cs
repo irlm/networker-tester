@@ -25,6 +25,11 @@ public partial class Deployment
 
     public string? EndpointIps { get; set; }
 
+    /// <summary>JSONB array parallel to <see cref="EndpointIps"/>: the DNS name of
+    /// endpoint i (cloud FQDN / docker container name / lab alias) or null when
+    /// the provider gave none. Dispatch prefers it over the IP (V050).</summary>
+    public string? EndpointHosts { get; set; }
+
     public Guid? AgentId { get; set; }
 
     public string? ErrorMessage { get; set; }

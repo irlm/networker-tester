@@ -111,16 +111,18 @@ describe('HTTP/3 by proxy stack (shared/http-stacks.json)', () => {
   const H3 = ['http3', 'pageload3', 'browser3', 'download3', 'upload3'];
 
   it('stacks with QUIC allow every h3 mode', () => {
-    for (const stack of ['nginx', 'caddy', 'endpoint']) {
+    // iis: http.sys serves HTTP/3 to SNI clients — the installer binds an SNI
+    // hostname listener and dispatch resolves the target by its recorded DNS
+    // name (deployment.endpoint_hosts, v0.28.210; lab-measured 2/2).
+    for (const stack of ['nginx', 'caddy', 'endpoint', 'iis']) {
       for (const m of H3) {
         expect(unsupportedReason(m, { kind: 'endpoint', stack }), `${m} on ${stack}`).toBeNull();
       }
     }
   });
 
-  it('apache / haproxy / traefik / iis disable exactly the h3 modes, naming the stack', () => {
-    // iis: http.sys HTTP/3 needs TLS SNI, and proxy targets are addressed by IP (lab-measured, v0.28.208).
-    for (const stack of ['apache', 'haproxy', 'traefik', 'iis']) {
+  it('apache / haproxy / traefik disable exactly the h3 modes, naming the stack', () => {
+    for (const stack of ['apache', 'haproxy', 'traefik']) {
       for (const m of H3) {
         const why = unsupportedReason(m, { kind: 'endpoint', stack });
         expect(why, `${m} on ${stack}`).toContain(`${stack} has no HTTP/3`);

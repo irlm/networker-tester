@@ -50,6 +50,12 @@ LAB_WINDOWS_USER="${LAB_WINDOWS_USER:-Docker}"
 LAB_WINDOWS_PASSWORD="${LAB_WINDOWS_PASSWORD:-LabWindows-Pass1!}"   # local admin, SSH (lab only — NOT a secret)
 LAB_WINDOWS_TIMEOUT="${LAB_WINDOWS_TIMEOUT:-3600}"     # s to wait for the VM's endpoint + IIS on first boot
 LAB_WINDOWS_VIEWER_PORT="${LAB_WINDOWS_VIEWER_PORT:-8006}"  # dockur web viewer (VM console) on the host
+# Every target is also reachable by NAME on labnet: target-N.<domain> (a docker
+# network alias — the embedded DNS answers it for runners AND the control
+# plane). The Windows target's deployment is registered with that name as its
+# endpoint_hosts[0] and its IIS SNI binding + cert SAN carry it, so dispatch
+# hands the tester a hostname and http.sys serves HTTP/3 (SNI required).
+LAB_TARGET_DOMAIN="${LAB_TARGET_DOMAIN:-lab}"
 export LAB_NET_PREFIX LAB_CP_PORT LAB_UI_PORT LAB_PG_PORT LAB_ADMIN_EMAIL LAB_ADMIN_BOOTSTRAP_PASSWORD
 
 BASE_URL="http://127.0.0.1:${LAB_CP_PORT}"
@@ -86,6 +92,7 @@ Commands:
   wait-windows                               Block until the Windows target(s) serve :8080 + IIS :8445
   windows-log [target-N] [-f]                Show the Windows VM's setup log/status (from the host share)
   windows-ssh [target-N] [-- cmd]            SSH into the Windows VM (user/password printed)
+  windows-iis-refresh [target-N]             Re-run install.ps1 -Setup iis -Fqdn target-N.lab inside the VM (SNI/H3 binding)
   down [--volumes]                           Stop (and optionally wipe the DB + the Windows VM disk)
   env                                        Print the saved lab env (token, project id, urls)
 
@@ -94,7 +101,7 @@ Targets SPEC = comma list of stacks; one container each:
   nginx|caddy|apache|haproxy|traefik
             networker-endpoint + that proxy set up by install.sh --setup-stack
   windows   (alias: iis) a Windows Server VM: install.ps1 endpoint (8080/8443)
-            + IIS 8082/8445 — Linux + /dev/kvm only, first boot 15-40 min
+            + IIS 8082/8445 (SNI binding target-N.lab → HTTP/3) — Linux + /dev/kvm only, first boot 15-40 min
   Default: rust,nginx        Runners default: 2
 EOF
 }
@@ -211,21 +218,30 @@ SQL
 # Register target N (stack != rust) as a COMPLETED deployment so test configs
 # of kind "proxy" (proxy_endpoint_id = deployment id, proxy_stack = <stack>)
 # resolve to <target ip>:<stack https port> exactly like a cloud endpoint VM.
-# The Windows target registers as stack "iis" (its proxy stack) with os windows.
+# The Windows target registers as stack "iis" (its proxy stack) with os windows
+# AND with endpoint_hosts = its labnet name (V050) — like a cloud Windows VM
+# whose deploy recorded the Azure/AWS DNS name — so the resolver dispatches
+# the run to target-N.lab (TLS SNI) and IIS's SNI binding serves HTTP/3. Linux
+# targets stay IP-addressed here (they don't need SNI; prod records their
+# cloud FQDN the same way, so nothing differs on the resolver side).
 register_target_deployment() {
-  local n="$1" stack="$2" ip name id os pstack
-  ip="${LAB_NET_PREFIX}.$((100 + n))"; pstack="$(proxy_stack_of_target "$stack")"; name="lab-target-${n}-${pstack}"
-  os="ubuntu-24.04"; [ "$stack" = windows ] && os="windows"
+  local n="$1" stack="$2" ip name id os pstack hosts_json
+  ip="$(target_ip "$n")"; pstack="$(proxy_stack_of_target "$stack")"; name="lab-target-${n}-${pstack}"
+  os="ubuntu-24.04"; hosts_json="NULL"
+  if [ "$stack" = windows ]; then os="windows"; hosts_json="'[\"$(target_host "$n")\"]'::jsonb"; fi
   id="$(psql_q "SELECT deployment_id FROM deployment WHERE name='${name}' AND project_id='${LAB_PROJECT_ID}' LIMIT 1" || true)"
   if [ -z "$id" ]; then
     psql_stdin <<SQL
-INSERT INTO deployment (deployment_id, name, status, config, endpoint_ips, project_id, created_at, started_at, finished_at, log)
+INSERT INTO deployment (deployment_id, name, status, config, endpoint_ips, endpoint_hosts, project_id, created_at, started_at, finished_at, log)
 VALUES (gen_random_uuid(), '${name}', 'completed',
         '{"lab":true,"tester":{"provider":"local"},"endpoints":[{"label":"target-${n}","provider":"lan","lan":{"ip":"${ip}","user":"lab"},"http_stacks":["${pstack}"],"os":"${os}"}]}'::jsonb,
-        '["${ip}"]'::jsonb, '${LAB_PROJECT_ID}', now(), now(), now(),
-        'seeded by lab.sh — docker target ${n} (${stack} → ${pstack}) at ${ip}');
+        '["${ip}"]'::jsonb, ${hosts_json}, '${LAB_PROJECT_ID}', now(), now(), now(),
+        'seeded by lab.sh — docker target ${n} (${stack} → ${pstack}) at ${ip}$([ "$stack" = windows ] && echo " / $(target_host "$n")")');
 SQL
     id="$(psql_q "SELECT deployment_id FROM deployment WHERE name='${name}' AND project_id='${LAB_PROJECT_ID}' LIMIT 1")"
+  else
+    # A row seeded by an older lab.sh (pre-V050) has no hostname — bring it up to date.
+    psql_q "UPDATE deployment SET endpoint_hosts = ${hosts_json} WHERE deployment_id='${id}'" >/dev/null
   fi
   echo "$id"
 }
@@ -236,6 +252,8 @@ stack_of() { echo "$LAB_TARGETS" | tr ',' '\n' | sed -n "${1}p"; }
 target_count() { [ -z "${LAB_TARGETS:-}" ] && echo 0 || echo "$LAB_TARGETS" | tr ',' '\n' | grep -c .; }
 # The proxy stack a target is registered/validated as: windows → iis, else itself.
 proxy_stack_of_target() { case "$1" in windows) echo iis;; *) echo "$1";; esac; }
+target_ip() { echo "${LAB_NET_PREFIX}.$((100 + $1))"; }
+target_host() { echo "target-$1.${LAB_TARGET_DOMAIN}"; }   # labnet DNS alias of target N
 normalize_stacks() { echo "$1" | tr ',' '\n' | sed 's/^iis$/windows/' | grep . | paste -sd, -; }
 validate_stacks() {
   local s
@@ -257,12 +275,28 @@ stage_windows_target() {
   mkdir -p "$d/oem" "$d/shared"
   cp "$LAB_DIR/images/windows/oem/"* "$d/oem/"
   cp "$REPO_ROOT/install.ps1" "$d/oem/install.ps1"
+  # The share (\\host.lan\Data inside the VM) also gets the checkout's install.ps1
+  # + a refresh script, so an ALREADY-INSTALLED VM disk can be brought up to
+  # date without reinstalling Windows (windows-iis-refresh).
+  cp "$REPO_ROOT/install.ps1" "$d/shared/install.ps1"
   {
     echo "# GENERATED by lab.sh"
     echo "\$LabUser     = \"${LAB_WINDOWS_USER}\""
     echo "\$LabPassword = \"${LAB_WINDOWS_PASSWORD}\""
     echo "\$LabStacks   = \"iis\""
+    echo "\$LabFqdn     = \"$(target_host "$n")\""
   } > "$d/oem/lab.env.ps1"
+  {
+    echo "# GENERATED by lab.sh — run inside the VM (windows-iis-refresh): the checkout's"
+    echo "# install.ps1 -Setup iis with the labnet hostname (SNI binding + cert SAN → HTTP/3)."
+    echo "Copy-Item '\\\\host.lan\\Data\\install.ps1' 'C:\\OEM\\install.ps1' -Force -ErrorAction SilentlyContinue"
+    echo "& powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File 'C:\\OEM\\install.ps1' -Setup iis -Fqdn '$(target_host "$n")'"
+    echo "\$rc = \$LASTEXITCODE"
+    echo "# virtio USO breaks multi-packet QUIC sends on the dockur path (see lab-setup.ps1) — turn it off,"
+    echo "# detached: the adapter reset drops this SSH session."
+    echo "Start-Process powershell.exe -WindowStyle Hidden -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep 2; Get-NetAdapter -Physical | ForEach-Object { Set-NetAdapterUso -Name \$_.Name -IPv4Enabled \$false -IPv6Enabled \$false -ErrorAction SilentlyContinue }'"
+    echo "exit \$rc"
+  } > "$d/shared/iis-refresh.ps1"
   # cmd.exe wants CRLF in .bat files (git may have checked it out LF).
   awk '{ sub(/\r$/, ""); printf "%s\r\n", $0 }' "$LAB_DIR/images/windows/oem/install.bat" > "$d/oem/install.bat"
   # The VM's log/status files must be writable by the container's samba user.
@@ -310,6 +344,7 @@ write_topology() {
     networks:
       labnet:
         ipv4_address: ${LAB_NET_PREFIX}.$((100 + i))
+        aliases: [$(target_host "$i")]
 YML
         continue
       fi
@@ -327,6 +362,7 @@ YML
     networks:
       labnet:
         ipv4_address: ${LAB_NET_PREFIX}.$((100 + i))
+        aliases: [$(target_host "$i")]
 YML
     done
     n=1
@@ -441,6 +477,7 @@ wait_windows_target() {
     st="$(windows_status "$n")"
     if [ "$st_ep" = 1 ] && [ "$st_iis" = 1 ] && [ "$st" != rebooting ]; then
       ok "target-${n} (windows) ready at ${ip}: endpoint :8080 + IIS :8445 answering (status=${st}, $((SECONDS - start))s)"
+      windows_ensure_iis_sni "$n"
       return 0
     fi
     case "$st" in failed:*)
@@ -459,6 +496,42 @@ wait_windows_target() {
     fi
     sleep 30
   done
+}
+# Does IIS on Windows target N serve the certificate whose SAN carries the
+# target's labnet name? (install.ps1 -Setup iis -Fqdn creates the SNI binding
+# and the SAN together, so the SAN is the observable proof of the binding.)
+windows_iis_sni_ok() { # windows_iis_sni_ok N
+  local ip fqdn; ip="$(target_ip "$1")"; fqdn="$(target_host "$1")"
+  command -v openssl >/dev/null 2>&1 || return 0   # can't tell — assume fine
+  echo | openssl s_client -connect "${ip}:8445" -servername "$fqdn" 2>/dev/null \
+    | openssl x509 -noout -text 2>/dev/null | grep -q "DNS:${fqdn}"
+}
+# A VM disk installed by an older lab.sh (or with a different domain) has IIS
+# bound without the hostname → re-run the installer's IIS setup with -Fqdn over
+# SSH (sshpass in a throwaway alpine on labnet — nothing on the host needed);
+# the same script turns the NIC's UDP Segmentation Offload off (lab-setup.ps1
+# does it on fresh installs — needed for multi-packet QUIC through dockur).
+windows_iis_refresh() { # windows_iis_refresh N
+  local n="$1" ip fqdn net; ip="$(target_ip "$n")"; fqdn="$(target_host "$n")"
+  net="$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' "nwk-lab-target-${n}-1" 2>/dev/null | head -1)"
+  [ -n "$net" ] || net="nwk-lab_labnet"
+  note "target-${n} (windows): re-running install.ps1 -Setup iis -Fqdn ${fqdn} inside the VM (SNI binding + cert SAN → HTTP/3; ~2-4 min)"
+  [ -f "$(windows_gen_dir "$n")/shared/iis-refresh.ps1" ] || stage_windows_target "$n"
+  # The VM's SSH shell is PowerShell; \\host.lan\Data is the /shared bind mount.
+  local rcmd='powershell -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \\host.lan\Data\iis-refresh.ps1'
+  docker run --rm --network "$net" -e SSHPASS="$LAB_WINDOWS_PASSWORD" alpine:3 sh -c \
+    "apk add -q --no-cache sshpass openssh-client >/dev/null 2>&1 && sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=20 -o ServerAliveInterval=5 -o ServerAliveCountMax=3 ${LAB_WINDOWS_USER}@${ip} '${rcmd}'" \
+    2>&1 | tr -d '\r' | sed 's/^/    /' | grep -v '^ *$' | tail -40 || true
+  local i=0
+  while [ "$i" -lt 12 ]; do windows_iis_ok "$n" && break; sleep 5; i=$((i + 1)); done
+}
+windows_ensure_iis_sni() { # windows_ensure_iis_sni N — refresh once if the SNI/SAN name is missing, then report
+  local n="$1"
+  if windows_iis_sni_ok "$n"; then ok "target-${n} (windows) IIS :8445 serves the SNI/SAN name $(target_host "$n") (HTTP/3 reachable by hostname)"; return 0; fi
+  warn "target-${n} (windows) IIS :8445 has no SNI binding for $(target_host "$n") (VM disk installed without a hostname) — refreshing"
+  windows_iis_refresh "$n"
+  if windows_iis_sni_ok "$n"; then ok "target-${n} (windows) IIS :8445 now serves the SNI/SAN name $(target_host "$n")"
+  else warn "target-${n} (windows) IIS still has no SNI binding for $(target_host "$n") — h3 modes through iis will fail in validate; see ./lab/lab.sh windows-log target-${n} / windows-iis-refresh"; fi
 }
 wait_targets_healthy() {
   local i total; total="$(target_count)"; i=1
@@ -615,7 +688,7 @@ cmd_status() {
     st="$(stack_of "$i")"; ip="${LAB_NET_PREFIX}.$((100 + i))"
     case "$st" in rust) port=8443;; nginx) port=8444;; caddy) port=8454;; traefik) port=8455;; haproxy) port=8456;; apache) port=8457;; windows) port=8445;; esac
     if [ "$st" = windows ]; then
-      printf '  %-12s %-9s %-16s http://%s:8080  https://%s:8443  iis https://%s:%s  [vm %s · console :%s]\n' "target-$i" "$st" "$ip" "$ip" "$ip" "$ip" "$port" "$(windows_status "$i")" "$LAB_WINDOWS_VIEWER_PORT"
+      printf '  %-12s %-9s %-16s http://%s:8080  https://%s:8443  iis https://%s:%s (SNI, h3)  [vm %s · console :%s]\n' "target-$i" "$st" "$ip" "$ip" "$ip" "$(target_host "$i")" "$port" "$(windows_status "$i")" "$LAB_WINDOWS_VIEWER_PORT"
     else
       printf '  %-12s %-9s %-16s http://%s:8080  https://%s:%s\n' "target-$i" "$st" "$ip" "$ip" "$ip" "$port"
     fi
@@ -679,6 +752,12 @@ cmd_windows_log() {
   fi
   if [ "$follow" = 1 ]; then tail -n 50 -f "$d/lab-setup.log"; else tail -n 200 "$d/lab-setup.log"; fi
 }
+cmd_windows_iis_refresh() {
+  load_state
+  local n; n="$(windows_target_index "$(echo "$*" | tr ' ' '\n' | grep '^target-' | head -1)")"
+  windows_iis_refresh "$n"
+  windows_iis_sni_ok "$n" && ok "IIS on target-${n} serves $(target_host "$n") (SNI/SAN)" || die "IIS on target-${n} still has no SNI binding for $(target_host "$n")"
+}
 cmd_windows_ssh() {
   load_state
   local n ip
@@ -713,6 +792,7 @@ case "$cmd" in
   wait-windows) cmd_wait_windows ;;
   windows-log)  cmd_windows_log "$@" ;;
   windows-ssh)  cmd_windows_ssh "$@" ;;
+  windows-iis-refresh) cmd_windows_iis_refresh "$@" ;;
   env)      cmd_env ;;
   down)     cmd_down "$@" ;;
   ""|-h|--help|help) usage ;;

@@ -23,8 +23,12 @@ namespace Networker.ControlPlane.Provisioning;
 ///     <c>DeployOutput::process_line</c> does.</item>
 ///   <item>Parse endpoint hosts out of the output — FQDN-with-IP-in-parens
 ///     preferred over a bare IP, with the same fallback scan for IPs near
-///     "endpoint"/"deployed"/"public ip" lines.</item>
-///   <item>On success: persist <c>endpoint_ips</c> + status <c>completed</c>.
+///     "endpoint"/"deployed"/"public ip" lines — plus, per endpoint, the DNS
+///     name install.sh reports as <c>endpoint_host: &lt;name&gt; (&lt;ip&gt;)</c>
+///     (Azure DNS label / AWS public DNS), kept PARALLEL to the ips.</item>
+///   <item>On success: persist <c>endpoint_ips</c> + <c>endpoint_hosts</c>
+///     (V050; the proxy resolver prefers the hostname — SNI → HTTP/3 through
+///     IIS) + status <c>completed</c>.
 ///     On failure: persist <c>error_message</c> + status <c>failed</c>. Either
 ///     way persist the full log and publish a <see cref="DeployComplete"/>.</item>
 /// </list>
@@ -97,6 +101,14 @@ public sealed class DeployRunner
     // Ported verbatim from Rust DeployOutput::ip_re.
     private static readonly Regex IpRe = new(
         @"(?i)(?:endpoint[_ ](?:ip|address)|deployed[_ ](?:to|at)|public[_ ]ip)[:\s]+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})",
+        RegexOptions.Compiled);
+
+    // Matches install.sh's explicit per-endpoint hostname report
+    // "endpoint_host: nwk-ep-x.eastus.cloudapp.azure.com (20.1.2.3)" — the DNS
+    // name the tester should connect to (V050 endpoint_hosts), tied to the ip
+    // so the two arrays stay parallel however the surrounding lines were parsed.
+    private static readonly Regex EndpointHostRe = new(
+        @"(?i)endpoint[_ ]host[:\s]+([A-Za-z0-9](?:[-A-Za-z0-9.]*[A-Za-z0-9])?)\s+\((\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\)",
         RegexOptions.Compiled);
 
     // Bare-IP fallback scanner (only applied to lines mentioning endpoint/deployed/public ip).
@@ -219,14 +231,15 @@ public sealed class DeployRunner
 
         var success = exitCode == 0;
         var error = success ? null : $"install.sh exited with code {exitCode ?? -1}";
-        await FinishAsync(deploymentId, success, output.EndpointIps, output.FullLog, error, ct)
+        await FinishAsync(deploymentId, success, output.EndpointIps, output.FullLog, error, ct, output.EndpointHosts)
             .ConfigureAwait(false);
 
         TryDelete(deployFile);
 
         _logger.LogInformation(
-            "Deployment {DeploymentId} finished status={Status} ips={Ips}",
-            deploymentId, success ? "completed" : "failed", string.Join(",", output.EndpointIps));
+            "Deployment {DeploymentId} finished status={Status} ips={Ips} hosts={Hosts}",
+            deploymentId, success ? "completed" : "failed", string.Join(",", output.EndpointIps),
+            string.Join(",", output.EndpointHosts.Select(h => h ?? "-")));
 
         return output.EndpointIps;
     }
@@ -283,6 +296,10 @@ public sealed class DeployRunner
         var flusher = FlushLogPeriodicallyAsync(deploymentId, output, flushCts.Token);
 
         var ips = new List<string>();
+        // Parallel to ips: the container name — resolvable by every container on
+        // the same docker network (embedded DNS), so runners provisioned by the
+        // docker provider address the target by hostname like a cloud FQDN.
+        var hosts = new List<string?>();
         var created = new List<string>();
         string? error = null;
         try
@@ -316,7 +333,9 @@ public sealed class DeployRunner
                     ? "bare endpoint 8080/8443"
                     : $"{ep.Stack} on :{ProvisioningOrchestrator.ProxyHttpsPort(ep.Stack)}";
                 Log($"endpoint_ip: {res.PublicIp} ({ep.Label}, {stackNote})");
+                Log($"endpoint_host: {res.ResourceId} ({res.PublicIp}) — container name, docker-network DNS");
                 ips.Add(res.PublicIp!);
+                hosts.Add(res.ResourceId);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -355,7 +374,7 @@ public sealed class DeployRunner
         }
 
         Log($"deployed {ips.Count} docker target(s): {string.Join(", ", ips)}");
-        await FinishAsync(deploymentId, success: true, ips, output.FullLog, error: null, ct).ConfigureAwait(false);
+        await FinishAsync(deploymentId, success: true, ips, output.FullLog, error: null, ct, hosts).ConfigureAwait(false);
         _logger.LogInformation(
             "Deployment {DeploymentId} (docker) finished status=completed ips={Ips}", deploymentId, string.Join(",", ips));
         return ips;
@@ -521,7 +540,8 @@ public sealed class DeployRunner
     /// token the deployment could never be marked terminal and would wedge at
     /// <c>running</c> forever (quality audit F3(c)).</para></summary>
     private async Task FinishAsync(
-        Guid deploymentId, bool success, IReadOnlyList<string> ips, string? log, string? error, CancellationToken ct)
+        Guid deploymentId, bool success, IReadOnlyList<string> ips, string? log, string? error, CancellationToken ct,
+        IReadOnlyList<string?>? hosts = null)
     {
         _ = ct; // terminal cleanup is intentionally not cancellable — see summary.
         var status = success ? "completed" : "failed";
@@ -531,6 +551,12 @@ public sealed class DeployRunner
             var db = scope.ServiceProvider.GetRequiredService<NetworkerDbContext>();
 
             var ipsJson = System.Text.Json.JsonSerializer.Serialize(ips);
+            // endpoint_hosts stays parallel to endpoint_ips (null where the
+            // provider gave no DNS name); omitted entirely when nothing was recorded.
+            var hostsJson = success && hosts is not null && hosts.Any(h => !string.IsNullOrEmpty(h))
+                ? System.Text.Json.JsonSerializer.Serialize(
+                    ips.Select((_, i) => i < hosts.Count && !string.IsNullOrEmpty(hosts[i]) ? hosts[i] : null).ToList())
+                : null;
             var now = DateTime.UtcNow;
 
             await db.Deployments
@@ -539,6 +565,7 @@ public sealed class DeployRunner
                     .SetProperty(d => d.Status, status)
                     .SetProperty(d => d.Log, log)
                     .SetProperty(d => d.EndpointIps, success ? ipsJson : (string?)null)
+                    .SetProperty(d => d.EndpointHosts, hostsJson)
                     .SetProperty(d => d.ErrorMessage, error)
                     .SetProperty(d => d.FinishedAt, now), CancellationToken.None)
                 .ConfigureAwait(false);
@@ -615,8 +642,11 @@ public sealed class DeployRunner
 
     /// <summary>Accumulates the full log, dedups broadcast lines, and extracts
     /// endpoint hosts (FQDN preferred over bare IP). Ported from the Rust
-    /// <c>DeployOutput</c> struct.</summary>
-    private sealed class DeployOutput
+    /// <c>DeployOutput</c> struct. Additionally records, per endpoint, the DNS
+    /// name install.sh reports (<c>endpoint_host: name (ip)</c>, or the cloud
+    /// FQDN it printed next to the ip) as <see cref="EndpointHosts"/> — kept
+    /// index-parallel to <see cref="EndpointIps"/>.</summary>
+    internal sealed class DeployOutput
     {
         // One lock for all mutable state: the stdout and stderr pumps append
         // CONCURRENTLY (a latent race before the incremental flusher made it
@@ -626,6 +656,8 @@ public sealed class DeployRunner
         private readonly System.Text.StringBuilder _log = new();
         private readonly HashSet<string> _seen = new(StringComparer.Ordinal);
         private readonly List<string> _endpointIps = [];
+        // Parallel to _endpointIps: the recorded DNS name for that entry, or null.
+        private readonly List<string?> _endpointHosts = [];
 
         public string FullLog
         {
@@ -649,6 +681,25 @@ public sealed class DeployRunner
             }
         }
 
+        /// <summary>Per-endpoint DNS names, index-parallel to <see cref="EndpointIps"/>
+        /// (null where none was reported).</summary>
+        public IReadOnlyList<string?> EndpointHosts
+        {
+            get
+            {
+                lock (_sync)
+                {
+                    return _endpointHosts.ToArray();
+                }
+            }
+        }
+
+        private void AddEndpoint(string addr, string? host)
+        {
+            _endpointIps.Add(addr);
+            _endpointHosts.Add(host);
+        }
+
         /// <summary>Process one output line: append to the full log, parse for a
         /// host, and report whether it should be broadcast (true = not a
         /// duplicate). Mirrors Rust <c>process_line</c>.</summary>
@@ -664,6 +715,35 @@ public sealed class DeployRunner
         {
             _log.Append(text).Append('\n');
 
+            // Explicit per-endpoint hostname report: bind the DNS name to the
+            // ip's entry (create it if this is the first mention). Does not
+            // rewrite endpoint_ips — that column keeps its historical shape.
+            var hostMatch = EndpointHostRe.Match(text);
+            if (hostMatch.Success)
+            {
+                var name = hostMatch.Groups[1].Value;
+                var ip = hostMatch.Groups[2].Value;
+                var pos = _endpointIps.IndexOf(ip);
+                if (pos < 0)
+                {
+                    pos = _endpointIps.IndexOf(name);
+                }
+                if (pos < 0)
+                {
+                    pos = _endpointHosts.IndexOf(name);
+                }
+                if (pos >= 0)
+                {
+                    _endpointHosts[pos] = name;
+                }
+                else
+                {
+                    AddEndpoint(ip, name);
+                }
+                _ = TrimmedBroadcast(text, out var bcast);
+                return bcast;
+            }
+
             // Prefer FQDN-with-IP; replace a previously-captured bare IP with the FQDN.
             var fqdnMatch = FqdnRe.Match(text);
             if (fqdnMatch.Success)
@@ -674,10 +754,11 @@ public sealed class DeployRunner
                 if (pos >= 0)
                 {
                     _endpointIps[pos] = fqdn;
+                    _endpointHosts[pos] = fqdn;
                 }
                 if (!_endpointIps.Contains(fqdn))
                 {
-                    _endpointIps.Add(fqdn);
+                    AddEndpoint(fqdn, fqdn);
                 }
             }
             else
@@ -688,14 +769,21 @@ public sealed class DeployRunner
                     var ip = ipMatch.Groups[1].Value;
                     if (!_endpointIps.Contains(ip))
                     {
-                        _endpointIps.Add(ip);
+                        AddEndpoint(ip, null);
                     }
                 }
             }
 
-            var trimmed = text.Trim();
             _ = stream; // origin tag is carried on the DeployLog, dedup is text-only
-            return trimmed.Length > 0 && _seen.Add(trimmed);
+            _ = TrimmedBroadcast(text, out var broadcast);
+            return broadcast;
+        }
+
+        private string TrimmedBroadcast(string text, out bool broadcast)
+        {
+            var trimmed = text.Trim();
+            broadcast = trimmed.Length > 0 && _seen.Add(trimmed);
+            return trimmed;
         }
 
         /// <summary>Fallback: if the structured regexes caught nothing, scan for
@@ -730,7 +818,7 @@ public sealed class DeployRunner
                         && !ip.StartsWith("0.", StringComparison.Ordinal)
                         && !_endpointIps.Contains(ip))
                     {
-                        _endpointIps.Add(ip);
+                        AddEndpoint(ip, null);
                     }
                 }
             }

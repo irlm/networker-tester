@@ -585,6 +585,10 @@ export interface Deployment {
   started_at: string | null;
   finished_at: string | null;
   endpoint_ips: string[] | null;
+  /** V050: DNS name of each endpoint, parallel to endpoint_ips (null entries
+   *  where the provider gave none). Proxy runs are dispatched to it when set —
+   *  the hostname carries TLS SNI, which is what lets IIS serve HTTP/3. */
+  endpoint_hosts?: (string | null)[] | null;
   agent_id: string | null;
   error_message: string | null;
   log: string | null;
