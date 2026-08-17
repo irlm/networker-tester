@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.223] - 2026-08-17
+
+### Fixed
+
+- **main went red on macOS right after v0.28.222 merged** —
+  `stamp_probe_computes_corrected_rtt_and_directional_loss` failed with
+  `corrected RTT should exclude processing: 8.46 ms` against a `< 5 ms` bound.
+  Not the probe: the **test's own reflector** slept its injected 5 ms delay
+  *inline in the recv loop*, so the moment that sleep overshot the sender's
+  10 ms cadence on a loaded runner, the following probes sat in the socket
+  buffer and were stamped with a late T2. Queueing time outside T3−T2 is
+  exactly what the corrected RTT cannot subtract, so the reflector's own
+  scheduling inflated the number being asserted on. The reflector now stamps
+  T2 at read time and serves the delay on a per-packet task, and the injected
+  delay is 40 ms against a 20 ms bound — measured corrected RTT is ~0.11 ms
+  under 8× CPU load, ~180× of headroom instead of the old ~5 ms.
+
+---
+
 ## [0.28.222] - 2026-08-17
 
 ### Fixed
