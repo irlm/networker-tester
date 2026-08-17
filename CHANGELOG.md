@@ -11,6 +11,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.216] - 2026-08-17
+
+### Fixed
+
+- **The endpoint advertised HTTP/3 it did not have.** `h3_port` — which feeds the
+  router's Alt-Svc header *and* `/health` `services.h3`, the live capability
+  self-report the control plane gates h3 modes on — was set from config
+  unconditionally, while the QUIC socket was bound inside a spawned task. A bind
+  failure (UDP port already taken, no permission) was logged and forgotten: the
+  endpoint kept claiming h3, so launch flows offered h3 tests that could never
+  pass. The QUIC socket is now bound **before** anything advertises it (the same
+  up-front-bind rule the UDP services have followed since 2026-08-06); a failure
+  logs `HTTP/3 DISABLED — QUIC bind … failed` and reports `services.h3: null`.
+  `run_h3_server` is split into `bind_h3` + `serve_h3`.
+- **Integration harness: the HTTPS/QUIC port was only checked for TCP.** The
+  endpoint binds that same number on UDP for QUIC, so with the suite running in
+  parallel a sibling test's UDP server could already own it — the endpoint came
+  up without h3 and the gate blamed a 20 s timeout ("QUIC server … is not
+  bound"). This is the `pageload_h3_multiplexes_assets` flake that failed CI on
+  an unrelated PR today. The port is now verified free on **both** families.
+- **Test ports are claimed process-wide.** Every test in the integration binary
+  is a thread of one process, and the OS will hand a just-released ephemeral port
+  to the next asker, so two concurrent tests could receive the same number and
+  the loser's endpoint failed to bind (also seen as "UDP echo server did not
+  start within 10s"). A ledger makes that impossible between tests instead of
+  merely unlikely. 10 consecutive suite runs green.
+- **Readiness gates now quote the endpoint's own verdict.** On timeout each gate
+  (HTTP/3, UDP echo, UDP throughput, STAMP) appends `/health` `services`, where a
+  null entry means "that listener is not running" — so a collision reads as a
+  bind failure instead of "too slow", and an unhealthy endpoint says so.
+
+---
+
 ## [0.28.215] - 2026-08-17
 
 Two WAN-only probe defects from the production sweep, reproduced locally in the
