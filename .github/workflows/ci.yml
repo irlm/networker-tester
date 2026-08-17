@@ -811,14 +811,55 @@ jobs:
           TAG="v${VERSION}"
           echo "Cargo.toml version: ${VERSION}"
 
+          # Tag push and release dispatch are SEPARATE API calls, so they can
+          # half-succeed: on 2026-08-17 the tag v0.28.214 pushed and then
+          # `gh workflow run` died on a GitHub 503 ("unable to determine default
+          # branch"). The old guard keyed on "does the tag exist", so every rerun
+          # then skipped straight past the missing release — v0.28.214 has a tag
+          # and no release to this day. Key on the RELEASE instead: that makes a
+          # stranded tag recoverable by simply re-running this job.
+          # "Is there a release?" must distinguish a real 404 from an API blip:
+          # treating a 503 as "no release" would re-dispatch a release that
+          # already exists. Only a genuine not-found proceeds.
+          release_state=""
+          for attempt in 1 2 3; do
+            out="$(gh release view "${TAG}" --json tagName 2>&1)" && { release_state="published"; break; }
+            case "${out}" in
+              *"release not found"*|*"Not Found"*|*"404"*) release_state="missing"; break ;;
+              *) echo "release lookup attempt ${attempt} failed: ${out}"; sleep $((attempt * 10)) ;;
+            esac
+          done
+          if [ "${release_state}" = "published" ]; then
+            echo "Release ${TAG} already published — nothing to do"
+            exit 0
+          fi
+          if [ "${release_state}" != "missing" ]; then
+            echo "::error::Could not determine whether ${TAG} has a release (API unavailable) — refusing to guess."
+            echo "::error::Re-run this job once the API recovers."
+            exit 1
+          fi
+
           if git tag -l "${TAG}" | grep -q "${TAG}"; then
-            echo "Tag ${TAG} already exists — skipping"
+            echo "Tag ${TAG} exists but has NO release — re-dispatching (recovery path)"
           else
             echo "New version detected — tagging ${TAG}"
             git tag "${TAG}"
             git push origin "${TAG}"
-
-            echo "Triggering Release workflow..."
-            gh workflow run release.yml --field tag="${TAG}"
-            echo "Release workflow triggered for ${TAG}"
           fi
+
+          # Retry the dispatch: a transient API failure here is what stranded
+          # v0.28.214, and the release train is the last place to be optimistic.
+          echo "Triggering Release workflow for ${TAG}..."
+          for attempt in 1 2 3 4 5; do
+            if gh workflow run release.yml --field tag="${TAG}"; then
+              echo "Release workflow triggered for ${TAG} (attempt ${attempt})"
+              exit 0
+            fi
+            echo "dispatch attempt ${attempt} failed — retrying in $((attempt * 15))s"
+            sleep $((attempt * 15))
+          done
+
+          echo "::error::Tagged ${TAG} but could not trigger release.yml after 5 attempts."
+          echo "::error::Recover with: gh workflow run release.yml --field tag=${TAG}"
+          echo "::error::(or re-run this job — it now detects the missing release)"
+          exit 1

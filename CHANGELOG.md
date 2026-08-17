@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.217] - 2026-08-17
+
+### Fixed
+
+- **A stranded tag can no longer lose its release.** `Auto-tag & deploy` pushes
+  the tag and dispatches `release.yml` in two separate API calls, so they can
+  half-succeed: on 2026-08-17 `v0.28.214` was tagged and `gh workflow run` then
+  failed on a GitHub 503, and because the guard asked "does the tag exist?", every
+  re-run skipped past the missing release — v0.28.214 has a tag and no release.
+  The job now keys on whether the **release** exists (so re-running it *is* the
+  recovery), retries the dispatch 5 times with backoff, distinguishes a genuine
+  404 from an API outage instead of guessing, and fails loudly with the exact
+  recovery command when it cannot dispatch. All five paths were exercised against
+  stubbed `gh`/`git`. `docs/release-flow.md` §3 documents the states, including
+  why filling an old gap by hand would roll production back (`release.yml`'s
+  deploy job is unconditional and checks out the tag it is given).
+
+---
+
 ## [0.28.216] - 2026-08-17
 
 ### Fixed
