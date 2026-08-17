@@ -2605,7 +2605,10 @@ function Invoke-SetupIIS {
             $imdsDns = Invoke-RestMethod -Uri 'http://169.254.169.254/latest/meta-data/public-hostname' `
                 -Headers @{ 'X-aws-ec2-metadata-token' = $imdsTok } -TimeoutSec 2
             if ($imdsDns -and "$imdsDns" -match '\.amazonaws\.com$') { $fqdn = "$imdsDns".Trim(); Write-Info "FQDN from EC2 IMDS: $fqdn" }
-        } catch { }
+        } catch {
+            # Not on EC2 (no IMDS) or no public DNS: IP-only binding (h1/h2), no h3.
+            Write-Dim "EC2 IMDS not reachable ($($_.Exception.Message)) -- IIS gets an IP-only binding (no HTTP/3)"
+        }
     }
 
     # 1. IIS + URL Rewrite + ARR (reverse proxy for the dynamic endpoint routes)

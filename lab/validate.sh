@@ -125,6 +125,9 @@ fi
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 STACKS_JSON="$LAB_DIR/../shared/http-stacks.json"
+# Git Bash on Windows: jq is a native .exe and cannot open MSYS paths (/d/a/…),
+# and the native lab exports MSYS_NO_PATHCONV=1 — hand it a Windows path.
+if command -v cygpath >/dev/null 2>&1; then STACKS_JSON="$(cygpath -m "$STACKS_JSON" 2>/dev/null || echo "$STACKS_JSON")"; fi
 stack_h3() { # stack_h3 STACK → 0 (true) / 1 (false); unknown → assume true
   # (not `// true`: jq's // treats false as missing)
   case ",$H3_OFF_STACKS," in *",$1,"*) return 1;; esac   # host-level override (LAB_H3_OFF_STACKS)
@@ -524,21 +527,41 @@ if run_phase 6; then
       if [ "$WCAPS" = "null" ]; then
         fail "phase 6 ($WNAME): no capabilities reported on the heartbeat"
       else
-        [ "$(jq -r '.chrome' <<<"$WCAPS")" = "false" ] || fail "phase 6 ($WNAME): capabilities.chrome=true on a lab Windows runner (no Chrome is installed there — detection wrong?)"
-        [ "$(jq -r '.tshark' <<<"$WCAPS")" = "false" ] || fail "phase 6 ($WNAME): capabilities.tshark=true on a lab Windows runner (no Wireshark there — detection wrong?)"
+        # The inventory must be reported as booleans; the VALUES depend on the
+        # host (the lab's dockur VMs have neither Chrome nor Wireshark, a GitHub
+        # windows-latest runner has Chrome) — so they are checked only when the
+        # lab itself created this runner (LAB_WINDOWS_RUNNERS > 0), else noted.
+        for cap in chrome tshark; do
+          v="$(jq -r ".$cap" <<<"$WCAPS")"
+          case "$v" in true|false) ;; *) fail "phase 6 ($WNAME): capabilities.$cap is '$v' — expected a boolean";; esac
+        done
+        if [ "${LAB_WINDOWS_RUNNERS:-0}" -gt 0 ]; then
+          [ "$(jq -r '.chrome' <<<"$WCAPS")" = "false" ] || fail "phase 6 ($WNAME): capabilities.chrome=true on a lab Windows runner (no Chrome is installed there — detection wrong?)"
+          [ "$(jq -r '.tshark' <<<"$WCAPS")" = "false" ] || fail "phase 6 ($WNAME): capabilities.tshark=true on a lab Windows runner (no Wireshark there — detection wrong?)"
+        fi
       fi
-      if [ -z "$WTESTER" ]; then
-        fail "phase 6 ($WNAME): agent has no tester_id — lab.sh registers Windows runners bound to a project_tester row so LaunchRequest.tester_id can pin runs to it"
+      # Pinning: lab.sh binds its Windows VM runners to a project_tester row so
+      # LaunchRequest.tester_id can target them. A standalone Windows agent
+      # (the native lab on windows-latest, or a hand-registered runner) has no
+      # tester row — then the runs are pinned implicitly only if it is the ONLY
+      # online agent (dispatch has nowhere else to go); otherwise it is a failure.
+      PIN_BODY='{}'
+      if [ -n "$WTESTER" ]; then
+        TROW="$(api GET "/api/projects/$PID/testers/$WTESTER")"
+        note "  tester $(jq -r '"\(.name) cloud=\(.cloud) power_state=\(.power_state) allocation=\(.allocation) installer_version=\(.installer_version // "?")"' <<<"$TROW")"
+        PIN_BODY="$(jq -nc --arg t "$WTESTER" '{tester_id:$t}')"
+      elif [ "${ONLINE:-1}" -eq 1 ]; then
+        note "  standalone Windows agent (no tester row) and the only online agent — runs are not pinned but must land on it"
+      else
+        fail "phase 6 ($WNAME): agent has no tester_id and $ONLINE agents are online — lab.sh binds Windows runners to a project_tester row so LaunchRequest.tester_id can pin runs to it"
         continue
       fi
-      TROW="$(api GET "/api/projects/$PID/testers/$WTESTER")"
-      note "  tester $(jq -r '"\(.name) cloud=\(.cloud) power_state=\(.power_state) allocation=\(.allocation) installer_version=\(.installer_version // "?")"' <<<"$TROW")"
 
       # 6b. the phase-1 network modes, pinned to the Windows runner (target-1 rust endpoint).
       CFG6N="$(create_config "lab-p6-win-network-${WNAME}-$STAMP" \
         "$(jq -nc --arg h "$(target_ip 1)" '{kind:"network",host:$h,port:8443}')" \
         "$(jq -nc --arg m "$NETWORK_MODES" --argjson r "$RUNS" '{modes:($m|split(",")),runs:$r,concurrency:1,timeout_ms:8000,insecure:true}')")" || exit 1
-      LRESP="$(api POST "/api/v2/test-configs/$CFG6N/launch" "$(jq -nc --arg t "$WTESTER" '{tester_id:$t}')")"
+      LRESP="$(api POST "/api/v2/test-configs/$CFG6N/launch" "$PIN_BODY")"
       RUN6N="$(jq -r '.run_id // .id // empty' <<<"$LRESP")"
       if [ -z "$RUN6N" ]; then
         fail "phase 6 ($WNAME): launch pinned to tester $WTESTER failed: $(head -c 300 <<<"$LRESP")"
@@ -575,7 +598,7 @@ if run_phase 6; then
           CFG6P="$(create_config "lab-p6-win-${pst}-${WNAME}-$STAMP" \
             "$(jq -nc --arg d "$DEP" --arg s "$pst" '{kind:"proxy",proxy_endpoint_id:$d,proxy_stack:$s}')" \
             "$(jq -nc --argjson modes "$MODES_JSON" --argjson r "$RUNS" '{modes:$modes,runs:$r,concurrency:1,timeout_ms:15000,capture_mode:"headers-only",payload_sizes:[]}')")" || exit 1
-          LRESP="$(api POST "/api/v2/test-configs/$CFG6P/launch" "$(jq -nc --arg t "$WTESTER" '{tester_id:$t}')")"
+          LRESP="$(api POST "/api/v2/test-configs/$CFG6P/launch" "$PIN_BODY")"
           RUN6P="$(jq -r '.run_id // .id // empty' <<<"$LRESP")"
           if [ -z "$RUN6P" ]; then
             fail "phase 6 ($WNAME): proxy launch pinned to tester $WTESTER failed: $(head -c 300 <<<"$LRESP")"
