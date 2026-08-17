@@ -66,7 +66,7 @@ public sealed record HeartbeatMessage(
     [property: JsonPropertyName("capabilities")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     AgentCapabilities? Capabilities = null,
-    // Additive (v0.28.210+): the runner's host OS family ("windows"|"linux"|
+    // Additive (v0.28.211+): the runner's host OS family ("windows"|"linux"|
     // "macos") and CPU architecture ("x86_64"|"aarch64"|…), as the agent's
     // `health` verb reports them. Absent from older agents (null) — the row's
     // agent.os / agent.arch are left as they are (nothing else ever wrote them,

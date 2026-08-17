@@ -113,7 +113,7 @@ describe('HTTP/3 by proxy stack (shared/http-stacks.json)', () => {
   it('stacks with QUIC allow every h3 mode', () => {
     // iis: http.sys serves HTTP/3 to SNI clients — the installer binds an SNI
     // hostname listener and dispatch resolves the target by its recorded DNS
-    // name (deployment.endpoint_hosts, v0.28.210; lab-measured 2/2).
+    // name (deployment.endpoint_hosts, v0.28.211; lab-measured 2/2).
     for (const stack of ['nginx', 'caddy', 'endpoint', 'iis']) {
       for (const m of H3) {
         expect(unsupportedReason(m, { kind: 'endpoint', stack }), `${m} on ${stack}`).toBeNull();

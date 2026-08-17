@@ -55,7 +55,7 @@ public sealed record HeartbeatMessage(
     [property: JsonPropertyName("capabilities")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     AgentCapabilities? Capabilities = null,
-    // Additive (v0.28.210+): the runner's host OS / CPU architecture
+    // Additive (v0.28.211+): the runner's host OS / CPU architecture
     // ("windows"|"linux"|"macos", "x86_64"|"aarch64"|…) — the same words the
     // `health` command verb reports (RunnerCapabilities.HostOs/HostArch).
     // Omitted when null so older control planes see the previous shape; a
