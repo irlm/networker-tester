@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.220] - 2026-08-17
+
+### Fixed
+
+- **`Release gap check`: usable signal, and it now catches the second failure
+  shape.** Its first real run reported **230 warnings** — this repo carries ~225
+  tags from before it published releases at all (`v0.1.0` … `v0.27.x`), which
+  buried the lines that matter. The check now ignores everything older than the
+  oldest published release (`v0.28.12`), a floor that needs no maintenance, and
+  reports 4 real gaps instead of 230.
+- That first run also exposed a hole in the check itself: a version can be
+  **merged and never tagged** — the auto-tag job dying before it pushes the tag —
+  which leaves nothing for a tag-vs-release comparison to find. `v0.28.210` is
+  exactly that, and it slipped straight through. The current version is now
+  asserted to have **both** a tag and a release, with the recovery named for each
+  shape.
+- Corrected history: the stranded-tag gaps are `v0.28.76`, `v0.28.182`,
+  `v0.28.191` and `v0.28.214`; `v0.28.210` is the never-tagged one. (v0.28.217's
+  commit message called `v0.28.210` a stranded tag — it was not.) All are
+  superseded and deliberately left alone; `docs/release-flow.md` §7 records them.
+
+---
+
 ## [0.28.219] - 2026-08-17
 
 ### Added
