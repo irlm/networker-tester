@@ -492,11 +492,19 @@ mod tests {
 
     /// Minimal in-test reflector implementing the RFC 8762 §4.3 layout with a
     /// stateful sequence counter and an optional injected processing delay.
+    ///
+    /// T2 is stamped the moment the packet is READ, and the injected delay is
+    /// then served on its own task: a reflector that slept inline would stall
+    /// its recv loop, so whenever the delay overran the sender's cadence (a
+    /// few ms of timer overshoot on a loaded runner is enough) the following
+    /// probes would sit in the socket buffer and get a LATE T2. That queueing
+    /// time lands outside T3−T2, so it inflates the corrected RTT — the test
+    /// reflector's own scheduling, not the code under test.
     fn spawn_reflector(processing_delay: Duration) -> (SocketAddr, tokio::task::JoinHandle<()>) {
         let server = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         let addr = server.local_addr().unwrap();
         server.set_nonblocking(true).unwrap();
-        let server = UdpSocket::from_std(server).unwrap();
+        let server = std::sync::Arc::new(UdpSocket::from_std(server).unwrap());
         let handle = tokio::spawn(async move {
             let mut seq = 0u32;
             let mut buf = [0u8; 2048];
@@ -505,23 +513,29 @@ mod tests {
                     continue;
                 }
                 let (t2s, t2f) = ntp_now();
-                if !processing_delay.is_zero() {
-                    tokio::time::sleep(processing_delay).await;
-                }
-                let (t3s, t3f) = ntp_now();
-                let mut out = [0u8; STAMP_PACKET_LEN];
-                out[0..4].copy_from_slice(&seq.to_be_bytes());
-                out[4..8].copy_from_slice(&t3s.to_be_bytes());
-                out[8..12].copy_from_slice(&t3f.to_be_bytes());
-                out[12..14].copy_from_slice(&[0x00, 0x01]);
-                out[16..20].copy_from_slice(&t2s.to_be_bytes());
-                out[20..24].copy_from_slice(&t2f.to_be_bytes());
-                out[24..28].copy_from_slice(&buf[0..4]);
-                out[28..36].copy_from_slice(&buf[4..12]);
-                out[36..38].copy_from_slice(&buf[12..14]);
-                out[40] = 255;
+                let mut req = [0u8; STAMP_PACKET_LEN];
+                req.copy_from_slice(&buf[..STAMP_PACKET_LEN]);
+                let my_seq = seq;
                 seq = seq.wrapping_add(1);
-                let _ = server.send_to(&out, from).await;
+                let sock = std::sync::Arc::clone(&server);
+                tokio::spawn(async move {
+                    if !processing_delay.is_zero() {
+                        tokio::time::sleep(processing_delay).await;
+                    }
+                    let (t3s, t3f) = ntp_now();
+                    let mut out = [0u8; STAMP_PACKET_LEN];
+                    out[0..4].copy_from_slice(&my_seq.to_be_bytes());
+                    out[4..8].copy_from_slice(&t3s.to_be_bytes());
+                    out[8..12].copy_from_slice(&t3f.to_be_bytes());
+                    out[12..14].copy_from_slice(&[0x00, 0x01]);
+                    out[16..20].copy_from_slice(&t2s.to_be_bytes());
+                    out[20..24].copy_from_slice(&t2f.to_be_bytes());
+                    out[24..28].copy_from_slice(&req[0..4]);
+                    out[28..36].copy_from_slice(&req[4..12]);
+                    out[36..38].copy_from_slice(&req[12..14]);
+                    out[40] = 255;
+                    let _ = sock.send_to(&out, from).await;
+                });
             }
         });
         (addr, handle)
@@ -547,9 +561,12 @@ mod tests {
 
     #[tokio::test]
     async fn stamp_probe_computes_corrected_rtt_and_directional_loss() {
-        // 5 ms injected reflector processing: the corrected RTT must be far
-        // below the raw RTT (which includes the delay).
-        let (addr, server) = spawn_reflector(Duration::from_millis(5));
+        // 40 ms injected reflector processing: the corrected RTT must be far
+        // below the raw RTT (which includes the delay). The delay is this big
+        // so the "correction happened" threshold sits an order of magnitude
+        // above loopback RTT plus any scheduling noise a loaded CI runner
+        // adds — a 5 ms delay left only ~5 ms of headroom, which macOS ate.
+        let (addr, server) = spawn_reflector(Duration::from_millis(40));
         let cfg = StampProbeConfig {
             target_host: addr.ip().to_string(),
             target_port: addr.port(),
@@ -566,15 +583,16 @@ mod tests {
         assert_eq!(s.replies_received, 10);
         assert_eq!(s.loss_sent_percent, Some(0.0));
         assert_eq!(s.loss_return_percent, Some(0.0));
-        // Corrected RTT excludes the injected 5 ms processing time.
+        // Corrected RTT excludes the injected 40 ms processing time (an
+        // uncorrected RTT would sit at ~40 ms, not under half of it).
         assert!(
-            s.rtt_avg_ms < 5.0,
+            s.rtt_avg_ms < 20.0,
             "corrected RTT should exclude processing: {} ms",
             s.rtt_avg_ms
         );
         let proc_us = s.reflector_processing_avg_us.unwrap();
         assert!(
-            proc_us > 3_000.0,
+            proc_us > 30_000.0,
             "processing time must be visible: {proc_us} µs"
         );
         assert_eq!(s.reflector_seq_max, Some(9));
