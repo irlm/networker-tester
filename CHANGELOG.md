@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.235] - 2026-08-19
+
+### Fixed
+
+- **The deployed-target "update" button no longer succeeds-but-lies.** The
+  update re-ran install.sh, which replaced the endpoint binary on disk and
+  then `systemctl start`-ed an already-running unit — a no-op, so the OLD
+  process kept serving; the health check got its 200 from that old process
+  and every layer reported success. Now: the three Linux endpoint-service
+  paths `systemctl restart` (GCP/LAN had the same defect; Windows was
+  already correct); binary replacement uses a same-directory rename;
+  `_remote_verify_health` FAILS the deploy when the running /health version
+  differs from the installed one (with the exact ssh remediation); a failed
+  update no longer wipes the target's endpoint hosts/IPs from the row; and
+  the UI surfaces rejected updates, scans the event buffer for the
+  completion event (a heartbeat could swallow it forever), and re-probes the
+  live version after "completed" instead of trusting exit 0.
+
 ## [0.28.234] - 2026-08-19
 
 ### Fixed

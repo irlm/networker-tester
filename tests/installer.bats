@@ -322,6 +322,85 @@ teardown() {
     [[ "$output" == *"health"* ]] || [[ "$output" == *"1.2.3.4"* ]]
 }
 
+# Regression (silent update, prod 2026-08-17): a deploy replaced the endpoint
+# binary on disk but the service was never restarted — /health kept answering
+# with the PREVIOUS version and the deploy still exited 0, so the dashboard's
+# "update" button reported success while the endpoint stayed on the old
+# release. _remote_verify_health must fail loudly when the running version
+# does not match the version this deploy installed.
+@test "_remote_verify_health: fails when the running version does not match NETWORKER_VERSION" {
+    export STUB_CURL_BODY='{"status":"ok","version":"0.28.227"}'
+    NETWORKER_VERSION="v0.28.230"
+    run _remote_verify_health "1.2.3.4" "azureuser"
+    [ "$status" -eq 1 ] || { echo "expected exit 1, got $status; output: $output" >&2; exit 1; }
+    [[ "$output" == *"still reports v0.28.227"* ]] || { echo "output: $output" >&2; exit 1; }
+    [[ "$output" == *"systemctl restart networker-endpoint"* ]]
+}
+
+@test "_remote_verify_health: passes when the running version matches NETWORKER_VERSION" {
+    export STUB_CURL_BODY='{"status":"ok","version":"0.28.230"}'
+    NETWORKER_VERSION="v0.28.230"
+    run _remote_verify_health "1.2.3.4" "azureuser"
+    [ "$status" -eq 0 ] || { echo "expected exit 0, got $status; output: $output" >&2; exit 1; }
+    [[ "$output" == *"Health check passed"* ]]
+}
+
+@test "_remote_verify_health: lenient when the health body has no version field" {
+    export STUB_CURL_BODY='{"status":"ok"}'
+    NETWORKER_VERSION="v0.28.230"
+    run _remote_verify_health "1.2.3.4" "azureuser"
+    [ "$status" -eq 0 ] || { echo "expected exit 0, got $status; output: $output" >&2; exit 1; }
+}
+
+@test "_remote_verify_health: lenient when NETWORKER_VERSION is not a semver tag" {
+    export STUB_CURL_BODY='{"status":"ok","version":"0.28.227"}'
+    NETWORKER_VERSION="main"
+    run _remote_verify_health "1.2.3.4" "azureuser"
+    [ "$status" -eq 0 ] || { echo "expected exit 0, got $status; output: $output" >&2; exit 1; }
+}
+
+# Regression twin of the above at the source level: every Linux endpoint
+# service creator must RESTART the service (an update re-runs it after
+# replacing the binary; `systemctl start` on an already-running unit is a
+# no-op that leaves the old process serving the previous version).
+@test "endpoint service creators restart (never merely start) the service" {
+    local script="$BATS_TEST_DIRNAME/../install.sh"
+    local fn body
+    for fn in _remote_create_endpoint_service _lan_create_endpoint_service _gcp_create_endpoint_service; do
+        body="$(awk -v fn="$fn" '
+            $0 ~ "^"fn"\\(\\) \\{" { infn = 1 }
+            infn { print }
+            infn && /^\}/ { exit }
+        ' "$script")"
+        [ -n "$body" ] || { echo "$fn not found in install.sh" >&2; exit 1; }
+        printf '%s' "$body" | grep -q 'systemctl restart networker-endpoint' \
+            || { echo "$fn does not restart networker-endpoint" >&2; exit 1; }
+        if printf '%s' "$body" | grep -q 'systemctl start networker-endpoint'; then
+            echo "$fn still uses 'systemctl start' — an update would leave the old process running" >&2
+            exit 1
+        fi
+    done
+}
+
+# The remote binary install must replace via same-directory rename: a plain
+# `mv /tmp/x /usr/local/bin/x` degrades to copy-over-a-running-binary
+# (ETXTBSY) when /tmp is a separate filesystem.
+@test "_remote_install_binary: replaces the binary via same-directory rename" {
+    local script="$BATS_TEST_DIRNAME/../install.sh"
+    local body
+    body="$(awk '
+        /^_remote_install_binary\(\) \{/ { infn = 1 }
+        infn { print }
+        infn && /^\}/ { exit }
+    ' "$script")"
+    [ -n "$body" ] || { echo "_remote_install_binary not found" >&2; exit 1; }
+    if printf '%s' "$body" | grep -qE 'mv /tmp/\$\{binary\} /usr/local/bin'; then
+        echo "_remote_install_binary moves /tmp binary directly over the destination" >&2
+        exit 1
+    fi
+    printf '%s' "$body" | grep -q 'mv -f /usr/local/bin/${binary}.new /usr/local/bin/${binary}'
+}
+
 @test "_remote_verify_health: shows SSH diagnostics on timeout when curl always fails" {
     export STUB_CURL_FAIL=1
     # Patch the retry limit to 2 iterations so the test is fast
