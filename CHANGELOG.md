@@ -11,6 +11,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.231] - 2026-08-18
+
+### Added
+
+- **URL sets — probe several URLs together in ONE run (#782 P1).** The URL
+  Probe input now accepts multiple URLs (space/comma/newline separated); they
+  are probed by a single tester invocation (repeated `--target`), so every
+  cycle measures all URLs under the same network conditions — the fairness
+  basis for the upcoming comparison report. One run row per set (not N).
+  Every attempt is now stamped with the `target_url` it probed (tester
+  `dispatch_once` choke point; streamed frames and the `extra_json` artifact
+  carry it automatically, no schema change), the attempts API surfaces it
+  (`target_url`, recovered from the raw-attempt JSON column), and the run
+  detail page groups results per URL when a run probed more than one.
+  Agent: `endpoint.hosts[]` on network endpoints (back-compat: `host` stays
+  the first URL; classic single-URL configs are byte-identical on the wire).
+  Persistence is a real column — tester migration **V006**
+  (`RequestAttempt.TargetUrl`, mirrored in `shared/tester-schema.postgres.sql`
+  so control-plane bootstrap creates it too): the raw-JSON ride-along worked
+  only on prod-shaped DBs (lab e2e caught it), and legacy install.sh-seeded
+  schemas keep working via a per-column insert fallback ladder.
+
+### Fixed
+
+- The long-dead single-run HTML snapshot pin (stale since ~v0.28.86 — the
+  suite is not part of CI's test invocation) is re-pinned to the current
+  deterministic renderer output.
+
 ## [0.28.230] - 2026-08-18
 
 - **Dashboard architecture is now feature-oriented and reusable.** Shared API transport, TanStack Query hooks, page shells, form controls, dialogs, buttons, async states, and run-detail sections replace duplicated page-level implementations; heavy charts are loaded only when needed.

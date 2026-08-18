@@ -89,8 +89,13 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             "{CorrelationId}: Run received config_id={ConfigId} endpoint_kind={Kind} modes=[{Modes}] is_benchmark={Bench}",
             correlationId, config.Id, config.EndpointKind, string.Join(",", config.Modes), config.IsBenchmark);
 
-        // Resolve endpoint → target ──────────────────────────────────────────────
-        var target = EndpointToTarget(config);
+        // Resolve endpoint → target(s) ───────────────────────────────────────────
+        // Multi-URL set (#782): a network endpoint may carry several URLs; the
+        // base invocation probes them all in ONE tester process (repeated
+        // --target flags — same tick, comparable conditions). apibench keeps
+        // the single/first target: it is a runner-level suite against one API.
+        var targets = EndpointToTargets(config);
+        var target = targets.Count > 0 ? targets[0] : null;
         if (target is null)
         {
             var msg = $"Unsupported endpoint kind for standalone agent: {config.EndpointKind}";
@@ -107,7 +112,7 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         var apibenchRequested = config.Modes.Any(ApibenchWorkloads.IsApibenchMode);
         var invocations = new List<(string? Workload, List<string> Args)>();
         if (config.Modes.Any(m => !ApibenchWorkloads.IsApibenchMode(m)))
-            invocations.Add((null, BuildArgs(config, target)));
+            invocations.Add((null, BuildArgs(config, targets)));
         if (apibenchRequested)
         {
             IReadOnlyList<ApibenchWorkloads.Workload> workloads;
@@ -566,19 +571,31 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         {
             var root = parsed.RootElement;
 
+            // Multi-target artifact (#782): with several --target flags the
+            // tester emits an ARRAY of TestRun objects (one per URL). Envelope
+            // context (geo/network/clock/host) is per-machine, so the first
+            // element's is representative; the fallback attempt re-emission
+            // walks every element.
+            var runElements = root.ValueKind == JsonValueKind.Array
+                ? root.EnumerateArray().ToList()
+                : new List<JsonElement> { root };
+
             // Run envelope (v0.28.80): geo / network / clock / load / host-info
             // context the tester attaches to the TestRun root. Previously this
             // died here — only attempts + a bare run_finished left the agent.
-            envelope = ExtractRunEnvelope(root);
+            envelope = runElements.Count > 0 ? ExtractRunEnvelope(runElements[0]) : null;
 
             // Stream per-attempt events + progress counts (every 10 + final).
             // Skipped when the tester already streamed them live (>=0.28.117,
             // NETWORKER_ATTEMPT_STREAM) — re-emitting here would double both
             // the persisted attempts pipeline input and the counts.
-            if (streamedAttempts == 0
-                && root.TryGetProperty("attempts", out var attempts) && attempts.ValueKind == JsonValueKind.Array)
+            if (streamedAttempts == 0)
             {
-                foreach (var attempt in attempts.EnumerateArray())
+                foreach (var attempt in runElements
+                    .Where(e => e.ValueKind == JsonValueKind.Object
+                                && e.TryGetProperty("attempts", out var arr)
+                                && arr.ValueKind == JsonValueKind.Array)
+                    .SelectMany(e => e.GetProperty("attempts").EnumerateArray()))
                 {
                     var ok = attempt.TryGetProperty("success", out var s) && s.ValueKind == JsonValueKind.True;
                     uint total;
@@ -642,18 +659,34 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
 
     internal static string? EndpointToTarget(TestConfigView config)
     {
+        var targets = EndpointToTargets(config);
+        return targets.Count > 0 ? targets[0] : null;
+    }
+
+    /// <summary>All resolved target URLs for a network endpoint — one entry per
+    /// URL of a multi-URL set (#782), a single entry for the classic shape.
+    /// Empty for non-network endpoints (unsupported in the standalone agent).</summary>
+    internal static IReadOnlyList<string> EndpointToTargets(TestConfigView config)
+    {
         if (config.EndpointKind != "network" || config.Network is null)
-            return null; // proxy / runtime / pending unsupported in standalone agent
+            return Array.Empty<string>(); // proxy / runtime / pending unsupported in standalone agent
 
-        var host = config.Network.Host;
-        if (host.StartsWith("http://", StringComparison.Ordinal) ||
-            host.StartsWith("https://", StringComparison.Ordinal))
-            return host;
+        var resolved = new List<string>();
+        foreach (var host in config.Network.Hosts)
+        {
+            if (host.StartsWith("http://", StringComparison.Ordinal) ||
+                host.StartsWith("https://", StringComparison.Ordinal))
+            {
+                resolved.Add(host);
+                continue;
+            }
 
-        const string scheme = "https";
-        return config.Network.Port is { } p
-            ? $"{scheme}://{host}:{p}/health"
-            : $"{scheme}://{host}/health";
+            const string scheme = "https";
+            resolved.Add(config.Network.Port is { } p
+                ? $"{scheme}://{host}:{p}/health"
+                : $"{scheme}://{host}/health");
+        }
+        return resolved;
     }
 
     /// <summary>How many stderr lines to keep for the failure message.</summary>
@@ -700,6 +733,9 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
 
     // ── build_args (Rust parity) ─────────────────────────────────────────────────
     internal static List<string> BuildArgs(TestConfigView config, string target)
+        => BuildArgs(config, new[] { target });
+
+    internal static List<string> BuildArgs(TestConfigView config, IReadOnlyList<string> targets)
     {
         // "apibench" is a runner-level mode — never a tester --modes value
         // (the tester would silently drop it). Its workloads run as separate
@@ -709,15 +745,20 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         // timeout_ms.div_ceil(1000).max(1) — round up to whole seconds, floor 1.
         var timeoutSecs = Math.Max(1u, (config.TimeoutMs + 999) / 1000);
 
-        var args = new List<string>
+        var args = new List<string>();
+        foreach (var t in targets)
         {
-            "--target", target,
+            args.Add("--target");
+            args.Add(t);
+        }
+        args.AddRange(new[]
+        {
             "--modes", modesCsv,
             "--runs", config.Runs.ToString(),
             "--concurrency", config.Concurrency.ToString(),
             "--timeout", timeoutSecs.ToString(),
             "--json-stdout",
-        };
+        });
 
         if (config.Insecure)
             args.Add("--insecure");

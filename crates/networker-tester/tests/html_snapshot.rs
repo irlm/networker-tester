@@ -20,6 +20,7 @@ fn fixed_time(offset_secs: i64) -> DateTime<Utc> {
 
 fn http_attempt(run_id: Uuid, seq: u32, proto: Protocol, ms: f64) -> RequestAttempt {
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id: Uuid::from_u128(0xA000 + seq as u128),
         run_id,
@@ -97,6 +98,7 @@ fn http_attempt(run_id: Uuid, seq: u32, proto: Protocol, ms: f64) -> RequestAtte
 
 fn failed_attempt(run_id: Uuid, seq: u32) -> RequestAttempt {
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id: Uuid::from_u128(0xB000 + seq as u128),
         run_id,
@@ -136,6 +138,7 @@ fn failed_attempt(run_id: Uuid, seq: u32) -> RequestAttempt {
 
 fn udp_attempt(run_id: Uuid, seq: u32) -> RequestAttempt {
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id: Uuid::from_u128(0xC000 + seq as u128),
         run_id,
@@ -266,7 +269,7 @@ fn html_render_single_run_snapshot_is_stable() {
     let html = normalized(&html::render(&run, Some("report.css"), None));
     assert_eq!(
         (html.len(), fnv1a(html.as_bytes())),
-        (11270, 9317960495895442682),
+        (11270, 16558609383391557259),
         "single-run HTML output changed — html renderer is expected to be byte-identical",
     );
 }

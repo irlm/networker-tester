@@ -58,6 +58,7 @@ fn make_run() -> TestRun {
         client_geo: None,
         target_geo: None,
         attempts: vec![RequestAttempt {
+            target_url: None,
             phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
@@ -177,6 +178,7 @@ fn sample_packet_capture_summary() -> crate::capture::PacketCaptureSummary {
 }
 fn make_http_attempt(success: bool, ttfb: f64, total: f64) -> RequestAttempt {
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id: Uuid::new_v4(),
         run_id: Uuid::new_v4(),
@@ -280,6 +282,7 @@ fn make_run_with_url(url: &str) -> TestRun {
 fn make_attempt(proto: Protocol, success: bool) -> RequestAttempt {
     let run_id = Uuid::new_v4();
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id: Uuid::new_v4(),
         run_id,

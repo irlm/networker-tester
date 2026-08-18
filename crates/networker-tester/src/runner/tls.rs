@@ -250,6 +250,7 @@ pub async fn run_tls_probe(
     tls_result.ocsp_response_bytes = ocsp_capture.response_bytes();
 
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id,
         run_id,
@@ -464,6 +465,7 @@ pub async fn run_tls_resumption_probe(
     };
 
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id,
         run_id,
@@ -1207,6 +1209,7 @@ fn make_failed_with_protocol(
     protocol: Protocol,
 ) -> RequestAttempt {
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id,
         run_id,

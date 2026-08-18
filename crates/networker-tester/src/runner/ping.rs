@@ -225,6 +225,7 @@ fn ping_attempt(
     success: bool,
 ) -> RequestAttempt {
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id,
         run_id,
@@ -304,6 +305,7 @@ fn ping_failed(
     detail: Option<String>,
 ) -> RequestAttempt {
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id,
         run_id,

@@ -31,7 +31,7 @@ import {
   StatsRow,
   TimingRow,
 } from '../features/runs/components/RunDetailSections';
-import { groupByProtocol } from '../features/runs/grouping';
+import { groupByProtocol, groupByTargetUrl } from '../features/runs/grouping';
 import {
   computeProtocolStats,
   computeTimingBreakdown,
@@ -463,17 +463,31 @@ export function RunDetailPage() {
           </Button>
         </div>
       )}
-      {Object.entries(groupByProtocol(attempts)).map(([protocol, group]) => {
-        const isExpanded = expandedProtocols.has(protocol);
+      {Object.entries(groupByTargetUrl(attempts))
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([targetUrl, urlAttempts], _idx, urlEntries) => {
+        // Single-URL runs (and pre-#782 attempts with no target_url) keep the
+        // flat protocol layout; a URL-set run gets one labelled section per URL.
+        const multiUrl = urlEntries.filter(([u]) => u !== '').length > 1;
+        return (
+        <div key={targetUrl || 'all'}>
+        {multiUrl && (
+          <h3 className="mt-4 mb-1 px-1 text-xs font-medium tracking-wider text-cyan-400 font-mono">
+            {targetUrl || 'unattributed'}
+          </h3>
+        )}
+      {Object.entries(groupByProtocol(urlAttempts)).map(([protocol, group]) => {
+        const sectionKey = multiUrl ? `${targetUrl}|${protocol}` : protocol;
+        const isExpanded = expandedProtocols.has(sectionKey);
         const protoSuccess = group.filter((a) => a.success).length;
         const protoFail = group.length - protoSuccess;
         const values = group.filter((a) => a.success).map(primaryMetricValue).filter((v): v is number => v != null);
         const stats = computeStats(values);
 
         return (
-          <div key={protocol} className="table-container mb-2">
+          <div key={sectionKey} className="table-container mb-2">
             <button
-              onClick={() => toggleProtocol(protocol)}
+              onClick={() => toggleProtocol(sectionKey)}
               className="w-full px-4 py-2.5 flex items-center justify-between text-left hover:bg-gray-800/10 transition-colors"
               aria-expanded={isExpanded}
             >
@@ -501,6 +515,9 @@ export function RunDetailPage() {
               </div>
             )}
           </div>
+        );
+      })}
+        </div>
         );
       })}
 

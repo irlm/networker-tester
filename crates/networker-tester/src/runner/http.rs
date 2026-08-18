@@ -160,6 +160,7 @@ pub async fn run_probe(
             .await
         }
         other => RequestAttempt {
+            target_url: None,
             phase: None,
             attempt_id,
             run_id,
@@ -446,6 +447,7 @@ async fn run_http_or_tcp(
     if protocol == Protocol::Tcp {
         drop(tcp_stream);
         return RequestAttempt {
+            target_url: None,
             phase: None,
             attempt_id,
             run_id,
@@ -664,6 +666,7 @@ async fn run_http_or_tcp(
             // problem with an actionable message rather than a generic HTTP 404.
             let is_sdk_auth_404 = protocol == Protocol::SdkProbe && status_code == 404;
             RequestAttempt {
+                target_url: None,
                 phase: None,
                 attempt_id,
                 run_id,
@@ -1532,6 +1535,7 @@ fn failed_attempt(
     tcp: Option<TcpResult>,
 ) -> RequestAttempt {
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id,
         run_id,

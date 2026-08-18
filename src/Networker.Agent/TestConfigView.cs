@@ -41,7 +41,11 @@ public sealed class TestConfigView
     /// <c>laghound_route</c> → tester <c>--laghound-route</c>).</summary>
     public string? LagHoundRoute { get; init; }
 
-    public sealed record EndpointNetwork(string Host, ushort? Port);
+    /// <summary>Raw-URL target(s). <see cref="Hosts"/> is the full set for a
+    /// multi-URL ("URL set", #782) config — always non-empty and containing
+    /// <see cref="Host"/> (the back-compat single/first URL) as its first
+    /// element.</summary>
+    public sealed record EndpointNetwork(string Host, ushort? Port, IReadOnlyList<string> Hosts);
 
     /// <summary>Parse the assign_run <c>config</c> element into a view. Throws
     /// <see cref="JsonException"/> on a structurally broken document.</summary>
@@ -57,7 +61,23 @@ public sealed class TestConfigView
             ushort? port = endpoint.TryGetProperty("port", out var p) && p.ValueKind == JsonValueKind.Number
                 ? (ushort)p.GetUInt32()
                 : null;
-            network = new EndpointNetwork(host, port);
+            // Multi-URL set (#782): endpoint.hosts[] with host = first element
+            // (back-compat for every consumer that reads only host). Dedupe,
+            // drop blanks, and guarantee host leads the list.
+            var hosts = new List<string>();
+            if (endpoint.TryGetProperty("hosts", out var hs) && hs.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var el in hs.EnumerateArray())
+                {
+                    if (el.GetString() is { Length: > 0 } u && !hosts.Contains(u, StringComparer.Ordinal))
+                        hosts.Add(u);
+                }
+            }
+            if (hosts.Count == 0 && host.Length > 0)
+                hosts.Add(host);
+            else if (host.Length > 0 && !hosts.Contains(host, StringComparer.Ordinal))
+                hosts.Insert(0, host);
+            network = new EndpointNetwork(host, port, hosts);
         }
 
         var workload = config.GetProperty("workload");
