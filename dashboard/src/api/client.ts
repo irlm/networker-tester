@@ -839,10 +839,48 @@ export const api = {
     windows?: boolean;
     ref?: string;
   }) =>
-    request<{ status: string; actions_url: string }>('/admin/canary/dispatch', {
+    request<{ status: string; dispatch_id?: string | null; actions_url: string }>('/admin/canary/dispatch', {
       method: 'POST',
       body: JSON.stringify(inputs),
     }),
+
+  // Durable in-product dispatch history (our DB — works when GitHub is down).
+  getCanaryHistory: (limit = 30) =>
+    request<{
+      items: {
+        id: string;
+        requested_by: string | null;
+        requested_at: string;
+        git_ref: string;
+        inputs: Record<string, string>;
+        run_id: number | null;
+        run_url: string | null;
+        run_status: string | null;
+        conclusion: string | null;
+        updated_at: string;
+      }[];
+    }>(`/admin/canary/history?limit=${limit}`),
+
+  // Live recent soak-canary.yml runs straight from GitHub (includes runs
+  // triggered outside the product). Empty + detail when no token/unreachable.
+  getCanaryRuns: (limit = 30) =>
+    request<{
+      configured: boolean;
+      detail?: string;
+      runs: {
+        id: number;
+        runNumber: number;
+        event: string | null;
+        status: string | null;
+        conclusion: string | null;
+        branch: string | null;
+        title: string | null;
+        actor: string | null;
+        htmlUrl: string | null;
+        createdAt: string | null;
+        updatedAt: string | null;
+      }[];
+    }>(`/admin/canary/runs?limit=${limit}`),
 
   // Leaderboard (simple benchmark routes)
   getLeaderboard: () =>

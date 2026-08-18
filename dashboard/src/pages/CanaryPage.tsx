@@ -20,6 +20,38 @@ interface CanaryStatus {
   actions_url: string;
 }
 
+type CanaryHistoryItem = Awaited<ReturnType<typeof api.getCanaryHistory>>['items'][number];
+type CanaryRunItem = Awaited<ReturnType<typeof api.getCanaryRuns>>['runs'][number];
+
+// queued/in_progress → pulse; success green; failure red; everything else gray.
+function outcomeBadge(status: string | null, conclusion: string | null) {
+  if (status && status !== 'completed') {
+    return <span className="text-yellow-300 animate-pulse">{status}</span>;
+  }
+  if (!conclusion) return <span className="text-gray-500">—</span>;
+  const cls =
+    conclusion === 'success'
+      ? 'text-emerald-400'
+      : conclusion === 'failure'
+        ? 'text-red-400'
+        : 'text-gray-400';
+  return <span className={cls}>{conclusion}</span>;
+}
+
+function fmtWhen(iso: string | null) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+}
+
+// The non-default inputs, compactly ("matrix_flow, windows" etc.).
+function fmtInputs(inputs: Record<string, string>) {
+  const on = Object.entries(inputs)
+    .filter(([, v]) => v === '1')
+    .map(([k]) => k);
+  return on.length ? on.join(', ') : 'none';
+}
+
 // Mirrors soak-canary.yml's workflow_dispatch inputs + their defaults.
 interface CanaryInputs {
   reuse_runner: boolean;
@@ -55,6 +87,10 @@ export function CanaryPage() {
   const [inputs, setInputs] = useState<CanaryInputs>(DEFAULT_INPUTS);
   const [gitRef, setGitRef] = useState('main');
   const [dispatching, setDispatching] = useState(false);
+  const [history, setHistory] = useState<CanaryHistoryItem[] | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [ghRuns, setGhRuns] = useState<CanaryRunItem[] | null>(null);
+  const [ghDetail, setGhDetail] = useState<string | null>(null);
 
   const loadStatus = useCallback(() => {
     api
@@ -67,6 +103,31 @@ export function CanaryPage() {
   }, []);
 
   useEffect(loadStatus, [loadStatus]);
+
+  // Durable history from OUR database — must render even when GitHub is down.
+  const loadHistory = useCallback(() => {
+    api
+      .getCanaryHistory()
+      .then((r) => {
+        setHistory(r.items);
+        setHistoryError(null);
+      })
+      .catch((e: unknown) => setHistoryError(errorMessage(e)));
+  }, []);
+
+  // Live GitHub runs — best-effort; the endpoint degrades to an empty list.
+  const loadGhRuns = useCallback(() => {
+    api
+      .getCanaryRuns()
+      .then((r) => {
+        setGhRuns(r.runs);
+        setGhDetail(r.detail ?? null);
+      })
+      .catch((e: unknown) => setGhDetail(errorMessage(e)));
+  }, []);
+
+  useEffect(loadHistory, [loadHistory]);
+  useEffect(loadGhRuns, [loadGhRuns]);
 
   const dispatch = useCallback(() => {
     // Short-circuit the common local case with a clean message — the endpoint
@@ -85,15 +146,17 @@ export function CanaryPage() {
       .then((r) => {
         toast('success', 'Canary dispatched. Opening the GitHub Actions log…');
         window.open(r.actions_url, '_blank', 'noopener,noreferrer');
+        loadHistory();
+        loadGhRuns();
       })
       .catch((e: unknown) => toast('error', errorMessage(e)))
       .finally(() => setDispatching(false));
-  }, [inputs, gitRef, toast, status]);
+  }, [inputs, gitRef, toast, status, loadHistory, loadGhRuns]);
 
   const actionsUrl = status?.actions_url;
 
   return (
-    <div className="p-4 md:p-6 max-w-3xl">
+    <div className="p-4 md:p-6 max-w-5xl">
       <h2 className="text-lg md:text-xl font-bold text-gray-100 mb-1">Run-execution canary</h2>
       <p className="text-sm text-gray-400 mb-6">
         Trigger the prod run-execution canary (<code className="text-gray-300">soak-canary.yml</code>) and
@@ -217,6 +280,132 @@ export function CanaryPage() {
             </span>
           </li>
         </ul>
+      </section>
+
+      {/* ── Dispatch history (durable, our DB) ──────────────────────── */}
+      <section className="mt-6 border border-gray-700 rounded bg-gray-900/40">
+        <div className="px-4 py-3 border-b border-gray-700 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-gray-200">Dispatch history</h3>
+          <button
+            type="button"
+            onClick={() => {
+              loadHistory();
+              loadGhRuns();
+            }}
+            className="text-xs text-cyan-400 hover:text-cyan-300"
+          >
+            Refresh
+          </button>
+        </div>
+        <div className="p-4">
+          <p className="text-xs text-gray-500 mb-3">
+            In-product triggers recorded in this deployment's database — visible even when GitHub is
+            unreachable. Run link/outcome are backfilled automatically once the run appears on GitHub.
+          </p>
+          {historyError && <div className="text-sm text-red-400">Could not load history: {historyError}</div>}
+          {history && history.length === 0 && !historyError && (
+            <div className="text-sm text-gray-500">No in-product dispatches recorded yet.</div>
+          )}
+          {history && history.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-gray-500 border-b border-gray-800">
+                    <th className="py-1.5 pr-3 font-medium">Requested</th>
+                    <th className="py-1.5 pr-3 font-medium">By</th>
+                    <th className="py-1.5 pr-3 font-medium">Ref</th>
+                    <th className="py-1.5 pr-3 font-medium">Inputs on</th>
+                    <th className="py-1.5 pr-3 font-medium">Outcome</th>
+                    <th className="py-1.5 font-medium">Run</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {history.map((h) => (
+                    <tr key={h.id} className="border-b border-gray-800/60 text-gray-300">
+                      <td className="py-1.5 pr-3 whitespace-nowrap font-mono text-xs">{fmtWhen(h.requested_at)}</td>
+                      <td className="py-1.5 pr-3 text-xs">{h.requested_by ?? '—'}</td>
+                      <td className="py-1.5 pr-3 font-mono text-xs">{h.git_ref}</td>
+                      <td className="py-1.5 pr-3 text-xs text-gray-400">{fmtInputs(h.inputs)}</td>
+                      <td className="py-1.5 pr-3 text-xs">{outcomeBadge(h.run_status, h.conclusion)}</td>
+                      <td className="py-1.5 text-xs">
+                        {h.run_url ? (
+                          <a
+                            href={h.run_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-cyan-400 hover:text-cyan-300 underline"
+                          >
+                            #{h.run_id} ↗
+                          </a>
+                        ) : (
+                          <span className="text-gray-500">{h.conclusion === 'unresolved' ? 'not found' : 'linking…'}</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* ── Recent GitHub runs (live) ───────────────────────────────── */}
+      <section className="mt-6 border border-gray-700 rounded bg-gray-900/40">
+        <div className="px-4 py-3 border-b border-gray-700">
+          <h3 className="text-sm font-semibold text-gray-200">Recent runs on GitHub</h3>
+        </div>
+        <div className="p-4">
+          <p className="text-xs text-gray-500 mb-3">
+            Live from the GitHub API — includes canary runs triggered outside the product (Actions UI,
+            schedules, other deployments).
+          </p>
+          {ghDetail && <div className="text-sm text-gray-500 mb-2">{ghDetail}</div>}
+          {ghRuns && ghRuns.length === 0 && !ghDetail && (
+            <div className="text-sm text-gray-500">No runs returned.</div>
+          )}
+          {ghRuns && ghRuns.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-gray-500 border-b border-gray-800">
+                    <th className="py-1.5 pr-3 font-medium">Run</th>
+                    <th className="py-1.5 pr-3 font-medium">Started</th>
+                    <th className="py-1.5 pr-3 font-medium">Trigger</th>
+                    <th className="py-1.5 pr-3 font-medium">Actor</th>
+                    <th className="py-1.5 pr-3 font-medium">Branch</th>
+                    <th className="py-1.5 font-medium">Outcome</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ghRuns.map((r) => (
+                    <tr key={r.id} className="border-b border-gray-800/60 text-gray-300">
+                      <td className="py-1.5 pr-3 text-xs">
+                        {r.htmlUrl ? (
+                          <a
+                            href={r.htmlUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-cyan-400 hover:text-cyan-300 underline"
+                          >
+                            #{r.runNumber} ↗
+                          </a>
+                        ) : (
+                          <span>#{r.runNumber}</span>
+                        )}
+                      </td>
+                      <td className="py-1.5 pr-3 whitespace-nowrap font-mono text-xs">{fmtWhen(r.createdAt)}</td>
+                      <td className="py-1.5 pr-3 text-xs text-gray-400">{r.event ?? '—'}</td>
+                      <td className="py-1.5 pr-3 text-xs">{r.actor ?? '—'}</td>
+                      <td className="py-1.5 pr-3 font-mono text-xs">{r.branch ?? '—'}</td>
+                      <td className="py-1.5 text-xs">{outcomeBadge(r.status, r.conclusion)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </section>
     </div>
   );
