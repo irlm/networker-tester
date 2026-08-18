@@ -29,8 +29,11 @@ namespace Networker.ControlPlane.Provisioning;
 ///   <item>On success: persist <c>endpoint_ips</c> + <c>endpoint_hosts</c>
 ///     (V050; the proxy resolver prefers the hostname — SNI → HTTP/3 through
 ///     IIS) + status <c>completed</c>.
-///     On failure: persist <c>error_message</c> + status <c>failed</c>. Either
-///     way persist the full log and publish a <see cref="DeployComplete"/>.</item>
+///     On failure: persist <c>error_message</c> + status <c>failed</c> and
+///     leave any existing <c>endpoint_ips</c>/<c>endpoint_hosts</c> untouched
+///     (an update re-run over a live deployment must not orphan its
+///     still-serving endpoints). Either way persist the full log and publish
+///     a <see cref="DeployComplete"/>.</item>
 /// </list>
 ///
 /// <para><b>CI-safe soft-fail:</b> if <c>install.sh</c> can't be located, or
@@ -571,16 +574,37 @@ public sealed class DeployRunner
                 : null;
             var now = DateTime.UtcNow;
 
-            await db.Deployments
-                .Where(d => d.DeploymentId == deploymentId)
-                .ExecuteUpdateAsync(s => s
-                    .SetProperty(d => d.Status, status)
-                    .SetProperty(d => d.Log, log)
-                    .SetProperty(d => d.EndpointIps, success ? ipsJson : (string?)null)
-                    .SetProperty(d => d.EndpointHosts, hostsJson)
-                    .SetProperty(d => d.ErrorMessage, error)
-                    .SetProperty(d => d.FinishedAt, now), CancellationToken.None)
-                .ConfigureAwait(false);
+            if (success)
+            {
+                await db.Deployments
+                    .Where(d => d.DeploymentId == deploymentId)
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(d => d.Status, status)
+                        .SetProperty(d => d.Log, log)
+                        .SetProperty(d => d.EndpointIps, ipsJson)
+                        .SetProperty(d => d.EndpointHosts, hostsJson)
+                        .SetProperty(d => d.ErrorMessage, error)
+                        .SetProperty(d => d.FinishedAt, now), CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                // Failure: leave endpoint_ips/endpoint_hosts UNTOUCHED. This
+                // used to null them, which was harmless on a first deploy (they
+                // were already null) but destructive on an UPDATE re-run over a
+                // live deployment: the still-serving endpoints vanished from the
+                // deployed-targets/version panels, and DELETE's VM teardown lost
+                // its reverse-lookup inputs — orphaning the VM to the reaper
+                // (silent-update investigation, 2026-08-18).
+                await db.Deployments
+                    .Where(d => d.DeploymentId == deploymentId)
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(d => d.Status, status)
+                        .SetProperty(d => d.Log, log)
+                        .SetProperty(d => d.ErrorMessage, error)
+                        .SetProperty(d => d.FinishedAt, now), CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
         }
         catch (Exception ex)
         {
