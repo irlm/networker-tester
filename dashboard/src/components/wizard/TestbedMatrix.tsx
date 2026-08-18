@@ -4,7 +4,7 @@ import { api } from '../../api/client';
 import type { CloudAccountSummary } from '../../api/types';
 import { TestbedRow } from './TestbedRow';
 import type { TestbedState } from './testbed-constants';
-import { makeTestbed, updateTestbedState } from './testbed-constants';
+import { makeTestbed, nextTestbedKey, updateTestbedState } from './testbed-constants';
 
 // ── Runner helpers ────────────────────────────────────────────────────
 
@@ -49,7 +49,6 @@ export function TestbedMatrix({
   onTesterIdChange,
   proxyWarning,
 }: TestbedMatrixProps) {
-  const [testbedKey, setTestbedKey] = useState(() => testbeds.length);
   const [testers, setTesters] = useState<TesterRow[]>([]);
   // Which project the tester list was last loaded for. Loading is *derived*
   // (loaded !== current project) so "No runners available." doesn't flash on
@@ -78,9 +77,7 @@ export function TestbedMatrix({
   }, [testers]);
 
   const addTestbed = (cloud?: string, os?: 'linux' | 'windows') => {
-    const k = testbedKey;
-    setTestbedKey(k + 1);
-    onTestbedsChange([...testbeds, makeTestbed(k, cloud, os)]);
+    onTestbedsChange([...testbeds, makeTestbed(nextTestbedKey(testbeds), cloud, os)]);
   };
 
   const removeTestbed = (key: number) => {

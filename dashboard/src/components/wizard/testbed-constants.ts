@@ -149,6 +149,19 @@ export function resolveTopology(label: string): string {
   return label.toLowerCase().replace(/\s+/g, '-');
 }
 
+/**
+ * Next unique testbed key: max existing key + 1. Testbed keys MUST be unique —
+ * updateTestbedState patches by key, so two rows sharing one key mutate
+ * together (user-caught: template-seeded row + "+ add testbed" row changed OS
+ * in lockstep). The old scheme used two uncoordinated counters (the page's
+ * template counter and a matrix-local counter re-initialized to
+ * testbeds.length on every remount), which desynced after a template re-apply
+ * or a remove + step navigation.
+ */
+export function nextTestbedKey(testbeds: TestbedState[]): number {
+  return testbeds.reduce((max, t) => Math.max(max, t.key), -1) + 1;
+}
+
 export function updateTestbedState(testbeds: TestbedState[], key: number, patch: Partial<TestbedState>): TestbedState[] {
   return testbeds.map(c => {
     if (c.key !== key) return c;
