@@ -455,7 +455,7 @@ export function DeployDetailPage() {
           ) : (
             logLines.map((line, i) => (
               <div key={i} className="text-gray-300 whitespace-pre-wrap break-all">
-                {line}
+                {stripAnsi(line)}
               </div>
             ))
           )}

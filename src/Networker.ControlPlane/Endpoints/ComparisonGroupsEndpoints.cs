@@ -82,7 +82,7 @@ public static class ComparisonGroupsEndpoints
             // methodology + a queued TestRun (comparison_group_id = row.Id) via
             // IRunDispatcher, then return them in runs[]. Deferred until the run
             // dispatcher lands; for now runs[] is empty.
-            return Results.Ok(ToDetailDto(row, runs: []));
+            return Results.Ok(ToDetailDto(row, runs: [], DeriveStatus(row.Status, [])));
         }).RequireAuthorization(AuthPolicies.ProjectOperator);
 
         // GET /api/v2/projects/{projectId}/comparison-groups — list.
@@ -98,7 +98,22 @@ public static class ComparisonGroupsEndpoints
                 .Take(ListLimit)
                 .ToListAsync();
 
-            return Results.Ok(rows.Select(ToGroupDto));
+            // Pull the child-run statuses for these groups in one query so the
+            // reported status can be derived per group (issue #775) instead of
+            // echoing the never-updated stored column.
+            var ids = rows.Select(r => r.Id).ToList();
+            var runStatuses = await db.TestRuns
+                .AsNoTracking()
+                .Where(r => r.ComparisonGroupId != null && ids.Contains(r.ComparisonGroupId.Value))
+                .Select(r => new { GroupId = r.ComparisonGroupId!.Value, r.Status })
+                .ToListAsync();
+            var statusesByGroup = runStatuses
+                .GroupBy(x => x.GroupId)
+                .ToDictionary(g => g.Key, g => g.Select(x => x.Status).ToList());
+
+            return Results.Ok(rows.Select(g => ToGroupDto(g,
+                DeriveStatus(g.Status,
+                    statusesByGroup.TryGetValue(g.Id, out var ss) ? ss : []))));
         }).RequireAuthorization(AuthPolicies.ProjectMember);
 
         // GET /api/v2/comparison-groups/{id} — detail (incl. run_ids via runs[]).
@@ -128,7 +143,8 @@ public static class ComparisonGroupsEndpoints
                 .OrderBy(r => r.CreatedAt)
                 .ToListAsync(ct);
 
-            return Results.Ok(ToDetailDto(group, runs.Select(ToRunDto).ToArray()));
+            return Results.Ok(ToDetailDto(group, runs.Select(ToRunDto).ToArray(),
+                DeriveStatus(group.Status, runs.Select(r => r.Status).ToList())));
         }).RequireAuthorization();
 
         // POST /api/v2/comparison-groups/{id}/launch — materialize + dispatch one
@@ -273,7 +289,74 @@ public static class ComparisonGroupsEndpoints
             });
         }).RequireAuthorization();
 
+        // DELETE /api/v2/comparison-groups/{id} — hard-delete the group row.
+        // Flat route (no {projectId}): resolve the group's project and require
+        // Operator, exactly like the flat test-config delete. The test_run FK is
+        // ON DELETE SET NULL (comparison_group_id_fkey), so the group's runs
+        // survive detached — they stay independently listable/deletable and are
+        // NOT cascaded away. 204 on success, 404 on absent/no-access (identical
+        // response, so a delete can't probe for a group in another project).
+        app.MapDelete("/api/v2/comparison-groups/{id:guid}", async (
+            Guid id,
+            HttpContext ctx,
+            ProjectAccessChecker access,
+            NetworkerDbContext db,
+            CancellationToken ct) =>
+        {
+            var owner = await db.ComparisonGroups.AsNoTracking()
+                .Where(g => g.Id == id)
+                .Select(g => g.ProjectId)
+                .FirstOrDefaultAsync(ct);
+            if (owner is null || !await access.HasRoleAsync(ctx, owner, ProjectRole.Operator, ct))
+            {
+                return Results.NotFound();
+            }
+
+            var affected = await db.ComparisonGroups
+                .Where(g => g.Id == id)
+                .ExecuteDeleteAsync(ct);
+
+            return affected > 0 ? Results.NoContent() : Results.NotFound();
+        }).RequireAuthorization();
+
         return app;
+    }
+
+    /// <summary>Run statuses that are final — a run in one of these will never
+    /// change again. Mirrors <c>AlertEvaluator.TerminalStatuses</c> plus
+    /// <c>cancelled</c> (the third terminal transition, see RunDispatcher).</summary>
+    private static readonly string[] TerminalRunStatuses = ["completed", "failed", "cancelled"];
+
+    /// <summary>
+    /// Derive a comparison group's live status from its child runs, so a group
+    /// whose runs have all reached a terminal state stops reporting "running"
+    /// (issue #775). The stored <c>status</c> column is a launch-time snapshot
+    /// ("pending" before launch, "running"/"failed" right after) that is never
+    /// updated as runs finish; this recomputes it on read:
+    /// <list type="bullet">
+    ///   <item>no runs yet → keep the stored status (pending/failed from launch);</item>
+    ///   <item>any run still non-terminal → "running";</item>
+    ///   <item>all runs completed → "completed";</item>
+    ///   <item>no run completed (all failed/cancelled) → "failed";</item>
+    ///   <item>a mix of completed and failed/cancelled → "partial".</item>
+    /// </list>
+    /// </summary>
+    internal static string DeriveStatus(string storedStatus, IReadOnlyList<string> runStatuses)
+    {
+        if (runStatuses.Count == 0)
+        {
+            return storedStatus;
+        }
+        if (runStatuses.Any(s => !TerminalRunStatuses.Contains(s)))
+        {
+            return "running";
+        }
+        var completed = runStatuses.Count(s => s == "completed");
+        if (completed == runStatuses.Count)
+        {
+            return "completed";
+        }
+        return completed == 0 ? "failed" : "partial";
     }
 
     /// <summary>The proxy stack a cell resolves to: <c>pending.proxy_stack</c>,
@@ -468,7 +551,7 @@ public static class ComparisonGroupsEndpoints
     // Shape a ComparisonGroup entity into the snake_case wire DTO matching the Rust
     // networker_common::ComparisonGroup. base_workload / methodology / cells are
     // re-emitted as raw JSON.
-    private static object ToGroupDto(Data.Entities.ComparisonGroup g) => new
+    private static object ToGroupDto(Data.Entities.ComparisonGroup g, string status) => new
     {
         id = g.Id,
         project_id = g.ProjectId,
@@ -476,7 +559,9 @@ public static class ComparisonGroupsEndpoints
         base_workload = RawJson(g.BaseWorkload),
         methodology = RawJsonOrNull(g.Methodology),
         cells = RawJson(g.Cells),
-        status = g.Status,
+        // status derived from the child runs (issue #775) — the stored column is
+        // a launch-time snapshot that never advances as runs finish.
+        status,
         created_by = g.CreatedBy,
         created_at = g.CreatedAt,
     };
@@ -484,7 +569,7 @@ public static class ComparisonGroupsEndpoints
     // Detail = the flattened group fields + a runs[] array (Rust ComparisonGroupDetail
     // uses #[serde(flatten)] on the group, so the run list sits alongside the group
     // fields at the top level).
-    private static object ToDetailDto(Data.Entities.ComparisonGroup g, object[] runs) => new
+    private static object ToDetailDto(Data.Entities.ComparisonGroup g, object[] runs, string status) => new
     {
         id = g.Id,
         project_id = g.ProjectId,
@@ -492,7 +577,8 @@ public static class ComparisonGroupsEndpoints
         base_workload = RawJson(g.BaseWorkload),
         methodology = RawJsonOrNull(g.Methodology),
         cells = RawJson(g.Cells),
-        status = g.Status,
+        // status derived from the child runs (issue #775).
+        status,
         created_by = g.CreatedBy,
         created_at = g.CreatedAt,
         runs,

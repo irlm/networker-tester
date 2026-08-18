@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.228] - 2026-08-18
+
+- **Comparison groups can now be deleted (#775).** Added `DELETE /api/v2/comparison-groups/{id}` (project-Operator, row-level authz like the flat test-config delete) — a hard delete of the group row that returns 204 on success and 404 on absent/no-access. Previously there was no delete route (405). The `test_run` FK is `ON DELETE SET NULL`, so the group's runs survive detached rather than being cascaded away.
+- **Comparison group status is derived from its runs (#775).** A group whose runs had all reached a terminal state still reported `status: "running"` (the stored column was a launch-time snapshot that never advanced). The list and detail endpoints now compute the reported status from the child runs: `running` if any run is non-terminal, else `completed` (all completed), `failed` (none completed), or `partial` (a mix). A group with no runs keeps its stored status.
+- **Deploy log no longer shows raw ANSI escapes (#765).** The live-streamed WebSocket log lines rendered raw ANSI (`␛[2m…␛[32m INFO`); `DeployDetailPage` now applies the existing `stripAnsi` helper consistently to every rendered log line, matching the already-stripped error message.
+- **Dashboard infrastructure card shows the runner (tester) name (#765).** The card rendered the auto-generated agent name (e.g. `tester-eastus-59ea5`) while the Infrastructure page showed the user-facing tester name (e.g. `eastus-runner-01`) for the same runner. The card now resolves and prefers the tester name, falling back to the agent name when no tester is linked.
+
+---
+
 ## [0.28.227] - 2026-08-18
 
 - **Admin → System → Auth: the Public URL field no longer masks real errors.** `getSystemConfig` caught *every* error as "unset"; it now returns null only on the expected 404 (key not set) and surfaces genuine failures (401/5xx) instead of silently showing an empty field.
