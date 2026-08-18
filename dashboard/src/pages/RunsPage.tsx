@@ -54,6 +54,9 @@ export function RunsPage() {
   // Opt-out via ?show_queued=0.
   const showQueued = searchParams.get('show_queued') !== '0';
   const comparisonGroupId = searchParams.get('comparison_group');
+  // ?q=<substring> — client-side config-name filter. Drives the admin canary
+  // panel's "canary runs" link (?q=soak-canary); harmless when absent.
+  const nameQuery = (searchParams.get('q') || '').trim().toLowerCase();
 
   const markRender = useRenderLog('RunsPage');
 
@@ -162,15 +165,18 @@ export function RunsPage() {
 
   // Precompute formatted dates + apply kind tab filter
   const runsWithDates = useMemo(() => {
-    const source = endpointKindFilter !== 'all'
+    let source = endpointKindFilter !== 'all'
       ? filteredRuns.filter(r => r.endpoint_kind === endpointKindFilter)
       : filteredRuns;
+    if (nameQuery) {
+      source = source.filter(r => (r.config_name || '').toLowerCase().includes(nameQuery));
+    }
     return source.map(r => ({
       ...r,
       _createdAgo: timeAgo(r.created_at),
       _createdIso: new Date(r.created_at).toISOString(),
     }));
-  }, [filteredRuns, endpointKindFilter]);
+  }, [filteredRuns, endpointKindFilter, nameQuery]);
 
   // Pagination
   const totalPages = Math.max(1, Math.ceil(runsWithDates.length / PAGE_SIZE));

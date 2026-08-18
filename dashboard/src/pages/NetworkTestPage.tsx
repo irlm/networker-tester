@@ -297,7 +297,8 @@ export function NetworkTestPage() {
       || (deploymentRegion(d) ?? '').toLowerCase().includes(q)
       // The hostname/IP is what an engineer actually knows about a target —
       // it wasn't searchable (E2E P2-9).
-      || (d.endpoint_ips ?? []).some(h => h.toLowerCase().includes(q)),
+      || (d.endpoint_ips ?? []).some(h => h.toLowerCase().includes(q))
+      || (d.endpoint_hosts ?? []).some(h => (h ?? '').toLowerCase().includes(q)),
     );
   }, [deployments, targetSearch]);
 

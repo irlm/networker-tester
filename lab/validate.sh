@@ -10,10 +10,12 @@
 #            up (kind=proxy → dispatcher resolves ip:stack-port + insecure);
 #            every mode must have ≥1 successful attempt; `native` must be DROPPED
 #            by dispatch (0 attempts), never failed. A `windows` target is
-#            validated as proxy stack `iis` (:8445; h3 modes only if
-#            shared/http-stacks.json says iis h3=true — it says false: http.sys
-#            needs SNI, targets are addressed by IP) AND, mirroring phase 1,
-#            its bare networker-endpoint on :8443 (kind=network, incl. http3).
+#            validated as proxy stack `iis` (:8445 — the deployment carries
+#            endpoint_hosts=[target-N.lab], so dispatch hands the tester the
+#            hostname, the QUIC ClientHello carries SNI and IIS's SNI binding
+#            serves HTTP/3: http3/pageload3 are in the iis matrix) AND,
+#            mirroring phase 1, its bare networker-endpoint on :8443
+#            (kind=network, incl. http3).
 #   phase 3  fan-out — launch 2×runners runs at once; all complete and ≥2
 #            distinct workers execute them (dispatch spreads across agents).
 #   phase 4  cancel — launch a long run, cancel it, assert terminal `cancelled`.
@@ -25,6 +27,17 @@
 #            with an endpoint_ip; a proxy-kind config against that deployment
 #            pinned to that tester runs with successes; DELETE both → the
 #            containers are gone (docker ps -a --filter label=networker.role).
+#   phase 6  windows runner — for every online agent whose os is windows
+#            (lab.sh up --windows-runners M: a Windows Server VM running the
+#            checkout's agent + the released tester, bound to a project_tester
+#            row so LaunchRequest.tester_id pins to it): its heartbeat carries
+#            os=windows + capabilities {chrome:false,tshark:false}; the phase-1
+#            network modes (incl. ping via IcmpSendEcho, http3) and the phase-2
+#            proxy matrix through the first Linux proxy target (nginx) run
+#            PINNED to it, execute on that agent (worker_id) and every mode
+#            has ≥1 success — "a Windows runner runs the same tests as a Linux
+#            runner"; modes that differ from the Linux runs are listed.
+#            Skipped with a note when the lab has no Windows runner.
 #
 # Exit non-zero on the first failed assertion, printing the run/attempt detail
 # needed to debug it (and `lab.sh logs runner-N` for the rest).
@@ -33,13 +46,14 @@
 #   --modes a,b,c     phase-2 matrix override (default below)
 #   --runs N          runs per mode (default 2)
 #   --timeout SECS    per-run wall-clock budget (default 300)
-#   --skip PHASES     comma list of phase numbers to skip (e.g. --skip 3,4,5)
+#   --skip PHASES     comma list of phase numbers to skip (e.g. --skip 3,4,5,6)
 #   --only PHASES     comma list of phase numbers to run
 #
 # Env overrides (all optional — set by lab.sh or by other lab front-ends such
 # as lab/native/lab-native.ps1, which drives this same matrix against native
 # Windows processes through Git Bash):
-#   LAB_STATE_ENV      path of the lab.env to source (default lab/.state/lab.env)
+#   LAB_STATE_ENV      path of the lab.env to source (default lab/.state/lab.env,
+#                      or lab/.state-N/lab.env for LAB_INSTANCE=N)
 #   LAB_TARGET_HOSTS   comma list: host of target-1, target-2, … (overrides the
 #                      NET_PREFIX+index addressing; LAB_TARGET_IPS is an alias)
 #   LAB_H3_OFF_STACKS  comma list of stacks whose HTTP/3 modes must be EXCLUDED
@@ -49,7 +63,9 @@
 set -uo pipefail
 
 LAB_DIR="$(cd "$(dirname "$0")" && pwd)"
-STATE_ENV="${LAB_STATE_ENV:-$LAB_DIR/.state/lab.env}"
+LAB_INSTANCE="${LAB_INSTANCE:-1}"
+STATE_SUFFIX=""; [ "$LAB_INSTANCE" != 1 ] && STATE_SUFFIX="-${LAB_INSTANCE}"
+STATE_ENV="${LAB_STATE_ENV:-$LAB_DIR/.state${STATE_SUFFIX}/lab.env}"
 [ -f "$STATE_ENV" ] || { echo "no lab state — run ./lab/lab.sh up first (or set LAB_STATE_ENV)" >&2; exit 2; }
 # shellcheck disable=SC1090
 . "$STATE_ENV"
@@ -68,9 +84,22 @@ POLL=3
 SKIP=""; ONLY=""
 # Deterministic + proxy-reachable modes. UDP modes (udp/stamp) go straight to
 # the endpoint's UDP ports on the same container, like the opened cloud ports.
-MATRIX_DEFAULT="tcp,dns,tls,tlsresume,http1,http2,http3,curl,download,upload,pageload,pageload2,pageload3,websocket,udp,stamp"
+MATRIX_DEFAULT="tcp,dns,tls,tlsresume,http1,http2,http3,curl,download,upload,download1,download2,download3,upload1,upload2,upload3,webdownload,webupload,udpdownload,udpupload,mthroughput,rpm,responsiveness,pageload,pageload2,pageload3,websocket,udp,stamp"
+# ↑ EVERY endpoint-capable catalog mode, not a hand-picked subset: the prod sweep
+# (v0.28.213) found download2/upload2 broken on every target since forever
+# (ALPN never advertised h2 for them) and a whole run aborting for
+# labelled-throughput-only workloads — both invisible here because the matrix
+# only ran `download`/`upload`. `browser*` are covered separately (they need
+# Chrome in the runner image), `path` separately (needs runs>=2 + blocked ICMP),
+# `apibench` is a runner-level mode and `sdkprobe` needs an SDK endpoint.
 MATRIX="$MATRIX_DEFAULT"
-NETWORK_MODES="tcp,dns,tls,tlsresume,http1,http2,http3,curl,ping"
+# Explicit sizes: every throughput mode needs them, and passing them here means a
+# regression in the agent's own fallback shows up as a FAILED PHASE, not a silent
+# skip (that fallback was the v0.28.213 bug).
+MATRIX_PAYLOADS="${MATRIX_PAYLOADS:-65536}"
+NETWORK_MODES="tcp,dns,tls,tlsresume,http1,http2,http3,curl,ping,pmtud,dualstack"
+# ↑ + pmtud/dualstack: L3 probes that work against a lab target (ICMP is allowed
+# on labnet) and regressed unnoticed in prod for lack of coverage.
 while [ $# -gt 0 ]; do
   case "$1" in
     --modes) shift; MATRIX="$1" ;;
@@ -78,7 +107,7 @@ while [ $# -gt 0 ]; do
     --timeout) shift; RUN_TIMEOUT="$1" ;;
     --skip) shift; SKIP=",$1," ;;
     --only) shift; ONLY=",$1," ;;
-    -h|--help) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,39p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown flag $1" >&2; exit 2 ;;
   esac; shift
 done
@@ -86,6 +115,10 @@ done
 if [ -t 1 ]; then G=$'\033[32m'; R=$'\033[31m'; Y=$'\033[33m'; C=$'\033[36m'; D=$'\033[2m'; N=$'\033[0m'; else G=""; R=""; Y=""; C=""; D=""; N=""; fi
 note() { printf '%s▸%s %s\n' "$C" "$N" "$*"; }
 pass() { printf '%s  ✓ %s%s\n' "$G" "$*" "$N"; }
+WARNS=0
+# A finding that is NOT a verdict on the code under test (e.g. the Windows VM
+# runs an older RELEASED tester): loud, counted, but it does not fail the lab.
+warn() { printf '%s  ! %s%s\n' "${Y:-$C}" "$*" "$N" >&2; WARNS=$((WARNS + 1)); }
 FAILS=0
 fail() { printf '%s  ✗ FAIL: %s%s\n' "$R" "$*" "$N" >&2; FAILS=$((FAILS + 1)); }
 die()  { fail "$@"; summary; exit 1; }
@@ -109,6 +142,9 @@ fi
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 STACKS_JSON="$LAB_DIR/../shared/http-stacks.json"
+# Git Bash on Windows: jq is a native .exe and cannot open MSYS paths (/d/a/…),
+# and the native lab exports MSYS_NO_PATHCONV=1 — hand it a Windows path.
+if command -v cygpath >/dev/null 2>&1; then STACKS_JSON="$(cygpath -m "$STACKS_JSON" 2>/dev/null || echo "$STACKS_JSON")"; fi
 stack_h3() { # stack_h3 STACK → 0 (true) / 1 (false); unknown → assume true
   # (not `// true`: jq's // treats false as missing)
   case ",$H3_OFF_STACKS," in *",$1,"*) return 1;; esac   # host-level override (LAB_H3_OFF_STACKS)
@@ -118,8 +154,36 @@ stack_h3() { # stack_h3 STACK → 0 (true) / 1 (false); unknown → assume true
 # HTTP/3 modes only make sense on stacks the installer configures with QUIC
 # (shared/http-stacks.json h3=true); on the others they are dropped from the
 # expected matrix rather than counted as regressions.
-H3_MODES="http3,pageload3,browser3"
-strip_h3_modes() { echo "$1" | tr ',' '\n' | grep -vxF -e http3 -e pageload3 -e browser3 | paste -sd, -; }
+# The list itself comes from shared/http-stacks.json `h3_modes` - the SAME
+# source the C# and dashboard gates read. Hardcoding it here drifted once the
+# phase-2 matrix grew to every catalog mode: download3/upload3 were left in on
+# h3-less hosts and reported as regressions (native Windows CI, v0.28.213).
+H3_MODES="$(jq -r '(.h3_modes // ["http3","pageload3","browser3"]) | join(",")' "$STACKS_JSON" 2>/dev/null)"
+[ -n "$H3_MODES" ] || H3_MODES="http3,pageload3,browser3"
+strip_h3_modes() {
+  echo "$1" | tr ',' '\n' | grep -vxF -f <(echo "$H3_MODES" | tr ',' '\n') | paste -sd, -
+}
+# A Windows VM runner executes the RELEASED networker-tester.exe (install.ps1
+# -Component tester): there is no cross-toolchain in the lab, so its tester lags
+# this checkout until a release catches up. A mode that fails ONLY on Windows is
+# therefore ambiguous - a Windows regression, or a fix that has not shipped yet.
+# These two helpers make the difference explicit instead of guessing.
+CHECKOUT_VERSION="$(sed -n 's/^version *= *"\([0-9][0-9.]*\)".*/\1/p' "$LAB_DIR/../Cargo.toml" | head -1)"
+win_tester_version() { # win_tester_version RUNNER_NAME -> "0.28.209" | ""
+  case "$1" in runner-*) ;; *) echo ""; return 0;; esac
+  "$LAB_DIR/lab.sh" windows-tester-version "$1" 2>/dev/null | tr -d '\r' | head -1
+}
+version_lt() { # version_lt A B -> 0 when A < B (numeric, dot-separated; bash 3.2)
+  [ "$1" = "$2" ] && return 1
+  local a b i=1 x y
+  for i in 1 2 3; do
+    x="$(echo "$1" | cut -d. -f$i)"; y="$(echo "$2" | cut -d. -f$i)"
+    x="${x:-0}"; y="${y:-0}"
+    [ "$x" -lt "$y" ] 2>/dev/null && return 0
+    [ "$x" -gt "$y" ] 2>/dev/null && return 1
+  done
+  return 1
+}
 stack_of() { echo "$TARGETS" | tr ',' '\n' | sed -n "${1}p"; }
 # lab.sh registers the windows target as its proxy stack (iis); the rest are 1:1.
 proxy_stack_of() { case "$1" in windows) echo iis;; *) echo "$1";; esac; }
@@ -167,11 +231,138 @@ per_mode_stats() { # per_mode_stats ATTEMPTS_JSON → "mode ok/n · …" and set
 broken_modes() { jq -r 'group_by(.protocol) | map({m:.[0].protocol, ok:(map(select(.success==true))|length)}) | [.[]|select(.ok==0)|.m] | join(",")' <<<"$1"; }
 first_errors() { jq -r '[.[]|select(.success==false)|"\(.protocol): \(.error_message // "?")"] | unique | .[0:6][]' <<<"$1"; }
 
+# Verdict for "modes with zero successes", aware of WHO executed the run.
+# Runs are dispatched freely (only `tester_id` pins, and the Linux runners stay
+# standalone on purpose so fan-out can spread), so ANY phase can land on the
+# Windows VM runner - and that runner executes the RELEASED tester, which lags
+# this checkout. Failing the lab for a fix that has not shipped yet is noise; so
+# is passing silently. Windows + older tester => warning naming both versions;
+# anything else => failure.
+#   broken_verdict LABEL BROKEN_MODES WORKER_ID ATTEMPTS_JSON
+# Returns 0 when the outcome was a warning (i.e. not counted as a failure).
+broken_verdict() {
+  local label="$1" broken="$2" worker="$3" att="$4" wname="" wos="" wtv=""
+  [ -n "$broken" ] || return 0
+  if [ -n "$worker" ] && [ "$worker" != "?" ]; then
+    wname="$(api GET "/api/projects/$PID/agents" 2>/dev/null \
+      | jq -r --arg w "$worker" '(if type=="array" then . else (.agents // .items // []) end)|[.[]|select(.agent_id==$w)][0]|"\(.name)|\(.os // "")"')"
+    wos="${wname#*|}"; wname="${wname%%|*}"
+  fi
+  if [ "$wos" = windows ]; then wtv="$(win_tester_version "$wname")"; fi
+  if [ -n "$wtv" ] && version_lt "$wtv" "$CHECKOUT_VERSION"; then
+    warn "$label: mode(s) with ZERO successes: $broken — this run executed on the WINDOWS runner $wname, whose tester is the RELEASED v$wtv (checkout v$CHECKOUT_VERSION): fixes not yet released cannot pass there"
+    first_errors "$att" | sed 's/^/      /'
+    return 0
+  fi
+  fail "$label: mode(s) with ZERO successes: $broken${wname:+ (worker $wname${wtv:+, tester v$wtv})}"
+  first_errors "$att" | sed 's/^/      /'
+  return 1
+}
+
+# ── phase 8: sdkprobe against the SDK target ─────────────────────────────────
+# `sdkprobe` is the one catalog mode that needs a CUSTOMER app carrying the
+# LagHound SDK (not a networker-endpoint, not a proxy stack), so it was the only
+# mode neither the lab nor the production sweep could exercise. The lab's `sdk`
+# target is the repo's own sample app; lab.sh registered it through
+# POST /sdk-endpoints, so the token is stored encrypted and dispatch splices it
+# in exactly as in production. Three assertions: the probe succeeds and reports
+# the SDK's Server-Timing, a WRONG token fails with the token/mount diagnosis
+# (the SDK answers 404 to unauthenticated callers by design), and the capability
+# gate refuses sdkprobe against a non-SDK target.
+phase8_sdkprobe() {
+  local run att ok_n
+  note "phase 8 — sdkprobe against the SDK target (config ${LAB_SDK_CONFIG_ID:0:8}, route ${LAB_SDK_ROUTE:-/laghound/echo})"
+  run="$(api POST "/api/v2/test-configs/$LAB_SDK_CONFIG_ID/launch" '{}' | jq -r '.run_id // .id // empty')"
+  [ -n "$run" ] || { fail "phase 8: launching the SDK endpoint config failed"; return 1; }
+  wait_run "$run" || fail "phase 8: sdkprobe run $run did not finish (last=$R_STATUS)"
+  att="$(attempts_of "$run")"
+  note "  status=$R_STATUS ok=$R_OK fail=$R_FAIL attempts=$(jq length <<<"$att")"
+  echo "    $(per_mode_stats "$att")"
+  [ "$R_STATUS" = "completed" ] || fail "phase 8: status '$R_STATUS' ${R_ERR:+— $R_ERR}"
+  ok_n="$(jq '[.[]|select(.protocol=="sdkprobe" and .success==true)]|length' <<<"$att")"
+  [ "$ok_n" -gt 0 ] || { fail "phase 8: no successful sdkprobe attempt"; first_errors "$att" | sed 's/^/      /'; }
+  # The probe's value is the SDK's own Server-Timing (app/total durations).
+  if [ "$(jq '[.[]|select(.protocol=="sdkprobe")|.server_timing]|map(select(. != null))|length' <<<"$att")" -eq 0 ]; then
+    fail "phase 8: sdkprobe succeeded but no server_timing was persisted — the SDK header was not parsed/stored"
+  else
+    note "  server_timing: $(jq -c '[.[]|select(.protocol=="sdkprobe")|.server_timing]|.[0]' <<<"$att")"
+  fi
+  record "phase 8  sdkprobe → $R_STATUS ok=$R_OK fail=$R_FAIL ($(per_mode_stats "$att"))"
+
+  # Negative: a wrong token must FAIL with the token/mount diagnosis, not a pass.
+  if [ -n "${LAB_SDK_BADTOKEN_CONFIG_ID:-}" ]; then
+    local brun batt bmsg
+    brun="$(api POST "/api/v2/test-configs/$LAB_SDK_BADTOKEN_CONFIG_ID/launch" '{}' | jq -r '.run_id // .id // empty')"
+    if [ -n "$brun" ]; then
+      wait_run "$brun" 300 || true
+      batt="$(attempts_of "$brun")"
+      bmsg="$(jq -r '[.[]|select(.protocol=="sdkprobe")|.error_message // ""]|.[0] // ""' <<<"$batt")"
+      note "  wrong-token run: status=$R_STATUS ok=$R_OK fail=$R_FAIL msg=${bmsg:0:90}"
+      # The tester writes UTF-8. If the agent decodes its pipes with the
+      # console code page (every Windows runner did until v0.28.214) an
+      # em-dash comes back mangled and the corruption is persisted. The
+      # signatures are built with printf so this file stays ASCII-only
+      # (Windows PowerShell 5.1 parses lab-native.ps1 the same way).
+      local moji_oem moji_latin1
+      moji_oem="$(printf '\316\223\303\207')"    # U+0393 U+00C7 - UTF-8 em-dash read as cp437
+      moji_latin1="$(printf '\303\242\302')"      # U+00E2 U+0082.. - UTF-8 read as cp1252
+      case "$bmsg" in
+        *"$moji_oem"*|*"$moji_latin1"*)
+          fail "phase 8: the persisted message is mojibake (${bmsg:0:60}) - the agent decoded the tester UTF-8 output with a non-UTF-8 code page" ;;
+      esac
+      if [ "$(jq '[.[]|select(.protocol=="sdkprobe" and .success==true)]|length' <<<"$batt")" -ne 0 ]; then
+        fail "phase 8: a WRONG SDK token produced a successful sdkprobe — the token is not being enforced"
+      else
+        pass "phase 8: wrong token rejected (${bmsg:0:60})"
+      fi
+      record "phase 8  sdkprobe wrong-token → $R_STATUS (rejected)"
+    fi
+  fi
+
+  # Gate: sdkprobe is meaningless against a proxy/endpoint target and must 422.
+  local dep gate
+  dep="$(api GET "/api/projects/$PID/deployments?limit=100" | jq -r '(if type=="array" then . else (.deployments // .items // []) end)|[.[]|select((.name // "")|startswith("lab-target-"))][0]|(.id // .deployment_id) // empty')"
+  if [ -n "$dep" ]; then
+    gate="$(api POST "/api/v2/projects/$PID/test-configs" \
+      "$(jq -nc --arg n "lab-p8-gate-$STAMP" --arg d "$dep" '{name:$n,endpoint:{kind:"proxy",proxy_endpoint_id:$d},workload:{modes:["sdkprobe"],runs:1,concurrency:1,timeout_ms:5000}}')" 2>&1 || true)"
+    case "$gate" in
+      *"sdk"*|*"SDK"*) pass "phase 8: sdkprobe on a proxy target rejected by the gate" ;;
+      *) fail "phase 8: sdkprobe against a proxy target was NOT rejected: $(head -c 160 <<<"$gate")" ;;
+    esac
+  fi
+  [ "$ok_n" -gt 0 ] && pass "phase 8 (sdkprobe)"
+}
+
 RESULTS=""
+# ── phase 7: labelled-throughput-only workload ───────────────────────────────
+# A workload with NO bare `download`/`upload` (e.g. the UI's "HTTP/3 throughput"
+# selection) must still run: the agent has to supply --payload-sizes for every
+# throughput mode, not just those two names. Prod aborted the whole run here
+# ("unparseable JSON") until v0.28.213.
+phase7_labelled_throughput() {
+  local ep="$1" label="$2" cfg run att broken
+  note "phase 7 — labelled-throughput-only workload through $label (no bare download/upload, no payload_sizes in the config)"
+  cfg="$(create_config "lab-p7-labelled-$label-$STAMP" "$ep" \
+    "$(jq -nc '{modes:["download1","download2","upload1","upload2","udpdownload","udpupload"],runs:1,concurrency:1,timeout_ms:15000}')")" || return 1
+  run="$(launch "$cfg")" || return 1
+  wait_run "$run" || fail "phase 7: run $run did not finish (last=$R_STATUS)"
+  att="$(attempts_of "$run")"
+  note "  status=$R_STATUS ok=$R_OK fail=$R_FAIL attempts=$(jq length <<<"$att")"
+  echo "    $(per_mode_stats "$att")"
+  [ "$R_STATUS" = "completed" ] || fail "phase 7: status '$R_STATUS' ${R_ERR:+— $R_ERR} (the agent must default --payload-sizes for labelled throughput modes)"
+  [ "$(jq length <<<"$att")" -gt 0 ] || fail "phase 7: no attempts — the tester aborted before writing JSON (payload-sizes regression?)"
+  broken="$(broken_modes "$att")"
+  local skew=0
+  broken_verdict "phase 7 ($label)" "$broken" "${R_WORKER:-}" "$att" && skew=1
+  record "phase 7  labelled-throughput ($label) → $R_STATUS ok=$R_OK fail=$R_FAIL${broken:+ BROKEN=$broken}"
+  { [ -z "$broken" ] || [ "$skew" = 1 ]; } && [ "$R_STATUS" = "completed" ] && pass "phase 7 ($label)"
+}
+
 summary() {
   echo
   printf '%s══ lab validation summary (%s) ══%s\n' "$C" "$STAMP" "$N"
   printf '%b' "$RESULTS"
+  [ "${WARNS:-0}" -gt 0 ] && printf '%s  %d WARNING(S) (not verdicts on this checkout - see the ! lines)%s\n' "$Y" "$WARNS" "$N"
   if [ "$FAILS" -eq 0 ]; then printf '%s  ALL PHASES PASSED%s\n' "$G" "$N"; else printf '%s  %d FAILURE(S)%s\n' "$R" "$FAILS" "$N"; fi
 }
 record() { RESULTS="${RESULTS}  $*\n"; }
@@ -199,7 +390,7 @@ if run_phase 1; then
   [ "$N1" -gt 0 ] || fail "phase 1: 0 attempts persisted (attempt persistence broken?)"
   [ "${R_OK:-0}" -gt 0 ] || fail "phase 1: 0 successful attempts"
   B1="$(broken_modes "$ATT1")"
-  if [ -n "$B1" ]; then fail "phase 1: mode(s) with zero successes: $B1"; first_errors "$ATT1" | sed 's/^/      /'; fi
+  broken_verdict "phase 1" "$B1" "${R_WORKER:-}" "$ATT1" || true
   record "phase 1  network probe → $R_STATUS ok=$R_OK fail=$R_FAIL ($(per_mode_stats "$ATT1"))"
   [ "$FAILS" -eq 0 ] && pass "phase 1"
 fi
@@ -209,14 +400,18 @@ if run_phase 2; then
   i=1; total="$(target_count)"; any_proxy=0
   while [ "$i" -le "$total" ]; do
     st="$(stack_of "$i")"
-    if [ "$st" != "rust" ]; then
+    # `rust` is the bare endpoint (phase 1) and `sdk` is a customer app behind no
+    # proxy at all - it is registered as an SDK endpoint, not a deployment, and
+    # phase 8 is what exercises it.
+    if [ "$st" != "rust" ] && [ "$st" != "sdk" ]; then
       any_proxy=1
       pst="$(proxy_stack_of "$st")"   # windows → iis
       lbl="$st"; [ "$pst" != "$st" ] && lbl="$st/$pst"
       DEP="$(api GET "/api/projects/$PID/deployments?limit=100" | jq -r --arg n "lab-target-${i}-${pst}" \
         '(if type=="array" then . else (.deployments // .items // []) end) | [.[]|select(.name==$n)][0] | (.id // .deployment_id) // empty')"
       [ -n "$DEP" ] || { fail "phase 2: deployment for target-$i ($lbl) not found (lab.sh up registers it)"; i=$((i+1)); continue; }
-      note "phase 2 — mode matrix through target-$i ($lbl) deployment ${DEP:0:8} at $(target_ip "$i"):$(jq -r --arg s "$pst" '[.stacks[]|select(.id==$s)][0].https_port // "?"' "$STACKS_JSON")"
+      DEP_HOST="$(api GET "/api/projects/$PID/deployments/$DEP" | jq -r '(.endpoint_hosts // [])[0] // empty')"
+      note "phase 2 — mode matrix through target-$i ($lbl) deployment ${DEP:0:8} at ${DEP_HOST:-$(target_ip "$i")}:$(jq -r --arg s "$pst" '[.stacks[]|select(.id==$s)][0].https_port // "?"' "$STACKS_JSON")${DEP_HOST:+ (endpoint_hosts → hostname dispatch, TLS SNI)}"
       STACK_MATRIX="$MATRIX"
       if ! stack_h3 "$pst"; then
         STACK_MATRIX="$(strip_h3_modes "$MATRIX")"
@@ -228,22 +423,25 @@ if run_phase 2; then
       MODES_JSON="$(jq -nc --arg m "$STACK_MATRIX" '($m|split(",")) + ["native"]')"
       CFG2="$(create_config "lab-p2-${pst}-t${i}-$STAMP" \
         "$(jq -nc --arg d "$DEP" --arg s "$pst" '{kind:"proxy",proxy_endpoint_id:$d,proxy_stack:$s}')" \
-        "$(jq -nc --argjson modes "$MODES_JSON" --argjson r "$RUNS" '{modes:$modes,runs:$r,concurrency:1,timeout_ms:15000,capture_mode:"headers-only",payload_sizes:[]}')")" || exit 1
+        "$(jq -nc --argjson modes "$MODES_JSON" --argjson r "$RUNS" --argjson ps "[$MATRIX_PAYLOADS]" '{modes:$modes,runs:$r,concurrency:1,timeout_ms:15000,capture_mode:"headers-only",payload_sizes:$ps}')")" || exit 1
       RUN2="$(launch "$CFG2")" || exit 1
       note "  run $RUN2 launched — waiting (matrix: $STACK_MATRIX + native)"
       wait_run "$RUN2" || fail "phase 2 ($lbl): run $RUN2 did not finish in ${RUN_TIMEOUT}s (last=$R_STATUS)"
       ATT2="$(attempts_of "$RUN2")"
       note "  status=$R_STATUS ok=$R_OK fail=$R_FAIL attempts=$(jq length <<<"$ATT2") worker=${R_WORKER:-?}"
       echo "    $(per_mode_stats "$ATT2")"
+      # Remembered for phase 6 (Windows runner vs Linux runner, same target).
+      if [ -z "${P2_LINUX_ATT:-}" ] && [ "$st" != windows ]; then P2_LINUX_ATT="$ATT2"; P2_LINUX_STACK="$pst"; P2_LINUX_WORKER="$R_WORKER"; fi
       case "$R_STATUS" in completed|partial) ;; *) fail "phase 2 ($lbl): status '$R_STATUS' ${R_ERR:+— $R_ERR}";; esac
       B2="$(broken_modes "$ATT2")"
-      if [ -n "$B2" ]; then fail "phase 2 ($lbl): mode(s) with ZERO successes through $pst: $B2"; first_errors "$ATT2" | sed 's/^/      /'; fi
+      B2SKEW=0
+      broken_verdict "phase 2 ($lbl, through $pst)" "$B2" "${R_WORKER:-}" "$ATT2" && B2SKEW=1
       NATIVE="$(jq '[.[]|select(.protocol=="native")]|length' <<<"$ATT2")"
       [ "$NATIVE" -eq 0 ] || fail "phase 2 ($lbl): 'native' produced $NATIVE attempt(s) — dispatch must DROP it (v0.28.120 filter)"
       NOTFOUND="$(jq '[.[]|select(.success==false and ((.error_message // "")|test("404")))]|length' <<<"$ATT2")"
       [ "$NOTFOUND" -eq 0 ] || fail "phase 2 ($lbl): $NOTFOUND attempt(s) got HTTP 404 through $pst — the proxy is not forwarding a route (v0.28.112 class)"
       record "phase 2  $lbl matrix → $R_STATUS ok=$R_OK fail=$R_FAIL${B2:+ BROKEN=$B2}"
-      [ -z "$B2" ] && [ "$NATIVE" -eq 0 ] && [ "$NOTFOUND" -eq 0 ] && pass "phase 2 ($lbl)"
+      { [ -z "$B2" ] || [ "$B2SKEW" = 1 ]; } && [ "$NATIVE" -eq 0 ] && [ "$NOTFOUND" -eq 0 ] && pass "phase 2 ($lbl)"
 
       # Windows target: also the BARE Windows networker-endpoint on :8443
       # (kind=network, like phase 1 against the rust target) — proves the
@@ -270,6 +468,24 @@ if run_phase 2; then
     i=$((i + 1))
   done
   [ "$any_proxy" = 1 ] || { note "phase 2 — no proxy targets (all rust) — skipped; use: lab.sh up --targets rust,nginx"; record "phase 2  (skipped: no proxy targets)"; }
+fi
+
+# ── phase 7 (runs with phase 2's first proxy target) ─────────────────────────
+if run_phase 7; then
+  i=1; t="$(target_count)"; done7=0
+  while [ "$i" -le "$t" ]; do
+    st="$(stack_of "$i")"
+    if [ "$st" != rust ] && [ "$done7" = 0 ]; then
+      DEP7="$(api GET "/api/projects/$PID/deployments?limit=100" | jq -r --arg n "lab-target-${i}-${st}" \
+        '(if type=="array" then . else (.deployments // .items // []) end) | [.[]|select(.name==$n)][0] | (.id // .deployment_id) // empty')"
+      if [ -n "$DEP7" ]; then
+        phase7_labelled_throughput "$(jq -nc --arg d "$DEP7" --arg s "$st" '{kind:"proxy",proxy_endpoint_id:$d,proxy_stack:$s}')" "$st"
+        done7=1
+      fi
+    fi
+    i=$((i + 1))
+  done
+  [ "$done7" = 1 ] || { note "phase 7 — no proxy target available — skipped"; record "phase 7  (skipped: no proxy target)"; }
 fi
 
 # ── phase 3: fan-out across runners ──────────────────────────────────────────
@@ -467,6 +683,171 @@ if run_phase 5; then
     fi
     record "phase 5  docker provider → tester=${T_STATE:-?}/${T_ALLOC:-?} deployment=${D_STATUS:-?}@${D_IP:-?} run=${R_STATUS:-?} ok=${R_OK:-0} cleanup=$([ -z "$LEFT" ] && echo clean || echo LEFTOVERS)"
     [ "$FAILS" -eq "$P5_FAILS_BEFORE" ] && pass "phase 5"
+  fi
+fi
+
+# ── phase 6: Windows runner — the same tests, executed on Windows ────────────
+if run_phase 6; then
+  # Windows runners: agents whose heartbeat says os=windows (v0.28.211+) or that
+  # lab.sh tagged so at registration, online, and bound to a project_tester
+  # (agent.tester_id) — the only handle the launch API pins with.
+  WIN_AGENTS="$(api GET "/api/projects/$PID/agents" | jq -c '(.agents // .) | [.[]|select(.status=="online" and ((.os // "")=="windows" or (.tags.os // "")=="windows"))]')"
+  WIN_N="$(jq length <<<"$WIN_AGENTS")"
+  if [ "${WIN_N:-0}" -eq 0 ]; then
+    note "phase 6 — no online Windows runner in this lab (lab.sh up --windows-runners 1) — skipped"
+    record "phase 6  (skipped: no windows runner)"
+  else
+    note "phase 6 — windows runner: $WIN_N online Windows agent(s): $(jq -r '[.[]|"\(.name)@\(.version // "?")"]|join(", ")' <<<"$WIN_AGENTS")"
+    P6_FAILS_BEFORE=$FAILS
+    # Modes whose verdict differs between the Linux and the Windows runner
+    # (same target) — reported per runner; a mode broken ONLY on Windows fails.
+    diff_modes() { # diff_modes LINUX_ATT WINDOWS_ATT → "mode: linux ok/n vs windows ok/n" per differing mode
+      jq -rn --argjson l "$1" --argjson w "$2" '
+        def stats: group_by(.protocol) | map({key:.[0].protocol, value:{ok:(map(select(.success==true))|length), n:length}}) | from_entries;
+        ($l|stats) as $L | ($w|stats) as $W
+        | [(($L|keys) + ($W|keys)) | unique[] | . as $m
+           | {m:$m, l:($L[$m] // {ok:-1,n:0}), w:($W[$m] // {ok:-1,n:0})}
+           | select((.l.ok > 0) != (.w.ok > 0))
+           | "\(.m): linux \(if .l.ok < 0 then "-" else "\(.l.ok)/\(.l.n)" end) vs windows \(if .w.ok < 0 then "-" else "\(.w.ok)/\(.w.n)" end)"] | .[]'
+    }
+    w=0
+    while [ "$w" -lt "$WIN_N" ]; do
+      WA="$(jq -c ".[$w]" <<<"$WIN_AGENTS")"; w=$((w + 1))
+      WNAME="$(jq -r '.name' <<<"$WA")"; WID="$(jq -r '.agent_id' <<<"$WA")"; WTESTER="$(jq -r '.tester_id // empty' <<<"$WA")"
+      WOS="$(jq -r '.os // empty' <<<"$WA")"; WARCH="$(jq -r '.arch // empty' <<<"$WA")"; WCAPS="$(jq -c '.capabilities // null' <<<"$WA")"
+      note "  $WNAME: agent $WID os=${WOS:-?} arch=${WARCH:-?} capabilities=$WCAPS tester=${WTESTER:-<none>}"
+      # 6a. identity: the heartbeat reports os=windows + an inventory without Chrome/tshark
+      [ "$WOS" = "windows" ] || fail "phase 6 ($WNAME): agent.os is '${WOS:-null}' — the heartbeat should report os=windows (v0.28.211 agent + control plane)"
+      if [ "$WCAPS" = "null" ]; then
+        fail "phase 6 ($WNAME): no capabilities reported on the heartbeat"
+      else
+        # The inventory must be reported as booleans; the VALUES depend on the
+        # host (the lab's dockur VMs have neither Chrome nor Wireshark, a GitHub
+        # windows-latest runner has Chrome) — so they are checked only when the
+        # lab itself created this runner (LAB_WINDOWS_RUNNERS > 0), else noted.
+        for cap in chrome tshark; do
+          v="$(jq -r ".$cap" <<<"$WCAPS")"
+          case "$v" in true|false) ;; *) fail "phase 6 ($WNAME): capabilities.$cap is '$v' — expected a boolean";; esac
+        done
+        if [ "${LAB_WINDOWS_RUNNERS:-0}" -gt 0 ]; then
+          [ "$(jq -r '.chrome' <<<"$WCAPS")" = "false" ] || fail "phase 6 ($WNAME): capabilities.chrome=true on a lab Windows runner (no Chrome is installed there — detection wrong?)"
+          [ "$(jq -r '.tshark' <<<"$WCAPS")" = "false" ] || fail "phase 6 ($WNAME): capabilities.tshark=true on a lab Windows runner (no Wireshark there — detection wrong?)"
+        fi
+      fi
+      # Pinning: lab.sh binds its Windows VM runners to a project_tester row so
+      # LaunchRequest.tester_id can target them. A standalone Windows agent
+      # (the native lab on windows-latest, or a hand-registered runner) has no
+      # tester row — then the runs are pinned implicitly only if it is the ONLY
+      # online agent (dispatch has nowhere else to go); otherwise it is a failure.
+      PIN_BODY='{}'
+      if [ -n "$WTESTER" ]; then
+        TROW="$(api GET "/api/projects/$PID/testers/$WTESTER")"
+        note "  tester $(jq -r '"\(.name) cloud=\(.cloud) power_state=\(.power_state) allocation=\(.allocation) installer_version=\(.installer_version // "?")"' <<<"$TROW")"
+        PIN_BODY="$(jq -nc --arg t "$WTESTER" '{tester_id:$t}')"
+      elif [ "${ONLINE:-1}" -eq 1 ]; then
+        note "  standalone Windows agent (no tester row) and the only online agent — runs are not pinned but must land on it"
+      else
+        fail "phase 6 ($WNAME): agent has no tester_id and $ONLINE agents are online — lab.sh binds Windows runners to a project_tester row so LaunchRequest.tester_id can pin runs to it"
+        continue
+      fi
+
+      # 6b. the phase-1 network modes, pinned to the Windows runner (target-1 rust endpoint).
+      CFG6N="$(create_config "lab-p6-win-network-${WNAME}-$STAMP" \
+        "$(jq -nc --arg h "$(target_ip 1)" '{kind:"network",host:$h,port:8443}')" \
+        "$(jq -nc --arg m "$NETWORK_MODES" --argjson r "$RUNS" '{modes:($m|split(",")),runs:$r,concurrency:1,timeout_ms:8000,insecure:true}')")" || exit 1
+      LRESP="$(api POST "/api/v2/test-configs/$CFG6N/launch" "$PIN_BODY")"
+      RUN6N="$(jq -r '.run_id // .id // empty' <<<"$LRESP")"
+      if [ -z "$RUN6N" ]; then
+        fail "phase 6 ($WNAME): launch pinned to tester $WTESTER failed: $(head -c 300 <<<"$LRESP")"
+      else
+        note "  run $RUN6N (network modes $NETWORK_MODES → target-1 $(stack_of 1)) pinned to $WNAME — waiting"
+        wait_run "$RUN6N" || fail "phase 6 ($WNAME): network run $RUN6N did not finish in ${RUN_TIMEOUT}s (last=$R_STATUS)"
+        ATT6N="$(attempts_of "$RUN6N")"
+        note "  status=$R_STATUS ok=$R_OK fail=$R_FAIL attempts=$(jq length <<<"$ATT6N") worker=${R_WORKER:-?}"
+        echo "    $(per_mode_stats "$ATT6N")"
+        [ "$R_STATUS" = "completed" ] || fail "phase 6 ($WNAME): network run status '$R_STATUS' (expected completed) ${R_ERR:+— $R_ERR}"
+        # A finished run with NO attempts is data loss, not a pass: it is what a
+        # saturated agent channel looked like before v0.28.214 (the run reported
+        # completed ok=0 while the tester had measured 22 successes).
+        [ "$(jq length <<<"$ATT6N")" -gt 0 ] || fail "phase 6 ($WNAME): network run finished with ZERO attempts — the agent's attempt frames never reached the control plane ${R_ERR:+($R_ERR)}"
+        [ "$R_WORKER" = "$WID" ] || fail "phase 6 ($WNAME): network run executed on worker ${R_WORKER:-?}, not the pinned Windows agent $WID (tester affinity broken?)"
+        B6N="$(broken_modes "$ATT6N")"
+        if [ -n "$B6N" ]; then fail "phase 6 ($WNAME): network mode(s) with zero successes on Windows: $B6N"; first_errors "$ATT6N" | sed 's/^/      /'; fi
+        if [ -n "${ATT1:-}" ]; then
+          D6N="$(diff_modes "$ATT1" "$ATT6N")"
+          if [ -n "$D6N" ]; then note "  differs from the Linux runner (phase 1):"; echo "$D6N" | sed 's/^/      /'; else note "  network verdicts identical to the Linux runner (phase 1) mode for mode"; fi
+        fi
+        record "phase 6  $WNAME network → $R_STATUS ok=$R_OK fail=$R_FAIL${B6N:+ BROKEN=$B6N} ($(per_mode_stats "$ATT6N"))"
+      fi
+
+      # 6c. the phase-2 proxy matrix through the FIRST Linux proxy target, pinned to the Windows runner.
+      PT=""; i=1; total="$(target_count)"
+      while [ "$i" -le "$total" ]; do st="$(stack_of "$i")"; if [ "$st" != rust ] && [ "$st" != windows ] && [ "$st" != sdk ]; then PT="$i"; break; fi; i=$((i + 1)); done
+      if [ -z "$PT" ]; then
+        note "  no Linux proxy target in this lab (targets=$TARGETS) — proxy matrix on the Windows runner skipped; use: lab.sh up --targets rust,nginx"
+        record "phase 6  $WNAME proxy → (skipped: no linux proxy target)"
+      else
+        pst="$(stack_of "$PT")"
+        DEP="$(api GET "/api/projects/$PID/deployments?limit=100" | jq -r --arg n "lab-target-${PT}-${pst}" \
+          '(if type=="array" then . else (.deployments // .items // []) end) | [.[]|select(.name==$n)][0] | (.id // .deployment_id) // empty')"
+        if [ -z "$DEP" ]; then fail "phase 6 ($WNAME): deployment for target-$PT ($pst) not found"; else
+          STACK_MATRIX="$MATRIX"; stack_h3 "$pst" || STACK_MATRIX="$(strip_h3_modes "$MATRIX")"
+          MODES_JSON="$(jq -nc --arg m "$STACK_MATRIX" '($m|split(",")) + ["native"]')"
+          CFG6P="$(create_config "lab-p6-win-${pst}-${WNAME}-$STAMP" \
+            "$(jq -nc --arg d "$DEP" --arg s "$pst" '{kind:"proxy",proxy_endpoint_id:$d,proxy_stack:$s}')" \
+            "$(jq -nc --argjson modes "$MODES_JSON" --argjson r "$RUNS" --argjson ps "[$MATRIX_PAYLOADS]" '{modes:$modes,runs:$r,concurrency:1,timeout_ms:15000,capture_mode:"headers-only",payload_sizes:$ps}')")" || exit 1
+          LRESP="$(api POST "/api/v2/test-configs/$CFG6P/launch" "$PIN_BODY")"
+          RUN6P="$(jq -r '.run_id // .id // empty' <<<"$LRESP")"
+          if [ -z "$RUN6P" ]; then
+            fail "phase 6 ($WNAME): proxy launch pinned to tester $WTESTER failed: $(head -c 300 <<<"$LRESP")"
+          else
+            note "  run $RUN6P (matrix $STACK_MATRIX + native → target-$PT $pst at $(target_ip "$PT")) pinned to $WNAME — waiting"
+            wait_run "$RUN6P" || fail "phase 6 ($WNAME): proxy run $RUN6P did not finish in ${RUN_TIMEOUT}s (last=$R_STATUS)"
+            ATT6P="$(attempts_of "$RUN6P")"
+            note "  status=$R_STATUS ok=$R_OK fail=$R_FAIL attempts=$(jq length <<<"$ATT6P") worker=${R_WORKER:-?}"
+            echo "    $(per_mode_stats "$ATT6P")"
+            case "$R_STATUS" in completed|partial) ;; *) fail "phase 6 ($WNAME): proxy run status '$R_STATUS' ${R_ERR:+— $R_ERR}";; esac
+            [ "$(jq length <<<"$ATT6P")" -gt 0 ] || fail "phase 6 ($WNAME): proxy run finished with ZERO attempts — the agent's attempt frames never reached the control plane ${R_ERR:+($R_ERR)}"
+            [ "$R_WORKER" = "$WID" ] || fail "phase 6 ($WNAME): proxy run executed on worker ${R_WORKER:-?}, not the pinned Windows agent $WID"
+            B6P="$(broken_modes "$ATT6P")"
+            if [ -n "$B6P" ]; then
+              WTV="$(win_tester_version "$WNAME")"
+              if [ -n "$WTV" ] && version_lt "$WTV" "$CHECKOUT_VERSION"; then
+                # The released tester in the VM is OLDER than this checkout, so a
+                # Windows-only failure may simply be a fix that has not shipped.
+                # Report it loudly, with both versions, but do not call it a
+                # regression - the next release is what settles it (and the
+                # native Windows lab / soak canary run the released build too).
+                warn "phase 6 ($WNAME): mode(s) with ZERO successes through $pst from Windows: $B6P — the VM's tester is the RELEASED v$WTV, older than this checkout (v$CHECKOUT_VERSION): fixes not yet released cannot pass here"
+                first_errors "$ATT6P" | sed 's/^/      /'
+                record "phase 6  $WNAME proxy/$pst → SKEW v$WTV < v$CHECKOUT_VERSION, unshipped-fix modes: $B6P"
+              else
+                fail "phase 6 ($WNAME): proxy mode(s) with ZERO successes through $pst from Windows: $B6P${WTV:+ (VM tester v$WTV, checkout v$CHECKOUT_VERSION)}"
+                first_errors "$ATT6P" | sed 's/^/      /'
+              fi
+            fi
+            NATIVE6="$(jq '[.[]|select(.protocol=="native")]|length' <<<"$ATT6P")"
+            [ "$NATIVE6" -eq 0 ] || fail "phase 6 ($WNAME): 'native' produced $NATIVE6 attempt(s) — dispatch must DROP it"
+            if [ -n "${P2_LINUX_ATT:-}" ] && [ "${P2_LINUX_STACK:-}" = "$pst" ]; then
+              D6P="$(diff_modes "$P2_LINUX_ATT" "$ATT6P")"
+              if [ -n "$D6P" ]; then note "  differs from the Linux runner (phase 2, $pst):"; echo "$D6P" | sed 's/^/      /'; else note "  proxy verdicts identical to the Linux runner (phase 2, $pst) mode for mode"; fi
+            fi
+            record "phase 6  $WNAME proxy/$pst → $R_STATUS ok=$R_OK fail=$R_FAIL${B6P:+ BROKEN=$B6P} ($(per_mode_stats "$ATT6P"))"
+          fi
+        fi
+      fi
+    done
+    [ "$FAILS" -eq "$P6_FAILS_BEFORE" ] && pass "phase 6 (windows runner)"
+  fi
+fi
+
+# ── phase 8 (sdkprobe — needs the lab's `sdk` target) ────────────────────────
+if run_phase 8; then
+  if [ -n "${LAB_SDK_CONFIG_ID:-}" ]; then
+    phase8_sdkprobe
+  else
+    note "phase 8 — no SDK target in this lab (add one: lab.sh up --targets rust,nginx,sdk) — skipped"
+    record "phase 8  (skipped: no sdk target)"
   fi
 fi
 

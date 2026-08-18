@@ -472,6 +472,17 @@ certbot --nginx --non-interactive --agree-tos \
     ${CERTBOT_DOMAINS} \
     --redirect 2>&1 || echo 'SSL_SKIPPED (DNS not ready — run certbot manually)'
 
+# Enable HTTP/2 on the TLS listener. certbot --nginx writes 'listen 443 ssl;'
+# WITHOUT http2, so the dashboard is served over HTTP/1.1 — and the SPA holds
+# several long-lived SSE streams, so it saturates the browser's 6-connection
+# cap and ordinary API calls stall ~5s. nginx 1.24 has no 'http2 on;' directive
+# (added in 1.25.1), so append the http2 PARAMETER to certbot's managed listen
+# lines. Idempotent (the '; # managed by Certbot' anchor won't re-match once
+# http2 is present); no-op if certbot was skipped.
+sed -i -E 's/(listen[^;]*ssl)(; # managed by Certbot)/\1 http2\2/' \
+    /etc/nginx/sites-available/dashboard 2>/dev/null || true
+nginx -t && systemctl reload nginx || echo 'HTTP2_SKIPPED (nginx -t failed; left HTTP/1.1)'
+
 systemctl enable certbot.timer
 systemctl start certbot.timer
 " -o none 2>&1 || echo "  SSL setup deferred (DNS may not be ready)"

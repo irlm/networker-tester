@@ -11,6 +11,674 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.227] - 2026-08-18
+
+- **Admin → System → Auth: the Public URL field no longer masks real errors.** `getSystemConfig` caught *every* error as "unset"; it now returns null only on the expected 404 (key not set) and surfaces genuine failures (401/5xx) instead of silently showing an empty field.
+
+### Fixed
+
+- **`HEAD /api/health` returned 405** (#765). The health route was registered
+  GET-only, so load balancers and health probes that use `HEAD` got a 405
+  instead of 200. The route now answers both `GET` and `HEAD` (identical
+  behavior; `HEAD` returns the same 200 with no body).
+- **Deleting a tester orphaned its `agent` rows** (#765). The
+  `agent → tester` FK is `ON DELETE SET NULL`, so removing a tester left its
+  agent rows behind (tester_id nulled, all offline) to accumulate forever. The
+  tester-delete path now reaps the tester's agent rows (and, via the existing
+  `agent_command` cascade, their commands) before removing the tester.
+- **Logs tab showed a misleading "No log entries" when log persistence isn't
+  set up** (#765). On a C#-only install (like prod) the `service_log` table
+  doesn't exist, so `GET /api/logs` returns `log_sink: "unconfigured"`. The
+  System dashboard Logs tab now reads that flag and renders an informative
+  empty-state ("Log persistence isn't configured for this deployment…") instead
+  of "No log entries", which is kept for the genuinely-empty-but-configured case.
+
+### Notes
+
+- **Deployment SIGTERM on control-plane restart** (#764) — assessed, no code
+  change here. install.sh runs as a child process of the control plane, so a
+  restart (e.g. during a deploy) SIGTERMs in-flight deployments (exit 143). The
+  Retry button (#766) is the shipped mitigation. See the PR description /
+  `docs/deploy-restart-resilience.md` for the design assessment and
+  recommendation.
+
+---
+
+## [0.28.226] - 2026-08-18
+
+### Added
+
+- **In-product admin canary panel.** Platform admins get a new **Canary** page
+  (`/admin/canary`, gated by the existing platform-admin RBAC) that triggers the
+  prod run-execution canary (`.github/workflows/soak-canary.yml`) without leaving
+  the product. A new control-plane endpoint `POST /api/admin/canary/dispatch`
+  fires the workflow via the GitHub REST `workflow_dispatch` API using a
+  server-side token (`CANARY_GITHUB_TOKEN`; repo overridable via
+  `CANARY_GITHUB_REPO`) — no token is ever hardcoded, and when it is absent the
+  endpoint returns a clear "not configured" error instead of failing opaquely.
+  `GET /api/admin/canary` reports whether dispatch is configured and the links to
+  view results. The panel also surfaces the canary's output: a new-tab link to
+  the GitHub Actions run log, and a new-tab link to the canary's in-product runs
+  (the Runs list gained a `?q=` config-name filter; canary configs are named
+  `soak-canary-*`).
+
+---
+
+## [0.28.225] - 2026-08-18
+
+### Fixed
+
+- **Full-Stack / App benchmark wizard: "Add schedule" was silently dropped on
+  multi-cell launches** (#763). A comparison group has one config per cell and
+  no group-level schedule, so the backend could not honor a schedule set in the
+  wizard — yet the control was shown and its cron accepted. The control is now
+  hidden whenever the run will fan out to a comparison group, so the UI never
+  promises what it can't keep. Single-cell runs are unchanged.
+- **Six legacy redirect routes 404'd to the project list** (#765). Routes two
+  URL segments deep (`/runs/new`, `/runs/new/probe`, `/tests/:jobId`,
+  `/vms/testers`, `/vms/endpoints`) used one too few `..` in their path-relative
+  `<Navigate>`, so they resolved to a non-existent path and fell through to the
+  `*` catch-all. Corrected the `..` depth; single-segment redirects were already
+  right and are untouched.
+
+### Security
+
+- **h2 `0.4.15` → `0.4.16`** — closes RUSTSEC-2026-0258 (unbounded empty DATA
+  frames, a remote DoS in the HTTP/2 stack, transitive via hyper). The advisory
+  landed 2026-08-18 and was failing the required `cargo audit` check repo-wide;
+  the bump is isolated (only h2 moved in the lockfile).
+
+### Added
+
+- **Retry on a failed deployment** (#764). A `failed`/`cancelled` deployment now
+  offers a one-click **Retry** that re-runs the same config as a fresh
+  deployment (install.sh is idempotent), instead of forcing a full rebuild
+  through the wizard.
+
+### Fixed
+
+- **The prod run-execution canary has been red for five straight nights (#728)
+  on a healthy production** — every run since 2026-08-13 died before it probed
+  anything, at `❌ CANARY FAIL: config create failed: {"error":"a test config
+  with this name already exists"}`. The canary is what proves runs actually
+  execute end to end, so prod has had no run-execution signal since 08-12.
+
+  The canary did find-or-create on one long-lived `soak-canary-probe` config.
+  That cannot work against this API: `GET /test-configs` returns only the **200
+  newest** rows while the name is `UNIQUE(project_id, name)` — so once 200 newer
+  configs existed the lookup missed a row the create then collided with, with no
+  way out. What supplied those 200 rows was the canary itself: it created a
+  config every night (probe, mode-coverage, and one per apibench/matrix cell)
+  and **never deleted any of them**, so it slowly buried its own probe config
+  and then wedged permanently.
+
+  - The probe config now takes a per-run unique name — no lookup, so nothing to
+    miss and nothing to collide with.
+  - The EXIT trap deletes the configs the run created. Only on **green**: runs
+    cascade from configs, so a red night stays inspectable.
+  - A startup reaper deletes leftover `soak-canary*` configs older than
+    `CANARY_CONFIG_TTL_DAYS` (default 7), draining the backlog already in prod —
+    including the wedged `soak-canary-probe` row — without touching anything a
+    human made.
+
+  Note the underlying trap is still there for other clients: a find-or-create
+  built on that 200-row list is unsound, and the list gives no way to ask
+  whether one name exists. Worth an exact-`name` filter on the endpoint.
+
+---
+
+## [0.28.224] - 2026-08-17
+
+### Fixed
+
+- **The second macOS-only flake of the day, same family as the first** —
+  `bind_h3_succeeds_on_a_free_udp_port_and_fails_on_a_taken_one` went red on
+  `QUIC bind on a free UDP port should succeed: bind QUIC endpoint: Address
+  already in use (os error 48)`: the assertion that a bind must SUCCEED, failing
+  because the port was taken. The test learned a free port by binding a probe
+  socket, reading its number, dropping it, and then re-binding that number — and
+  for the whole gap between the drop and the re-bind, nothing reserved the port.
+  On a loaded runner something else claimed it. macOS shows this far more often
+  than Linux because its ephemeral range is roughly half the size, so a
+  just-released port comes back around much sooner. The bind now asks for port
+  0 and lets the kernel choose during the bind itself, which is atomic — there
+  is no longer a window to lose. `Test (macos-latest)` is not a required check,
+  so this was reddening runs without blocking them.
+
+---
+
+## [0.28.223] - 2026-08-17
+
+### Fixed
+
+- **main went red on macOS right after v0.28.222 merged** —
+  `stamp_probe_computes_corrected_rtt_and_directional_loss` failed with
+  `corrected RTT should exclude processing: 8.46 ms` against a `< 5 ms` bound.
+  Not the probe: the **test's own reflector** slept its injected 5 ms delay
+  *inline in the recv loop*, so the moment that sleep overshot the sender's
+  10 ms cadence on a loaded runner, the following probes sat in the socket
+  buffer and were stamped with a late T2. Queueing time outside T3−T2 is
+  exactly what the corrected RTT cannot subtract, so the reflector's own
+  scheduling inflated the number being asserted on. The reflector now stamps
+  T2 at read time and serves the delay on a per-packet task, and the injected
+  delay is 40 ms against a 20 ms bound — measured corrected RTT is ~0.11 ms
+  under 8× CPU load, ~180× of headroom instead of the old ~5 ms.
+
+---
+
+## [0.28.222] - 2026-08-17
+
+### Fixed
+
+- **main was red:** `LeaderLockKeysTests.OpsServiceNames_All_covers_every_named_constant`
+  asserted `OpsServiceNames.All` equalled a **hand-copied list of the same
+  constants** — two manual lists checking each other, so a name missing from both
+  passed happily. That is precisely how `system-health` stayed missing long enough
+  to cost five nights of false soak-check failures (v0.28.221), and adding it to
+  `All` then broke the copy. The test now derives the expectation by reflection
+  over the constants and asserts `All` contains exactly them, no duplicates,
+  nothing stray. Verified by removing the entry and watching it fail.
+- **A manually started tester was deallocated within a minute.** `POST /start`
+  never touched `next_shutdown_at`, and the auto-shutdown sweep selects
+  `running AND idle AND next_shutdown_at < now` — so a tester stopped yesterday
+  still carried yesterday's slot and was shut down as soon as it came up
+  (reproduced against production: started, agent online, "auto-shutdown
+  completed" ~60 s later, which made a manual run impossible without disabling
+  the schedule). A stale or missing `next_shutdown_at` is now rolled forward to
+  the region's next slot on manual start.
+
+### Notes
+
+- A production sweep on the same day re-validated every catalog mode end to end
+  against Azure. With the runner's tester at v0.28.202 it reproduced exactly the
+  defects fixed earlier that day — `download2`/`upload2` "http2 error" (v0.28.213)
+  and `udpdownload` "Short response: 24 bytes" (v0.28.215) — and after the
+  auto-upgrade lifted it to v0.28.220 all four went 3/3, with `path` now honouring
+  the run timeout ("scan stopped at the 20000ms budget"). `path` itself stays 0/2
+  from an Azure runner by design: SLB SNAT eats ICMP, which the probe reports as
+  an environment verdict rather than a path failure.
+
+---
+
+## [0.28.221] - 2026-08-17
+
+### Fixed
+
+- **Production reported `all_healthy: false` roughly half of every hour, and the
+  nightly soak check failed five nights running (2026-08-12..16), on a background
+  loop that was working perfectly.** `SystemHealthService.TickInterval` is one
+  hour, but `system-health` was missing from `OpsEndpoints.ExpectedIntervals`, so
+  it fell back to the 10-minute default; the "healthy = ticked within 3x the
+  expected interval" rule then called an hourly loop stale after 30 minutes. Each
+  failed soak check also opened an issue — alert fatigue on a false alarm, which
+  is how a real outage gets missed.
+- **`system-health` was missing from `OpsServiceNames.All` too**, so every
+  consumer keyed on that array silently skipped it — including the first version
+  of the regression test, which iterated `All` and was therefore blind in exactly
+  the case it existed to catch. The test now derives the expected set by
+  **reflection over the name constants** and asserts each appears in BOTH
+  `ExpectedIntervals` and `All`. Verified by removing each entry in turn and
+  watching the test fail with the right message.
+
+---
+
+## [0.28.220] - 2026-08-17
+
+### Fixed
+
+- **`Release gap check`: usable signal, and it now catches the second failure
+  shape.** Its first real run reported **230 warnings** — this repo carries ~225
+  tags from before it published releases at all (`v0.1.0` … `v0.27.x`), which
+  buried the lines that matter. The check now ignores everything older than the
+  oldest published release (`v0.28.12`), a floor that needs no maintenance, and
+  reports 4 real gaps instead of 230.
+- That first run also exposed a hole in the check itself: a version can be
+  **merged and never tagged** — the auto-tag job dying before it pushes the tag —
+  which leaves nothing for a tag-vs-release comparison to find. `v0.28.210` is
+  exactly that, and it slipped straight through. The current version is now
+  asserted to have **both** a tag and a release, with the recovery named for each
+  shape.
+- Corrected history: the stranded-tag gaps are `v0.28.76`, `v0.28.182`,
+  `v0.28.191` and `v0.28.214`; `v0.28.210` is the never-tagged one. (v0.28.217's
+  commit message called `v0.28.210` a stranded tag — it was not.) All are
+  superseded and deliberately left alone; `docs/release-flow.md` §7 records them.
+
+---
+
+## [0.28.219] - 2026-08-17
+
+### Added
+
+- **`Release gap check`** (daily 07:31 UTC + `workflow_dispatch`) — compares every
+  `v*` tag against the published releases. A tag can outlive its release when the
+  auto-tag dispatch fails, which happened twice on 2026-08-17: `v0.28.214` was
+  lost permanently, and `v0.28.217` hit the identical failure an hour after the
+  recovery path shipped and was caught only because someone looked. Now nothing
+  has to look.
+  The check **fails** only when main's CURRENT version is the stranded one — the
+  case that re-running `Auto-tag & deploy` recovers. Older gaps are warnings and
+  are deliberately left alone, because dispatching `release.yml` for an old tag
+  would deploy that version over production. A GitHub API outage fails the job
+  rather than reporting phantom gaps. All four states were exercised against
+  stubbed `gh`/`git`, including the `bash -e` trap where a trailing
+  `[ ... ] && exit 1` would have failed the job on its false branch.
+
+---
+
+## [0.28.218] - 2026-08-17
+
+### Fixed
+
+- **`pageload3` now says WHY an asset is missing.** Every per-asset failure on the
+  HTTP/3 path collapsed into `None`, so a 49/50 page load reached the operator as
+  "1 asset request(s) did not complete" with no status code, no error, nothing —
+  the state the v0.28.213 note on `page_load_error` complained about. Each failure
+  mode now reports itself (`send_request`, request-stream `finish`,
+  `recv_response`, `recv_data`, or a non-2xx status with its body size), the
+  attempt's message names the first reason and its `detail` lists every distinct
+  one, deduplicated.
+- **A mid-body stream error no longer counts as a complete fetch.** `recv_data`
+  was read with `.ok().flatten()`, which makes an error indistinguishable from
+  end-of-body — a stream reset half-way through counted as a successful 2xx asset
+  with a short body. It is now reported with how many bytes had arrived.
+
+### Documented
+
+- **The IIS `pageload3` "dropped h3 stream" is ARR, not http.sys and not the
+  tester.** Measured against the lab's Windows/IIS target: 41 of 5250 HTTP/3 asset
+  requests (0.78%) get `502.7` / win32 `87` — an ARR *forwarder* failure in 1-5 ms
+  with no `SERVER-STATUS` in the IIS log, i.e. the backend was never contacted.
+  The same IIS serves 2300 h1/h2 tester requests and 633 curl requests (including
+  50 concurrent streams on one h2 connection) with zero failures, and `pageload3`
+  against the bare endpoint is 1000/1000 clean. ARR's `httpVersion=Http11` makes
+  no difference. The deciding experiment: the SAME 50 assets served by IIS as
+  STATIC files over h3 — http.sys only, no ARR — are 20/20 runs clean
+  (1000/1000 assets), while the dynamic ones through ARR drop in 10 of 20 runs.
+  So http.sys serves HTTP/3 correctly and the loss is in ARR's forwarder, where
+  its own `502.7` substatus says it is. A customer reverse-proxying h3 through
+  IIS loses ~0.8% of requests and the probe is right to report it. See
+  `lab/README.md` and `docs/probes.md`.
+
+---
+
+## [0.28.217] - 2026-08-17
+
+### Fixed
+
+- **A stranded tag can no longer lose its release.** `Auto-tag & deploy` pushes
+  the tag and dispatches `release.yml` in two separate API calls, so they can
+  half-succeed: on 2026-08-17 `v0.28.214` was tagged and `gh workflow run` then
+  failed on a GitHub 503, and because the guard asked "does the tag exist?", every
+  re-run skipped past the missing release — v0.28.214 has a tag and no release.
+  The job now keys on whether the **release** exists (so re-running it *is* the
+  recovery), retries the dispatch 5 times with backoff, distinguishes a genuine
+  404 from an API outage instead of guessing, and fails loudly with the exact
+  recovery command when it cannot dispatch. All five paths were exercised against
+  stubbed `gh`/`git`. `docs/release-flow.md` §3 documents the states, including
+  why filling an old gap by hand would roll production back (`release.yml`'s
+  deploy job is unconditional and checks out the tag it is given).
+
+---
+
+## [0.28.216] - 2026-08-17
+
+### Fixed
+
+- **The endpoint advertised HTTP/3 it did not have.** `h3_port` — which feeds the
+  router's Alt-Svc header *and* `/health` `services.h3`, the live capability
+  self-report the control plane gates h3 modes on — was set from config
+  unconditionally, while the QUIC socket was bound inside a spawned task. A bind
+  failure (UDP port already taken, no permission) was logged and forgotten: the
+  endpoint kept claiming h3, so launch flows offered h3 tests that could never
+  pass. The QUIC socket is now bound **before** anything advertises it (the same
+  up-front-bind rule the UDP services have followed since 2026-08-06); a failure
+  logs `HTTP/3 DISABLED — QUIC bind … failed` and reports `services.h3: null`.
+  `run_h3_server` is split into `bind_h3` + `serve_h3`.
+- **Integration harness: the HTTPS/QUIC port was only checked for TCP.** The
+  endpoint binds that same number on UDP for QUIC, so with the suite running in
+  parallel a sibling test's UDP server could already own it — the endpoint came
+  up without h3 and the gate blamed a 20 s timeout ("QUIC server … is not
+  bound"). This is the `pageload_h3_multiplexes_assets` flake that failed CI on
+  an unrelated PR today. The port is now verified free on **both** families.
+- **Test ports are claimed process-wide.** Every test in the integration binary
+  is a thread of one process, and the OS will hand a just-released ephemeral port
+  to the next asker, so two concurrent tests could receive the same number and
+  the loser's endpoint failed to bind (also seen as "UDP echo server did not
+  start within 10s"). A ledger makes that impossible between tests instead of
+  merely unlikely. 10 consecutive suite runs green.
+- **Readiness gates now quote the endpoint's own verdict.** On timeout each gate
+  (HTTP/3, UDP echo, UDP throughput, STAMP) appends `/health` `services`, where a
+  null entry means "that listener is not running" — so a collision reads as a
+  bind failure instead of "too slow", and an unhealthy endpoint says so.
+
+---
+
+## [0.28.215] - 2026-08-17
+
+Two WAN-only probe defects from the production sweep, reproduced locally in the
+Docker lab with `tc netem` (no cloud VMs) and fixed with the measurement in
+hand.
+
+### Fixed
+
+- **`udpdownload`/`udpupload` failed on any path that reorders packets.** The
+  server sends CMD_ACK microseconds before the data burst, so a jittery path
+  routinely delivers a data packet first — and `wait_for_ack` failed the probe on
+  the first datagram that was not the ACK. Worse, it read into a 24-byte buffer,
+  and `recv()` truncates a datagram to the buffer and returns the buffer length,
+  so a 1408-byte data packet was reported as the production sweep's
+  `Short response: 24 bytes`. The ACK wait now uses a full-size buffer, skips
+  stray datagrams until its deadline, and treats an early data packet as the
+  transfer having started (counting its bytes). Reproduced with
+  `netem delay 20ms 10ms reorder 50% 50%`: **4 of 8 attempts failed before, 8 of
+  8 pass after.**
+- **Reordering also fabricated packet loss.** `CMD_DONE` is the last datagram the
+  server sends, so it arrives while data is still in flight; the receiver broke
+  on it and counted everything in flight as path loss (47 datagrams sent,
+  "27 received", 40% loss, and a truncated transfer window that reported
+  300 MB/s over a 2 MB/s link). It now drains briefly after `CMD_DONE`, with the
+  throughput window still ending at the last data packet: **0.0% loss, 47/47.**
+- **A late CMD_ACK was counted as a data packet** whose sequence number was the
+  protocol magic — 48 datagrams "received" out of 47 sent, plus phantom bytes.
+  Control packets are now excluded from the data path, and `wait_for_report`
+  skips a late ACK instead of returning no server byte count.
+- **`path` ignored the run's timeout.** A filtered path (no ICMP anywhere) always
+  cost `max_ttl x per_hop_timeout` = 30 x 1 s per attempt, which is what the
+  sweep saw as a "hang" from the second iteration on; because the trace runs in
+  `spawn_blocking` it cannot be cancelled from outside, so it now bounds itself.
+  `PathProbeConfig.total_budget_ms` (set by the dispatcher from the per-attempt
+  timeout; `0` keeps the unbounded classic behaviour for direct library/CLI use)
+  stops the scan at the budget and reports honestly how far it got —
+  "no ICMP responses for any TTL 1..=10 (scan stopped at the 10000ms budget,
+  before TTL 30)". Measured with inbound ICMP dropped: **61 s → 20 s for
+  `--runs 2 --timeout 10`.**
+
+---
+
+## [0.28.214] - 2026-08-17
+
+### Added
+
+- **Lab: an SDK (`sdkprobe`) target** — `lab.sh up --targets rust,nginx,sdk`
+  runs the repo's own `sdk/csharp/Example` app with `LagHound.Endpoint` mounted
+  at `/laghound` and registers it exactly as the product does
+  (`POST /api/projects/{id}/sdk-endpoints`, token encrypted by the control
+  plane), plus a wrong-token twin for the negative test. New `validate.sh`
+  phase 8 asserts a successful probe with the app's `Server-Timing` persisted,
+  the token/mount diagnosis on a bad token, and the mode gate refusing
+  `sdkprobe` against a non-SDK target. `lab/images/sdk.Dockerfile`.
+- **Lab: `lab.sh windows-agent-refresh [runner-K]`** — publishes this
+  checkout's `Networker.Agent` (win-x64) into a *running* Windows VM, restarts
+  the `NetworkerAgent` task and waits for it to come back online (~40 s instead
+  of a 15-40 min Windows reinstall). Non-interactive SSH via
+  `SSH_ASKPASS_REQUIRE=force` (no `sshpass` dependency).
+- `run_finished` carries `attempts_ok` / `attempts_failed` (additive; older
+  agents omit them) so the run counters have a source that is not droppable.
+- **Lab: `lab.sh windows-tester-version [runner-K]`** and skew-aware phase 6 —
+  a Windows VM runner executes the *released* `networker-tester.exe`, so modes
+  that fail only there are ambiguous. When the VM's tester is older than the
+  checkout, phase 6 now reports the affected modes as a **warning naming both
+  versions** ("fixes not yet released cannot pass here") instead of a failure;
+  a Windows-only failure on an up-to-date tester still fails.
+
+### Fixed
+
+- **A Windows runner mangled non-ASCII tester output.** `RunExecutor`
+  redirected the tester's stdout/stderr without an encoding, so .NET decoded
+  its UTF-8 output with the console OEM code page and persisted mojibake into
+  `attempt.error_message` (`… returned 404 ΓÇö check token …`). Both streams are
+  now pinned to UTF-8.
+- **A chatty tester could delete a whole run's data.** Relayed stderr lines
+  shared the lossy fast path with attempt frames; 1757 log frames filled the
+  agent's outbound channel and dropped 883 attempt frames and every progress
+  frame with them, so the run landed as `completed ok=0 fail=0` with no
+  attempts. Log frames now use a low-priority tier that refuses to enqueue
+  above half the channel, the stderr relay is capped at 400 lines per run
+  (with a truncation notice), and the drop warning is rate-limited.
+- **Run counters no longer depend on droppable frames**: the control plane
+  takes `success_count`/`failure_count` from the terminal `run_finished` when
+  present, and a run whose agent measured attempts of which **none** were
+  persisted is stamped "The agent measured N attempt(s) but none reached the
+  control plane" instead of reading as a clean success.
+- **Windows runner VMs disable virtio UDP Segmentation Offload** like the
+  Windows *target* VMs already did (`lab-runner-setup.ps1` for fresh installs,
+  `windows-agent-refresh` for existing disks): with USO on, every multi-packet
+  QUIC *send* stalled on dockur's tap/DNAT path, so a Windows runner could
+  download over h3 fine while `upload3` timed out ("h3 send_data: Connection
+  error: Timeout"). The refresh path applies it through a SYSTEM scheduled task,
+  because setting it resets the adapter and kills the SSH session that asked
+  for it (a detached child dies with the session).
+- **`lab/validate.sh`: the HTTP/3 mode list now comes from
+  `shared/http-stacks.json` `h3_modes`** (the same source the C# and dashboard
+  gates use) instead of a hardcoded triple. With the phase-2 matrix expanded to
+  every catalog mode, `download3`/`upload3` were left in on h3-less hosts and
+  reported as regressions (red `lab-native.ps1` check on windows-latest).
+  Phase 6 also fails now on a finished run with zero attempts.
+
+---
+
+## [0.28.213] - 2026-08-17
+
+### Fixed
+- **`download2` / `upload2` never worked over TLS — on any target, ever.** The
+  ALPN advertisement matched only `Protocol::Http2`, so the labelled HTTP/2
+  throughput probes offered `http/1.1`, the server negotiated h1, and the h2
+  client then spoke h2 on that connection: instant `http2 error`. ALPN and the
+  `send_http2` dispatch now read one predicate (`speaks_http2`), with a test that
+  walks every protocol. Found by the production mode sweep (all five Linux
+  stacks + IIS), reproduced in the lab in 0.4 s, verified fixed at 223 MB/s
+  (`download2`) / 71 MB/s (`upload2`).
+- **A workload of only labelled throughput modes aborted the whole run.** The
+  agent's `--payload-sizes` fallback triggered on the bare names `download` /
+  `upload` only, so e.g. the UI's HTTP/3-throughput selection
+  (`http3,download3,upload3,pageload3`) shipped without sizes, the tester exited 1
+  before writing JSON, and the run failed as "unparseable JSON". The fallback now
+  covers every mode the tester's `has_throughput` covers, and lab validation
+  gained a phase (7) that runs exactly such a workload.
+- **A tester exiting before it writes JSON now reports WHY.** The agent keeps the
+  last stderr lines and puts them in the run's error (`Tester exited with code 1:
+  Error: --payload-sizes required …`) instead of only complaining about
+  unparseable stdout.
+- **`stamp` could never work on any cloud endpoint.** The endpoint listens on UDP
+  9997 (STAMP Session-Reflector) and self-reports it, but no provider opened that
+  port: Azure NSG / AWS security group / GCP firewall and all Windows firewall
+  rules now include 9997. Prod showed "All 50 STAMP probes lost" on every target;
+  the canary's Windows cell re-enables `stamp`.
+- **A tester stranded in `provisioning` by a control-plane restart now recovers.**
+  Every deploy restarts the control plane, killing the create-path task; the row
+  stayed `provisioning` forever — unusable in the UI and skipped by auto-shutdown
+  (which only acts on `running`), so the VM billed on. The create path now owns
+  its row for the flow's lifetime, and a heartbeat from the bound agent
+  reconciles an UNOWNED `provisioning` row to `running` (install is provably done
+  when its agent is talking). Seen live in prod during the 0.28.211 deploy.
+- **A deployment interrupted by a control-plane restart says so.** `install.sh` is
+  a child process, so a restart kills it mid-deploy; the run reported a bare
+  "install.sh exited with code 143". It now reports the signal, the cause and the
+  retry, and points at the orphan sweep for any VM already created.
+- **A wedged probe can no longer stall a run indefinitely.** Short diagnostic
+  modes (tcp/dns/tls/http*/ping/path/pmtud/dualstack/udp/stamp/websocket/curl/
+  sdkprobe) get a per-attempt cap (10× the request timeout, floor 120 s) and
+  record an explained failure instead of hanging: prod had a `path` probe (runs=2,
+  ICMP fully blocked) return an error on iteration 1 and never return on
+  iteration 2, leaving the run `running` with no progress for 22 minutes.
+  Long-by-design families (throughput, page-load, browser, rpm, responsiveness,
+  mthroughput) stay uncapped.
+- **The watchdog now reaps a run that stops progressing even when its agent is
+  online** (`DASHBOARD_RUN_NO_PROGRESS_SECS`, default 15 min, clamped 120 s…6 h,
+  `0` disables) — the counterpart to the cap above, and the reason that 22-minute
+  hang needed a manual cancel.
+- **`GET /api/logs` and `/api/logs/stats` returned 500 in every installation**, so
+  the Logs page was dead everywhere (and hid the tester stderr this very sweep
+  needed). `service_log` is the retired Rust dashboard's table and no C# migration
+  creates it; both routes now degrade to an empty, `log_sink: "unconfigured"`
+  result on 42P01/42703/insufficient-privilege, like `UrlTestsEndpoints` already
+  did, and `/api/logs/pipeline-status` reports `unconfigured` instead of a
+  hard-coded `healthy`.
+- **A failed page-load attempt now carries an error.** A 49/50-asset page load is
+  a failure by the all-assets rule but landed with `error: null` and nothing to
+  act on; all five page-load attempt builders now attach
+  "49/50 assets fetched — 1 asset request(s) did not complete…". Surfaced by
+  `pageload3` through IIS, where http.sys occasionally drops one of 50 concurrent
+  h3 streams (prod and lab both).
+
+### Changed
+- `lab/validate.sh` phase 2 runs **every** endpoint-capable catalog mode (was a
+  hand-picked subset that excluded `download1/2/3`, `upload1/2/3`, `webdownload`,
+  `webupload`, `udpdownload`, `udpupload`, `mthroughput`, `rpm`,
+  `responsiveness`) and the network phase adds `pmtud` + `dualstack`, with
+  explicit `payload_sizes`. Those gaps are exactly why the two tester/agent bugs
+  above reached production while the lab stayed green.
+
+---
+
+## [0.28.212] - 2026-08-17
+
+### Added
+- **Prod canary: optional Windows Server + IIS cell (phase 5).** `CANARY_WINDOWS=1`
+  / workflow input `windows=1` (on by default on the weekly Sunday run)
+  provisions one Windows+IIS endpoint through the real deploy path and asserts
+  every deterministic proxy mode succeeds through IIS — in particular
+  `http2`/`pageload2` (the tester's h2 `:scheme`/`:authority` fix in 0.28.208:
+  http.sys had been RST-ing every HTTP/2 probe, invisible to the Linux-only
+  canary) and `websocket` (IIS payload `/ws` route). h3 modes are excluded
+  (IIS QUIC needs an SNI hostname binding — see `shared/http-stacks.json`).
+
+---
+
+## [0.28.211] - 2026-08-16
+
+### Added
+- **HTTP/3 through IIS on the managed path** — proxy targets are now
+  dispatched **by hostname**, so the tester's TLS/QUIC ClientHello carries SNI
+  and http.sys completes the QUIC handshake (it never does for an IP literal —
+  RFC 6066 has no SNI for IPs; lab-measured in v0.28.208). Pieces:
+  - **Schema V050** `deployment.endpoint_hosts` (JSONB, nullable): array
+    **parallel** to `endpoint_ips` — element *i* is endpoint *i*'s resolvable
+    DNS name (Azure `<label>.<region>.cloudapp.azure.com` from the public-IP
+    DNS label, AWS `ec2-….compute.amazonaws.com`, the docker provider's
+    container name, the lab's `target-N.lab`) or null when the provider gave
+    none (GCP, lan). `endpoint_ips` is untouched (UI cards, health/version
+    probes, the teardown reverse lookup keep keying off it); pre-V050 rows
+    keep resolving by IP.
+  - **DeployRunner** records the hostname: install.sh's deploy prints one
+    machine-readable `endpoint_host: <fqdn> (<ip>)` line per endpoint that has
+    a cloud DNS name (Azure/AWS; nothing for GCP), the docker provider records
+    the container name; `FinishAsync` persists both arrays.
+  - **Dispatch** (`RunDispatcher.ResolveProxyEndpointAsync`, the orchestrator's
+    pending→network rewrite + readiness gate) resolve through
+    `EndpointAddressing.PreferredHost`: `endpoint_hosts[i]` when recorded for
+    the first addressed endpoint, else `endpoint_ips[i]`. The teardown-deferral
+    reference match considers both forms. `GET …/deployments` exposes
+    `endpoint_hosts`.
+  - **Installer**: the IIS payload (`install.sh _iis_setup_powershell` — Azure
+    run-command + AWS UserData — and `install.ps1 -Setup iis`) already binds
+    an SNI hostname listener + certificate SAN when given a name; AWS never
+    had one at UserData time, so with no `-Fqdn` the payload now asks EC2 IMDS
+    (IMDSv2, 2 s budget) for the instance's public DNS — the exact name the
+    control plane records and dispatches to.
+  - **`shared/http-stacks.json`: `iis` back to `h3: true`** (C#/TS/Rust
+    manifest tests, `docs/probes.md`); the config-create 422 / UI grey-out /
+    matrix trimming gates now offer `http3`/`pageload3`/`browser3`/
+    `download3`/`upload3` on IIS.
+  - **Lab**: every target gets a labnet DNS alias `target-N.lab`; the Windows
+    VM's IIS is set up with `install.ps1 -Setup iis -Fqdn target-N.lab` and its
+    deployment is registered with `endpoint_hosts:["target-N.lab"]`, so
+    validate phase 2 runs the full iis matrix incl. h3 by hostname
+    (`http3 2/2 · pageload3 2/2` measured). A VM disk installed by an older
+    `lab.sh` is upgraded in place — `up` checks the certificate served for
+    SNI `target-N.lab` and re-runs the installer's IIS setup inside the VM
+    over SSH when the name is missing (`lab.sh windows-iis-refresh`).
+
+- **Lab: Windows Server VM runners** — `lab.sh up --runners N
+  --windows-runners M` adds M dockur/windows (QEMU + KVM) VMs numbered
+  `runner-(N+1)..runner-(N+M)` next to the Linux runner containers, on the
+  same pattern as the Windows target: first boot runs the checkout's
+  `install.ps1 -Yes -Component tester` (the RELEASED
+  `networker-tester.exe` — Windows binaries can't be cross-built on the Linux
+  host) plus **the C# agent published from the checkout** (`Networker.Agent`
+  win-x64 self-contained, built in the dotnet SDK image with BuildKit
+  `--output`, or with the host dotnet via `LAB_WIN_AGENT_BUILD=host`), then
+  runs the agent as a **SYSTEM `schtasks /SC ONSTART` task** with the cloud
+  bootstraps' `AGENT_DASHBOARD_URL` / `AGENT_API_KEY` (+ `AGENT_NAME`,
+  `AGENT_TESTER_PATH`) contract, so a `down` + `up` reboot reconnects on its
+  own. `lab.sh` mints the key and agent row like for Linux runners AND binds
+  the agent to a `project_tester` row (cloud docker, region lab, power_state
+  running, os windows), because the public launch API pins a run to a runner
+  only through `LaunchRequest.tester_id`. `status` shows os / capabilities /
+  tester per runner; `wait-windows`, `windows-log runner-K`, `windows-ssh
+  runner-K` cover runners too. Persistent disk `nwk-lab[N]_windows-runner-
+  storage-K`; console `LAB_WINDOWS_VIEWER_PORT+10+K-1`. Files:
+  `lab/images/windows/oem-runner/`, `lab/images/agent-win.Dockerfile`.
+- **Lab: `validate.sh` phase 6 — Windows runner runs the same tests.** For
+  every online agent with `os=windows` (bound tester): asserts the heartbeat
+  reports `os=windows` and `capabilities {chrome:false,tshark:false}`, then
+  launches the phase-1 network modes (tcp,dns,tls,tlsresume,http1,http2,
+  http3,curl,ping — ping via IcmpSendEcho on Windows) and the phase-2 proxy
+  matrix through the first Linux proxy target (nginx: incl. http3/pageload3,
+  websocket, udp, stamp) **pinned to it** (`tester_id`), asserts the run
+  executed on that agent (`worker_id`) with every mode ≥1 success, `native`
+  dropped, and prints any mode whose verdict differs from the Linux runner's
+  phase-1/2 runs on the same target. Skipped with a note without a Windows
+  runner. Phases 1-5 unchanged (fan-out now spreads across Linux + Windows).
+- **Lab: multiple instances** — `LAB_INSTANCE=N` (default 1) → compose
+  project `nwk-lab` / `nwk-labN`, `LAB_NET_PREFIX` `172.31.(99+N)`, host ports
+  5030 / 8088 / 55432 shifted by N-1 (Windows consoles by 100·(N-1)), state
+  in `lab/.state[-N]`, topology in `lab/.generated[-N]`, per-project volume
+  names, and the control plane's Docker (local) provider joins that
+  instance's network (`DASHBOARD_DOCKER_NETWORK=${LAB_PROJECT}_labnet`).
+  `validate.sh` follows `LAB_INSTANCE` too. Everything else — `LAB_CP_PORT`
+  & co — still overrides. Plus `LAB_IMAGE_TAG` (default `local`) to give a
+  checkout its own image tags, and `lab.sh compose <args>` (raw compose with
+  the instance's project/files/env).
+- **Agent heartbeat carries `os` + `arch`** (additive, omitted when null;
+  the `health` verb's vocabulary: `windows|linux|macos`, `x86_64|aarch64|…`);
+  the control plane persists them on `agent.os` / `agent.arch` (guarded,
+  steady-state heartbeat stays write-free) so a mixed Linux + Windows runner
+  pool is visible per runner in `GET /api/projects/{id}/agents` — nothing had
+  ever written those columns.
+
+### Fixed
+- **Lab Windows VM: multi-packet QUIC stalled** (`pageload3` 0/N against IIS
+  and the bare Windows endpoint, ~1 s QUIC handshakes — the "sporadic
+  H3_INTERNAL_ERROR" noted in v0.28.208): the guest's virtio NIC ships with
+  UDP Segmentation Offload on and the USO super-datagrams msquic emits do not
+  survive dockur's tap/DNAT path. `lab-setup.ps1` and the refresh script now
+  disable USO on the adapter (persists across reboots); QUIC handshakes are
+  ~1-2 ms and pageload3 is 50/50. dockur/virtio-specific — cloud VMs
+  (Hyper-V netvsc / ENA) are not affected.
+- **Config-create gate applies the target's LIVE capabilities** (rule 3,
+  `POST /api/v2/projects/{id}/test-configs`). For `proxy` targets the
+  server now also consults the endpoint's `/health` `services`
+  self-report — the udp / stamp / UDP-throughput listeners can be
+  disabled per instance, and IIS / other proxies may not forward every
+  route — and rejects a mode the target cannot serve with **422** and the
+  endpoint's own reason (the text the wizard already shows, e.g.
+  `'udp' UDP echo listener disabled on this target`); the message names
+  the reporting host(s) and the report's age. The kind and HTTP/3-by-stack
+  rules are unchanged and still win when they apply.
+- **Never slow, never flaky**: the create path reads a per-host cache
+  only (`LiveCapabilityCache`, 90 s TTL) and never probes — a miss or a
+  stale entry fails OPEN (kind / stack rules still apply) and queues ONE
+  background refresh so the next attempt is informed. The deployment
+  `GET …/deployments/{id}/capabilities` route (the wizard's live probe)
+  writes through to the cache, so a config created from the UI is
+  normally gated at zero network cost; a multi-host deployment is
+  narrowed only when EVERY host has a fresh report and all of them say a
+  mode is off (the wizard's rule). The response now also carries
+  `live_capabilities_age_secs` / `live_capabilities_ttl_secs` so a client
+  knows how long the server will trust that snapshot.
+- Docs: `docs/probes.md` capability table names the third axis and its
+  fail-open contract.
+
+### Changed
+- `lab.sh up --runners N` keeps meaning N **Linux** runners; the state file's
+  `LAB_RUNNERS` is the total (N + Windows), `LAB_WINDOWS_RUNNERS` the Windows
+  count. Windows target consoles: the first target on
+  `LAB_WINDOWS_VIEWER_PORT`, further Windows targets +1 each (was: every
+  Windows target on the same host port).
+
+---
+
 ## [0.28.209] - 2026-08-16
 
 ### Fixed
@@ -2844,7 +3512,6 @@ convention** — see Changed.
   `example.com` hit `example.com/health` → 404 → false "failed". The probe now
   submits the URL as entered (root by default; `toProbeUrl`), which the agent
   uses verbatim; the bare host is kept only for the watchlist display/grouping.
-
 
 
 ### Fixed

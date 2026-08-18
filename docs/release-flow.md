@@ -45,8 +45,25 @@ missing or inconsistent. Branch protection also requires these checks:
 On every push to `main`, the `Auto-tag & deploy` job (ci.yml) reads the version
 from `Cargo.toml`. If the tag `vX.Y.Z` does not exist yet, the job creates and
 pushes it. The job then dispatches `release.yml` with that tag. A tag that the
-Actions token pushes does not trigger a workflow on its own. If the tag already
-exists — for example, after a docs-only merge with no bump — nothing happens.
+Actions token pushes does not trigger a workflow on its own.
+
+The job keys on whether the **release** exists, not the tag, because tagging and
+dispatching are two API calls that can half-succeed. On 2026-08-17 the tag
+`v0.28.214` pushed and `gh workflow run` then died on a GitHub 503, and the old
+"tag exists → skip" guard meant every re-run walked straight past the missing
+release: **v0.28.214 has a tag and no release, permanently.** Now:
+
+| state | what happens |
+|---|---|
+| release published | nothing (a docs-only merge with no bump lands here) |
+| tag exists, no release | re-dispatch `release.yml` — re-running the job is the recovery |
+| no tag | tag, push, dispatch (5 attempts with backoff) |
+| release lookup itself failing (API down) | job fails without guessing; re-run it later |
+
+**Do not** dispatch `release.yml` for an OLD tag to fill a gap: its `deploy` job
+is unconditional and checks out that tag, so it would roll production back to
+that version. A superseded gap (like v0.28.214, whose code shipped in v0.28.215)
+is better left alone.
 
 ## 4. The release graph (release.yml)
 
@@ -138,6 +155,24 @@ relevant only during the decommission soak window.
 - The nightly `Prod soak check` workflow (06:47 UTC) validates `/api/health`,
   `/api/health/background` (`all_healthy`), and the queue depth. It also confirms
   that the retired Rust services stay inactive.
+- The daily `Release gap check` (07:31 UTC, also `workflow_dispatch`) compares
+  every `v*` tag against the published releases, because a release can go missing
+  in two ways (§3):
+
+  | shape | cause |
+  |---|---|
+  | tag exists, no release | the tag pushed and the `release.yml` dispatch failed |
+  | no tag at all | the auto-tag job died or was cancelled before tagging |
+
+  It **fails** only for main's CURRENT version, in either shape — that is the
+  recoverable case (re-run `Auto-tag & deploy`). Older gaps are warnings and must
+  be left alone: dispatching `release.yml` for an old tag deploys that version
+  over production. Tags older than the first published release (`v0.28.12`) are
+  ignored; this repo carries ~225 of them.
+
+  Known historical gaps, all superseded and deliberately left alone: `v0.28.76`,
+  `v0.28.182`, `v0.28.191`, `v0.28.214` (tag, no release) and `v0.28.210`
+  (merged, never tagged).
 
 ## Dependency updates (Dependabot)
 

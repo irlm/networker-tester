@@ -65,7 +65,18 @@ public sealed record HeartbeatMessage(
     // from pre-0.28.208 agents (null) — the row's stored inventory is left as is.
     [property: JsonPropertyName("capabilities")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    AgentCapabilities? Capabilities = null
+    AgentCapabilities? Capabilities = null,
+    // Additive (v0.28.211+): the runner's host OS family ("windows"|"linux"|
+    // "macos") and CPU architecture ("x86_64"|"aarch64"|…), as the agent's
+    // `health` verb reports them. Absent from older agents (null) — the row's
+    // agent.os / agent.arch are left as they are (nothing else ever wrote them,
+    // so a Windows runner was indistinguishable from a Linux one in the list).
+    [property: JsonPropertyName("os")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? Os = null,
+    [property: JsonPropertyName("arch")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? Arch = null
 ) : AgentMessage;
 
 /// <summary>Runner tool inventory (<c>{"chrome":bool,"tshark":bool}</c>) —
@@ -125,7 +136,12 @@ public sealed record RunFinishedMessage(
     [property: JsonPropertyName("run_id")] Guid RunId,
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("artifact")] BenchmarkArtifactPayload? Artifact,
-    [property: JsonPropertyName("envelope")] JsonElement? Envelope = null
+    [property: JsonPropertyName("envelope")] JsonElement? Envelope = null,
+    // Authoritative end-of-run totals (additive, v0.28.214+): the agent's own
+    // count of parsed attempts. Null from older agents, in which case the
+    // counters keep coming from the (lossy) run_progress stream only.
+    [property: JsonPropertyName("attempts_ok")] int? AttemptsOk = null,
+    [property: JsonPropertyName("attempts_failed")] int? AttemptsFailed = null
 ) : AgentMessage;
 
 /// <summary>

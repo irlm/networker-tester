@@ -40,13 +40,18 @@ pub mod server {
     // Entry point
     // ─────────────────────────────────────────────────────────────────────────
 
-    pub async fn run_h3_server(
-        cert_pem: Vec<u8>,
-        key_pem: Vec<u8>,
-        addr: SocketAddr,
-    ) -> anyhow::Result<()> {
+    /// Bind the QUIC socket, SEPARATELY from serving it.
+    ///
+    /// The caller binds before the endpoint advertises HTTP/3 (`/health`
+    /// `services.h3`, Alt-Svc): a bind that fails inside a spawned task left the
+    /// endpoint claiming h3 it did not have, so the control plane offered h3
+    /// modes that could not work and the integration harness saw a port
+    /// collision as a 20 s "QUIC server never answered" timeout. Same reasoning
+    /// as the UDP services in `lib.rs`, which have bound up-front since
+    /// 2026-08-06.
+    pub fn bind_h3(cert_pem: &[u8], key_pem: &[u8], addr: SocketAddr) -> anyhow::Result<Endpoint> {
         let quinn_cfg =
-            build_quinn_server_config(&cert_pem, &key_pem).context("build QUIC server config")?;
+            build_quinn_server_config(cert_pem, key_pem).context("build QUIC server config")?;
         let endpoint = Endpoint::server(quinn_cfg, addr).context("bind QUIC endpoint")?;
 
         info!(
@@ -54,6 +59,11 @@ pub mod server {
             addr.port()
         );
 
+        Ok(endpoint)
+    }
+
+    /// Serve an already-bound QUIC endpoint (accept loop).
+    pub async fn serve_h3(endpoint: Endpoint) -> anyhow::Result<()> {
         let conn_permits = Arc::new(Semaphore::new(MAX_CONNECTIONS));
         while let Some(incoming) = endpoint.accept().await {
             // Acquire before spawning: at the connection cap, refuse the new
@@ -488,5 +498,57 @@ pub mod server {
         let mut u: libc::rusage = unsafe { std::mem::zeroed() };
         unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut u) };
         (u.ru_nvcsw, u.ru_nivcsw)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::net::UdpSocket;
+
+        fn test_cert() -> (Vec<u8>, Vec<u8>) {
+            let key = rcgen::KeyPair::generate().unwrap();
+            let cert = rcgen::CertificateParams::new(vec!["localhost".into()])
+                .unwrap()
+                .self_signed(&key)
+                .unwrap();
+            (cert.pem().into_bytes(), key.serialize_pem().into_bytes())
+        }
+
+        /// The QUIC bind must be observable by the caller instead of failing
+        /// inside a spawned task: `/health` `services.h3` and the Alt-Svc header
+        /// are promises the endpoint can only keep once this succeeded.
+        // quinn's Endpoint::server needs a reactor even though it is sync — the
+        // real caller (endpoint startup) is already inside one.
+        #[tokio::test]
+        async fn bind_h3_succeeds_on_a_free_udp_port_and_fails_on_a_taken_one() {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            let (cert, key) = test_cert();
+
+            // Free port: bind must succeed. Port 0 makes the KERNEL pick the
+            // free port as part of the bind itself, which is atomic. Asking for
+            // a specific port instead means first learning that a port is free
+            // and only then binding it — and whatever the test does in between,
+            // the port is unreserved for that whole window. This test used to
+            // bind a probe socket, read its port, drop it and re-bind that
+            // number; on a loaded macOS runner something else claimed the port
+            // inside the gap and the run went red on `Address already in use
+            // (os error 48)` — from the assertion that the bind must SUCCEED.
+            let ok = bind_h3(&cert, &key, SocketAddr::from(([0, 0, 0, 0], 0)));
+            assert!(
+                ok.is_ok(),
+                "QUIC bind on a free UDP port should succeed: {:#}",
+                ok.err().unwrap()
+            );
+
+            // Occupied port: bind must report an error, NOT pretend to serve h3.
+            let squatter = UdpSocket::bind("0.0.0.0:0").unwrap();
+            let taken = squatter.local_addr().unwrap().port();
+            let err = bind_h3(&cert, &key, SocketAddr::from(([0, 0, 0, 0], taken)))
+                .expect_err("QUIC bind on an occupied UDP port must fail");
+            assert!(
+                format!("{err:#}").contains("bind QUIC endpoint"),
+                "the error should name the bind step: {err:#}"
+            );
+        }
     }
 }

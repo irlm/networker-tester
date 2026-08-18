@@ -23,7 +23,7 @@ dashboard/playwright-report
 output
 docs
 supply-chain
-sdk
+# sdk/ IS needed: lab/images/sdk.Dockerfile builds sdk/csharp/Example (the SDK target)
 lab/.generated
 lab/.state
 *.log

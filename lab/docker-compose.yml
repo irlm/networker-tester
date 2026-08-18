@@ -4,6 +4,8 @@
 # THIS checkout — no GitHub releases involved — so what you validate here is
 # the code you are about to ship, on Linux, in a private network, exactly like
 # the cloud VMs will run it (Ubuntu 24.04 runtime images).
+# Compose project: nwk-lab, or nwk-labN for LAB_INSTANCE=N (lab.sh passes -p;
+# the network is then nwk-labN_labnet, the volumes nwk-labN_windows-*).
 name: nwk-lab
 
 services:
@@ -32,7 +34,7 @@ services:
         ipv4_address: ${LAB_NET_PREFIX:-172.31.100}.5
 
   controlplane:
-    image: nwk-lab/controlplane:local
+    image: nwk-lab/controlplane:${LAB_IMAGE_TAG:-local}
     build:
       context: ..
       dockerfile: lab/images/controlplane.Dockerfile
@@ -59,8 +61,9 @@ services:
       # create-tester + deployment paths as Azure/AWS/GCP — validate.sh phase 5.
       # Feature-flagged; prod never sets it.
       DASHBOARD_DOCKER_PROVIDER: "1"
-      DASHBOARD_DOCKER_NETWORK: nwk-lab_labnet
-      DASHBOARD_DOCKER_RUNNER_IMAGE: nwk-lab/runner:local
+      DASHBOARD_DOCKER_NETWORK: ${LAB_PROJECT:-nwk-lab}_labnet
+      DASHBOARD_DOCKER_RUNNER_IMAGE: nwk-lab/runner:${LAB_IMAGE_TAG:-local}
+      DASHBOARD_DOCKER_TARGET_IMAGE_TAG: ${LAB_IMAGE_TAG:-local}
       DASHBOARD_DOCKER_TARGET_IMAGE_PREFIX: nwk-lab/target-
       Logging__LogLevel__Default: ${LAB_CP_LOGLEVEL:-Information}
       Logging__LogLevel__Microsoft.AspNetCore: Warning
@@ -81,7 +84,7 @@ services:
 
   # Optional: the React SPA behind nginx (also proxies /api + /ws like prod).
   ui:
-    image: nwk-lab/ui:local
+    image: nwk-lab/ui:${LAB_IMAGE_TAG:-local}
     profiles: ["ui"]
     build:
       context: ..

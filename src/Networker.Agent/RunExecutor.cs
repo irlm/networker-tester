@@ -180,7 +180,9 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
                 logger.LogInformation(
                     "Run {RunId}: relaying run_finished status=failed (ok={Ok} fail={Fail})",
                     runId, successCount, failureCount);
-                await SendFinishedAsync(sink, runId, "failed", artifact: null).ConfigureAwait(false);
+                await SendFinishedAsync(
+                    sink, runId, "failed", artifact: null,
+                    attemptsOk: successCount, attemptsFailed: failureCount).ConfigureAwait(false);
                 return;
             }
         }
@@ -195,7 +197,9 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         logger.LogInformation(
             "Run {RunId}: relaying run_finished status=completed (ok={Ok} fail={Fail})",
             runId, successCount, failureCount);
-        await SendFinishedAsync(sink, runId, "completed", artifact, envelope).ConfigureAwait(false);
+        await SendFinishedAsync(
+            sink, runId, "completed", artifact, envelope,
+            attemptsOk: successCount, attemptsFailed: failureCount).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -340,6 +344,13 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             RedirectStandardInput = true, // closed immediately → stdin null (Rust: Stdio::null)
             UseShellExecute = false,
             CreateNoWindow = true,
+            // The tester always writes UTF-8 (Rust's println!/eprintln!). Without
+            // these, .NET decodes the redirected pipes with the process' console
+            // code page, which on Windows runners is an OEM page (437/850) - every
+            // non-ASCII byte in an error message came back mojibake ("ΓÇö" for an
+            // em-dash), and that corruption was persisted into attempt.error_message.
+            StandardOutputEncoding = new UTF8Encoding(false),
+            StandardErrorEncoding = new UTF8Encoding(false),
         };
         // Ask the tester (>= 0.28.117) to emit per-attempt NDJSON event lines
         // on stdout ahead of the final artifact so attempts stream LIVE instead
@@ -365,7 +376,13 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
 
         process.StandardInput.Close(); // stdin = null
 
-        // Stream stderr as [tester] error frames (best-effort).
+        // Stream stderr as [tester] error frames (best-effort) AND keep the last
+        // few lines: when the tester dies before writing JSON, those lines are the
+        // only explanation the operator ever gets, and the relayed frames are lost
+        // if the log sink is unavailable (the prod sweep hit exactly this: a
+        // "--payload-sizes required" abort surfaced only as "unparseable JSON").
+        var stderrTail = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var relayed = 0;
         var stderrTask = Task.Run(async () =>
         {
             try
@@ -373,7 +390,34 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
                 string? line;
                 while ((line = await process.StandardError.ReadLineAsync(invocationToken).ConfigureAwait(false)) is not null)
                 {
-                    sink.TrySend(new ErrorMessage(runId, $"[{label}] {line}"));
+                    // Relayed log lines are LOW priority and capped per run: a
+                    // tester run with RUST_LOG=debug emits thousands of them, and
+                    // on the lossy fast path they used to fill the outbound
+                    // channel and take the run's attempt frames down with them
+                    // (native Windows lab 2026-08-17: a run reached the control
+                    // plane "completed" with 0 of its 22 attempts). The last
+                    // lines are kept in stderrTail regardless, so the diagnosis
+                    // of a tester that dies before writing JSON is never lost.
+                    if (relayed < StderrRelayMaxLines)
+                    {
+                        relayed++;
+                        sink.TrySendLowPriority(new ErrorMessage(runId, $"[{label}] {line}"));
+                    }
+                    else if (relayed == StderrRelayMaxLines)
+                    {
+                        relayed++;
+                        sink.TrySendLowPriority(new ErrorMessage(
+                            runId,
+                            $"[{label}] ... stderr relay truncated after {StderrRelayMaxLines} lines (the run's own attempts keep streaming; the last lines are reported on failure)"));
+                    }
+                    if (!string.IsNullOrWhiteSpace(line))
+                    {
+                        stderrTail.Enqueue(line.Length > 300 ? line[..300] : line);
+                        while (stderrTail.Count > StderrTailLines)
+                        {
+                            stderrTail.TryDequeue(out _);
+                        }
+                    }
                 }
             }
             catch (OperationCanceledException) { /* cancelled */ }
@@ -505,7 +549,13 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         catch (JsonException parseErr)
         {
             var snippet = stdoutText.Length > 512 ? stdoutText[..512] : stdoutText;
-            var msg = $"Tester ({label}) exited with code {exitCode} and unparseable JSON: {parseErr.Message} (stdout starts: {snippet})";
+            // stderr FIRST: for an early abort (bad flags, missing binary, denied
+            // socket) it carries the actual reason, while stdout is empty and the
+            // JSON-parse complaint says nothing.
+            var tail = StderrTail(stderrTail);
+            var msg = string.IsNullOrEmpty(tail)
+                ? $"Tester ({label}) exited with code {exitCode} and unparseable JSON: {parseErr.Message} (stdout starts: {snippet})"
+                : $"Tester ({label}) exited with code {exitCode}: {tail} (unparseable stdout: {parseErr.Message})";
             logger.LogError("{CorrelationId}: {Message}", correlationId, msg);
             await sink.TrySendCriticalAsync(new ErrorMessage(runId, msg)).ConfigureAwait(false);
             return new(InvocationStatus.Failed, successCount, failureCount);
@@ -606,6 +656,35 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             : $"{scheme}://{host}/health";
     }
 
+    /// <summary>How many stderr lines to keep for the failure message.</summary>
+    private const int StderrTailLines = 5;
+
+    /// <summary>Cap on tester stderr lines relayed to the control plane per run.
+    /// Beyond this the relay stops (one truncation notice is sent) - log volume
+    /// must never compete with attempt frames for the outbound channel.</summary>
+    private const int StderrRelayMaxLines = 400;
+
+    /// <summary>The kept stderr lines, newest last, joined for one message.</summary>
+    internal static string StderrTail(System.Collections.Concurrent.ConcurrentQueue<string> q) =>
+        string.Join(" | ", q.ToArray());
+
+    /// <summary>
+    /// Throughput modes the tester refuses to run without <c>--payload-sizes</c>
+    /// — kept in lockstep with `has_throughput` in the tester's main.rs
+    /// (download/upload + their 1/2/3 variants, web*, udp*). `mthroughput`
+    /// derives its own stream sizes and is deliberately NOT here.
+    /// </summary>
+    private static readonly string[] PayloadSizeModes =
+    [
+        "download", "download1", "download2", "download3",
+        "upload", "upload1", "upload2", "upload3",
+        "webdownload", "webupload", "udpdownload", "udpupload",
+    ];
+
+    /// <summary>Whether this catalog mode needs <c>--payload-sizes</c>.</summary>
+    internal static bool RequiresPayloadSizes(string mode) =>
+        PayloadSizeModes.Contains(mode, StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
     /// Map a catalog mode id (shared/modes.json — what the control plane
     /// stores and the UI shows) to the tester's <c>--modes</c> token. They are
@@ -661,9 +740,14 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             }
         }
 
-        // Download/Upload hard-require --payload-sizes; fall back to [65536] when
-        // a throughput mode is selected but no sizes were supplied.
-        var needsPayload = config.Modes.Any(m => m is "download" or "upload");
+        // The tester hard-requires --payload-sizes for EVERY throughput mode
+        // (main.rs `has_throughput`), not just the two bare names. Matching only
+        // "download"/"upload" meant a workload of e.g. {http3, download3,
+        // upload3, pageload3} shipped WITHOUT sizes → the tester exited 1 with
+        // "--payload-sizes required …" and an empty stdout → the whole run failed
+        // as "unparseable JSON" (prod mode sweep, v0.28.213: every HTTP/3- or
+        // labelled-throughput-only selection from the UI was unusable).
+        var needsPayload = config.Modes.Any(RequiresPayloadSizes);
         var payloadSizes = config.PayloadSizes.Count == 0 && needsPayload
             ? new List<uint> { 65536 }
             : config.PayloadSizes.ToList();
@@ -759,8 +843,11 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
     /// failed/cancelled runs never parsed a full TestRun.</summary>
     private static async Task SendFinishedAsync(
         RawWebSocketClient.IFrameSink sink, Guid runId, string status,
-        BenchmarkArtifactPayload? artifact, JsonElement? envelope = null)
-        => await sink.TrySendCriticalAsync(new RunFinishedMessage(runId, status, artifact, envelope)).ConfigureAwait(false);
+        BenchmarkArtifactPayload? artifact, JsonElement? envelope = null,
+        uint? attemptsOk = null, uint? attemptsFailed = null)
+        => await sink.TrySendCriticalAsync(
+            new RunFinishedMessage(runId, status, artifact, envelope, attemptsOk, attemptsFailed))
+            .ConfigureAwait(false);
 
     private static async Task WaitAndDrainAsync(Process process, Task stderrTask)
     {

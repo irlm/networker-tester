@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/irlm/Projects/Github/networker-tester/benchmarks/reference-apis/cpp/build/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

@@ -47,10 +47,37 @@ use uuid::Uuid;
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Ports already handed to a test in THIS process.
+///
+/// Every `#[tokio::test]` in this binary is a thread of one process, and the OS
+/// happily hands a just-released ephemeral port to the next asker — so two
+/// concurrent tests could be given the same number, and the loser's endpoint
+/// then failed to bind (seen as "UDP echo server did not start within 10s" and
+/// as the QUIC gate's "it is not bound"). Claiming ports in a process-wide
+/// ledger makes that impossible between tests rather than merely unlikely; the
+/// remaining window against OTHER processes is unavoidable and now diagnosed by
+/// the readiness gates instead of being blamed on slowness.
+static CLAIMED_PORTS: std::sync::Mutex<Option<std::collections::HashSet<u16>>> =
+    std::sync::Mutex::new(None);
+
+/// Record `port` as ours; `false` when another test already claimed it.
+fn claim_port(port: u16) -> bool {
+    let mut guard = CLAIMED_PORTS.lock().unwrap();
+    guard
+        .get_or_insert_with(std::collections::HashSet::new)
+        .insert(port)
+}
+
 fn free_port() -> u16 {
     use std::net::TcpListener;
-    let l = TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port()
+    for _ in 0..50 {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        if claim_port(port) {
+            return port;
+        }
+    }
+    panic!("no unclaimed TCP port after 50 attempts");
 }
 
 /// Like `free_port` but finds a free *UDP* port by actually binding a UDP socket.
@@ -59,8 +86,65 @@ fn free_port() -> u16 {
 /// free for a subsequent `0.0.0.0:{port}` bind by the server.
 fn free_udp_port() -> u16 {
     use std::net::UdpSocket;
-    let s = UdpSocket::bind("0.0.0.0:0").unwrap();
-    s.local_addr().unwrap().port()
+    for _ in 0..50 {
+        let s = UdpSocket::bind("0.0.0.0:0").unwrap();
+        let port = s.local_addr().unwrap().port();
+        if claim_port(port) {
+            return port;
+        }
+    }
+    panic!("no unclaimed UDP port after 50 attempts");
+}
+
+/// A port free for TCP **and** UDP — what the HTTPS/QUIC pair needs.
+///
+/// `free_port()` only proves the TCP side is free, but the endpoint binds the
+/// same number on UDP for QUIC. With the integration tests running in parallel
+/// (v0.28.169), a sibling test's UDP server could already own that number: the
+/// endpoint came up serving HTTP/HTTPS with no h3, and the h3 gate then blamed a
+/// 20 s timeout ("QUIC server … is not bound") for what was an instant,
+/// diagnosable collision (CI flake on 2026-08-17). Checking both families makes
+/// that collision rare instead of routine; the endpoint's own `/health`
+/// `services.h3` is what proves it, and the gate below reads it.
+fn free_tcp_and_udp_port() -> u16 {
+    use std::net::{TcpListener, UdpSocket};
+    for _ in 0..50 {
+        let tcp = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = tcp.local_addr().unwrap().port();
+        // Bind UDP while the TCP socket is still held: the OS cannot hand this
+        // number to another TCP listener meanwhile.
+        if UdpSocket::bind(("0.0.0.0", port)).is_ok() && claim_port(port) {
+            return port;
+        }
+    }
+    panic!("no port free on both TCP and UDP after 50 attempts");
+}
+
+/// The endpoint's `/health` `services` block, or a reason it could not be read.
+///
+/// Every readiness gate below is otherwise ambiguous on timeout: "the port never
+/// bound" and "the port is bound but slow" look identical from outside. The
+/// endpoint already publishes the live truth (a null service = not running), so
+/// a failing gate quotes it instead of guessing — that is what turned a 20 s
+/// "QUIC server never answered" CI flake into a one-line diagnosis.
+async fn health_services(http_port: u16) -> String {
+    let fetch = async {
+        let body = reqwest::Client::new()
+            .get(format!("http://127.0.0.1:{http_port}/health"))
+            .timeout(std::time::Duration::from_secs(3))
+            .send()
+            .await
+            .ok()?
+            .text()
+            .await
+            .ok()?;
+        let v: serde_json::Value = serde_json::from_str(&body).ok()?;
+        Some(v["services"].to_string())
+    };
+    match fetch.await {
+        Some(s) => format!("endpoint /health services: {s}"),
+        None => "endpoint /health did not answer, so the endpoint itself is unhealthy".to_string(),
+    }
 }
 
 fn init_crypto() {
@@ -171,7 +255,8 @@ impl Endpoint {
         init_crypto();
 
         let http_port = free_port();
-        let https_port = free_port();
+        // HTTPS *and* QUIC ride this number (TCP + UDP), so both must be free.
+        let https_port = free_tcp_and_udp_port();
         let udp_port = free_udp_port();
         let udp_throughput_port = free_udp_port();
         let stamp_port = free_udp_port();
@@ -273,7 +358,10 @@ impl Endpoint {
             }
             if std::time::Instant::now() >= deadline {
                 bail_if_server_died!("the UDP echo server");
-                panic!("UDP echo server did not start within {budget:?}");
+                panic!(
+                    "UDP echo server did not start within {budget:?} — {}",
+                    health_services(http_port).await
+                );
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
@@ -320,7 +408,8 @@ impl Endpoint {
                 bail_if_server_died!("the UDP throughput server");
                 panic!(
                     "UDP throughput server on port {udp_throughput_port} never answered a \
-                     zero-byte CMD_DOWNLOAD within {budget:?} — it is not bound"
+                     zero-byte CMD_DOWNLOAD within {budget:?} — {}",
+                    health_services(http_port).await
                 );
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -348,7 +437,10 @@ impl Endpoint {
             }
             if std::time::Instant::now() >= deadline {
                 bail_if_server_died!("the STAMP reflector");
-                panic!("STAMP reflector did not start within {budget:?}");
+                panic!(
+                    "STAMP reflector did not start within {budget:?} — {}",
+                    health_services(http_port).await
+                );
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
@@ -439,9 +531,15 @@ impl Endpoint {
             }
 
             if std::time::Instant::now() >= deadline {
+                // Ask the endpoint what it thinks: `/health` `services.h3` is
+                // null when the QUIC bind failed (v0.28.216), so the report
+                // names the cause instead of implying "too slow".
+                // `"h3":null` there means the QUIC bind FAILED (v0.28.216) — the
+                // port was taken or permission denied — rather than "too slow".
+                let verdict = health_services(self.http_port).await;
                 panic!(
                     "QUIC server on UDP port {} never answered a version-negotiation \
-                     probe within {budget:?} ({attempts} attempts) — it is not bound",
+                     probe within {budget:?} ({attempts} attempts) — {verdict}",
                     self.https_port
                 );
             }

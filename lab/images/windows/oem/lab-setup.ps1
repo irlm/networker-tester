@@ -10,9 +10,13 @@
 #      networker-endpoint.exe (Windows binaries can't be cross-built on the
 #      Linux host; the VM has NAT internet), then starts it the way the cloud
 #      Windows bootstraps do (hidden process + schtasks ONSTART as SYSTEM).
-#   3. `install.ps1 -Setup iis` → IIS 8082/8445 + HTTP/3 (http.sys) + ARR
-#      reverse proxy to the endpoint. (nginx on Windows: install.ps1 says
-#      unsupported — see Invoke-HttpStackSetup — so no nginx target here.)
+#   3. `install.ps1 -Setup iis -Fqdn target-N.lab` → IIS 8082/8445 + HTTP/3
+#      (http.sys) + ARR reverse proxy to the endpoint. The -Fqdn is the VM's
+#      labnet DNS alias (lab.sh registers the deployment with it as
+#      endpoint_hosts[0]): http.sys serves HTTP/3 only to TLS SNI, so IIS gets
+#      an SNI hostname binding + cert SAN for that name — like a cloud VM gets
+#      its Azure DNS label / AWS public DNS. (nginx on Windows: install.ps1
+#      says unsupported — see Invoke-HttpStackSetup — so no nginx target here.)
 #   4. Reboot when the installer says http.sys needs it (HTTP/3 registry).
 #
 # Progress: C:\lab\lab-setup.log + C:\lab\status, mirrored to \\host.lan\Data
@@ -26,6 +30,7 @@ try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::S
 $LabUser     = "Docker"
 $LabPassword = "LabWindows-Pass1!"
 $LabStacks   = "iis"
+$LabFqdn     = ""      # hostname for IIS's SNI binding (lab.sh: target-N.lab); empty = IP bindings only
 if (Test-Path "C:\OEM\lab.env.ps1") { . "C:\OEM\lab.env.ps1" }
 
 $LabDir   = "C:\lab"
@@ -62,7 +67,7 @@ function Wait-Http($url, $seconds) {
     return $false
 }
 
-Log "=== lab-setup start: user=$env:USERNAME host=$env:COMPUTERNAME os=$([Environment]::OSVersion.VersionString) stacks=$LabStacks"
+Log "=== lab-setup start: user=$env:USERNAME host=$env:COMPUTERNAME os=$([Environment]::OSVersion.VersionString) stacks=$LabStacks fqdn=$LabFqdn"
 Set-LabStatus "installing"
 
 # ── 1. lab plumbing ──────────────────────────────────────────────────────────
@@ -80,6 +85,16 @@ Run-Logged "OpenSSH server" {
     New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell `
         -Value 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -PropertyType String -Force | Out-Null
     "sshd: $((Get-Service sshd).Status)"
+}
+# The VM's virtio NIC ships with UDP Segmentation Offload on; on the dockur
+# tap/DNAT path the USO super-datagrams msquic emits for multi-packet sends
+# never arrive (QUIC handshakes retransmit after a 1 s PTO, any h3 response
+# larger than one packet stalls until the idle timeout — pageload3 0/N). Turn it
+# off (persists across reboots; the adapter blips for a second).
+Run-Logged "NIC: disable UDP Segmentation Offload (virtio USO vs dockur DNAT — QUIC/h3 multi-packet sends)" {
+    Get-NetAdapter -Physical | ForEach-Object { Set-NetAdapterUso -Name $_.Name -IPv4Enabled $false -IPv6Enabled $false -ErrorAction SilentlyContinue }
+    Start-Sleep -Seconds 5
+    (Get-NetAdapterUso | Format-Table Name,IPv4Enabled,IPv6Enabled -AutoSize | Out-String).Trim()
 }
 Run-Logged "firewall" {
     foreach ($r in @(
@@ -121,8 +136,10 @@ $rebootNeeded = $false
 foreach ($stack in ($LabStacks -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
     Set-LabStatus $stack
     $out = @()
-    Run-Logged "install.ps1 -Setup $stack" {
-        $script:out = & powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File $installer -Setup $stack 2>&1
+    $setupArgs = @('-Setup', $stack)
+    if ($stack -eq 'iis' -and $LabFqdn) { $setupArgs += @('-Fqdn', $LabFqdn) }
+    Run-Logged "install.ps1 $($setupArgs -join ' ')" {
+        $script:out = & powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File $installer @setupArgs 2>&1
         $script:out
         "exit=$LASTEXITCODE"
     }

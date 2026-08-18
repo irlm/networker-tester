@@ -106,10 +106,32 @@ pub async fn run_with_shutdown(
     );
     info!("STAMP reflector→ {}", udp_service_label(cfg.stamp_port));
 
-    // Pass the QUIC port so the router can advertise H3 via Alt-Svc headers.
-    // Chrome only acts on Alt-Svc from HTTPS origins, so HTTP clients ignore it.
+    // Bind the QUIC socket HERE, before anything ADVERTISES HTTP/3, and keep the
+    // bound endpoint for the accept loop further down.
+    //
+    // `h3_port` feeds two promises: the router's Alt-Svc header (Chrome only
+    // acts on Alt-Svc from HTTPS origins) and `/health` `services.h3`, which is
+    // the LIVE capability self-report the control plane gates h3 modes on. It
+    // used to be set from config unconditionally while the bind happened inside
+    // a spawned task, so a QUIC bind failure (the UDP port already taken,
+    // permissions) left the endpoint claiming h3 it did not have: the UI offered
+    // h3 tests that could never pass, and the integration harness read the same
+    // silence as a 20 s "QUIC server never answered … it is not bound" timeout
+    // (CI flake, 2026-08-17). A failure now disables h3 loudly and honestly
+    // instead — the same up-front-bind reasoning as the UDP services below.
     #[cfg(feature = "http3")]
-    let h3_port = Some(cfg.https_port);
+    let (h3_port, h3_endpoint) =
+        match http3_server::server::bind_h3(&cert_pem, &key_pem, https_addr) {
+            Ok(endpoint) => (Some(cfg.https_port), Some(endpoint)),
+            Err(e) => {
+                tracing::error!(
+                    "HTTP/3 DISABLED — QUIC bind on udp://0.0.0.0:{} failed: {e:#} \
+                     (/health services.h3 reports null, so launch flows will not offer h3 modes)",
+                    cfg.https_port
+                );
+                (None, None)
+            }
+        };
     #[cfg(not(feature = "http3"))]
     let h3_port: Option<u16> = None;
 
@@ -200,12 +222,15 @@ pub async fn run_with_shutdown(
         }
     });
 
-    // HTTP/3 QUIC server – same UDP port as HTTPS, sharing the self-signed cert
+    // HTTP/3 QUIC server – the socket is already bound (above); this is only the
+    // accept loop. None means the bind failed and h3 is off for this instance.
     #[cfg(feature = "http3")]
-    let h3_handle = tokio::spawn(async move {
-        if let Err(e) = http3_server::server::run_h3_server(cert_pem, key_pem, https_addr).await {
-            tracing::error!("HTTP/3 server error: {e:#}");
-        }
+    let h3_handle = h3_endpoint.map(|endpoint| {
+        tokio::spawn(async move {
+            if let Err(e) = http3_server::server::serve_h3(endpoint).await {
+                tracing::error!("HTTP/3 server error: {e:#}");
+            }
+        })
     });
 
     // Wait for shutdown signal or unexpected server exit
@@ -229,7 +254,9 @@ pub async fn run_with_shutdown(
         h.abort();
     }
     #[cfg(feature = "http3")]
-    h3_handle.abort();
+    if let Some(h) = h3_handle {
+        h.abort();
+    }
 
     Ok(())
 }

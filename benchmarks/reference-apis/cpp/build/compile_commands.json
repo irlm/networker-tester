@@ -1,0 +1,8 @@
+[
+{
+  "directory": "/home/irlm/Projects/Github/networker-tester/benchmarks/reference-apis/cpp/build",
+  "command": "/usr/bin/c++ -DBOOST_ASIO_NO_DEPRECATED  -O3 -DNDEBUG -std=gnu++20 -o CMakeFiles/server.dir/server.cpp.o -c /home/irlm/Projects/Github/networker-tester/benchmarks/reference-apis/cpp/server.cpp",
+  "file": "/home/irlm/Projects/Github/networker-tester/benchmarks/reference-apis/cpp/server.cpp",
+  "output": "CMakeFiles/server.dir/server.cpp.o"
+}
+]

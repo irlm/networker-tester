@@ -26,6 +26,15 @@ namespace Networker.Agent;
 public sealed class RawWebSocketClient
 {
     private const int WsChannelCapacity = 4096;
+
+    /// <summary>Backlog above which <see cref="IFrameSink.TrySendLowPriority"/>
+    /// refuses to enqueue. Log-relay frames are unbounded in volume (one per
+    /// tester stderr line) while attempt frames are the run's actual payload;
+    /// without a reserve a chatty tester fills the channel and every
+    /// attempt_event is dropped - a run then lands in the control plane
+    /// "completed" with ZERO attempts (native Windows lab, 2026-08-17: 1757
+    /// stderr frames dropped 883 attempt frames with it).</summary>
+    private const int LowPriorityHighWater = WsChannelCapacity / 2;
     private const int ReceiveBufferBytes = 64 * 1024;
 
     /// <summary>How long <see cref="IFrameSink.TrySendCriticalAsync"/> will wait
@@ -68,6 +77,12 @@ public sealed class RawWebSocketClient
         /// socket writer.</summary>
         ValueTask<bool> TrySendCriticalAsync(AgentMessage message, CancellationToken ct = default)
             => ValueTask.FromResult(TrySend(message)); // default: fall back to the lossy path (tests/fakes)
+
+        /// <summary>Enqueue a frame that is worth LESS than the run's own data:
+        /// relayed tester log lines. Refuses (returning <c>false</c>) once the
+        /// outbound backlog passes the high-water mark, so log volume can never
+        /// starve attempt/progress frames. Never blocks.</summary>
+        bool TrySendLowPriority(AgentMessage message) => TrySend(message);
     }
 
     /// <summary>
@@ -116,7 +131,7 @@ public sealed class RawWebSocketClient
             FullMode = BoundedChannelFullMode.Wait,
             SingleReader = true,
         });
-        var sink = new ChannelFrameSink(channel.Writer, _logger);
+        var sink = new ChannelFrameSink(channel.Writer, channel.Reader, _logger);
 
         var sendPump = Task.Run(() => SendPumpAsync(socket, channel.Reader, connToken), CancellationToken.None);
         var onConnectedTask = onConnected is null
@@ -262,8 +277,12 @@ public sealed class RawWebSocketClient
     /// <summary>Channel-backed frame sink: serialises + enqueues; the single
     /// send pump is the only writer to the socket (both paths only enqueue, so
     /// the single-writer discipline holds).</summary>
-    private sealed class ChannelFrameSink(ChannelWriter<string> writer, ILogger logger) : IFrameSink
+    private sealed class ChannelFrameSink(
+        ChannelWriter<string> writer, ChannelReader<string> reader, ILogger logger) : IFrameSink
     {
+        private int _drops;
+        private int _lowPriorityDrops;
+
         public bool TrySend(AgentMessage message)
         {
             if (!TryEncode(message, out var text))
@@ -271,13 +290,44 @@ public sealed class RawWebSocketClient
 
             if (!writer.TryWrite(text))
             {
-                logger.LogError(
-                    "Failed to send {Type}: channel full or closed", message.GetType().Name);
+                // Rate-limited: a saturated channel used to emit one ERROR line
+                // per dropped frame (2731 of them in one 8-minute lab run), which
+                // buries the single fact that matters - how many were lost.
+                var n = Interlocked.Increment(ref _drops);
+                if (n == 1 || n % 100 == 0)
+                {
+                    logger.LogError(
+                        "Failed to send {Type}: outbound channel full or closed ({Drops} frame(s) dropped so far, backlog {Backlog}/{Capacity})",
+                        message.GetType().Name, n, Backlog(), WsChannelCapacity);
+                }
+
                 return false;
             }
 
             return true;
         }
+
+        public bool TrySendLowPriority(AgentMessage message)
+        {
+            var backlog = Backlog();
+            if (backlog >= LowPriorityHighWater)
+            {
+                var n = Interlocked.Increment(ref _lowPriorityDrops);
+                if (n == 1 || n % 500 == 0)
+                {
+                    logger.LogDebug(
+                        "Dropping relayed log frame(s) to protect attempt delivery: backlog {Backlog}/{Capacity}, {Drops} log frame(s) dropped so far",
+                        backlog, WsChannelCapacity, n);
+                }
+
+                return false;
+            }
+
+            return TrySend(message);
+        }
+
+        /// <summary>Queued frames, or 0 when the channel cannot report a count.</summary>
+        private int Backlog() => reader.CanCount ? reader.Count : 0;
 
         public async ValueTask<bool> TrySendCriticalAsync(
             AgentMessage message, CancellationToken ct = default)

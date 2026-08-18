@@ -18,6 +18,25 @@ namespace Networker.Agent;
 /// </summary>
 public static class RunnerCapabilities
 {
+    /// <summary>The runner's OS family word (<c>windows</c> / <c>linux</c> /
+    /// <c>macos</c>, else the runtime description) — what the <c>health</c>
+    /// verb and the heartbeat <c>os</c> field report.</summary>
+    public static string HostOs { get; } = OperatingSystem.IsWindows() ? "windows"
+        : OperatingSystem.IsMacOS() ? "macos"
+        : OperatingSystem.IsLinux() ? "linux"
+        : RuntimeInformation.OSDescription;
+
+    /// <summary>The runner's CPU architecture in Rust target-triple words
+    /// (<c>x86_64</c>, <c>aarch64</c>, …) — heartbeat <c>arch</c> / <c>health</c>.</summary>
+    public static string HostArch { get; } = RuntimeInformation.ProcessArchitecture switch
+    {
+        Architecture.X64 => "x86_64",
+        Architecture.X86 => "x86",
+        Architecture.Arm64 => "aarch64",
+        Architecture.Arm => "arm",
+        _ => RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant(),
+    };
+
     private static readonly Lazy<AgentCapabilities> Cached = new(() =>
         new AgentCapabilities(Chrome: DetectChrome(), Tshark: DetectTshark()));
 

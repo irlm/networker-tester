@@ -545,6 +545,9 @@ public partial class NetworkerDbContext : DbContext
             entity.Property(e => e.EndpointIps)
                 .HasColumnType("jsonb")
                 .HasColumnName("endpoint_ips");
+            entity.Property(e => e.EndpointHosts)
+                .HasColumnType("jsonb")
+                .HasColumnName("endpoint_hosts");
             entity.Property(e => e.ErrorMessage).HasColumnName("error_message");
             entity.Property(e => e.FinishedAt).HasColumnName("finished_at");
             entity.Property(e => e.Log).HasColumnName("log");

@@ -117,18 +117,22 @@ export function ReviewStep({
 
       {afterWorkload}
 
-      {/* Schedule */}
-      <label className="flex items-center gap-3 cursor-pointer mb-4">
-        <input
-          type="checkbox"
-          checked={addSchedule}
-          onChange={e => onAddScheduleChange(e.target.checked)}
-          className="w-4 h-4 border-gray-600 bg-gray-900 text-cyan-500 focus:ring-cyan-500/50"
-        />
-        <span className="text-sm text-gray-200">Add schedule</span>
-      </label>
+      {/* Schedule — single-config runs only. A multi-cell comparison group has
+          one config PER cell and no group-level schedule, so the backend can't
+          honor a schedule here; offering the control would silently drop it. */}
+      {!isMatrixRun && (
+        <label className="flex items-center gap-3 cursor-pointer mb-4">
+          <input
+            type="checkbox"
+            checked={addSchedule}
+            onChange={e => onAddScheduleChange(e.target.checked)}
+            className="w-4 h-4 border-gray-600 bg-gray-900 text-cyan-500 focus:ring-cyan-500/50"
+          />
+          <span className="text-sm text-gray-200">Add schedule</span>
+        </label>
+      )}
 
-      {addSchedule && (
+      {!isMatrixRun && addSchedule && (
         <div className="border border-gray-800 p-4 mb-4">
           <label htmlFor="cron" className="text-xs text-gray-400 mb-1 block">Cron Expression (6-field)</label>
           <input

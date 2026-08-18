@@ -34,6 +34,12 @@ public static class OpsServiceNames
         WorkspaceInactivity,
         ProvisioningOrchestrator,
         AgentAutoUpgrade,
+        // Left out when the loop was added, which hid it from every consumer of
+        // `All` — including the test meant to catch exactly this. `OpsHealthTests`
+        // now derives the expected set by REFLECTION over the constants below,
+        // so a new loop cannot go missing from this array or from
+        // OpsEndpoints.ExpectedIntervals without failing the build.
+        SystemHealth,
     ];
 }
 

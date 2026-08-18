@@ -92,10 +92,22 @@ public static class LogsEndpoints
 
             short? minLevel = ParseLevelToDb(level);
 
-            var response = await QueryLogsAsync(
-                dataSource, service, minLevel, config_id, project_id, search, fromTs, toTs, take, skip, ct);
-
-            return Results.Ok(response);
+            // A deployment WITHOUT the tester-owned `service_log` table (every
+            // C#-only install: the table came from the retired Rust dashboard's
+            // separate logs DB, and no C# migration creates it) must not 500 —
+            // that killed the whole Logs page in prod, and hid the tester stderr
+            // this very sweep needed (prod sweep, v0.28.213). Degrade to an empty,
+            // clearly-labelled result, exactly like UrlTestsEndpoints does on 42P01.
+            try
+            {
+                var response = await QueryLogsAsync(
+                    dataSource, service, minLevel, config_id, project_id, search, fromTs, toTs, take, skip, ct);
+                return Results.Ok(response);
+            }
+            catch (PostgresException ex) when (IsLogSinkMissing(ex))
+            {
+                return Results.Ok(EmptyLogListResponse());
+            }
         }).RequireAuthorization();
 
         // GET /api/logs/stats — per-service level-bucket counts.
@@ -121,32 +133,45 @@ public static class LogsEndpoints
             var toTs = (to ?? DateTime.UtcNow).ToUniversalTime();
             var fromTs = (from?.ToUniversalTime()) ?? toTs.AddHours(-1);
 
-            var stats = await StatsAsync(dataSource, fromTs, toTs, project_id, ct);
+            object stats;
+            try
+            {
+                stats = await StatsAsync(dataSource, fromTs, toTs, project_id, ct);
+            }
+            catch (PostgresException ex) when (IsLogSinkMissing(ex))
+            {
+                stats = new { services = Array.Empty<object>(), log_sink = "unconfigured" };
+            }
             return Results.Ok(stats);
         }).RequireAuthorization();
 
-        // GET /api/logs/pipeline-status — live pipeline metrics (STUBBED shape).
-        app.MapGet("/api/logs/pipeline-status", (HttpContext ctx) =>
+        // GET /api/logs/pipeline-status — pipeline metrics. There is no live
+        // in-process log pipeline in the C# control plane (the Rust dashboard
+        // batched service_log writes); reporting a hard-coded "healthy" while
+        // /api/logs itself was 500ing was actively misleading (prod sweep,
+        // v0.28.213). Probe the sink instead and say what is true.
+        app.MapGet("/api/logs/pipeline-status", async (
+            HttpContext ctx, NpgsqlDataSource dataSource, CancellationToken ct) =>
         {
             var user = ctx.GetAuthUser();
             if (user is null)
             {
                 return Results.Unauthorized();
             }
-
-            // TODO(phase3): the C# ControlPlane has no in-process log-batching
-            // pipeline (the Rust dashboard batches service_log writes and exposes
-            // live counters). Return a zeroed, "healthy" snapshot so the shape
-            // matches; wire real metrics when/if a C# log pipeline lands.
+            var configured = await LogSinkPresentAsync(dataSource, ct);
             return Results.Ok(new
             {
-                entries_written = 0UL,
-                entries_dropped = 0UL,
-                flush_count = 0UL,
-                flush_errors = 0UL,
-                last_flush_ms = 0UL,
-                queue_depth = 0U,
-                status = "healthy",
+                entries_written = 0,
+                entries_dropped = 0,
+                flush_count = 0,
+                flush_errors = 0,
+                last_flush_ms = 0,
+                queue_depth = 0,
+                // "unconfigured": no `service_log` table in this deployment, so
+                // nothing can be queried (the UI shows the reason instead of an
+                // empty page that looks like "no logs yet").
+                status = configured ? "healthy" : "unconfigured",
+                log_sink = configured ? "service_log" : "none",
             });
         }).RequireAuthorization();
 
@@ -174,6 +199,41 @@ public static class LogsEndpoints
     }
 
     // ── list (mirrors networker_log::query::list) ───────────────────────────
+    /// <summary>
+    /// The Postgres errors that mean "this deployment has no log sink": the
+    /// `service_log` table (or a column of it) does not exist, or the role may
+    /// not read it. Anything else is a real fault and must keep bubbling up.
+    /// </summary>
+    internal static bool IsLogSinkMissing(PostgresException ex) =>
+        ex.SqlState is PostgresErrorCodes.UndefinedTable
+            or PostgresErrorCodes.UndefinedColumn
+            or PostgresErrorCodes.InsufficientPrivilege;
+
+    /// <summary>The `/api/logs` shape with no rows, flagged as unconfigured.</summary>
+    internal static object EmptyLogListResponse() => new
+    {
+        entries = Array.Empty<object>(),
+        total = 0,
+        truncated = false,
+        log_sink = "unconfigured",
+    };
+
+    /// <summary>Whether `service_log` is readable in this deployment (cheap,
+    /// catalog-only check; never throws).</summary>
+    private static async Task<bool> LogSinkPresentAsync(NpgsqlDataSource dataSource, CancellationToken ct)
+    {
+        try
+        {
+            await using var cmd = dataSource.CreateCommand("SELECT to_regclass('service_log') IS NOT NULL");
+            var present = await cmd.ExecuteScalarAsync(ct);
+            return present is true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
     private static async Task<object> QueryLogsAsync(
         NpgsqlDataSource dataSource,
         string? service, short? minLevel, Guid? configId, string? projectId, string? search,

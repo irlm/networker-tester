@@ -449,7 +449,7 @@ pub async fn run_pageload_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) ->
         tls: conn0.tls_result.clone(),
         http: conn0.manifest_http.clone(),
         udp: None,
-        error: None,
+        error: page_load_error(assets_fetched, n),
         retry_count: 0,
         server_timing: conn0.server_timing.clone(),
         udp_throughput: None,
@@ -1228,7 +1228,7 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         tls: Some(tls_result),
         http: Some(manifest_http),
         udp: None,
-        error: None,
+        error: page_load_error(assets_fetched, n),
         retry_count: 0,
         server_timing,
         udp_throughput: None,
@@ -1338,7 +1338,70 @@ fn error_attempt(
     )
 }
 
-fn error_attempt_proto(
+/// The error a page-load attempt carries when some assets did not arrive.
+///
+/// A page-load attempt only succeeds when EVERY asset was fetched, but the three
+/// attempt builders left `error: None` — so a 49/50 attempt landed as
+/// "failed, reason unknown" in the run's attempt list and in the DB (prod +
+/// lab both hit this on `pageload3` through IIS, where http.sys occasionally
+/// drops one of 50 concurrent h3 streams; the operator had nothing to go on).
+fn page_load_error(assets_fetched: usize, n: usize) -> Option<ErrorRecord> {
+    page_load_error_with(assets_fetched, n, &[])
+}
+
+/// As [`page_load_error`], plus the per-asset reasons when the caller kept them.
+///
+/// "1 asset request(s) did not complete" is a symptom, not a diagnosis: the
+/// operator still cannot tell a stream reset from a timeout from a 500. Callers
+/// that collect reasons pass them here and the first few ride along in `detail`.
+fn page_load_error_with(
+    assets_fetched: usize,
+    n: usize,
+    failures: &[String],
+) -> Option<ErrorRecord> {
+    if n > 0 && assets_fetched == n {
+        return None;
+    }
+    let missing = n.saturating_sub(assets_fetched);
+    Some(ErrorRecord {
+        category: ErrorCategory::Http,
+        message: if n == 0 {
+            "page manifest listed no assets".to_string()
+        } else {
+            let first = failures.first().map(String::as_str).unwrap_or("");
+            format!(
+                "{assets_fetched}/{n} assets fetched — {missing} asset request(s) did not complete \
+                 with a drained 2xx body{}",
+                if first.is_empty() {
+                    " (see per-asset timings in the attempt's page_load block)".to_string()
+                } else {
+                    format!(" — first failure: {first}")
+                }
+            )
+        },
+        // Every distinct reason, deduplicated, so a run with several different
+        // failures is not reduced to whichever one happened to be first.
+        detail: if failures.is_empty() {
+            None
+        } else {
+            let mut seen: Vec<&str> = Vec::new();
+            for f in failures {
+                let reason = f.split_once(": ").map_or(f.as_str(), |(_, r)| r);
+                if !seen.contains(&reason) {
+                    seen.push(reason);
+                }
+            }
+            Some(format!(
+                "{} failing asset(s); distinct reasons: {}",
+                failures.len(),
+                seen.join(" | ")
+            ))
+        },
+        occurred_at: Utc::now(),
+    })
+}
+
+pub(crate) fn error_attempt_proto(
     attempt_id: Uuid,
     run_id: Uuid,
     seq: u32,
@@ -1747,24 +1810,76 @@ pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
                     .body(())
                     .expect("valid asset request");
                 let t0 = Instant::now();
+                // Every failure below used to collapse into `None`, so a dropped
+                // stream reached the operator as "1 asset request(s) did not
+                // complete" with no reason at all — exactly what the v0.28.213
+                // note on `page_load_error` complained about. Each arm now says
+                // what happened; the reasons ride on the attempt's error.
                 let mut stream = match tokio::time::timeout(dur, sr.send_request(req)).await {
                     Ok(Ok(s)) => s,
-                    _ => return None,
+                    Ok(Err(e)) => return Err(format!("send_request: {e}")),
+                    Err(_) => {
+                        return Err(format!(
+                            "send_request timed out after {}ms",
+                            dur.as_millis()
+                        ))
+                    }
                 };
-                stream.finish().await.ok();
-                let resp = stream.recv_response().await.ok()?;
+                if let Err(e) = stream.finish().await {
+                    return Err(format!("finish request stream: {e}"));
+                }
+                let resp = match stream.recv_response().await {
+                    Ok(r) => r,
+                    Err(e) => return Err(format!("recv_response: {e}")),
+                };
                 let status = resp.status().as_u16();
                 let mut body_bytes = 0usize;
-                while let Some(chunk) = stream.recv_data().await.ok().flatten() {
-                    body_bytes += chunk.remaining();
+                loop {
+                    // A mid-body error used to be indistinguishable from
+                    // end-of-body (`.ok().flatten()`), so a RESET stream counted
+                    // as a complete 2xx fetch with a short body.
+                    match stream.recv_data().await {
+                        Ok(Some(chunk)) => body_bytes += chunk.remaining(),
+                        Ok(None) => break,
+                        Err(e) => {
+                            return Err(format!(
+                                "recv_data after {body_bytes} byte(s) (status {status}): {e}"
+                            ))
+                        }
+                    }
                 }
                 let elapsed = t0.elapsed().as_secs_f64() * 1000.0;
-                Some((status, body_bytes, elapsed))
+                Ok((status, body_bytes, elapsed))
             }
         })
         .collect();
 
-    let asset_results = futures::future::join_all(asset_futures).await;
+    let asset_outcomes: Vec<Result<(u16, usize, f64), String>> =
+        futures::future::join_all(asset_futures).await;
+
+    // Keep the reasons — they are what makes a 49/50 page load diagnosable.
+    // A non-2xx response is a failed asset too (`asset_fetch_ok`), and it is the
+    // case that actually bites through IIS: the stream completes fine and the
+    // server answers with a status the page load cannot use, so collecting only
+    // `Err` left the attempt saying "did not complete" with no reason.
+    let asset_failures: Vec<String> = asset_outcomes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, r)| match r {
+            Err(e) => Some(format!("asset {i}: {e}")),
+            Ok((status, bytes, _)) if !asset_fetch_ok(*status) => {
+                Some(format!("asset {i}: HTTP {status} ({bytes} byte body)"))
+            }
+            Ok(_) => None,
+        })
+        .collect();
+    for failure in &asset_failures {
+        debug!("pageload3 {failure}");
+    }
+    let asset_results: Vec<Option<(u16, usize, f64)>> = asset_outcomes
+        .iter()
+        .map(|r| r.as_ref().ok().copied())
+        .collect();
 
     // Index-aligned aggregation (join_all preserves order → index == asset id).
     let (assets_fetched, assets_failed, total_bytes, asset_timings) =
@@ -1819,7 +1934,7 @@ pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
         tls: Some(tls_result),
         http: Some(manifest_http),
         udp: None,
-        error: None,
+        error: page_load_error_with(assets_fetched, n, &asset_failures),
         retry_count: 0,
         server_timing: None,
         udp_throughput: None,
@@ -2435,7 +2550,7 @@ async fn fetch_h2_pageload(
         tls: tls_result,
         http: Some(manifest_http),
         udp: None,
-        error: None,
+        error: page_load_error(assets_fetched, n),
         retry_count: 0,
         server_timing,
         udp_throughput: None,
@@ -3008,7 +3123,7 @@ async fn fetch_h3_pageload(
         },
         http: Some(manifest_http),
         udp: None,
-        error: None,
+        error: page_load_error(assets_fetched, n),
         retry_count: 0,
         server_timing: None,
         udp_throughput: None,
@@ -3953,6 +4068,59 @@ mod tests {
         assert!(!asset_fetch_ok(404));
         assert!(!asset_fetch_ok(500));
         assert!(!asset_fetch_ok(199));
+    }
+
+    #[test]
+    fn page_load_error_explains_a_partial_fetch() {
+        assert!(
+            page_load_error(50, 50).is_none(),
+            "a complete page load has no error"
+        );
+        let e = page_load_error(49, 50).expect("a partial fetch must be explained");
+        assert_eq!(e.category, ErrorCategory::Http);
+        assert!(e.message.contains("49/50 assets fetched"), "{}", e.message);
+        assert!(e.message.contains("1 asset request(s)"), "{}", e.message);
+        let none = page_load_error(0, 0).expect("an empty manifest is also a failure");
+        assert!(none.message.contains("no assets"), "{}", none.message);
+    }
+
+    /// The reason matters more than the count. `pageload3` through IIS drops
+    /// roughly 0.8% of asset requests (ARR answers 502.7 / win32 87 without ever
+    /// reaching the backend — measured in the lab against a real IIS target on
+    /// 2026-08-17), and until the reasons were carried the attempt only said
+    /// "1 asset request(s) did not complete".
+    #[test]
+    fn page_load_error_names_the_first_reason_and_lists_distinct_ones() {
+        let failures = vec![
+            "asset 5: HTTP 502 (0 byte body)".to_string(),
+            "asset 31: HTTP 502 (0 byte body)".to_string(),
+            "asset 44: recv_response: stream reset by peer".to_string(),
+        ];
+        let e = page_load_error_with(47, 50, &failures).expect("a partial fetch must be explained");
+        assert!(e.message.contains("47/50 assets fetched"), "{}", e.message);
+        assert!(
+            e.message.contains("first failure: asset 5: HTTP 502"),
+            "the message must name a concrete reason: {}",
+            e.message
+        );
+        let detail = e.detail.expect("distinct reasons belong in detail");
+        assert!(detail.contains("3 failing asset(s)"), "{detail}");
+        // The two identical 502s collapse; the reset is kept.
+        assert_eq!(
+            detail.matches("HTTP 502").count(),
+            1,
+            "identical reasons must be deduplicated: {detail}"
+        );
+        assert!(detail.contains("stream reset by peer"), "{detail}");
+    }
+
+    /// With no reasons collected the message keeps its old shape, so the other
+    /// page-load probes are unaffected.
+    #[test]
+    fn page_load_error_without_reasons_is_unchanged() {
+        let e = page_load_error_with(49, 50, &[]).unwrap();
+        assert!(e.message.contains("per-asset timings"), "{}", e.message);
+        assert!(e.detail.is_none());
     }
 
     #[test]

@@ -5,7 +5,7 @@ export type { AlertMetric, AlertComparator, AlertChannelKind, AlertChannelConfig
 export type { SdkEndpoint, SdkEndpointCreate, AppNetworkReport, AppNetworkGroup, AppNetworkFormulas, AppNetworkVerdict } from './types';
 export type { LiveAttempt, EndpointRef, EndpointKind, Workload, Methodology, RunStatus, CaptureMode, OutlierPolicy, QualityGates, PublicationGates, ComparisonCell } from './types';
 
-import { request } from './http';
+import { ApiError, request } from './http';
 export { ApiError, clearSession, downloadExport, errorMessage, friendlyHttpError, handleUnauthorized, request } from './http';
 
 function projectUrl(projectId: string, path: string): string {
@@ -533,10 +533,35 @@ export const api = {
 
   // System config
   getSystemConfig: (key: string) =>
-    request<{ key: string; value: string }>(`/admin/system-config/${key}`).catch(() => null),
+    // A missing config key is a 404 by design (Rust-parity KV read) and means
+    // "not set yet" → null. Only swallow that case; a real failure (401/5xx)
+    // must surface instead of masquerading as an empty/unset value.
+    request<{ key: string; value: string }>(`/admin/system-config/${key}`).catch((e) => {
+      if (e instanceof ApiError && e.status === 404) return null;
+      throw e;
+    }),
 
   setSystemConfig: (key: string, value: string) =>
     request<void>(`/admin/system-config/${key}`, { method: 'PUT', body: JSON.stringify({ value }) }),
+
+  // ── Prod run-execution canary (platform admin only) ─────────────────
+  getCanaryStatus: () =>
+    request<{ configured: boolean; owner: string; repo: string; workflow: string; actions_url: string }>(
+      '/admin/canary',
+    ),
+
+  dispatchCanary: (inputs: {
+    reuse_runner?: boolean;
+    apibench?: boolean;
+    mode_coverage?: boolean;
+    matrix_flow?: boolean;
+    windows?: boolean;
+    ref?: string;
+  }) =>
+    request<{ status: string; actions_url: string }>('/admin/canary/dispatch', {
+      method: 'POST',
+      body: JSON.stringify(inputs),
+    }),
 
   // Leaderboard (simple benchmark routes)
   getLeaderboard: () =>

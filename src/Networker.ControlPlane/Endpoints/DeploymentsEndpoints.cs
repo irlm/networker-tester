@@ -59,7 +59,7 @@ public static class DeploymentsEndpoints
         // come back with supported_modes: null so the UI falls back to the
         // config-derived summary instead of trusting a fabricated list.
         app.MapGet("/api/projects/{projectId}/deployments/{deploymentId:guid}/capabilities", async (
-            string projectId, Guid deploymentId, NetworkerDbContext db) =>
+            string projectId, Guid deploymentId, NetworkerDbContext db, LiveCapabilityCache liveCaps) =>
         {
             var d = await db.Deployments
                 .AsNoTracking()
@@ -73,7 +73,15 @@ public static class DeploymentsEndpoints
             }
 
             var hosts = DeploymentWriteEndpoints.ParseHosts(d.EndpointIps);
-            var reports = await Task.WhenAll(hosts.Select(TargetCapabilities.ProbeHostAsync));
+            var probed = await Task.WhenAll(hosts.Select(TargetCapabilities.ProbeHostAsync));
+            // Write-through: the config-create gate (rule 3, TestConfigWriteEndpoints)
+            // reads this cache and never probes itself — a wizard that fetched
+            // capabilities for its target has just informed the server too.
+            foreach (var r in probed)
+            {
+                liveCaps.Store(r);
+            }
+            var reports = probed.Select(r => r.ToWire()).ToArray();
             // Static half of the answer: the proxy stack(s) this deployment
             // installed and whether each serves HTTP/3 (shared/http-stacks.json).
             // `stack` is http_stacks[0] — the listener a `proxy` config resolves
@@ -87,6 +95,11 @@ public static class DeploymentsEndpoints
                 stack = primary,
                 stack_h3 = HttpStackCatalog.HasH3(primary),
                 h3_modes = HttpStackCatalog.H3Modes.ToArray(),
+                // This response IS a fresh probe (age 0); the server's create gate
+                // will trust it for `live_capabilities_ttl_secs` and fail open
+                // (kind / stack rules only) once it is older than that.
+                live_capabilities_age_secs = 0,
+                live_capabilities_ttl_secs = (int)liveCaps.Ttl.TotalSeconds,
             });
         })
         .RequireAuthorization(AuthPolicies.ProjectMember);
@@ -274,7 +287,7 @@ public static class DeploymentsEndpoints
 
     /// <summary>Shape a <see cref="Data.Entities.Deployment"/> to the snake_case
     /// DeploymentRow JSON contract, decoding the JSON-text columns (config,
-    /// endpoint_ips) to real JSON nodes rather than escaped strings.</summary>
+    /// endpoint_ips, endpoint_hosts) to real JSON nodes rather than escaped strings.</summary>
     private static object ShapeDeployment(Data.Entities.Deployment d) => new
     {
         deployment_id = d.DeploymentId,
@@ -287,6 +300,9 @@ public static class DeploymentsEndpoints
         started_at = d.StartedAt,
         finished_at = d.FinishedAt,
         endpoint_ips = ParseJson(d.EndpointIps),
+        // V050: per-endpoint DNS names, parallel to endpoint_ips (null entries
+        // where the provider gave none) — what a proxy run connects to.
+        endpoint_hosts = ParseJson(d.EndpointHosts),
         agent_id = d.AgentId,
         error_message = d.ErrorMessage,
         log = d.Log,

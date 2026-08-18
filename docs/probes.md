@@ -32,15 +32,26 @@ can run, from one shared manifest — nothing is inferred per page:
 | Axis | Source of truth | Effect |
 |---|---|---|
 | Target **kind** (`requires` in `shared/modes.json`) | `GET /api/modes` | throughput / UDP / page-load need a `networker-endpoint`; `sdkprobe` an SDK endpoint; `apibench` the reference APIs. A raw URL gets only the any-target modes. |
-| **HTTP/3 by proxy stack** (`h3` + `h3_modes` in `shared/http-stacks.json`) | `GET /api/http-stacks` (also `stacks`/`h3_modes` on `/api/modes`) | `http3`, `pageload3`, `browser3`, `download3`, `upload3` are refused on **apache / haproxy / traefik** (installed h1/h2 only) and on **IIS** (http.sys serves HTTP/3 only to clients that send TLS SNI, and proxy targets are addressed by IP — measured in the lab's Windows target), and offered on nginx / caddy / the bare endpoint. The stack is `endpoint.proxy_stack`, the deployment's `http_stacks[0]`, or `pending.proxy_stack`; unknown stacks fail open. |
-| **Live target self-report** (`/health` `services`) | `GET /api/projects/{id}/deployments/{id}/capabilities` | udp / stamp / websocket / page-asset modes are off when the endpoint reports that listener disabled (pre-0.28.202 endpoints report nothing → no filtering). |
+| **HTTP/3 by proxy stack** (`h3` + `h3_modes` in `shared/http-stacks.json`) | `GET /api/http-stacks` (also `stacks`/`h3_modes` on `/api/modes`) | `http3`, `pageload3`, `browser3`, `download3`, `upload3` are refused on **apache / haproxy / traefik** (installed h1/h2 only) and offered on nginx / caddy / **IIS** / the bare endpoint. IIS needs the client to send TLS SNI (http.sys completes the QUIC handshake only then), so the installer binds an SNI hostname listener + certificate SAN for the endpoint's DNS name (Azure public-IP DNS label, AWS public DNS via IMDS, the lab's `target-N.lab`), the deploy records it as `deployment.endpoint_hosts[i]` (V050), and the proxy resolver / pending→network rewrite hand the tester that hostname instead of `endpoint_ips[i]` — measured http3/pageload3 2/2 through IIS in the lab's Windows target (v0.28.211). A deployment without a recorded hostname (GCP, lan, pre-V050 rows) is still addressed by IP. The stack is `endpoint.proxy_stack`, the deployment's `http_stacks[0]`, or `pending.proxy_stack`; unknown stacks fail open. |
+| **Live target self-report** (`/health` `services`) | `GET /api/projects/{id}/deployments/{id}/capabilities` (also carries `live_capabilities_age_secs` / `live_capabilities_ttl_secs`) | udp / stamp / websocket / page-asset modes are off when the endpoint reports that listener disabled (pre-0.28.202 endpoints report nothing → no filtering). |
 | **Runner inventory** (agent heartbeat `capabilities`) | `GET /api/projects/{id}/agents` (`capabilities`), tester rows (`agent_capabilities`) | `browser*` modes are off when the pinned runner reports `chrome: false`; packet capture needs `tshark`. |
 
-The API enforces the first two at config-create (`POST /api/v2/projects/{id}/test-configs`
+The API enforces the first three at config-create (`POST /api/v2/projects/{id}/test-configs`
 → **422** naming the mode and the reason, e.g. `'http3' needs HTTP/3 (QUIC): apache has
-no HTTP/3 (see shared/http-stacks.json)`); comparison groups / matrix runs instead **drop
+no HTTP/3 (see shared/http-stacks.json)` or `'udp' UDP echo listener disabled on this
+target`); comparison groups / matrix runs instead **drop
 the h3 modes per cell** at launch (an nginx+apache matrix runs `http3` on the nginx cell
-only — the launch response lists the drops under `adjustments`). The wizards mirror the
+only — the launch response lists the drops under `adjustments`; their cells are `pending`
+provisioning requests, so the live axis does not apply to them).
+
+The live axis is applied to `proxy` targets from a **per-host cache only**
+(`LiveCapabilityCache`, 90 s TTL): the create request never probes the endpoint, so it can
+never be slowed or failed by a dead target. With a fresh self-report for every host of the
+deployment, the modes all hosts report off are rejected (the 422 names the host(s) and the
+report's age); with a missing / stale report the gate **fails open** — kind and stack rules
+still apply — and one background refresh is queued so the next attempt is informed. The
+deployment `/capabilities` route (the wizard's live probe) writes through to that cache, so
+a config created from the UI is normally gated with zero network I/O. The wizards mirror the
 same rules (`dashboard/src/lib/mode-capabilities.ts`): unsupported modes render disabled
 with the reason as a tooltip and are pre-unchecked. Standalone CLI runs are not gated —
 `networker-tester` runs whatever you ask and reports the failure honestly.
@@ -365,6 +376,14 @@ networker-tester --target https://127.0.0.1:8443/health \
 **Note:** a firewall must not block UDP. Use `--insecure` for self-signed certificates.
 
 ---
+
+> **Through IIS**, expect the occasional 49/50: ARR answers roughly 0.8% of
+> HTTP/3-originated asset requests with `502.7` / win32 `87` before it ever
+> reaches the backend (measured in the lab, v0.28.218). It is ARR's
+> reverse-proxy hop, not http.sys: the same 50 assets served by IIS as STATIC
+> files over h3 are 1000/1000 clean, while h1/h2 through the same ARR and h3
+> against a non-IIS target are clean too. The attempt now names the status per
+> failing asset, so a partial page load is diagnosable from the run.
 
 ## `native` — System TLS Stack
 

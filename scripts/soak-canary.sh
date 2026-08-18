@@ -28,7 +28,9 @@
 #      (/ws not proxied) reached prod unflagged. Also asserts dispatch DROPS
 #      native (v0.28.120) rather than failing it.
 #   6. tear the runner AND the endpoint down (validates P1-16 teardown), ALWAYS
-#      — even on failure.
+#      — even on failure — and, on a GREEN run, delete the test-configs it
+#      created. The canary must leave no residue: it used to leak several
+#      configs a night, which is what eventually broke it (see the teardown).
 #
 # Any assertion miss exits non-zero → the workflow goes red → watchers are
 # alerted. Self-contained: no standing infra, ~$0.03 of VM time per run.
@@ -48,6 +50,19 @@
 #   CANARY_MODE_COVERAGE   "1" → also run the full mode matrix through the proxy
 #                          (default "1"; requires the apibench phase since it
 #                          reuses that endpoint)
+#   CANARY_CONFIG_TTL_DAYS days before a leftover `soak-canary*` config is
+#                          reaped at startup (default 7; "0" disables). Only
+#                          the canary's own rows are ever matched.
+#   CANARY_KEEP_CONFIGS    "1" → never delete this run's configs, even on green
+#                          (default "0"; failures always keep them)
+#   CANARY_WINDOWS         "1" → PHASE 5: provision ONE Windows Server + IIS
+#                          endpoint cell (pending kind, os windows, proxy_stack
+#                          iis) and run the deterministic proxy matrix through
+#                          it, asserting every mode succeeds — in particular
+#                          http2/pageload2 (the tester's h2 :scheme/:authority
+#                          fix, v0.28.208 — http.sys RST every h2 probe before)
+#                          and websocket (IIS payload /ws route). Off by default
+#                          (a Windows VM is ~2× the cost/time of a Linux cell).
 set -uo pipefail
 
 BASE="${LAGHOUND_URL:-https://laghound.com}"
@@ -60,6 +75,8 @@ MODE_COVERAGE="${CANARY_MODE_COVERAGE:-1}"
 # Phase 4 (matrix flow) is OFF by default: it provisions several VMs at once,
 # so it runs on the weekly schedule, not nightly. CANARY_MATRIX=1 enables it.
 MATRIX="${CANARY_MATRIX:-0}"
+WINDOWS="${CANARY_WINDOWS:-0}"
+WINDOWS_TIMEOUT=2400    # s for a Windows VM to provision (+ IIS setup) and run
 
 PROVISION_TIMEOUT=480   # s to wait for a fresh runner to come online (~5-7 min)
 RUN_TIMEOUT=240         # s to wait for the run to reach a terminal state
@@ -119,6 +136,7 @@ ACCT=$(api GET "/api/projects/$PID/cloud-accounts" \
 # ── ensure a runner ──────────────────────────────────────────────────────────
 PROVISIONED=""
 APIBENCH_CGS=""  # space-separated apibench comparison-group ids to reap (phase 2)
+CREATED_CFGS=""  # space-separated test-config ids THIS run created (reaped on green)
 RUNNER_ID=$(api GET "/api/projects/$PID/testers" \
   | jq -r '[.[]|select(.power_state=="running" and .allocation=="idle")][0].tester_id // empty')
 
@@ -173,29 +191,68 @@ cleanup() {
     note "tearing down ephemeral runner ${PROVISIONED} ..."
     api DELETE "/api/projects/${PID:-}/testers/${PROVISIONED}?force=true" >/dev/null 2>&1 || true
   fi
+  # Delete the test-configs THIS run created. Nothing used to, so the project
+  # grew by several configs a night (probe + modes + every apibench/matrix cell)
+  # until the GET list — hard-capped at the 200 NEWEST rows — could no longer
+  # see the long-lived `soak-canary-probe` row, while UNIQUE(project_id,name)
+  # still rejected re-creating it: every run from 2026-08-13 on died with
+  # "a test config with this name already exists".
+  # test_run cascades from test_config, so a FAILED run keeps its configs —
+  # a red night stays inspectable in the UI — and only green runs sweep.
+  if [ -n "${CREATED_CFGS:-}" ] && [ -n "${PID:-}" ]; then
+    if [ "$code" = "0" ] && [ "${CANARY_KEEP_CONFIGS:-0}" != "1" ]; then
+      local c n=0
+      for c in ${CREATED_CFGS}; do
+        api DELETE "/api/v2/test-configs/${c}" >/dev/null 2>&1 && n=$((n + 1))
+      done
+      note "deleted ${n} canary test-config(s)"
+    else
+      note "keeping canary test-config(s) for inspection: ${CREATED_CFGS}"
+    fi
+  fi
   exit "$code"
 }
 trap cleanup EXIT
 
-# ── find-or-create a lightweight probe config ────────────────────────────────
+# ── reap canary configs leaked by earlier runs ───────────────────────────────
+# Everything the canary creates is named `soak-canary*`, so this only ever
+# touches its own rows — a human's configs in the same project are untouched.
+# Bounded by the same 200-newest list, which is fine: the leaked rows ARE the
+# newest, so a backlog drains at up to 200/run. Deleting a config cascades to
+# its runs, hence the TTL — recent nights stay inspectable.
+CFG_TTL_DAYS="${CANARY_CONFIG_TTL_DAYS:-7}"
+if [ "$CFG_TTL_DAYS" != "0" ]; then
+  CUTOFF=$(date -u -d "${CFG_TTL_DAYS} days ago" +%Y-%m-%d 2>/dev/null \
+    || date -u -v-"${CFG_TTL_DAYS}"d +%Y-%m-%d)
+  REAPED=0
+  for stale in $(api GET "/api/v2/projects/$PID/test-configs" \
+      | jq -r --arg c "$CUTOFF" \
+        '(if type=="array" then . else (.configs // .items // []) end)
+         | .[]? | select((.name // "") | startswith("soak-canary"))
+                | select(((.created_at // "")[0:10]) < $c) | .id // empty' 2>/dev/null); do
+    api DELETE "/api/v2/test-configs/$stale" >/dev/null 2>&1 && REAPED=$((REAPED + 1))
+  done
+  [ "$REAPED" -gt 0 ] && note "reaped $REAPED canary config(s) older than ${CFG_TTL_DAYS}d"
+fi
+
+# ── create a lightweight probe config (unique per run) ───────────────────────
 # dns+tcp+tls against a stable public host on :443 — produces attempt rows with
 # per-phase results without depending on an HTTP path (avoids the P1-4 class).
-# The config NAME is unique-constrained, so REUSE one canary config across runs
-# (creating one every night collides after the first and accumulates rows).
-CFG_NAME="soak-canary-probe"
-CFG_ID=$(api GET "/api/v2/projects/$PID/test-configs" \
-  | jq -r --arg n "$CFG_NAME" \
-    '(if type=="array" then . else (.configs // .items // []) end) | [.[]|select(.name==$n)][0].id // empty')
-if [ -z "$CFG_ID" ]; then
-  CFG=$(api POST "/api/v2/projects/$PID/test-configs" \
-    "$(jq -nc --arg n "$CFG_NAME" --arg h "$TARGET_HOST" \
-       '{name:$n,endpoint:{kind:"network",host:$h,port:443},workload:{modes:["dns","tcp","tls"],runs:2,concurrency:1,timeout_ms:5000}}')")
-  CFG_ID=$(jq -r '.id // empty' <<<"$CFG")
-  [ -n "$CFG_ID" ] || fail "config create failed: $(head -c 200 <<<"$CFG")"
-  note "created canary config $CFG_ID"
-else
-  note "reusing canary config $CFG_ID"
-fi
+#
+# This used to find-or-create ONE long-lived `soak-canary-probe` row. That is
+# unsound against this API: the list is capped at the 200 newest configs while
+# the name is unique per project, so once 200 newer rows existed the lookup
+# missed a row the create then collided with — unrecoverable, and exactly how
+# the canary died every night from 2026-08-13. A per-run name plus the teardown
+# sweep needs no lookup at all, and cannot collide.
+CFG_NAME="soak-canary-probe-$(date -u +%Y%m%dT%H%M%SZ)"
+CFG=$(api POST "/api/v2/projects/$PID/test-configs" \
+  "$(jq -nc --arg n "$CFG_NAME" --arg h "$TARGET_HOST" \
+     '{name:$n,endpoint:{kind:"network",host:$h,port:443},workload:{modes:["dns","tcp","tls"],runs:2,concurrency:1,timeout_ms:5000}}')")
+CFG_ID=$(jq -r '.id // empty' <<<"$CFG")
+[ -n "$CFG_ID" ] || fail "config create failed: $(head -c 200 <<<"$CFG")"
+CREATED_CFGS="${CREATED_CFGS} ${CFG_ID}"
+note "created canary config $CFG_ID ($CFG_NAME)"
 
 RUN=$(api POST "/api/v2/test-configs/$CFG_ID/launch" '{}')
 RUN_ID=$(jq -r '.run_id // .id // empty' <<<"$RUN")
@@ -273,14 +330,28 @@ deployment_id_of() {
 
 # capture_deploy_log <group-id> — dump the endpoint deploy-log tail to the summary.
 capture_deploy_log() {
-  local g8="${1:0:8}" dep log
-  dep=$(api GET "/api/projects/$PID/deployments?limit=30" \
-    | jq -r --arg g "cg-$g8" '[ (if type=="array" then . else (.deployments // .items // []) end)[]? | select((.name // "")|contains($g)) ][0] | (.id // .deployment_id // .deploymentId) // empty')
+  local g8="${1:0:8}" dep log deps
+  deps=$(api GET "/api/projects/$PID/deployments?limit=30")
+  # Prefer the deployment whose name carries this group's short id (apibench and
+  # matrix cells are named `…cg-<id>…`). The Windows/IIS cell is named
+  # `target-azure-…IIS-…` with no `cg-`, so fall back to the most recently
+  # created deployment — under the canary's serialized phases that is the cell
+  # that just failed. Without the fallback a phase-5 failure captured NOTHING
+  # (the very case this exists for).
+  dep=$(jq -r --arg g "cg-$g8" '(if type=="array" then . else (.deployments // .items // []) end) as $d
+        | ([ $d[]? | select((.name // "")|contains($g)) ][0] // $d[0]) | (.id // .deployment_id // .deploymentId) // empty' <<<"$deps")
   [ -n "$dep" ] || return 0
   log=$(api GET "/api/projects/$PID/deployments/$dep" | jq -r '.log // ""')
   [ -n "$log" ] || return 0
   summary "<details><summary>endpoint deploy log (tail) — deployment $dep</summary>"
-  summary ''; summary '```'; printf '%s\n' "$log" | tail -c 1800 >>"${GITHUB_STEP_SUMMARY:-/dev/stdout}"; summary '```'; summary "</details>"
+  summary ''; summary '```'
+  # Echo the tail to BOTH the step summary (when in CI) AND stdout, so a failed
+  # deploy is diagnosable straight from the CI *log stream* — not only from the
+  # job-summary tab (which is not in `gh run view --log` / the fetched logs).
+  local tail_log; tail_log=$(printf '%s\n' "$log" | tail -c 1800)
+  [ -n "${GITHUB_STEP_SUMMARY:-}" ] && printf '%s\n' "$tail_log" >>"$GITHUB_STEP_SUMMARY"
+  printf '%s\n' "$tail_log"
+  summary '```'; summary "</details>"
 }
 
 AB_ATTEMPTS=2
@@ -412,6 +483,7 @@ MC_CFG=$(api POST "/api/v2/projects/$PID/test-configs" \
        workload:{modes:$modes, runs:2, concurrency:1, timeout_ms:8000, capture_mode:"headers-only", payload_sizes:[]}}')")
 MC_CFG_ID=$(jq -r '.id // empty' <<<"$MC_CFG")
 [ -n "$MC_CFG_ID" ] || fail "phase 3: mode-coverage config create failed: $(head -c 200 <<<"$MC_CFG")"
+CREATED_CFGS="${CREATED_CFGS} ${MC_CFG_ID}"   # reaped on green by the EXIT trap
 
 MC_RUN=$(api POST "/api/v2/test-configs/$MC_CFG_ID/launch" '{}')
 MC_RUN_ID=$(jq -r '.run_id // .id // empty' <<<"$MC_RUN")
@@ -453,17 +525,17 @@ summary "✅ phase 3 (mode coverage): all matrix modes returned successful attem
 # check has ever exercised. This phase launches a small mixed matrix and
 # asserts the flow-level invariants: every cell gets its own config, its own
 # VM name, and reaches a terminal state without the group aborting.
+run_phase4() {
 if [ "$MATRIX" != "1" ]; then
   note "matrix-flow phase disabled (CANARY_MATRIX=$MATRIX) — skipping"
-  note "CANARY PASS (phases 1 + 2 + 3)"
-  exit 0
+  return 0
 fi
 
 note "phase 4: multi-cell matrix flow (concurrent provisioning)"
 MX_NAME="soak-canary-matrix-$(date -u +%Y%m%dT%H%M%SZ)"
 # 3 linux cells across DIFFERENT stacks: enough to exercise concurrency, the
 # IP-quota throttle and per-cell naming without a large cloud bill.
-MX_CELLS=$(jq -nc --arg acct "$ACCOUNT_ID" '[
+MX_CELLS=$(jq -nc --arg acct "$ACCT" '[
   {label:"canary linux · nginx",   endpoint:{kind:"pending", cloud_account_id:$acct, region:"eastus", vm_size:"Standard_B2s", os:"linux", proxy_stack:"nginx",   language:"rust"}},
   {label:"canary linux · caddy",   endpoint:{kind:"pending", cloud_account_id:$acct, region:"eastus", vm_size:"Standard_B2s", os:"linux", proxy_stack:"caddy",   language:"rust"}},
   {label:"canary linux · traefik", endpoint:{kind:"pending", cloud_account_id:$acct, region:"eastus", vm_size:"Standard_B2s", os:"linux", proxy_stack:"traefik", language:"rust"}}
@@ -485,7 +557,7 @@ note "  matrix ${MX_CG_ID:0:8}: launched=${MX_OK}/${MX_TOTAL} failed=${MX_FAILED
 [ "$MX_OK" = "3" ] || fail "phase 4: only ${MX_OK}/3 cells launched — errors: $(jq -c '.errors // []' <<<"$MX_LAUNCH")"
 
 # Every cell must get its OWN config (the v0.28.129 shared-name collision).
-MX_RUNS=$(api GET "/api/v2/test-runs?comparison_group_id=$MX_CG_ID&limit=20")
+MX_RUNS=$(api GET "/api/v2/projects/$PID/test-runs?comparison_group_id=$MX_CG_ID&limit=20")
 MX_CFG_COUNT=$(jq -r '[ (if type=="array" then . else (.runs // .items // .data // []) end)[]? | (.test_config_id // empty) ] | unique | length' <<<"$MX_RUNS")
 [ "$MX_CFG_COUNT" = "3" ] || fail "phase 4: cells share configs (${MX_CFG_COUNT} distinct for 3 cells) — v0.28.129 collision class"
 
@@ -493,7 +565,7 @@ MX_CFG_COUNT=$(jq -r '[ (if type=="array" then . else (.runs // .items // .data 
 # so this is the only automated check on that interaction.
 deadline=$((SECONDS + MATRIX_TIMEOUT))
 while :; do
-  MX_STATE=$(api GET "/api/v2/test-runs?comparison_group_id=$MX_CG_ID&limit=20" \
+  MX_STATE=$(api GET "/api/v2/projects/$PID/test-runs?comparison_group_id=$MX_CG_ID&limit=20" \
     | jq -r '[ (if type=="array" then . else (.runs // .items // .data // []) end)[]? | (.status // "?") ] | join(",")')
   note "    cells: $MX_STATE"
   case "$MX_STATE" in *queued*|*provisioning*|*running*) : ;; *) break ;; esac
@@ -501,7 +573,7 @@ while :; do
   sleep 30
 done
 
-MX_FINAL=$(api GET "/api/v2/test-runs?comparison_group_id=$MX_CG_ID&limit=20")
+MX_FINAL=$(api GET "/api/v2/projects/$PID/test-runs?comparison_group_id=$MX_CG_ID&limit=20")
 MX_DONE=$(jq -r '[ (if type=="array" then . else (.runs // .items // .data // []) end)[]? | select((.status // "")=="completed") ] | length' <<<"$MX_FINAL")
 MX_ERRS=$(jq -r '[ (if type=="array" then . else (.runs // .items // .data // []) end)[]? | select((.status // "")!="completed") | "\(.status // "?"): \((.error_message // "")[0:70])" ] | join(" | ")' <<<"$MX_FINAL")
 
@@ -515,4 +587,68 @@ summary "- cells completed: ${MX_DONE}/3"
 [ "$MX_DONE" -ge 2 ] || fail "phase 4: only ${MX_DONE}/3 matrix cells completed — the multi-cell flow regressed: ${MX_ERRS}"
 
 summary "✅ phase 4 (matrix flow): ${MX_DONE}/3 concurrent cells completed with distinct configs."
-note "CANARY PASS (phases 1 + 2 + 3 + 4)"
+note "phase 4 PASS"
+}
+run_phase4
+
+# ── PHASE 5: WINDOWS SERVER + IIS ENDPOINT CELL ──────────────────────────────
+# Everything above is Linux. The Windows/IIS target has its own failure class:
+# http.sys rejected every tester HTTP/2 request until v0.28.208 (missing
+# :scheme/:authority — http2/pageload2/download2/upload2 0/N against IIS in
+# prod, invisible to the Linux canary), the IIS payload lacked /ws (websocket
+# 404), and IIS serves HTTP/3 only via SNI hostname bindings. This phase
+# provisions one Windows+IIS cell through the real deploy path and asserts
+# every deterministic proxy mode succeeds. h3 modes are excluded (the gate
+# drops them for iis; see shared/http-stacks.json). Torn down with the group.
+if [ "$WINDOWS" != "1" ]; then
+  note "windows/iis phase disabled (CANARY_WINDOWS=$WINDOWS) — skipping"
+  note "CANARY PASS (phases 1 + 2 + 3$([ "$MATRIX" = "1" ] && echo " + 4"))"
+  exit 0
+fi
+
+note "phase 5: Windows Server + IIS endpoint cell (provision ~10-15 min)"
+WIN_NAME="soak-canary-windows-iis-$(date -u +%Y%m%dT%H%M%SZ)"
+WIN_MODES='["tcp","dns","tls","tlsresume","http1","http2","curl","download","upload","pageload","pageload2","websocket","udp","stamp"]'   # stamp needs UDP 9997, opened since v0.28.213
+# The Windows cell installs a reference API for apibench; the language must be
+# in install.ps1's Windows-viable set (csharp-net*, go, nodejs, python, java —
+# rust/cpp/ruby/php are Linux-only, install.ps1:2808). `rust` here made every
+# phase-5 run fail deterministically at ~31s ("install.sh exited with code 1",
+# no VM) — install.sh dispatched an unsupported rust reference-API install on
+# Windows. `go` is the lightest Windows-viable choice.
+WIN_CELLS=$(jq -nc --arg acct "$ACCT" '[
+  {label:"canary windows · iis", endpoint:{kind:"pending", cloud_account_id:$acct, region:"eastus", vm_size:"Standard_B2s", os:"windows", proxy_stack:"iis", language:"go"}}
+]')
+WIN_CG=$(api POST "/api/v2/projects/$PID/comparison-groups"   "$(jq -nc --arg n "$WIN_NAME" --argjson cells "$WIN_CELLS" --argjson modes "$WIN_MODES"      '{name:$n, base_workload:{modes:$modes, runs:2, concurrency:1, timeout_ms:15000, capture_mode:"headers-only", payload_sizes:[]}, cells:$cells}')")
+WIN_CG_ID=$(jq -r '.id // empty' <<<"$WIN_CG")
+[ -n "$WIN_CG_ID" ] || fail "phase 5: windows group create failed: $(head -c 200 <<<"$WIN_CG")"
+APIBENCH_CGS="${APIBENCH_CGS:-} ${WIN_CG_ID}"   # torn down by the EXIT trap
+
+WIN_LAUNCH=$(api POST "/api/v2/comparison-groups/$WIN_CG_ID/launch" '{}')
+[ "$(jq -r '.launched // 0' <<<"$WIN_LAUNCH")" = "1" ] || fail "phase 5: windows cell did not launch: $(jq -c '.errors // []' <<<"$WIN_LAUNCH")"
+note "  windows group ${WIN_CG_ID:0:8} launched; adjustments: $(jq -c '.adjustments // []' <<<"$WIN_LAUNCH")"
+
+deadline=$((SECONDS + WINDOWS_TIMEOUT)); WIN_RUN=""; WIN_STATUS=""
+while :; do
+  WIN_RUNS=$(api GET "/api/v2/projects/$PID/test-runs?comparison_group_id=$WIN_CG_ID&limit=5")
+  WIN_RUN=$(jq -r '(if type=="array" then . else (.runs // .items // .data // []) end)[0].id // empty' <<<"$WIN_RUNS")
+  WIN_STATUS=$(jq -r '(if type=="array" then . else (.runs // .items // .data // []) end)[0].status // "?"' <<<"$WIN_RUNS")
+  note "    windows cell: $WIN_STATUS"
+  case "$WIN_STATUS" in completed|failed|partial|cancelled|error) break;; esac
+  [ "$SECONDS" -ge "$deadline" ] && { capture_deploy_log "$WIN_CG_ID"; fail "phase 5: windows cell did not settle within ${WINDOWS_TIMEOUT}s (last=$WIN_STATUS)"; }
+  sleep 30
+done
+[ -n "$WIN_RUN" ] || fail "phase 5: no run for the windows cell"
+[ "$WIN_STATUS" = "completed" ] || { capture_deploy_log "$WIN_CG_ID"; fail "phase 5: windows cell ended '$WIN_STATUS' — $(api GET "/api/v2/test-runs/$WIN_RUN" | jq -r '.error_message // ""' | head -c 200)"; }
+
+WIN_ATT=$(api GET "/api/v2/test-runs/$WIN_RUN/attempts?limit=300")
+WIN_STATS=$(jq -c '(if type=="array" then . else (.attempts // .items // .data // []) end)
+  | group_by(.protocol) | map({m:.[0].protocol, ok:(map(select(.success==true))|length), n:length})' <<<"$WIN_ATT")
+WIN_LINE=$(jq -r 'map("\(.m) \(.ok)/\(.n)")|join(" · ")' <<<"$WIN_STATS")
+WIN_BROKEN=$(jq -r '[.[]|select(.ok==0)|.m]|join(", ")' <<<"$WIN_STATS")
+WIN_H2=$(jq -r '[.[]|select(.m=="http2" or .m=="pageload2")|.ok]|add // 0' <<<"$WIN_STATS")
+summary "### Phase 5 (Windows Server + IIS cell) — run \`$WIN_RUN\`"
+summary "- $WIN_LINE"
+[ -z "$WIN_BROKEN" ] || fail "phase 5: mode(s) with ZERO successes through IIS: $WIN_BROKEN"
+[ "$WIN_H2" -gt 0 ] || fail "phase 5: HTTP/2 through IIS produced no successes (h2 :scheme/:authority regression?)"
+summary "✅ phase 5 (windows/iis): every mode succeeded through IIS (h2 ok=$WIN_H2)."
+note "CANARY PASS (phases 1 + 2 + 3$([ "$MATRIX" = "1" ] && echo " + 4") + 5)"

@@ -54,7 +54,20 @@ public sealed record HeartbeatMessage(
     [property: JsonPropertyName("version")] string? Version,
     [property: JsonPropertyName("capabilities")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    AgentCapabilities? Capabilities = null
+    AgentCapabilities? Capabilities = null,
+    // Additive (v0.28.211+): the runner's host OS / CPU architecture
+    // ("windows"|"linux"|"macos", "x86_64"|"aarch64"|…) — the same words the
+    // `health` command verb reports (RunnerCapabilities.HostOs/HostArch).
+    // Omitted when null so older control planes see the previous shape; a
+    // newer control plane persists them on agent.os / agent.arch so a mixed
+    // Linux + Windows runner pool is visible per runner (agents list,
+    // lab.sh status).
+    [property: JsonPropertyName("os")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? Os = null,
+    [property: JsonPropertyName("arch")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? Arch = null
 ) : AgentMessage;
 
 /// <summary>Runner tool inventory carried on the heartbeat:
@@ -104,7 +117,20 @@ public sealed record RunFinishedMessage(
     BenchmarkArtifactPayload? Artifact,
     [property: JsonPropertyName("envelope")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    JsonElement? Envelope = null
+    JsonElement? Envelope = null,
+    // Authoritative end-of-run totals (additive, v0.28.214+). run_progress -
+    // which the control plane used as its ONLY source for the counters - rides
+    // the LOSSY fast path: when the outbound channel saturates every progress
+    // frame is dropped and a finished run reports ok=0/fail=0 even though the
+    // tester measured 22 successes (native Windows lab, 2026-08-17). The
+    // terminal frame is delivered on the critical path, so carrying the totals
+    // here makes the counters self-sufficient. Null from older agents.
+    [property: JsonPropertyName("attempts_ok")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    uint? AttemptsOk = null,
+    [property: JsonPropertyName("attempts_failed")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    uint? AttemptsFailed = null
 ) : AgentMessage;
 
 /// <summary><c>{"type":"error","run_id":?,"message":...}</c> — <c>run_id</c> omitted

@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Security;
 using Npgsql;
+using Networker.ControlPlane.Provisioning;
 using Networker.Data;
 using Networker.Data.Entities;
 
@@ -340,6 +341,11 @@ public sealed class AgentMessageProcessor
     /// heartbeat AgentStatus would be a redundant flap, so it is omitted to stay
     /// byte-for-byte with the Rust bus output).
     /// </summary>
+    /// <summary>Test seam: drive one heartbeat (no wire frame) — used by the
+    /// provisioning-recovery regression tests.</summary>
+    internal Task OnHeartbeatForTests(Guid agentId, CancellationToken ct = default) =>
+        OnHeartbeat(agentId, new HeartbeatMessage(Load: null, Version: null, Capabilities: null), ct);
+
     private async Task OnHeartbeat(Guid agentId, HeartbeatMessage hb, CancellationToken ct)
     {
         var agent = await _db.Agents.AsTracking().FirstOrDefaultAsync(a => a.AgentId == agentId, ct);
@@ -361,6 +367,16 @@ public sealed class AgentMessageProcessor
             {
                 agent.Tags = merged;
             }
+        }
+        // Host OS / arch (additive, v0.28.211+): persisted once, then only on a
+        // real change — the steady-state heartbeat stays write-free.
+        if (!string.IsNullOrEmpty(hb.Os) && !string.Equals(agent.Os, hb.Os, StringComparison.Ordinal))
+        {
+            agent.Os = hb.Os;
+        }
+        if (!string.IsNullOrEmpty(hb.Arch) && !string.Equals(agent.Arch, hb.Arch, StringComparison.Ordinal))
+        {
+            agent.Arch = hb.Arch;
         }
         if (!string.IsNullOrEmpty(hb.Version))
         {
@@ -409,6 +425,32 @@ public sealed class AgentMessageProcessor
                     .SetProperty(t => t.PowerState, "running")
                     .SetProperty(t => t.StatusMessage, (string?)null)
                     .SetProperty(t => t.UpdatedAt, DateTime.UtcNow), ct);
+
+            // `provisioning` is normally owned by the create-path task, which does
+            // this transition itself — but when that task is GONE (the control
+            // plane restarted mid-provision: every deploy does this) nothing ever
+            // finished the flow, and the tester stayed `provisioning` forever:
+            // unusable in the UI, skipped by auto-shutdown (so the VM billed on),
+            // while its agent heartbeated happily. A heartbeat is proof the VM is
+            // up AND the install produced a working agent, so an UNOWNED
+            // provisioning row converges to running here (prod sweep, v0.28.213).
+            if (!TesterState.IsProvisioningOwnedHere(reconTesterId))
+            {
+                var recovered = await _db.ProjectTesters
+                    .Where(t => t.TesterId == reconTesterId && t.PowerState == "provisioning")
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(t => t.PowerState, "running")
+                        .SetProperty(t => t.StatusMessage,
+                            "recovered: the agent came online but the provisioning task was lost "
+                            + "(control plane restart) — power state reconciled from the heartbeat")
+                        .SetProperty(t => t.UpdatedAt, DateTime.UtcNow), ct);
+                if (recovered > 0)
+                {
+                    _logger.LogWarning(
+                        "Tester {TesterId} was stuck in provisioning with no owning task; reconciled to "
+                        + "running from agent {AgentId}'s heartbeat", reconTesterId, agent.AgentId);
+                }
+            }
         }
 
         await _db.SaveChangesAsync(ct);
@@ -614,6 +656,42 @@ public sealed class AgentMessageProcessor
                 "Ignored run_finished ({Status}) for run {RunId}: run is missing or already terminal",
                 rf.Status, rf.RunId);
             return;
+        }
+
+        // Authoritative end-of-run counters (v0.28.214). run_progress - until
+        // now the ONLY source for success_count/failure_count - rides the lossy
+        // fast path, so a saturated agent channel produced runs that finished
+        // "completed ok=0 fail=0" while the tester had measured 22 successes
+        // (native Windows lab, 2026-08-17). The terminal frame is delivered on
+        // the critical path, so its totals win when present.
+        if (rf.AttemptsOk is { } reportedOk && rf.AttemptsFailed is { } reportedFail)
+        {
+            await _db.TestRuns
+                .Where(r => r.Id == rf.RunId)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(r => r.SuccessCount, reportedOk)
+                    .SetProperty(r => r.FailureCount, reportedFail), ct);
+
+            // The agent measured attempts but none of them reached the database:
+            // every attempt frame was dropped (channel saturation) or the probe
+            // schema rejected them. Such a run must NOT read as a clean success
+            // with an empty attempts list - stamp the reason where the UI, the
+            // API and lab/validate.sh all see it.
+            if (reportedOk + reportedFail > 0
+                && _db.Database.GetDbConnection() is NpgsqlConnection countConn
+                && await AttemptPersister.CountForRunAsync(countConn, rf.RunId, ct) == 0)
+            {
+                var lost = reportedOk + reportedFail;
+                var msg = $"The agent measured {lost} attempt(s) but none of them reached the database - "
+                    + "the attempt frames were lost in transit or rejected on ingest, so this run has "
+                    + "counters but no data. Check the agent log for dropped frames.";
+                await _db.TestRuns
+                    .Where(r => r.Id == rf.RunId)
+                    .ExecuteUpdateAsync(s => s.SetProperty(r => r.ErrorMessage, msg), ct);
+                _logger.LogError(
+                    "Run {RunId} finished '{Status}' with {Lost} measured attempt(s) but ZERO persisted - frames lost in transit or rejected on ingest",
+                    rf.RunId, rf.Status, lost);
+            }
         }
 
         if (rf.Artifact is { } art)

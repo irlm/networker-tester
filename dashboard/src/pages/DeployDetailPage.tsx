@@ -155,6 +155,25 @@ export function DeployDetailPage() {
     }
   };
 
+  // Retry re-runs the SAME config as a fresh deployment. install.sh is
+  // idempotent, so an interrupted or environmentally-failed deploy can be
+  // re-driven without rebuilding the wizard. The old failed row is left in
+  // place for reference (delete it separately if unwanted).
+  const [retrying, setRetrying] = useState(false);
+  const handleRetry = async () => {
+    if (!deployment?.config) return;
+    setRetrying(true);
+    try {
+      const base = (deployment.name || 'deployment').replace(/-retry(-\d+)?$/, '');
+      const created = await api.createDeployment(projectId, `${base}-retry`, deployment.config);
+      addToast('success', 'Retrying deployment');
+      navigate(`/projects/${projectId}/deploy/${created.deployment_id}`);
+    } catch {
+      addToast('error', 'Failed to retry deployment');
+      setRetrying(false);
+    }
+  };
+
   // Use live WebSocket lines while deployment is active, DB log when done.
   const logLines: string[] =
     liveLines.length > 0
@@ -241,6 +260,15 @@ export function DeployDetailPage() {
                   Update Target
                 </button>
               )}
+              {isOperator && (deployment?.status === 'failed' || deployment?.status === 'cancelled') && (
+                <button
+                  onClick={handleRetry}
+                  disabled={retrying}
+                  className="bg-cyan-600/20 border border-cyan-500/30 hover:bg-cyan-600/30 text-cyan-300 px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50"
+                >
+                  {retrying ? 'Retrying…' : 'Retry'}
+                </button>
+              )}
               {!isOperator ? null : !confirmDelete ? (
                 <button
                   onClick={() => setConfirmDelete(true)}
@@ -277,7 +305,15 @@ export function DeployDetailPage() {
         </span>
         <span className="text-gray-400">
           Targets <span className="text-gray-200 ml-1">
-            {hasEndpoints ? (deployment?.endpoint_ips || []).join(', ') : '\u2014'}
+            {hasEndpoints
+              ? (deployment?.endpoint_ips || []).map((ip, i) => {
+                  // Show the dispatched hostname next to the ip when the deploy
+                  // recorded one (endpoint_hosts, V050) — that is what a proxy
+                  // run connects to (SNI → HTTP/3 through IIS).
+                  const host = deployment?.endpoint_hosts?.[i];
+                  return host && host !== ip ? `${host} (${ip})` : ip;
+                }).join(', ')
+              : '\u2014'}
           </span>
         </span>
         <span className="text-gray-400">

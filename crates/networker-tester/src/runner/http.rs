@@ -624,7 +624,7 @@ async fn run_http_or_tcp(
             )
             .await
         }
-        Protocol::Http2 | Protocol::Download2 | Protocol::Upload2 => {
+        ref p if speaks_http2(p) => {
             send_http2(
                 io_box,
                 &host,
@@ -912,6 +912,16 @@ fn make_upload_body(total_bytes: usize) -> BoxBody<Bytes, Infallible> {
 /// until the lab's Windows target caught it (v0.28.208). The port is always
 /// spelled out (`:authority` = `host:port`), which is what the endpoint URL
 /// says and avoids default-port guessing per scheme.
+/// The probe protocols carried over HTTP/2 — the ALPN advertisement and the
+/// `send_http2` dispatch MUST agree, so both read this one predicate. (h3 modes
+/// use QUIC and never reach the TLS/ALPN path here.)
+pub(crate) fn speaks_http2(protocol: &Protocol) -> bool {
+    matches!(
+        protocol,
+        Protocol::Http2 | Protocol::Download2 | Protocol::Upload2
+    )
+}
+
 pub(crate) fn h2_absolute_uri(scheme: &str, host: &str, port: u16, path_and_query: &str) -> String {
     format!("{scheme}://{host}:{port}{path_and_query}")
 }
@@ -1357,10 +1367,17 @@ pub(crate) fn build_tls_config(
             .with_no_client_auth()
     };
 
-    // Advertise ALPN
-    config.alpn_protocols = match protocol {
-        Protocol::Http2 => vec![b"h2".to_vec()],
-        _ => vec![b"http/1.1".to_vec()],
+    // Advertise ALPN. MUST list every protocol that later takes the
+    // `send_http2` branch in `run_probe` — `download2` / `upload2` were missing
+    // here, so the client offered only `http/1.1`, the server negotiated h1 and
+    // the h2 client then spoke h2 on an h1 connection: every TLS `download2` /
+    // `upload2` attempt failed instantly with "http2 error" on every target
+    // (found by the prod mode sweep, v0.28.213; `speaks_http2` is now the single
+    // source both sites read).
+    config.alpn_protocols = if speaks_http2(protocol) {
+        vec![b"h2".to_vec()]
+    } else {
+        vec![b"http/1.1".to_vec()]
     };
 
     Ok(config)
@@ -1656,6 +1673,42 @@ mod tests {
         .unwrap();
         assert_eq!(req1.uri().scheme_str(), None);
         assert_eq!(req1.headers().get("host").unwrap(), "example.com");
+    }
+
+    #[test]
+    fn alpn_matches_the_send_http2_dispatch_for_every_protocol() {
+        init_crypto();
+        // The regression the prod sweep caught: download2/upload2 negotiated
+        // http/1.1 and then spoke h2 → instant "http2 error". ALPN and the
+        // send_http2 branch must agree for every protocol, forever.
+        for p in [Protocol::Http2, Protocol::Download2, Protocol::Upload2] {
+            assert!(speaks_http2(&p), "{p:?} must be treated as h2");
+            let cfg = build_tls_config(&p, false, None).unwrap();
+            assert_eq!(
+                cfg.alpn_protocols,
+                vec![b"h2".to_vec()],
+                "{p:?} must advertise h2"
+            );
+        }
+        for p in [
+            Protocol::Http1,
+            Protocol::Download,
+            Protocol::Download1,
+            Protocol::Upload,
+            Protocol::Upload1,
+            Protocol::WebDownload,
+            Protocol::WebUpload,
+            Protocol::SdkProbe,
+            Protocol::Tcp,
+        ] {
+            assert!(!speaks_http2(&p), "{p:?} must stay on h1");
+            let cfg = build_tls_config(&p, false, None).unwrap();
+            assert_eq!(
+                cfg.alpn_protocols,
+                vec![b"http/1.1".to_vec()],
+                "{p:?} must advertise http/1.1"
+            );
+        }
     }
 
     #[test]

@@ -302,6 +302,7 @@ function LogsTab() {
   const [search, setSearch] = useState('');
   const [paused, setPaused] = useState(false);
   const [truncated, setTruncated] = useState(false);
+  const [logSink, setLogSink] = useState<string | undefined>(undefined);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const fetchLogs = useCallback(async () => {
@@ -314,6 +315,7 @@ function LogsTab() {
       });
       setLogs(data.entries);
       setTruncated(data.truncated);
+      setLogSink(data.log_sink);
     } catch {
       // retry on next poll
     }
@@ -397,7 +399,14 @@ function LogsTab() {
         ref={containerRef}
         className="max-h-[600px] overflow-y-auto border border-gray-800 rounded bg-[var(--bg-card)] p-3 text-xs leading-relaxed"
       >
-        {logs.length === 0 && (
+        {logs.length === 0 && logSink === 'unconfigured' && (
+          <p className="text-faint text-center py-4">
+            Log persistence isn't configured for this deployment. Control-plane
+            logs are written to the host (journald/stdout), not stored in the
+            database.
+          </p>
+        )}
+        {logs.length === 0 && logSink !== 'unconfigured' && (
           <p className="text-faint text-center py-4">No log entries</p>
         )}
         {logs.map((entry, i) => {

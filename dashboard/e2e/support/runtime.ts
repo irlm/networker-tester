@@ -35,6 +35,7 @@ export const authenticatedRoutes = [
   ['application network report', `/projects/${PID}/reports/app-network`],
   ['leaderboard', '/leaderboard'],
   ['system dashboard', '/admin/system'],
+  ['run-execution canary', '/admin/canary'],
   ['performance log', '/admin/perf-log'],
   ['benchmark tokens', '/bench-tokens'],
   ['users', '/users'],
@@ -102,6 +103,15 @@ export async function stubRuntime(page: Page) {
       return json({
         live: { core_db: true, logs_db: true },
         checks: [],
+      });
+    }
+    if (path.endsWith('/api/admin/canary')) {
+      return json({
+        configured: false,
+        owner: 'irlm',
+        repo: 'networker-tester',
+        workflow: 'soak-canary.yml',
+        actions_url: 'https://github.com/irlm/networker-tester/actions',
       });
     }
     if (path.endsWith(`/api/projects/${PID}/members`)) return json({ members: [] });

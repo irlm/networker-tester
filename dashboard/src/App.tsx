@@ -56,6 +56,7 @@ const AcceptInvitePage = lazyPage(() => import('./pages/AcceptInvitePage'), 'Acc
 const CommandApprovalsPage = lazyPage(() => import('./pages/CommandApprovalsPage'), 'CommandApprovalsPage');
 const SystemDashboardPage = lazyPage(() => import('./pages/SystemDashboardPage'), 'SystemDashboardPage');
 const PerfLogPage = lazyPage(() => import('./pages/PerfLogPage'), 'PerfLogPage');
+const CanaryPage = lazyPage(() => import('./pages/CanaryPage'), 'CanaryPage');
 const LeaderboardPage = lazyPage(() => import('./pages/LeaderboardPage'), 'LeaderboardPage');
 const BenchmarkCatalogPage = lazyPage(() => import('./pages/BenchmarkCatalogPage'), 'BenchmarkCatalogPage');
 const BenchmarkConfigResultsPage = lazyPage(() => import('./pages/BenchmarkConfigResultsPage'), 'BenchmarkConfigResultsPage');
@@ -211,7 +212,7 @@ function AuthenticatedApp() {
             <Route path="/projects/:projectId/runs" element={<RunsPage />} />
             <Route
               path="/projects/:projectId/runs/new"
-              element={<Navigate to="../tests/new" replace relative="path" />}
+              element={<Navigate to="../../tests/new" replace relative="path" />}
             />
             {/* Scenario launcher — pre-fills one of the four flows below */}
             <Route path="/projects/:projectId/scenarios" element={<ScenariosPage />} />
@@ -221,7 +222,7 @@ function AuthenticatedApp() {
             {/* PROBE — canonical /probe; legacy /diagnostics redirected */}
             <Route path="/projects/:projectId/probe" element={<DiagnosticsPage />} />
             <Route path="/projects/:projectId/diagnostics" element={<Navigate to="../probe" replace relative="path" />} />
-            <Route path="/projects/:projectId/runs/new/probe" element={<Navigate to="../../probe" replace relative="path" />} />
+            <Route path="/projects/:projectId/runs/new/probe" element={<Navigate to="../../../probe" replace relative="path" />} />
             {/* NETWORK — per-endpoint runs-list (preset cards + colored mode chips) */}
             <Route path="/projects/:projectId/network/:endpointId" element={<EndpointRunsPage />} />
             <Route path="/projects/:projectId/runs/compare" element={<RunComparePage />} />
@@ -235,7 +236,7 @@ function AuthenticatedApp() {
                 on Runs. */}
             <Route
               path="/projects/:projectId/tests/:jobId"
-              element={<Navigate to="../runs" replace relative="path" />}
+              element={<Navigate to="../../runs" replace relative="path" />}
             />
             <Route path="/projects/:projectId/benchmarks" element={<Navigate to="../runs?has_artifact=yes" replace relative="path" />} />
             <Route path="/projects/:projectId/benchmark-wizard" element={<Navigate to="../runs/new" replace relative="path" />} />
@@ -251,11 +252,11 @@ function AuthenticatedApp() {
             {/* Redirects: old tab URLs + pre-v0.27.22 URLs → /vms */}
             <Route
               path="/projects/:projectId/vms/testers"
-              element={<Navigate to="../vms" replace relative="path" />}
+              element={<Navigate to=".." replace relative="path" />}
             />
             <Route
               path="/projects/:projectId/vms/endpoints"
-              element={<Navigate to="../vms" replace relative="path" />}
+              element={<Navigate to=".." replace relative="path" />}
             />
             <Route
               path="/projects/:projectId/deploy"
@@ -296,6 +297,7 @@ function AuthenticatedApp() {
             <Route path="/leaderboard" element={<LeaderboardPage />} />
             {isPlatformAdmin && <Route path="/admin/system" element={<SystemDashboardPage />} />}
             {isPlatformAdmin && <Route path="/admin/perf-log" element={<PerfLogPage />} />}
+            {isPlatformAdmin && <Route path="/admin/canary" element={<CanaryPage />} />}
             {isPlatformAdmin && <Route path="/bench-tokens" element={<BenchTokensPage />} />}
             {/* Token history merged into the tokens page as a tab (UI-3). */}
             {isPlatformAdmin && <Route path="/bench-tokens/history" element={<Navigate to="/bench-tokens?tab=history" replace />} />}
