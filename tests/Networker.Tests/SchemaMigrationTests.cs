@@ -55,9 +55,9 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
     // ── Migration chain ─────────────────────────────────────────────────
 
     [Fact]
-    public void Fresh_database_applies_the_full_chain_v002_to_v050()
+    public void Fresh_database_applies_the_full_chain_v002_to_v051()
     {
-        Assert.Equal(Enumerable.Range(2, 49), _fx.FreshRun.Applied);
+        Assert.Equal(Enumerable.Range(2, 50), _fx.FreshRun.Applied);
         Assert.Empty(_fx.FreshRun.AlreadyApplied);
     }
 
@@ -70,7 +70,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
 
         Assert.True(second.WasUpToDate);
         Assert.Empty(second.Applied);
-        Assert.Equal(Enumerable.Range(2, 49), second.AlreadyApplied);
+        Assert.Equal(Enumerable.Range(2, 50), second.AlreadyApplied);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
             }
         }
 
-        Assert.Equal(Enumerable.Range(2, 49), recorded);
+        Assert.Equal(Enumerable.Range(2, 50), recorded);
     }
 
     // ── EF-model equivalence ────────────────────────────────────────────
@@ -159,6 +159,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
         await db.AlertRules.ToListAsync(); queried++;
         await db.AlertEvents.ToListAsync(); queried++;
         await db.BenchmarkRegressions.ToListAsync(); queried++;
+        await db.CanaryDispatches.ToListAsync(); queried++;
 
         // If someone adds a DbSet without extending this list, fail loudly so
         // the new entity is covered by the equivalence proof too.
