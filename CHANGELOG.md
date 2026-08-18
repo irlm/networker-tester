@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.224] - 2026-08-17
+
+### Fixed
+
+- **The second macOS-only flake of the day, same family as the first** —
+  `bind_h3_succeeds_on_a_free_udp_port_and_fails_on_a_taken_one` went red on
+  `QUIC bind on a free UDP port should succeed: bind QUIC endpoint: Address
+  already in use (os error 48)`: the assertion that a bind must SUCCEED, failing
+  because the port was taken. The test learned a free port by binding a probe
+  socket, reading its number, dropping it, and then re-binding that number — and
+  for the whole gap between the drop and the re-bind, nothing reserved the port.
+  On a loaded runner something else claimed it. macOS shows this far more often
+  than Linux because its ephemeral range is roughly half the size, so a
+  just-released port comes back around much sooner. The bind now asks for port
+  0 and lets the kernel choose during the bind itself, which is atomic — there
+  is no longer a window to lose. `Test (macos-latest)` is not a required check,
+  so this was reddening runs without blocking them.
+
+---
+
 ## [0.28.223] - 2026-08-17
 
 ### Fixed

@@ -524,12 +524,16 @@ pub mod server {
             let _ = rustls::crypto::ring::default_provider().install_default();
             let (cert, key) = test_cert();
 
-            // Free port: bind must succeed.
-            let probe = UdpSocket::bind("0.0.0.0:0").unwrap();
-            let free_port = probe.local_addr().unwrap().port();
-            drop(probe);
-            let addr = SocketAddr::from(([0, 0, 0, 0], free_port));
-            let ok = bind_h3(&cert, &key, addr);
+            // Free port: bind must succeed. Port 0 makes the KERNEL pick the
+            // free port as part of the bind itself, which is atomic. Asking for
+            // a specific port instead means first learning that a port is free
+            // and only then binding it — and whatever the test does in between,
+            // the port is unreserved for that whole window. This test used to
+            // bind a probe socket, read its port, drop it and re-bind that
+            // number; on a loaded macOS runner something else claimed the port
+            // inside the gap and the run went red on `Address already in use
+            // (os error 48)` — from the assertion that the bind must SUCCEED.
+            let ok = bind_h3(&cert, &key, SocketAddr::from(([0, 0, 0, 0], 0)));
             assert!(
                 ok.is_ok(),
                 "QUIC bind on a free UDP port should succeed: {:#}",
