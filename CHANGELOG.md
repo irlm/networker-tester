@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.229] - 2026-08-18
+
+### Added
+
+- **Canary run history — in product AND in the database.** The admin canary
+  panel (`/admin/canary`) now shows two histories under the trigger: a
+  **Dispatch history** persisted in our own database (new `canary_dispatch`
+  table, migration V051) recording who triggered each in-product run, when,
+  against which ref and with which inputs — durable even when GitHub is
+  unreachable and visible from any deployment sharing the database — and a
+  live **Recent runs on GitHub** list (includes runs triggered outside the
+  product). GitHub's `workflow_dispatch` API returns no run id, so a new
+  `CanaryRunPoller` background loop links each dispatch to its Actions run
+  and backfills status/conclusion until the run completes (steady-state
+  GitHub API cost: zero). New endpoints: `GET /api/admin/canary/history`
+  (DB-backed) and `GET /api/admin/canary/runs` (live, degrades to an empty
+  list when no `CANARY_GITHUB_TOKEN` is configured); both GlobalAdmin-gated
+  like the rest of the canary surface.
+
 ## [0.28.228] - 2026-08-18
 
 - **Comparison groups can now be deleted (#775).** Added `DELETE /api/v2/comparison-groups/{id}` (project-Operator, row-level authz like the flat test-config delete) — a hard delete of the group row that returns 204 on success and 404 on absent/no-access. Previously there was no delete route (405). The `test_run` FK is `ON DELETE SET NULL`, so the group's runs survive detached rather than being cascaded away.

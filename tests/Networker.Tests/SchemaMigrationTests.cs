@@ -724,6 +724,7 @@ public sealed class MigrationScriptFreezeTests
         ["V048_strip_endpoint_only_modes_from_url_configs.sql"] = "629e07f03f878ffbbcff474597c9f4783c7d3cc19fd5d5fd77a9535155a237c8",
         ["V049_provision_retry_columns.sql"] = "d06c0e1967f6228523284609dc6bdd54b10d3044762bc6cf2c6eabdcadc93c9d",
         ["V050_deployment_endpoint_hosts.sql"] = "8d76716d824e8e00e23741e866cc874324a5fa6fc580ebb71bbb315df0f572dc",
+        ["V051_canary_dispatch.sql"] = "9c1a5053fe3ca9218b959793fc8275c843d32a41a65e62200adf1f360f03cfad",
     };
 
     [Fact]
@@ -743,7 +744,7 @@ public sealed class MigrationScriptFreezeTests
             Assert.Contains(version, scripted);
         }
 
-        Assert.Equal(48, scripted.Count);
+        Assert.Equal(49, scripted.Count);
     }
 
     [Fact]
