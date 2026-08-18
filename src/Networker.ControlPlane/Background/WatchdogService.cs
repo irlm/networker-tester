@@ -339,10 +339,16 @@ public sealed class WatchdogService : BackgroundService
         // and with it any run in `provisioning`. Nothing else times these out.
         // Fail deployments older than the cutoff — the orchestrator's next tick
         // then fails their run via the DeploymentFailed arm (quality audit F3(b)).
+        // Age basis is COALESCE(started_at, created_at): the runner stamps
+        // started_at when the deploy actually flips to running, and the startup
+        // recovery pass (issue #764) stamps it when it re-runs an interrupted
+        // deployment — so a recovered attempt gets a fresh window instead of
+        // being reaped against the ORIGINAL attempt's created_at. Pre-V052
+        // rows (started_at null) keep the created_at basis unchanged.
         var deploymentStaleBefore = now - DeploymentStaleCutoff;
         var stuckDeployments = await db.Deployments
             .Where(d => (d.Status == "pending" || d.Status == "running")
-                && d.CreatedAt < deploymentStaleBefore)
+                && (d.StartedAt ?? d.CreatedAt) < deploymentStaleBefore)
             .Select(d => d.DeploymentId)
             .ToListAsync(ct)
             .ConfigureAwait(false);

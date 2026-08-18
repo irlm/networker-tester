@@ -82,7 +82,8 @@ public class SchedulerAndThrottleLoopTests
                 error_message TEXT,
                 log TEXT,
                 project_id TEXT,
-                cloud_account_id TEXT
+                cloud_account_id TEXT,
+                recovery_attempts INTEGER NOT NULL DEFAULT 0
             );
             """);
         return (sp, conn);

@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.233] - 2026-08-19
+
+### Fixed
+
+- **A control-plane restart no longer strands in-flight endpoint deployments**
+  (#764). install.sh --deploy runs as a child of the control-plane process, so
+  every release restart SIGTERMed mid-install deployments (exit 143) and
+  nothing re-drove them. New `DeploymentRecoveryService` (one-shot at startup,
+  before the orchestrator's first tick) reclaims crash-wedged pending/running
+  rows and recently-interrupted failures (30-min window), flips them back to
+  pending and re-runs the stored config — capped at 3 recovery attempts
+  (migration V052: `deployment.recovery_attempts`). Interrupted-classed
+  failures on the run path also re-queue through the V049 retry machinery
+  instead of failing terminally. Deployments now stamp `started_at` when they
+  start running and record `created_by` on wizard creates.
+
 ## [0.28.232] - 2026-08-19
 
 ### Fixed

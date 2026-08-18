@@ -1,0 +1,23 @@
+-- V052: deployment.recovery_attempts — automatic restart-recovery bookkeeping.
+--
+-- install.sh --deploy runs as a CHILD PROCESS of the control plane, so every
+-- control-plane release restart SIGTERMs any in-flight endpoint deployment
+-- (install.sh exit 143). The dying process persists the row as failed with the
+-- "Deployment interrupted" message, but nothing ever re-drove it — the user
+-- lost the deployment and had to retry by hand (issue #764, reproduced live
+-- during the 2026-08-18 E2E pass).
+--
+-- DeploymentRecoveryService now re-runs such deployments on startup:
+--   * rows stuck at pending/running (a crash — no in-process driver can
+--     survive a restart), and
+--   * rows recently failed with the interrupted marker (the graceful path).
+--
+-- recovery_attempts counts those automatic re-runs so a deployment that keeps
+-- getting interrupted (or keeps crashing the deploy) can't loop forever —
+-- past the cap the row stays failed and the UI's Retry button (#766) remains
+-- the manual path.
+--
+-- Idempotent (ADD COLUMN IF NOT EXISTS); no backfill — historical rows have
+-- consumed no recovery attempts.
+ALTER TABLE deployment
+    ADD COLUMN IF NOT EXISTS recovery_attempts SMALLINT NOT NULL DEFAULT 0;

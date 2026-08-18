@@ -19,13 +19,13 @@ finished and re-verified end to end:
   retired Rust dashboard no longer boots in prod. The C# migrator is now the sole
   runtime schema authority.
 
-Chain latest: **V050** (`SchemaMigrator.LatestVersion`).
+Chain latest: **V052** (`SchemaMigrator.LatestVersion`).
 
 ## Where the schema lives
 
 | Piece | Location |
 |---|---|
-| Ordered migration scripts (V002…V050) | `src/Networker.Data/Migrations/V0NN_*.sql` (embedded resources) |
+| Ordered migration scripts (V002…V052) | `src/Networker.Data/Migrations/V0NN_*.sql` (embedded resources) |
 | V025 (UUID → base36 project ids) | `src/Networker.Data/Migrations/V025ProjectIdMigration.cs` (code, like the Rust original) |
 | ProjectId base36 + Damm implementation | `src/Networker.Data/Migrations/ProjectId36.cs` |
 | Runner | `src/Networker.Data/Migrations/SchemaMigrator.cs` |
