@@ -28,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `*` catch-all. Corrected the `..` depth; single-segment redirects were already
   right and are untouched.
 
+### Security
+
+- **h2 `0.4.15` → `0.4.16`** — closes RUSTSEC-2026-0258 (unbounded empty DATA
+  frames, a remote DoS in the HTTP/2 stack, transitive via hyper). The advisory
+  landed 2026-08-18 and was failing the required `cargo audit` check repo-wide;
+  the bump is isolated (only h2 moved in the lockfile).
+
 ### Added
 
 - **Retry on a failed deployment** (#764). A `failed`/`cancelled` deployment now
