@@ -10,6 +10,7 @@ import {
   useCancelRunMutation,
   useTestConfigDetailsQueries,
   useTestConfigsQuery,
+  useTestRunQuery,
   useTestRunsQuery,
 } from './queries';
 
@@ -126,6 +127,21 @@ describe('run query architecture', () => {
     const interval = cachedRefetchInterval(client, runKeys.list('project-1', params));
     expect(typeof interval).toBe('function');
     expect((interval as (value: typeof query) => number)(query)).toBe(5_000);
+  });
+
+  it('stops polling run metadata after the run reaches a terminal state', async () => {
+    vi.spyOn(runsApi, 'get').mockResolvedValue(completedRun);
+    const client = createClient();
+    const { result } = renderHook(
+      () => useTestRunQuery('run-1'),
+      { wrapper: wrapperFor(client) },
+    );
+
+    await waitFor(() => expect(result.current.data).toEqual(completedRun));
+    const query = client.getQueryCache().find({ queryKey: runKeys.detail('run-1') });
+    const interval = cachedRefetchInterval(client, runKeys.detail('run-1'));
+    expect(typeof interval).toBe('function');
+    expect((interval as (value: typeof query) => number | false)(query)).toBe(false);
   });
 
   it('shares full config detail requests through stable keys', async () => {

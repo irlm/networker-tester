@@ -437,6 +437,41 @@ public sealed class WriteEndpointCoverageTests : IClassFixture<ControlPlaneFixtu
             "comparison group not persisted");
     }
 
+    [Fact]
+    public async Task Delete_comparison_group_removes_row_and_returns_204()
+    {
+        var client = _fixture.CreateAdminClient();
+        var createResp = await client.PostAsJsonAsync(
+            $"/api/v2/projects/{Pid}/comparison-groups",
+            new
+            {
+                name = Uniq("cmp-delete"),
+                base_workload = new { modes = new[] { "http11" }, runs = 3 },
+                cells = new[]
+                {
+                    new { endpoint = new { kind = "network", host = "https://a.example.com" } },
+                },
+            });
+        Assert.True(createResp.StatusCode == HttpStatusCode.OK,
+            $"POST comparison-group (setup) → {(int)createResp.StatusCode}; body: {await Body(createResp)}");
+        using var createdDoc = JsonDocument.Parse(await Body(createResp));
+        var id = createdDoc.RootElement.GetProperty("id").GetGuid();
+
+        var resp = await client.DeleteAsync($"/api/v2/comparison-groups/{id}");
+
+        Assert.True(resp.StatusCode == HttpStatusCode.NoContent,
+            $"DELETE /api/v2/comparison-groups/{{id}} → {(int)resp.StatusCode}; body: {await Body(resp)}");
+
+        await using var ctx = _fixture.NewDbContext();
+        Assert.False(await ctx.ComparisonGroups.AnyAsync(g => g.Id == id),
+            "comparison group still present after DELETE 204");
+
+        // A second delete of the now-absent group is a clean 404, not 405/500.
+        var resp2 = await client.DeleteAsync($"/api/v2/comparison-groups/{id}");
+        Assert.True(resp2.StatusCode == HttpStatusCode.NotFound,
+            $"second DELETE → {(int)resp2.StatusCode}, expected 404");
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     //  SDK ENDPOINTS — POST 200 / DELETE 204
     // ═══════════════════════════════════════════════════════════════════════════

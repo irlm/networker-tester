@@ -72,8 +72,8 @@ export function PerfLogPage() {
     windowMs: selectedRange.windowMs,
     limit: 200,
   }), [kindFilter, pathFilter, selectedRange.windowMs]);
-  const logsQuery = usePerfLogsQuery(queryParams, !paused);
-  const statsQuery = usePerfLogStatsQuery(selectedRange.windowMs);
+  const logsQuery = usePerfLogsQuery(queryParams, tab === 'logs' && !paused);
+  const statsQuery = usePerfLogStatsQuery(selectedRange.windowMs, tab === 'stats' && !paused);
   const logs = useMemo(() => logsQuery.data ?? [], [logsQuery.data]);
   const stats = statsQuery.data;
 

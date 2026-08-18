@@ -3,6 +3,7 @@ import { KpiTile } from '../components/common/KpiTile';
 import { Link } from 'react-router';
 import { api, errorMessage } from '../api/client';
 import { useTestRunsQuery } from '../features/runs/queries';
+import { testersApi, type TesterRow } from '../api/testers';
 import type { Agent, Deployment, TestRun } from '../api/types';
 import { ExportMenu } from '../components/common/ExportMenu';
 import { ErrorState } from '../components/common/AsyncState';
@@ -36,6 +37,7 @@ export function DashboardPage() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [testers, setTesters] = useState<TesterRow[]>([]);
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -54,6 +56,11 @@ export function DashboardPage() {
     Promise.all([
       api.getDashboardSummary(projectId).then(setSummary),
       api.getAgents(projectId).then(r => setAgents(Array.isArray(r) ? r : [])),
+      // Testers carry the user-facing runner name (e.g. "eastus-runner-01");
+      // agents carry the auto-generated agent name (e.g. "tester-eastus-59ea5").
+      // The Infrastructure page shows the tester name, so resolve it here too
+      // and render it on the dashboard card (issue #765) for a consistent label.
+      testersApi.listTesters(projectId).then(r => setTesters(Array.isArray(r) ? r : [])),
       api.getDeployments(projectId, { limit: 10 }).then(setDeployments),
     ]).then(() => { setError(null); setLoading(false); })
      .catch(e => { setError(errorMessage(e)); setLoading(false); });
@@ -69,6 +76,14 @@ export function DashboardPage() {
   const onlineAgents = agents.filter(a => a.status === 'online');
   const completedDeps = deployments.filter(d => d.status === 'completed' && d.endpoint_ips?.length);
   const endpoints = versionInfo?.endpoints || [];
+
+  // tester_id → user-facing runner name, so the infra card shows the same label
+  // as the Infrastructure page (issue #765).
+  const testerNames = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const t of testers) m.set(t.tester_id, t.name);
+    return m;
+  }, [testers]);
 
   // Filter out queued zombie runs — only show runs with real signal
   const nonQueuedRuns = useMemo(
@@ -245,7 +260,7 @@ export function DashboardPage() {
 
           {/* Show infrastructure if there are agents */}
           {agents.length > 0 && (
-            <InfraSection agents={agents} endpoints={endpoints} projectId={projectId} />
+            <InfraSection agents={agents} endpoints={endpoints} projectId={projectId} testerNames={testerNames} />
           )}
 
           {/* Show recent runs if any non-queued exist */}
@@ -258,7 +273,7 @@ export function DashboardPage() {
         <div className={recentEvents.length > 0 ? 'grid grid-cols-1 lg:grid-cols-3 gap-6' : 'max-w-4xl space-y-6'}>
           <div className={recentEvents.length > 0 ? 'lg:col-span-2 space-y-6' : 'space-y-6'}>
             {/* Infrastructure: combined targets + runners */}
-            <InfraSection agents={agents} endpoints={endpoints} projectId={projectId} />
+            <InfraSection agents={agents} endpoints={endpoints} projectId={projectId} testerNames={testerNames} />
 
             {/* Recent Runs */}
             <RecentRunsSection runs={nonQueuedRuns} projectId={projectId} />
@@ -293,10 +308,11 @@ export function DashboardPage() {
 }
 
 /* ── Infrastructure section: targets + runners combined ── */
-function InfraSection({ agents, endpoints, projectId }: {
+function InfraSection({ agents, endpoints, projectId, testerNames }: {
   agents: Agent[];
   endpoints: { host: string; version: string | null; reachable: boolean }[];
   projectId: string;
+  testerNames: Map<string, string>;
 }) {
   return (
     <div>
@@ -355,7 +371,13 @@ function InfraSection({ agents, endpoints, projectId }: {
             return (
               <>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                  {shown.map((a) => (
+                  {shown.map((a) => {
+                    // Prefer the user-facing runner (tester) name so this card
+                    // matches the Infrastructure page; fall back to the agent
+                    // name when no tester is linked yet (issue #765).
+                    const displayName =
+                      (a.tester_id && testerNames.get(a.tester_id)) || a.name;
+                    return (
                     <div
                       key={a.agent_id}
                       className={`border border-gray-800 rounded p-3 flex items-center gap-3 ${
@@ -368,7 +390,7 @@ function InfraSection({ agents, endpoints, projectId }: {
                         }`}
                       />
                       <div className="min-w-0 flex-1">
-                        <div className="text-sm text-gray-200 truncate">{a.name}</div>
+                        <div className="text-sm text-gray-200 truncate">{displayName}</div>
                         <div className="text-xs text-faint">
                           {a.provider && `${a.provider} `}
                           {a.region && a.region}
@@ -376,7 +398,8 @@ function InfraSection({ agents, endpoints, projectId }: {
                       </div>
                       <StatusBadge status={a.status} />
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
                 {hidden > 0 && (
                   <Link

@@ -69,7 +69,7 @@ describe('PerfLogPage time filters', () => {
       expect.objectContaining({ windowMs: 300_000, limit: 200 }),
       true,
     );
-    expect(queryMocks.stats).toHaveBeenLastCalledWith(300_000);
+    expect(queryMocks.stats).toHaveBeenLastCalledWith(300_000, false);
     expect(screen.getByText(/No performance logs in last 5 minutes/i)).toBeInTheDocument();
   });
 
@@ -90,7 +90,7 @@ describe('PerfLogPage time filters', () => {
       expect.objectContaining({ windowMs: 60 * 60_000 }),
       true,
     ));
-    expect(queryMocks.stats).toHaveBeenLastCalledWith(60 * 60_000);
+    expect(queryMocks.stats).toHaveBeenLastCalledWith(60 * 60_000, false);
   });
 
   it('keeps kind and path filters on the log view and exposes an accessible stats tab', async () => {
@@ -107,8 +107,22 @@ describe('PerfLogPage time filters', () => {
 
     await user.click(screen.getByRole('tab', { name: 'Stats' }));
     expect(screen.getByRole('tab', { name: 'Stats' })).toHaveAttribute('aria-selected', 'true');
+    expect(queryMocks.logs).toHaveBeenLastCalledWith(expect.anything(), false);
+    expect(queryMocks.stats).toHaveBeenLastCalledWith(300_000, true);
     expect(screen.queryByRole('combobox', { name: 'Log kind' })).not.toBeInTheDocument();
     expect(screen.getByText('API Requests')).toBeInTheDocument();
+  });
+
+  it('stops both polling intervals when paused before switching views', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByRole('button', { name: 'LIVE' }));
+    expect(queryMocks.logs).toHaveBeenLastCalledWith(expect.anything(), false);
+    expect(queryMocks.stats).toHaveBeenLastCalledWith(300_000, false);
+
+    await user.click(screen.getByRole('tab', { name: 'Stats' }));
+    expect(queryMocks.stats).toHaveBeenLastCalledWith(300_000, false);
   });
 
   it('supports arrow, Home, and End keyboard navigation between tabs', async () => {

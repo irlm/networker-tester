@@ -17,11 +17,11 @@ export function usePerfLogsQuery(params: PerfLogListParams, polling = true) {
   });
 }
 
-export function usePerfLogStatsQuery(windowMs?: number) {
+export function usePerfLogStatsQuery(windowMs?: number, polling = true) {
   return useQuery({
     queryKey: perfLogKeys.stats(windowMs),
     queryFn: ({ signal }) => perfLogsApi.stats(windowMs, signal),
     placeholderData: keepPreviousData,
-    refetchInterval: 15_000,
+    refetchInterval: polling ? 15_000 : false,
   });
 }

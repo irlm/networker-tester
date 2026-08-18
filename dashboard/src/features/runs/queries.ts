@@ -75,7 +75,16 @@ export function useTestRunQuery(runId: string, polling = true) {
     queryKey: runKeys.detail(runId),
     queryFn: ({ signal }) => runsApi.get(runId, signal),
     enabled: !!runId,
-    refetchInterval: polling ? 15_000 : false,
+    refetchInterval: polling
+      ? (query) => {
+          const run = query.state.data as Awaited<ReturnType<typeof runsApi.get>> | undefined;
+          const isActive = !run
+            || run.status === 'queued'
+            || run.status === 'provisioning'
+            || run.status === 'running';
+          return isActive ? 15_000 : false;
+        }
+      : false,
   });
 }
 
