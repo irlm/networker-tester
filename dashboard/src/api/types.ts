@@ -1271,6 +1271,11 @@ export interface LogsResponse {
   entries: LogEntry[];
   total: number;
   truncated: boolean;
+  // Present as "unconfigured" when this deployment has no `service_log` table
+  // (e.g. a C#-only install where control-plane logs go to journald/stdout, not
+  // the DB). Absent when the log sink is configured. Used to distinguish
+  // "logs aren't stored here" from a genuinely empty-but-configured result.
+  log_sink?: string;
 }
 
 // Benchmark types

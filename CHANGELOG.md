@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   agent rows behind (tester_id nulled, all offline) to accumulate forever. The
   tester-delete path now reaps the tester's agent rows (and, via the existing
   `agent_command` cascade, their commands) before removing the tester.
+- **Logs tab showed a misleading "No log entries" when log persistence isn't
+  set up** (#765). On a C#-only install (like prod) the `service_log` table
+  doesn't exist, so `GET /api/logs` returns `log_sink: "unconfigured"`. The
+  System dashboard Logs tab now reads that flag and renders an informative
+  empty-state ("Log persistence isn't configured for this deployment…") instead
+  of "No log entries", which is kept for the genuinely-empty-but-configured case.
 
 ### Notes
 
