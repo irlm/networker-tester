@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.28.227] - 2026-08-18
 
+- **Admin → System → Auth: the Public URL field no longer masks real errors.** `getSystemConfig` caught *every* error as "unset"; it now returns null only on the expected 404 (key not set) and surfaces genuine failures (401/5xx) instead of silently showing an empty field.
+
 ### Fixed
 
 - **`HEAD /api/health` returned 405** (#765). The health route was registered

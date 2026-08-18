@@ -814,7 +814,13 @@ export const api = {
 
   // System config
   getSystemConfig: (key: string) =>
-    request<{ key: string; value: string }>(`/admin/system-config/${key}`).catch(() => null),
+    // A missing config key is a 404 by design (Rust-parity KV read) and means
+    // "not set yet" → null. Only swallow that case; a real failure (401/5xx)
+    // must surface instead of masquerading as an empty/unset value.
+    request<{ key: string; value: string }>(`/admin/system-config/${key}`).catch((e) => {
+      if (e instanceof ApiError && e.status === 404) return null;
+      throw e;
+    }),
 
   setSystemConfig: (key: string, value: string) =>
     request<void>(`/admin/system-config/${key}`, { method: 'PUT', body: JSON.stringify({ value }) }),
