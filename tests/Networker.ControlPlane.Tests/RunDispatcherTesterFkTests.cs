@@ -211,7 +211,8 @@ public sealed class RunDispatcherTesterFkTests
                 error_message TEXT,
                 log TEXT,
                 project_id TEXT NOT NULL,
-                cloud_account_id TEXT
+                cloud_account_id TEXT,
+                recovery_attempts INTEGER NOT NULL DEFAULT 0
             );
             """);
     }

@@ -55,9 +55,9 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
     // ── Migration chain ─────────────────────────────────────────────────
 
     [Fact]
-    public void Fresh_database_applies_the_full_chain_v002_to_v051()
+    public void Fresh_database_applies_the_full_chain_v002_to_v052()
     {
-        Assert.Equal(Enumerable.Range(2, 50), _fx.FreshRun.Applied);
+        Assert.Equal(Enumerable.Range(2, 51), _fx.FreshRun.Applied);
         Assert.Empty(_fx.FreshRun.AlreadyApplied);
     }
 
@@ -70,7 +70,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
 
         Assert.True(second.WasUpToDate);
         Assert.Empty(second.Applied);
-        Assert.Equal(Enumerable.Range(2, 50), second.AlreadyApplied);
+        Assert.Equal(Enumerable.Range(2, 51), second.AlreadyApplied);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
             }
         }
 
-        Assert.Equal(Enumerable.Range(2, 50), recorded);
+        Assert.Equal(Enumerable.Range(2, 51), recorded);
     }
 
     // ── EF-model equivalence ────────────────────────────────────────────
@@ -603,6 +603,29 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
     }
 
     [Fact]
+    public async Task V052_added_the_recovery_attempts_counter()
+    {
+        await using var conn = new NpgsqlConnection(_fx.ConnectionString);
+        await conn.OpenAsync();
+
+        await using var cols = new NpgsqlCommand(
+            """
+            SELECT data_type, is_nullable, column_default
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'deployment'
+              AND column_name = 'recovery_attempts'
+            """, conn);
+        await using var reader = await cols.ExecuteReaderAsync();
+        // Restart-recovery counter (issue #764): NOT NULL with default 0 so
+        // pre-V052 rows read as never auto-recovered.
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal("smallint", reader.GetString(0));
+        Assert.Equal("NO", reader.GetString(1));
+        Assert.Contains("0", reader.GetString(2));
+        Assert.False(await reader.ReadAsync());
+    }
+
+    [Fact]
     public async Task V048_strips_endpoint_only_modes_from_url_configs_only()
     {
         await using var conn = new NpgsqlConnection(_fx.ConnectionString);
@@ -726,6 +749,7 @@ public sealed class MigrationScriptFreezeTests
         ["V049_provision_retry_columns.sql"] = "d06c0e1967f6228523284609dc6bdd54b10d3044762bc6cf2c6eabdcadc93c9d",
         ["V050_deployment_endpoint_hosts.sql"] = "8d76716d824e8e00e23741e866cc874324a5fa6fc580ebb71bbb315df0f572dc",
         ["V051_canary_dispatch.sql"] = "9c1a5053fe3ca9218b959793fc8275c843d32a41a65e62200adf1f360f03cfad",
+        ["V052_deployment_recovery.sql"] = "a679dd0d9d4a1d108cadbdbbf58f93bbb5d1f05c7286526dcc72e07191343724",
     };
 
     [Fact]
@@ -745,7 +769,7 @@ public sealed class MigrationScriptFreezeTests
             Assert.Contains(version, scripted);
         }
 
-        Assert.Equal(49, scripted.Count);
+        Assert.Equal(50, scripted.Count);
     }
 
     [Fact]
