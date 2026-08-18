@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.234] - 2026-08-19
+
+### Fixed
+
+- **E2E-pass minor findings cluster (#765).** Orphan agent rows are reaped:
+  the ReaperService purges retired, unlinked, disconnected agent rows not
+  referenced by any deployment (the ~35 accumulated prod rows drain on their
+  own). The URL-probe watchlist shows only the page's own probes — matrix
+  cells, canary configs and SDK endpoints no longer pollute it (and its
+  per-config detail fetches), fixing the 76-requests-on-load behaviour. The
+  six legacy redirects are pinned by a regression test that replays every
+  path-relative <Navigate> through react-router's own resolver. SDK
+  endpoints now show a reachability chip (reachable / partial / unreachable /
+  probing / never probed + age) derived from their latest sdkprobe run — no
+  new probing infrastructure. URL input no longer renders // as a ligature.
+
 ## [0.28.233] - 2026-08-19
 
 ### Fixed

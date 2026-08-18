@@ -135,7 +135,11 @@ public static class SdkEndpointsEndpoints
                 .OrderByDescending(c => c.CreatedAt)
                 .ToListAsync(ct);
 
-            var dtos = rows.Where(IsSdkEndpoint).Select(ToDto).ToList();
+            var sdkRows = rows.Where(IsSdkEndpoint).ToList();
+            var lastRuns = await LoadLastRunsAsync(db, sdkRows.Select(c => c.Id).ToList(), ct);
+            var dtos = sdkRows
+                .Select(c => ToDto(c, lastRuns.TryGetValue(c.Id, out var lr) ? lr : null))
+                .ToList();
             return Results.Ok(dtos);
         }).RequireAuthorization(AuthPolicies.ProjectMember);
 
@@ -150,9 +154,13 @@ public static class SdkEndpointsEndpoints
                 .AsNoTracking()
                 .FirstOrDefaultAsync(c => c.Id == id && c.ProjectId == projectId, ct);
 
-            return cfg is null || !IsSdkEndpoint(cfg)
-                ? ApiError.NotFound("SDK endpoint not found")
-                : Results.Ok(ToDto(cfg));
+            if (cfg is null || !IsSdkEndpoint(cfg))
+            {
+                return ApiError.NotFound("SDK endpoint not found");
+            }
+
+            var lastRuns = await LoadLastRunsAsync(db, [cfg.Id], ct);
+            return Results.Ok(ToDto(cfg, lastRuns.TryGetValue(cfg.Id, out var lr) ? lr : null));
         }).RequireAuthorization(AuthPolicies.ProjectMember);
 
         // DELETE /api/projects/{projectId}/sdk-endpoints/{id} — 204 (operator).
@@ -262,7 +270,7 @@ public static class SdkEndpointsEndpoints
     /// back, but the token is NEVER returned — <c>token_set</c> reports whether
     /// one is stored and <c>token</c> is always the mask.
     /// </summary>
-    private static object ToDto(Data.Entities.TestConfig cfg)
+    private static object ToDto(Data.Entities.TestConfig cfg, LastRunInfo? lastRun = null)
     {
         var url = ReadEndpointHost(cfg.EndpointRef);
         var route = ReadWorkloadRoute(cfg.Workload);
@@ -282,7 +290,43 @@ public static class SdkEndpointsEndpoints
             created_by = cfg.CreatedBy,
             created_at = cfg.CreatedAt,
             updated_at = cfg.UpdatedAt,
+            // Reachability signal (#765): the latest sdkprobe run's outcome —
+            // already-recorded data, no new probing. All nulls = never probed.
+            last_run_at = lastRun?.CreatedAt,
+            last_run_status = lastRun?.Status,
+            last_run_success_count = lastRun?.SuccessCount,
+            last_run_failure_count = lastRun?.FailureCount,
         };
+    }
+
+    /// <summary>The slice of the latest run the DTO reports. Nullable-wrapped so
+    /// "never probed" is representable.</summary>
+    internal readonly record struct LastRunInfo(
+        DateTime CreatedAt, string Status, int SuccessCount, int FailureCount);
+
+    /// <summary>
+    /// Latest run per config id. One small indexed query per endpoint rather
+    /// than a GroupBy-top-1 (which not every provider translates); a project
+    /// has a handful of SDK endpoints, so N stays tiny.
+    /// </summary>
+    internal static async Task<Dictionary<Guid, LastRunInfo>> LoadLastRunsAsync(
+        NetworkerDbContext db, IReadOnlyList<Guid> configIds, CancellationToken ct)
+    {
+        var result = new Dictionary<Guid, LastRunInfo>(configIds.Count);
+        foreach (var id in configIds)
+        {
+            var run = await db.TestRuns
+                .AsNoTracking()
+                .Where(r => r.TestConfigId == id)
+                .OrderByDescending(r => r.CreatedAt)
+                .Select(r => new { r.CreatedAt, r.Status, r.SuccessCount, r.FailureCount })
+                .FirstOrDefaultAsync(ct);
+            if (run is not null)
+            {
+                result[id] = new LastRunInfo(run.CreatedAt, run.Status, run.SuccessCount, run.FailureCount);
+            }
+        }
+        return result;
     }
 
     private static string? ReadEndpointHost(string endpointRef)
