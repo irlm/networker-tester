@@ -436,6 +436,7 @@ pub async fn run_pageload_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) ->
     };
 
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id,
         run_id,
@@ -1215,6 +1216,7 @@ pub async fn run_pageload2_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
     };
 
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id,
         run_id,
@@ -1411,6 +1413,7 @@ pub(crate) fn error_attempt_proto(
     message: String,
 ) -> RequestAttempt {
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id,
         run_id,
@@ -1921,6 +1924,7 @@ pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
     };
 
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id,
         run_id,
@@ -2537,6 +2541,7 @@ async fn fetch_h2_pageload(
     };
 
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id,
         run_id,
@@ -3106,6 +3111,7 @@ async fn fetch_h3_pageload(
     };
 
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id,
         run_id,

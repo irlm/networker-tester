@@ -3,7 +3,14 @@
 export type EndpointKind = 'network' | 'proxy' | 'runtime' | 'pending';
 
 export type EndpointRef =
-  | { kind: 'network'; host: string; port?: number }
+  | {
+      kind: 'network';
+      host: string;
+      port?: number;
+      /** Multi-URL set (#782): all URLs probed together in ONE run (repeated
+       *  tester --target). `host` stays the first element for back-compat. */
+      hosts?: string[];
+    }
   | { kind: 'proxy'; proxy_endpoint_id: string }
   | { kind: 'runtime'; runtime_id: string; language: string }
   | {
@@ -563,6 +570,8 @@ export interface Attempt {
   success: boolean;
   error_message: string | null;
   retry_count: number;
+  /** URL this attempt probed — set on multi-URL set runs (#782, tester ≥0.28.231). */
+  target_url?: string | null;
   // Per-phase detail rows (GET /test-runs/{id}/attempts). Omitted entirely for
   // runs whose tester didn't persist phase rows — same shapes as LiveAttempt
   // so both feed the run-detail attempt view through one code path.
@@ -787,6 +796,8 @@ export interface LiveAttempt {
   protocol: string;
   sequence_num: number;
   started_at: string;
+  /** URL this attempt probed — set on multi-URL set runs (#782, tester ≥0.28.231). */
+  target_url?: string | null;
   finished_at: string | null;
   success: boolean;
   retry_count: number;

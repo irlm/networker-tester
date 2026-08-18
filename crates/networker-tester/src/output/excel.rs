@@ -1194,6 +1194,7 @@ mod tests {
         let now = Utc::now();
 
         let http_attempt = RequestAttempt {
+            target_url: None,
             phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
@@ -1329,6 +1330,7 @@ mod tests {
         };
 
         let udp_attempt = RequestAttempt {
+            target_url: None,
             phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
@@ -1377,6 +1379,7 @@ mod tests {
         };
 
         let udp_throughput_attempt = RequestAttempt {
+            target_url: None,
             phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
@@ -1421,6 +1424,7 @@ mod tests {
         };
 
         let pageload_attempt = RequestAttempt {
+            target_url: None,
             phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
@@ -1469,6 +1473,7 @@ mod tests {
         };
 
         let error_attempt = RequestAttempt {
+            target_url: None,
             phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
@@ -1659,6 +1664,7 @@ mod tests {
     /// Base attempt with every sub-result unset, for probe-depth fixtures.
     fn empty_attempt(proto: Protocol, seq: u32, run_id: Uuid) -> RequestAttempt {
         RequestAttempt {
+            target_url: None,
             phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
@@ -1925,6 +1931,7 @@ mod tests {
         let now = Utc::now();
 
         let download_attempt = RequestAttempt {
+            target_url: None,
             phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
@@ -1980,6 +1987,7 @@ mod tests {
         };
 
         let upload_attempt = RequestAttempt {
+            target_url: None,
             phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,

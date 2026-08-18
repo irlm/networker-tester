@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 fn request_attempt(success: bool, retry_count: u32) -> RequestAttempt {
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id: Uuid::new_v4(),
         run_id: Uuid::new_v4(),
@@ -64,6 +65,7 @@ fn measured_http_attempt(
 ) -> RequestAttempt {
     let started_at = Utc.timestamp_millis_opt(start_offset_ms).single().unwrap();
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id: Uuid::new_v4(),
         run_id: Uuid::new_v4(),
@@ -127,6 +129,7 @@ fn failed_http_attempt(
 ) -> RequestAttempt {
     let started_at = Utc.timestamp_millis_opt(start_offset_ms).single().unwrap();
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id: Uuid::new_v4(),
         run_id: Uuid::new_v4(),

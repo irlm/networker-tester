@@ -732,11 +732,35 @@ public static class TestRunsEndpoints
     private static async Task<List<AttemptView>> LoadAttemptsAsync(
         NpgsqlDataSource dataSource, Guid runId, CancellationToken ct)
     {
+        // The raw-attempt JSON column on RequestAttempt varies by provenance
+        // (extrajson on live prod, extra_json from install.sh's psql seed,
+        // absent on a tester-bootstrapped V001–V005 schema). target_url lives
+        // inside that JSON (stamped by the tester since v0.28.231, #782), so
+        // detect the column once and select it as a uniform alias — NULL when
+        // the column (or the key) is absent. Appended LAST so every tier's
+        // positional ordinals stay untouched.
+        var (extraCol, hasUrlCol) = await GetAttemptShapeAsync(dataSource, ct);
+        var targetSelA = (hasUrlCol, extraCol) switch
+        {
+            // V006 column first, older extra-json rows as fallback.
+            (true, { } ec) => $", COALESCE(a.TargetUrl, a.{ec}->>'target_url') AS target_url",
+            (true, null) => ", a.TargetUrl AS target_url",
+            (false, { } ec) => $", a.{ec}->>'target_url' AS target_url",
+            _ => ", NULL AS target_url",
+        };
+        var targetSelFlat = (hasUrlCol, extraCol) switch
+        {
+            (true, { } ec) => $", COALESCE(TargetUrl, {ec}->>'target_url') AS target_url",
+            (true, null) => ", TargetUrl AS target_url",
+            (false, { } ec) => $", {ec}->>'target_url' AS target_url",
+            _ => ", NULL AS target_url",
+        };
+
         // V005 tier: everything in richSql PLUS ServerTimingResult.SrvCpuMs
         // and the MthroughputResult capacity columns (appended, so the shared
         // reader ordinals are a strict prefix). Testers on pre-V005 schemas
         // make this fail with UndefinedColumn/UndefinedTable → richSql tier.
-        const string richSqlV005 = """
+        var richSqlV005 = $"""
             SELECT a.AttemptId, a.Protocol, a.SequenceNum, a.StartedAt, a.FinishedAt,
                    a.Success, a.ErrorMessage, a.RetryCount,
                    d.DurationMs, d.Success, d.QueryName, d.ResolvedIPs,
@@ -752,7 +776,7 @@ public static class TestRunsEndpoints
                    st.ProcessingMs, st.RecvBodyMs, st.TotalServerMs,
                    st.SrvCpuMs,
                    mt.CapacityDownMbps, mt.CapacityUpMbps, mt.ConnsDown, mt.ConnsUp,
-                   mt.FairShareSpreadDownPct, mt.FairShareSpreadUpPct
+                   mt.FairShareSpreadDownPct, mt.FairShareSpreadUpPct{targetSelA}
             FROM RequestAttempt a
             LEFT JOIN LATERAL (SELECT * FROM DnsResult  x WHERE x.AttemptId = a.AttemptId LIMIT 1) d  ON TRUE
             LEFT JOIN LATERAL (SELECT * FROM TcpResult  x WHERE x.AttemptId = a.AttemptId LIMIT 1) t  ON TRUE
@@ -766,7 +790,7 @@ public static class TestRunsEndpoints
             LIMIT 10000
             """;
 
-        const string richSql = """
+        var richSql = $"""
             SELECT a.AttemptId, a.Protocol, a.SequenceNum, a.StartedAt, a.FinishedAt,
                    a.Success, a.ErrorMessage, a.RetryCount,
                    d.DurationMs, d.Success, d.QueryName, d.ResolvedIPs,
@@ -779,7 +803,7 @@ public static class TestRunsEndpoints
                    h.BodySizeBytes, h.RedirectCount, h.PayloadBytes, h.ThroughputMbps,
                    u.RttAvgMs, u.RttMinMs, u.RttP95Ms, u.JitterMs, u.LossPercent,
                    u.ProbeCount, u.SuccessCount,
-                   st.ProcessingMs, st.RecvBodyMs, st.TotalServerMs
+                   st.ProcessingMs, st.RecvBodyMs, st.TotalServerMs{targetSelA}
             FROM RequestAttempt a
             LEFT JOIN LATERAL (SELECT * FROM DnsResult  x WHERE x.AttemptId = a.AttemptId LIMIT 1) d  ON TRUE
             LEFT JOIN LATERAL (SELECT * FROM TcpResult  x WHERE x.AttemptId = a.AttemptId LIMIT 1) t  ON TRUE
@@ -795,9 +819,9 @@ public static class TestRunsEndpoints
         // Pre-phase-table fallback shape — kept so a partially-created tester
         // schema (RequestAttempt present, a phase table missing) still serves
         // the flat rows it used to instead of degrading to an empty list.
-        const string flatSql = """
+        var flatSql = $"""
             SELECT AttemptId, Protocol, SequenceNum, StartedAt, FinishedAt,
-                   Success, ErrorMessage, RetryCount
+                   Success, ErrorMessage, RetryCount{targetSelFlat}
             FROM RequestAttempt
             WHERE RunId = $1
             ORDER BY SequenceNum, StartedAt
@@ -870,6 +894,7 @@ public static class TestRunsEndpoints
                 // get clean data (audit F8).
                 ErrorMessage: reader.IsDBNull(6) ? null : AnsiText.Strip(reader.GetString(6)),
                 RetryCount: reader.GetInt32(7),
+                TargetUrl: ReadTargetUrl(reader),
                 Dns: rich ? ReadDns(reader) : null,
                 Tcp: rich ? ReadTcp(reader) : null,
                 Tls: rich ? ReadTls(reader) : null,
@@ -879,6 +904,51 @@ public static class TestRunsEndpoints
                 Mthroughput: v005 ? ReadMthroughput(reader) : null));
         }
         return attempts;
+    }
+
+    /// <summary>target_url is selected under a stable alias as the LAST column
+    /// of every tier (NULL literal when no extra-json column exists), so it is
+    /// read by name — the positional phase ordinals stay untouched.</summary>
+    private static string? ReadTargetUrl(NpgsqlDataReader r)
+    {
+        var i = r.GetOrdinal("target_url");
+        return r.IsDBNull(i) ? null : r.GetString(i);
+    }
+
+    /// <summary>Name of the raw-attempt JSON column on RequestAttempt
+    /// (<c>extrajson</c> | <c>extra_json</c> | null when absent), detected once
+    /// per process — the same divergence AttemptPersistence handles on the
+    /// write side. Null means target_url cannot be recovered for DB-read
+    /// attempts (pre-#782 tester schemas); the live stream still carries it.</summary>
+    private static (string? ExtraJsonColumn, bool HasTargetUrl)? _attemptShape;
+
+    internal static void ResetExtraJsonColumnCacheForTests() => _attemptShape = null;
+
+    private static async Task<(string? ExtraJsonColumn, bool HasTargetUrl)> GetAttemptShapeAsync(
+        NpgsqlDataSource dataSource, CancellationToken ct)
+    {
+        if (_attemptShape is { } cached)
+        {
+            return cached;
+        }
+        var cols = new List<string>();
+        await using (var cmd = dataSource.CreateCommand(
+            "SELECT lower(column_name) FROM information_schema.columns " +
+            "WHERE lower(table_name) = 'requestattempt' " +
+            "AND lower(column_name) IN ('extrajson','extra_json','targeturl')"))
+        await using (var reader = await cmd.ExecuteReaderAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+            {
+                cols.Add(reader.GetString(0));
+            }
+        }
+        var found = cols.Contains("extrajson") ? "extrajson"
+            : cols.Contains("extra_json") ? "extra_json"
+            : null;
+        var shape = (found, cols.Contains("targeturl"));
+        _attemptShape = shape;
+        return shape;
     }
 
     // Per-phase readers for the rich query above. Ordinals are positional in
@@ -997,6 +1067,9 @@ public sealed record AttemptView(
     [property: JsonPropertyName("success")] bool Success,
     [property: JsonPropertyName("error_message")] string? ErrorMessage,
     [property: JsonPropertyName("retry_count")] int RetryCount,
+    [property: JsonPropertyName("target_url"),
+     JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? TargetUrl = null,
     [property: JsonPropertyName("dns"),
      JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     AttemptDnsView? Dns = null,

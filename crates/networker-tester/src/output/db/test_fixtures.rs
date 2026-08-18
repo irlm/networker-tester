@@ -59,6 +59,7 @@ pub(crate) fn make_benchmark_run(run_id: Uuid, attempts: Vec<RequestAttempt>) ->
 
 pub(crate) fn bare_attempt(run_id: Uuid) -> RequestAttempt {
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id: Uuid::new_v4(),
         run_id,
@@ -95,6 +96,7 @@ pub(crate) fn bare_attempt(run_id: Uuid) -> RequestAttempt {
 #[allow(dead_code)]
 pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id: Uuid::new_v4(),
         run_id,

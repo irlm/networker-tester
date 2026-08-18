@@ -501,6 +501,18 @@ CREATE INDEX IF NOT EXISTS IX_MthroughputResult_AttemptId
 ALTER TABLE ServerTimingResult ADD COLUMN IF NOT EXISTS SrvCpuMs DOUBLE PRECISION NULL;
 "#;
 
+const V006_MIGRATION: &str = r#"
+-- V006: Per-attempt target attribution for multi-URL set runs (issue #782).
+-- A RequestAttempt row never recorded WHICH URL it probed — irrelevant while
+-- every run had exactly one target, fatal for URL sets where one run probes
+-- several URLs in a single tester invocation (repeated --target): the
+-- comparison surface cannot attribute an attempt to its URL. NULL on rows
+-- written before v0.28.231 and on single-target runs by older testers; the
+-- tester stamps it on every attempt from v0.28.231 (dispatch_once).
+
+ALTER TABLE RequestAttempt ADD COLUMN IF NOT EXISTS TargetUrl TEXT NULL;
+"#;
+
 #[async_trait]
 impl DatabaseBackend for PostgresBackend {
     async fn migrate(&self) -> anyhow::Result<()> {
@@ -626,6 +638,26 @@ impl DatabaseBackend for PostgresBackend {
                     )
                     .await
                     .context("record V005")?;
+            }
+
+            let row = client
+                .query_opt("SELECT 1 FROM _schema_versions WHERE version = 'V006'", &[])
+                .await
+                .context("check V006")?;
+
+            if row.is_none() {
+                client
+                    .batch_execute(V006_MIGRATION)
+                    .await
+                    .context("apply V006 migration")?;
+
+                client
+                    .execute(
+                        "INSERT INTO _schema_versions (version) VALUES ('V006')",
+                        &[],
+                    )
+                    .await
+                    .context("record V006")?;
             }
 
             Ok(())
@@ -1374,71 +1406,129 @@ async fn insert_request_attempt(a: &RequestAttempt, c: &PgClient) -> anyhow::Res
     // Serialize the full attempt as JSON for rich data (browser, pageload, etc.)
     let extra_json: Option<serde_json::Value> = serde_json::to_value(a).ok();
 
-    // Try with extra_json column first (V004+), fall back to without
-    c.batch_execute("SAVEPOINT requestattempt_extra_json_column")
-        .await
-        .context("SAVEPOINT RequestAttempt extra_json")?;
-    let result = c
-        .execute(
-            "INSERT INTO RequestAttempt (
-            AttemptId, RunId, Protocol, SequenceNum,
-            StartedAt, FinishedAt, Success, ErrorMessage, RetryCount, extra_json
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
-            &[
-                &a.attempt_id,
-                &a.run_id,
-                &protocol,
-                &(a.sequence_num as i32),
-                &a.started_at,
-                &a.finished_at,
-                &a.success,
-                &err_msg,
-                &(a.retry_count as i32),
-                &extra_json,
-            ],
-        )
-        .await;
-
-    match result {
-        Ok(_) => {
-            c.batch_execute("RELEASE SAVEPOINT requestattempt_extra_json_column")
-                .await
-                .context("RELEASE SAVEPOINT RequestAttempt extra_json")?;
-            Ok(())
-        }
-        Err(err) => {
-            c.batch_execute(
-                "ROLLBACK TO SAVEPOINT requestattempt_extra_json_column;
-                 RELEASE SAVEPOINT requestattempt_extra_json_column;",
-            )
+    // Column-availability ladder. The tester's own migrate() guarantees BOTH
+    // optional columns (extra_json since V004-era installs, TargetUrl since
+    // V006/#782), but the documented install.sh-seeded legacy schema is written
+    // to WITHOUT migrating — so each optional column degrades independently via
+    // a savepoint retry on UNDEFINED_COLUMN, exactly like the original
+    // extra_json fallback this generalizes.
+    let mut with_url = true;
+    let mut with_extra = true;
+    loop {
+        c.batch_execute("SAVEPOINT requestattempt_optional_columns")
             .await
-            .context("ROLLBACK SAVEPOINT RequestAttempt extra_json")?;
+            .context("SAVEPOINT RequestAttempt optional columns")?;
 
-            if !is_missing_column_error(&err, "extra_json") {
-                return Err(err).context("INSERT RequestAttempt");
+        let result = match (with_url, with_extra) {
+            (true, true) => {
+                c.execute(
+                    "INSERT INTO RequestAttempt (
+                    AttemptId, RunId, Protocol, SequenceNum,
+                    StartedAt, FinishedAt, Success, ErrorMessage, RetryCount, TargetUrl, extra_json
+                 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+                    &[
+                        &a.attempt_id,
+                        &a.run_id,
+                        &protocol,
+                        &(a.sequence_num as i32),
+                        &a.started_at,
+                        &a.finished_at,
+                        &a.success,
+                        &err_msg,
+                        &(a.retry_count as i32),
+                        &a.target_url,
+                        &extra_json,
+                    ],
+                )
+                .await
             }
-
-            // Fallback: insert without extra_json (older schema)
-            c.execute(
-                "INSERT INTO RequestAttempt (
+            (true, false) => {
+                c.execute(
+                    "INSERT INTO RequestAttempt (
+                    AttemptId, RunId, Protocol, SequenceNum,
+                    StartedAt, FinishedAt, Success, ErrorMessage, RetryCount, TargetUrl
+                 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+                    &[
+                        &a.attempt_id,
+                        &a.run_id,
+                        &protocol,
+                        &(a.sequence_num as i32),
+                        &a.started_at,
+                        &a.finished_at,
+                        &a.success,
+                        &err_msg,
+                        &(a.retry_count as i32),
+                        &a.target_url,
+                    ],
+                )
+                .await
+            }
+            (false, true) => {
+                c.execute(
+                    "INSERT INTO RequestAttempt (
+                    AttemptId, RunId, Protocol, SequenceNum,
+                    StartedAt, FinishedAt, Success, ErrorMessage, RetryCount, extra_json
+                 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+                    &[
+                        &a.attempt_id,
+                        &a.run_id,
+                        &protocol,
+                        &(a.sequence_num as i32),
+                        &a.started_at,
+                        &a.finished_at,
+                        &a.success,
+                        &err_msg,
+                        &(a.retry_count as i32),
+                        &extra_json,
+                    ],
+                )
+                .await
+            }
+            (false, false) => {
+                c.execute(
+                    "INSERT INTO RequestAttempt (
                     AttemptId, RunId, Protocol, SequenceNum,
                     StartedAt, FinishedAt, Success, ErrorMessage, RetryCount
                  ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
-                &[
-                    &a.attempt_id,
-                    &a.run_id,
-                    &protocol,
-                    &(a.sequence_num as i32),
-                    &a.started_at,
-                    &a.finished_at,
-                    &a.success,
-                    &err_msg,
-                    &(a.retry_count as i32),
-                ],
-            )
-            .await
-            .context("INSERT RequestAttempt")?;
-            Ok(())
+                    &[
+                        &a.attempt_id,
+                        &a.run_id,
+                        &protocol,
+                        &(a.sequence_num as i32),
+                        &a.started_at,
+                        &a.finished_at,
+                        &a.success,
+                        &err_msg,
+                        &(a.retry_count as i32),
+                    ],
+                )
+                .await
+            }
+        };
+
+        match result {
+            Ok(_) => {
+                c.batch_execute("RELEASE SAVEPOINT requestattempt_optional_columns")
+                    .await
+                    .context("RELEASE SAVEPOINT RequestAttempt optional columns")?;
+                return Ok(());
+            }
+            Err(err) => {
+                c.batch_execute(
+                    "ROLLBACK TO SAVEPOINT requestattempt_optional_columns;
+                     RELEASE SAVEPOINT requestattempt_optional_columns;",
+                )
+                .await
+                .context("ROLLBACK SAVEPOINT RequestAttempt optional columns")?;
+
+                if with_url && is_missing_column_error(&err, "targeturl") {
+                    with_url = false; // legacy schema without V006
+                } else if with_extra && is_missing_column_error(&err, "extra_json") {
+                    with_extra = false; // legacy schema without extra_json
+                } else {
+                    return Err(err).context("INSERT RequestAttempt");
+                }
+            }
         }
     }
 }
@@ -1756,7 +1846,7 @@ mod tests {
 
     // ── Migration SQL content tests (no database required) ────────────────────
 
-    /// `shared/tester-schema.postgres.sql` is the copy of THIS crate's V001–V005
+    /// `shared/tester-schema.postgres.sql` is the copy of THIS crate's V001–V006
     /// migrations that the C# control plane embeds and applies lazily on first
     /// attempt ingest (AttemptPersister) — that is how a fresh control-plane
     /// database gets the RequestAttempt/… tables when no DB-backed tester ever
@@ -1774,6 +1864,7 @@ mod tests {
             V003_MIGRATION,
             V004_MIGRATION,
             V005_MIGRATION,
+            V006_MIGRATION,
         ]
         .concat();
         let idx = SHARED
@@ -1782,7 +1873,7 @@ mod tests {
         assert_eq!(
             &SHARED[idx..],
             body,
-            "shared/tester-schema.postgres.sql drifted from postgres.rs V001–V005 — regenerate it from the constants"
+            "shared/tester-schema.postgres.sql drifted from postgres.rs V001–V006 — regenerate it from the constants"
         );
     }
 

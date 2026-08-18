@@ -1412,6 +1412,7 @@ mod tests {
             client_geo: None,
             target_geo: None,
             attempts: vec![RequestAttempt {
+                target_url: None,
                 phase: None,
                 attempt_id: Uuid::new_v4(),
                 run_id,
@@ -1690,6 +1691,7 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(sequence_num, total_duration_ms)| RequestAttempt {
+                target_url: None,
                 phase: None,
                 attempt_id: Uuid::new_v4(),
                 run_id,
@@ -1964,6 +1966,7 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(sequence_num, total_duration_ms)| RequestAttempt {
+                target_url: None,
                 phase: None,
                 attempt_id: Uuid::new_v4(),
                 run_id,
@@ -2105,6 +2108,7 @@ mod tests {
                     let template = template.clone();
                     let protocol = protocol.clone();
                     move |(sequence_num, &total_duration_ms)| RequestAttempt {
+                        target_url: None,
                         attempt_id: Uuid::new_v4(),
                         run_id,
                         protocol: protocol.clone(),

@@ -921,6 +921,7 @@ fn throughput_protocol_comparison_higher_is_better() {
     let make_dl = |mbps: f64| -> RequestAttempt {
         let run_id = Uuid::new_v4();
         RequestAttempt {
+            target_url: None,
             phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
