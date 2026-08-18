@@ -55,9 +55,9 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
     // ── Migration chain ─────────────────────────────────────────────────
 
     [Fact]
-    public void Fresh_database_applies_the_full_chain_v002_to_v050()
+    public void Fresh_database_applies_the_full_chain_v002_to_v051()
     {
-        Assert.Equal(Enumerable.Range(2, 49), _fx.FreshRun.Applied);
+        Assert.Equal(Enumerable.Range(2, 50), _fx.FreshRun.Applied);
         Assert.Empty(_fx.FreshRun.AlreadyApplied);
     }
 
@@ -70,7 +70,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
 
         Assert.True(second.WasUpToDate);
         Assert.Empty(second.Applied);
-        Assert.Equal(Enumerable.Range(2, 49), second.AlreadyApplied);
+        Assert.Equal(Enumerable.Range(2, 50), second.AlreadyApplied);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
             }
         }
 
-        Assert.Equal(Enumerable.Range(2, 49), recorded);
+        Assert.Equal(Enumerable.Range(2, 50), recorded);
     }
 
     // ── EF-model equivalence ────────────────────────────────────────────
@@ -159,6 +159,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
         await db.AlertRules.ToListAsync(); queried++;
         await db.AlertEvents.ToListAsync(); queried++;
         await db.BenchmarkRegressions.ToListAsync(); queried++;
+        await db.CanaryDispatches.ToListAsync(); queried++;
 
         // If someone adds a DbSet without extending this list, fail loudly so
         // the new entity is covered by the equivalence proof too.
@@ -724,6 +725,7 @@ public sealed class MigrationScriptFreezeTests
         ["V048_strip_endpoint_only_modes_from_url_configs.sql"] = "629e07f03f878ffbbcff474597c9f4783c7d3cc19fd5d5fd77a9535155a237c8",
         ["V049_provision_retry_columns.sql"] = "d06c0e1967f6228523284609dc6bdd54b10d3044762bc6cf2c6eabdcadc93c9d",
         ["V050_deployment_endpoint_hosts.sql"] = "8d76716d824e8e00e23741e866cc874324a5fa6fc580ebb71bbb315df0f572dc",
+        ["V051_canary_dispatch.sql"] = "9c1a5053fe3ca9218b959793fc8275c843d32a41a65e62200adf1f360f03cfad",
     };
 
     [Fact]
@@ -743,7 +745,7 @@ public sealed class MigrationScriptFreezeTests
             Assert.Contains(version, scripted);
         }
 
-        Assert.Equal(48, scripted.Count);
+        Assert.Equal(49, scripted.Count);
     }
 
     [Fact]

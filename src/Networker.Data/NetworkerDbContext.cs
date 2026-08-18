@@ -81,6 +81,8 @@ public partial class NetworkerDbContext : DbContext
 
     public virtual DbSet<AlertEvent> AlertEvents { get; set; }
 
+    public virtual DbSet<CanaryDispatch> CanaryDispatches { get; set; }
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder
@@ -1596,6 +1598,26 @@ public partial class NetworkerDbContext : DbContext
                 .HasForeignKey(d => d.RunId)
                 .OnDelete(DeleteBehavior.Cascade)
                 .HasConstraintName("alert_event_run_id_fkey");
+        });
+
+        modelBuilder.Entity<CanaryDispatch>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("canary_dispatch_pkey");
+
+            entity.ToTable("canary_dispatch");
+
+            entity.HasIndex(e => e.RequestedAt, "ix_canary_dispatch_requested_at").IsDescending();
+
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.RequestedBy).HasColumnName("requested_by");
+            entity.Property(e => e.RequestedAt).HasColumnName("requested_at");
+            entity.Property(e => e.GitRef).HasColumnName("git_ref");
+            entity.Property(e => e.Inputs).HasColumnName("inputs").HasColumnType("jsonb");
+            entity.Property(e => e.RunId).HasColumnName("run_id");
+            entity.Property(e => e.RunUrl).HasColumnName("run_url");
+            entity.Property(e => e.RunStatus).HasColumnName("run_status");
+            entity.Property(e => e.Conclusion).HasColumnName("conclusion");
+            entity.Property(e => e.UpdatedAt).HasColumnName("updated_at");
         });
 
         modelBuilder.HasSequence("chunk_constraint_name", "_timescaledb_catalog");

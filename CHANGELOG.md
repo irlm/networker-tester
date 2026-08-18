@@ -11,12 +11,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.28.229] - 2026-08-18
+## [0.28.230] - 2026-08-18
 
 - **Dashboard architecture is now feature-oriented and reusable.** Shared API transport, TanStack Query hooks, page shells, form controls, dialogs, buttons, async states, and run-detail sections replace duplicated page-level implementations; heavy charts are loaded only when needed.
 - **Performance logs now return a fast, focused default view.** The page starts at the last five minutes and adds URL-backed time ranges, kind and path filters, pagination, filtered statistics, and active-view polling that respects Pause.
 - **The UI design contract is documented and enforced.** `DESIGN.md` and `dashboard/ARCHITECTURE.md` define tokens, component ownership, accessibility, responsive behavior, query boundaries, and testing expectations.
 - **Dashboard regression coverage is broader.** Unit and Playwright suites now cover shared primitives, query behavior, routes, accessibility, responsive layouts, performance-log filtering, and lazy-loaded chart bundles.
+
+---
+
+## [0.28.229] - 2026-08-18
+
+### Added
+
+- **Canary run history — in product AND in the database.** The admin canary
+  panel (`/admin/canary`) now shows two histories under the trigger: a
+  **Dispatch history** persisted in our own database (new `canary_dispatch`
+  table, migration V051) recording who triggered each in-product run, when,
+  against which ref and with which inputs — durable even when GitHub is
+  unreachable and visible from any deployment sharing the database — and a
+  live **Recent runs on GitHub** list (includes runs triggered outside the
+  product). GitHub's `workflow_dispatch` API returns no run id, so a new
+  `CanaryRunPoller` background loop links each dispatch to its Actions run
+  and backfills status/conclusion until the run completes (steady-state
+  GitHub API cost: zero). New endpoints: `GET /api/admin/canary/history`
+  (DB-backed) and `GET /api/admin/canary/runs` (live, degrades to an empty
+  list when no `CANARY_GITHUB_TOKEN` is configured); both GlobalAdmin-gated
+  like the rest of the canary surface.
 
 ---
 

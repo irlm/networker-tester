@@ -109,6 +109,9 @@ builder.Services.AddScoped<BenchmarkRegressionDetector>();
 // Floor = the real assembly version (Directory.Build.props, single-sourced
 // with Cargo.toml) — never a hardcoded string.
 builder.Services.AddVersionRefresh(VersionEndpoints.DashboardVersion);
+// Backfills GitHub run id/status/conclusion onto canary_dispatch history rows
+// (workflow_dispatch returns no run id). Gated like other DB-writing loops.
+builder.Services.AddCanaryRunPoller();
 // Per-host cache of the endpoints' live /health `services` self-report — the
 // config-create gate reads it (never probes on the request path) and the
 // deployment /capabilities route writes through to it.
