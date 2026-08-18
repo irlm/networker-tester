@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.232] - 2026-08-19
+
+### Fixed
+
+- **install.sh's dashboard TLS vhost now serves HTTP/2 on both paths**
+  (#762, repo half). The Let's Encrypt path appends the `http2` parameter to
+  certbot's managed `listen 443 ssl;` lines after certbot succeeds
+  (idempotent sed + `nginx -t` gate; parameter form for nginx 1.24 compat),
+  and the self-signed fallback vhost declares `listen 443 ssl http2;`
+  directly. Without h2 the SPA's held SSE streams pin the browser's
+  6-connection cap and API calls stall ~5.8 s. New bats test locks both
+  listeners in. (scripts/deploy-dashboard.sh was already fixed by #770;
+  the live prod VM still needs the one-time vhost edit.)
+
 ## [0.28.231] - 2026-08-18
 
 ### Added
