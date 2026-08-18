@@ -187,9 +187,10 @@ app.UseSecurityHeaders();
 // after routing so {projectId} route values reach the project-scope handler.
 app.UseNetworkerAuth();
 
-// GET /api/health — same shape the Rust dashboard serves; used by the deploy
-// health check and the frontend connection dot.
-app.MapGet("/api/health", async (NetworkerDbContext db) =>
+// GET/HEAD /api/health — same shape the Rust dashboard serves; used by the
+// deploy health check and the frontend connection dot. HEAD is answered too so
+// load balancers / health probes that probe with HEAD get 200, not 405 (#765).
+app.MapMethods("/api/health", new[] { "GET", "HEAD" }, async (NetworkerDbContext db) =>
 {
     var dbOk = await db.Database.CanConnectAsync();
     return Results.Ok(new

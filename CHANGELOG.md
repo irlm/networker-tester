@@ -11,6 +11,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.227] - 2026-08-18
+
+- **Admin → System → Auth: the Public URL field no longer masks real errors.** `getSystemConfig` caught *every* error as "unset"; it now returns null only on the expected 404 (key not set) and surfaces genuine failures (401/5xx) instead of silently showing an empty field.
+
+### Fixed
+
+- **`HEAD /api/health` returned 405** (#765). The health route was registered
+  GET-only, so load balancers and health probes that use `HEAD` got a 405
+  instead of 200. The route now answers both `GET` and `HEAD` (identical
+  behavior; `HEAD` returns the same 200 with no body).
+- **Deleting a tester orphaned its `agent` rows** (#765). The
+  `agent → tester` FK is `ON DELETE SET NULL`, so removing a tester left its
+  agent rows behind (tester_id nulled, all offline) to accumulate forever. The
+  tester-delete path now reaps the tester's agent rows (and, via the existing
+  `agent_command` cascade, their commands) before removing the tester.
+- **Logs tab showed a misleading "No log entries" when log persistence isn't
+  set up** (#765). On a C#-only install (like prod) the `service_log` table
+  doesn't exist, so `GET /api/logs` returns `log_sink: "unconfigured"`. The
+  System dashboard Logs tab now reads that flag and renders an informative
+  empty-state ("Log persistence isn't configured for this deployment…") instead
+  of "No log entries", which is kept for the genuinely-empty-but-configured case.
+
+### Notes
+
+- **Deployment SIGTERM on control-plane restart** (#764) — assessed, no code
+  change here. install.sh runs as a child process of the control plane, so a
+  restart (e.g. during a deploy) SIGTERMs in-flight deployments (exit 143). The
+  Retry button (#766) is the shipped mitigation. See the PR description /
+  `docs/deploy-restart-resilience.md` for the design assessment and
+  recommendation.
+
+---
+
 ## [0.28.226] - 2026-08-18
 
 ### Added
@@ -3479,7 +3512,6 @@ convention** — see Changed.
   `example.com` hit `example.com/health` → 404 → false "failed". The probe now
   submits the URL as entered (root by default; `toProbeUrl`), which the agent
   uses verbatim; the bare host is kept only for the watchlist display/grouping.
-
 
 
 ### Fixed

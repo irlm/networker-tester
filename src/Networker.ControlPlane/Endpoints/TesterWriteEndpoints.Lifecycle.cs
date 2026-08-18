@@ -440,6 +440,20 @@ public static partial class TesterWriteEndpoints
                     + "and must be cleaned up in the cloud console: {Err}", testerId, res.Error ?? res.StdErr);
             }
 
+            // Reap the tester's agent rows before removing the tester itself. The
+            // agent → tester FK (agent_tester_id_fkey) is ON DELETE SET NULL, so
+            // without this the agent rows survive the tester as orphans (tester_id
+            // nulled, all offline) that accumulate forever (#765). ExecuteDelete
+            // issues a direct DELETE; the DB-level agent_command_agent_id_fkey
+            // (ON DELETE CASCADE) reaps each agent's commands with it.
+            var reaped = await sdb.Agents
+                .Where(a => a.TesterId == testerId)
+                .ExecuteDeleteAsync(token);
+            if (reaped > 0)
+            {
+                l.LogInformation("tester {TesterId} delete reaped {Count} agent row(s)", testerId, reaped);
+            }
+
             sdb.ProjectTesters.Remove(row);
             await sdb.SaveChangesAsync(token);
             if (!res.Success && res.ExitCode is not null)
