@@ -344,7 +344,14 @@ capture_deploy_log() {
   log=$(api GET "/api/projects/$PID/deployments/$dep" | jq -r '.log // ""')
   [ -n "$log" ] || return 0
   summary "<details><summary>endpoint deploy log (tail) — deployment $dep</summary>"
-  summary ''; summary '```'; printf '%s\n' "$log" | tail -c 1800 >>"${GITHUB_STEP_SUMMARY:-/dev/stdout}"; summary '```'; summary "</details>"
+  summary ''; summary '```'
+  # Echo the tail to BOTH the step summary (when in CI) AND stdout, so a failed
+  # deploy is diagnosable straight from the CI *log stream* — not only from the
+  # job-summary tab (which is not in `gh run view --log` / the fetched logs).
+  local tail_log; tail_log=$(printf '%s\n' "$log" | tail -c 1800)
+  [ -n "${GITHUB_STEP_SUMMARY:-}" ] && printf '%s\n' "$tail_log" >>"$GITHUB_STEP_SUMMARY"
+  printf '%s\n' "$tail_log"
+  summary '```'; summary "</details>"
 }
 
 AB_ATTEMPTS=2

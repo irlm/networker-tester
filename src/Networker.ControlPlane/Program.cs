@@ -240,6 +240,7 @@ app.MapDeploymentWriteEndpoints();
 // account/password + SSO flows + provider admin.
 app.MapUsersEndpoints();
 app.MapAdminEndpoints();
+app.MapCanaryEndpoints();
 app.MapProjectWriteEndpoints();
 app.MapMembersEndpoints();
 app.MapInvitesEndpoints();
