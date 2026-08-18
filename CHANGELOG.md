@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.226] - 2026-08-18
+
+### Added
+
+- **In-product admin canary panel.** Platform admins get a new **Canary** page
+  (`/admin/canary`, gated by the existing platform-admin RBAC) that triggers the
+  prod run-execution canary (`.github/workflows/soak-canary.yml`) without leaving
+  the product. A new control-plane endpoint `POST /api/admin/canary/dispatch`
+  fires the workflow via the GitHub REST `workflow_dispatch` API using a
+  server-side token (`CANARY_GITHUB_TOKEN`; repo overridable via
+  `CANARY_GITHUB_REPO`) — no token is ever hardcoded, and when it is absent the
+  endpoint returns a clear "not configured" error instead of failing opaquely.
+  `GET /api/admin/canary` reports whether dispatch is configured and the links to
+  view results. The panel also surfaces the canary's output: a new-tab link to
+  the GitHub Actions run log, and a new-tab link to the canary's in-product runs
+  (the Runs list gained a `?q=` config-name filter; canary configs are named
+  `soak-canary-*`).
+
+---
+
 ## [0.28.225] - 2026-08-18
 
 ### Fixed

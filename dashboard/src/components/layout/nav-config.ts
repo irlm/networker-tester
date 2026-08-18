@@ -57,6 +57,7 @@ export const NAV_ENTRIES: NavEntry[] = [
   { label: 'System', icon: '▦', path: '/admin/system', section: 'admin', keywords: ['health', 'usage', 'logs', 'auth'], gate: 'platformAdmin' },
   { label: 'Tokens', icon: '⚿', path: '/bench-tokens', section: 'admin', keywords: ['bench tokens', 'api keys'], gate: 'platformAdmin' },
   { label: 'Perf Log', icon: '⏱', path: '/admin/perf-log', section: 'admin', keywords: ['performance', 'latency', 'slow requests'], gate: 'platformAdmin' },
+  { label: 'Canary', icon: '⚑', path: '/admin/canary', section: 'admin', keywords: ['soak', 'canary', 'run execution', 'workflow', 'dispatch'], gate: 'platformAdmin' },
   { label: 'Users', icon: '♟', path: '/users', section: 'admin', keywords: ['accounts', 'members', 'pending'], gate: 'admin' },
 ];
 

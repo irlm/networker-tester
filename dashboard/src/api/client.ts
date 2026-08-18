@@ -819,6 +819,25 @@ export const api = {
   setSystemConfig: (key: string, value: string) =>
     request<void>(`/admin/system-config/${key}`, { method: 'PUT', body: JSON.stringify({ value }) }),
 
+  // ── Prod run-execution canary (platform admin only) ─────────────────
+  getCanaryStatus: () =>
+    request<{ configured: boolean; owner: string; repo: string; workflow: string; actions_url: string }>(
+      '/admin/canary',
+    ),
+
+  dispatchCanary: (inputs: {
+    reuse_runner?: boolean;
+    apibench?: boolean;
+    mode_coverage?: boolean;
+    matrix_flow?: boolean;
+    windows?: boolean;
+    ref?: string;
+  }) =>
+    request<{ status: string; actions_url: string }>('/admin/canary/dispatch', {
+      method: 'POST',
+      body: JSON.stringify(inputs),
+    }),
+
   // Leaderboard (simple benchmark routes)
   getLeaderboard: () =>
     request<import('./types').BenchmarkLeaderboardEntry[]>('/leaderboard'),
