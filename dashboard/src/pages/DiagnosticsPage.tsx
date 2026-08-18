@@ -13,6 +13,7 @@ import { useProject } from '../hooks/useProject';
 import { useToast } from '../hooks/useToast';
 import { timeAgo } from '../lib/format';
 import { stripAnsi } from '../lib/ansi';
+import { isWatchlistConfigName } from '../lib/watchlist';
 import { Button } from '../components/common/Button';
 import {
   runKeys,
@@ -549,7 +550,11 @@ export function DiagnosticsPage() {
   const configs = useMemo(
     () => ((configsQuery.data ?? []) as Array<TestConfigListItem | TestConfig>).filter((config) => {
       const kind = 'endpoint_kind' in config ? config.endpoint_kind : config.endpoint.kind;
-      return kind === 'network';
+      // Only this page's own probe configs are watch entries — see
+      // isWatchlistConfigName. Runs from other network-kind configs
+      // (benchmark cells, canary, SDK endpoints) are excluded downstream too:
+      // their config detail is never fetched and their names don't parse.
+      return kind === 'network' && isWatchlistConfigName(config.name);
     }),
     [configsQuery.data],
   );
@@ -878,6 +883,9 @@ export function DiagnosticsPage() {
         <div className="flex items-center gap-2.5">
           <div className="flex-1 flex items-center gap-2">
             <label htmlFor="diag-url" className="text-xs text-gray-400 flex-shrink-0">URL:</label>
+            {/* Ligatures off (#765): coding fonts render `//` as a slashed
+                ligature that reads as ` /` in a URL field. The stored value
+                was always correct — display only. */}
             <input
               ref={inputRef}
               id="diag-url"
@@ -886,7 +894,7 @@ export function DiagnosticsPage() {
               onChange={e => setUrl(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && url.trim()) handleRun(); }}
               placeholder="Enter URL to test..."
-              className="flex-1 bg-[var(--bg-raised)] border border-gray-800 rounded px-3 py-2 text-sm text-cyan-400 focus:outline-none focus:border-cyan-500/50 placeholder:text-gray-600 transition-colors"
+              className="flex-1 bg-[var(--bg-raised)] border border-gray-800 rounded px-3 py-2 text-sm text-cyan-400 focus:outline-none focus:border-cyan-500/50 placeholder:text-gray-600 transition-colors [font-variant-ligatures:none]"
               aria-label="URL or hostname to test"
             />
           </div>

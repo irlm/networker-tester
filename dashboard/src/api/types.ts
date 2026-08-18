@@ -1685,6 +1685,12 @@ export interface SdkEndpoint {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  /** Latest sdkprobe run's timestamp — the reachability signal (#765). All
+   * four last_run_* fields are null when the endpoint was never probed. */
+  last_run_at: string | null;
+  last_run_status: string | null;
+  last_run_success_count: number | null;
+  last_run_failure_count: number | null;
 }
 
 /** Create body for an SDK endpoint. `token` is required and write-only. */
