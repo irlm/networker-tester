@@ -163,6 +163,7 @@ pub async fn run_udpdownload_probe(
     };
 
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id,
         run_id,
@@ -302,6 +303,7 @@ pub async fn run_udpupload_probe(
     };
 
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id,
         run_id,
@@ -657,6 +659,7 @@ fn udp_tp_failed(
     message: String,
 ) -> RequestAttempt {
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id,
         run_id,

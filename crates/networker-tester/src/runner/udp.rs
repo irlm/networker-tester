@@ -191,6 +191,7 @@ pub async fn run_udp_probe(
     };
 
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id,
         run_id,
@@ -280,6 +281,7 @@ fn udp_failed(
     message: String,
 ) -> RequestAttempt {
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id,
         run_id,

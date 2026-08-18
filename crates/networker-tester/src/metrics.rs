@@ -1108,6 +1108,12 @@ pub struct RequestAttempt {
     /// Number of retries performed before this attempt succeeded (0 = first try succeeded).
     #[serde(default)]
     pub retry_count: u32,
+    /// The target URL this attempt probed. `Some` on every attempt produced by
+    /// `dispatch_once` (stamped centrally there) — the field that lets a
+    /// multi-target ("URL set") run attribute each streamed attempt to its URL
+    /// (issue #782). `None` only in legacy artifacts recorded before v0.28.231.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_url: Option<String>,
     /// Server-side timing metadata parsed from response headers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_timing: Option<ServerTimingResult>,
@@ -4524,6 +4530,7 @@ mod tests {
     fn test_test_run_counts() {
         let run_id = Uuid::new_v4();
         let mk = |success: bool| RequestAttempt {
+            target_url: None,
             phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
@@ -4860,6 +4867,7 @@ mod tests {
     // Helper to build a minimal RequestAttempt with no sub-results.
     fn bare_attempt(proto: Protocol) -> RequestAttempt {
         RequestAttempt {
+            target_url: None,
             phase: None,
             attempt_id: Uuid::new_v4(),
             run_id: Uuid::new_v4(),
