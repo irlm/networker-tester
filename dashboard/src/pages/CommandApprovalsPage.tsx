@@ -157,7 +157,7 @@ export function CommandApprovalsPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
                       <span className="text-sm text-gray-200">{a.command_type}</span>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${statusBadge[a.status]}`}>
+                      <span className={`text-xs px-1.5 py-0.5 rounded ${statusBadge[a.status]}`}>
                         {a.status}
                       </span>
                     </div>
@@ -167,7 +167,7 @@ export function CommandApprovalsPage() {
                       <span>expires: <TimeUntil iso={a.expires_at} /></span>
                     </div>
                     {a.command_detail && Object.keys(a.command_detail).length > 0 && (
-                      <pre className="text-[11px] text-gray-400 mt-2 bg-gray-950 rounded px-2 py-1 overflow-x-auto">
+                      <pre className="text-xs text-gray-400 mt-2 bg-gray-950 rounded px-2 py-1 overflow-x-auto">
                         {JSON.stringify(a.command_detail, null, 2)}
                       </pre>
                     )}
@@ -271,7 +271,7 @@ function HistoryTab({ projectId }: { projectId: string }) {
           <tr key={a.approval_id} className="border-b border-gray-800/50 hover:bg-gray-800/20">
             <td className="py-2 text-gray-200">{a.command_type}</td>
             <td className="py-2">
-              <span className={`text-[10px] px-1.5 py-0.5 rounded ${statusBadge[a.status]}`}>
+              <span className={`text-xs px-1.5 py-0.5 rounded ${statusBadge[a.status]}`}>
                 {a.status}
               </span>
             </td>

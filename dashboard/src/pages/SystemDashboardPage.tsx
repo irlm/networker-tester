@@ -18,6 +18,7 @@ import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useToast } from '../hooks/useToast';
 import { timeAgo } from '../lib/format';
+import { StatusBadge } from '../components/common/StatusBadge';
 
 type Tab = 'overview' | 'usage' | 'logs' | 'auth';
 
@@ -105,7 +106,7 @@ function OverviewTab({ system, db, version, userCount, workspaceCount }: {
             </div>
           </>
         ) : (
-          <p className="text-sm text-gray-500">Loading...</p>
+          <p className="text-sm text-faint">Loading...</p>
         )}
       </div>
 
@@ -134,7 +135,7 @@ function OverviewTab({ system, db, version, userCount, workspaceCount }: {
             </div>
           </div>
         ) : (
-          <p className="text-sm text-gray-500">Loading...</p>
+          <p className="text-sm text-faint">Loading...</p>
         )}
       </div>
 
@@ -233,7 +234,7 @@ function UsageTab({ workspaces, onRefresh }: { workspaces: WorkspaceUsage[]; onR
                   {ws.last_activity ? timeAgo(ws.last_activity) : 'never'}
                 </td>
                 <td className="py-2 pr-3">
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${st.cls}`}>{st.label}</span>
+                  <span className={`text-xs px-1.5 py-0.5 rounded ${st.cls}`}>{st.label}</span>
                 </td>
                 <td className="py-2">
                   <div className="flex items-center gap-1.5">
@@ -332,7 +333,7 @@ function LogsTab() {
       case 1: return 'text-red-400';
       case 2: return 'text-yellow-400';
       case 4: return 'text-gray-400';
-      case 5: return 'text-gray-500';
+      case 5: return 'text-faint';
       default: return 'text-gray-400';
     }
   };
@@ -397,13 +398,13 @@ function LogsTab() {
         className="max-h-[600px] overflow-y-auto border border-gray-800 rounded bg-[var(--bg-card)] p-3 text-xs leading-relaxed"
       >
         {logs.length === 0 && (
-          <p className="text-gray-500 text-center py-4">No log entries</p>
+          <p className="text-faint text-center py-4">No log entries</p>
         )}
         {logs.map((entry, i) => {
           const levelStr = levelToString(entry.level);
           return (
             <div key={i} className={levelColor(entry.level)}>
-              <span className="text-gray-500">[{formatTime(entry.ts)}]</span>{' '}
+              <span className="text-faint">[{formatTime(entry.ts)}]</span>{' '}
               <span className="font-bold">{levelStr.padEnd(5)}</span>{' '}
               <span className="text-gray-400">{entry.service}</span>{' '}
               &mdash; {entry.message}
@@ -620,7 +621,7 @@ function AuthTab() {
     }
   };
 
-  if (loading) return <p className="text-sm text-gray-500">Loading...</p>;
+  if (loading) return <p className="text-sm text-faint">Loading...</p>;
 
   return (
     <div className="space-y-6">
@@ -661,7 +662,7 @@ function AuthTab() {
         </div>
 
         {providers.length === 0 && !showForm && (
-          <p className="text-sm text-gray-500 py-4 text-center">No SSO providers configured</p>
+          <p className="text-sm text-faint py-4 text-center">No SSO providers configured</p>
         )}
 
         {providers.length > 0 && (
@@ -682,11 +683,10 @@ function AuthTab() {
                   <td className="py-2 pr-3 text-gray-400 text-xs">{p.provider_type}</td>
                   <td className="py-2 pr-3 text-gray-400 text-xs truncate max-w-[200px]">{p.client_id}</td>
                   <td className="py-2 pr-3">
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-                      p.enabled ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'
-                    }`}>
-                      {p.enabled ? 'enabled' : 'disabled'}
-                    </span>
+                    <StatusBadge
+                      status={p.enabled ? 'online' : 'offline'}
+                      label={p.enabled ? 'enabled' : 'disabled'}
+                    />
                   </td>
                   <td className="py-2">
                     <div className="flex items-center gap-1.5">
@@ -761,8 +761,8 @@ function AuthTab() {
             {/* Setup guide */}
             {!editingId && PROVIDER_SETUP_GUIDES[formType] && (
               <div className="mb-4 bg-gray-900/40 border border-gray-800 rounded p-3">
-                <div className="text-[10px] text-cyan-400/80 font-medium uppercase tracking-wider mb-1.5">Setup Guide</div>
-                <ol className="text-[11px] text-gray-400 space-y-0.5 list-none pl-0">
+                <div className="text-xs text-cyan-400/80 font-medium uppercase tracking-wider mb-1.5">Setup Guide</div>
+                <ol className="text-xs text-gray-400 space-y-0.5 list-none pl-0">
                   {PROVIDER_SETUP_GUIDES[formType].map((step, i) => (
                     <li key={i}>
                       {step.replace(/\{public_url\}/g, publicUrl || 'https://your-dashboard-url')}
@@ -785,7 +785,7 @@ function AuthTab() {
                   placeholder={f.secret && editingId ? '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (leave empty to keep)' : ''}
                   className="w-full bg-transparent border-b border-gray-700 focus:border-cyan-500/50 py-1.5 text-sm text-gray-200 focus:outline-none"
                 />
-                {f.help && <p className="text-[10px] text-gray-500 mt-0.5">{f.help}</p>}
+                {f.help && <p className="text-xs text-faint mt-0.5">{f.help}</p>}
               </div>
             ))}
 
@@ -805,7 +805,7 @@ function AuthTab() {
               <button
                 onClick={handleSave}
                 disabled={saving}
-                className="px-4 py-1.5 text-xs rounded bg-cyan-600 hover:bg-cyan-500 text-white transition-colors disabled:opacity-50"
+                className="px-4 py-1.5 text-xs rounded bg-cyan-600 hover:bg-cyan-500 text-[var(--bg-base)] transition-colors disabled:opacity-50"
               >
                 {saving ? 'Saving...' : editingId ? 'Update' : 'Create'}
               </button>

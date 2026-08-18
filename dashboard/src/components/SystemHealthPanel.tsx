@@ -144,7 +144,7 @@ export default function SystemHealthPanel() {
               {check.stale && (
                 // The writer once died silently and the panel served
                 // month-old rows as current — staleness is now explicit.
-                <span className="text-[10px] px-1 py-0.5 border border-yellow-500/40 text-yellow-400 rounded">
+                <span className="text-xs px-1 py-0.5 border border-yellow-500/40 text-yellow-400 rounded">
                   stale
                 </span>
               )}
@@ -162,7 +162,7 @@ export default function SystemHealthPanel() {
       </div>
 
       {health?.checks[0] && (
-        <p className="text-[10px] text-gray-500 mt-2">
+        <p className="text-xs text-faint mt-2">
           Last checked:{" "}
           {new Date(health.checks[0].checked_at).toLocaleString()}
         </p>

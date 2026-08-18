@@ -110,14 +110,15 @@ export function HorizontalBoxWhiskerChart({
 
   if (rows.length === 0) return null;
 
-  // Layout constants — wider viewBox = smaller rendered fonts
+  // The SVG keeps a readable 12px internal type scale. Narrow containers can
+  // scroll instead of shrinking chart labels below the product type ramp.
   const longestLabel = Math.max(...rows.map(r => r.label.length), 4);
-  const LBL_W = Math.max(100, longestLabel * 7 + 20); // ~7px per char at fontSize 9
-  const MEAN_W = 65;     // right annotation area for mean text
-  const ROW_H = 24;      // tighter rows
-  const BOX_H = 12;
-  const PAD_TOP = title ? 28 : 6;
-  const PAD_BOT = 20;    // space for x-axis labels
+  const LBL_W = Math.max(120, longestLabel * 8 + 24);
+  const MEAN_W = 90;     // right annotation area for mean text
+  const ROW_H = 38;
+  const BOX_H = 16;
+  const PAD_TOP = title ? 32 : 8;
+  const PAD_BOT = 32;    // space for x-axis labels
   const PAD_LEFT = 4;    // small left margin inside chart area
 
   // Domain: 0 to max(p95) * 1.1
@@ -137,7 +138,7 @@ export function HorizontalBoxWhiskerChart({
     LBL_W + PAD_LEFT + Math.max(0, (v / domainMax) * CHART_AREA);
 
   return (
-    <div ref={containerRef} className="relative w-full">
+    <div ref={containerRef} className="relative w-full overflow-x-auto">
       {title && (
         <div
           className="mb-2 text-xs uppercase tracking-wider text-gray-400"
@@ -151,8 +152,16 @@ export function HorizontalBoxWhiskerChart({
         width="100%"
         viewBox={`0 0 ${CHART_W} ${totalH}`}
         preserveAspectRatio="xMinYMin meet"
-        style={{ fontFamily: 'var(--font-mono, ui-monospace, monospace)', fontSize: 9, display: 'block' }}
+        role={onClickGroup ? 'group' : 'img'}
+        aria-label={title ?? `Box-and-whisker distribution in ${unit}`}
+        style={{
+          fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+          fontSize: 12,
+          display: 'block',
+          minWidth: `${CHART_W}px`,
+        }}
       >
+        <title>{title ?? `Box-and-whisker distribution in ${unit}`}</title>
         {/* Grid lines */}
         {ticks.map(t => {
           const x = scaleX(t);
@@ -168,10 +177,10 @@ export function HorizontalBoxWhiskerChart({
               />
               <text
                 x={x}
-                y={PAD_TOP + rows.length * ROW_H + 13}
+                y={PAD_TOP + rows.length * ROW_H + 20}
                 textAnchor="middle"
                 fill="#9ca3af"
-                fontSize={8}
+                fontSize={12}
               >
                 {fmt(t, unit)}
               </text>
@@ -201,7 +210,17 @@ export function HorizontalBoxWhiskerChart({
             <g
               key={row.label}
               style={{ cursor: onClickGroup ? 'pointer' : 'default' }}
+              role={onClickGroup ? 'button' : undefined}
+              tabIndex={onClickGroup ? 0 : undefined}
+              aria-expanded={onClickGroup ? isExpanded : undefined}
+              aria-label={onClickGroup ? `${row.label}: ${fmt(row.p50, unit)} median` : undefined}
               onClick={() => onClickGroup?.(row.label)}
+              onKeyDown={(event) => {
+                if (onClickGroup && (event.key === 'Enter' || event.key === ' ')) {
+                  event.preventDefault();
+                  onClickGroup(row.label);
+                }
+              }}
               onMouseMove={e => handleMouseMove(e, row)}
               onMouseLeave={handleMouseLeave}
             >
@@ -219,22 +238,22 @@ export function HorizontalBoxWhiskerChart({
               {/* Label — right-aligned */}
               <text
                 x={LBL_W - 6}
-                y={cy - (row.sublabel ? 3 : 0)}
+                y={cy - (row.sublabel ? 7 : 0)}
                 textAnchor="end"
                 dominantBaseline="middle"
                 fill="#9ca3af"
-                fontSize={9}
+                fontSize={12}
               >
                 {row.label}
               </text>
               {row.sublabel && (
                 <text
                   x={LBL_W - 6}
-                  y={cy + 7}
+                  y={cy + 9}
                   textAnchor="end"
                   dominantBaseline="middle"
                   fill="#6b7280"
-                  fontSize={7}
+                  fontSize={12}
                 >
                   {row.sublabel}
                 </text>
@@ -282,7 +301,7 @@ export function HorizontalBoxWhiskerChart({
                 y={cy}
                 dominantBaseline="middle"
                 fill={row.color}
-                fontSize={8}
+                fontSize={12}
               >
                 {fmt(row.mean, unit)}
               </text>

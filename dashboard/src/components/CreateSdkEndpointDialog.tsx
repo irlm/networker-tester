@@ -115,7 +115,7 @@ export function CreateSdkEndpointDialog({ projectId, onClose, onCreated }: Creat
           {(!trimmedUrl || urlValid) && <div className="mb-3" />}
 
           <label htmlFor="sdk-token" className="block text-xs text-gray-400 mb-1">
-            LagHound token <span className="text-gray-500">(write-only)</span>
+            LagHound token <span className="text-faint">(write-only)</span>
           </label>
           <input
             id="sdk-token"
@@ -126,10 +126,10 @@ export function CreateSdkEndpointDialog({ projectId, onClose, onCreated }: Creat
             placeholder="Sent as X-LagHound-Token"
             className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 mb-1 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
           />
-          <p className="text-xs text-gray-500 mb-4">Encrypted at rest and never shown again — you can only replace it.</p>
+          <p className="text-xs text-faint mb-4">Encrypted at rest and never shown again — you can only replace it.</p>
 
           <label htmlFor="sdk-route" className="block text-xs text-gray-400 mb-1">
-            Probe route <span className="text-gray-500">(optional)</span>
+            Probe route <span className="text-faint">(optional)</span>
           </label>
           <input
             id="sdk-route"
@@ -146,7 +146,7 @@ export function CreateSdkEndpointDialog({ projectId, onClose, onCreated }: Creat
           {routeValid && <div className="mb-3" />}
 
           <label htmlFor="sdk-desc" className="block text-xs text-gray-400 mb-1">
-            Description <span className="text-gray-500">(optional)</span>
+            Description <span className="text-faint">(optional)</span>
           </label>
           <input
             id="sdk-desc"
@@ -157,7 +157,7 @@ export function CreateSdkEndpointDialog({ projectId, onClose, onCreated }: Creat
 
           <div className="flex justify-end gap-3 pt-4 border-t border-gray-800/50">
             <button type="button" onClick={onClose} className="px-4 py-1.5 text-sm text-gray-400 hover:text-gray-200">Cancel</button>
-            <button type="submit" disabled={!canSubmit} className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50">
+            <button type="submit" disabled={!canSubmit} className="bg-cyan-600 hover:bg-cyan-500 text-[var(--bg-base)] px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50">
               {loading ? 'Registering...' : 'Register endpoint'}
             </button>
           </div>

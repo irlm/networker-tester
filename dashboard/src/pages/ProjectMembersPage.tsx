@@ -11,6 +11,8 @@ import { PageHeader } from '../components/common/PageHeader';
 import { EmptyState } from '../components/common/EmptyState';
 import { SettingsTabs } from '../components/common/SettingsTabs';
 import { DataTable } from '../components/common/DataTable';
+import { Button } from '../components/common/Button';
+import { Modal } from '../components/common/Modal';
 
 const ROLES = ['admin', 'operator', 'viewer'] as const;
 type StatusFilter = 'all' | 'active' | 'pending_acceptance' | 'denied';
@@ -277,15 +279,14 @@ export function ProjectMembersPage() {
         action={
           isProjectAdmin ? (
             <div className="flex gap-2">
-              <button
+              <Button
                 onClick={() => setShowImport(true)}
-                className="px-3 py-1.5 text-sm border border-gray-700 text-gray-300 hover:text-gray-100 hover:border-gray-600 rounded transition-colors"
               >
                 Import CSV
-              </button>
-              <button onClick={() => { setShowInvite(true); setShowAddExisting(false); setInviteUrl(null); }} className="btn-primary">
+              </Button>
+              <Button variant="primary" onClick={() => { setShowInvite(true); setShowAddExisting(false); setInviteUrl(null); }}>
                 Invite
-              </button>
+              </Button>
             </div>
           ) : undefined
         }
@@ -315,15 +316,21 @@ export function ProjectMembersPage() {
                 ))}
               </select>
             </div>
-            <button onClick={handleInvite} disabled={adding || !newEmail.trim()} className="btn-primary">
-              {adding ? 'Sending...' : 'Send Invite'}
-            </button>
-            <button
+            <Button
+              variant="primary"
+              onClick={handleInvite}
+              disabled={!newEmail.trim()}
+              loading={adding}
+              loadingLabel="Sending…"
+            >
+              Send Invite
+            </Button>
+            <Button
+              variant="ghost"
               onClick={() => { setShowInvite(false); setNewEmail(''); setInviteUrl(null); }}
-              className="text-gray-400 hover:text-gray-200 px-3 py-1.5 text-sm"
             >
               Cancel
-            </button>
+            </Button>
           </div>
 
           {/* Invite URL copy section */}
@@ -343,7 +350,7 @@ export function ProjectMembersPage() {
           <div className="mt-2">
             <button
               onClick={() => { setShowInvite(false); setShowAddExisting(true); setInviteUrl(null); }}
-              className="text-xs text-gray-500 hover:text-gray-400 transition-colors"
+              className="text-xs text-faint hover:text-gray-400 transition-colors"
             >
               or add existing user directly
             </button>
@@ -374,20 +381,26 @@ export function ProjectMembersPage() {
                 ))}
               </select>
             </div>
-            <button onClick={handleAddExisting} disabled={adding || !newEmail.trim()} className="btn-primary">
-              {adding ? 'Adding...' : 'Add'}
-            </button>
-            <button
+            <Button
+              variant="primary"
+              onClick={handleAddExisting}
+              disabled={!newEmail.trim()}
+              loading={adding}
+              loadingLabel="Adding…"
+            >
+              Add
+            </Button>
+            <Button
+              variant="ghost"
               onClick={() => { setShowAddExisting(false); setNewEmail(''); }}
-              className="text-gray-400 hover:text-gray-200 px-3 py-1.5 text-sm"
             >
               Cancel
-            </button>
+            </Button>
           </div>
           <div className="mt-2">
             <button
               onClick={() => { setShowAddExisting(false); setShowInvite(true); }}
-              className="text-xs text-gray-500 hover:text-gray-400 transition-colors"
+              className="text-xs text-faint hover:text-gray-400 transition-colors"
             >
               or send an invite link instead
             </button>
@@ -412,7 +425,7 @@ export function ProjectMembersPage() {
                   isProjectAdmin && (
                     <button
                       onClick={() => handleRevokeInvite(invite.invite_id, invite.email)}
-                      className="text-xs text-gray-500 hover:text-red-400 transition-colors"
+                      className="text-xs text-faint hover:text-red-400 transition-colors"
                     >
                       Revoke
                     </button>
@@ -542,7 +555,7 @@ export function ProjectMembersPage() {
                           {!isSelf && (
                             <button
                               onClick={() => handleRemove(member.user_id, member.email)}
-                              className="text-xs text-gray-500 hover:text-red-400 transition-colors"
+                              className="text-xs text-faint hover:text-red-400 transition-colors"
                             >
                               Remove
                             </button>
@@ -560,9 +573,13 @@ export function ProjectMembersPage() {
 
       {/* CSV Import Modal */}
       {isProjectAdmin && showImport && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-          <div className="bg-[var(--bg-base,#0d1117)] border border-gray-800 rounded-lg w-full max-w-lg mx-4 p-5">
-            <h3 className="text-sm text-gray-200 font-medium mb-4">Import Members from CSV</h3>
+        <Modal
+          onClose={handleCloseImport}
+          labelledBy="import-members-title"
+          maxWidth="max-w-lg"
+          closeDisabled={importing}
+        >
+            <h3 id="import-members-title" className="text-sm text-gray-200 font-medium mb-4">Import Members from CSV</h3>
 
             {!importResult ? (
               <>
@@ -599,19 +616,21 @@ export function ProjectMembersPage() {
                 )}
 
                 <div className="flex gap-2 justify-end">
-                  <button
+                  <Button
+                    variant="ghost"
                     onClick={handleCloseImport}
-                    className="text-gray-400 hover:text-gray-200 px-3 py-1.5 text-sm"
                   >
                     Cancel
-                  </button>
-                  <button
+                  </Button>
+                  <Button
+                    variant="primary"
                     onClick={handleImport}
-                    disabled={!importFile || importing}
-                    className="btn-primary disabled:opacity-50"
+                    disabled={!importFile}
+                    loading={importing}
+                    loadingLabel="Importing…"
                   >
-                    {importing ? 'Importing...' : 'Import'}
-                  </button>
+                    Import
+                  </Button>
                 </div>
               </>
             ) : (
@@ -652,14 +671,13 @@ export function ProjectMembersPage() {
                   )}
                 </div>
                 <div className="flex justify-end">
-                  <button onClick={handleCloseImport} className="btn-primary">
+                  <Button variant="primary" onClick={handleCloseImport}>
                     Close
-                  </button>
+                  </Button>
                 </div>
               </>
             )}
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

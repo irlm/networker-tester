@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { api, ApiError, clearSession, errorMessage, friendlyHttpError } from './client';
+import { runsApi } from '../features/runs/api';
 import { useApiLogStore } from '../stores/apiLogStore';
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -39,7 +40,7 @@ describe('request()', () => {
 
   it('resolves undefined on empty-body responses (204 / NoContent)', async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
-    await expect(api.deleteTestConfig('cfg-1')).resolves.toBeUndefined();
+    await expect(runsApi.deleteConfig('cfg-1')).resolves.toBeUndefined();
   });
 
   it('does NOT wipe the session on 401 from /auth/login (bad credentials)', async () => {
@@ -87,7 +88,7 @@ describe('request()', () => {
 describe('friendlyHttpError — human copy, never raw bodies (audit F3/F16)', () => {
   it('maps 404 to human copy without class-name or "API error:" prefixes', async () => {
     fetchMock.mockResolvedValueOnce(new Response('Not Found', { status: 404, statusText: 'Not Found' }));
-    const err = await api.getTestRun('r1').catch((e: unknown) => e) as ApiError;
+    const err = await runsApi.get('r1').catch((e: unknown) => e) as ApiError;
     expect(err.message).not.toContain('API error');
     expect(err.message).not.toContain('ApiError');
     expect(err.message).toContain('Not found');
@@ -98,7 +99,7 @@ describe('friendlyHttpError — human copy, never raw bodies (audit F3/F16)', ()
   it('never surfaces raw nginx 502 HTML in the message', async () => {
     const nginx = '<html>\n<head><title>502 Bad Gateway</title></head>\n<body><center><h1>502 Bad Gateway</h1></center></body>\n</html>\n<!-- a padding to disable MSIE and Chrome friendly error page -->';
     fetchMock.mockResolvedValueOnce(new Response(nginx, { status: 502, statusText: 'Bad Gateway' }));
-    const err = await api.getTestRun('r1').catch((e: unknown) => e) as ApiError;
+    const err = await runsApi.get('r1').catch((e: unknown) => e) as ApiError;
     expect(err.message).not.toContain('<');
     expect(err.message).toContain('Server unavailable');
     // Raw body stays available for debugging on .body.

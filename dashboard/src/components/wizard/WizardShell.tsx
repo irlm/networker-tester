@@ -66,12 +66,12 @@ export function WizardShell({
         {showNext && (
           <div className="flex items-center gap-3">
             {nextHint && (
-              <span className="text-[11px] text-gray-400">{nextHint}</span>
+              <span className="text-xs text-gray-400">{nextHint}</span>
             )}
             <button
               onClick={onNext}
               disabled={!canNext}
-              className="px-5 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-800 disabled:text-gray-600 text-white text-xs font-medium transition-colors"
+              className="px-5 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-800 disabled:text-gray-600 text-[var(--bg-base)] text-xs font-medium transition-colors"
             >
               Next
             </button>

@@ -6,7 +6,7 @@
 // Layout follows /tmp/mockups/unified-deploy/v6-linear-stepper.html: 5 steps
 // with a top stepper, kind picker on step 1, then forks at step 4.
 
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { api } from '../api/client';
 import { testersApi, type CreateTesterBody } from '../api/testers';
@@ -23,6 +23,7 @@ import {
   LANGUAGE_GROUPS,
 } from './wizard/testbed-constants';
 import { useToast } from '../hooks/useToast';
+import { Modal } from './common/Modal';
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -160,7 +161,6 @@ export function InfraDeployWizard({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const dialogRef = useRef<HTMLDivElement>(null);
   const addToast = useToast();
 
   // ── Load cloud accounts ────────────────────────────────────────────────
@@ -177,30 +177,6 @@ export function InfraDeployWizard({
       })
       .catch(() => {});
   }, [projectId]);
-
-  // ── Esc to close + focus trap ──────────────────────────────────────────
-  const handleKeyDown = useCallback((e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); }, [onClose]);
-  useEffect(() => {
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [handleKeyDown]);
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    function trapFocus(e: KeyboardEvent) {
-      if (e.key !== 'Tab') return;
-      const els = dialog!.querySelectorAll<HTMLElement>(
-        'input:not([disabled]), button:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]):not([disabled])'
-      );
-      if (els.length === 0) return;
-      const first = els[0];
-      const last = els[els.length - 1];
-      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-    }
-    dialog.addEventListener('keydown', trapFocus);
-    return () => dialog.removeEventListener('keydown', trapFocus);
-  }, []);
 
   // ── Suggest a runner name when entering step 4 (runner path) ───────────
   // Fills a default once the user reaches step 3 with a region chosen; it
@@ -363,15 +339,13 @@ export function InfraDeployWizard({
   const validProxyList = os === 'windows' ? windowsProxiesFor(cloud) : LINUX_PROXIES;
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-black/40 slide-over-backdrop" onClick={onClose} aria-hidden="true" />
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        className="relative w-full md:w-[680px] md:max-w-[95vw] bg-[var(--bg-base)] md:border-l border-gray-800 h-full overflow-y-auto slide-over-panel"
-      >
+    <Modal
+      onClose={onClose}
+      labelledBy={titleId}
+      variant="slide-over"
+      closeDisabled={submitting}
+      panelClassName="md:!w-[680px] md:!max-w-[95vw]"
+    >
         <div className="p-4 md:p-6">
           {/* Header */}
           <div className="flex items-center justify-between mb-5">
@@ -395,13 +369,13 @@ export function InfraDeployWizard({
                   className={`flex items-center gap-2 text-xs whitespace-nowrap ${
                     i === step ? accentClass :
                     reachable ? 'text-gray-400 hover:text-gray-200 cursor-pointer' :
-                    'text-gray-500 cursor-not-allowed'
+                    'text-faint cursor-not-allowed'
                   }`}
                 >
-                  <span className={`w-5 h-5 rounded-full inline-flex items-center justify-center text-[10px] border ${
+                  <span className={`w-5 h-5 rounded-full inline-flex items-center justify-center text-xs border ${
                     i === step ? `${accentBorder} bg-transparent ${accentClass}` :
                     i < step ? 'border-green-500/40 bg-green-500/10 text-green-400' :
-                    'border-gray-700 bg-gray-900 text-gray-500'
+                    'border-gray-700 bg-gray-900 text-faint'
                   }`}>
                     {i < step ? '✓' : i + 1}
                   </span>
@@ -444,7 +418,7 @@ export function InfraDeployWizard({
                           : 'border-gray-800 hover:border-gray-600'
                       }`}
                     >
-                      <span className={`inline-block text-[9px] tracking-wider px-1.5 py-0.5 border mb-2 ${
+                      <span className={`inline-block text-xs tracking-wider px-1.5 py-0.5 border mb-2 ${
                         card.color === 'cyan'
                           ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
                           : 'bg-purple-500/15 border-purple-500/40 text-purple-300'
@@ -474,7 +448,7 @@ export function InfraDeployWizard({
                       : 'border-gray-800 hover:border-gray-600'
                   }`}
                 >
-                  <span className="inline-block text-[9px] tracking-wider px-1.5 py-0.5 border mb-1 bg-purple-500/15 border-purple-500/40 text-purple-300">LOCAL</span>
+                  <span className="inline-block text-xs tracking-wider px-1.5 py-0.5 border mb-1 bg-purple-500/15 border-purple-500/40 text-purple-300">LOCAL</span>
                   <h5 className="text-sm font-medium text-gray-100">{DOCKER_LABEL}</h5>
                   <p className="text-xs text-gray-400">
                     A container on the control-plane host — no cloud account, no cost. Region <span className="text-gray-300">local</span>; Ubuntu 24.04 images built by the lab.
@@ -541,17 +515,17 @@ export function InfraDeployWizard({
                     ))}
                   </div>
                   {useDocker && (
-                    <p className="text-[11px] text-gray-500 mt-2">
+                    <p className="text-xs text-faint mt-2">
                       ⓘ Docker (local) targets and runners are Linux containers (Ubuntu 24.04 images).
                     </p>
                   )}
                   {kind === 'target' && !useDocker && (
-                    <p className="text-[11px] text-gray-500 mt-2">
+                    <p className="text-xs text-faint mt-2">
                       ⓘ Linux unlocks all 5 proxy stacks. Windows offers IIS{cloud === 'Azure' ? ', Caddy, and Traefik' : cloud === 'AWS' ? ' only' : ' (not yet wired on GCP)'} — nginx, HAProxy, and Apache are Linux-only.
                     </p>
                   )}
                   {kind === 'runner' && !useDocker && (
-                    <p className="text-[11px] text-gray-500 mt-2">
+                    <p className="text-xs text-faint mt-2">
                       ⓘ Runners are typically Linux. Windows runners are supported but require additional setup.
                     </p>
                   )}
@@ -566,7 +540,7 @@ export function InfraDeployWizard({
               <h4 className="text-base font-semibold text-gray-100 mb-1">Configure target</h4>
               <p className="text-xs text-gray-400 mb-4">Pick which proxy stacks to install. install.sh runs idempotently — already-installed stacks are skipped.</p>
 
-              <div className="bg-cyan-500/5 border-l-2 border-cyan-500 px-3 py-1.5 mb-4 text-[10px] text-cyan-400 tracking-wider uppercase">
+              <div className="bg-cyan-500/5 border-l-2 border-cyan-500 px-3 py-1.5 mb-4 text-xs text-cyan-400 tracking-wider uppercase">
                 ▢ Target-only fields
               </div>
 
@@ -600,9 +574,9 @@ export function InfraDeployWizard({
 
               {!useDocker && <>
                   <label className="block text-xs text-gray-400 mb-1">
-                    Reference APIs <span className="text-gray-500">(apibench targets — optional)</span>
+                    Reference APIs <span className="text-faint">(apibench targets — optional)</span>
                   </label>
-                  <p className="text-[11px] text-gray-500 mb-2">
+                  <p className="text-xs text-faint mb-2">
                     Installs the language&apos;s reference API on the target; apibench then
                     measures it {os === 'windows' ? 'behind the endpoint (/api routed via --api-upstream)' : 'behind the proxy'} instead of the built-in endpoint /api.
                     {os === 'windows' && ' Windows offers the .NET family (incl. Framework 4.8), Go, Node.js, Python, and Java — C++/Ruby/PHP and AOT variants are Linux-only. Pick ONE: a target serves /api from a single language (last installed wins), and each install adds ~8 min.'}
@@ -665,7 +639,7 @@ export function InfraDeployWizard({
               <h4 className="text-base font-semibold text-gray-100 mb-1">Configure runner</h4>
               <p className="text-xs text-gray-400 mb-4">Name the runner so you can find it in the regional list. Auto-shutdown saves cost when the runner is idle past business hours.</p>
 
-              <div className="bg-purple-500/5 border-l-2 border-purple-500 px-3 py-1.5 mb-4 text-[10px] text-purple-400 tracking-wider uppercase">
+              <div className="bg-purple-500/5 border-l-2 border-purple-500 px-3 py-1.5 mb-4 text-xs text-purple-400 tracking-wider uppercase">
                 ↗ Runner-only fields
               </div>
 
@@ -679,7 +653,7 @@ export function InfraDeployWizard({
                     placeholder={`${region}-runner-01`}
                     className="w-full bg-[var(--bg-base)] border border-gray-700 px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
                   />
-                  <p className="text-[11px] text-gray-500 mt-1">
+                  <p className="text-xs text-faint mt-1">
                     ⓘ Suggested format: {`{region}-runner-{nn}`}. Must be unique within this project.
                   </p>
                 </div>
@@ -694,7 +668,7 @@ export function InfraDeployWizard({
                     disabled={!autoShutdownEnabled}
                     className="w-full bg-[var(--bg-base)] border border-gray-700 px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500 disabled:opacity-40"
                   />
-                  <p className="text-[11px] text-gray-500 mt-1">
+                  <p className="text-xs text-faint mt-1">
                     ⓘ Runner deallocates if idle past this hour. Default = 23:00.
                   </p>
                 </div>
@@ -722,14 +696,14 @@ export function InfraDeployWizard({
               <div className="space-y-1 mb-4">
                 {[
                   { k: 'Kind', v: kind === 'target'
-                    ? <><span className="text-[9px] px-1.5 py-0.5 bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 mr-2">▢ TARGET</span>Server-under-test</>
-                    : <><span className="text-[9px] px-1.5 py-0.5 bg-purple-500/15 border border-purple-500/40 text-purple-300 mr-2">↗ RUNNER</span>Load-generator agent</>
+                    ? <><span className="text-xs px-1.5 py-0.5 bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 mr-2">▢ TARGET</span>Server-under-test</>
+                    : <><span className="text-xs px-1.5 py-0.5 bg-purple-500/15 border border-purple-500/40 text-purple-300 mr-2">↗ RUNNER</span>Load-generator agent</>
                   },
                   { k: 'Cloud account', v: useDocker ? <span className="text-purple-300">{DOCKER_LABEL}</span> : (cloudAccounts.find(a => a.account_id === accountId)?.name ?? '—') },
                   { k: 'Region', v: region },
                   {
                     k: 'Instance type',
-                    v: <span>{vmSize} <span className="text-gray-500">· {(INSTANCE_TYPES[cloud] ?? []).find(t => t.id === vmSize)?.hint ?? ''}</span></span>,
+                    v: <span>{vmSize} <span className="text-faint">· {(INSTANCE_TYPES[cloud] ?? []).find(t => t.id === vmSize)?.hint ?? ''}</span></span>,
                   },
                   { k: 'Operating system', v: os === 'linux' ? 'Linux (Ubuntu)' : 'Windows Server' },
                   ...(kind === 'target' ? [
@@ -747,7 +721,7 @@ export function InfraDeployWizard({
                   ]),
                 ].map((row, idx) => (
                   <div key={idx} className="flex items-baseline gap-3 px-3 py-2 border border-gray-800 bg-[var(--bg-raised)] text-xs">
-                    <span className="text-gray-400 w-32 flex-shrink-0 text-[10px] tracking-wider uppercase">{row.k}</span>
+                    <span className="text-gray-400 w-32 flex-shrink-0 text-xs tracking-wider uppercase">{row.k}</span>
                     <span className="text-gray-200 flex-1">{row.v}</span>
                   </div>
                 ))}
@@ -779,8 +753,10 @@ export function InfraDeployWizard({
                 disabled={!canProceed}
                 onClick={() => setStep(s => s + 1)}
                 className={`px-5 py-2 text-xs font-medium transition-colors ${
-                  kind === 'target' ? 'bg-cyan-600 hover:bg-cyan-500' : 'bg-purple-600 hover:bg-purple-500'
-                } disabled:bg-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed text-white`}
+                  kind === 'target'
+                    ? 'bg-cyan-600 hover:bg-cyan-500 text-[var(--bg-base)]'
+                    : 'bg-purple-600 hover:bg-purple-500 text-white'
+                } disabled:bg-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed`}
               >
                 Next: {STEPS[step + 1]} →
               </button>
@@ -790,15 +766,16 @@ export function InfraDeployWizard({
                 disabled={submitting}
                 onClick={submit}
                 className={`px-5 py-2 text-xs font-medium transition-colors ${
-                  kind === 'target' ? 'bg-cyan-600 hover:bg-cyan-500' : 'bg-purple-600 hover:bg-purple-500'
-                } disabled:opacity-50 disabled:cursor-not-allowed text-white`}
+                  kind === 'target'
+                    ? 'bg-cyan-600 hover:bg-cyan-500 text-[var(--bg-base)]'
+                    : 'bg-purple-600 hover:bg-purple-500 text-white'
+                } disabled:opacity-50 disabled:cursor-not-allowed`}
               >
                 {submitting ? 'Deploying…' : kind === 'target' ? 'Deploy target' : 'Create runner'}
               </button>
             )}
           </div>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

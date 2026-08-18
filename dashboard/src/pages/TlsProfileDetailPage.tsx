@@ -217,7 +217,7 @@ function StringList({ title, items, empty }: { title: string; items: string[]; e
     <div>
       <div className="text-xs text-gray-400 mb-2">{title}</div>
       {items.length === 0 ? (
-        <p className="text-sm text-gray-500">{empty}</p>
+        <p className="text-sm text-faint">{empty}</p>
       ) : (
         <ul className="space-y-1 text-sm text-gray-300 list-disc pl-5">
           {items.map((item, i) => <li key={`${title}-${i}`} className="break-all">{item}</li>)}
@@ -232,7 +232,7 @@ function FindingsList({ title, items, empty, color }: { title: string; items: Ar
     <div>
       <div className="text-xs text-gray-400 mb-2">{title}</div>
       {items.length === 0 ? (
-        <p className="text-sm text-gray-500">{empty}</p>
+        <p className="text-sm text-faint">{empty}</p>
       ) : (
         <ul className="space-y-2">
           {items.map((item, i) => (

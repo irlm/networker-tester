@@ -1,7 +1,7 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useSearchParams } from 'react-router';
 import { api, ApiError } from '../api/client';
-import type { AlertChannel, AlertEvent, AlertRule, TestConfigListItem } from '../api/types';
+import type { AlertChannel, AlertEvent, AlertRule } from '../api/types';
 import { DataTable } from '../components/common/DataTable';
 import { EmptyState } from '../components/common/EmptyState';
 import { StatusBadge } from '../components/common/StatusBadge';
@@ -14,6 +14,7 @@ import { usePolling } from '../hooks/usePolling';
 import { useProject } from '../hooks/useProject';
 import { useToast } from '../hooks/useToast';
 import { timeAgo } from '../lib/format';
+import { useTestConfigsQuery } from '../features/runs/queries';
 
 const TABS = ['rules', 'channels', 'history'] as const;
 type Tab = (typeof TABS)[number];
@@ -34,7 +35,7 @@ function apiErrorMessage(err: unknown, fallback: string): string {
 }
 
 function deliveryStatusColor(status: string | null): string {
-  if (!status) return 'text-gray-500';
+  if (!status) return 'text-faint';
   if (status === 'delivered') return 'text-green-400';
   if (status.startsWith('failed')) return 'text-red-400';
   if (status.startsWith('skipped')) return 'text-gray-400';
@@ -68,11 +69,14 @@ export function AlertsPage() {
 
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [channels, setChannels] = useState<AlertChannel[]>([]);
-  const [configs, setConfigs] = useState<TestConfigListItem[]>([]);
   const [events, setEvents] = useState<AlertEvent[]>([]);
   const [eventsOffset, setEventsOffset] = useState(0);
   const [eventsRuleFilter, setEventsRuleFilter] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [alertsLoading, setAlertsLoading] = useState(true);
+  const configsQuery = useTestConfigsQuery(projectId, { polling: false });
+  const configs = useMemo(() => configsQuery.data ?? [], [configsQuery.data]);
+  const refetchConfigs = configsQuery.refetch;
+  const loading = alertsLoading || configsQuery.isPending;
 
   const [ruleDialog, setRuleDialog] = useState<{ open: boolean; rule: AlertRule | null }>({ open: false, rule: null });
   const [channelDialog, setChannelDialog] = useState<{ open: boolean; channel: AlertChannel | null }>({ open: false, channel: null });
@@ -80,6 +84,7 @@ export function AlertsPage() {
   const [toggling, setToggling] = useState<string | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, string>>({});
+  const tabRefs = useRef<Record<Tab, HTMLButtonElement | null>>({ rules: null, channels: null, history: null });
 
   const setTab = useCallback(
     (next: Tab) => {
@@ -95,6 +100,19 @@ export function AlertsPage() {
     },
     [setSearchParams],
   );
+
+  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, current: Tab) => {
+    const currentIndex = TABS.indexOf(current);
+    let next: Tab | undefined;
+    if (event.key === 'ArrowRight') next = TABS[(currentIndex + 1) % TABS.length];
+    if (event.key === 'ArrowLeft') next = TABS[(currentIndex - 1 + TABS.length) % TABS.length];
+    if (event.key === 'Home') next = TABS[0];
+    if (event.key === 'End') next = TABS[TABS.length - 1];
+    if (!next) return;
+    event.preventDefault();
+    setTab(next);
+    tabRefs.current[next]?.focus();
+  };
 
   const loadEvents = useCallback(
     (offset: number, ruleId: string) => {
@@ -116,20 +134,20 @@ export function AlertsPage() {
 
   const refresh = useCallback(() => {
     if (!projectId) return;
-    Promise.all([api.listAlertRules(projectId), api.listAlertChannels(projectId), api.listTestConfigs(projectId)])
-      .then(([r, c, tc]) => {
+    void refetchConfigs();
+    Promise.all([api.listAlertRules(projectId), api.listAlertChannels(projectId)])
+      .then(([r, c]) => {
         setRules(r);
         setChannels(c);
-        setConfigs(tc);
-        setLoading(false);
+        setAlertsLoading(false);
         setLastUpdatedAt(Date.now());
       })
       .catch(() => {
         addToast('error', 'Failed to load alerts');
-        setLoading(false);
+        setAlertsLoading(false);
       });
     loadEvents(eventsOffset, eventsRuleFilter);
-  }, [projectId, addToast, loadEvents, eventsOffset, eventsRuleFilter]);
+  }, [projectId, addToast, loadEvents, eventsOffset, eventsRuleFilter, refetchConfigs]);
 
   // StatusFooter wiring: pause flips usePolling's enabled flag; refresh
   // bumps resetKey (restarts the loop with an immediate tick).
@@ -248,7 +266,7 @@ export function AlertsPage() {
         <div className="flex items-center gap-3 min-w-0">
           <h2 className="text-lg md:text-xl font-bold text-gray-100">Alerts</h2>
           {rules.length > 0 && (
-            <span className="text-xs text-gray-500 hidden sm:inline">
+            <span className="text-xs text-faint hidden sm:inline">
               <span className="text-green-400">{enabledRules}</span> active
               {enabledRules !== rules.length && <> · {rules.length} total</>}
             </span>
@@ -257,7 +275,7 @@ export function AlertsPage() {
         {isOperator && tab === 'rules' && (
           <button
             onClick={() => setRuleDialog({ open: true, rule: null })}
-            className="bg-cyan-600 hover:bg-cyan-500 text-white px-3 py-1.5 rounded text-sm transition-colors"
+            className="bg-cyan-600 hover:bg-cyan-500 text-[var(--bg-base)] px-3 py-1.5 rounded text-sm transition-colors"
           >
             + Rule
           </button>
@@ -265,7 +283,7 @@ export function AlertsPage() {
         {isOperator && tab === 'channels' && (
           <button
             onClick={() => setChannelDialog({ open: true, channel: null })}
-            className="bg-cyan-600 hover:bg-cyan-500 text-white px-3 py-1.5 rounded text-sm transition-colors"
+            className="bg-cyan-600 hover:bg-cyan-500 text-[var(--bg-base)] px-3 py-1.5 rounded text-sm transition-colors"
           >
             + Channel
           </button>
@@ -277,9 +295,14 @@ export function AlertsPage() {
         {TABS.map((t) => (
           <button
             key={t}
+            id={`alerts-${t}-tab`}
             role="tab"
             aria-selected={tab === t}
+            aria-controls={`alerts-${t}-panel`}
+            tabIndex={tab === t ? 0 : -1}
+            ref={node => { tabRefs.current[t] = node; }}
             onClick={() => setTab(t)}
+            onKeyDown={event => handleTabKeyDown(event, t)}
             className={`px-3 py-2 text-sm capitalize border-b-2 -mb-px transition-colors ${
               tab === t
                 ? 'border-cyan-500 text-gray-100'
@@ -291,6 +314,7 @@ export function AlertsPage() {
         ))}
       </div>
 
+      <div id={`alerts-${tab}-panel`} role="tabpanel" aria-labelledby={`alerts-${tab}-tab`}>
       {loading ? (
         <div className="py-10 text-center text-sm text-gray-400 motion-safe:animate-pulse">Loading alerts...</div>
       ) : tab === 'rules' ? (
@@ -364,7 +388,7 @@ export function AlertsPage() {
                       <button
                         onClick={() => handleDeleteRule(r)}
                         className={`text-xs transition-colors ${
-                          confirmDelete === `rule:${r.rule_id}` ? 'text-red-400' : 'text-gray-500 hover:text-red-400'
+                          confirmDelete === `rule:${r.rule_id}` ? 'text-red-400' : 'text-faint hover:text-red-400'
                         }`}
                         title={confirmDelete === `rule:${r.rule_id}` ? 'Click again to confirm' : 'Delete rule'}
                         aria-label={confirmDelete === `rule:${r.rule_id}` ? 'Confirm delete rule' : 'Delete rule'}
@@ -413,7 +437,7 @@ export function AlertsPage() {
                       </span>
                       {c.config.secret === SECRET_MASK && (
                         <span
-                          className="text-[10px] text-purple-300 border border-purple-500/30 bg-purple-500/10 rounded px-1.5 py-0.5"
+                          className="text-xs text-purple-300 border border-purple-500/30 bg-purple-500/10 rounded px-1.5 py-0.5"
                           title="Deliveries carry an HMAC-SHA256 signature header"
                         >
                           signed
@@ -458,7 +482,7 @@ export function AlertsPage() {
                       </button>
                       {testResults[c.channel_id] && (
                         <span
-                          className={`text-[11px] ${deliveryStatusColor(testResults[c.channel_id])}`}
+                          className={`text-xs ${deliveryStatusColor(testResults[c.channel_id])}`}
                           title={testResults[c.channel_id]}
                         >
                           {testResults[c.channel_id]}
@@ -474,7 +498,7 @@ export function AlertsPage() {
                       <button
                         onClick={() => handleDeleteChannel(c)}
                         className={`text-xs transition-colors ${
-                          confirmDelete === `channel:${c.channel_id}` ? 'text-red-400' : 'text-gray-500 hover:text-red-400'
+                          confirmDelete === `channel:${c.channel_id}` ? 'text-red-400' : 'text-faint hover:text-red-400'
                         }`}
                         title={confirmDelete === `channel:${c.channel_id}` ? 'Click again to confirm' : 'Delete channel'}
                         aria-label={confirmDelete === `channel:${c.channel_id}` ? 'Confirm delete channel' : 'Delete channel'}
@@ -507,7 +531,7 @@ export function AlertsPage() {
                 </option>
               ))}
             </select>
-            <span className="text-xs text-gray-500">newest first</span>
+            <span className="text-xs text-faint">newest first</span>
           </div>
 
           {events.length === 0 && eventsOffset === 0 ? (
@@ -595,6 +619,7 @@ export function AlertsPage() {
           )}
         </>
       )}
+      </div>
 
       {/* One footer for the whole page, mounted outside the tab switch —
           the single refresh() poll feeds all three tabs, and StatusFooter
@@ -606,7 +631,7 @@ export function AlertsPage() {
         lastUpdatedAt={lastUpdatedAt}
         intervalMs={15000}
         pills={
-          <span className="text-gray-500">
+          <span className="text-faint">
             {rules.length} rule{rules.length !== 1 ? 's' : ''}
             {rules.length > 0 && ` (${enabledRules} active)`}
             {` · ${channels.length} channel${channels.length !== 1 ? 's' : ''}`}

@@ -151,7 +151,7 @@ export function CloudAccountCombobox({
           // Next-button hint carries the "select an account" message instead.
           className={`w-full bg-[var(--bg-base)] border ${
             open ? 'border-cyan-500/60' : 'border-gray-700'
-          } px-3 py-1.5 text-xs text-gray-200 focus:outline-none placeholder:text-gray-500 ${
+          } px-3 py-1.5 text-xs text-gray-200 focus:outline-none placeholder:text-faint ${
             selected && !open ? 'pl-7' : ''
           }`}
           role="combobox"
@@ -160,7 +160,7 @@ export function CloudAccountCombobox({
           aria-controls="cloud-account-listbox"
           aria-activedescendant={open && filtered.length > 0 ? `cloud-account-opt-${activeIdx}` : undefined}
         />
-        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-gray-400 pointer-events-none">
+        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 pointer-events-none">
           {open ? '⌄' : '/'}
         </span>
       </div>
@@ -178,6 +178,9 @@ export function CloudAccountCombobox({
             filtered.map((acct, idx) => {
               const isActive = idx === activeIdx;
               const isDisabled = acct.status !== 'active';
+              const activeClass = isActive
+                ? 'bg-cyan-500/10 text-white before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-cyan-400'
+                : 'text-gray-300';
               return (
                 <div
                   key={acct.account_id}
@@ -195,19 +198,17 @@ export function CloudAccountCombobox({
                     setQuery('');
                     inputRef.current?.blur();
                   }}
-                  className={`flex items-center gap-2.5 px-3 py-2 text-xs border-b border-gray-800/60 last:border-b-0 ${
-                    isActive ? 'bg-cyan-500/10 text-gray-100' : 'text-gray-300'
-                  } ${isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${
-                    isActive ? 'shadow-[inset_2px_0_0_#22d3ee]' : ''
+                  className={`relative flex items-center gap-2.5 px-3 py-2 text-xs border-b border-gray-800/60 last:border-b-0 ${activeClass} ${
+                    isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
                   }`}
                 >
                   <span className={`w-1.5 h-1.5 rounded-full ${dotClass(acct.provider)}`} aria-hidden="true" />
                   <span className="flex-1 truncate">
                     <HighlightedText text={acct.name} query={query} />
-                    <span className="text-gray-500"> · </span>
+                    <span className="text-faint"> · </span>
                     <HighlightedText text={acct.provider.toUpperCase()} query={query} />
                   </span>
-                  <span className="text-gray-400 text-[11px]">
+                  <span className="text-gray-400 text-xs">
                     <HighlightedText text={acct.region_default ?? '—'} query={query} />
                   </span>
                   <span className={`w-1.5 h-1.5 rounded-full ${statusDotClass(acct.status)}`} title={acct.status} aria-hidden="true" />
@@ -232,7 +233,7 @@ export function CloudAccountCombobox({
 
       {/* Keyboard hints */}
       {open && (
-        <div className="mt-1 flex gap-3 text-[10px] text-gray-500">
+        <div className="mt-1 flex gap-3 text-xs text-faint">
           <span><kbd className="px-1 py-0.5 border border-gray-700 rounded">↑↓</kbd> navigate</span>
           <span><kbd className="px-1 py-0.5 border border-gray-700 rounded">↵</kbd> select</span>
           <span><kbd className="px-1 py-0.5 border border-gray-700 rounded">esc</kbd> close</span>

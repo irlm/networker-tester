@@ -77,7 +77,7 @@ export function ShareDialog({ projectId, resourceType, resourceId, onClose, onCr
                 </select>
               </div>
 
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-faint">
                 Sharing: {resourceType} {resourceId.slice(0, 8)}
               </p>
 
@@ -96,7 +96,7 @@ export function ShareDialog({ projectId, resourceType, resourceId, onClose, onCr
               <button
                 onClick={handleCreate}
                 disabled={creating}
-                className="px-4 py-2 text-sm bg-cyan-600 hover:bg-cyan-500 text-white rounded transition-colors disabled:opacity-50"
+                className="px-4 py-2 text-sm bg-cyan-600 hover:bg-cyan-500 text-[var(--bg-base)] rounded transition-colors disabled:opacity-50"
               >
                 {creating ? 'Creating...' : 'Create Link'}
               </button>
@@ -129,7 +129,7 @@ export function ShareDialog({ projectId, resourceType, resourceId, onClose, onCr
                 </p>
               </div>
 
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-faint">
                 Expires: {new Date(result.expires_at).toLocaleDateString()}
               </p>
             </div>

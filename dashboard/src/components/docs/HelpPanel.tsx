@@ -186,8 +186,8 @@ export default function HelpPanel() {
             placeholder="Search... (p95, throughput, benchmark phases)"
             className="flex-1 bg-[var(--bg-base)] border border-[var(--border-default)] px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-cyan-500/50"
           />
-          <span className={`text-[10px] font-medium whitespace-nowrap transition-colors duration-100 ${
-            isInsertMode ? 'text-cyan-500/50' : 'text-gray-500'
+          <span className={`text-xs font-medium whitespace-nowrap transition-colors duration-100 ${
+            isInsertMode ? 'text-cyan-500/50' : 'text-faint'
           }`}>
             -- {isInsertMode ? 'INSERT' : 'NORMAL'} --
           </span>
@@ -204,9 +204,9 @@ export default function HelpPanel() {
                   : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/20 border-l-2 border-transparent -ml-0.5 pl-1.5'
               }`}
             >
-              <span className="text-gray-500 text-[10px] w-3">0</span>
+              <span className="text-faint text-xs w-4">0</span>
               <span>All</span>
-              <span className="text-gray-500 ml-auto">{DOC_ENTRIES.length}</span>
+              <span className="text-faint ml-auto">{DOC_ENTRIES.length}</span>
             </button>
             {DOC_CATEGORIES.map((cat, idx) => {
               const count = DOC_ENTRIES.filter((e) => e.category === cat.id).length;
@@ -221,16 +221,16 @@ export default function HelpPanel() {
                       : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/20 border-l-2 border-transparent -ml-0.5 pl-1.5'
                   }`}
                 >
-                  <span className="text-gray-500 text-[10px] w-3">{idx + 1}</span>
+                  <span className="text-faint text-xs w-4">{idx + 1}</span>
                   <span aria-hidden="true">{cat.icon}</span>
                   <span>{cat.label}</span>
-                  <span className="text-gray-500 ml-auto">{count}</span>
+                  <span className="text-faint ml-auto">{count}</span>
                 </button>
               );
             })}
 
             <div className="mt-auto pt-3 border-t border-[var(--border-default)]">
-              <div className="px-2 text-[10px] text-gray-500 leading-relaxed">
+              <div className="px-2 text-xs text-faint leading-relaxed">
                 <kbd className="text-gray-400">j</kbd>/<kbd className="text-gray-400">k</kbd> navigate
                 {' '}<kbd className="text-gray-400">l</kbd> expand
                 <br />
@@ -251,7 +251,7 @@ export default function HelpPanel() {
           <div className="md:hidden flex gap-1 px-2 py-2 border-b border-[var(--border-default)] overflow-x-auto flex-shrink-0">
             <button
               onClick={() => setCategory(null)}
-              className={`px-2 py-1 text-[10px] whitespace-nowrap ${
+              className={`px-2 py-1 text-xs whitespace-nowrap ${
                 activeCategory === null ? 'bg-gray-800/60 text-gray-100' : 'text-gray-400'
               }`}
             >
@@ -261,7 +261,7 @@ export default function HelpPanel() {
               <button
                 key={cat.id}
                 onClick={() => setCategory(activeCategory === cat.id ? null : cat.id)}
-                className={`px-2 py-1 text-[10px] whitespace-nowrap ${
+                className={`px-2 py-1 text-xs whitespace-nowrap ${
                   activeCategory === cat.id ? 'bg-gray-800/60 text-gray-100' : 'text-gray-400'
                 }`}
               >
@@ -274,7 +274,7 @@ export default function HelpPanel() {
           <div ref={listRef} className="flex-1 overflow-y-auto p-3">
             {filtered.length === 0 ? (
               <div className="py-8 px-4 text-center">
-                <div className="text-gray-500 text-sm">
+                <div className="text-faint text-sm">
                   No manual entry for &ldquo;{query}&rdquo;
                 </div>
                 {query && (
@@ -320,7 +320,7 @@ export default function HelpPanel() {
         </div>
 
         {/* Status bar — vim-style */}
-        <div className="flex items-center justify-between border-t border-[var(--border-default)] px-3 py-1 text-[10px] text-gray-500">
+        <div className="flex items-center justify-between border-t border-[var(--border-default)] px-3 py-1 text-xs text-faint">
           <span>
             {activeCategoryLabel}
             {query && ` \u00b7 "${query}"`}

@@ -50,9 +50,9 @@ export function KpiTile({ label, value, health = 'muted', sub, title, valueClass
       title={title}
       className={`border border-gray-800 border-l-2 ${BORDER[health]} bg-[var(--bg-surface)] rounded px-4 py-3`}
     >
-      <p className="text-[10px] text-gray-400 tracking-wider uppercase mb-1">{label}</p>
+      <p className="text-xs text-gray-400 tracking-wider uppercase mb-1">{label}</p>
       <p className={`text-2xl font-bold tabular-nums ${valueClass ?? VALUE[health]}`}>{value}</p>
-      {sub && <p className="text-xs text-gray-500 mt-1">{sub}</p>}
+      {sub && <p className="text-xs text-faint mt-1">{sub}</p>}
     </div>
   );
 }

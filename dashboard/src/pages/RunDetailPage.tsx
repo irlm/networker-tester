@@ -1,8 +1,8 @@
-import { useState, useMemo } from 'react';
+import { lazy, Suspense, useState, useMemo } from 'react';
 import { Link, useParams } from 'react-router';
-import { api, errorMessage } from '../api/client';
+import { errorMessage } from '../api/client';
 import { stripAnsi } from '../lib/ansi';
-import type { TestRun, LiveAttempt, BenchmarkArtifact, RunInfra } from '../api/types';
+import type { LiveAttempt } from '../api/types';
 import { InfraEnvelope } from '../components/InfraEnvelope';
 import { useProject } from '../hooks/useProject';
 import { Breadcrumb } from '../components/common/Breadcrumb';
@@ -13,8 +13,25 @@ import { RunEnvelopeBlock } from '../components/RunEnvelopeBlock';
 import { runDisplayStatus } from '../lib/runStatus';
 import { ShareDialog } from '../components/ShareDialog';
 import { usePageTitle } from '../hooks/usePageTitle';
-import { usePolling } from '../hooks/usePolling';
 import { useToast } from '../hooks/useToast';
+import {
+  useCancelRunMutation,
+  useRunArtifactQuery,
+  useRunAttemptsQuery,
+  useRunInfraQuery,
+  useTestRunQuery,
+} from '../features/runs/queries';
+import { Button } from '../components/common/Button';
+import { buttonClassName } from '../components/common/button-styles';
+import { ErrorState } from '../components/common/AsyncState';
+import { PageShell } from '../components/common/PageShell';
+import {
+  ArtifactSection,
+  AttemptRow,
+  StatsRow,
+  TimingRow,
+} from '../features/runs/components/RunDetailSections';
+import { groupByProtocol } from '../features/runs/grouping';
 import {
   computeProtocolStats,
   computeTimingBreakdown,
@@ -26,74 +43,41 @@ import {
   formatMetricValue,
   formatBytes,
   successRateClass,
-  type ProtocolStats,
-  type TimingBreakdown,
   type Stats,
 } from '../lib/analysis';
-import { TOOLTIP_STYLE } from '../lib/chart';
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  CartesianGrid,
-} from 'recharts';
+
+const RunDetailCharts = lazy(() => import('../features/runs/components/RunDetailCharts'));
 
 export function RunDetailPage() {
   const { projectId, isProjectAdmin } = useProject();
   const { runId } = useParams<{ runId: string }>();
   const addToast = useToast();
-  const [run, setRun] = useState<TestRun | null>(null);
-  const [attempts, setAttempts] = useState<LiveAttempt[]>([]);
-  const [artifact, setArtifact] = useState<BenchmarkArtifact | null>(null);
-  const [infra, setInfra] = useState<RunInfra | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  // Attempts failing must never dead-end the page when the run itself loaded
-  // (audit F3: /attempts 404'd while the run returned 200) — track separately
-  // and degrade that section instead.
-  const [attemptsError, setAttemptsError] = useState<string | null>(null);
   const [expandedProtocols, setExpandedProtocols] = useState<Set<string>>(new Set());
   const [showShareDialog, setShowShareDialog] = useState(false);
-  const [retryTick, setRetryTick] = useState(0);
 
   const shortId = runId?.slice(0, 8) ?? '';
   usePageTitle(runId ? `Run ${shortId}` : 'Run');
+  const id = runId ?? '';
+  const runQuery = useTestRunQuery(id);
+  const run = runQuery.data ?? null;
+  const isActive = !run || run.status === 'queued' || run.status === 'provisioning' || run.status === 'running';
+  const attemptsQuery = useRunAttemptsQuery(id, isActive);
+  const artifactQuery = useRunArtifactQuery(id, run?.artifact_id);
+  const infraQuery = useRunInfraQuery(id);
+  const cancelRun = useCancelRunMutation(id);
 
-  usePolling(
-    () => {
-      if (!runId || !projectId) return;
-      api
-        .getTestRunAttempts(runId)
-        .then((data) => {
-          setAttempts(data as unknown as LiveAttempt[]);
-          setAttemptsError(null);
-          setLoading(false);
-        })
-        .catch((e) => { setAttemptsError(errorMessage(e)); setLoading(false); });
-      api
-        .getTestRun(runId)
-        .then((data) => {
-          setRun(data);
-          setError(null);
-          // Fetch artifact if present and not already loaded
-          if (data.artifact_id && !artifact) {
-            api.getTestRunArtifact(runId).then(setArtifact).catch(() => {});
-          }
-          // Infra facts are static per run — fetch once, degrade silently
-          // (old control planes without the route → panel simply absent).
-          if (!infra) {
-            api.getTestRunInfra(runId).then(setInfra).catch(() => {});
-          }
-        })
-        .catch((e) => { setError(errorMessage(e)); setLoading(false); });
-    },
-    15000,
-    !!runId,
-    retryTick
-  );
+  const attempts = useMemo<LiveAttempt[]>(() => attemptsQuery.data ?? [], [attemptsQuery.data]);
+  const artifact = artifactQuery.data ?? null;
+  const infra = infraQuery.data ?? null;
+  const loading = runQuery.isPending || attemptsQuery.isPending;
+  const error = runQuery.error ? errorMessage(runQuery.error) : null;
+  // Attempts failing must never dead-end the page when the run itself loaded.
+  const attemptsError = attemptsQuery.error ? errorMessage(attemptsQuery.error) : null;
+
+  const retry = () => {
+    void runQuery.refetch();
+    void attemptsQuery.refetch();
+  };
 
   // ── Analysis (shared with HTML report logic) ──
   const protocolStats = useMemo(() => computeProtocolStats(attempts), [attempts]);
@@ -189,10 +173,9 @@ export function RunDetailPage() {
 
   if (loading && attempts.length === 0 && !run) {
     return (
-      <div className="p-4 md:p-6">
-        <Breadcrumb items={[{ label: 'Runs', to: `/projects/${projectId}/runs` }, { label: `Run ${shortId}` }]} />
+      <PageShell before={<Breadcrumb items={[{ label: 'Runs', to: `/projects/${projectId}/runs` }, { label: `Run ${shortId}` }]} />}>
         <div className="text-gray-400 motion-safe:animate-pulse">Loading run {shortId}...</div>
-      </div>
+      </PageShell>
     );
   }
 
@@ -200,27 +183,21 @@ export function RunDetailPage() {
   // failure renders the run with a degraded probe-details section below.
   if (error && !run) {
     return (
-      <div className="p-4 md:p-6">
-        <Breadcrumb items={[{ label: 'Runs', to: `/projects/${projectId}/runs` }, { label: `Run ${shortId}` }]} />
-        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
-          <h3 className="text-red-400 font-bold mb-2">Failed to load run {shortId}</h3>
-          <p className="text-red-300 text-sm mb-3">{error}</p>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setRetryTick(t => t + 1)}
-              className="px-3 py-1.5 text-xs bg-cyan-600 hover:bg-cyan-500 text-white rounded transition-colors"
-            >
-              Retry
-            </button>
+      <PageShell before={<Breadcrumb items={[{ label: 'Runs', to: `/projects/${projectId}/runs` }, { label: `Run ${shortId}` }]} />}>
+        <ErrorState
+          title={`Failed to load run ${shortId}`}
+          message={error}
+          onRetry={retry}
+          secondaryAction={
             <Link
               to={`/projects/${projectId}/runs`}
-              className="px-3 py-1.5 text-xs border border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600 rounded transition-colors"
+              className={buttonClassName({ size: 'xs' })}
             >
               Back to runs
             </Link>
-          </div>
-        </div>
-      </div>
+          }
+        />
+      </PageShell>
     );
   }
 
@@ -233,8 +210,7 @@ export function RunDetailPage() {
   const probeCount = attemptsMissing ? run.success_count + run.failure_count : attempts.length;
 
   return (
-    <div className="p-4 md:p-6">
-      <Breadcrumb items={[{ label: 'Runs', to: `/projects/${projectId}/runs` }, { label: `Run ${shortId}` }]} />
+    <PageShell before={<Breadcrumb items={[{ label: 'Runs', to: `/projects/${projectId}/runs` }, { label: `Run ${shortId}` }]} />}>
 
       {/* Header */}
       <div className="mb-6 flex items-start justify-between">
@@ -243,7 +219,7 @@ export function RunDetailPage() {
             <h2 className="text-xl font-bold text-gray-100">Run {shortId}</h2>
             {run && <StatusBadge status={runDisplayStatus(run)} />}
             {run?.artifact_id && (
-              <span className="text-[10px] text-gray-300 bg-gray-500/10 px-1.5 py-0.5 rounded">benchmark</span>
+              <span className="text-xs text-gray-300 bg-gray-500/10 px-1.5 py-0.5 rounded">benchmark</span>
             )}
           </div>
           <p className="text-sm text-gray-400">
@@ -257,17 +233,21 @@ export function RunDetailPage() {
         </div>
         <div className="flex items-center gap-2">
           {run && (run.status === 'queued' || run.status === 'running') && (
-            <button
+            <Button
               onClick={() => {
                 if (!runId) return;
-                api.cancelTestRun(runId)
-                  .then(() => addToast('info', `Run ${shortId} cancel requested`))
-                  .catch((e) => addToast('error', `Failed to cancel: ${e instanceof Error ? e.message : String(e)}`));
+                cancelRun.mutate(undefined, {
+                  onSuccess: () => addToast('info', `Run ${shortId} cancel requested`),
+                  onError: (e) => addToast('error', `Failed to cancel: ${errorMessage(e)}`),
+                });
               }}
-              className="px-3 py-1.5 text-xs bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded transition-colors border border-red-500/30"
+              variant="danger"
+              size="xs"
+              loading={cancelRun.isPending}
+              loadingLabel="Cancelling…"
             >
               Cancel
-            </button>
+            </Button>
           )}
           {/* Read-only document export — available to every role that can see
               the run (same visibility as the page itself). */}
@@ -275,12 +255,12 @@ export function RunDetailPage() {
             <ExportMenu path={`/v2/test-runs/${runId}/report`} fileBase={`test-run-${shortId}`} />
           )}
           {isProjectAdmin && runId && (
-            <button
+            <Button
               onClick={() => setShowShareDialog(true)}
-              className="px-3 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors border border-gray-700"
+              size="xs"
             >
               Share
-            </button>
+            </Button>
           )}
         </div>
       </div>
@@ -303,7 +283,7 @@ export function RunDetailPage() {
           Success <span className="text-green-400 font-semibold ml-1">{successCount}</span>
         </span>
         <span className="text-gray-400">
-          Failed <span className={`font-semibold ml-1 ${failureCount > 0 ? 'text-red-400' : 'text-gray-500'}`}>{failureCount}</span>
+          Failed <span className={`font-semibold ml-1 ${failureCount > 0 ? 'text-red-400' : 'text-faint'}`}>{failureCount}</span>
         </span>
         <span className="text-gray-400">
           Rate <span className={`font-semibold ml-1 ${successRateClass(probeCount > 0 ? (successCount / probeCount) * 100 : 100)}`}>
@@ -376,7 +356,7 @@ export function RunDetailPage() {
             </table>
           </div>
           {protocolStats.some((ps) => ps.payloadBytes != null) && (
-            <p className="px-4 py-2 text-[10px] text-gray-500 border-t border-gray-800/50 leading-relaxed">
+            <p className="px-4 py-2 text-xs text-faint border-t border-gray-800/50 leading-relaxed">
               throughput is measured per direction — download over the body-receive window, upload over
               the send window (cross-checked against the server&apos;s Server-Timing clock). upload and
               download legitimately differ on asymmetric paths: cloud VMs cap egress, so a small target
@@ -384,23 +364,6 @@ export function RunDetailPage() {
               burst, not steady-state bandwidth.
             </p>
           )}
-        </div>
-      )}
-
-      {/* ── Protocol Comparison Chart ── */}
-      {protocolChartData.length > 1 && (
-        <div className="mb-6">
-          <h3 className="text-xs text-gray-400 tracking-wider mb-3 font-medium">protocol comparison — p50 vs p95</h3>
-          <ResponsiveContainer width="100%" height={250}>
-            <BarChart data={protocolChartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1f2028" />
-              <XAxis dataKey="name" stroke="#4b5563" fontSize={10} />
-              <YAxis stroke="#4b5563" fontSize={10} />
-              <Tooltip contentStyle={TOOLTIP_STYLE} />
-              <Bar dataKey="p50" fill="#94a3b8" name="p50" />
-              <Bar dataKey="p95" fill="#eab308" name="p95" />
-            </BarChart>
-          </ResponsiveContainer>
         </div>
       )}
 
@@ -429,7 +392,7 @@ export function RunDetailPage() {
                     <div key={`${r.protocol}:${r.payloadBytes ?? ''}`} className="flex items-center gap-3">
                       <div className="w-40 text-xs text-right shrink-0 truncate">
                         <span className="text-gray-300">{r.protocol}</span>
-                        {r.payloadBytes != null && <span className="text-gray-500"> · {formatBytes(r.payloadBytes)}</span>}
+                        {r.payloadBytes != null && <span className="text-faint"> · {formatBytes(r.payloadBytes)}</span>}
                       </div>
                       <div className="flex-1 relative h-6">
                         {/* Whisker line (min to max) */}
@@ -452,12 +415,12 @@ export function RunDetailPage() {
               </div>
             </div>
             {/* Log-scale decade tick labels */}
-            <div className="relative h-4 mt-2 text-[10px] text-gray-500" style={{ marginLeft: 'calc(10rem + 0.75rem)', marginRight: 'calc(6rem + 0.75rem)' }}>
+            <div className="relative h-4 mt-2 text-xs text-faint" style={{ marginLeft: 'calc(10rem + 0.75rem)', marginRight: 'calc(6rem + 0.75rem)' }}>
               {latencyAxis.decades.map((t) => (
                 <span key={t} className="absolute -translate-x-1/2 whitespace-nowrap" style={{ left: `${latencyAxis.scale(t)}%` }}>{formatMs(t)}</span>
               ))}
             </div>
-            <div className="flex items-center gap-4 mt-3 text-[10px] text-gray-500 px-[calc(10rem+0.75rem)]">
+            <div className="flex items-center gap-4 mt-3 text-xs text-faint px-[calc(10rem+0.75rem)]">
               <span className="flex items-center gap-1"><span className="w-3 h-px bg-gray-500 inline-block" /> whisker (min/max)</span>
               <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm border border-cyan-600/60 bg-cyan-900/30 inline-block" /> IQR (p25–p75)</span>
               <span className="flex items-center gap-1"><span className="w-0.5 h-3 bg-cyan-400 inline-block" /> median (p50)</span>
@@ -467,20 +430,10 @@ export function RunDetailPage() {
         </div>
       )}
 
-      {/* ── TTFB Distribution ── */}
-      {ttfbDistribution.length > 0 && (
-        <div className="mb-6">
-          <h3 className="text-xs text-gray-400 tracking-wider mb-3 font-medium">TTFB distribution (ms)</h3>
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={ttfbDistribution}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1f2028" />
-              <XAxis dataKey="range" stroke="#4b5563" fontSize={9} angle={-30} textAnchor="end" height={50} />
-              <YAxis stroke="#4b5563" fontSize={10} allowDecimals={false} />
-              <Tooltip contentStyle={TOOLTIP_STYLE} />
-              <Bar dataKey="count" fill="#8b5cf6" name="Attempts" />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
+      {(protocolChartData.length > 1 || ttfbDistribution.length > 0) && (
+        <Suspense fallback={<div className="mb-6 h-52 rounded border border-gray-800 motion-safe:animate-pulse" aria-label="Loading charts" />}>
+          <RunDetailCharts protocolData={protocolChartData} ttfbData={ttfbDistribution} />
+        </Suspense>
       )}
 
       {/* ── Attempts by Protocol (collapsible) ── */}
@@ -490,7 +443,7 @@ export function RunDetailPage() {
           <p className="text-gray-400 text-sm mb-1">
             {attemptsMissing ? 'Per-attempt detail is no longer stored for this run' : 'No attempts recorded'}
           </p>
-          <p className="text-gray-500 text-xs">
+          <p className="text-faint text-xs">
             {attemptsMissing
               ? 'The summary above reflects the run\u2019s recorded totals; individual probe rows were pruned or never ingested.'
               : 'The run finished without producing any probe attempts.'}
@@ -500,13 +453,14 @@ export function RunDetailPage() {
       {attemptsError && attempts.length === 0 && (
         <div className="border border-gray-800 rounded p-6 text-center mb-2">
           <p className="text-gray-400 text-sm mb-1">Attempt data unavailable</p>
-          <p className="text-gray-500 text-xs mb-3">{attemptsError}</p>
-          <button
-            onClick={() => setRetryTick(t => t + 1)}
-            className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors"
+          <p className="text-faint text-xs mb-3">{attemptsError}</p>
+          <Button
+            onClick={() => { void attemptsQuery.refetch(); }}
+            variant="ghost"
+            size="xs"
           >
             Retry
-          </button>
+          </Button>
         </div>
       )}
       {Object.entries(groupByProtocol(attempts)).map(([protocol, group]) => {
@@ -528,7 +482,7 @@ export function RunDetailPage() {
                 <span className="text-gray-200 font-medium text-sm">{protocol.toUpperCase()}</span>
                 <span className="text-gray-400 text-xs">{group.length} attempts</span>
                 {stats && (
-                  <span className="text-gray-500 text-xs">
+                  <span className="text-faint text-xs">
                     p50: {formatMetricValue(protocol, stats.p50)} · p95: {formatMetricValue(protocol, stats.p95)}
                   </span>
                 )}
@@ -573,407 +527,8 @@ export function RunDetailPage() {
           </div>
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }
 
 // ─── Artifact Section (merged from BenchmarkDetailPage) ─────────────────────
-
-function ArtifactSection({ artifact }: { artifact: BenchmarkArtifact }) {
-  return (
-    <div className="mt-8 border-t border-purple-500/20 pt-6">
-      <h3 className="text-sm font-bold text-purple-400 mb-4 flex items-center gap-2">
-        <span className="text-purple-400/60">&#9670;</span> Benchmark Artifact
-      </h3>
-
-      {/* Data Quality Summary */}
-      {artifact.data_quality && (
-        <div className="border border-gray-800 rounded p-4 mb-4 text-xs">
-          <div className="flex flex-wrap gap-x-6 gap-y-2">
-            <span className="text-gray-400">
-              Noise: <span className={artifact.data_quality.noise_level === 'low' ? 'text-green-400' : 'text-yellow-400'}>
-                {artifact.data_quality.noise_level}
-              </span>
-            </span>
-            <span className="text-gray-400">
-              {/* Artifact vocabulary is adequate/marginal/insufficient
-                  (json.rs) — this compared against 'sufficient' and painted
-                  every healthy run yellow. */}
-              Sufficiency: <span className={artifact.data_quality.sufficiency === 'adequate' ? 'text-green-400' : 'text-yellow-400'}>
-                {artifact.data_quality.sufficiency}
-              </span>
-            </span>
-            <span className="text-gray-400">
-              Publication: <span className={artifact.data_quality.publication_ready ? 'text-green-400' : 'text-red-400'}>
-                {artifact.data_quality.publication_ready ? 'Ready' : 'Not Ready'}
-              </span>
-            </span>
-            {artifact.data_quality.quality_tier && (
-              <span className="text-gray-400">
-                Tier: <span className="text-gray-300">{artifact.data_quality.quality_tier}</span>
-              </span>
-            )}
-          </div>
-          {(artifact.data_quality.warnings?.length ?? 0) > 0 && (
-            <div className="mt-2 space-y-1">
-              {artifact.data_quality.warnings.map((w, i) => (
-                <p key={i} className="text-yellow-400/80">&#9888; {w}</p>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Case Summaries */}
-      {artifact.summaries && artifact.summaries.length > 0 && (
-        <div className="table-container mb-4">
-          <h4 className="px-4 py-2.5 text-xs text-gray-400 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
-            case summaries
-          </h4>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b border-gray-800 text-gray-400">
-                  <th className="px-4 py-2 text-left">Protocol</th>
-                  <th className="px-4 py-2 text-left">Metric</th>
-                  <th className="px-4 py-2 text-right">N</th>
-                  <th className="px-4 py-2 text-right">p50</th>
-                  <th className="px-4 py-2 text-right">p95</th>
-                  <th className="px-4 py-2 text-right">p99</th>
-                  <th className="px-4 py-2 text-right">RPS</th>
-                  <th className="px-4 py-2 text-right">StdDev</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(Array.isArray(artifact.summaries) ? artifact.summaries : [artifact.summaries]).map((s, i) => (
-                  <tr key={i} className="border-b border-gray-800/30 hover:bg-gray-800/10">
-                    <td className="px-4 py-2 text-gray-200">{s.protocol}</td>
-                    <td className="px-4 py-2 text-gray-400">{s.metric_name} ({s.metric_unit})</td>
-                    <td className="px-4 py-2 text-gray-400 text-right">{s.included_sample_count}</td>
-                    <td className="px-4 py-2 text-gray-100 text-right">{s.p50.toFixed(2)}</td>
-                    <td className="px-4 py-2 text-yellow-400 text-right">{s.p95.toFixed(2)}</td>
-                    <td className="px-4 py-2 text-s4 text-right">{s.p99.toFixed(2)}</td>
-                    <td className="px-4 py-2 text-gray-300 text-right">{s.rps.toFixed(0)}</td>
-                    <td className="px-4 py-2 text-gray-400 text-right">{s.stddev.toFixed(2)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* Methodology */}
-      {artifact.methodology && (
-        <div className="border border-gray-800 rounded p-4 text-xs text-gray-400 space-y-1">
-          <p className="text-gray-400 font-medium mb-2">Methodology</p>
-          <p>Mode: {artifact.methodology.mode} | Phase model: {artifact.methodology.phase_model}</p>
-          <p>Scenario: {artifact.methodology.scenario} | Sample phase: {artifact.methodology.sample_phase}</p>
-          <p>Launches: {artifact.methodology.launch_count} | Phases: {artifact.methodology.phases_present?.join(', ')}</p>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Sub-components ──────────────────────────────────────────────────────────
-
-function TimingRow({ row }: { row: TimingBreakdown }) {
-  const successPct = row.totalCount > 0 ? (row.successCount / row.totalCount) * 100 : 0;
-  return (
-    <tr className="border-b border-gray-800/30 hover:bg-gray-800/10">
-      <td className="px-4 py-2 text-gray-200 font-medium">{row.protocol}</td>
-      <td className="px-4 py-2 text-gray-400 text-right">{row.count}</td>
-      <td className="px-4 py-2 text-gray-400 text-right">{formatMs(row.avgDns)}</td>
-      <td className="px-4 py-2 text-gray-400 text-right">{formatMs(row.avgTcp)}</td>
-      <td className="px-4 py-2 text-gray-400 text-right">{formatMs(row.avgTls)}</td>
-      <td className="px-4 py-2 text-gray-200 text-right">{formatMs(row.avgTtfb)}</td>
-      <td className="px-4 py-2 text-gray-100 text-right font-bold">{formatMs(row.avgTotal)}</td>
-      <td className={`px-4 py-2 text-right ${successRateClass(successPct)}`}>
-        {row.successCount}/{row.totalCount}
-      </td>
-    </tr>
-  );
-}
-
-function StatsRow({ ps }: { ps: ProtocolStats }) {
-  const fmt = (v: number) => formatMetricValue(ps.protocol, v);
-  return (
-    <tr className="border-b border-gray-800/30 hover:bg-gray-800/10">
-      <td className="px-4 py-2 text-gray-200 font-medium">
-        {ps.protocol}
-        {ps.payloadBytes != null && <span className="text-gray-400 ml-1">({formatBytes(ps.payloadBytes)})</span>}
-      </td>
-      <td className="px-4 py-2 text-gray-400">{ps.label}</td>
-      <td className="px-4 py-2 text-gray-400 text-right">{ps.stats.count}</td>
-      <td className="px-4 py-2 text-gray-400 text-right">{fmt(ps.stats.min)}</td>
-      <td className="px-4 py-2 text-gray-400 text-right">{fmt(ps.stats.mean)}</td>
-      <td className="px-4 py-2 text-gray-100 text-right font-semibold">{fmt(ps.stats.p50)}</td>
-      <td className="px-4 py-2 text-yellow-400 text-right">{fmt(ps.stats.p95)}</td>
-      <td className="px-4 py-2 text-s4 text-right">{fmt(ps.stats.p99)}</td>
-      <td className="px-4 py-2 text-gray-400 text-right">{fmt(ps.stats.max)}</td>
-      <td className="px-4 py-2 text-gray-400 text-right">{fmt(ps.stats.stddev)}</td>
-      <td className={`px-4 py-2 text-right ${successRateClass(ps.successRate)}`}>
-        {ps.successRate.toFixed(0)}%
-      </td>
-    </tr>
-  );
-}
-
-// Exported for RunDetailPage.attempts.test.tsx — renders one probe attempt's
-// per-phase cards. Every row below the core timings is conditional: older runs
-// (pre phase-detail widening) simply render fewer lines.
-export function AttemptRow({ a }: { a: LiveAttempt }) {
-  const st = a.server_timing;
-  const hasSplit = st != null && (st.server_ms != null || st.network_ms != null || st.app_ms != null);
-  const hasServerTimings = st != null && (hasSplit || st.processing_ms != null || st.total_server_ms != null);
-  return (
-    <div className="px-4 py-3 border-b border-gray-800/30 hover:bg-gray-800/10">
-      <div className="flex items-center gap-4 mb-2">
-        <span className="text-gray-400 text-xs w-8">#{a.sequence_num}</span>
-        {a.success
-          ? <span className="text-green-400 text-xs font-medium">OK</span>
-          : <span className="text-red-400 text-xs font-medium">FAIL</span>
-        }
-        {a.retry_count > 0 && <span className="text-gray-500 text-xs">{a.retry_count} retries</span>}
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 text-xs">
-        {a.dns && (
-          <SubResult label="DNS" color="gray">
-            <p className="text-gray-300">{formatMs(a.dns.duration_ms)}</p>
-            {a.dns.resolved_ips?.length > 0 && (
-              <p className="text-gray-400 truncate">{a.dns.resolved_ips.join(', ')}</p>
-            )}
-          </SubResult>
-        )}
-        {a.tcp && (
-          <SubResult label="TCP" color="gray">
-            <p className="text-gray-300">{formatMs(a.tcp.connect_duration_ms)}</p>
-            <p className="text-gray-400 truncate">{a.tcp.remote_addr}</p>
-            {(a.tcp.total_retrans != null || a.tcp.congestion_algorithm != null || a.tcp.rtt_estimate_ms != null) && (
-              <p className="truncate">
-                {a.tcp.total_retrans != null && (
-                  <span className={a.tcp.total_retrans > 0 ? 'text-yellow-400' : 'text-gray-400'}>
-                    {a.tcp.total_retrans} retrans
-                  </span>
-                )}
-                {a.tcp.congestion_algorithm != null && (
-                  <span className="text-gray-400">{a.tcp.total_retrans != null ? ' · ' : ''}{a.tcp.congestion_algorithm}</span>
-                )}
-                {a.tcp.rtt_estimate_ms != null && (
-                  <span className="text-gray-400"> · rtt {formatMs(a.tcp.rtt_estimate_ms)}</span>
-                )}
-              </p>
-            )}
-          </SubResult>
-        )}
-        {a.tls && (
-          <SubResult label="TLS" color="gray">
-            <p className="text-gray-300">{formatMs(a.tls.handshake_duration_ms)}</p>
-            <p className="text-gray-400 truncate">{a.tls.protocol_version} · {a.tls.cipher_suite}</p>
-            {(a.tls.handshake_kind != null || a.tls.resumed != null || a.tls.alpn_negotiated != null) && (
-              <p className="truncate">
-                {(a.tls.handshake_kind != null || a.tls.resumed != null) && (
-                  <span className={(a.tls.resumed ?? a.tls.handshake_kind === 'resumed') ? 'text-cyan-400' : 'text-gray-400'}>
-                    {a.tls.handshake_kind ?? (a.tls.resumed ? 'resumed' : 'full')}
-                  </span>
-                )}
-                {a.tls.alpn_negotiated != null && (
-                  <span className="text-gray-400">
-                    {(a.tls.handshake_kind != null || a.tls.resumed != null) ? ' · ' : ''}alpn {a.tls.alpn_negotiated}
-                  </span>
-                )}
-              </p>
-            )}
-          </SubResult>
-        )}
-        {a.http && (
-          <SubResult label="HTTP" color="cyan">
-            <p className="text-gray-300">
-              <span className={a.http.status_code >= 400 ? 'text-red-400' : 'text-green-400'}>{a.http.status_code}</span>
-              {' · '}TTFB {formatMs(a.http.ttfb_ms)} · Total {formatMs(a.http.total_duration_ms)}
-            </p>
-            <p className="text-gray-400 truncate">
-              {a.http.negotiated_version}
-              {a.http.throughput_mbps != null && ` · ${a.http.throughput_mbps.toFixed(1)} MB/s`}
-              {a.http.goodput_mbps != null && ` · goodput ${a.http.goodput_mbps.toFixed(1)} MB/s`}
-              {a.http.payload_bytes != null && a.http.payload_bytes > 0 && ` · ${formatBytes(a.http.payload_bytes)}`}
-            </p>
-          </SubResult>
-        )}
-        {a.udp && (
-          <SubResult label="UDP" color="gray">
-            <p className="text-gray-300">
-              RTT avg {formatMs(a.udp.rtt_avg_ms)} · Loss {a.udp.loss_percent.toFixed(1)}%
-              {a.udp.jitter_ms != null && ` · Jitter ${formatMs(a.udp.jitter_ms)}`}
-            </p>
-            <p className="text-gray-400">
-              {a.udp.probe_count} probes
-              {a.udp.rtt_p95_ms != null && ` · p95 ${formatMs(a.udp.rtt_p95_ms)}`}
-            </p>
-          </SubResult>
-        )}
-        {hasServerTimings && st && (
-          <SubResult label="Server" color="cyan">
-            {hasSplit ? (
-              <>
-                <p className="text-gray-300">
-                  {st.server_ms != null && <>Server {formatMs(st.server_ms)}</>}
-                  {st.server_ms != null && st.network_ms != null && ' · '}
-                  {st.network_ms != null && <>Network {formatMs(st.network_ms)}</>}
-                  {st.split_anomaly && (
-                    <span className="text-yellow-400"> · split anomaly</span>
-                  )}
-                </p>
-                {st.app_ms != null && <p className="text-gray-400">app {formatMs(st.app_ms)}</p>}
-              </>
-            ) : (
-              <p className="text-gray-300">
-                {st.processing_ms != null && <>Proc {formatMs(st.processing_ms)}</>}
-                {st.processing_ms != null && st.total_server_ms != null && ' · '}
-                {st.total_server_ms != null && <>Total {formatMs(st.total_server_ms)}</>}
-              </p>
-            )}
-          </SubResult>
-        )}
-        {a.rpm && (
-          <SubResult label="RPM" color="cyan">
-            <p className="text-gray-300">
-              RTT {formatMs(a.rpm.unloaded_rtt_avg_ms)} &rarr; {formatMs(a.rpm.loaded_rtt_avg_ms)} under load
-              {a.rpm.rpm != null && ` · ${a.rpm.rpm.toFixed(0)} RPM`}
-            </p>
-            <p className="truncate">
-              {a.rpm.bufferbloat_factor != null && (
-                <span className={a.rpm.bufferbloat_factor >= 2 ? 'text-yellow-400' : 'text-gray-400'}>
-                  bufferbloat &times;{a.rpm.bufferbloat_factor.toFixed(2)}
-                </span>
-              )}
-              {a.rpm.load_throughput_mbps != null && (
-                <span className="text-gray-400">
-                  {a.rpm.bufferbloat_factor != null ? ' · ' : ''}load {a.rpm.load_throughput_mbps.toFixed(1)} MB/s
-                </span>
-              )}
-            </p>
-          </SubResult>
-        )}
-        {a.ping && (
-          <SubResult label="Ping" color="gray">
-            <p className="text-gray-300">
-              RTT avg {formatMs(a.ping.rtt_avg_ms)} · Jitter {formatMs(a.ping.jitter_ms)} · Loss {a.ping.loss_percent.toFixed(1)}%
-              {a.ping.fallback_method && (
-                <span className="ml-2 rounded-sm border border-yellow-700 px-1.5 py-0.5 text-xs text-yellow-400" title={`Every ICMP echo was lost (cloud NAT layers drop ICMP), so the RTTs above are TCP connect times to port ${a.ping.fallback_port ?? '?'} — not comparable to ICMP RTTs.`}>
-                  TCP RTT — ICMP blocked
-                </span>
-              )}
-            </p>
-            <p className="text-gray-400">
-              {a.ping.probe_count} probes
-              {a.ping.reply_ttl != null && ` · ttl ${a.ping.reply_ttl}`}
-              {a.ping.fallback_method && a.ping.fallback_port != null && ` · tcp :${a.ping.fallback_port}`}
-            </p>
-          </SubResult>
-        )}
-        {a.path && (
-          <SubResult label="Path" color="gray">
-            <p className="text-gray-300">
-              {a.path.hop_count != null ? `${a.path.hop_count} hops` : 'hops unknown'}
-              {' · '}
-              <span className={a.path.destination_reached ? 'text-green-400' : 'text-yellow-400'}>
-                {a.path.destination_reached ? 'reached' : 'not reached'}
-              </span>
-              {a.path.destination_rtt_ms != null && ` · ${formatMs(a.path.destination_rtt_ms)}`}
-            </p>
-            <p className="text-gray-400 truncate">{a.path.method}</p>
-            {a.path.hops.length > 0 && (
-              <p className="text-gray-400 truncate">
-                {a.path.hops.map((h) => h.addr ?? '*').join(' → ')}
-              </p>
-            )}
-          </SubResult>
-        )}
-        {a.dualstack && (
-          <SubResult label="Dual Stack" color="cyan">
-            <p className="text-gray-300">
-              v4 {a.dualstack.ipv4.success && a.dualstack.ipv4.total_ms != null
-                ? formatMs(a.dualstack.ipv4.total_ms)
-                : <span className={a.dualstack.ipv4.attempted ? 'text-red-400' : 'text-gray-500'}>{a.dualstack.ipv4.attempted ? 'fail' : 'n/a'}</span>}
-              {' · '}
-              v6 {a.dualstack.ipv6.success && a.dualstack.ipv6.total_ms != null
-                ? formatMs(a.dualstack.ipv6.total_ms)
-                : <span className={a.dualstack.ipv6.attempted ? 'text-red-400' : 'text-gray-500'}>{a.dualstack.ipv6.attempted ? 'fail' : 'n/a'}</span>}
-              {a.dualstack.faster_family != null && (
-                <span className="text-cyan-400">
-                  {' · '}{a.dualstack.faster_family} faster
-                  {a.dualstack.delta_ms != null && ` by ${formatMs(a.dualstack.delta_ms)}`}
-                </span>
-              )}
-            </p>
-            <p className="text-gray-400 truncate">{a.dualstack.happy_eyeballs_verdict}</p>
-          </SubResult>
-        )}
-        {a.websocket && (
-          <SubResult label="WebSocket" color="cyan">
-            <p className="text-gray-300">
-              Upgrade {formatMs(a.websocket.upgrade_ms)} · RTT avg {formatMs(a.websocket.msg_rtt_avg_ms)} · Loss {a.websocket.loss_percent.toFixed(1)}%
-            </p>
-            <p className="text-gray-400">
-              {a.websocket.echo_count}/{a.websocket.message_count} echoes
-              {` · p95 ${formatMs(a.websocket.msg_rtt_p95_ms)}`}
-            </p>
-          </SubResult>
-        )}
-        {a.pmtud && (
-          <SubResult label="PMTUD" color="gray">
-            <p className="text-gray-300">
-              {a.pmtud.path_mtu != null
-                ? <>Path MTU <span>{a.pmtud.path_mtu}</span>{a.pmtud.lower_bound_only && <span className="text-yellow-400"> (lower bound)</span>}</>
-                : <span className="text-yellow-400">no MTU verdict</span>}
-              {a.pmtud.local_mtu != null && ` · local ${a.pmtud.local_mtu}`}
-            </p>
-            <p className="text-gray-400 truncate">{a.pmtud.method}</p>
-          </SubResult>
-        )}
-        {a.page_load && (
-          <SubResult label="Page Load" color="blue">
-            <p className="text-gray-300">Total {formatMs(a.page_load.total_ms)} · {a.page_load.assets_fetched}/{a.page_load.asset_count} assets</p>
-            {a.page_load.tls_setup_ms != null && <p className="text-gray-400">TLS setup: {formatMs(a.page_load.tls_setup_ms)}</p>}
-          </SubResult>
-        )}
-        {a.browser && (
-          <SubResult label="Browser" color="purple">
-            <p className="text-gray-300">Load {formatMs(a.browser.load_ms)}</p>
-            {a.browser.dom_content_loaded_ms != null && <p className="text-gray-400">DCL: {formatMs(a.browser.dom_content_loaded_ms)}</p>}
-          </SubResult>
-        )}
-        {a.error && (
-          <SubResult label="Error" color="red">
-            <p className="text-red-300">{a.error.category}: {a.error.message}</p>
-            {a.error.detail && <p className="text-red-400/60 truncate">{a.error.detail}</p>}
-          </SubResult>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function SubResult({ label, color, children }: { label: string; color: string; children: React.ReactNode }) {
-  const borderColor = color === 'red' ? 'border-red-500/20' : color === 'cyan' ? 'border-gray-600' : color === 'blue' ? 'border-blue-500/20' : color === 'purple' ? 'border-purple-500/20' : 'border-gray-800';
-  const bgColor = color === 'red' ? 'bg-red-500/5' : 'bg-[var(--bg-base)]';
-  const labelColor = color === 'red' ? 'text-red-400' : color === 'cyan' ? 'text-gray-300' : color === 'blue' ? 'text-blue-400' : color === 'purple' ? 'text-purple-400' : 'text-gray-400';
-  return (
-    <div className={`${bgColor} border ${borderColor} rounded p-2`}>
-      <p className={`${labelColor} tracking-wider mb-1 text-[11px] font-medium`}>{label}</p>
-      {children}
-    </div>
-  );
-}
-
-function groupByProtocol(attempts: LiveAttempt[]): Record<string, LiveAttempt[]> {
-  const groups: Record<string, LiveAttempt[]> = {};
-  for (const a of attempts) {
-    const key = a.protocol || 'unknown';
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(a);
-  }
-  return groups;
-}

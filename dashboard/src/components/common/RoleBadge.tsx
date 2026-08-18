@@ -9,7 +9,7 @@ interface RoleBadgeProps {
   className?: string;
 }
 
-export function RoleBadge({ role, className = 'text-[10px]' }: RoleBadgeProps) {
+export function RoleBadge({ role, className = 'text-xs' }: RoleBadgeProps) {
   return (
     <span className={`${className} ${ROLE_COLORS[role] || 'text-gray-400'}`}>
       {role}

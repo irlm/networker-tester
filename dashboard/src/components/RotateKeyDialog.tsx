@@ -89,7 +89,7 @@ export function RotateKeyDialog({
               <button
                 onClick={handleRotate}
                 disabled={rotating}
-                className="px-4 py-2 text-sm bg-cyan-600 hover:bg-cyan-500 text-white rounded transition-colors disabled:opacity-50"
+                className="px-4 py-2 text-sm bg-cyan-600 hover:bg-cyan-500 text-[var(--bg-base)] rounded transition-colors disabled:opacity-50"
               >
                 {rotating ? 'Rotating...' : 'Rotate key'}
               </button>

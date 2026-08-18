@@ -1,6 +1,6 @@
 /**
  * PhaseBreakdown — per-mode stacked phase timing bars, data table, and comparison deltas.
- * Phase colors: DNS=#3b82f6, TCP=#8b5cf6, TLS=#f59e0b, TTFB=#ef4444, Transfer=#10b981
+ * Protocol-phase categories use the named chart tokens from DESIGN.md.
  */
 import { formatMs1dp } from '../../lib/format';
 
@@ -36,11 +36,11 @@ interface PhaseDefinition {
 }
 
 const PHASES: PhaseDefinition[] = [
-  { key: 'dns_ms',      label: 'DNS',      color: '#3b82f6', dimmed: true },
-  { key: 'tcp_ms',      label: 'TCP',      color: '#8b5cf6', dimmed: true },
-  { key: 'tls_ms',      label: 'TLS',      color: '#f59e0b' },
-  { key: 'ttfb_ms',     label: 'TTFB',     color: '#ef4444' },
-  { key: 'transfer_ms', label: 'Transfer', color: '#10b981' },
+  { key: 'dns_ms',      label: 'DNS',      color: 'var(--phase-dns)', dimmed: true },
+  { key: 'tcp_ms',      label: 'TCP',      color: 'var(--phase-tcp)', dimmed: true },
+  { key: 'tls_ms',      label: 'TLS',      color: 'var(--phase-tls)' },
+  { key: 'ttfb_ms',     label: 'TTFB',     color: 'var(--phase-ttfb)' },
+  { key: 'transfer_ms', label: 'Transfer', color: 'var(--phase-transfer)' },
 ];
 
 
@@ -92,7 +92,7 @@ function ModeBar({ data, maxTotal, barWidthPx, onTooltip }: ModeBarProps) {
     return (
       <div
         className="relative h-[10px] rounded-sm"
-        style={{ width: `${scaledTotal}px`, backgroundColor: '#4b5563' /* gray-600 */ }}
+        style={{ width: `${scaledTotal}px`, backgroundColor: 'var(--text-placeholder)' }}
         onMouseLeave={handleLeave}
         onMouseMove={(e) =>
           handleSegmentEnter(e, 'Total', data.total_ms)
@@ -138,14 +138,14 @@ interface DeltaInfo {
 
 function DeltaBadge({ delta }: { delta: DeltaInfo }) {
   if (delta.value === null) {
-    return <span style={{ color: '#9ca3af' /* gray-500 */ }}>—</span>;
+    return <span style={{ color: 'var(--text-muted)' }}>—</span>;
   }
   const v = delta.value;
-  let color = '#22c55e'; // green — faster
-  if (v > 20) color = '#ef4444';
-  else if (v > 0) color = '#f59e0b';
+  let color = 'var(--status-success)';
+  if (v > 20) color = 'var(--status-failure)';
+  else if (v > 0) color = 'var(--status-attention)';
 
-  const displayColor = delta.isDimmed ? '#6b7280' /* gray-500 */ : color;
+  const displayColor = delta.isDimmed ? 'var(--text-faint)' : color;
   const prefix = v > 0 ? '+' : '';
   const text = `${prefix}${Math.round(v)}%`;
 
@@ -383,7 +383,7 @@ export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps
                   {/* Delta row */}
                   {deltas && (
                     <tr className="border-b border-[var(--border-default)] bg-[var(--bg-base)]">
-                      <td className="py-0.5 pr-2 text-gray-500 text-[10px]">Δ</td>
+                      <td className="py-0.5 pr-2 text-faint text-xs">Δ</td>
                       <td className="text-right py-0.5 px-1">
                         <DeltaBadge delta={deltas['dns_ms']} />
                       </td>
@@ -423,4 +423,3 @@ export function PhaseBreakdown({ color, modes, comparison }: PhaseBreakdownProps
     </div>
   );
 }
-

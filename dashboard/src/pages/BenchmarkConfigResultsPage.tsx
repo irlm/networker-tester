@@ -439,7 +439,7 @@ export function BenchmarkConfigResultsPage() {
                 onClickGroup={handleClickGroup}
                 expandedGroups={expandedSet}
               />
-              <p className="text-xs text-gray-500 mt-1 ml-[70px]">
+              <p className="text-xs text-faint mt-1 ml-[70px]">
                 Click a language row to expand phase breakdown (max {MAX_EXPANDED} at a time).
               </p>
             </div>
@@ -476,7 +476,7 @@ export function BenchmarkConfigResultsPage() {
                       </span>
                       <button
                         onClick={() => handleClickGroup(lang)}
-                        className="text-xs text-gray-500 hover:text-gray-400 transition-colors"
+                        className="text-xs text-faint hover:text-gray-400 transition-colors"
                       >
                         collapse
                       </button>

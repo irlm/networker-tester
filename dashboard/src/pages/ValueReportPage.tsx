@@ -1,13 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  CartesianGrid,
-} from 'recharts';
+import { lazy, Suspense, useState, useCallback, useMemo } from 'react';
 import { api } from '../api/client';
 import type { PerfPerCostReport, PerfPerCostGroup, PerfPerCostFamily } from '../api/types';
 import { usePolling } from '../hooks/usePolling';
@@ -16,7 +7,8 @@ import { useProject } from '../hooks/useProject';
 import { ExportMenu } from '../components/common/ExportMenu';
 import { PageHeader } from '../components/common/PageHeader';
 import { EmptyState } from '../components/common/EmptyState';
-import { TOOLTIP_STYLE } from '../lib/chart';
+
+const ValueReportChart = lazy(() => import('./ValueReportChart'));
 
 const FAMILY_LABEL: Record<string, string> = {
   net: 'Network',
@@ -194,7 +186,7 @@ export function ValueReportPage() {
                   <th className="px-4 py-2.5 text-right font-medium">$/hr</th>
                   <th className="px-4 py-2.5 text-right font-medium">
                     {higherIsBetter ? 'Mbps per $·hr' : 'p95 × $/hr'}
-                    <span className="text-gray-500 font-normal ml-1">
+                    <span className="text-faint font-normal ml-1">
                       ({higherIsBetter ? 'higher' : 'lower'} is better)
                     </span>
                   </th>
@@ -236,26 +228,13 @@ export function ValueReportPage() {
 
           {/* Value bars */}
           {chartData.length > 1 && (
-            <div className="border border-gray-800 rounded p-4 mb-6">
-              <p className="text-xs text-gray-400 mb-2">
-                {higherIsBetter
-                  ? 'Sustained Mbps per dollar-hour (higher is better)'
-                  : 'Dollar-weighted p95 latency (lower is better)'}
-              </p>
-              <ResponsiveContainer width="100%" height={260}>
-                <BarChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1a1b25" />
-                  <XAxis dataKey="name" tick={{ fill: '#6b7280', fontSize: 11 }} />
-                  <YAxis tick={{ fill: '#6b7280', fontSize: 11 }} />
-                  <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: 'rgba(71,191,255,0.05)' }} />
-                  <Bar dataKey="value" fill="#47bfff" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+            <Suspense fallback={<div className="mb-6 h-64 rounded border border-gray-800 motion-safe:animate-pulse" aria-label="Loading value chart" />}>
+              <ValueReportChart data={chartData} higherIsBetter={higherIsBetter} />
+            </Suspense>
           )}
 
           {/* Formulas + disclaimer */}
-          <div className="text-xs text-gray-500 space-y-1">
+          <div className="text-xs text-faint space-y-1">
             <p>{report.formulas.latency_cost_index}</p>
             <p>{report.formulas.mbps_per_dollar_hour}</p>
             <p>

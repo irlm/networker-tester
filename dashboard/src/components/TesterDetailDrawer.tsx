@@ -11,6 +11,8 @@ import { useProjectStore } from '../stores/projectStore';
 import { StatusBadge } from './common/StatusBadge';
 import { DetailList } from './common/DetailList';
 import { RotateKeyDialog } from './RotateKeyDialog';
+import { Modal } from './common/Modal';
+import { ConfirmDialog } from './common/ConfirmDialog';
 
 interface TesterDetailDrawerProps {
   projectId: string;
@@ -157,19 +159,6 @@ export function TesterDetailDrawer({
     return Promise.all([cost, version]);
   }, [projectId, tester]);
 
-  // Escape closes the drawer — unless a confirm dialog is open (it handles
-  // its own Escape) or an action is in flight.
-  useEffect(() => {
-    if (!tester) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      if (confirmForceStop || confirmDelete || confirmForceDelete) return;
-      onClose();
-    };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [tester, confirmForceStop, confirmDelete, confirmForceDelete, onClose]);
-
   const run = useCallback(
     async (fn: () => Promise<unknown>) => {
       setActionState('busy');
@@ -215,17 +204,14 @@ export function TesterDetailDrawer({
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end" data-testid="tester-detail-drawer">
-      <div
-        className="absolute inset-0 bg-black/40 slide-over-backdrop"
-        onClick={onClose}
-        aria-hidden="true"
-      />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="tester-detail-title"
-        className="relative w-full md:w-[560px] md:max-w-[95vw] bg-[var(--bg-base)] md:border-l border-gray-800 h-full overflow-y-auto slide-over-panel"
+    <>
+      <Modal
+        onClose={onClose}
+        labelledBy="tester-detail-title"
+        variant="slide-over"
+        closeDisabled={isBusy || confirmForceStop || confirmDelete || confirmForceDelete || rotatingKey}
+        panelClassName="md:!w-[560px] md:!max-w-[95vw]"
+        testId="tester-detail-drawer"
       >
         <div className="p-4 md:p-6 space-y-6">
           <div className="flex items-center justify-between">
@@ -385,7 +371,7 @@ export function TesterDetailDrawer({
                 <span className="text-gray-400">Latest known:</span>
                 <span className="text-gray-300">{latestVersion ?? '—'}</span>
                 {updateAvailable && (
-                  <span className="px-1.5 py-0.5 text-[10px] rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                  <span className="px-1.5 py-0.5 text-xs rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
                     Update available
                   </span>
                 )}
@@ -513,7 +499,7 @@ export function TesterDetailDrawer({
                         }),
                       );
                     }}
-                    className="px-3 py-1 text-xs rounded bg-cyan-600 hover:bg-cyan-500 text-white disabled:opacity-50"
+                    className="px-3 py-1 text-xs rounded bg-cyan-600 hover:bg-cyan-500 text-[var(--bg-base)] disabled:opacity-50"
                   >
                     Save
                   </button>
@@ -723,15 +709,17 @@ export function TesterDetailDrawer({
           </section>
           )}
         </div>
-      </div>
+      </Modal>
 
       {/* ── Confirm force-stop ─────────────────────────────────────────── */}
       {confirmForceStop && (
         <ConfirmDialog
+          open
           title="Force runner to stopped"
-          message="This marks the runner stopped without waiting for a clean shutdown. Queued benchmarks remain locked until manually released. Continue?"
+          description="This marks the runner stopped without waiting for a clean shutdown. Queued benchmarks remain locked until manually released. Continue?"
           confirmLabel="Force stop"
           danger
+          layer="nested"
           onConfirm={() => {
             setConfirmForceStop(false);
             run(() =>
@@ -741,17 +729,19 @@ export function TesterDetailDrawer({
               }),
             );
           }}
-          onCancel={() => setConfirmForceStop(false)}
+          onClose={() => setConfirmForceStop(false)}
         />
       )}
 
       {/* ── Confirm delete ─────────────────────────────────────────────── */}
       {confirmDelete && (
         <ConfirmDialog
+          open
           title={`Delete runner "${tester.name}"?`}
-          message="The VM will be deprovisioned. This cannot be undone."
+          description="The VM will be deprovisioned. This cannot be undone."
           confirmLabel="Delete"
           danger
+          layer="nested"
           onConfirm={() => {
             setConfirmDelete(false);
             run(async () => {
@@ -765,21 +755,23 @@ export function TesterDetailDrawer({
               onChanged();
             });
           }}
-          onCancel={() => setConfirmDelete(false)}
+          onClose={() => setConfirmDelete(false)}
         />
       )}
 
       {/* ── Confirm FORCE delete ───────────────────────────────────────────── */}
       {confirmForceDelete && (
         <ConfirmDialog
+          open
           title={`Force-delete runner "${tester.name}"?`}
-          message={
+          description={
             'The cloud VM could not be deleted (its credentials are likely gone). '
             + 'Force-delete removes the runner record anyway — the VM may still exist '
             + 'and must be deleted in your cloud console. This cannot be undone.'
           }
           confirmLabel="Force delete"
           danger
+          layer="nested"
           onConfirm={() => {
             setConfirmForceDelete(false);
             run(async () => {
@@ -788,7 +780,7 @@ export function TesterDetailDrawer({
               onClose();
             });
           }}
-          onCancel={() => setConfirmForceDelete(false)}
+          onClose={() => setConfirmForceDelete(false)}
         />
       )}
 
@@ -801,70 +793,6 @@ export function TesterDetailDrawer({
           onRotated={() => onChanged()}
         />
       )}
-    </div>
-  );
-}
-
-interface ConfirmDialogProps {
-  title: string;
-  message: string;
-  confirmLabel: string;
-  danger?: boolean;
-  onConfirm: () => void;
-  onCancel: () => void;
-}
-
-function ConfirmDialog({
-  title,
-  message,
-  confirmLabel,
-  danger,
-  onConfirm,
-  onCancel,
-}: ConfirmDialogProps) {
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        onCancel();
-      }
-    };
-    document.addEventListener('keydown', handler, true);
-    return () => document.removeEventListener('keydown', handler, true);
-  }, [onCancel]);
-
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/60" onClick={onCancel} aria-hidden="true" />
-      <div
-        role="alertdialog"
-        aria-modal="true"
-        aria-labelledby="confirm-dialog-title"
-        className="relative bg-[var(--bg-base)] border border-gray-800 rounded p-5 w-[360px] max-w-[90vw]"
-      >
-        <h4 id="confirm-dialog-title" className="text-sm font-bold text-gray-100 mb-2">{title}</h4>
-        <p className="text-xs text-gray-400 mb-4">{message}</p>
-        <div className="flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="px-3 py-1 text-xs text-gray-400 hover:text-gray-200"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            className={`px-3 py-1 text-xs rounded ${
-              danger
-                ? 'bg-red-600 hover:bg-red-500 text-white'
-                : 'bg-cyan-600 hover:bg-cyan-500 text-white'
-            }`}
-          >
-            {confirmLabel}
-          </button>
-        </div>
-      </div>
-    </div>
+    </>
   );
 }

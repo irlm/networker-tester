@@ -8,6 +8,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AlertsPage } from './AlertsPage';
 import { resetRoleStores, setProjectRole, type ProjectRole } from '../test/rbac-helpers';
 import type { AlertChannel, AlertRule } from '../api/types';
@@ -51,18 +52,24 @@ vi.mock('../api/client', () => {
     api: {
       listAlertRules: vi.fn(() => Promise.resolve([rule])),
       listAlertChannels: vi.fn(() => Promise.resolve([channel])),
-      listTestConfigs: vi.fn(() => Promise.resolve([])),
       listAlertEvents: vi.fn(() => Promise.resolve([])),
     },
   };
 });
 
+vi.mock('../features/runs/api', () => ({
+  runsApi: { listConfigs: vi.fn(() => Promise.resolve([])) },
+}));
+
 async function renderPage(role: ProjectRole, tab: 'rules' | 'channels' = 'rules') {
   setProjectRole(role);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const utils = render(
-    <MemoryRouter initialEntries={[`/projects/p-1/alerts${tab === 'channels' ? '?tab=channels' : ''}`]}>
-      <AlertsPage />
-    </MemoryRouter>,
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={[`/projects/p-1/alerts${tab === 'channels' ? '?tab=channels' : ''}`]}>
+        <AlertsPage />
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
   // Wait for the initial load so gating is asserted on real content.
   await waitFor(() =>

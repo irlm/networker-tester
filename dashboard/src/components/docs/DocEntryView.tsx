@@ -13,7 +13,7 @@ export function DocEntryView({ entry, compact, showCategory = true }: DocEntryVi
     <div className={compact ? '' : 'py-3'}>
       {showCategory && cat && (
         <div className="flex items-center gap-2 mb-1">
-          <span className="text-[10px] uppercase tracking-wider text-[#863bff] font-medium">
+          <span className="text-xs uppercase tracking-wider text-brand font-medium">
             {cat.label}
           </span>
         </div>

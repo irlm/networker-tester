@@ -1,10 +1,12 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useMemo } from 'react';
 import { useSearchParams } from 'react-router';
-import { api, errorMessage } from '../api/client';
-import type { ComparisonReport, BenchmarkCaseComparison } from '../api/types';
+import { errorMessage } from '../api/client';
+import type { BenchmarkCaseComparison } from '../api/types';
 import { Breadcrumb } from '../components/common/Breadcrumb';
+import { ErrorState, LoadingState } from '../components/common/AsyncState';
+import { PageShell } from '../components/common/PageShell';
+import { useRunComparisonQuery } from '../features/runs/queries';
 import { usePageTitle } from '../hooks/usePageTitle';
-import { usePolling } from '../hooks/usePolling';
 import { useProject } from '../hooks/useProject';
 
 export function RunComparePage() {
@@ -12,65 +14,49 @@ export function RunComparePage() {
   const [searchParams] = useSearchParams();
   const idsParam = searchParams.get('ids') || '';
   const runIds = useMemo(() => idsParam.split(',').filter(Boolean), [idsParam]);
-  const [report, setReport] = useState<ComparisonReport | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const comparison = useRunComparisonQuery(runIds);
 
   usePageTitle('Compare Runs');
 
-  const loadComparison = useCallback(() => {
-    if (runIds.length < 2) return;
-    api.compareTestRuns(runIds)
-      .then(r => { setReport(r); setError(null); setLoading(false); })
-      .catch(e => { setError(errorMessage(e)); setLoading(false); });
-  }, [runIds]);
-
-  usePolling(loadComparison, 0, runIds.length >= 2);
-
-  // Handle invalid input without useEffect setState
   const tooFewIds = runIds.length < 2;
+  const breadcrumb = <Breadcrumb items={[{ label: 'Runs', to: `/projects/${projectId}/runs` }, { label: 'Compare' }]} />;
 
   if (tooFewIds) {
     return (
-      <div className="p-4 md:p-6">
-        <Breadcrumb items={[{ label: 'Runs', to: `/projects/${projectId}/runs` }, { label: 'Compare' }]} />
-        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
-          <h3 className="text-red-400 font-bold mb-2">Invalid input</h3>
-          <p className="text-red-300 text-sm">At least two run IDs are required (pass ?ids=a,b,...)</p>
-        </div>
-      </div>
+      <PageShell before={breadcrumb} title="Run Comparison">
+        <ErrorState
+          title="Invalid comparison"
+          message="Select at least two runs before opening a comparison."
+        />
+      </PageShell>
     );
   }
 
-  if (loading) {
+  if (comparison.isPending) {
     return (
-      <div className="p-4 md:p-6">
-        <Breadcrumb items={[{ label: 'Runs', to: `/projects/${projectId}/runs` }, { label: 'Compare' }]} />
-        <div className="text-gray-400 motion-safe:animate-pulse text-sm">Loading comparison...</div>
-      </div>
+      <PageShell before={breadcrumb} title="Run Comparison">
+        <LoadingState label="Loading comparison…" />
+      </PageShell>
     );
   }
 
-  if (error) {
+  if (comparison.error) {
     return (
-      <div className="p-4 md:p-6">
-        <Breadcrumb items={[{ label: 'Runs', to: `/projects/${projectId}/runs` }, { label: 'Compare' }]} />
-        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
-          <h3 className="text-red-400 font-bold mb-2">Comparison failed</h3>
-          <p className="text-red-300 text-sm">{error}</p>
-        </div>
-      </div>
+      <PageShell before={breadcrumb} title="Run Comparison">
+        <ErrorState
+          title="Comparison failed"
+          message={errorMessage(comparison.error)}
+          onRetry={() => { void comparison.refetch(); }}
+        />
+      </PageShell>
     );
   }
 
+  const report = comparison.data;
   if (!report) return null;
 
   return (
-    <div className="p-4 md:p-6">
-      <Breadcrumb items={[{ label: 'Runs', to: `/projects/${projectId}/runs` }, { label: 'Compare' }]} />
-      <h2 className="text-xl font-bold text-gray-100 mb-2">Run Comparison</h2>
-      <p className="text-xs text-gray-400 mb-6">{runIds.length} runs compared</p>
-
+    <PageShell before={breadcrumb} title="Run Comparison" subtitle={`${runIds.length} runs compared`}>
       {report.cases.length === 0 ? (
         <div className="border border-gray-800 rounded p-8 text-center">
           <p className="text-gray-400 text-sm">No comparable cases found across these runs.</p>
@@ -102,7 +88,7 @@ export function RunComparePage() {
                   </td>
                   {c.candidates?.map((cand, i) => {
                     const delta = cand.percent_delta;
-                    const color = delta == null ? 'text-gray-500' :
+                    const color = delta == null ? 'text-faint' :
                       (c.higher_is_better ? delta > 0 : delta < 0) ? 'text-green-400' : 'text-red-400';
                     return (
                       <td key={i} className={`px-4 py-2 text-right ${color}`}>
@@ -116,6 +102,6 @@ export function RunComparePage() {
           </table>
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }

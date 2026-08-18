@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
-import { api } from '../../api/client';
+import { runsApi } from '../../features/runs/api';
 import type { Workload, Methodology, TestConfigCreate, ComparisonCell, ComparisonGroupCreate } from '../../api/types';
 import { useToast } from '../../hooks/useToast';
 
@@ -54,8 +54,8 @@ export function useComparisonSubmit({
           methodology,
           cells,
         };
-        const group = await api.createComparisonGroup(projectId, body);
-        await api.launchComparisonGroup(group.id);
+        const group = await runsApi.createComparisonGroup(projectId, body);
+        await runsApi.launchComparisonGroup(group.id);
         addToast('success', `Launched ${cells.length} run${cells.length === 1 ? '' : 's'}`);
         navigate(`/projects/${projectId}/runs?comparison_group=${group.id}`);
         return;
@@ -75,17 +75,17 @@ export function useComparisonSubmit({
         methodology,
       };
 
-      const created = await api.createTestConfig(projectId, config);
+      const created = await runsApi.createConfig(projectId, config);
 
       if (addSchedule) {
-        await api.createTestSchedule(projectId, {
+        await runsApi.createSchedule(projectId, {
           test_config_id: created.id,
           cron_expr: cronExpr,
         });
       }
 
       if (launchNow) {
-        const run = await api.launchTestConfig(created.id, selectedTesterId ?? undefined);
+        const run = await runsApi.launchConfig(created.id, selectedTesterId ?? undefined);
         addToast('success', `Run ${run.id.slice(0, 8)} launched`);
         navigate(`/projects/${projectId}/runs/${run.id}`);
       } else {

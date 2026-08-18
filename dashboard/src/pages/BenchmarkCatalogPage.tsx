@@ -209,7 +209,7 @@ export function BenchmarkCatalogPage() {
               key: 'cloud',
               label: 'Cloud',
               render: (vm) => (
-                <span className={`text-[10px] px-1.5 py-0.5 rounded ${cloudProviderBadge(vm.cloud)}`}>
+                <span className={`text-xs px-1.5 py-0.5 rounded ${cloudProviderBadge(vm.cloud)}`}>
                   {vm.cloud}
                 </span>
               ),
@@ -222,12 +222,12 @@ export function BenchmarkCatalogPage() {
               render: (vm) => (
                 <div className="flex flex-wrap gap-1">
                   {vm.languages.length === 0 && (
-                    <span className="text-gray-500 text-xs">none</span>
+                    <span className="text-faint text-xs">none</span>
                   )}
                   {vm.languages.map((lang) => (
                     <span
                       key={lang}
-                      className="text-[10px] px-1.5 py-0.5 rounded border border-cyan-700/50 bg-cyan-500/10 text-cyan-400"
+                      className="text-xs px-1.5 py-0.5 rounded border border-cyan-700/50 bg-cyan-500/10 text-cyan-400"
                     >
                       {lang}
                     </span>
@@ -239,7 +239,7 @@ export function BenchmarkCatalogPage() {
               key: 'status',
               label: 'Status',
               render: (vm) => (
-                <span className={`text-[10px] px-1.5 py-0.5 rounded ${statusBadge[vm.status] || statusBadge.unknown}`}>
+                <span className={`text-xs px-1.5 py-0.5 rounded ${statusBadge[vm.status] || statusBadge.unknown}`}>
                   {vm.status}
                 </span>
               ),
@@ -260,7 +260,7 @@ export function BenchmarkCatalogPage() {
                       <button
                         onClick={() => handleDetect(vm.vm_id)}
                         disabled={detectingVmId === vm.vm_id}
-                        className="px-2 py-1 text-[10px] rounded text-cyan-400 hover:bg-cyan-500/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        className="px-2 py-1 text-xs rounded text-cyan-400 hover:bg-cyan-500/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                         title="Detect installed languages"
                       >
                         {detectingVmId === vm.vm_id ? (
@@ -273,13 +273,13 @@ export function BenchmarkCatalogPage() {
                         <span className="flex items-center gap-1">
                           <button
                             onClick={() => handleDelete(vm.vm_id)}
-                            className="px-2 py-1 text-[10px] rounded bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors"
+                            className="px-2 py-1 text-xs rounded bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors"
                           >
                             Confirm
                           </button>
                           <button
                             onClick={() => setDeletingVmId(null)}
-                            className="px-1.5 py-1 text-[10px] text-gray-400 hover:text-gray-300 transition-colors"
+                            className="px-1.5 py-1 text-xs text-gray-400 hover:text-gray-300 transition-colors"
                           >
                             Cancel
                           </button>
@@ -287,7 +287,7 @@ export function BenchmarkCatalogPage() {
                       ) : (
                         <button
                           onClick={() => setDeletingVmId(vm.vm_id)}
-                          className="px-2 py-1 text-[10px] rounded text-red-400 hover:bg-red-500/20 transition-colors"
+                          className="px-2 py-1 text-xs rounded text-red-400 hover:bg-red-500/20 transition-colors"
                           title="Delete VM"
                         >
                           &#10005;

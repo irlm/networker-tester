@@ -6,7 +6,7 @@
  * layer; components read fields directly.
  */
 
-import { request } from './client';
+import { request } from './http';
 
 export type ResourceType = 'tester' | 'endpoint' | 'benchmark';
 export type EventType =

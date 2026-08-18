@@ -1,8 +1,10 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { timeAgo } from '../lib/format';
 import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { useNavigate } from 'react-router';
 import { api } from '../api/client';
+import { runsApi } from '../features/runs/api';
 import { testersApi, type TesterRow } from '../api/testers';
 import type { Deployment, TestRun, TestConfigCreate, Workload } from '../api/types';
 import { Breadcrumb } from '../components/common/Breadcrumb';
@@ -12,6 +14,8 @@ import { useToast } from '../hooks/useToast';
 import { familyOf, modeLabel } from '../components/common/mode-family';
 import { RunResult } from '../components/common/RunResult';
 import { unsupportedModes } from '../lib/mode-capabilities';
+import { Button } from '../components/common/Button';
+import { testConfigQueryOptions, useTestRunsQuery } from '../features/runs/queries';
 
 // ── Mode families (source of truth is ModeChip.tsx) ────────────────────
 
@@ -29,6 +33,16 @@ interface ModeFamilyDef {
 // One selection accent across all families (audit F12 — the four category
 // hues collided with the status ramp; grouping carries the taxonomy now).
 const CHIP_ACTIVE_CLASS = 'bg-cyan-400/[.14] text-cyan-300 border-cyan-400/50';
+
+function stepMarkerClass(complete: boolean): string {
+  if (complete) return 'w-5 h-5 rounded-full text-xs text-center leading-[18px] border bg-cyan-500 text-black border-cyan-500';
+  return 'w-5 h-5 rounded-full text-xs text-center leading-[18px] border bg-gray-900 text-gray-400 border-gray-700';
+}
+
+function runnerChoiceClass(active: boolean): string {
+  if (active) return 'px-2.5 py-1 text-xs border border-cyan-500/40 text-cyan-300 bg-cyan-500/5 transition-colors';
+  return 'px-2.5 py-1 text-xs border border-gray-800 text-gray-400 transition-colors';
+}
 
 const MODE_FAMILIES: ModeFamilyDef[] = [
   {
@@ -126,6 +140,7 @@ function deploymentStatusDot(status: string): string {
 
 export function NetworkTestPage() {
   const { projectId } = useProject();
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const addToast = useToast();
   usePageTitle('New Network Test');
@@ -133,8 +148,14 @@ export function NetworkTestPage() {
   // Data
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [testers, setTesters] = useState<TesterRow[]>([]);
-  const [recentRuns, setRecentRuns] = useState<TestRun[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [resourcesLoading, setResourcesLoading] = useState(true);
+  const recentRunsQuery = useTestRunsQuery(
+    projectId,
+    { endpoint_kind: 'network', limit: 5 },
+    { polling: false },
+  );
+  const recentRuns = useMemo(() => recentRunsQuery.data ?? [], [recentRunsQuery.data]);
+  const loading = resourcesLoading || recentRunsQuery.isPending;
 
   // Form state — intent-first: modes → target → runner.
   // ?modes= / ?target= seed the INITIAL values rather than being written back
@@ -244,16 +265,14 @@ export function NetworkTestPage() {
   useAsyncEffect((cancelled) => Promise.all([
       api.getDeployments(projectId, { limit: 50 }).catch(() => [] as Deployment[]),
       testersApi.listTesters(projectId).catch(() => [] as TesterRow[]),
-      api.listTestRuns(projectId, { endpoint_kind: 'network', limit: 5 }).catch(() => [] as TestRun[]),
-    ]).then(([deps, rnrs, runs]) => {
+    ]).then(([deps, rnrs]) => {
       if (cancelled()) return;
       // Only COMPLETED deployments are runnable targets — failed/cancelled ones
       // have no live endpoint and used to be listed (and selectable!) here,
       // producing guaranteed-failing runs (E2E P2-9).
       setDeployments(deps.filter(d => d.status === 'completed'));
       setTesters(rnrs);
-      setRecentRuns(runs);
-      setLoading(false);
+      setResourcesLoading(false);
     }), [projectId]);
 
   // ── Derived ──────────────────────────────────────────────────────────
@@ -338,7 +357,7 @@ export function NetworkTestPage() {
     if (submitting) return;
     setSubmitting(true);
     try {
-      const run = await api.launchTestConfig(configId);
+      const run = await runsApi.launchConfig(configId);
       addToast('success', `Run ${run.id.slice(0, 8)} launched`);
       navigate(`/projects/${projectId}/runs/${run.id}`);
     } catch (e) {
@@ -350,7 +369,7 @@ export function NetworkTestPage() {
 
   const tweakFromRun = useCallback(async (run: TestRun) => {
     try {
-      const cfg = await api.getTestConfig(run.test_config_id);
+      const cfg = await queryClient.ensureQueryData(testConfigQueryOptions(run.test_config_id));
       // Prefill modes
       setSelectedModes(new Set(cfg.workload.modes));
       setActivePreset(null);
@@ -366,7 +385,7 @@ export function NetworkTestPage() {
     } catch (e) {
       addToast('error', `Failed to load config: ${e instanceof Error ? e.message : String(e)}`);
     }
-  }, [addToast]);
+  }, [addToast, queryClient]);
 
   // ── Launch new ───────────────────────────────────────────────────────
 
@@ -394,8 +413,8 @@ export function NetworkTestPage() {
         endpoint: { kind: 'proxy', proxy_endpoint_id: selectedDeployment.deployment_id },
         workload,
       };
-      const created = await api.createTestConfig(projectId, config);
-      const run = await api.launchTestConfig(created.id, selectedTesterId ?? undefined);
+      const created = await runsApi.createConfig(projectId, config);
+      const run = await runsApi.launchConfig(created.id, selectedTesterId ?? undefined);
       addToast('success', `Run ${run.id.slice(0, 8)} launched`);
       navigate(`/projects/${projectId}/runs/${run.id}`);
     } catch (e) {
@@ -453,27 +472,24 @@ export function NetworkTestPage() {
 
       {/* ─── HERO: Rerun last ──────────────────────────────────────── */}
       {lastRun && lastRun.modes && lastRun.modes.length > 0 && (
-        <div
-          className="grid items-center gap-3 mb-3 px-5 py-3 border border-cyan-500/40 bg-cyan-500/5"
-          style={{ gridTemplateColumns: 'auto 1fr auto auto', borderLeft: '3px solid rgb(34, 211, 238)' }}
-        >
+        <div className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-3 mb-3 px-5 py-3 border border-cyan-500/40 bg-cyan-500/5">
           <div className="text-cyan-400 text-xl leading-none">↻</div>
           <div>
-            <div className="text-[10px] uppercase tracking-wider text-gray-400">Repeat last run</div>
+            <div className="text-xs uppercase tracking-wider text-gray-400">Repeat last run</div>
             <div className="text-sm text-gray-200 mt-0.5">
               <span className="text-cyan-300">{lastRun.config_name ?? lastRun.id.slice(0, 8)}</span>
             </div>
-            <div className="flex items-center gap-1 flex-wrap mt-1 text-[11px] text-gray-400">
+            <div className="flex items-center gap-1 flex-wrap mt-1 text-xs text-gray-400">
               {lastRun.modes.slice(0, 8).map(m => (
                 <span
                   key={m}
-                  className={`inline-flex items-center px-1.5 py-0.5 text-[10px] leading-tight border rounded-sm ${classForMode(m, true)}`}
+                  className={`inline-flex items-center px-1.5 py-0.5 text-xs leading-tight border rounded-sm ${classForMode(m, true)}`}
                 >
                   {modeLabel(m)}
                 </span>
               ))}
               {lastRun.modes.length > 8 && (
-                <span className="text-[10px] text-gray-500">+{lastRun.modes.length - 8}</span>
+                <span className="text-xs text-faint">+{lastRun.modes.length - 8}</span>
               )}
               <span className="ml-2">· {timeAgo(lastRun.finished_at ?? lastRun.started_at ?? lastRun.created_at)}</span>
               {lastRun.status === 'completed' && (
@@ -486,19 +502,21 @@ export function NetworkTestPage() {
           </div>
           <button
             onClick={() => tweakFromRun(lastRun)}
-            className="px-2.5 py-1.5 text-[11px] border border-gray-700 text-gray-400 hover:border-cyan-500/40 hover:text-cyan-300 transition-colors"
+            className="px-2.5 py-1.5 text-xs border border-gray-700 text-gray-400 hover:border-cyan-500/40 hover:text-cyan-300 transition-colors"
             title="Load this config into the form below"
           >
             ✎ tweak &amp; run
           </button>
-          <button
+          <Button
+            variant="primary"
             onClick={() => rerunConfig(lastRun.test_config_id)}
-            disabled={submitting}
-            className="px-4 py-2 bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-gray-900 text-xs font-semibold transition-colors flex items-center gap-2"
+            loading={submitting}
+            loadingLabel="Running…"
+            className="flex items-center gap-2"
           >
             ▶ Run again
-            <span className="px-1.5 py-0.5 text-[9px] bg-gray-900/30 border border-gray-900/40 rounded">R</span>
-          </button>
+            <span className="px-1.5 py-0.5 text-xs bg-black/25 border border-white/20 rounded">R</span>
+          </Button>
         </div>
       )}
 
@@ -507,9 +525,9 @@ export function NetworkTestPage() {
         <div className="mb-4">
           <div className="flex items-baseline justify-between mb-1.5">
             <h3 className="text-xs font-semibold text-gray-300 tracking-wider">Recent runs</h3>
-            <span className="text-[10px] text-gray-500">rerun any row or click → for detail</span>
+            <span className="text-xs text-faint">rerun any row or click → for detail</span>
           </div>
-          <div className="flex items-center gap-1 mb-2 text-[11px]">
+          <div className="flex items-center gap-1 mb-2 text-xs">
             {([
               { id: 'all' as const, label: 'All', count: recentRuns.length },
               { id: 'this' as const, label: 'This target only', count: selectedDeployment ? filteredRecent.length : 0 },
@@ -524,7 +542,7 @@ export function NetworkTestPage() {
                     : 'border-transparent text-gray-400 hover:text-gray-300'
                 } disabled:opacity-40 disabled:cursor-not-allowed`}
               >
-                {t.label} <span className="text-[10px] text-gray-500">· {t.count}</span>
+                {t.label} <span className="text-xs text-faint">· {t.count}</span>
               </button>
             ))}
             <div className="flex-1" />
@@ -540,26 +558,26 @@ export function NetworkTestPage() {
                   className="grid items-center gap-3 py-2 px-3 border-b border-gray-800/50 hover:bg-cyan-500/[.03]"
                   style={{ gridTemplateColumns: '28px 1fr auto auto 100px' }}
                 >
-                  <span className="inline-block px-1.5 py-0.5 text-[10px] text-gray-400 bg-gray-900 border border-gray-800 rounded text-center">
+                  <span className="inline-block px-1.5 py-0.5 text-xs text-gray-400 bg-gray-900 border border-gray-800 rounded text-center">
                     {i + 1}
                   </span>
                   <div className="min-w-0">
                     <span className="text-xs text-gray-200">{run.config_name ?? run.id.slice(0, 8)}</span>
-                    <span className="text-[10px] text-gray-400 ml-2">{timeAgo(run.finished_at ?? run.started_at ?? run.created_at)}</span>
+                    <span className="text-xs text-gray-400 ml-2">{timeAgo(run.finished_at ?? run.started_at ?? run.created_at)}</span>
                   </div>
                   <div className="flex gap-1 flex-wrap">
                     {modes.slice(0, 6).map(m => (
                       <span
                         key={m}
-                        className={`inline-flex items-center px-1.5 py-0.5 text-[9px] leading-tight border rounded-sm ${classForMode(m, true)}`}
+                        className={`inline-flex items-center px-1.5 py-0.5 text-xs leading-tight border rounded-sm ${classForMode(m, true)}`}
                       >
                         {modeLabel(m)}
                       </span>
                     ))}
-                    {modes.length > 6 && <span className="text-[9px] text-gray-500">+{modes.length - 6}</span>}
+                    {modes.length > 6 && <span className="text-xs text-faint">+{modes.length - 6}</span>}
                   </div>
-                  <RunResult ok={run.success_count} fail={run.failure_count} className="text-[11px]" />
-                  <div className="text-right text-[11px]">
+                  <RunResult ok={run.success_count} fail={run.failure_count} className="text-xs" />
+                  <div className="text-right text-xs">
                     <button onClick={() => rerunConfig(run.test_config_id)} disabled={submitting} className="text-cyan-400 hover:underline disabled:opacity-50" title={`rerun (key ${i + 1})`}>↻ rerun</button>
                     <button onClick={() => tweakFromRun(run)} className="text-gray-400 hover:text-cyan-300 ml-2" title="load into form">✎</button>
                   </div>
@@ -572,7 +590,7 @@ export function NetworkTestPage() {
 
       {/* ─── OR DIVIDER ──────────────────────────────────────────── */}
       {recentRuns.length > 0 && (
-        <div className="flex items-center gap-3 my-6 text-[11px] uppercase tracking-widest text-gray-500">
+        <div className="flex items-center gap-3 my-6 text-xs uppercase tracking-widest text-faint">
           <div className="flex-1 h-px bg-gray-800" />
           or build a new run
           <div className="flex-1 h-px bg-gray-800" />
@@ -585,9 +603,9 @@ export function NetworkTestPage() {
         {/* Step 1: MODES */}
         <div className="mb-5">
           <div className="flex items-baseline gap-2 mb-2">
-            <span className={`w-5 h-5 rounded-full text-[10px] text-center leading-[18px] border ${selectedModes.size > 0 ? 'bg-cyan-500 text-gray-900 border-cyan-500' : 'bg-gray-900 text-gray-400 border-gray-700'}`}>1</span>
+            <span className={stepMarkerClass(selectedModes.size > 0)}>1</span>
             <span className="text-xs text-gray-200 font-medium">What are you testing?</span>
-            <span className="text-[11px] text-gray-400 ml-auto">
+            <span className="text-xs text-gray-400 ml-auto">
               {selectedModes.size === 0 ? 'pick at least one mode' : `${selectedModes.size} mode${selectedModes.size === 1 ? '' : 's'} selected`}
             </span>
           </div>
@@ -600,7 +618,7 @@ export function NetworkTestPage() {
                 <button
                   key={p.id}
                   onClick={() => applyPreset(p.id)}
-                  className={`px-2.5 py-1 text-[11px] border transition-colors ${
+                  className={`px-2.5 py-1 text-xs border transition-colors ${
                     active
                       ? 'border-cyan-500 text-cyan-300 bg-cyan-500/10'
                       : 'border-gray-800 border-dashed text-gray-400 hover:text-cyan-300 hover:border-cyan-500/40 hover:border-solid'
@@ -612,7 +630,7 @@ export function NetworkTestPage() {
               );
             })}
             {selectedModes.size > 0 && (
-              <button onClick={clearModes} className="px-2.5 py-1 text-[11px] text-gray-500 hover:text-gray-300">clear all</button>
+              <button onClick={clearModes} className="px-2.5 py-1 text-xs text-faint hover:text-gray-300">clear all</button>
             )}
           </div>
 
@@ -621,10 +639,10 @@ export function NetworkTestPage() {
           {[...selectedModes].some(m => THROUGHPUT_MODES.has(m)) && (
             <div className="mb-2 px-2 py-1.5 border border-cyan-400/30 bg-cyan-500/5 rounded-sm">
               <div className="flex items-center justify-between mb-1">
-                <span className="text-[10px] uppercase tracking-wider text-gray-400">
+                <span className="text-xs uppercase tracking-wider text-gray-400">
                   PAYLOAD SIZES <span className="text-gray-400 normal-case tracking-normal">· download/upload run once per selected size</span>
                 </span>
-                <span className="text-[10px] text-gray-400">
+                <span className="text-xs text-gray-400">
                   {payloadSizes.size === 0 ? 'pick at least one' : `${payloadSizes.size} selected`}
                 </span>
               </div>
@@ -639,7 +657,7 @@ export function NetworkTestPage() {
                         if (next.has(p.bytes)) next.delete(p.bytes); else next.add(p.bytes);
                         return next;
                       })}
-                      className={`px-2 py-0.5 text-[11px] border transition-colors rounded-sm ${
+                      className={`px-2 py-0.5 text-xs border transition-colors rounded-sm ${
                         active
                           ? CHIP_ACTIVE_CLASS
                           : 'border-gray-700 text-gray-400 hover:text-gray-300 hover:border-gray-600'
@@ -661,10 +679,10 @@ export function NetworkTestPage() {
             return (
               <div key={family.id} className="mb-2">
                 <div className="flex items-center justify-between mb-1">
-                  <span className={`text-[10px] uppercase tracking-wider ${family.labelClass}`}>{family.label}</span>
+                  <span className={`text-xs uppercase tracking-wider ${family.labelClass}`}>{family.label}</span>
                   <button
                     onClick={() => toggleFamily(family)}
-                    className="text-[10px] text-gray-500 hover:text-cyan-300"
+                    className="text-xs text-faint hover:text-cyan-300"
                   >
                     {allSelected ? 'clear' : `select all (${eligible.length})`}
                   </button>
@@ -679,7 +697,7 @@ export function NetworkTestPage() {
                         onClick={() => toggleMode(m)}
                         disabled={offReason != null}
                         title={offReason}
-                        className={`px-2 py-0.5 text-[11px] border transition-colors rounded-sm ${
+                        className={`px-2 py-0.5 text-xs border transition-colors rounded-sm ${
                           offReason != null
                             ? 'border-gray-800 text-gray-600 line-through cursor-not-allowed'
                             : classForMode(m, active)
@@ -698,22 +716,22 @@ export function NetworkTestPage() {
         {/* Step 2: TARGET */}
         <div className="mb-5">
           <div className="flex items-baseline gap-2 mb-2">
-            <span className={`w-5 h-5 rounded-full text-[10px] text-center leading-[18px] border ${selectedTargetId ? 'bg-cyan-500 text-gray-900 border-cyan-500' : 'bg-gray-900 text-gray-400 border-gray-700'}`}>2</span>
+            <span className={stepMarkerClass(Boolean(selectedTargetId))}>2</span>
             <span className="text-xs text-gray-200 font-medium">Against which target?</span>
-            <span className="text-[11px] text-gray-400 ml-auto">{deployments.length} deployed</span>
+            <span className="text-xs text-gray-400 ml-auto">{deployments.length} deployed</span>
           </div>
 
           {selectedDeployment ? (
             <div className="flex items-center gap-2 px-3 py-2 bg-cyan-500/5 border border-cyan-500/40">
               <span className={`w-2 h-2 rounded-full ${deploymentStatusDot(selectedDeployment.status)}`} />
               <span className="text-xs text-gray-200">{selectedDeployment.name}</span>
-              <span className="text-[11px] text-gray-400">
+              <span className="text-xs text-gray-400">
                 {selectedDeployment.config?.endpoints?.[0]?.provider && `· ${selectedDeployment.config.endpoints[0].provider}`}
                 {deploymentRegion(selectedDeployment) && ` ${deploymentRegion(selectedDeployment)}`}
               </span>
               <button
                 onClick={() => { setSelectedTargetId(''); setTargetSearch(''); setTargetPopoverOpen(true); targetInputRef.current?.focus(); }}
-                className="ml-auto text-[11px] text-gray-400 hover:text-cyan-300"
+                className="ml-auto text-xs text-gray-400 hover:text-cyan-300"
               >
                 change
               </button>
@@ -729,7 +747,7 @@ export function NetworkTestPage() {
                 placeholder={loading ? 'loading deployed targets…' : 'search by name, region, or cloud — press / to focus'}
                 className="w-full bg-[var(--bg-base)] border border-gray-700 px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
               />
-              <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-gray-500">
+              <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-faint">
                 <span className="px-1 border border-gray-700 rounded">/</span>
               </span>
               {targetPopoverOpen && filteredTargets.length > 0 && (
@@ -744,14 +762,14 @@ export function NetworkTestPage() {
                       <span className={`w-2 h-2 rounded-full ${deploymentStatusDot(dep.status)}`} />
                       <div>
                         <div className="text-gray-200">{dep.name}</div>
-                        <div className="text-[10px] text-gray-400">
+                        <div className="text-xs text-gray-400">
                           {dep.config?.endpoints?.[0]?.provider ?? 'cloud unknown'}
                           {' · '}
                           {deploymentRegion(dep) ?? 'region unknown'}
                           {dep.config?.endpoints?.[0]?.http_stacks && dep.config.endpoints[0].http_stacks.length > 0 && ` · ${dep.config.endpoints[0].http_stacks.join(', ')}`}
                         </div>
                       </div>
-                      <span className="text-[10px] text-gray-400">{dep.status}</span>
+                      <span className="text-xs text-gray-400">{dep.status}</span>
                     </button>
                   ))}
                 </div>
@@ -774,15 +792,15 @@ export function NetworkTestPage() {
         {/* Step 3: RUNNER */}
         <div className="mb-0">
           <div className="flex items-baseline gap-2 mb-1">
-            <span className="w-5 h-5 rounded-full text-[10px] text-center leading-[18px] bg-gray-900 text-gray-400 border border-gray-700">3</span>
+            <span className="w-5 h-5 rounded-full text-xs text-center leading-[18px] bg-gray-900 text-gray-400 border border-gray-700">3</span>
             <span className="text-xs text-gray-200 font-medium">Runner</span>
-            <span className="text-[11px] text-gray-400 ml-auto">
+            <span className="text-xs text-gray-400 ml-auto">
               {runnerMode === 'auto' ? 'auto-pick' : selectedTesterId ? (testers.find(t => t.tester_id === selectedTesterId)?.name ?? 'none') : 'none selected'}
               {' · '}{runnerStats.idle} idle / {runnerStats.online} online
             </span>
           </div>
           {!runnerExpanded ? (
-            <div className="text-[11px] text-gray-400 ml-7">
+            <div className="text-xs text-gray-400 ml-7">
               First idle runner will execute this run.{' '}
               <button onClick={() => setRunnerExpanded(true)} className="text-cyan-400 hover:underline">pick specific →</button>
             </div>
@@ -791,17 +809,17 @@ export function NetworkTestPage() {
               <div className="flex gap-1">
                 <button
                   onClick={() => { setRunnerMode('auto'); setSelectedTesterId(null); }}
-                  className={`px-2.5 py-1 text-[11px] border transition-colors ${runnerMode === 'auto' ? 'border-cyan-500/40 text-cyan-300 bg-cyan-500/5' : 'border-gray-800 text-gray-400'}`}
+                  className={runnerChoiceClass(runnerMode === 'auto')}
                 >
                   Auto-pick
                 </button>
                 <button
                   onClick={() => setRunnerMode('specific')}
-                  className={`px-2.5 py-1 text-[11px] border transition-colors ${runnerMode === 'specific' ? 'border-cyan-500/40 text-cyan-300 bg-cyan-500/5' : 'border-gray-800 text-gray-400'}`}
+                  className={runnerChoiceClass(runnerMode === 'specific')}
                 >
                   Pick specific
                 </button>
-                <button onClick={() => setRunnerExpanded(false)} className="px-2.5 py-1 text-[11px] text-gray-500 hover:text-gray-300 ml-auto">collapse</button>
+                <button onClick={() => setRunnerExpanded(false)} className="px-2.5 py-1 text-xs text-faint hover:text-gray-300 ml-auto">collapse</button>
               </div>
               {runnerMode === 'specific' && testers.length > 0 && (
                 <div className="space-y-1">
@@ -818,8 +836,8 @@ export function NetworkTestPage() {
                       >
                         <input type="radio" name="runner" checked={checked} disabled={!isOnline} onChange={() => setSelectedTesterId(row.tester_id)} className="accent-cyan-400" />
                         <span className="text-gray-200">{row.name}</span>
-                        <span className="text-[10px] text-gray-400">· {row.cloud}/{row.region}</span>
-                        <span className={`ml-auto text-[10px] ${isIdle ? 'text-green-400' : 'text-gray-400'}`}>
+                        <span className="text-xs text-gray-400">· {row.cloud}/{row.region}</span>
+                        <span className={`ml-auto text-xs ${isIdle ? 'text-green-400' : 'text-gray-400'}`}>
                           {isOnline ? (isIdle ? 'idle' : row.allocation) : row.power_state}
                         </span>
                       </label>
@@ -838,29 +856,30 @@ export function NetworkTestPage() {
             {selectedDeployment && <> · <span className="text-gray-100">{selectedDeployment.name}</span></>}
             {' · '}{runnerMode === 'auto' ? 'auto-runner' : 'specific runner'}
           </div>
-          <button
+          <Button
+            variant="primary"
             onClick={launchNew}
             disabled={!canLaunch || submitting}
-            className="px-5 py-2 bg-cyan-500 hover:bg-cyan-400 disabled:bg-gray-800 disabled:text-gray-600 text-gray-900 disabled:cursor-not-allowed text-xs font-semibold transition-colors flex items-center gap-2"
+            className="flex items-center gap-2"
           >
             {submitting ? (
               <>
-                <span className="inline-block w-3 h-3 border-2 border-gray-900/30 border-t-gray-900 rounded-full animate-spin" />
+                <span className="inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full motion-safe:animate-spin" />
                 Launching…
               </>
             ) : (
               <>
                 ▶ Launch
-                <span className="px-1 py-0.5 text-[9px] bg-gray-900/30 border border-gray-900/40 rounded">⏎</span>
+                <span className="px-1 py-0.5 text-xs bg-black/25 border border-white/20 rounded">⏎</span>
               </>
             )}
-          </button>
+          </Button>
         </div>
       </div>
 
       {/* Shortcuts hint — static footer so it can't collide with the fixed
           perf pill in the same corner (audit F11). */}
-      <div className="mt-4 text-right text-[10px] text-gray-500 select-none">
+      <div className="mt-4 text-right text-xs text-faint select-none">
         <span className="px-1 bg-gray-900 border border-gray-800 rounded">R</span> rerun last ·{' '}
         <span className="px-1 bg-gray-900 border border-gray-800 rounded">1</span>-<span className="px-1 bg-gray-900 border border-gray-800 rounded">5</span> recent ·{' '}
         <span className="px-1 bg-gray-900 border border-gray-800 rounded">/</span> search ·{' '}

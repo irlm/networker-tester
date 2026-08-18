@@ -114,7 +114,7 @@ export function CreateTlsProfileDialog({ projectId, onClose, onCreated }: Create
 
           <div className="flex justify-end gap-3 pt-4 border-t border-gray-800/50 mt-6">
             <button type="button" onClick={onClose} className="px-4 py-1.5 text-sm text-gray-400 hover:text-gray-200">Cancel</button>
-            <button type="submit" disabled={loading} className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50">
+            <button type="submit" disabled={loading} className="bg-cyan-600 hover:bg-cyan-500 text-[var(--bg-base)] px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50">
               {loading ? 'Creating...' : 'Run TLS Profile'}
             </button>
           </div>

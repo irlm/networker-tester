@@ -52,7 +52,7 @@ function EventBadge({ kind }: { kind: string }) {
   const cls =
     EVENT_BADGE[kind] ?? 'text-gray-400 border-gray-500/30 bg-gray-500/5';
   return (
-    <span className={`inline-block text-[11px] px-2 py-0.5 rounded border ${cls}`}>
+    <span className={`inline-block text-xs px-2 py-0.5 rounded border ${cls}`}>
       {kind}
     </span>
   );
@@ -190,7 +190,7 @@ export function VmHistoryPage() {
               label: 'Resource',
               cellClass: 'text-gray-200 truncate max-w-xs',
               titleOf: (r) => r.resource_id,
-              render: (r) => r.resource_name ?? <span className="text-gray-500">(unnamed)</span>,
+              render: (r) => r.resource_name ?? <span className="text-faint">(unnamed)</span>,
             },
             {
               key: 'type',

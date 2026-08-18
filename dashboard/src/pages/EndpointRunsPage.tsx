@@ -15,6 +15,7 @@ import { EmptyState } from '../components/common/EmptyState';
 import { useMemo, useEffect, useState, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router';
 import { api } from '../api/client';
+import { runsApi } from '../features/runs/api';
 import type { Deployment, TestRun } from '../api/types';
 import { useProject } from '../hooks/useProject';
 import { usePageTitle } from '../hooks/usePageTitle';
@@ -86,8 +87,8 @@ export function EndpointRunsPage() {
   // a backend follow-up; we currently ask for all and trust the search UI.
   const loadRuns = useCallback(() => {
     if (!projectId) return;
-    api
-      .listTestRuns(projectId, { endpoint_kind: 'network', limit: 50 })
+    runsApi
+      .list(projectId, { endpoint_kind: 'network', limit: 50 })
       .then((rows) => { setRuns(rows ?? []); setRunsLoading(false); })
       .catch(() => setRunsLoading(false));
   }, [projectId]);
@@ -167,7 +168,7 @@ export function EndpointRunsPage() {
             {deployment?.name ?? 'endpoint'}
             {ip !== '—' && <span className="text-cyan-400 text-sm ml-2">· {ip}</span>}
           </h2>
-          <div className="flex flex-wrap gap-3 mt-1 text-[11px] text-gray-400">
+          <div className="flex flex-wrap gap-3 mt-1 text-xs text-gray-400">
             {provider && <span>{provider} · {region}</span>}
             {vmSize && <span>· {vmSize}</span>}
             {stacks.length > 0 && <span className="text-cyan-400">· {stacks.join(', ')}</span>}
@@ -179,12 +180,12 @@ export function EndpointRunsPage() {
       {/* ── Run a test ─────────────────────────────────────────────── */}
       <div className="flex items-baseline justify-between mb-2">
         <h3 className="text-sm font-semibold text-gray-200">Run a test</h3>
-        <span className="text-[11px] text-gray-400">
+        <span className="text-xs text-gray-400">
           pick a saved config or build a custom one · color:
-          <span className="ml-2 px-1.5 py-0.5 border rounded-sm bg-green-400/[.14] text-green-300 border-green-400/50 text-[9px]">net</span>
-          <span className="ml-1 px-1.5 py-0.5 border rounded-sm bg-cyan-400/[.14] text-cyan-300 border-cyan-400/50 text-[9px]">http</span>
-          <span className="ml-1 px-1.5 py-0.5 border rounded-sm bg-cyan-400/[.16] text-cyan-300 border-cyan-400/55 text-[9px]">thru</span>
-          <span className="ml-1 px-1.5 py-0.5 border rounded-sm bg-yellow-400/[.14] text-yellow-300 border-yellow-400/50 text-[9px]">page</span>
+          <span className="ml-2 px-1.5 py-0.5 border rounded-sm bg-green-400/[.14] text-green-300 border-green-400/50 text-xs">net</span>
+          <span className="ml-1 px-1.5 py-0.5 border rounded-sm bg-cyan-400/[.14] text-cyan-300 border-cyan-400/50 text-xs">http</span>
+          <span className="ml-1 px-1.5 py-0.5 border rounded-sm bg-cyan-400/[.16] text-cyan-300 border-cyan-400/55 text-xs">thru</span>
+          <span className="ml-1 px-1.5 py-0.5 border rounded-sm bg-yellow-400/[.14] text-yellow-300 border-yellow-400/50 text-xs">page</span>
         </span>
       </div>
 
@@ -195,12 +196,12 @@ export function EndpointRunsPage() {
               {p.star && <span className="text-yellow-300 mr-1">★</span>}
               {p.name}
             </div>
-            <div className="text-[10px] text-gray-400 mt-1">{p.desc}</div>
+            <div className="text-xs text-gray-400 mt-1">{p.desc}</div>
             <div className="mt-2"><ModeChipList modes={p.modes} max={6} /></div>
             <button
               type="button"
               onClick={() => launchModes(p.modes)}
-              className="mt-3 px-3 py-1 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-medium"
+              className="mt-3 px-3 py-1 bg-cyan-600 hover:bg-cyan-500 text-[var(--bg-base)] text-xs font-medium"
             >
               ▶ Run
             </button>
@@ -237,7 +238,7 @@ export function EndpointRunsPage() {
       {/* ── History ───────────────────────────────────────────────── */}
       <div className="flex items-baseline justify-between mt-6 mb-2">
         <h3 className="text-sm font-semibold text-gray-200">History</h3>
-        <span className="text-[11px] text-gray-400">
+        <span className="text-xs text-gray-400">
           {filteredRuns.length} of {runs.length} runs ·{' '}
           <Link to={`/projects/${projectId}/runs`} className="text-cyan-400 hover:underline">
             view all →
@@ -333,12 +334,12 @@ export function EndpointRunsPage() {
                   <>
                     <div className="flex items-center gap-2 mb-1">
                       {preset ? (
-                        <span className="text-[10px] px-1.5 py-0.5 border border-cyan-500/40 text-cyan-300 rounded">
+                        <span className="text-xs px-1.5 py-0.5 border border-cyan-500/40 text-cyan-300 rounded">
                           {preset.star && <span className="mr-0.5">★</span>}
                           {preset.name}
                         </span>
                       ) : (
-                        <span className="text-[10px] px-1.5 py-0.5 border border-gray-700 text-gray-400 rounded">
+                        <span className="text-xs px-1.5 py-0.5 border border-gray-700 text-gray-400 rounded">
                           custom
                         </span>
                       )}

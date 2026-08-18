@@ -54,7 +54,7 @@ export function ChangePasswordDialog({ onClose }: ChangePasswordDialogProps) {
           <h2 id="change-pw-title" className="text-sm font-semibold text-gray-200">Change password</h2>
           <button
             onClick={onClose}
-            className="text-gray-500 hover:text-gray-400 transition-colors text-xs px-1"
+            className="text-faint hover:text-gray-400 transition-colors text-xs px-1"
             aria-label="Close"
           >
             Esc
@@ -76,7 +76,7 @@ export function ChangePasswordDialog({ onClose }: ChangePasswordDialogProps) {
             )}
 
             <div className="mb-4">
-              <label htmlFor="dlg-current-password" className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">
+              <label htmlFor="dlg-current-password" className="block text-xs text-faint mb-1.5 uppercase tracking-wider">
                 Current password
               </label>
               <input
@@ -90,7 +90,7 @@ export function ChangePasswordDialog({ onClose }: ChangePasswordDialogProps) {
             </div>
 
             <div className="mb-4">
-              <label htmlFor="dlg-new-password" className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">
+              <label htmlFor="dlg-new-password" className="block text-xs text-faint mb-1.5 uppercase tracking-wider">
                 New password
               </label>
               <input
@@ -105,7 +105,7 @@ export function ChangePasswordDialog({ onClose }: ChangePasswordDialogProps) {
             </div>
 
             <div className="mb-6">
-              <label htmlFor="dlg-confirm-password" className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">
+              <label htmlFor="dlg-confirm-password" className="block text-xs text-faint mb-1.5 uppercase tracking-wider">
                 Confirm password
               </label>
               <input
@@ -129,7 +129,7 @@ export function ChangePasswordDialog({ onClose }: ChangePasswordDialogProps) {
               <button
                 type="submit"
                 disabled={loading || !currentPassword || !newPassword || !confirmPassword}
-                className="bg-cyan-700 hover:bg-cyan-600 disabled:opacity-40 text-white text-xs px-4 py-2 rounded transition-colors"
+                className="bg-cyan-700 hover:bg-cyan-600 disabled:opacity-40 text-[var(--bg-base)] text-xs px-4 py-2 rounded transition-colors"
               >
                 {loading ? 'Updating...' : 'Update password'}
               </button>

@@ -13,14 +13,14 @@ export function HelpHint({ collapsed }: HelpHintProps) {
       <div className="flex flex-col items-center gap-1 py-1.5">
         <button
           onClick={openHelp}
-          className="text-gray-500 hover:text-gray-400 text-[10px] transition-colors focus:outline-none focus:text-cyan-500"
+          className="text-faint hover:text-gray-400 text-xs transition-colors focus:outline-none focus:text-cyan-500"
           title="Help (?)"
         >
           ?
         </button>
         <button
           onClick={openPalette}
-          className="text-gray-500 hover:text-gray-400 text-[10px] transition-colors focus:outline-none focus:text-cyan-500"
+          className="text-faint hover:text-gray-400 text-xs transition-colors focus:outline-none focus:text-cyan-500"
           title="Search (/)"
         >
           /
@@ -30,7 +30,7 @@ export function HelpHint({ collapsed }: HelpHintProps) {
   }
 
   return (
-    <div className="px-3 py-1.5 flex items-center gap-3 text-[10px] text-gray-500">
+    <div className="px-3 py-1.5 flex items-center gap-3 text-xs text-faint">
       <button
         onClick={openHelp}
         className="hover:text-gray-400 transition-colors focus:outline-none focus:text-cyan-500"
