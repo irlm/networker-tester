@@ -602,8 +602,14 @@ fi
 note "phase 5: Windows Server + IIS endpoint cell (provision ~10-15 min)"
 WIN_NAME="soak-canary-windows-iis-$(date -u +%Y%m%dT%H%M%SZ)"
 WIN_MODES='["tcp","dns","tls","tlsresume","http1","http2","curl","download","upload","pageload","pageload2","websocket","udp","stamp"]'   # stamp needs UDP 9997, opened since v0.28.213
+# The Windows cell installs a reference API for apibench; the language must be
+# in install.ps1's Windows-viable set (csharp-net*, go, nodejs, python, java —
+# rust/cpp/ruby/php are Linux-only, install.ps1:2808). `rust` here made every
+# phase-5 run fail deterministically at ~31s ("install.sh exited with code 1",
+# no VM) — install.sh dispatched an unsupported rust reference-API install on
+# Windows. `go` is the lightest Windows-viable choice.
 WIN_CELLS=$(jq -nc --arg acct "$ACCT" '[
-  {label:"canary windows · iis", endpoint:{kind:"pending", cloud_account_id:$acct, region:"eastus", vm_size:"Standard_B2s", os:"windows", proxy_stack:"iis", language:"rust"}}
+  {label:"canary windows · iis", endpoint:{kind:"pending", cloud_account_id:$acct, region:"eastus", vm_size:"Standard_B2s", os:"windows", proxy_stack:"iis", language:"go"}}
 ]')
 WIN_CG=$(api POST "/api/v2/projects/$PID/comparison-groups"   "$(jq -nc --arg n "$WIN_NAME" --argjson cells "$WIN_CELLS" --argjson modes "$WIN_MODES"      '{name:$n, base_workload:{modes:$modes, runs:2, concurrency:1, timeout_ms:15000, capture_mode:"headers-only", payload_sizes:[]}, cells:$cells}')")
 WIN_CG_ID=$(jq -r '.id // empty' <<<"$WIN_CG")
