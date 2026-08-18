@@ -326,6 +326,19 @@ if [[ -n "$ACS_CONN" ]]; then
 Environment=DASHBOARD_ACS_SENDER=${ACS_SENDER}"
 fi
 
+# Canary control: optional GitHub token so the in-product Run-canary button
+# (Canary admin page, #771) can dispatch soak-canary.yml via the workflow_dispatch
+# API. Sourced from the deploy environment; absent -> the /api/admin/canary
+# endpoint stays "not configured" (graceful, no failure). set -u safe.
+CANARY_ENV=""
+if [[ -n "${CANARY_GITHUB_TOKEN:-}" ]]; then
+    CANARY_ENV="Environment=CANARY_GITHUB_TOKEN=${CANARY_GITHUB_TOKEN}"
+    if [[ -n "${CANARY_GITHUB_REPO:-}" ]]; then
+        CANARY_ENV="${CANARY_ENV}
+Environment=CANARY_GITHUB_REPO=${CANARY_GITHUB_REPO}"
+    fi
+fi
+
 az vm run-command invoke \
     --resource-group "$RG_NAME" \
     --name "$VM_NAME" \
@@ -417,6 +430,7 @@ Environment=DASHBOARD_PUBLIC_URL=https://${DOMAIN}
 Environment=DASHBOARD_STATIC_DIR=/opt/dashboard/dashboard/dist
 ${SSO_ENV}
 ${ACS_ENV}
+${CANARY_ENV}
 
 [Install]
 WantedBy=multi-user.target
