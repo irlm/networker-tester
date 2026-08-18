@@ -49,6 +49,51 @@ public class ConfigAndArgsTests
     }
 
     [Fact]
+    public void Multi_url_set_parses_resolves_and_builds_repeated_target_flags()
+    {
+        // #782 URL sets: endpoint.hosts[] with host = first (back-compat).
+        var view = TestConfigView.From(Config("""
+            { "id":"00000000-0000-0000-0000-000000000000",
+              "endpoint": { "kind":"network", "host":"https://a.example/health",
+                            "hosts":["https://a.example/health","https://b.example/health","bare.example"] },
+              "workload": { "modes":["dns","http2"], "runs":1, "concurrency":1, "timeout_ms":3000,
+                            "payload_sizes":[], "capture_mode":"headers-only", "insecure":false } }
+            """));
+
+        Assert.Equal(
+            new[] { "https://a.example/health", "https://b.example/health", "bare.example" },
+            view.Network!.Hosts);
+
+        // Bare hostnames still get the https://…/health treatment per element.
+        var targets = RunExecutor.EndpointToTargets(view);
+        Assert.Equal(
+            new[] { "https://a.example/health", "https://b.example/health", "https://bare.example/health" },
+            targets);
+
+        // First target remains the single-target answer (apibench base target).
+        Assert.Equal("https://a.example/health", RunExecutor.EndpointToTarget(view));
+
+        // One tester invocation probes them ALL: repeated --target flags, in order.
+        var args = RunExecutor.BuildArgs(view, targets);
+        var targetValues = args
+            .Select((a, i) => (a, i))
+            .Where(t => t.a == "--target")
+            .Select(t => args[t.i + 1])
+            .ToArray();
+        Assert.Equal(targets, targetValues);
+    }
+
+    [Fact]
+    public void Single_host_config_still_yields_one_hosts_entry()
+    {
+        // Classic shape (no hosts key) must behave exactly as before — Hosts
+        // is the singleton [host] so every consumer can iterate uniformly.
+        var view = TestConfigView.From(Config(NetworkDnsHttp2));
+        Assert.Equal(new[] { "www.cloudflare.com" }, view.Network!.Hosts);
+        Assert.Single(RunExecutor.EndpointToTargets(view));
+    }
+
+    [Fact]
     public void EndpointToTarget_network_with_port_includes_port()
     {
         var view = TestConfigView.From(Config("""

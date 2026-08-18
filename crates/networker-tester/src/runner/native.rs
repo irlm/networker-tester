@@ -46,6 +46,7 @@ pub async fn run_native_probe(
     {
         let _ = (target, cfg);
         RequestAttempt {
+            target_url: None,
             phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
@@ -388,6 +389,7 @@ async fn run_native_probe_impl(
         let http_ok = status_code < 400;
 
         RequestAttempt {
+            target_url: None,
             phase: None,
             attempt_id,
             run_id,
@@ -694,6 +696,7 @@ async fn run_native_https(
     let http_ok = status_code < 400;
 
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id,
         run_id,
@@ -861,6 +864,7 @@ fn make_failed(
     tcp: Option<TcpResult>,
 ) -> RequestAttempt {
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id,
         run_id,

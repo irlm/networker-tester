@@ -449,6 +449,7 @@ pub async fn run_dns_probe(
 
     match resolve_detailed(hostname, ipv4_only, ipv6_only).await {
         Ok((_, dns_result)) => RequestAttempt {
+            target_url: None,
             phase: None,
             attempt_id,
             run_id,
@@ -480,6 +481,7 @@ pub async fn run_dns_probe(
             mthroughput: None,
         },
         Err(err) => RequestAttempt {
+            target_url: None,
             phase: None,
             attempt_id,
             run_id,

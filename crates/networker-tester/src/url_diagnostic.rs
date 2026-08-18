@@ -1228,6 +1228,7 @@ mod tests {
     #[test]
     fn protocol_probe_from_failed_attempt_captures_error() {
         let attempt = crate::metrics::RequestAttempt {
+            target_url: None,
             phase: None,
             attempt_id: Uuid::new_v4(),
             run_id: Uuid::new_v4(),

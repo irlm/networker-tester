@@ -185,6 +185,7 @@ pub async fn run_mthroughput_probe(
     };
 
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id,
         run_id,
@@ -538,6 +539,7 @@ fn mthroughput_failed(
     message: String,
 ) -> RequestAttempt {
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id,
         run_id,

@@ -130,7 +130,7 @@ pub async fn dispatch_once(
     throughput_cfg: &ThroughputConfig,
     pageload_cfg: &PageLoadConfig,
 ) -> RequestAttempt {
-    match attempt_cap(proto, cfg) {
+    let mut attempt = match attempt_cap(proto, cfg) {
         Some(cap) => {
             let started_at = Utc::now();
             match tokio::time::timeout(
@@ -171,7 +171,12 @@ pub async fn dispatch_once(
             )
             .await
         }
-    }
+    };
+    // Stamp the probed URL on EVERY attempt (including stalled ones) at the one
+    // choke point all probes flow through — multi-target runs (#782) attribute
+    // each streamed attempt to its URL by this field.
+    attempt.target_url = Some(target.to_string());
+    attempt
 }
 
 /// The failed attempt recorded when a short diagnostic probe blows its cap —
@@ -1018,6 +1023,23 @@ mod attempt_stream_tests {
         assert_eq!(v["event"], "attempt");
         assert_eq!(v["attempt"]["attempt_id"], a.attempt_id.to_string());
         assert_eq!(v["attempt"]["success"], a.success);
+    }
+
+    /// Multi-target ("URL set", #782) attribution: the streamed event carries
+    /// target_url when stamped, and OMITS the key entirely when None — so
+    /// pre-#782 artifact/stream consumers see byte-identical attempt JSON.
+    #[test]
+    fn event_line_carries_target_url_and_omits_none() {
+        let mut a = bare_attempt(Uuid::nil());
+        assert!(
+            !format_attempt_event(&a).expect("serializes").contains("target_url"),
+            "None must serialize to an ABSENT key, not null"
+        );
+
+        a.target_url = Some("https://compare.example/health".into());
+        let v: serde_json::Value =
+            serde_json::from_str(&format_attempt_event(&a).expect("serializes")).expect("valid");
+        assert_eq!(v["attempt"]["target_url"], "https://compare.example/health");
     }
 }
 
