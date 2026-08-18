@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [0.28.225] - 2026-08-18
+
+### Fixed
+
+- **Full-Stack / App benchmark wizard: "Add schedule" was silently dropped on
+  multi-cell launches** (#763). A comparison group has one config per cell and
+  no group-level schedule, so the backend could not honor a schedule set in the
+  wizard — yet the control was shown and its cron accepted. The control is now
+  hidden whenever the run will fan out to a comparison group, so the UI never
+  promises what it can't keep. Single-cell runs are unchanged.
+- **Six legacy redirect routes 404'd to the project list** (#765). Routes two
+  URL segments deep (`/runs/new`, `/runs/new/probe`, `/tests/:jobId`,
+  `/vms/testers`, `/vms/endpoints`) used one too few `..` in their path-relative
+  `<Navigate>`, so they resolved to a non-existent path and fell through to the
+  `*` catch-all. Corrected the `..` depth; single-segment redirects were already
+  right and are untouched.
+
+### Security
+
+- **h2 `0.4.15` → `0.4.16`** — closes RUSTSEC-2026-0258 (unbounded empty DATA
+  frames, a remote DoS in the HTTP/2 stack, transitive via hyper). The advisory
+  landed 2026-08-18 and was failing the required `cargo audit` check repo-wide;
+  the bump is isolated (only h2 moved in the lockfile).
+
+### Added
+
+- **Retry on a failed deployment** (#764). A `failed`/`cancelled` deployment now
+  offers a one-click **Retry** that re-runs the same config as a fresh
+  deployment (install.sh is idempotent), instead of forcing a full rebuild
+  through the wizard.
+
 ### Fixed
 
 - **The prod run-execution canary has been red for five straight nights (#728)
