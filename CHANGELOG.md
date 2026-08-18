@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.237] - 2026-08-19
+
+### Fixed
+
+- **Two testbeds no longer change in lockstep in the benchmark wizards.**
+  Testbed rows are patched by key, but keys came from two uncoordinated
+  counters (the Application wizard's template counter and a matrix-local
+  counter re-initialized to the list length on every step remount) — after
+  a template re-apply or a remove + step navigation, two rows could share a
+  key, and toggling one row's OS (or any field) mutated both, making a
+  Linux + Windows comparison impossible to configure (user-caught on the
+  api-compute template). Keys now come from one allocator
+  (`nextTestbedKey` = max existing + 1), the per-component counters are
+  gone, and a regression test pins the remove-then-add reuse case.
+
 ## [0.28.236] - 2026-08-19
 
 ### Added

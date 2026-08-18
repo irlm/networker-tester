@@ -93,8 +93,6 @@ export function AppBenchmarkPage() {
 
   // ── Template application ────────────────────────────────────────────
 
-  const [testbedKey, setTestbedKey] = useState(0);
-
   const applyTemplate = useCallback((tmpl: RuntimeTemplate) => {
     setSelectedTemplate(tmpl.id);
     setSelectedLangs(new Set(tmpl.defaultLanguages));
@@ -103,9 +101,9 @@ export function AppBenchmarkPage() {
     // Pre-fill testbeds
     const newTestbeds: TestbedState[] = [];
     if (tmpl.id !== 'custom' && tmpl.defaultTestbedCount > 0) {
-      const k = testbedKey;
-      setTestbedKey(k + 1);
-      newTestbeds.push(makeTestbed(k, 'Azure', tmpl.defaultOs ?? 'linux', tmpl.defaultProxies));
+      // Wholesale replace — key 0 is always free in the new array; subsequent
+      // "+ add testbed" rows get max+1 via nextTestbedKey.
+      newTestbeds.push(makeTestbed(0, 'Azure', tmpl.defaultOs ?? 'linux', tmpl.defaultProxies));
     }
     setTestbeds(newTestbeds);
 
@@ -128,7 +126,7 @@ export function AppBenchmarkPage() {
 
     setProxyWarning(false);
     setStep(1);
-  }, [testbedKey]);
+  }, []);
 
   // Prefill from ?template= (scenario launcher): apply the named RuntimeTemplate
   // once on mount, which seeds langs/modes/testbeds/methodology and advances to

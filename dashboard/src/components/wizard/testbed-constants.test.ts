@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_METHODOLOGY,
+  makeTestbed,
   METHODOLOGY_PRESETS,
   methodologyForPreset,
+  nextTestbedKey,
+  updateTestbedState,
   windowsProxiesFor,
   WINDOWS_PROXIES_AZURE,
 } from './testbed-constants';
@@ -60,5 +63,26 @@ describe('windows proxy support mirrors the server launch gate', () => {
 
   it('azure windows offers exactly the supported trio', () => {
     expect([...WINDOWS_PROXIES_AZURE].sort()).toEqual(['caddy', 'iis', 'traefik']);
+  });
+});
+
+describe('nextTestbedKey (duplicate-key regression)', () => {
+  it('starts at 0 and always allocates above the current max', () => {
+    expect(nextTestbedKey([])).toBe(0);
+    const a = makeTestbed(0);
+    const b = makeTestbed(nextTestbedKey([a]));
+    expect(b.key).toBe(1);
+    // Removing a LOW key must not cause reuse of a live key — the old
+    // length-derived counter did exactly that after remove + remount,
+    // making two rows patch together in updateTestbedState.
+    const afterRemove = [b]; // removed key 0, length is 1 again
+    expect(nextTestbedKey(afterRemove)).toBe(2);
+  });
+
+  it('updateTestbedState patches exactly one row when keys are unique', () => {
+    const rows = [makeTestbed(0), makeTestbed(1)];
+    const next = updateTestbedState(rows, 1, { os: 'windows' });
+    expect(next[0].os).toBe('linux');
+    expect(next[1].os).toBe('windows');
   });
 });
