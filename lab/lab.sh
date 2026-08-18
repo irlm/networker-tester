@@ -737,6 +737,16 @@ build_images() { # build_images STACKS(csv) UI(0|1)
   local arg
   for s in $(echo "$stacks" | tr ',' ' ' | tr ' ' '\n' | sort -u); do
     [ "$s" = windows ] && continue          # windows = dockur/windows image, pulled at up
+    if [ "$s" = sdk ]; then                  # sdk = customer app + LagHound SDK, its OWN image
+      # write_topology() and the cmd_up() missing-image check both expect
+      # nwk-lab/sdk:<tag> from sdk.Dockerfile — NOT nwk-lab/target-sdk from
+      # target.Dockerfile. Building it as a generic target left `up` pulling a
+      # nonexistent nwk-lab/sdk from Docker Hub (#774). sdk.Dockerfile takes
+      # DOTNET_* args (defaulted), not RUSTBIN_IMAGE/STACK.
+      note "building SDK target image (customer app + LagHound SDK)"
+      docker build ${BUILD_FLAGS[@]+"${BUILD_FLAGS[@]}"} -f "$LAB_DIR/images/sdk.Dockerfile" -t "nwk-lab/sdk:${LAB_IMAGE_TAG}" "$REPO_ROOT"
+      continue
+    fi
     arg="$s"; [ "$s" = rust ] && arg=none   # rust = bare endpoint, no proxy stack
     note "building target image for '$s'$([ "$arg" = none ] || echo " (install.sh --setup-stack $s runs at build time)")"
     docker build ${BUILD_FLAGS[@]+"${BUILD_FLAGS[@]}"} -f "$LAB_DIR/images/target.Dockerfile" --build-arg "RUSTBIN_IMAGE=nwk-lab/rustbin:${LAB_IMAGE_TAG}" --build-arg "STACK=$arg" -t "nwk-lab/target-$s:${LAB_IMAGE_TAG}" "$REPO_ROOT"
