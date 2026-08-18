@@ -331,7 +331,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.230"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.234"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -4661,6 +4661,21 @@ step_setup_letsencrypt() {
                 --non-interactive --agree-tos --register-unsafely-without-email \
                 --redirect < /dev/null 2>&1; then
             print_ok "Let's Encrypt certificate installed for $DASHBOARD_FQDN"
+            # Enable HTTP/2 on the TLS listener. certbot --nginx writes
+            # 'listen 443 ssl;' WITHOUT http2, so the SPA is served over
+            # HTTP/1.1 — its long-lived SSE streams then saturate the
+            # browser's 6-connection-per-origin cap and API calls stall
+            # (issue #762). Append the http2 PARAMETER (works on nginx 1.24;
+            # 'http2 on;' needs >= 1.25.1). Idempotent: the
+            # '; # managed by Certbot' anchor no longer matches once http2
+            # is present.
+            sudo sed -i -E 's/(listen[^;]*ssl)(; # managed by Certbot)/\1 http2\2/' \
+                /etc/nginx/conf.d/networker-dashboard.conf 2>/dev/null || true
+            if sudo nginx -t 2>&1; then
+                sudo systemctl reload nginx 2>/dev/null || true
+            else
+                print_warn "nginx config test failed after HTTP/2 enable — left as-is."
+            fi
             return 0
         else
             print_warn "Let's Encrypt failed — falling back to self-signed certificate."
@@ -4684,7 +4699,7 @@ step_setup_letsencrypt() {
     sudo tee -a /etc/nginx/conf.d/networker-dashboard.conf > /dev/null <<SSLCONF
 
 server {
-    listen 443 ssl;
+    listen 443 ssl http2;
     server_name ${server_name};
 
     ssl_certificate /etc/nginx/ssl/dashboard.crt;

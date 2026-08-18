@@ -37,6 +37,11 @@ public static class ProvisioningOrchestratorExtensions
         // pg-advisory-lock leader election lands (see BackgroundServicesGate).
         if (BackgroundServicesGate.IsEnabled("provisioning-orchestrator"))
         {
+            // Startup recovery FIRST: its StartAsync is awaited before the
+            // orchestrator starts, so deployments interrupted by the previous
+            // restart are flipped back to pending before the first tick could
+            // terminally fail their runs (issue #764).
+            services.AddHostedService<DeploymentRecoveryService>();
             services.AddHostedService<ProvisioningOrchestrator>();
         }
 

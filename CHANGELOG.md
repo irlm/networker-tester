@@ -11,6 +11,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.234] - 2026-08-19
+
+### Fixed
+
+- **E2E-pass minor findings cluster (#765).** Orphan agent rows are reaped:
+  the ReaperService purges retired, unlinked, disconnected agent rows not
+  referenced by any deployment (the ~35 accumulated prod rows drain on their
+  own). The URL-probe watchlist shows only the page's own probes — matrix
+  cells, canary configs and SDK endpoints no longer pollute it (and its
+  per-config detail fetches), fixing the 76-requests-on-load behaviour. The
+  six legacy redirects are pinned by a regression test that replays every
+  path-relative <Navigate> through react-router's own resolver. SDK
+  endpoints now show a reachability chip (reachable / partial / unreachable /
+  probing / never probed + age) derived from their latest sdkprobe run — no
+  new probing infrastructure. URL input no longer renders // as a ligature.
+
+## [0.28.233] - 2026-08-19
+
+### Fixed
+
+- **A control-plane restart no longer strands in-flight endpoint deployments**
+  (#764). install.sh --deploy runs as a child of the control-plane process, so
+  every release restart SIGTERMed mid-install deployments (exit 143) and
+  nothing re-drove them. New `DeploymentRecoveryService` (one-shot at startup,
+  before the orchestrator's first tick) reclaims crash-wedged pending/running
+  rows and recently-interrupted failures (30-min window), flips them back to
+  pending and re-runs the stored config — capped at 3 recovery attempts
+  (migration V052: `deployment.recovery_attempts`). Interrupted-classed
+  failures on the run path also re-queue through the V049 retry machinery
+  instead of failing terminally. Deployments now stamp `started_at` when they
+  start running and record `created_by` on wizard creates.
+
+## [0.28.232] - 2026-08-19
+
+### Fixed
+
+- **install.sh's dashboard TLS vhost now serves HTTP/2 on both paths**
+  (#762, repo half). The Let's Encrypt path appends the `http2` parameter to
+  certbot's managed `listen 443 ssl;` lines after certbot succeeds
+  (idempotent sed + `nginx -t` gate; parameter form for nginx 1.24 compat),
+  and the self-signed fallback vhost declares `listen 443 ssl http2;`
+  directly. Without h2 the SPA's held SSE streams pin the browser's
+  6-connection cap and API calls stall ~5.8 s. New bats test locks both
+  listeners in. (scripts/deploy-dashboard.sh was already fixed by #770;
+  the live prod VM still needs the one-time vhost edit.)
+
+## [0.28.231] - 2026-08-18
+
+### Added
+
+- **URL sets — probe several URLs together in ONE run (#782 P1).** The URL
+  Probe input now accepts multiple URLs (space/comma/newline separated); they
+  are probed by a single tester invocation (repeated `--target`), so every
+  cycle measures all URLs under the same network conditions — the fairness
+  basis for the upcoming comparison report. One run row per set (not N).
+  Every attempt is now stamped with the `target_url` it probed (tester
+  `dispatch_once` choke point; streamed frames and the `extra_json` artifact
+  carry it automatically, no schema change), the attempts API surfaces it
+  (`target_url`, recovered from the raw-attempt JSON column), and the run
+  detail page groups results per URL when a run probed more than one.
+  Agent: `endpoint.hosts[]` on network endpoints (back-compat: `host` stays
+  the first URL; classic single-URL configs are byte-identical on the wire).
+  Persistence is a real column — tester migration **V006**
+  (`RequestAttempt.TargetUrl`, mirrored in `shared/tester-schema.postgres.sql`
+  so control-plane bootstrap creates it too): the raw-JSON ride-along worked
+  only on prod-shaped DBs (lab e2e caught it), and legacy install.sh-seeded
+  schemas keep working via a per-column insert fallback ladder.
+
+### Fixed
+
+- The long-dead single-run HTML snapshot pin (stale since ~v0.28.86 — the
+  suite is not part of CI's test invocation) is re-pinned to the current
+  deterministic renderer output.
+
 ## [0.28.230] - 2026-08-18
 
 - **Dashboard architecture is now feature-oriented and reusable.** Shared API transport, TanStack Query hooks, page shells, form controls, dialogs, buttons, async states, and run-detail sections replace duplicated page-level implementations; heavy charts are loaded only when needed.

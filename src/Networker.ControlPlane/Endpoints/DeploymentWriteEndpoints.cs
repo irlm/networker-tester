@@ -40,6 +40,7 @@ public static class DeploymentWriteEndpoints
         app.MapPost("/api/projects/{projectId}/deployments", async (
             string projectId,
             CreateDeploymentRequest body,
+            HttpContext http,
             NetworkerDbContext db,
             DeployRunner runner,
             ILoggerFactory loggerFactory,
@@ -75,6 +76,9 @@ public static class DeploymentWriteEndpoints
                 Status = "pending",
                 Config = configText,
                 ProviderSummary = BuildProviderSummary(body.Config),
+                // Attribution was silently dropped here — every wizard-created
+                // deployment showed created_by: null (issue #764 observation).
+                CreatedBy = http.GetAuthUser()?.UserId,
                 CreatedAt = now,
                 ProjectId = projectId,
             });

@@ -566,6 +566,71 @@ public sealed class ProvisioningOrchestrator : BackgroundService
             case DeploymentFailed:
                 var msg = deployment.ErrorMessage ?? "deployment failed";
 
+                // ── Interrupted-by-restart failures retry instead of failing ──
+                // install.sh dies with SIGTERM whenever the control plane
+                // restarts — every release (issue #764). The startup
+                // DeploymentRecoveryService normally revives the deployment
+                // itself before this arm ever sees a failed row; this is the
+                // backstop for the shapes it skips (recovery cap reached, the
+                // retry window missed, or an install killed without a restart).
+                // The interruption is over by the time anyone can classify it,
+                // so re-queue promptly — a short backoff, then a FRESH kick.
+                if (ProvisioningFailureClassifier.IsInterruptedFailure(msg))
+                {
+                    var interruptedAttempts = await db.TestRuns.AsNoTracking()
+                        .Where(r => r.Id == runId)
+                        .Select(r => r.ProvisionAttempts)
+                        .FirstOrDefaultAsync(ct)
+                        .ConfigureAwait(false);
+                    if (interruptedAttempts < MaxProvisionAttempts)
+                    {
+                        var attempt = (short)(interruptedAttempts + 1);
+                        var backoff = TimeSpan.FromMinutes(1);
+                        await db.TestRuns
+                            .Where(r => r.Id == runId && r.Status == RunProvisioning)
+                            .ExecuteUpdateAsync(s => s
+                                .SetProperty(r => r.Status, RunQueued)
+                                .SetProperty(r => r.ProvisioningDeploymentId, (Guid?)null)
+                                .SetProperty(r => r.ProvisionAttempts, attempt)
+                                .SetProperty(r => r.NextProvisionAttemptAt, DateTime.UtcNow + backoff)
+                                .SetProperty(r => r.ErrorMessage,
+                                    $"Control-plane restart interrupted provisioning — retry {attempt}/{MaxProvisionAttempts} "
+                                    + $"scheduled in {backoff.TotalMinutes:0}m"), ct)
+                            .ConfigureAwait(false);
+                        // Release the dead deployment's throttle slot, keeping
+                        // the row+log as the diagnostic (mirrors the quota arm).
+                        // Any VM/IP the interrupted install left behind carries
+                        // no registered hosts, so it is the orphan reaper's job
+                        // — the same contract as the teardown phase's hostless
+                        // arm; the throttle's slot of headroom covers the sweep
+                        // lag.
+                        await db.Deployments
+                            .Where(d => d.DeploymentId == deploymentId && d.Status == DeploymentFailed)
+                            .ExecuteUpdateAsync(s => s
+                                .SetProperty(d => d.Status, DeploymentTornDown)
+                                .SetProperty(d => d.FinishedAt, d => d.FinishedAt ?? DateTime.UtcNow), ct)
+                            .ConfigureAwait(false);
+                        _logger.LogInformation(
+                            "Run {RunId} provisioning was interrupted by a control-plane restart — re-queued (attempt {Attempt}/{Max}, backoff {Backoff}m)",
+                            runId, attempt, MaxProvisionAttempts, backoff.TotalMinutes);
+                        return true;
+                    }
+
+                    await db.TestRuns
+                        .Where(r => r.Id == runId)
+                        .ExecuteUpdateAsync(s => s
+                            .SetProperty(r => r.Status, "failed")
+                            .SetProperty(r => r.ErrorMessage,
+                                $"Provisioning was interrupted by control-plane restarts {MaxProvisionAttempts} times — "
+                                + "relaunch the run once the release wave settles")
+                            .SetProperty(r => r.FinishedAt, DateTime.UtcNow), ct)
+                        .ConfigureAwait(false);
+                    _logger.LogWarning(
+                        "Run {RunId} failed: provisioning interrupted by restarts {Max} times",
+                        runId, MaxProvisionAttempts);
+                    return true;
+                }
+
                 // ── Quota-class failures retry instead of failing ─────────
                 // Capacity quota (Azure regional cores / public IPs) is
                 // transient by construction: every finished cell's teardown

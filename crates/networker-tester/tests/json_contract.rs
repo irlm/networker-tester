@@ -25,6 +25,7 @@ fn sample_run() -> TestRun {
     let run_id = Uuid::new_v4();
 
     let attempt = RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id: Uuid::new_v4(),
         run_id,

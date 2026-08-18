@@ -22,6 +22,11 @@ public sealed record ParsedAttempt(
     string? ExtraJson,
     string TargetHost,
     string TargetUrl,
+    /// <summary>The URL THIS attempt probed (frame <c>target_url</c>, tester
+    /// ≥0.28.231 — multi-URL set attribution, #782). Null from older testers.
+    /// Distinct from <see cref="TargetUrl"/>, the best-effort RUN-level host
+    /// for the V001 testrun parent row.</summary>
+    string? AttemptTargetUrl,
     ParsedDns? Dns,
     ParsedTcp? Tcp,
     ParsedTls? Tls,
@@ -108,6 +113,7 @@ public static class AttemptExtract
             ExtraJson: attempt.GetRawText(),
             TargetHost: host,
             TargetUrl: host,
+            AttemptTargetUrl: Str(attempt, "target_url"),
             Dns: ParseDns(dns),
             Tcp: ParseTcp(Child(attempt, "tcp")),
             Tls: ParseTls(Child(attempt, "tls")),

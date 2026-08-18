@@ -228,6 +228,7 @@ pub async fn run_path_probe(
     };
 
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id,
         run_id,
@@ -302,6 +303,7 @@ fn path_failed(
     message: String,
 ) -> RequestAttempt {
     RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id,
         run_id,

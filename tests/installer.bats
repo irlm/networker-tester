@@ -2191,6 +2191,24 @@ JSON
     ! echo "$section" | grep -q 'location /share/ {'
 }
 
+@test "controlplane: dashboard TLS listeners enable HTTP/2 (issue #762)" {
+    # certbot --nginx writes 'listen 443 ssl;' WITHOUT http2, so the SPA is
+    # served over HTTP/1.1 — its long-lived SSE streams then saturate the
+    # browser's 6-connection-per-origin cap and ordinary API calls stall ~5.8s.
+    # Both TLS paths must come out speaking h2 (issue #762).
+    local section
+    section=$(sed -n '/^step_setup_letsencrypt()/,/^}$/p' "$SCRIPT")
+    [ -n "$section" ]
+    # Let's Encrypt path: certbot's managed listen lines get the http2
+    # parameter appended ('http2 on;' needs nginx >= 1.25.1; the parameter
+    # works on 1.24 too).
+    echo "$section" | grep 'managed by Certbot' | grep -q 'http2'
+    # Self-signed fallback vhost: http2 on the listen directive itself.
+    echo "$section" | grep -q 'listen 443 ssl http2;'
+    # No bare TLS listener may survive in either vhost writer.
+    ! echo "$section" | grep -qE 'listen 443 ssl;$'
+}
+
 # ===========================================================================
 # scripts/ci/effective-changed-files.sh — the version-bump filter
 #
