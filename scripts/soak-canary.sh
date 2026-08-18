@@ -521,7 +521,7 @@ note "phase 4: multi-cell matrix flow (concurrent provisioning)"
 MX_NAME="soak-canary-matrix-$(date -u +%Y%m%dT%H%M%SZ)"
 # 3 linux cells across DIFFERENT stacks: enough to exercise concurrency, the
 # IP-quota throttle and per-cell naming without a large cloud bill.
-MX_CELLS=$(jq -nc --arg acct "$ACCOUNT_ID" '[
+MX_CELLS=$(jq -nc --arg acct "$ACCT" '[
   {label:"canary linux · nginx",   endpoint:{kind:"pending", cloud_account_id:$acct, region:"eastus", vm_size:"Standard_B2s", os:"linux", proxy_stack:"nginx",   language:"rust"}},
   {label:"canary linux · caddy",   endpoint:{kind:"pending", cloud_account_id:$acct, region:"eastus", vm_size:"Standard_B2s", os:"linux", proxy_stack:"caddy",   language:"rust"}},
   {label:"canary linux · traefik", endpoint:{kind:"pending", cloud_account_id:$acct, region:"eastus", vm_size:"Standard_B2s", os:"linux", proxy_stack:"traefik", language:"rust"}}
@@ -543,7 +543,7 @@ note "  matrix ${MX_CG_ID:0:8}: launched=${MX_OK}/${MX_TOTAL} failed=${MX_FAILED
 [ "$MX_OK" = "3" ] || fail "phase 4: only ${MX_OK}/3 cells launched — errors: $(jq -c '.errors // []' <<<"$MX_LAUNCH")"
 
 # Every cell must get its OWN config (the v0.28.129 shared-name collision).
-MX_RUNS=$(api GET "/api/v2/test-runs?comparison_group_id=$MX_CG_ID&limit=20")
+MX_RUNS=$(api GET "/api/v2/projects/$PID/test-runs?comparison_group_id=$MX_CG_ID&limit=20")
 MX_CFG_COUNT=$(jq -r '[ (if type=="array" then . else (.runs // .items // .data // []) end)[]? | (.test_config_id // empty) ] | unique | length' <<<"$MX_RUNS")
 [ "$MX_CFG_COUNT" = "3" ] || fail "phase 4: cells share configs (${MX_CFG_COUNT} distinct for 3 cells) — v0.28.129 collision class"
 
@@ -551,7 +551,7 @@ MX_CFG_COUNT=$(jq -r '[ (if type=="array" then . else (.runs // .items // .data 
 # so this is the only automated check on that interaction.
 deadline=$((SECONDS + MATRIX_TIMEOUT))
 while :; do
-  MX_STATE=$(api GET "/api/v2/test-runs?comparison_group_id=$MX_CG_ID&limit=20" \
+  MX_STATE=$(api GET "/api/v2/projects/$PID/test-runs?comparison_group_id=$MX_CG_ID&limit=20" \
     | jq -r '[ (if type=="array" then . else (.runs // .items // .data // []) end)[]? | (.status // "?") ] | join(",")')
   note "    cells: $MX_STATE"
   case "$MX_STATE" in *queued*|*provisioning*|*running*) : ;; *) break ;; esac
@@ -559,7 +559,7 @@ while :; do
   sleep 30
 done
 
-MX_FINAL=$(api GET "/api/v2/test-runs?comparison_group_id=$MX_CG_ID&limit=20")
+MX_FINAL=$(api GET "/api/v2/projects/$PID/test-runs?comparison_group_id=$MX_CG_ID&limit=20")
 MX_DONE=$(jq -r '[ (if type=="array" then . else (.runs // .items // .data // []) end)[]? | select((.status // "")=="completed") ] | length' <<<"$MX_FINAL")
 MX_ERRS=$(jq -r '[ (if type=="array" then . else (.runs // .items // .data // []) end)[]? | select((.status // "")!="completed") | "\(.status // "?"): \((.error_message // "")[0:70])" ] | join(" | ")' <<<"$MX_FINAL")
 
@@ -595,7 +595,7 @@ fi
 note "phase 5: Windows Server + IIS endpoint cell (provision ~10-15 min)"
 WIN_NAME="soak-canary-windows-iis-$(date -u +%Y%m%dT%H%M%SZ)"
 WIN_MODES='["tcp","dns","tls","tlsresume","http1","http2","curl","download","upload","pageload","pageload2","websocket","udp","stamp"]'   # stamp needs UDP 9997, opened since v0.28.213
-WIN_CELLS=$(jq -nc --arg acct "$ACCOUNT_ID" '[
+WIN_CELLS=$(jq -nc --arg acct "$ACCT" '[
   {label:"canary windows · iis", endpoint:{kind:"pending", cloud_account_id:$acct, region:"eastus", vm_size:"Standard_B2s", os:"windows", proxy_stack:"iis", language:"rust"}}
 ]')
 WIN_CG=$(api POST "/api/v2/projects/$PID/comparison-groups"   "$(jq -nc --arg n "$WIN_NAME" --argjson cells "$WIN_CELLS" --argjson modes "$WIN_MODES"      '{name:$n, base_workload:{modes:$modes, runs:2, concurrency:1, timeout_ms:15000, capture_mode:"headers-only", payload_sizes:[]}, cells:$cells}')")
@@ -609,7 +609,7 @@ note "  windows group ${WIN_CG_ID:0:8} launched; adjustments: $(jq -c '.adjustme
 
 deadline=$((SECONDS + WINDOWS_TIMEOUT)); WIN_RUN=""; WIN_STATUS=""
 while :; do
-  WIN_RUNS=$(api GET "/api/v2/test-runs?comparison_group_id=$WIN_CG_ID&limit=5")
+  WIN_RUNS=$(api GET "/api/v2/projects/$PID/test-runs?comparison_group_id=$WIN_CG_ID&limit=5")
   WIN_RUN=$(jq -r '(if type=="array" then . else (.runs // .items // .data // []) end)[0].id // empty' <<<"$WIN_RUNS")
   WIN_STATUS=$(jq -r '(if type=="array" then . else (.runs // .items // .data // []) end)[0].status // "?"' <<<"$WIN_RUNS")
   note "    windows cell: $WIN_STATUS"
