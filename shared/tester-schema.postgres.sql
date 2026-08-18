@@ -459,3 +459,13 @@ CREATE INDEX IF NOT EXISTS IX_MthroughputResult_AttemptId
     ON MthroughputResult (AttemptId);
 
 ALTER TABLE ServerTimingResult ADD COLUMN IF NOT EXISTS SrvCpuMs DOUBLE PRECISION NULL;
+
+-- V006: Per-attempt target attribution for multi-URL set runs (issue #782).
+-- A RequestAttempt row never recorded WHICH URL it probed — irrelevant while
+-- every run had exactly one target, fatal for URL sets where one run probes
+-- several URLs in a single tester invocation (repeated --target): the
+-- comparison surface cannot attribute an attempt to its URL. NULL on rows
+-- written before v0.28.231 and on single-target runs by older testers; the
+-- tester stamps it on every attempt from v0.28.231 (dispatch_once).
+
+ALTER TABLE RequestAttempt ADD COLUMN IF NOT EXISTS TargetUrl TEXT NULL;

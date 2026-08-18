@@ -739,13 +739,22 @@ public static class TestRunsEndpoints
         // detect the column once and select it as a uniform alias — NULL when
         // the column (or the key) is absent. Appended LAST so every tier's
         // positional ordinals stay untouched.
-        var extraCol = await GetExtraJsonColumnAsync(dataSource, ct);
-        var targetSelA = extraCol is null
-            ? ", NULL AS target_url"
-            : $", a.{extraCol}->>'target_url' AS target_url";
-        var targetSelFlat = extraCol is null
-            ? ", NULL AS target_url"
-            : $", {extraCol}->>'target_url' AS target_url";
+        var (extraCol, hasUrlCol) = await GetAttemptShapeAsync(dataSource, ct);
+        var targetSelA = (hasUrlCol, extraCol) switch
+        {
+            // V006 column first, older extra-json rows as fallback.
+            (true, { } ec) => $", COALESCE(a.TargetUrl, a.{ec}->>'target_url') AS target_url",
+            (true, null) => ", a.TargetUrl AS target_url",
+            (false, { } ec) => $", a.{ec}->>'target_url' AS target_url",
+            _ => ", NULL AS target_url",
+        };
+        var targetSelFlat = (hasUrlCol, extraCol) switch
+        {
+            (true, { } ec) => $", COALESCE(TargetUrl, {ec}->>'target_url') AS target_url",
+            (true, null) => ", TargetUrl AS target_url",
+            (false, { } ec) => $", {ec}->>'target_url' AS target_url",
+            _ => ", NULL AS target_url",
+        };
 
         // V005 tier: everything in richSql PLUS ServerTimingResult.SrvCpuMs
         // and the MthroughputResult capacity columns (appended, so the shared
@@ -911,39 +920,35 @@ public static class TestRunsEndpoints
     /// per process — the same divergence AttemptPersistence handles on the
     /// write side. Null means target_url cannot be recovered for DB-read
     /// attempts (pre-#782 tester schemas); the live stream still carries it.</summary>
-    private static string? _extraJsonColumn;
-    private static bool _extraJsonColumnResolved;
+    private static (string? ExtraJsonColumn, bool HasTargetUrl)? _attemptShape;
 
-    internal static void ResetExtraJsonColumnCacheForTests()
-    {
-        _extraJsonColumn = null;
-        _extraJsonColumnResolved = false;
-    }
+    internal static void ResetExtraJsonColumnCacheForTests() => _attemptShape = null;
 
-    private static async Task<string?> GetExtraJsonColumnAsync(NpgsqlDataSource dataSource, CancellationToken ct)
+    private static async Task<(string? ExtraJsonColumn, bool HasTargetUrl)> GetAttemptShapeAsync(
+        NpgsqlDataSource dataSource, CancellationToken ct)
     {
-        if (Volatile.Read(ref _extraJsonColumnResolved))
+        if (_attemptShape is { } cached)
         {
-            return _extraJsonColumn;
+            return cached;
         }
-        string? found = null;
+        var cols = new List<string>();
         await using (var cmd = dataSource.CreateCommand(
             "SELECT lower(column_name) FROM information_schema.columns " +
-            "WHERE lower(table_name) = 'requestattempt' AND lower(column_name) IN ('extrajson','extra_json')"))
+            "WHERE lower(table_name) = 'requestattempt' " +
+            "AND lower(column_name) IN ('extrajson','extra_json','targeturl')"))
         await using (var reader = await cmd.ExecuteReaderAsync(ct))
         {
-            var cols = new List<string>();
             while (await reader.ReadAsync(ct))
             {
                 cols.Add(reader.GetString(0));
             }
-            found = cols.Contains("extrajson") ? "extrajson"
-                : cols.Contains("extra_json") ? "extra_json"
-                : null;
         }
-        _extraJsonColumn = found;
-        Volatile.Write(ref _extraJsonColumnResolved, true);
-        return found;
+        var found = cols.Contains("extrajson") ? "extrajson"
+            : cols.Contains("extra_json") ? "extra_json"
+            : null;
+        var shape = (found, cols.Contains("targeturl"));
+        _attemptShape = shape;
+        return shape;
     }
 
     // Per-phase readers for the rich query above. Ordinals are positional in

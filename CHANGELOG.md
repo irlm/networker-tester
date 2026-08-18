@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   detail page groups results per URL when a run probed more than one.
   Agent: `endpoint.hosts[]` on network endpoints (back-compat: `host` stays
   the first URL; classic single-URL configs are byte-identical on the wire).
+  Persistence is a real column — tester migration **V006**
+  (`RequestAttempt.TargetUrl`, mirrored in `shared/tester-schema.postgres.sql`
+  so control-plane bootstrap creates it too): the raw-JSON ride-along worked
+  only on prod-shaped DBs (lab e2e caught it), and legacy install.sh-seeded
+  schemas keep working via a per-column insert fallback ladder.
 
 ### Fixed
 

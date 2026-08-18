@@ -1032,7 +1032,9 @@ mod attempt_stream_tests {
     fn event_line_carries_target_url_and_omits_none() {
         let mut a = bare_attempt(Uuid::nil());
         assert!(
-            !format_attempt_event(&a).expect("serializes").contains("target_url"),
+            !format_attempt_event(&a)
+                .expect("serializes")
+                .contains("target_url"),
             "None must serialize to an ABSENT key, not null"
         );
 
