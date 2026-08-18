@@ -5,20 +5,26 @@ import type {
   ComparisonGroupCreate,
   ComparisonReport,
   LiveAttempt,
+  EndpointKind,
   RunInfra,
+  RunStatus,
   TestConfig,
   TestConfigCreate,
   TestConfigListItem,
+  TestKind,
   TestRun,
   TestSchedule,
 } from '../../api/types';
 
 export interface RunListParams {
-  status?: string;
-  endpoint_kind?: string;
+  status?: RunStatus;
+  endpoint_kind?: EndpointKind;
+  test_kind?: TestKind;
+  q?: string;
   has_artifact?: boolean;
   comparison_group_id?: string;
   limit?: number;
+  since?: string;
   before?: string;
 }
 
@@ -59,9 +65,12 @@ export const runsApi = {
     const search = new URLSearchParams();
     if (params.status) search.set('status', params.status);
     if (params.endpoint_kind) search.set('endpoint_kind', params.endpoint_kind);
+    if (params.test_kind) search.set('test_kind', params.test_kind);
+    if (params.q) search.set('q', params.q);
     if (params.has_artifact !== undefined) search.set('has_artifact', String(params.has_artifact));
     if (params.comparison_group_id) search.set('comparison_group_id', params.comparison_group_id);
     if (params.limit) search.set('limit', String(params.limit));
+    if (params.since) search.set('since', params.since);
     if (params.before) search.set('before', params.before);
     const qs = search.toString();
     return request<TestRun[]>(`/v2/projects/${projectId}/test-runs${qs ? `?${qs}` : ''}`, withSignal(signal));

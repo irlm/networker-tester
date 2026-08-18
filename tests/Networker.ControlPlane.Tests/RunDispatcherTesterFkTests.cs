@@ -155,6 +155,7 @@ public sealed class RunDispatcherTesterFkTests
                 name TEXT NOT NULL,
                 description TEXT,
                 endpoint_kind TEXT NOT NULL,
+                test_kind TEXT NOT NULL DEFAULT 'network',
                 endpoint_ref TEXT NOT NULL,
                 workload TEXT NOT NULL,
                 methodology TEXT,

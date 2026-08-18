@@ -99,6 +99,7 @@ public static class SdkEndpointsEndpoints
                 Name = req.Name.Trim(),
                 Description = req.Description,
                 EndpointKind = EndpointKindNetwork,
+                TestKind = TestConfigKinds.SdkProbe,
                 EndpointRef = BuildEndpointJson(url),
                 Workload = BuildWorkloadJson(req),
                 MaxDurationSecs = req.MaxDurationSecs ?? DefaultMaxDurationSecs,

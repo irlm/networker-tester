@@ -1,6 +1,7 @@
 // ── REST v2 types (spec §2) ──────────────────────────────────────────────
 
 export type EndpointKind = 'network' | 'proxy' | 'runtime' | 'pending';
+export type TestKind = 'network' | 'url_probe' | 'sdk_probe' | 'benchmark';
 
 export type EndpointRef =
   | {
@@ -73,6 +74,7 @@ export interface TestConfig {
   project_id: string;
   name: string;
   description: string | null;
+  test_kind?: TestKind;
   endpoint: EndpointRef;
   workload: Workload;
   methodology: Methodology | null;
@@ -87,6 +89,7 @@ export interface TestConfigListItem {
   id: string;
   project_id: string;
   name: string;
+  test_kind?: TestKind;
   endpoint_kind: EndpointKind;
   modes: string[];
   has_methodology: boolean;
@@ -97,6 +100,7 @@ export interface TestConfigListItem {
 export interface TestConfigCreate {
   name: string;
   description?: string;
+  test_kind?: TestKind;
   endpoint: EndpointRef;
   workload: Workload;
   methodology?: Methodology;
@@ -123,6 +127,7 @@ export interface TestRun {
   /** Denormalized from test_config for list display */
   config_name?: string;
   endpoint_kind?: EndpointKind;
+  test_kind?: TestKind;
   modes?: string[];
   /** V046 run-envelope pass-through (detail route only; absent on old runs). */
   envelope?: RunEnvelope;

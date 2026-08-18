@@ -41,18 +41,18 @@ BEGIN
   -- ── Test configs ───────────────────────────────────────────────────
 
   -- Simple network test
-  INSERT INTO test_config (id, project_id, name, endpoint_kind, endpoint_ref, workload, methodology, max_duration_secs, created_by)
+  INSERT INTO test_config (id, project_id, name, endpoint_kind, test_kind, endpoint_ref, workload, methodology, max_duration_secs, created_by)
   VALUES (
-    'c0000001-cccc-4000-8000-000000000001', pid, 'Cloudflare connectivity', 'network',
+    'c0000001-cccc-4000-8000-000000000001', pid, 'Cloudflare connectivity', 'network', 'network',
     '{"kind":"network","host":"www.cloudflare.com"}'::jsonb,
     '{"modes":["dns","tcp","tls","http2"],"runs":5,"concurrency":1,"timeout_ms":5000,"payload_sizes":[],"capture_mode":"headers-only"}'::jsonb,
     NULL, 120, uid
   ) ON CONFLICT DO NOTHING;
 
   -- Network test with benchmark methodology
-  INSERT INTO test_config (id, project_id, name, endpoint_kind, endpoint_ref, workload, methodology, max_duration_secs, created_by)
+  INSERT INTO test_config (id, project_id, name, endpoint_kind, test_kind, endpoint_ref, workload, methodology, max_duration_secs, created_by)
   VALUES (
-    'c0000001-cccc-4000-8000-000000000002', pid, 'Full matrix (benchmark mode)', 'network',
+    'c0000001-cccc-4000-8000-000000000002', pid, 'Full matrix (benchmark mode)', 'network', 'benchmark',
     '{"kind":"network","host":"nwk-ep-ubuntu-dev.eastus.cloudapp.azure.com"}'::jsonb,
     '{"modes":["tcp","dns","tls","http1","http2","udp","download","upload"],"runs":10,"concurrency":2,"timeout_ms":10000,"payload_sizes":[1024,65536],"capture_mode":"full"}'::jsonb,
     '{"warmup_runs":3,"measured_runs":20,"cooldown_ms":1000,"target_error_pct":5.0,"outlier_policy":{"policy":"iqr","k":1.5},"quality_gates":{"max_cv_pct":15.0,"min_samples":10,"max_noise_level":0.3},"publication_gates":{"max_failure_pct":10.0,"require_all_phases":true}}'::jsonb,
@@ -60,18 +60,18 @@ BEGIN
   ) ON CONFLICT DO NOTHING;
 
   -- Proxy endpoint test
-  INSERT INTO test_config (id, project_id, name, endpoint_kind, endpoint_ref, workload, max_duration_secs, created_by)
+  INSERT INTO test_config (id, project_id, name, endpoint_kind, test_kind, endpoint_ref, workload, max_duration_secs, created_by)
   VALUES (
-    'c0000001-cccc-4000-8000-000000000003', pid, 'nginx proxy API check', 'proxy',
+    'c0000001-cccc-4000-8000-000000000003', pid, 'nginx proxy API check', 'proxy', 'network',
     '{"kind":"proxy","proxy_endpoint_id":"d0000001-dddd-4000-8000-000000000001"}'::jsonb,
     '{"modes":["http1","http2"],"runs":10,"concurrency":4,"timeout_ms":10000,"payload_sizes":[],"capture_mode":"headers-only"}'::jsonb,
     300, uid
   ) ON CONFLICT DO NOTHING;
 
   -- Runtime comparison test
-  INSERT INTO test_config (id, project_id, name, endpoint_kind, endpoint_ref, workload, methodology, max_duration_secs, created_by)
+  INSERT INTO test_config (id, project_id, name, endpoint_kind, test_kind, endpoint_ref, workload, methodology, max_duration_secs, created_by)
   VALUES (
-    'c0000001-cccc-4000-8000-000000000004', pid, 'Rust vs Go vs Node throughput', 'runtime',
+    'c0000001-cccc-4000-8000-000000000004', pid, 'Rust vs Go vs Node throughput', 'runtime', 'benchmark',
     '{"kind":"runtime","runtime_id":"e0000001-eeee-4000-8000-000000000001","language":"rust"}'::jsonb,
     '{"modes":["http2"],"runs":30,"concurrency":8,"timeout_ms":15000,"payload_sizes":[4096],"capture_mode":"metrics-only"}'::jsonb,
     '{"warmup_runs":5,"measured_runs":50,"cooldown_ms":2000,"target_error_pct":2.0,"outlier_policy":{"policy":"iqr","k":1.5},"quality_gates":{"max_cv_pct":10.0,"min_samples":20,"max_noise_level":0.2},"publication_gates":{"max_failure_pct":5.0,"require_all_phases":true}}'::jsonb,

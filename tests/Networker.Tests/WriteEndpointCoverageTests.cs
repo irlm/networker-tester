@@ -114,6 +114,7 @@ public sealed class WriteEndpointCoverageTests : IClassFixture<ControlPlaneFixtu
         {
             name,
             description = "created by write-coverage test",
+            test_kind = "url_probe",
             endpoint = new { kind = "network", host = "https://example.com" },
             workload = new { modes = new[] { "http11" }, runs = 5 },
             max_duration_secs = 90,
@@ -128,6 +129,10 @@ public sealed class WriteEndpointCoverageTests : IClassFixture<ControlPlaneFixtu
         var row = await ctx.TestConfigs.FirstOrDefaultAsync(c => c.Name == name);
         Assert.True(row is not null, $"test config '{name}' not persisted");
         Assert.Equal("network", row!.EndpointKind);
+        Assert.Equal("url_probe", row.TestKind);
+
+        using var responseJson = JsonDocument.Parse(await Body(resp));
+        Assert.Equal("url_probe", responseJson.RootElement.GetProperty("test_kind").GetString());
     }
 
     [Fact]

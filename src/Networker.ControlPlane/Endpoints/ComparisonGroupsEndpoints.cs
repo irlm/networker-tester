@@ -248,6 +248,7 @@ public static class ComparisonGroupsEndpoints
                         ProjectId = group.ProjectId,
                         Name = CellConfigName(cell.Label, id, i, launchNonce),
                         EndpointKind = cell.EndpointKind,
+                        TestKind = TestConfigKinds.Benchmark,
                         EndpointRef = cell.EndpointRaw,
                         Workload = cellWorkload ?? group.BaseWorkload,
                         Methodology = group.Methodology,

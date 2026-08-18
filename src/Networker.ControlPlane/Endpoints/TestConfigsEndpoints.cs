@@ -79,6 +79,7 @@ public static class TestConfigsEndpoints
         project_id = c.ProjectId,
         name = c.Name,
         description = c.Description,
+        test_kind = c.TestKind,
         endpoint = RawJson(c.EndpointRef),
         workload = RawJson(c.Workload),
         methodology = RawJsonOrNull(c.Methodology),
