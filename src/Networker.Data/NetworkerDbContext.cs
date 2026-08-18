@@ -362,6 +362,8 @@ public partial class NetworkerDbContext : DbContext
 
             entity.HasIndex(e => e.EndpointKind, "ix_test_config_endpoint_kind");
 
+            entity.HasIndex(e => new { e.ProjectId, e.TestKind }, "ix_test_config_project_test_kind");
+
             entity.HasIndex(e => e.ProjectId, "ix_test_config_project");
 
             entity.HasIndex(e => new { e.ProjectId, e.Name }, "test_config_project_id_name_key").IsUnique();
@@ -376,6 +378,9 @@ public partial class NetworkerDbContext : DbContext
             entity.Property(e => e.CreatedBy).HasColumnName("created_by");
             entity.Property(e => e.Description).HasColumnName("description");
             entity.Property(e => e.EndpointKind).HasColumnName("endpoint_kind");
+            entity.Property(e => e.TestKind)
+                .HasDefaultValue("network")
+                .HasColumnName("test_kind");
             entity.Property(e => e.EndpointRef)
                 .HasColumnType("jsonb")
                 .HasColumnName("endpoint_ref");

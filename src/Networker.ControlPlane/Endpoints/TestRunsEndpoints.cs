@@ -39,13 +39,22 @@ public static class TestRunsEndpoints
             string projectId,
             string? status,
             string? endpoint_kind,
+            string? test_kind,
+            string? q,
             bool? has_artifact,
             Guid? comparison_group_id,
             int? limit,
+            DateTime? since,
             DateTime? before,
             NetworkerDbContext db) =>
         {
             var take = Math.Clamp(limit ?? DefaultLimit, 1, MaxLimit);
+            var requestedTestKind = test_kind?.Trim().ToLowerInvariant();
+
+            if (!string.IsNullOrWhiteSpace(requestedTestKind) && !TestConfigKinds.IsValid(requestedTestKind))
+            {
+                return ApiError.BadRequest("test_kind must be one of: network, url_probe, sdk_probe, benchmark");
+            }
 
             var query = db.TestRuns
                 .AsNoTracking()
@@ -68,6 +77,11 @@ public static class TestRunsEndpoints
                 query = query.Where(r => r.ComparisonGroupId == cgid);
             }
 
+            if (since is DateTime lowerBound)
+            {
+                query = query.Where(r => r.CreatedAt >= lowerBound);
+            }
+
             if (before is DateTime cursor)
             {
                 // `before` is a keyset cursor over created_at DESC (exclusive).
@@ -78,6 +92,17 @@ public static class TestRunsEndpoints
             if (!string.IsNullOrEmpty(endpoint_kind))
             {
                 query = query.Where(r => r.TestConfig.EndpointKind == endpoint_kind);
+            }
+
+            if (!string.IsNullOrEmpty(requestedTestKind))
+            {
+                query = query.Where(r => r.TestConfig.TestKind == requestedTestKind);
+            }
+
+            if (!string.IsNullOrWhiteSpace(q))
+            {
+                var term = q.Trim().ToLowerInvariant();
+                query = query.Where(r => r.TestConfig.Name.ToLower().Contains(term));
             }
 
             var rows = await query
@@ -104,6 +129,8 @@ public static class TestRunsEndpoints
                     // why this endpoint is "fuller" than the base TestRun shape.
                     config_name = r.TestConfig.Name,
                     endpoint_kind = r.TestConfig.EndpointKind,
+                    test_kind = r.TestConfig.TestKind,
+                    workload = r.TestConfig.Workload,
                 })
                 .ToListAsync();
 
@@ -129,6 +156,8 @@ public static class TestRunsEndpoints
                 r.comparison_group_id,
                 r.config_name,
                 r.endpoint_kind,
+                r.test_kind,
+                modes = ModesFromWorkload(r.workload),
             });
 
             return Results.Ok(shaped);
@@ -419,6 +448,30 @@ public static class TestRunsEndpoints
         }).RequireAuthorization();
 
         return app;
+    }
+
+    private static string[] ModesFromWorkload(string workload)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(workload);
+            if (doc.RootElement.TryGetProperty("modes", out var modes)
+                && modes.ValueKind == JsonValueKind.Array)
+            {
+                return modes.EnumerateArray()
+                    .Where(mode => mode.ValueKind == JsonValueKind.String)
+                    .Select(mode => mode.GetString())
+                    .Where(mode => !string.IsNullOrWhiteSpace(mode))
+                    .Select(mode => mode!)
+                    .ToArray();
+            }
+        }
+        catch (JsonException)
+        {
+            // A malformed legacy workload should not break the entire list.
+        }
+
+        return [];
     }
 
     /// <summary>

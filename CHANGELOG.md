@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.235] - 2026-08-19
+
+### Added
+
+- **Run history now reflects why each test was run.** URL probes, SDK probes,
+  network tests, and benchmarks have a persisted purpose and dedicated Runs
+  tabs, with migration backfill for existing data.
+- **Runs can be narrowed without mixing unrelated concepts.** Search, time,
+  status, target, mode family, artifact, and queued-run filters are separate,
+  URL-backed controls; the API supports purpose, name, and time filtering and
+  returns purpose and modes with each row.
+
 ## [0.28.234] - 2026-08-19
 
 ### Fixed
@@ -84,7 +96,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The long-dead single-run HTML snapshot pin (stale since ~v0.28.86 — the
   suite is not part of CI's test invocation) is re-pinned to the current
   deterministic renderer output.
-
 ## [0.28.230] - 2026-08-18
 
 - **Dashboard architecture is now feature-oriented and reusable.** Shared API transport, TanStack Query hooks, page shells, form controls, dialogs, buttons, async states, and run-detail sections replace duplicated page-level implementations; heavy charts are loaded only when needed.

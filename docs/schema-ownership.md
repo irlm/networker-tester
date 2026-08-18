@@ -19,13 +19,13 @@ finished and re-verified end to end:
   retired Rust dashboard no longer boots in prod. The C# migrator is now the sole
   runtime schema authority.
 
-Chain latest: **V052** (`SchemaMigrator.LatestVersion`).
+Chain latest: **V053** (`SchemaMigrator.LatestVersion`).
 
 ## Where the schema lives
 
 | Piece | Location |
 |---|---|
-| Ordered migration scripts (V002…V052) | `src/Networker.Data/Migrations/V0NN_*.sql` (embedded resources) |
+| Ordered migration scripts (V002…V053) | `src/Networker.Data/Migrations/V0NN_*.sql` (embedded resources) |
 | V025 (UUID → base36 project ids) | `src/Networker.Data/Migrations/V025ProjectIdMigration.cs` (code, like the Rust original) |
 | ProjectId base36 + Damm implementation | `src/Networker.Data/Migrations/ProjectId36.cs` |
 | Runner | `src/Networker.Data/Migrations/SchemaMigrator.cs` |
@@ -98,7 +98,7 @@ a healthy deployment):
 `tests/Networker.Tests/SchemaMigrationTests.cs` (runs in CI's dotnet
 workflow, Testcontainers + `postgres:16-alpine`):
 
-- applies the full chain to a fresh database and asserts versions 2…45 land
+- applies the full chain to a fresh database and asserts versions 2…53 land
   in `_migrations`;
 - re-runs the migrator and asserts **zero pending** (the prod-cutover case);
 - queries **every** EF-mapped entity (30 DbSets) against the migrated
@@ -124,19 +124,19 @@ replay).
 (the reference-only snapshot; the source of truth is the ordered `V0NN` scripts,
 which are current, frozen, and CI-tested). Regenerating it requires the C#
 migrator (V025 is a code migration — base36/Damm can't run in raw SQL), so it is
-a low-priority refresh, not a correctness gap: the V042–V047 deltas are small and
-documented under "Out-of-band DDL" below, and every mapped table is proven
+a low-priority refresh, not a correctness gap: the V042–V053 deltas are documented
+by their ordered migration scripts, and every mapped table is proven
 against the live-applied chain by `SchemaMigrationTests`. Refresh it (fresh PG16
-→ `SchemaMigrator.MigrateAsync` → `pg_dump`) next time a migration is added.
+→ `SchemaMigrator.MigrateAsync` → `pg_dump`) during the next snapshot refresh.
 
 ## How to add a migration (post-decommission workflow)
 
-1. Create `src/Networker.Data/Migrations/V047_short_name.sql` (next free
+1. Create `src/Networker.Data/Migrations/V054_short_name.sql` (next free
    number, zero-padded, one underscore after the version). Make it
    idempotent where cheap (`IF NOT EXISTS` guards) — the runner's
    transaction makes idempotence optional, but it keeps manual recovery
    easy.
-2. Bump `SchemaMigrator.LatestVersion` to `47`.
+2. Bump `SchemaMigrator.LatestVersion` to `54`.
 3. Pin the script's SHA-256 in `MigrationScriptFreezeTests.FrozenSha256`.
 4. Update the EF model (`NetworkerDbContext` + entity) to match, if the
    change touches mapped tables. The equivalence test fails if they drift.

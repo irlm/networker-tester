@@ -768,7 +768,7 @@ export function DiagnosticsPage() {
         payload_sizes: [],
         capture_mode: 'headers-only',
       };
-      const config: TestConfigCreate = { name: configName, endpoint, workload };
+      const config: TestConfigCreate = { name: configName, test_kind: 'url_probe', endpoint, workload };
 
       // `test_config` has UNIQUE (project_id, name), so re-running a diagnostic
       // against the same host+preset must reuse the existing config rather than
@@ -790,6 +790,7 @@ export function DiagnosticsPage() {
             id: created.id,
             project_id: created.project_id,
             name: created.name,
+            test_kind: created.test_kind,
             endpoint_kind: created.endpoint.kind,
             modes: created.workload.modes,
             has_methodology: created.methodology !== null,

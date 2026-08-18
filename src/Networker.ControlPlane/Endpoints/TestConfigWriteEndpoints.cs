@@ -68,6 +68,11 @@ public static class TestConfigWriteEndpoints
                 return ApiError.BadRequest("endpoint.kind is required");
             }
 
+            if (!TestConfigKindClassifier.TryResolve(req.TestKind, req.Workload, req.Methodology, out var testKind))
+            {
+                return ApiError.BadRequest("test_kind must be one of: network, url_probe, sdk_probe, benchmark");
+            }
+
             // Phase 2 capability enforcement: reject (mode, target) combos that
             // can only ever fail — e.g. throughput / sdkprobe / apibench against a
             // raw URL (endpoint.kind "network"), or an HTTP/3 mode through a
@@ -110,6 +115,7 @@ public static class TestConfigWriteEndpoints
                 Name = req.Name,
                 Description = req.Description,
                 EndpointKind = endpointKind,
+                TestKind = testKind,
                 EndpointRef = req.Endpoint.GetRawText(),
                 Workload = req.Workload.GetRawText(),
                 Methodology = req.Methodology is { ValueKind: not JsonValueKind.Null } m
@@ -159,6 +165,15 @@ public static class TestConfigWriteEndpoints
             if (req.Name is not null)
             {
                 cfg.Name = req.Name;
+            }
+            if (req.TestKind is not null)
+            {
+                var normalized = req.TestKind.Trim().ToLowerInvariant();
+                if (!TestConfigKinds.IsValid(normalized))
+                {
+                    return ApiError.BadRequest("test_kind must be one of: network, url_probe, sdk_probe, benchmark");
+                }
+                cfg.TestKind = normalized;
             }
             if (req.Description.IsSet)
             {
@@ -337,7 +352,8 @@ public static class TestConfigWriteEndpoints
         [property: JsonPropertyName("endpoint")] JsonElement Endpoint,
         [property: JsonPropertyName("workload")] JsonElement Workload,
         [property: JsonPropertyName("methodology")] JsonElement? Methodology,
-        [property: JsonPropertyName("max_duration_secs")] int? MaxDurationSecs);
+        [property: JsonPropertyName("max_duration_secs")] int? MaxDurationSecs,
+        [property: JsonPropertyName("test_kind")] string? TestKind = null);
 
     /// <summary>
     /// Mirrors Rust <c>UpdateTestConfigRequest</c>. The double-Option fields
@@ -349,6 +365,9 @@ public static class TestConfigWriteEndpoints
     {
         [JsonPropertyName("name")]
         public string? Name { get; set; }
+
+        [JsonPropertyName("test_kind")]
+        public string? TestKind { get; set; }
 
         [JsonPropertyName("description")]
         public OptionalField<string?> Description { get; set; }
@@ -537,6 +556,7 @@ public static class TestConfigWriteEndpoints
         project_id = c.ProjectId,
         name = c.Name,
         description = c.Description,
+        test_kind = c.TestKind,
         endpoint = RawJson(c.EndpointRef),
         workload = RawJson(c.Workload),
         methodology = RawJsonOrNull(c.Methodology),

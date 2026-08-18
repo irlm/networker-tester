@@ -1,7 +1,7 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { DataTable } from '../components/common/DataTable';
 import { Link, useSearchParams } from 'react-router';
-import type { TestRun, RunStatus, EndpointKind, TestConfig, TestConfigListItem } from '../api/types';
+import type { TestRun, RunStatus, TestKind, EndpointKind } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { RunResult } from '../components/common/RunResult';
 import { runDisplayStatus } from '../lib/runStatus';
@@ -9,31 +9,55 @@ import { FilterBar, FilterChip } from '../components/common/FilterBar';
 import { StatusFooter } from '../components/common/StatusFooter';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useRenderLog } from '../hooks/useRenderLog';
+import { useNow } from '../hooks/useNow';
 import { timeAgo } from '../lib/format';
 import { useProject } from '../hooks/useProject';
-import { useTestConfigsQuery, useTestRunsQuery } from '../features/runs/queries';
+import { useTestRunsQuery } from '../features/runs/queries';
 import type { RunListParams } from '../features/runs/api';
 import { PageShell } from '../components/common/PageShell';
 import { Button } from '../components/common/Button';
 import { buttonClassName } from '../components/common/button-styles';
-import { Select } from '../components/common/FormControls';
+import { Input, Select } from '../components/common/FormControls';
+import { familyOf } from '../components/common/mode-family';
 
 const STATUS_OPTIONS: Array<RunStatus | 'all'> = ['all', 'queued', 'provisioning', 'running', 'completed', 'failed', 'cancelled'];
 const ARTIFACT_OPTIONS = ['all', 'yes', 'no'] as const;
+const TIME_OPTIONS = [
+  { value: 'all', label: 'All time' },
+  { value: '1h', label: 'Last hour', milliseconds: 60 * 60 * 1000 },
+  { value: '24h', label: 'Last 24 hours', milliseconds: 24 * 60 * 60 * 1000 },
+  { value: '7d', label: 'Last 7 days', milliseconds: 7 * 24 * 60 * 60 * 1000 },
+  { value: '30d', label: 'Last 30 days', milliseconds: 30 * 24 * 60 * 60 * 1000 },
+] as const;
+const MODE_FAMILY_OPTIONS = [
+  { value: 'all', label: 'Any mode' },
+  { value: 'net', label: 'Network' },
+  { value: 'http', label: 'HTTP' },
+  { value: 'thru', label: 'Throughput' },
+  { value: 'page', label: 'Page load' },
+  { value: 'app', label: 'Application' },
+] as const;
 
 const PAGE_SIZE = 20;
 
 // Kind is a category, not a status — one neutral treatment so green/purple
 // stay reserved for success/logo (audit F12: category hues fought the ramp).
-const KIND_BADGE_CLASSES: Record<string, string> = {
+const TARGET_BADGE_CLASSES: Record<string, string> = {
   network: 'text-cyan-400 bg-cyan-500/10',
   proxy: 'text-gray-300 bg-gray-500/10',
   runtime: 'text-gray-300 bg-gray-500/10',
 };
 
-function KindBadge({ kind }: { kind: string | null | undefined }) {
+const TEST_KIND_LABELS: Record<TestKind, string> = {
+  network: 'Network test',
+  url_probe: 'URL probe',
+  sdk_probe: 'SDK probe',
+  benchmark: 'Benchmark',
+};
+
+function TargetBadge({ kind }: { kind: string | null | undefined }) {
   if (!kind) return <span className="text-faint">-</span>;
-  const classes = KIND_BADGE_CLASSES[kind] || 'text-gray-400 bg-gray-500/10';
+  const classes = TARGET_BADGE_CLASSES[kind] || 'text-gray-400 bg-gray-500/10';
   return (
     <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${classes}`}>
       {kind}
@@ -41,142 +65,180 @@ function KindBadge({ kind }: { kind: string | null | undefined }) {
   );
 }
 
+function PurposeBadge({ kind }: { kind: TestKind | undefined }) {
+  if (!kind) return <span className="text-faint">-</span>;
+  return (
+    <span className="text-xs font-medium px-1.5 py-0.5 rounded text-gray-300 bg-gray-500/10">
+      {TEST_KIND_LABELS[kind]}
+    </span>
+  );
+}
+
+function matchesModeFamily(modes: string[] | undefined, family: string): boolean {
+  if (family === 'all') return true;
+  if (family === 'app') return modes?.some(mode => mode.toLowerCase() === 'apibench') ?? false;
+  return modes?.some(mode => familyOf(mode) === family) ?? false;
+}
+
+function RunNameSearch({ value, onCommit }: { value: string; onCommit: (value: string) => void }) {
+  const [draft, setDraft] = useState(value);
+
+  useEffect(() => {
+    const nextQuery = draft.trim();
+    if (nextQuery === value) return;
+    const timer = window.setTimeout(() => onCommit(nextQuery), 250);
+    return () => window.clearTimeout(timer);
+  }, [draft, value, onCommit]);
+
+  return (
+    <Input
+      type="search"
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      placeholder="Search run names"
+      aria-label="Search runs by name"
+      className="w-full sm:!w-56 py-1.5"
+    />
+  );
+}
+
 export function RunsPage() {
   const { projectId } = useProject();
   const [searchParams, setSearchParams] = useSearchParams();
   const [page, setPage] = useState(0);
+  const pendingSearchParams = useRef(searchParams);
 
-  const statusFilter = searchParams.get('status') || 'all';
-  const endpointKindFilter = searchParams.get('endpoint_kind') || 'all';
+  const statusFilter = (searchParams.get('status') || 'all') as RunStatus | 'all';
+  const testKindFilter = (searchParams.get('test_kind') || 'all') as TestKind | 'all';
+  const endpointKindFilter = (searchParams.get('endpoint_kind') || 'all') as EndpointKind | 'all';
+  const modeFamilyFilter = searchParams.get('mode_family') || 'all';
+  const timeFilter = searchParams.get('time') || 'all';
   const artifactFilter = searchParams.get('has_artifact') || 'all';
   // Queued runs are real runs the user cares about — show them by default so
   // the list never lies with "No runs yet" while jobs are actually piling up.
   // Opt-out via ?show_queued=0.
   const showQueued = searchParams.get('show_queued') !== '0';
   const comparisonGroupId = searchParams.get('comparison_group');
-  // ?q=<substring> — client-side config-name filter. Drives the admin canary
-  // panel's "canary runs" link (?q=soak-canary); harmless when absent.
-  const nameQuery = (searchParams.get('q') || '').trim().toLowerCase();
+  const routeNameQuery = searchParams.get('q') || '';
+  const nameQuery = routeNameQuery.trim().toLowerCase();
 
   const markRender = useRenderLog('RunsPage');
+  const now = useNow(60_000);
+
+  useEffect(() => {
+    pendingSearchParams.current = searchParams;
+  }, [searchParams]);
+
+  // React Router does not queue consecutive functional search-param updates.
+  // Keep the pending URL in a ref so fast tab/select interactions compose
+  // instead of one filter silently restoring or dropping another.
+  const updateSearchParams = useCallback((update: (next: URLSearchParams) => void) => {
+    const next = new URLSearchParams(pendingSearchParams.current);
+    update(next);
+    pendingSearchParams.current = next;
+    setSearchParams(next, { replace: true });
+    setPage(0);
+  }, [setSearchParams]);
 
   const setFilter = useCallback((key: string, value: string) => {
     markRender(`filter:${key}`);
-    setSearchParams(prev => {
-      const next = new URLSearchParams(prev);
-      if (!value || value === 'all') {
+    updateSearchParams(next => {
+      if (!value || (value === 'all' && key !== 'q')) {
         next.delete(key);
       } else {
         next.set(key, value);
       }
-      return next;
-    }, { replace: true });
-    setPage(0);
-  }, [setSearchParams, markRender]);
+    });
+  }, [updateSearchParams, markRender]);
+
+  const commitNameQuery = useCallback((value: string) => setFilter('q', value), [setFilter]);
 
   const toggleShowQueued = useCallback(() => {
-    setSearchParams(prev => {
-      const next = new URLSearchParams(prev);
+    updateSearchParams(next => {
       // Default is now "show" — store '0' to explicitly hide.
-      if (prev.get('show_queued') === '0') {
+      if (next.get('show_queued') === '0') {
         next.delete('show_queued');
       } else {
         next.set('show_queued', '0');
       }
-      return next;
-    }, { replace: true });
-    setPage(0);
-  }, [setSearchParams]);
+    });
+  }, [updateSearchParams]);
 
   const clearAllFilters = useCallback(() => {
-    setSearchParams({}, { replace: true });
-    setPage(0);
-  }, [setSearchParams]);
+    updateSearchParams(next => {
+      for (const key of [...next.keys()]) next.delete(key);
+    });
+  }, [updateSearchParams]);
 
   usePageTitle('Runs');
 
   const params = useMemo<RunListParams>(() => {
     const next: RunListParams = { limit: 200 };
     if (statusFilter !== 'all') next.status = statusFilter;
+    if (testKindFilter !== 'all') next.test_kind = testKindFilter;
     if (endpointKindFilter !== 'all') next.endpoint_kind = endpointKindFilter;
+    if (routeNameQuery.trim()) next.q = routeNameQuery.trim();
     if (artifactFilter === 'yes') next.has_artifact = true;
     if (artifactFilter === 'no') next.has_artifact = false;
     if (comparisonGroupId) next.comparison_group_id = comparisonGroupId;
+    const selectedTime = TIME_OPTIONS.find(option => option.value === timeFilter);
+    if (selectedTime && 'milliseconds' in selectedTime) {
+      next.since = new Date(now - selectedTime.milliseconds).toISOString();
+    }
     return next;
-  }, [statusFilter, endpointKindFilter, artifactFilter, comparisonGroupId]);
+  }, [statusFilter, testKindFilter, endpointKindFilter, artifactFilter, comparisonGroupId, routeNameQuery, timeFilter, now]);
 
   const [paused, setPaused] = useState(false);
   const runsQuery = useTestRunsQuery(projectId, params, { polling: !paused });
-  const configsQuery = useTestConfigsQuery(projectId);
   const runs = useMemo<TestRun[]>(() => runsQuery.data ?? [], [runsQuery.data]);
-  // Older control planes returned full configs from the list endpoint. Keep
-  // the tolerant enrichment while the feature transport normalizes rollout.
-  const configs = useMemo<Array<TestConfigListItem | TestConfig>>(
-    () => (configsQuery.data ?? []) as Array<TestConfigListItem | TestConfig>,
-    [configsQuery.data],
-  );
 
-  // Build a config-id → {kind, name, modes} map so runs list can show endpoint_kind
-  // even when the backend doesn't denormalize it into the TestRun row.
-  const configMap = useMemo(() => {
-    const m = new Map<string, { name: string; endpoint_kind?: EndpointKind; modes?: string[] }>();
-    for (const c of configs) {
-      const endpoint_kind = 'endpoint_kind' in c
-        ? c.endpoint_kind
-        : (c.endpoint as { kind?: EndpointKind } | undefined)?.kind;
-      const modes = 'modes' in c
-        ? c.modes
-        : (c as TestConfig).workload?.modes;
-      m.set(c.id, { name: c.name, endpoint_kind, modes });
-    }
-    return m;
-  }, [configs]);
-
-  // Merge denormalized fields from the config map so the backend's sparse
-  // TestRun payload (no endpoint_kind, no config_name) still drives the UI.
+  // During a rolling deploy, a cached browser can briefly receive an older run
+  // shape. Keep a conservative display fallback; the new API always returns
+  // test_kind, endpoint_kind, and modes directly, avoiding a second config list.
   const runsEnriched = useMemo(() => {
     return runs.map((r) => {
-      const cfg = configMap.get(r.test_config_id);
       return {
         ...r,
-        config_name: r.config_name || cfg?.name,
-        endpoint_kind: r.endpoint_kind || cfg?.endpoint_kind,
-        modes: r.modes || cfg?.modes,
+        test_kind: r.test_kind
+          || (r.modes?.some(mode => mode.toLowerCase() === 'sdkprobe') ? 'sdk_probe'
+            : r.artifact_id ? 'benchmark' : r.config_name?.startsWith('Diag: ') ? 'url_probe' : 'network'),
       };
     });
-  }, [runs, configMap]);
+  }, [runs]);
 
   // Filter out queued unless opted in. Scoped to a comparison group, show
   // everything (the user just launched the group and expects to see its runs).
-  const filteredRuns = useMemo(() => {
+  const visibleQueuedRuns = useMemo(() => {
     if (showQueued || statusFilter === 'queued' || comparisonGroupId) return runsEnriched;
     return runsEnriched.filter(r => r.status !== 'queued');
   }, [runsEnriched, showQueued, statusFilter, comparisonGroupId]);
 
-  // Kind counts for tabs
-  const kindCounts = useMemo(() => {
-    const counts: Record<string, number> = { all: filteredRuns.length, network: 0, proxy: 0, runtime: 0 };
-    for (const r of filteredRuns) {
-      const k = r.endpoint_kind;
-      if (k && k in counts) counts[k]++;
-    }
-    return counts;
-  }, [filteredRuns]);
+  // Apply secondary mode filtering to the server-filtered run window.
+  const secondaryFilteredRuns = useMemo(() => {
+    const selectedTime = TIME_OPTIONS.find(option => option.value === timeFilter);
+    const cutoff = selectedTime && 'milliseconds' in selectedTime
+      ? now - selectedTime.milliseconds
+      : null;
+    return visibleQueuedRuns.filter(run => {
+      if (endpointKindFilter !== 'all' && run.endpoint_kind !== endpointKindFilter) return false;
+      if (!matchesModeFamily(run.modes, modeFamilyFilter)) return false;
+      if (nameQuery && !(run.config_name || '').toLowerCase().includes(nameQuery)) return false;
+      if (cutoff !== null && new Date(run.created_at).getTime() < cutoff) return false;
+      return true;
+    });
+  }, [visibleQueuedRuns, endpointKindFilter, modeFamilyFilter, nameQuery, timeFilter, now]);
 
-  // Precompute formatted dates + apply kind tab filter
+  // Precompute formatted dates after the purpose tab is applied.
   const runsWithDates = useMemo(() => {
-    let source = endpointKindFilter !== 'all'
-      ? filteredRuns.filter(r => r.endpoint_kind === endpointKindFilter)
-      : filteredRuns;
-    if (nameQuery) {
-      source = source.filter(r => (r.config_name || '').toLowerCase().includes(nameQuery));
-    }
+    const source = testKindFilter !== 'all'
+      ? secondaryFilteredRuns.filter(r => r.test_kind === testKindFilter)
+      : secondaryFilteredRuns;
     return source.map(r => ({
       ...r,
       _createdAgo: timeAgo(r.created_at),
       _createdIso: new Date(r.created_at).toISOString(),
     }));
-  }, [filteredRuns, endpointKindFilter, nameQuery]);
+  }, [secondaryFilteredRuns, testKindFilter]);
 
   // Pagination
   const totalPages = Math.max(1, Math.ceil(runsWithDates.length / PAGE_SIZE));
@@ -186,18 +248,19 @@ export function RunsPage() {
   const pageRuns = runsWithDates.slice(pageStart, pageEnd);
 
   const clearComparisonGroup = useCallback(() => {
-    setSearchParams(prev => {
-      const next = new URLSearchParams(prev);
+    updateSearchParams(next => {
       next.delete('comparison_group');
-      return next;
-    }, { replace: true });
-    setPage(0);
-  }, [setSearchParams]);
+    });
+  }, [updateSearchParams]);
 
   const activeFilterCount = [
     statusFilter !== 'all',
+    testKindFilter !== 'all',
     endpointKindFilter !== 'all',
+    modeFamilyFilter !== 'all',
+    timeFilter !== 'all',
     artifactFilter !== 'all',
+    !!nameQuery,
     !!comparisonGroupId,
   ].filter(Boolean).length;
 
@@ -210,7 +273,7 @@ export function RunsPage() {
               <tr className="border-b border-gray-800/50 text-gray-400 text-xs bg-[var(--bg-surface)]">
                 <th className="px-3 py-2 text-left font-medium">Run</th>
                 <th className="px-3 py-2 text-left font-medium">Name</th>
-                <th className="px-3 py-2 text-left font-medium">Kind</th>
+                <th className="px-3 py-2 text-left font-medium">Purpose</th>
                 <th className="px-3 py-2 text-left font-medium">Status</th>
                 <th className="px-3 py-2 text-left font-medium">Result</th>
                 <th className="px-3 py-2 text-left font-medium">Created</th>
@@ -245,11 +308,12 @@ export function RunsPage() {
     );
   }
 
-  const kindTabs: Array<{ key: EndpointKind | 'all'; label: string }> = [
+  const purposeTabs: Array<{ key: TestKind | 'all'; label: string }> = [
     { key: 'all', label: 'All' },
-    { key: 'network', label: 'Network' },
-    { key: 'proxy', label: 'Proxy' },
-    { key: 'runtime', label: 'Runtime' },
+    { key: 'network', label: 'Network tests' },
+    { key: 'url_probe', label: 'URL probes' },
+    { key: 'sdk_probe', label: 'SDK probes' },
+    { key: 'benchmark', label: 'Benchmarks' },
   ];
 
   return (
@@ -265,25 +329,22 @@ export function RunsPage() {
       }
     >
 
-      {/* Kind tabs */}
-      <div className="flex items-center gap-1 mb-4 border-b border-gray-800/50">
-        {kindTabs.map(tab => {
-          const active = endpointKindFilter === tab.key;
-          const count = kindCounts[tab.key] ?? 0;
+      {/* Product-purpose tabs are the primary way to segment run history. */}
+      <div className="flex items-center gap-1 mb-4 border-b border-gray-800/50 overflow-x-auto" aria-label="Run purpose">
+        {purposeTabs.map(tab => {
+          const active = testKindFilter === tab.key;
           return (
             <button
               key={tab.key}
-              onClick={() => setFilter('endpoint_kind', tab.key)}
-              className={`px-3 py-2 text-xs font-medium border-b-2 transition-colors ${
+              type="button"
+              onClick={() => setFilter('test_kind', tab.key)}
+              className={`px-3 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap ${
                 active
                   ? 'border-cyan-500 text-gray-100'
-                  : `border-transparent hover:text-gray-300 ${count === 0 ? 'text-faint' : 'text-gray-400'}`
+                  : 'border-transparent text-gray-400 hover:text-gray-300'
               }`}
             >
               {tab.label}
-              <span className={`ml-1.5 tabular-nums ${active ? 'text-cyan-400' : 'text-faint'}`}>
-                {count}
-              </span>
             </button>
           );
         })}
@@ -298,8 +359,20 @@ export function RunsPage() {
             {statusFilter !== 'all' && (
               <FilterChip label="Status" value={statusFilter} onClear={() => setFilter('status', 'all')} />
             )}
+            {timeFilter !== 'all' && (
+              <FilterChip label="Time" value={TIME_OPTIONS.find(option => option.value === timeFilter)?.label ?? timeFilter} onClear={() => setFilter('time', 'all')} />
+            )}
+            {endpointKindFilter !== 'all' && (
+              <FilterChip label="Target" value={endpointKindFilter} onClear={() => setFilter('endpoint_kind', 'all')} />
+            )}
+            {modeFamilyFilter !== 'all' && (
+              <FilterChip label="Mode" value={MODE_FAMILY_OPTIONS.find(option => option.value === modeFamilyFilter)?.label ?? modeFamilyFilter} onClear={() => setFilter('mode_family', 'all')} />
+            )}
             {artifactFilter !== 'all' && (
-              <FilterChip label="Benchmark" value={artifactFilter === 'yes' ? 'Yes' : 'No'} onClear={() => setFilter('has_artifact', 'all')} />
+              <FilterChip label="Artifact" value={artifactFilter === 'yes' ? 'Present' : 'None'} onClear={() => setFilter('has_artifact', 'all')} />
+            )}
+            {nameQuery && (
+              <FilterChip label="Search" value={routeNameQuery.trim()} onClear={() => setFilter('q', '')} />
             )}
             {comparisonGroupId && (
               <FilterChip label="Group" value={comparisonGroupId.slice(0, 8)} onClear={clearComparisonGroup} />
@@ -307,11 +380,24 @@ export function RunsPage() {
           </>
         }
       >
+        <RunNameSearch key={routeNameQuery} value={routeNameQuery} onCommit={commitNameQuery} />
+
+        <Select
+          value={timeFilter}
+          onChange={(e) => setFilter('time', e.target.value)}
+          aria-label="Filter by time range"
+          className="w-full sm:!w-auto py-1.5"
+        >
+          {TIME_OPTIONS.map(option => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </Select>
+
         <Select
           value={statusFilter}
           onChange={(e) => setFilter('status', e.target.value)}
           aria-label="Filter by status"
-          className="w-auto py-1.5"
+          className="w-full sm:!w-auto py-1.5"
         >
           {STATUS_OPTIONS.map(s => (
             <option key={s} value={s}>
@@ -321,14 +407,38 @@ export function RunsPage() {
         </Select>
 
         <Select
+          value={endpointKindFilter}
+          onChange={(e) => setFilter('endpoint_kind', e.target.value)}
+          aria-label="Filter by target type"
+          className="w-full sm:!w-auto py-1.5"
+        >
+          <option value="all">Any target</option>
+          <option value="network">Direct URL</option>
+          <option value="proxy">Proxy</option>
+          <option value="runtime">Runtime</option>
+          <option value="pending">Provisioned target</option>
+        </Select>
+
+        <Select
+          value={modeFamilyFilter}
+          onChange={(e) => setFilter('mode_family', e.target.value)}
+          aria-label="Filter by mode family"
+          className="w-full sm:!w-auto py-1.5"
+        >
+          {MODE_FAMILY_OPTIONS.map(option => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </Select>
+
+        <Select
           value={artifactFilter}
           onChange={(e) => setFilter('has_artifact', e.target.value)}
-          aria-label="Filter by benchmark artifact"
-          className="w-auto py-1.5"
+          aria-label="Filter by artifact"
+          className="w-full sm:!w-auto py-1.5"
         >
           {ARTIFACT_OPTIONS.map(a => (
             <option key={a} value={a}>
-              {a === 'all' ? 'Any type' : a === 'yes' ? 'Benchmarks only' : 'Simple only'}
+              {a === 'all' ? 'Any artifact' : a === 'yes' ? 'Has artifact' : 'No artifact'}
             </option>
           ))}
         </Select>
@@ -367,9 +477,6 @@ export function RunsPage() {
                 >
                   {run.id.slice(0, 8)}
                 </Link>
-                {run.artifact_id && (
-                  <span className="ml-2 text-xs text-gray-300 bg-gray-500/10 px-1.5 py-0.5 rounded">benchmark</span>
-                )}
               </>
             ),
           },
@@ -383,10 +490,15 @@ export function RunsPage() {
             render: (run) => run.config_name || run.test_config_id.slice(0, 8),
           },
           {
-            key: 'type',
-            label: 'Type',
+            key: 'purpose',
+            label: 'Purpose',
+            render: (run) => <PurposeBadge kind={run.test_kind} />,
+          },
+          {
+            key: 'target',
+            label: 'Target',
             hideBelow: 'lg',
-            render: (run) => <KindBadge kind={run.endpoint_kind} />,
+            render: (run) => <TargetBadge kind={run.endpoint_kind} />,
           },
           {
             key: 'status',

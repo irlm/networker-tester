@@ -70,6 +70,7 @@ export function useComparisonSubmit({
       }
       const config: TestConfigCreate = {
         name,
+        test_kind: 'benchmark',
         endpoint: onlyEndpoint,
         workload,
         methodology,
