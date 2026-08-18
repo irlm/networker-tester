@@ -242,7 +242,11 @@ public sealed class DeployRunner
         var error = success
             ? null
             : interrupted
-                ? $"Deployment interrupted (install.sh received {(exitCode == 137 ? "SIGKILL" : "SIGTERM")}, exit {exitCode}) — "
+                // Built on the classifier's shared prefix: the startup recovery
+                // pass and the orchestrator's interrupted-retry arm key on this
+                // exact marker to auto-re-run the deployment (issue #764).
+                ? ProvisioningFailureClassifier.InterruptedErrorPrefix
+                  + $"{(exitCode == 137 ? "KILL" : "TERM")}, exit {exitCode}) — "
                   + "the control plane restarted or was shut down while deploying. Any VM it had already created is "
                   + "reaped by the orphan sweep; retry the deployment."
                 : $"install.sh exited with code {exitCode ?? -1}";
@@ -539,9 +543,16 @@ public sealed class DeployRunner
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<NetworkerDbContext>();
+        // Both callers flip to `running` — stamp started_at (issue #764's
+        // "`started_at` is null" observation; also the watchdog's stale-deploy
+        // age basis, so a recovered re-run gets a fresh 30-minute window
+        // instead of being reaped against the ORIGINAL attempt's created_at).
+        var now = DateTime.UtcNow;
         await db.Deployments
             .Where(d => d.DeploymentId == deploymentId)
-            .ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, status), ct)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(d => d.Status, status)
+                .SetProperty(d => d.StartedAt, now), ct)
             .ConfigureAwait(false);
     }
 

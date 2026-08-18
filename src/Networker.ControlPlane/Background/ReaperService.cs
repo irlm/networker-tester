@@ -193,9 +193,48 @@ public sealed class ReaperService : BackgroundService
                 retired);
         }
 
+        // ── Tester-orphan purge (#765) ──────────────────────────────────────
+        // Deleting a tester now reaps its agent rows with it (v0.28.227), but
+        // rows orphaned BEFORE that fix (agent_tester_id_fkey is ON DELETE SET
+        // NULL, so pre-fix tester deletes left tester_id NULL) lingered in prod
+        // forever — offline for 30 days, then retired, never gone (~35 such
+        // rows in the 2026-08-18 E2E pass). Once such a row is retired AND has
+        // no tester link, its bootstrap is gone and it will never legitimately
+        // reconnect, so it is deleted outright — converging old data to the
+        // post-v0.28.227 invariant that an agent row lives exactly as long as
+        // its tester. This deliberately narrows the "RETIRE — never delete"
+        // rule above to tester-LINKED registrations (their history stays).
+        // FK safety: agent_command / command_approval are ON DELETE CASCADE;
+        // deployment.agent_id is NO ACTION, so any agent a deployment row
+        // references is kept (its deploy history matters more than the purge).
+        var purged = await PurgeTesterOrphanedAgentsAsync(db, onlineNow, ct).ConfigureAwait(false);
+        if (purged > 0)
+        {
+            _logger.LogInformation(
+                "Agent-status reaper: purged {Count} tester-orphaned retired agent row(s)", purged);
+        }
+
         _monitor.ReportTick(
             OpsServiceNames.AgentReaper,
             reaped,
             $"candidates={candidates.Count} reaped={reaped}");
     }
+
+    /// <summary>
+    /// Delete agent rows that are (a) already <c>retired</c> (≥30d silent — the
+    /// retire sweep above is the only writer of that status), (b) not linked to
+    /// any tester (<c>tester_id IS NULL</c> — the pre-v0.28.227 tester-delete
+    /// residue), (c) not currently connected, and (d) not referenced by any
+    /// deployment (<c>deployment_agent_id_fkey</c> is NO ACTION — deleting a
+    /// referenced row would throw, and that deploy history is worth keeping).
+    /// Static + internal so the Sqlite-backed tests can drive it directly.
+    /// </summary>
+    internal static Task<int> PurgeTesterOrphanedAgentsAsync(
+        NetworkerDbContext db, IReadOnlyCollection<Guid> onlineNow, CancellationToken ct) =>
+        db.Agents
+            .Where(a => a.Status == "retired"
+                && a.TesterId == null
+                && !onlineNow.Contains(a.AgentId)
+                && !db.Deployments.Any(d => d.AgentId == a.AgentId))
+            .ExecuteDeleteAsync(ct);
 }

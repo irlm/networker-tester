@@ -11,6 +11,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.234] - 2026-08-19
+
+### Fixed
+
+- **E2E-pass minor findings cluster (#765).** Orphan agent rows are reaped:
+  the ReaperService purges retired, unlinked, disconnected agent rows not
+  referenced by any deployment (the ~35 accumulated prod rows drain on their
+  own). The URL-probe watchlist shows only the page's own probes — matrix
+  cells, canary configs and SDK endpoints no longer pollute it (and its
+  per-config detail fetches), fixing the 76-requests-on-load behaviour. The
+  six legacy redirects are pinned by a regression test that replays every
+  path-relative <Navigate> through react-router's own resolver. SDK
+  endpoints now show a reachability chip (reachable / partial / unreachable /
+  probing / never probed + age) derived from their latest sdkprobe run — no
+  new probing infrastructure. URL input no longer renders // as a ligature.
+
+## [0.28.233] - 2026-08-19
+
+### Fixed
+
+- **A control-plane restart no longer strands in-flight endpoint deployments**
+  (#764). install.sh --deploy runs as a child of the control-plane process, so
+  every release restart SIGTERMed mid-install deployments (exit 143) and
+  nothing re-drove them. New `DeploymentRecoveryService` (one-shot at startup,
+  before the orchestrator's first tick) reclaims crash-wedged pending/running
+  rows and recently-interrupted failures (30-min window), flips them back to
+  pending and re-runs the stored config — capped at 3 recovery attempts
+  (migration V052: `deployment.recovery_attempts`). Interrupted-classed
+  failures on the run path also re-queue through the V049 retry machinery
+  instead of failing terminally. Deployments now stamp `started_at` when they
+  start running and record `created_by` on wizard creates.
+
 ## [0.28.232] - 2026-08-19
 
 ### Fixed
