@@ -330,9 +330,16 @@ deployment_id_of() {
 
 # capture_deploy_log <group-id> — dump the endpoint deploy-log tail to the summary.
 capture_deploy_log() {
-  local g8="${1:0:8}" dep log
-  dep=$(api GET "/api/projects/$PID/deployments?limit=30" \
-    | jq -r --arg g "cg-$g8" '[ (if type=="array" then . else (.deployments // .items // []) end)[]? | select((.name // "")|contains($g)) ][0] | (.id // .deployment_id // .deploymentId) // empty')
+  local g8="${1:0:8}" dep log deps
+  deps=$(api GET "/api/projects/$PID/deployments?limit=30")
+  # Prefer the deployment whose name carries this group's short id (apibench and
+  # matrix cells are named `…cg-<id>…`). The Windows/IIS cell is named
+  # `target-azure-…IIS-…` with no `cg-`, so fall back to the most recently
+  # created deployment — under the canary's serialized phases that is the cell
+  # that just failed. Without the fallback a phase-5 failure captured NOTHING
+  # (the very case this exists for).
+  dep=$(jq -r --arg g "cg-$g8" '(if type=="array" then . else (.deployments // .items // []) end) as $d
+        | ([ $d[]? | select((.name // "")|contains($g)) ][0] // $d[0]) | (.id // .deployment_id // .deploymentId) // empty' <<<"$deps")
   [ -n "$dep" ] || return 0
   log=$(api GET "/api/projects/$PID/deployments/$dep" | jq -r '.log // ""')
   [ -n "$log" ] || return 0
