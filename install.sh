@@ -331,7 +331,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.235"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.236"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -1387,7 +1387,11 @@ UNIT
 
 sudo systemctl daemon-reload
 sudo systemctl enable networker-endpoint
-sudo systemctl start networker-endpoint </dev/null >/dev/null 2>&1
+# restart, not start: on a re-deploy/update the service is already running and
+# `start` is a no-op — the old process would keep serving the previous binary
+# (prod, 2026-08-17: "update" left the endpoint on its old version). Restart is
+# an idempotent start on a fresh host. FDs closed so the SSH pipe can exit.
+sudo systemctl restart networker-endpoint </dev/null >/dev/null 2>&1
 
 if command -v iptables &>/dev/null; then
     sudo iptables -t nat -C PREROUTING -p tcp --dport 80  -j REDIRECT --to-port 8080 2>/dev/null || \
@@ -3541,9 +3545,16 @@ _remote_install_binary() {
             "${user}@${ip}:/tmp/${binary}"
         rm -rf "${tmp_dir}"
 
+        # Replace via same-directory rename: a direct mv from /tmp is a plain
+        # copy when /tmp is a separate filesystem (tmpfs), and copying over a
+        # RUNNING binary fails with ETXTBSY. rename(2) within /usr/local/bin
+        # is atomic and always succeeds; the running process keeps its old
+        # inode until the service is restarted right after.
         ssh -o StrictHostKeyChecking=accept-new "${user}@${ip}" \
-            "sudo mv /tmp/${binary} /usr/local/bin/${binary} && \
-             sudo chmod +x /usr/local/bin/${binary}"
+            "sudo cp /tmp/${binary} /usr/local/bin/${binary}.new && \
+             sudo chmod 755 /usr/local/bin/${binary}.new && \
+             sudo mv -f /usr/local/bin/${binary}.new /usr/local/bin/${binary} && \
+             rm -f /tmp/${binary}"
     else
         rm -rf "${tmp_dir}"
         # Fallback: download directly on the remote VM
@@ -3552,9 +3563,10 @@ _remote_install_binary() {
             "curl -fsSL https://github.com/${REPO_GH}/releases/download/${ver}/${archive} \
                -o /tmp/${archive} && \
              tar xzf /tmp/${archive} -C /tmp && \
-             sudo mv /tmp/${binary} /usr/local/bin/${binary} && \
-             sudo chmod +x /usr/local/bin/${binary} && \
-             rm /tmp/${archive}"; then
+             sudo cp /tmp/${binary} /usr/local/bin/${binary}.new && \
+             sudo chmod 755 /usr/local/bin/${binary}.new && \
+             sudo mv -f /usr/local/bin/${binary}.new /usr/local/bin/${binary} && \
+             rm -f /tmp/${binary} /tmp/${archive}"; then
             echo ""
             print_err "Failed to download ${archive} from release ${ver}."
             echo "  Check:  https://github.com/${REPO_GH}/releases/${ver}"
@@ -3594,8 +3606,13 @@ UNIT
 
 sudo systemctl daemon-reload
 sudo systemctl enable networker-endpoint
+# restart, not start: an endpoint UPDATE re-runs this after replacing the
+# binary on disk, and `start` on an already-running service is a no-op — the
+# old process kept serving the previous version while the deploy reported
+# success (prod, 2026-08-17: two "update" clicks left the endpoint on
+# v0.28.227). Restart is an idempotent start on a fresh VM.
 # Close inherited FDs before starting service so SSH pipe can exit
-sudo systemctl start networker-endpoint </dev/null >/dev/null 2>&1
+sudo systemctl restart networker-endpoint </dev/null >/dev/null 2>&1
 
 # Redirect standard ports 80/443 to the unprivileged service ports 8080/8443.
 # This lets browsers reach the landing page via http://IP and https://IP.
@@ -6526,6 +6543,24 @@ _remote_verify_health() {
         local resp
         resp="$(curl -sf --max-time 5 "http://${ip}:8080/health" 2>/dev/null || echo "")"
         if [[ -n "$resp" ]]; then
+            # Healthy is not enough: verify the RUNNING process is the version
+            # this deploy installed. The binary is replaced on disk first, so a
+            # missed service restart leaves the OLD process answering /health —
+            # the deploy used to report success anyway (prod, 2026-08-17: an
+            # endpoint "update" clicked twice left it on the previous version).
+            # Only enforced when both sides parse as X.Y.Z, so source builds or
+            # old endpoints without a version field stay lenient.
+            local running_ver want_ver
+            running_ver="$(printf '%s' "$resp" | grep -o '"version":"[^"]*"' | head -1 | sed 's/"version":"//;s/"//')"
+            want_ver="${NETWORKER_VERSION#v}"
+            if [[ "$running_ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ \
+                  && "$want_ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ \
+                  && "$running_ver" != "$want_ver" ]]; then
+                print_err "Endpoint at ${ip} is healthy but still reports v${running_ver} (expected v${want_ver})."
+                print_err "The running service did not pick up the new binary."
+                print_err "Fix manually:  ssh ${ssh_user}@${ip} 'sudo systemctl restart networker-endpoint'"
+                return 1
+            fi
             print_ok "Health check passed: $resp"
             return 0
         fi
@@ -8527,8 +8562,11 @@ WantedBy=multi-user.target
 UNIT
         sudo systemctl daemon-reload
         sudo systemctl enable networker-endpoint
-        # Close inherited FDs before starting service so SSH pipe can exit
-        sudo systemctl start networker-endpoint </dev/null >/dev/null 2>&1
+        # restart, not start: a re-deploy/update replaces the binary while the
+        # service is running; start would no-op and leave the old process
+        # serving the previous version. Restart is an idempotent start on a
+        # fresh instance. Close inherited FDs so the SSH pipe can exit.
+        sudo systemctl restart networker-endpoint </dev/null >/dev/null 2>&1
     "
     print_ok "networker-endpoint service started"
 

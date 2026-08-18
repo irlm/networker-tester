@@ -55,3 +55,30 @@ public sealed class TestConfigKindClassifierTests
         Assert.Equal(TestConfigKinds.Benchmark, actual);
     }
 }
+
+public sealed class TestConfigKindClassifierNameRuleTests
+{
+    private static System.Text.Json.JsonElement Workload(string json) =>
+        System.Text.Json.JsonDocument.Parse(json).RootElement.Clone();
+
+    [Theory]
+    [InlineData("Diag: api.example.com (Quick)")]
+    [InlineData("Diag set: api.example.com +2 (Quick)")]
+    [InlineData("Probe: old.example.com (Full)")]
+    public void Legacy_writers_with_diag_style_names_classify_as_url_probe(string name)
+    {
+        // Mirror of the V053 backfill rule: a rollout-window client that sends
+        // no explicit test_kind must not permanently pin a probe as 'network'.
+        Assert.True(Networker.ControlPlane.Endpoints.TestConfigKindClassifier.TryResolve(
+            null, Workload("""{"modes":["http2"]}"""), null, out var kind, name));
+        Assert.Equal(Networker.Data.TestConfigKinds.UrlProbe, kind);
+    }
+
+    [Fact]
+    public void Explicit_kind_still_wins_over_the_name_rule()
+    {
+        Assert.True(Networker.ControlPlane.Endpoints.TestConfigKindClassifier.TryResolve(
+            "network", Workload("""{"modes":["http2"]}"""), null, out var kind, "Diag: x"));
+        Assert.Equal(Networker.Data.TestConfigKinds.Network, kind);
+    }
+}

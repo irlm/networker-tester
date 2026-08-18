@@ -68,7 +68,7 @@ public static class TestConfigWriteEndpoints
                 return ApiError.BadRequest("endpoint.kind is required");
             }
 
-            if (!TestConfigKindClassifier.TryResolve(req.TestKind, req.Workload, req.Methodology, out var testKind))
+            if (!TestConfigKindClassifier.TryResolve(req.TestKind, req.Workload, req.Methodology, out var testKind, req.Name))
             {
                 return ApiError.BadRequest("test_kind must be one of: network, url_probe, sdk_probe, benchmark");
             }

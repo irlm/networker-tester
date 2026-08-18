@@ -289,8 +289,14 @@ export const api = {
   deleteDeployment: (projectId: string, deploymentId: string) =>
     request<{ deleted: boolean }>(projectUrl(projectId, `deployments/${deploymentId}`), { method: 'DELETE' }),
 
+  // Live per-endpoint probe (no cache — unlike /version's stale-while-revalidate
+  // per-host cache), so it is the honest read right after an update: `outdated`
+  // is computed server-side against the control plane's own version.
   checkDeployment: (projectId: string, deploymentId: string) =>
-    request<{ endpoints: { ip: string; alive: boolean }[] }>(projectUrl(projectId, `deployments/${deploymentId}/check`), { method: 'POST' }),
+    request<{
+      endpoints: { ip: string; alive: boolean; version: string | null; outdated: boolean }[];
+      latest_release: string;
+    }>(projectUrl(projectId, `deployments/${deploymentId}/check`), { method: 'POST' }),
 
   updateEndpoint: (projectId: string, deploymentId: string) =>
     request<{ status: string }>(projectUrl(projectId, `deployments/${deploymentId}/update`), { method: 'POST' }),

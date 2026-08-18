@@ -11,13 +11,23 @@ UPDATE test_config
 SET test_kind = CASE
     WHEN workload->'modes' ? 'sdkprobe' THEN 'sdk_probe'
     WHEN methodology IS NOT NULL OR workload->'modes' ? 'apibench' THEN 'benchmark'
-    WHEN name LIKE 'Diag: %' THEN 'url_probe'
+    -- Matrix cells of methodology-less comparison groups carry the cell name
+    -- shape "{label} · cg-{id8}·{i}·{nonce}" — they are benchmark cells even
+    -- without an apibench mode or a stored methodology.
+    WHEN name LIKE '% · cg-%' THEN 'benchmark'
+    -- URL-probe page configs across all naming generations: "Diag: <host>",
+    -- multi-URL sets "Diag set: <host> +N" (v0.28.231), and the pre-rename
+    -- watchlist shape "Probe: <host>" — all still watchlist members.
+    WHEN name LIKE 'Diag: %' OR name LIKE 'Diag set: %' OR name LIKE 'Probe: %' THEN 'url_probe'
     ELSE 'network'
 END
 WHERE workload->'modes' ? 'sdkprobe'
    OR methodology IS NOT NULL
    OR workload->'modes' ? 'apibench'
-   OR name LIKE 'Diag: %';
+   OR name LIKE '% · cg-%'
+   OR name LIKE 'Diag: %'
+   OR name LIKE 'Diag set: %'
+   OR name LIKE 'Probe: %';
 
 ALTER TABLE test_config
     DROP CONSTRAINT IF EXISTS test_config_test_kind_check;

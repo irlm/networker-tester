@@ -694,6 +694,9 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
         var userId = Guid.NewGuid();
         var networkId = Guid.NewGuid();
         var urlId = Guid.NewGuid();
+        var urlSetId = Guid.NewGuid();
+        var legacyProbeId = Guid.NewGuid();
+        var matrixCellId = Guid.NewGuid();
         var sdkId = Guid.NewGuid();
         var benchmarkId = Guid.NewGuid();
 
@@ -710,6 +713,9 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
             VALUES
               (@network, 'projv053000001', 'Connectivity', 'network', '{}', '{"modes":["tcp"]}', NULL, @user, now(), now()),
               (@url, 'projv053000001', 'Diag: api.example.com (Quick)', 'network', '{}', '{"modes":["http2"]}', NULL, @user, now(), now()),
+              (@urlSet, 'projv053000001', 'Diag set: api.example.com +2 (Quick)', 'network', '{}', '{"modes":["http2"]}', NULL, @user, now(), now()),
+              (@legacyProbe, 'projv053000001', 'Probe: old.example.com (Full)', 'network', '{}', '{"modes":["http1"]}', NULL, @user, now(), now()),
+              (@matrixCell, 'projv053000001', 'Azure/eastus nginx · cg-a1b2c3d4·0·xy', 'network', '{}', '{"modes":["http2"]}', NULL, @user, now(), now()),
               (@sdk, 'projv053000001', 'SDK endpoint', 'network', '{}', '{"modes":["sdkprobe"]}', NULL, @user, now(), now()),
               (@benchmark, 'projv053000001', 'Benchmark', 'runtime', '{}', '{"modes":["apibench"]}', '{}', @user, now(), now());
             """, conn))
@@ -717,6 +723,9 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
             seed.Parameters.AddWithValue("user", userId);
             seed.Parameters.AddWithValue("network", networkId);
             seed.Parameters.AddWithValue("url", urlId);
+            seed.Parameters.AddWithValue("urlSet", urlSetId);
+            seed.Parameters.AddWithValue("legacyProbe", legacyProbeId);
+            seed.Parameters.AddWithValue("matrixCell", matrixCellId);
             seed.Parameters.AddWithValue("sdk", sdkId);
             seed.Parameters.AddWithValue("benchmark", benchmarkId);
             await seed.ExecuteNonQueryAsync();
@@ -737,6 +746,12 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
 
         Assert.Equal(TestConfigKinds.Network, kinds[networkId]);
         Assert.Equal(TestConfigKinds.UrlProbe, kinds[urlId]);
+        // All URL-probe naming generations land under url_probe (a miss here
+        // is PERMANENT — find-or-create reuses by name, never re-classifies).
+        Assert.Equal(TestConfigKinds.UrlProbe, kinds[urlSetId]);
+        Assert.Equal(TestConfigKinds.UrlProbe, kinds[legacyProbeId]);
+        // Methodology-less matrix cells are still benchmark cells.
+        Assert.Equal(TestConfigKinds.Benchmark, kinds[matrixCellId]);
         Assert.Equal(TestConfigKinds.SdkProbe, kinds[sdkId]);
         Assert.Equal(TestConfigKinds.Benchmark, kinds[benchmarkId]);
     }
@@ -805,7 +820,7 @@ public sealed class MigrationScriptFreezeTests
         ["V050_deployment_endpoint_hosts.sql"] = "8d76716d824e8e00e23741e866cc874324a5fa6fc580ebb71bbb315df0f572dc",
         ["V051_canary_dispatch.sql"] = "9c1a5053fe3ca9218b959793fc8275c843d32a41a65e62200adf1f360f03cfad",
         ["V052_deployment_recovery.sql"] = "a679dd0d9d4a1d108cadbdbbf58f93bbb5d1f05c7286526dcc72e07191343724",
-        ["V053_test_config_kind.sql"] = "dc5f38abec5b291f862bd61d3d0931a4d5b836335d277130052eaf6b83e21539",
+        ["V053_test_config_kind.sql"] = "efa47c3dd51365625528f74f91c05082dbf5881adac784bf2e3feebeca143267",
     };
 
     [Fact]

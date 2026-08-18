@@ -73,37 +73,82 @@ export function SettingsPage() {
     }
   }, [liveLines]);
 
+  // The in-flight update this page is watching: which deployment, the event
+  // seq high-water mark at click time (so a deploy_complete left over from an
+  // EARLIER update of the same deployment is never mistaken for this one), and
+  // whether its completion has already been toasted.
+  const updateWatchRef = useRef<{ id: string; sinceSeq: number; handled: boolean } | null>(null);
+
   const handleUpdateEndpoint = async (deploymentId: string, name: string) => {
     setUpdating(prev => ({ ...prev, [deploymentId]: true }));
     setActiveUpdateId(deploymentId);
+    updateWatchRef.current = {
+      id: deploymentId,
+      sinceSeq: useLiveStore.getState().events.reduce((m, e) => Math.max(m, e.seq ?? 0), 0),
+      handled: false,
+    };
     try {
       await api.updateEndpoint(projectId, deploymentId);
       addToast('success', `Update started for ${name}`);
-    } catch {
-      addToast('error', `Failed to update ${name}`);
+    } catch (e) {
+      // Surface the server's reason (404, 501, auth…), never a bare failure.
+      addToast('error', `Failed to update ${name}: ${errorMessage(e)}`);
       setUpdating(prev => ({ ...prev, [deploymentId]: false }));
       setActiveUpdateId(null);
+      updateWatchRef.current = null;
     }
   };
 
-  // Watch for deploy_complete events to know when update finished
+  // Watch for deploy_complete events to know when the update finished. Scans
+  // the recent event buffer for OUR deployment instead of only the single
+  // latest event — any unrelated event (agent heartbeat, run attempt) landing
+  // right after deploy_complete used to make the completion invisible: the
+  // button stayed "updating…" forever and no toast ever fired.
   const events = useLiveStore(s => s.events);
-  useAsyncEffect(() => {
-    if (!activeUpdateId) return;
-    const latest = events[events.length - 1];
-    if (latest?.type === 'deploy_complete' && latest.deployment_id === activeUpdateId) {
-      setUpdating(prev => ({ ...prev, [activeUpdateId]: false }));
-      addToast(
-        latest.status === 'completed' ? 'success' : 'error',
-        latest.status === 'completed' ? 'Update completed' : 'Update failed'
-      );
-      // Refresh versions after update
-      setTimeout(() => {
-        loadData();
-        setActiveUpdateId(null);
-      }, 2000);
+  useAsyncEffect(async () => {
+    const watch = updateWatchRef.current;
+    if (!activeUpdateId || !watch || watch.id !== activeUpdateId || watch.handled) return;
+    const complete = [...events].reverse().find(e =>
+      e.type === 'deploy_complete'
+      && e.deployment_id === activeUpdateId
+      && (e.seq === undefined || e.seq > watch.sinceSeq));
+    if (!complete) return;
+    watch.handled = true;
+    setUpdating(prev => ({ ...prev, [activeUpdateId]: false }));
+
+    if (complete.status !== 'completed') {
+      // Failed update: surface the recorded reason, not a bare "failed".
+      let reason = '';
+      try {
+        const dep = await api.getDeployment(projectId, activeUpdateId);
+        if (dep.error_message) reason = `: ${dep.error_message}`;
+      } catch { /* the toast below still reports the failure */ }
+      addToast('error', `Update failed${reason}`);
+    } else {
+      // "completed" only means the deploy exited 0 — verify the update TOOK
+      // before declaring success. A deploy that replaced the binary but never
+      // restarted the service used to complete while the endpoint kept
+      // serving (and reporting) the old version.
+      try {
+        const check = await api.checkDeployment(projectId, activeUpdateId);
+        const stale = check.endpoints.filter(ep => ep.alive && ep.outdated);
+        if (stale.length > 0) {
+          addToast('error',
+            `Update finished but ${stale.map(ep => `${hostLabel(ep.ip)} still reports v${ep.version}`).join(', ')}`
+            + ` — expected v${check.latest_release}`);
+        } else {
+          addToast('success', 'Update completed');
+        }
+      } catch {
+        addToast('info', 'Update completed — version re-check failed, refresh to confirm');
+      }
     }
-  }, [events, activeUpdateId, addToast, loadData]);
+    // Refresh versions after update
+    setTimeout(() => {
+      loadData();
+      setActiveUpdateId(null);
+    }, 2000);
+  }, [events, activeUpdateId, projectId, addToast, loadData]);
 
   const handleUpdateAll = async () => {
     const outdated = getOutdatedDeployments();

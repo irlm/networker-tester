@@ -82,11 +82,27 @@ function matchesModeFamily(modes: string[] | undefined, family: string): boolean
 
 function RunNameSearch({ value, onCommit }: { value: string; onCommit: (value: string) => void }) {
   const [draft, setDraft] = useState(value);
+  // Track what WE last committed so an external value change (tab switch,
+  // back/forward, filter reset) can resync the draft — while our own debounce
+  // round-trip through the URL leaves the input (and its focus/caret) alone.
+  // Keying the component on the URL value remounted the input on every
+  // debounce commit and dropped focus mid-typing.
+  const lastCommitted = useRef(value);
+
+  useEffect(() => {
+    if (value !== lastCommitted.current) {
+      lastCommitted.current = value;
+      setDraft(value);
+    }
+  }, [value]);
 
   useEffect(() => {
     const nextQuery = draft.trim();
     if (nextQuery === value) return;
-    const timer = window.setTimeout(() => onCommit(nextQuery), 250);
+    const timer = window.setTimeout(() => {
+      lastCommitted.current = nextQuery;
+      onCommit(nextQuery);
+    }, 250);
     return () => window.clearTimeout(timer);
   }, [draft, value, onCommit]);
 
@@ -380,7 +396,7 @@ export function RunsPage() {
           </>
         }
       >
-        <RunNameSearch key={routeNameQuery} value={routeNameQuery} onCommit={commitNameQuery} />
+        <RunNameSearch value={routeNameQuery} onCommit={commitNameQuery} />
 
         <Select
           value={timeFilter}
