@@ -1,5 +1,12 @@
 # Database schema ownership
 
+> **Monitoring database:** the independent API-monitoring service does not use
+> this control-plane schema. Its additive migration chain and bookkeeping table
+> (`_monitoring_migrations`) are owned by
+> `src/Networker.Monitoring.Data`. See
+> [`monitoring-plane-design.md`](monitoring-plane-design.md) for the failure-domain
+> boundary.
+
 **The control-plane PostgreSQL schema is owned by `src/Networker.Data` — not by
 the Rust dashboard.** This removes the last structural dependency on
 `crates/networker-dashboard` and unblocks deleting the Rust control-plane crates
@@ -19,13 +26,13 @@ finished and re-verified end to end:
   retired Rust dashboard no longer boots in prod. The C# migrator is now the sole
   runtime schema authority.
 
-Chain latest: **V050** (`SchemaMigrator.LatestVersion`).
+Chain latest: **V051** (`SchemaMigrator.LatestVersion`).
 
 ## Where the schema lives
 
 | Piece | Location |
 |---|---|
-| Ordered migration scripts (V002…V050) | `src/Networker.Data/Migrations/V0NN_*.sql` (embedded resources) |
+| Ordered migration scripts (V002…V051) | `src/Networker.Data/Migrations/V0NN_*.sql` (embedded resources) |
 | V025 (UUID → base36 project ids) | `src/Networker.Data/Migrations/V025ProjectIdMigration.cs` (code, like the Rust original) |
 | ProjectId base36 + Damm implementation | `src/Networker.Data/Migrations/ProjectId36.cs` |
 | Runner | `src/Networker.Data/Migrations/SchemaMigrator.cs` |
