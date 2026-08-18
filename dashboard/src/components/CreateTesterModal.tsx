@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { testersApi, type TesterRow } from '../api/testers';
 import { api } from '../api/client';
 import { CloudAccountCombobox } from './wizard/CloudAccountCombobox';
 import type { CloudAccountSummary } from '../api/types';
 import { useDockerProvider, DOCKER_CLOUD, DOCKER_REGION, DOCKER_LABEL } from '../hooks/useDockerProvider';
+import { Modal } from './common/Modal';
 
 interface CreateTesterModalProps {
   projectId: string;
@@ -178,13 +179,7 @@ export function CreateTesterModal({
   const [error, setError] = useState<string | null>(null);
   const [createdTester, setCreatedTester] = useState<TesterRow | null>(null);
 
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const firstInputRef = useRef<HTMLInputElement>(null);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    firstInputRef.current?.focus();
-  }, []);
 
   // Load available clouds from project's cloud connections AND cloud accounts
   // Also load existing tester names for unique-name suggestion
@@ -266,18 +261,6 @@ export function CreateTesterModal({
     }
   }, [cloud]);
 
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && stage !== 'creating') onClose();
-    },
-    [onClose, stage],
-  );
-
-  useEffect(() => {
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [handleKeyDown]);
-
   // Poll every 2s while the tester is provisioning/starting so we can show
   // status_message updates. Simpler than opening a WS for this one-shot flow.
   useEffect(() => {
@@ -357,19 +340,14 @@ export function CreateTesterModal({
   const titleId = 'create-tester-modal-title';
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end" data-testid="create-tester-modal">
-      <div
-        className="absolute inset-0 bg-black/40 slide-over-backdrop"
-        onClick={stage === 'creating' ? undefined : onClose}
-        aria-hidden="true"
-      />
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        className="relative w-full md:w-[520px] md:max-w-[90vw] bg-[var(--bg-base)] md:border-l border-gray-800 h-full overflow-y-auto slide-over-panel"
-      >
+    <Modal
+      onClose={onClose}
+      labelledBy={titleId}
+      variant="slide-over"
+      closeDisabled={stage === 'creating'}
+      panelClassName="md:!max-w-[90vw]"
+      testId="create-tester-modal"
+    >
         <div className="p-4 md:p-6">
           <div className="flex items-center justify-between mb-6">
             <h3 id={titleId} className="text-lg font-bold text-gray-100">
@@ -453,7 +431,7 @@ export function CreateTesterModal({
                     ))}
                   </div>
                   {useDocker && (
-                    <p className="mt-1 text-[11px] text-gray-500">
+                    <p className="mt-1 text-xs text-faint">
                       A runner container on the control-plane host (no cloud account, no cost).
                       Region <span className="text-gray-300">local</span>, Ubuntu 24.04 runner image.
                     </p>
@@ -506,7 +484,6 @@ export function CreateTesterModal({
                   Name
                 </label>
                 <input
-                  ref={firstInputRef}
                   id="tester-name"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
@@ -648,7 +625,7 @@ export function CreateTesterModal({
                 <button
                   type="submit"
                   disabled={stage === 'creating' || !name || !region}
-                  className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50"
+                  className="bg-cyan-600 hover:bg-cyan-500 text-[var(--bg-base)] px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50"
                 >
                   Create Runner
                 </button>
@@ -656,7 +633,6 @@ export function CreateTesterModal({
             </form>
           )}
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

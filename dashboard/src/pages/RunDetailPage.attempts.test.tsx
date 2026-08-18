@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { describe, it, expect } from 'vitest';
-import { AttemptRow } from './RunDetailPage';
+import { AttemptRow } from '../features/runs/components/RunDetailSections';
 import type { LiveAttempt } from '../api/types';
 
 // Guards the run-detail probe cards over the widened attempt contract

@@ -406,7 +406,7 @@ export function DeployDetailPage() {
                   <span className={`text-xs ${ep.outdated ? 'text-yellow-400' : 'text-green-400'}`}>
                     v{ep.version || '?'}
                     {ep.outdated && versionInfo?.latest && (
-                      <span className="text-gray-500 ml-1">(latest: v{versionInfo.latest})</span>
+                      <span className="text-faint ml-1">(latest: v{versionInfo.latest})</span>
                     )}
                   </span>
                 ) : (
@@ -449,7 +449,7 @@ export function DeployDetailPage() {
           className="bg-[var(--bg-base)] border border-gray-800 rounded-lg p-4 h-[400px] overflow-y-auto text-xs leading-5"
         >
           {logLines.length === 0 ? (
-            <p className="text-gray-500">
+            <p className="text-faint">
               {isActive ? 'Waiting for output...' : 'No log output'}
             </p>
           ) : (

@@ -89,7 +89,7 @@ export function TlsProfilesPage() {
         </div>
         <button
           onClick={() => setShowCreate(true)}
-          className="bg-cyan-600 hover:bg-cyan-500 text-white px-3 md:px-4 py-1.5 rounded text-sm transition-colors flex-shrink-0"
+          className="bg-cyan-600 hover:bg-cyan-500 text-[var(--bg-base)] px-3 md:px-4 py-1.5 rounded text-sm transition-colors flex-shrink-0"
         >
           Run TLS Profile
         </button>

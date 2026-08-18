@@ -20,8 +20,9 @@ namespace Networker.ControlPlane.Endpoints;
 ///     or field lengths over the schema VARCHAR limits, with 400. Returns
 ///     <c>{ inserted: n }</c>.</item>
 ///   <item><b>GET /api/perf-log</b> — list with filters (kind, path, user_id,
-///     limit default 100 clamp 1..500, offset ≥0). Returns <c>[PerfLogRow...]</c>.</item>
-///   <item><b>GET /api/perf-log/stats</b> — 24h aggregate. Returns the stats object.</item>
+///     since, limit default 100 clamp 1..500, offset ≥0). Returns <c>[PerfLogRow...]</c>.</item>
+///   <item><b>GET /api/perf-log/stats</b> — aggregate since the optional
+///     timestamp (24h by default). Returns the stats object.</item>
 /// </list>
 ///
 /// <para>Raw-SQL divergence: <c>perf_log</c> is NOT in the EF model (it lives in
@@ -102,6 +103,7 @@ public static class PerfLogEndpoints
             string? kind,
             string? path,
             Guid? user_id,
+            DateTimeOffset? since,
             long? limit,
             long? offset,
             NpgsqlDataSource dataSource,
@@ -120,13 +122,14 @@ public static class PerfLogEndpoints
             var take = Math.Clamp(limit ?? DefaultLimit, 1, MaxLimit);
             var skip = Math.Max(offset ?? 0, 0);
 
-            var rows = await ListAsync(dataSource, kind, path, user_id, take, skip, ct);
+            var rows = await ListAsync(dataSource, kind, path, user_id, since, take, skip, ct);
             return Results.Ok(rows);
         }).RequireAuthorization();
 
-        // GET /api/perf-log/stats — 24h aggregate (admin only).
+        // GET /api/perf-log/stats — caller-selected window, 24h by default (admin only).
         app.MapGet("/api/perf-log/stats", async (
             HttpContext ctx,
+            DateTimeOffset? since,
             NpgsqlDataSource dataSource,
             CancellationToken ct) =>
         {
@@ -140,7 +143,7 @@ public static class PerfLogEndpoints
                 return Results.StatusCode(StatusCodes.Status403Forbidden);
             }
 
-            var stats = await StatsAsync(dataSource, ct);
+            var stats = await StatsAsync(dataSource, since, ct);
             return Results.Ok(stats);
         }).RequireAuthorization();
 
@@ -200,7 +203,7 @@ public static class PerfLogEndpoints
     // ── list (mirrors db::perf_log::list) ───────────────────────────────────
     private static async Task<List<PerfLogRow>> ListAsync(
         NpgsqlDataSource dataSource, string? kind, string? pathFilter, Guid? userIdFilter,
-        long limit, long offset, CancellationToken ct)
+        DateTimeOffset? since, long limit, long offset, CancellationToken ct)
     {
         const string baseSql =
             "SELECT id, logged_at, user_id, session_id, kind, method, path, status, " +
@@ -226,6 +229,11 @@ public static class PerfLogEndpoints
         {
             clauses.Add($"user_id = ${idx++}");
             extra.Add((NpgsqlDbType.Uuid, uid));
+        }
+        if (since is DateTimeOffset lowerBound)
+        {
+            clauses.Add($"logged_at >= ${idx++}");
+            extra.Add((NpgsqlDbType.TimestampTz, lowerBound.UtcDateTime));
         }
 
         var order = $"ORDER BY logged_at DESC LIMIT ${idx} OFFSET ${idx + 1}";
@@ -270,8 +278,9 @@ public static class PerfLogEndpoints
         return rows;
     }
 
-    // ── stats (mirrors db::perf_log::stats — last 24h) ──────────────────────
-    private static async Task<object> StatsAsync(NpgsqlDataSource dataSource, CancellationToken ct)
+    // ── stats (24h by default, caller-selected window when supplied) ────────
+    private static async Task<object> StatsAsync(
+        NpgsqlDataSource dataSource, DateTimeOffset? since, CancellationToken ct)
     {
         const string sql =
             "SELECT " +
@@ -284,9 +293,11 @@ public static class PerfLogEndpoints
             "PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY render_ms) FILTER (WHERE kind = 'render') AS p95_render_ms, " +
             "COUNT(*) FILTER (WHERE kind = 'api' AND total_ms > 200) AS slow_api_count, " +
             "COUNT(*) FILTER (WHERE kind = 'render' AND render_ms > 16) AS janky_render_count " +
-            "FROM perf_log WHERE logged_at >= NOW() - INTERVAL '24 hours'";
+            "FROM perf_log WHERE logged_at >= $1";
 
         await using var cmd = dataSource.CreateCommand(sql);
+        var lowerBound = ResolveStatsLowerBound(since, DateTime.UtcNow);
+        cmd.Parameters.Add(new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.TimestampTz, Value = lowerBound });
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         await reader.ReadAsync(ct);
 
@@ -310,6 +321,9 @@ public static class PerfLogEndpoints
     // ── helpers ─────────────────────────────────────────────────────────────
     public static string EscapeIlike(string input) =>
         input.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
+
+    public static DateTime ResolveStatsLowerBound(DateTimeOffset? since, DateTime utcNow) =>
+        since?.UtcDateTime ?? utcNow.AddHours(-24);
 
     private static NpgsqlParameter NullableText(string? v) =>
         new() { NpgsqlDbType = NpgsqlDbType.Text, Value = (object?)v ?? DBNull.Value };

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { api } from '../api/client';
 import type { CloudAccountSummary } from '../api/types';
 import { TestbedRow } from './wizard/TestbedRow';
@@ -12,6 +12,8 @@ import {
 import { useToast } from '../hooks/useToast';
 import { useDockerProvider, DOCKER_CLOUD } from '../hooks/useDockerProvider';
 import { DOCKER_CLOUD_LABEL } from './wizard/testbed-constants';
+import { Modal } from './common/Modal';
+import { Button } from './common/Button';
 
 // ── Prefill: lets the Infrastructure page open the wizard with an existing
 //    target's IP + already-installed proxy stacks selected. The user then
@@ -60,7 +62,6 @@ export function DeployWizard({ projectId, onClose, onCreated, prefill }: DeployW
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
   const addToast = useToast();
 
   // ── Load cloud accounts ─────────────────────────────────────────────────
@@ -86,30 +87,6 @@ export function DeployWizard({ projectId, onClose, onCreated, prefill }: DeployW
       .catch(() => {})
       .finally(() => setCloudLoading(false));
   }, [projectId]);
-
-  // ── Esc to close + focus trap ───────────────────────────────────────────
-  const handleKeyDown = useCallback((e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); }, [onClose]);
-  useEffect(() => {
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [handleKeyDown]);
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    function trapFocus(e: KeyboardEvent) {
-      if (e.key !== 'Tab') return;
-      const els = dialog!.querySelectorAll<HTMLElement>(
-        'input:not([disabled]), button:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]):not([disabled])'
-      );
-      if (els.length === 0) return;
-      const first = els[0];
-      const last = els[els.length - 1];
-      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-    }
-    dialog.addEventListener('keydown', trapFocus);
-    return () => dialog.removeEventListener('keydown', trapFocus);
-  }, []);
 
   // ── Testbed ops ─────────────────────────────────────────────────────────
   const updateTestbed = (key: number, patch: Partial<TestbedState>) => {
@@ -212,16 +189,13 @@ export function DeployWizard({ projectId, onClose, onCreated, prefill }: DeployW
   const upgradeMode = !!prefill;
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-black/40 slide-over-backdrop" onClick={onClose} aria-hidden="true" />
-
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        className="relative w-full md:w-[640px] md:max-w-[95vw] bg-[var(--bg-base)] md:border-l border-gray-800 h-full overflow-y-auto slide-over-panel"
-      >
+    <Modal
+      onClose={onClose}
+      labelledBy={titleId}
+      variant="slide-over"
+      closeDisabled={loading}
+      panelClassName="md:!w-[640px] md:!max-w-[95vw]"
+    >
         <div className="p-4 md:p-6">
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-4">
@@ -311,7 +285,7 @@ export function DeployWizard({ projectId, onClose, onCreated, prefill }: DeployW
                     <span className="text-gray-400 w-4">{i + 1}</span>
                     {tb.existingVm ? (
                       <>
-                        <span className="text-yellow-400 text-[10px] px-1.5 py-0.5 border border-yellow-500/30 rounded">upgrade</span>
+                        <span className="text-yellow-400 text-xs px-1.5 py-0.5 border border-yellow-500/30 rounded">upgrade</span>
                         <span className="text-cyan-400">{tb.existingVmId}</span>
                       </>
                     ) : (
@@ -352,28 +326,28 @@ export function DeployWizard({ projectId, onClose, onCreated, prefill }: DeployW
                 Cancel
               </button>
               {step === 1 ? (
-                <button
+                <Button
+                  variant="primary"
                   type="button"
                   onClick={() => setStep(2)}
                   disabled={!canProceed}
-                  className="bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-800 disabled:text-gray-600 disabled:cursor-not-allowed text-white px-4 py-1.5 rounded text-sm transition-colors"
                 >
                   Next
-                </button>
+                </Button>
               ) : (
-                <button
+                <Button
+                  variant="primary"
                   type="button"
                   onClick={handleSubmit}
-                  disabled={loading}
-                  className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  loading={loading}
+                  loadingLabel="Deploying…"
                 >
-                  {loading ? 'Deploying...' : upgradeMode ? 'Install Stacks' : 'Deploy Target'}
-                </button>
+                  {upgradeMode ? 'Install Stacks' : 'Deploy Target'}
+                </Button>
               )}
             </div>
           </div>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

@@ -2,7 +2,7 @@
 name: LagHound
 description: Terminal-grade network diagnostics — dark glass, phosphor accents, monospace confidence
 colors:
-  brand-violet: "#863bff"
+  brand-violet: "#9b74e8"
   phosphor-cyan: "#47bfff"
   interactive-cyan: "oklch(0.609 0.126 221.723)"
   interactive-cyan-hover: "oklch(0.655 0.127 221.723)"
@@ -14,11 +14,16 @@ colors:
   border-strong: "#374151"
   text-primary: "#e5e7eb"
   text-muted: "#9ca3af"
-  text-faint: "#6b7280"
+  text-faint: "#788294"
   text-placeholder: "#4b5563"
   status-success: "#4ade80"
   status-failure: "#f87171"
   status-attention: "#fbbf24"
+  phase-dns: "#3b82f6"
+  phase-tcp: "#8b5cf6"
+  phase-tls: "#f59e0b"
+  phase-ttfb: "#ef4444"
+  phase-transfer: "#10b981"
 typography:
   headline:
     fontFamily: "'Cascadia Code', 'JetBrains Mono', ui-monospace, Consolas, monospace"
@@ -53,18 +58,44 @@ spacing:
 components:
   button-primary:
     backgroundColor: "{colors.interactive-cyan}"
-    textColor: "#ffffff"
+    textColor: "{colors.bg-base}"
     rounded: "{rounded.sm}"
     padding: "8px 16px"
     typography: "{typography.body}"
   button-primary-hover:
     backgroundColor: "{colors.interactive-cyan-hover}"
+  button-secondary:
+    backgroundColor: "transparent"
+    textColor: "{colors.text-primary}"
+    borderColor: "{colors.border-strong}"
+    rounded: "{rounded.sm}"
+    padding: "8px 16px"
+    typography: "{typography.body}"
+  button-ghost:
+    backgroundColor: "transparent"
+    textColor: "{colors.text-muted}"
+    rounded: "{rounded.sm}"
+    padding: "8px 16px"
+    typography: "{typography.body}"
+  button-danger:
+    backgroundColor: "rgba(248, 113, 113, 0.10)"
+    textColor: "{colors.status-failure}"
+    borderColor: "rgba(248, 113, 113, 0.30)"
+    rounded: "{rounded.sm}"
+    padding: "8px 16px"
+    typography: "{typography.body}"
   input:
     backgroundColor: "{colors.bg-base}"
     textColor: "{colors.text-primary}"
     rounded: "{rounded.sm}"
     padding: "6px 12px"
     typography: "{typography.body}"
+  modal:
+    backgroundColor: "{colors.bg-surface}"
+    borderColor: "{colors.border-default}"
+    rounded: "{rounded.lg}"
+  page-shell:
+    padding: "16px 24px"
   card:
     backgroundColor: "{colors.bg-base}"
     rounded: "{rounded.md}"
@@ -111,7 +142,7 @@ ramp.
   one notch lighter.
 
 ### Secondary
-- **Brand Violet** (#863bff, working ramp purple-300/400/500): the logo/
+- **Brand Violet** (#9b74e8, working ramp purple-300/400): the logo/
   wordmark identity color, plus exactly one functional meaning — the
   **runner/operator side of a pairing**: runner vs target in the deploy wizard,
   admin role chips, benchmark-artifact sections, the network-vs-server split
@@ -126,13 +157,20 @@ ramp.
 - **Hairline** (#1a1b25): default borders, table rules, dividers.
 - **Strong Border** (#374151, gray-700): input strokes, emphasized edges.
 - Text ramp: **Primary** #e5e7eb (gray-200) → **Muted** #9ca3af (gray-400,
-  the labels/metadata workhorse, ~7:1 on base) → **Faint** #6b7280 (gray-500,
-  4.07:1 — de-emphasis floor for meaningful text) → **Placeholder** #4b5563
+  the labels/metadata workhorse, ~7:1 on base) → **Faint** #788294 (5.08:1
+  on base and 4.58:1 on the lightest raised surface — the de-emphasis floor
+  for meaningful text) → **Placeholder** #4b5563
   (placeholders and disabled states only).
 
 ### Status
 - **Success Green** (#4ade80), **Failure Red** (#f87171), **Attention Amber**
   (#fbbf24), **In-flight Cyan** (phosphor ramp), **Inert Grey** (muted ramp).
+
+### Protocol phase charts
+- Stacked waterfall charts use a fixed categorical set: DNS #3b82f6, TCP
+  #8b5cf6, TLS #f59e0b, TTFB #ef4444, Transfer #10b981. These colors identify
+  protocol dimensions only; legends must be present and color never carries
+  a health or severity claim by itself.
 
 ### Named Rules
 **The Violet Semantics Rule.** Brand Violet carries exactly two meanings: the
@@ -152,7 +190,7 @@ table, badge, chart, and report. A color is a claim about state; never
 re-purpose one decoratively.
 
 **The AA Floor Rule.** Meaningful text never drops below 4.5:1 on its
-background: Muted #9ca3af is the workhorse, Faint #6b7280 the de-emphasis
+background: Muted #9ca3af is the workhorse, Faint #788294 the de-emphasis
 floor. Only placeholders and disabled states may go dimmer (#4b5563). This
 lifted 950+ instances one step in v0.28.106 — don't regress it.
 
@@ -177,6 +215,9 @@ as a calibrated instrument, not a document.
 ### Named Rules
 **The Data-First Rule.** 12px monospace is the default voice; larger sizes are
 the exception and must earn their space. Never inflate type to fill a layout.
+Literal 9–11px type is not part of the ramp: use the 12px Data or Label step.
+This applies inside SVG and canvas visualizations too. On narrow screens,
+charts scroll or simplify rather than shrinking meaningful labels below 12px.
 
 ## Layout
 
@@ -216,12 +257,15 @@ feedback, quiet at rest.
 
 ### Buttons
 - **Shape:** tight corners (4px radius)
-- **Primary:** Interactive Cyan fill (cyan-600 oklch), white text, 8px 16px
-  padding, 0.875rem monospace
+- **Primary:** Interactive Cyan fill (cyan-600 oklch), terminal-black text,
+  8px 16px padding, 0.875rem monospace
 - **Hover / Focus:** fill lightens one step (cyan-500) over 150ms; every
   enabled button presses down 1px on `:active` (`translateY(1px)`)
 - **Secondary/Ghost:** transparent with gray-700 border, gray-300 text; border
   lightens on hover
+- **Danger:** red-tinted fill, red border, and red text are reserved for
+  destructive confirmation actions; this is a semantic warning, not a second
+  general-purpose interaction accent
 - **Disabled:** 50% opacity, `cursor: not-allowed` (never invisible
   disabling — a disabled-looking button must look disabled)
 
@@ -244,6 +288,35 @@ feedback, quiet at rest.
   padding, 0.875rem
 - **Focus:** stroke shifts to cyan over 150ms — no glow, no ring
 - **Placeholder:** Placeholder #4b5563
+- **Field anatomy:** a visible label when meaning is not self-evident, then the
+  control, then optional hint or error text wired with `aria-describedby`
+
+### Dialogs / Drawers
+- **Centered dialog:** Surface panel, Hairline border, 8px radius, dimmed
+  backdrop, and a width appropriate to the decision or form
+- **Drawer:** full-height right panel with the same border/surface language
+- **Behavior:** Escape and backdrop dismissal, initial focus, focus trap, and
+  opener focus restoration are mandatory; destructive actions use an
+  `alertdialog`
+
+### Page Shells / Async States
+- Route content uses 16px padding on compact screens and 24px from `md`
+- Page titles, subtitle, and primary action share one header rhythm
+- Loading and errors preserve the page shell; refresh errors may keep stale
+  content visible with a compact warning rather than blanking the route
+
+### Canonical Implementation
+The design contract is implemented by the primitives in
+`dashboard/src/components/common`: `Button`, `FormControls`, `Modal`,
+`ConfirmDialog`, `PageShell`, `AsyncState`, `DataTable`, `StatusBadge`, and
+`KpiTile`. Compose or extend these primitives before adding a new variant.
+Architecture and server-state ownership live in `dashboard/ARCHITECTURE.md`;
+this file remains the visual and interaction source of truth.
+
+**The One Shell Rule.** Do not hand-roll fixed dialog backdrops, Escape
+listeners, focus traps, route padding, or primary action styles in feature
+code. Specialized overlays such as the command palette may own a distinct
+shell when their interaction model genuinely differs.
 
 ### Navigation
 - Grouped rail with uppercase 12px section labels in Muted; items are 0.875rem
@@ -267,6 +340,8 @@ all entrance animations.
 - **Do** give every control press feedback (1px translate) and a 150ms
   border/fill transition — tactile, not animated.
 - **Do** honor `prefers-reduced-motion` on every entrance animation.
+- **Do** use the canonical shared primitives so accessibility and visual
+  behavior improve in one place.
 
 ### Don't:
 - **Don't** use Brand Violet outside its two meanings — the mark and the
@@ -280,3 +355,6 @@ all entrance animations.
   shade of the fill (the detector's standing gray-on-color finding class).
 - **Don't** disable a control without disabled styling; a dead-looking-alive
   button is a bug (the v0.28.104 launch-button lesson).
+- **Don't** introduce literal type sizes below the 12px Data step.
+- **Don't** implement a second modal, drawer, confirmation, or page shell in a
+  feature file.

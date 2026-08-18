@@ -2,9 +2,12 @@ import { useState, useMemo, useEffect, useCallback } from 'react';
 import { KpiTile } from '../components/common/KpiTile';
 import { Link } from 'react-router';
 import { api, errorMessage } from '../api/client';
+import { useTestRunsQuery } from '../features/runs/queries';
 import { testersApi, type TesterRow } from '../api/testers';
 import type { Agent, Deployment, TestRun } from '../api/types';
 import { ExportMenu } from '../components/common/ExportMenu';
+import { ErrorState } from '../components/common/AsyncState';
+import { PageShell } from '../components/common/PageShell';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { RunResult } from '../components/common/RunResult';
 import { runDisplayStatus } from '../lib/runStatus';
@@ -35,11 +38,12 @@ export function DashboardPage() {
   const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [testers, setTesters] = useState<TesterRow[]>([]);
-  const [recentRuns, setRecentRuns] = useState<TestRun[]>([]);
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const events = useLiveStore((s) => s.events);
+  const recentRunsQuery = useTestRunsQuery(projectId, { limit: 10 });
+  const recentRuns = useMemo(() => recentRunsQuery.data ?? [], [recentRunsQuery.data]);
 
   usePageTitle('Dashboard');
 
@@ -57,7 +61,6 @@ export function DashboardPage() {
       // The Infrastructure page shows the tester name, so resolve it here too
       // and render it on the dashboard card (issue #765) for a consistent label.
       testersApi.listTesters(projectId).then(r => setTesters(Array.isArray(r) ? r : [])),
-      api.listTestRuns(projectId, { limit: 10 }).then(setRecentRuns),
       api.getDeployments(projectId, { limit: 10 }).then(setDeployments),
     ]).then(() => { setError(null); setLoading(false); })
      .catch(e => { setError(errorMessage(e)); setLoading(false); });
@@ -103,11 +106,11 @@ export function DashboardPage() {
 
   // All KPIs zero — show onboarding instead of 4 zeros
   const allKpisZero = onlineAgents.length === 0 && activeCount === 0 && completedDeps.length === 0 && !showRuns24h;
+  const loadError = error ?? (recentRunsQuery.error ? errorMessage(recentRunsQuery.error) : null);
 
-  if (loading && !summary) {
+  if ((loading || recentRunsQuery.isPending) && !summary) {
     return (
-      <div className="p-4 md:p-6">
-        <h2 className="text-xl font-bold text-gray-100 mb-6">Dashboard</h2>
+      <PageShell title="Dashboard">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
           {[1, 2, 3, 4].map(i => (
             <div key={i} className="border border-gray-800 rounded p-4">
@@ -116,26 +119,26 @@ export function DashboardPage() {
             </div>
           ))}
         </div>
-      </div>
+      </PageShell>
     );
   }
 
-  if (error && !summary) {
+  if (loadError && !summary) {
     return (
-      <div className="p-4 md:p-6">
-        <h2 className="text-xl font-bold text-gray-100 mb-6">Dashboard</h2>
-        <div className="bg-red-500/10 border border-red-500/30 rounded p-4">
-          <p className="text-red-400 text-sm">Failed to load dashboard data. Check your connection and try refreshing.</p>
-        </div>
-      </div>
+      <PageShell title="Dashboard">
+        <ErrorState
+          title="Dashboard unavailable"
+          message={loadError}
+          onRetry={() => { loadData(); void recentRunsQuery.refetch(); }}
+        />
+      </PageShell>
     );
   }
 
   return (
-    <div className="p-4 md:p-6">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-bold text-gray-100">Dashboard</h2>
+    <PageShell
+      title="Dashboard"
+      action={(
         <div className="flex items-center gap-3">
           {/* Integrated Test Report — the whole project's results (summary +
               details) as one downloadable document. */}
@@ -146,9 +149,19 @@ export function DashboardPage() {
               label="Export report"
             />
           )}
-          <span className="text-xs text-gray-500">v{versionInfo?.dashboard_version}</span>
+          <span className="text-xs text-faint">v{versionInfo?.dashboard_version}</span>
         </div>
-      </div>
+      )}
+    >
+      {loadError && (
+        <div className="mb-6">
+          <ErrorState
+            title="Some dashboard data could not refresh"
+            message={`${loadError} Showing the last successful response.`}
+            onRetry={() => { loadData(); void recentRunsQuery.refetch(); }}
+          />
+        </div>
+      )}
 
       {/* ── KPI Row — skip when all zeros ── */}
       {!allKpisZero && (
@@ -197,12 +210,12 @@ export function DashboardPage() {
                 to={item.to}
                 className="flex items-center gap-4 p-3 rounded border border-gray-800 hover:border-gray-700 transition-colors group"
               >
-                <span className="w-6 h-6 rounded-full border border-gray-700 flex items-center justify-center text-xs text-gray-500 group-hover:border-cyan-500/50 group-hover:text-cyan-400 transition-colors flex-shrink-0">
+                <span className="w-6 h-6 rounded-full border border-gray-700 flex items-center justify-center text-xs text-faint group-hover:border-cyan-500/50 group-hover:text-cyan-400 transition-colors flex-shrink-0">
                   {item.step}
                 </span>
                 <div className="min-w-0">
                   <p className="text-sm text-gray-300 group-hover:text-gray-100 transition-colors">{item.title}</p>
-                  <p className="text-xs text-gray-500">{item.desc}</p>
+                  <p className="text-xs text-faint">{item.desc}</p>
                 </div>
               </Link>
             ))}
@@ -234,7 +247,7 @@ export function DashboardPage() {
                   <span className={`w-6 h-6 rounded-full border flex items-center justify-center text-xs flex-shrink-0 ${
                     item.done
                       ? 'border-green-500/50 text-green-400'
-                      : 'border-gray-700 text-gray-500 group-hover:border-cyan-500/50 group-hover:text-cyan-400'
+                      : 'border-gray-700 text-faint group-hover:border-cyan-500/50 group-hover:text-cyan-400'
                   } transition-colors`}>
                     {item.done ? '\u2713' : item.step}
                   </span>
@@ -290,7 +303,7 @@ export function DashboardPage() {
           )}
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }
 
@@ -305,12 +318,12 @@ function InfraSection({ agents, endpoints, projectId, testerNames }: {
     <div>
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-xs text-gray-400 tracking-wider font-medium">infrastructure</h3>
-        <Link to={`/projects/${projectId}/vms`} className="text-xs text-gray-500 hover:text-gray-400 transition-colors">View all &rarr;</Link>
+        <Link to={`/projects/${projectId}/vms`} className="text-xs text-faint hover:text-gray-400 transition-colors">View all &rarr;</Link>
       </div>
 
       {endpoints.length === 0 && agents.length === 0 ? (
         <div className="border border-gray-800 rounded p-6 text-center">
-          <p className="text-gray-500 text-sm">No runners or targets deployed yet</p>
+          <p className="text-faint text-sm">No runners or targets deployed yet</p>
           <Link to={`/projects/${projectId}/vms`} className="text-xs text-cyan-400 mt-1 inline-block">Deploy your first target</Link>
         </div>
       ) : (
@@ -334,7 +347,7 @@ function InfraSection({ agents, endpoints, projectId, testerNames }: {
                       <div className="text-sm text-gray-300 truncate">{host}</div>
                       <div className="text-xs text-gray-700 truncate" title={ep.host}>{ep.host}</div>
                     </div>
-                    <span className="text-xs text-gray-500">
+                    <span className="text-xs text-faint">
                       {ep.reachable ? `v${ep.version}` : 'offline'}
                     </span>
                   </div>
@@ -378,7 +391,7 @@ function InfraSection({ agents, endpoints, projectId, testerNames }: {
                       />
                       <div className="min-w-0 flex-1">
                         <div className="text-sm text-gray-200 truncate">{displayName}</div>
-                        <div className="text-xs text-gray-500">
+                        <div className="text-xs text-faint">
                           {a.provider && `${a.provider} `}
                           {a.region && a.region}
                         </div>
@@ -411,11 +424,11 @@ function RecentRunsSection({ runs, projectId }: { runs: TestRun[]; projectId: st
     <div>
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-xs text-gray-400 tracking-wider font-medium">recent runs</h3>
-        <Link to={`/projects/${projectId}/runs`} className="text-xs text-gray-500 hover:text-gray-400 transition-colors">View all &rarr;</Link>
+        <Link to={`/projects/${projectId}/runs`} className="text-xs text-faint hover:text-gray-400 transition-colors">View all &rarr;</Link>
       </div>
       {runs.length === 0 ? (
         <div className="border border-gray-800 rounded p-6 text-center">
-          <p className="text-gray-500 text-sm">No completed runs yet</p>
+          <p className="text-faint text-sm">No completed runs yet</p>
           <Link to={`/projects/${projectId}/tests/new`} className="text-xs text-cyan-400 mt-1 inline-block">Run your first test</Link>
         </div>
       ) : (

@@ -82,7 +82,7 @@ export function StatusFooter({
         </button>
         {pills && <div className="flex items-center gap-2 min-w-0 truncate">{pills}</div>}
       </div>
-      <div className="flex items-center gap-3 text-gray-500 whitespace-nowrap">
+      <div className="flex items-center gap-3 text-faint whitespace-nowrap">
         <span>
           updated {agoLabel(lastUpdatedAt, now)}
           {!paused && ` · every ${Math.round(intervalMs / 1000)}s`}

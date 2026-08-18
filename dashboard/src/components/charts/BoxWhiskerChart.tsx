@@ -47,10 +47,10 @@ export function BoxWhiskerChart({ groups, title }: BoxWhiskerChartProps) {
 
   if (rows.length === 0) return null;
 
-  const LBL_W = 120;
+  const LBL_W = 136;
   const BOX_AREA = 320;
-  const ANN_W = 160;
-  const ROW_H = 32;
+  const ANN_W = 184;
+  const ROW_H = 36;
   const BOX_H = 18;
   const PAD_TOP = title ? 28 : 8;
   const PAD_BOT = 12;
@@ -73,8 +73,11 @@ export function BoxWhiskerChart({ groups, title }: BoxWhiskerChartProps) {
       <svg
         width={totalW}
         height={totalH}
-        style={{ fontFamily: 'var(--font-mono, ui-monospace, monospace)', fontSize: 11 }}
+        role="img"
+        aria-label={title ?? 'Box-and-whisker latency distribution'}
+        style={{ fontFamily: 'var(--font-mono, ui-monospace, monospace)', fontSize: 12 }}
       >
+        <title>{title ?? 'Box-and-whisker latency distribution'}</title>
         {title && (
           <text x={LBL_W + 5} y={18} fontWeight="bold" fontSize={12} fill="#9ca3af">
             {title}
@@ -102,7 +105,7 @@ export function BoxWhiskerChart({ groups, title }: BoxWhiskerChartProps) {
                 textAnchor="end"
                 dominantBaseline="middle"
                 fill="#9ca3af"
-                fontSize={11}
+                fontSize={12}
               >
                 {row.label}
               </text>
@@ -152,7 +155,7 @@ export function BoxWhiskerChart({ groups, title }: BoxWhiskerChartProps) {
                 y={cy}
                 dominantBaseline="middle"
                 fill="#9ca3af"
-                fontSize={10}
+                fontSize={12}
               >
                 p50={fmt(row.p50)}  p95={fmt(row.p95)}
               </text>

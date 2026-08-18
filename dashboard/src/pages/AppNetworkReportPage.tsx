@@ -13,7 +13,7 @@ import { useProject } from '../hooks/useProject';
 // theme's cyan accent / purple brand). The split bar uses inline background
 // with CSS var references so it tracks the theme.
 const NETWORK_COLOR = 'var(--accent-cyan, #47bfff)';
-const SERVER_COLOR = 'var(--brand-purple, #863bff)';
+const SERVER_COLOR = 'var(--brand-purple, #9b74e8)';
 
 interface VerdictStyle {
   /** Text + accent color class for the headline. */
@@ -45,7 +45,7 @@ function verdictStyle(verdict: AppNetworkVerdict): VerdictStyle {
 function VerdictBadge({ verdict }: { verdict: AppNetworkVerdict }) {
   const s = verdictStyle(verdict);
   return (
-    <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-medium border ${s.border} ${s.bg} ${s.text}`}>
+    <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium border ${s.border} ${s.bg} ${s.text}`}>
       {s.label}
     </span>
   );
@@ -94,14 +94,14 @@ function SplitBar({
           <div className="w-full bg-gray-800/40" />
         )}
       </div>
-      <div className="flex justify-between mt-1 text-[11px]">
+      <div className="flex justify-between mt-1 text-xs">
         <span className="text-cyan-400">
           net {formatMs1dp(networkMs)}
-          {p95NetworkMs != null && <span className="text-gray-500"> · p95 {formatMs1dp(p95NetworkMs)}</span>}
+          {p95NetworkMs != null && <span className="text-faint"> · p95 {formatMs1dp(p95NetworkMs)}</span>}
         </span>
         <span className="text-purple-400">
           srv {formatMs1dp(serverMs)}
-          {p95ServerMs != null && <span className="text-gray-500"> · p95 {formatMs1dp(p95ServerMs)}</span>}
+          {p95ServerMs != null && <span className="text-faint"> · p95 {formatMs1dp(p95ServerMs)}</span>}
         </span>
       </div>
     </div>
@@ -179,7 +179,7 @@ export function AppNetworkReportPage() {
           action={
             <Link
               to={`/projects/${projectId}/sdk-endpoints`}
-              className="inline-block bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors"
+              className="inline-block bg-cyan-600 hover:bg-cyan-500 text-[var(--bg-base)] px-4 py-1.5 rounded text-sm transition-colors"
             >
               Create an SDK endpoint
             </Link>
@@ -189,7 +189,7 @@ export function AppNetworkReportPage() {
         <>
           {/* ── Headline verdict — the "find the main issue" payoff ─────────── */}
           <div className={`rounded-lg border ${overallStyle.border} ${overallStyle.bg} p-5 md:p-6 mb-6`}>
-            <div className={`text-[11px] uppercase tracking-wider font-medium ${overallStyle.text} mb-2`}>
+            <div className={`text-xs uppercase tracking-wider font-medium ${overallStyle.text} mb-2`}>
               {overallStyle.label}
             </div>
             <p className={`text-lg md:text-2xl font-bold leading-snug ${overallStyle.text}`}>
@@ -251,10 +251,10 @@ export function AppNetworkReportPage() {
                       />
                     </td>
                     <td className="px-4 py-3 text-right text-xs text-purple-300">
-                      {formatMs1dp(g.median_server_ms)} <span className="text-gray-500">/ {formatMs1dp(g.p95_server_ms)}</span>
+                      {formatMs1dp(g.median_server_ms)} <span className="text-faint">/ {formatMs1dp(g.p95_server_ms)}</span>
                     </td>
                     <td className="px-4 py-3 text-right text-xs text-cyan-300">
-                      {formatMs1dp(g.median_network_ms)} <span className="text-gray-500">/ {formatMs1dp(g.p95_network_ms)}</span>
+                      {formatMs1dp(g.median_network_ms)} <span className="text-faint">/ {formatMs1dp(g.p95_network_ms)}</span>
                     </td>
                     <td className="px-4 py-3 text-right text-xs text-gray-300">{fmtRatio(g.server_ratio)}</td>
                     <td className="px-4 py-3 text-right text-xs text-gray-400">
@@ -269,7 +269,7 @@ export function AppNetworkReportPage() {
                           ⚠ {g.split_anomaly_count}
                         </span>
                       ) : (
-                        <span className="text-gray-500">0</span>
+                        <span className="text-faint">0</span>
                       )}
                     </td>
                   </tr>
@@ -279,7 +279,7 @@ export function AppNetworkReportPage() {
           </div>
 
           {/* ── Formulas / disclaimer (verbatim from the response) ──────────── */}
-          <div className="text-xs text-gray-500 space-y-1">
+          <div className="text-xs text-faint space-y-1">
             <p>{report!.formulas.server_ms}</p>
             <p>{report!.formulas.network_ms}</p>
             <p>{report!.formulas.split}</p>

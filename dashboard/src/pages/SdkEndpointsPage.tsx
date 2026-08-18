@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Link } from 'react-router';
 import { api, errorMessage, type SdkEndpoint } from '../api/client';
 import { CreateSdkEndpointDialog } from '../components/CreateSdkEndpointDialog';
@@ -9,6 +9,8 @@ import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
 import { useToast } from '../hooks/useToast';
+import { Button } from '../components/common/Button';
+import { ConfirmDialog } from '../components/common/ConfirmDialog';
 
 /**
  * LagHound SDK-endpoint management. Register a customer endpoint (target URL +
@@ -44,18 +46,6 @@ export function SdkEndpointsPage() {
   }, [projectId]);
 
   usePolling(load, 20000);
-
-  // Keyboard path for the delete-confirm dialog (audit P2: the backdrop click
-  // was the only way to dismiss without reaching for Cancel — Escape now
-  // closes, matching every other dialog in the app).
-  useEffect(() => {
-    if (!confirmDelete) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setConfirmDelete(null);
-    };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [confirmDelete]);
 
   const handleDelete = async () => {
     if (!projectId || !confirmDelete) return;
@@ -100,12 +90,12 @@ export function SdkEndpointsPage() {
         subtitle="LagHound-instrumented customer endpoints probed with the sdkprobe mode."
         action={
           isOperator ? (
-            <button
+            <Button
+              variant="primary"
               onClick={() => setShowCreate(true)}
-              className="bg-cyan-600 hover:bg-cyan-500 text-white px-3 md:px-4 py-1.5 rounded text-sm transition-colors"
             >
               + SDK endpoint
-            </button>
+            </Button>
           ) : undefined
         }
       />
@@ -139,12 +129,12 @@ export function SdkEndpointsPage() {
           }
           action={
             isOperator ? (
-              <button
+              <Button
+                variant="primary"
                 onClick={() => setShowCreate(true)}
-                className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors"
               >
                 Register your first SDK endpoint
-              </button>
+              </Button>
             ) : undefined
           }
         />
@@ -168,7 +158,7 @@ export function SdkEndpointsPage() {
                   <>
                     {ep.name}
                     {ep.description && (
-                      <div className="text-xs text-gray-500 mt-0.5">{ep.description}</div>
+                      <div className="text-xs text-faint mt-0.5">{ep.description}</div>
                     )}
                   </>
                 ),
@@ -228,38 +218,16 @@ export function SdkEndpointsPage() {
         </>
       )}
 
-      {confirmDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/50" onClick={() => setConfirmDelete(null)} aria-hidden="true" />
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="delete-sdk-endpoint-title"
-            className="relative bg-[var(--bg-base)] border border-gray-800 rounded-lg p-6 w-full max-w-md"
-          >
-            <h3 id="delete-sdk-endpoint-title" className="text-lg font-bold text-gray-100 mb-2">Delete SDK endpoint</h3>
-            <p className="text-sm text-gray-400 mb-6">
-              Delete <span className="text-gray-200 font-medium">{confirmDelete.name}</span>? This removes the endpoint
-              and its stored token. Past probe runs and report history are kept.
-            </p>
-            <div className="flex justify-end gap-3">
-              <button
-                onClick={() => setConfirmDelete(null)}
-                className="px-4 py-1.5 text-sm text-gray-400 hover:text-gray-200"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleDelete}
-                disabled={deleting}
-                className="bg-red-600 hover:bg-red-500 text-white px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50"
-              >
-                {deleting ? 'Deleting...' : 'Delete'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmDialog
+        open={Boolean(confirmDelete)}
+        title="Delete SDK endpoint"
+        description={confirmDelete ? `Delete ${confirmDelete.name}? This removes the endpoint and its stored token. Past probe runs and report history are kept.` : ''}
+        confirmLabel="Delete"
+        danger
+        loading={deleting}
+        onClose={() => setConfirmDelete(null)}
+        onConfirm={() => void handleDelete()}
+      />
     </div>
   );
 }

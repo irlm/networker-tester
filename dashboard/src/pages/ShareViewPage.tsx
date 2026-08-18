@@ -49,7 +49,7 @@ export function ShareViewPage() {
       <div className="min-h-screen bg-[var(--bg-base)] flex items-center justify-center">
         <div className="text-center">
           <h1 className="text-xl font-bold text-gray-300 mb-2">Link expired or invalid</h1>
-          <p className="text-sm text-gray-500">This share link may have been revoked or has expired.</p>
+          <p className="text-sm text-faint">This share link may have been revoked or has expired.</p>
         </div>
       </div>
     );
@@ -60,7 +60,7 @@ export function ShareViewPage() {
       {/* Header */}
       <header className="border-b border-gray-800 px-6 py-4">
         <h1 className="text-lg font-bold text-gray-200">
-          {PRODUCT_NAME} <span className="text-gray-500 font-normal">- Shared Report</span>
+          {PRODUCT_NAME} <span className="text-faint font-normal">- Shared Report</span>
         </h1>
         {shareData.label && (
           <p className="text-sm text-gray-400 mt-1">{shareData.label}</p>
@@ -79,7 +79,7 @@ export function ShareViewPage() {
 
       {/* Footer */}
       <footer className="border-t border-gray-800 px-6 py-4 text-center">
-        <p className="text-xs text-gray-500">
+        <p className="text-xs text-faint">
           Shared by {shareData.shared_by} · Expires {new Date(shareData.expires_at).toLocaleDateString()}
         </p>
       </footer>
@@ -105,7 +105,7 @@ function SharedRunView({ data }: { data: LiveAttempt[] }) {
           Success <span className="text-green-400 font-semibold ml-1">{successCount}</span>
         </span>
         <span className="text-gray-400">
-          Failed <span className={`font-semibold ml-1 ${failureCount > 0 ? 'text-red-400' : 'text-gray-500'}`}>{failureCount}</span>
+          Failed <span className={`font-semibold ml-1 ${failureCount > 0 ? 'text-red-400' : 'text-faint'}`}>{failureCount}</span>
         </span>
         <span className="text-gray-400">
           Rate <span className={`font-semibold ml-1 ${successRateClass(attempts.length > 0 ? (successCount / attempts.length) * 100 : 100)}`}>
@@ -192,8 +192,8 @@ function SharedRunView({ data }: { data: LiveAttempt[] }) {
                   ? <span className="text-green-400">OK</span>
                   : <span className="text-red-400">FAIL</span>
                 }
-                {a.http && <span className="text-gray-500">TTFB {formatMs(a.http.ttfb_ms)} · Total {formatMs(a.http.total_duration_ms)}</span>}
-                {a.udp && <span className="text-gray-500">RTT {formatMs(a.udp.rtt_avg_ms)} · Loss {a.udp.loss_percent.toFixed(1)}%</span>}
+                {a.http && <span className="text-faint">TTFB {formatMs(a.http.ttfb_ms)} · Total {formatMs(a.http.total_duration_ms)}</span>}
+                {a.udp && <span className="text-faint">RTT {formatMs(a.udp.rtt_avg_ms)} · Loss {a.udp.loss_percent.toFixed(1)}%</span>}
                 {a.error && <span className="text-red-400/70">{a.error.message}</span>}
               </div>
             </div>

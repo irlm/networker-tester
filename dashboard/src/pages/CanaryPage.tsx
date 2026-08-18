@@ -225,7 +225,7 @@ export function CanaryPage() {
               type="button"
               onClick={dispatch}
               disabled={dispatching}
-              className="px-3 py-1.5 text-sm font-semibold rounded bg-cyan-600 hover:bg-cyan-500 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-3 py-1.5 text-sm font-semibold rounded bg-cyan-600 hover:bg-cyan-500 text-[var(--bg-base)] disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {dispatching ? 'Dispatching…' : 'Run canary'}
             </button>

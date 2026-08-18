@@ -1,18 +1,25 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useNow } from '../hooks/useNow';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import { api } from '../api/client';
+import { runsApi } from '../features/runs/api';
 import { testersApi, type TesterRow } from '../api/testers';
 import type { EndpointRef, TestConfig, TestConfigCreate, TestConfigListItem, TestRun, Workload } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { RunResult } from '../components/common/RunResult';
 import { runDisplayStatus } from '../lib/runStatus';
 import { usePageTitle } from '../hooks/usePageTitle';
-import { usePolling } from '../hooks/usePolling';
 import { useProject } from '../hooks/useProject';
 import { useToast } from '../hooks/useToast';
 import { timeAgo } from '../lib/format';
 import { stripAnsi } from '../lib/ansi';
+import { Button } from '../components/common/Button';
+import {
+  runKeys,
+  useTestConfigDetailsQueries,
+  useTestConfigsQuery,
+  useTestRunsQuery,
+} from '../features/runs/queries';
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -55,6 +62,7 @@ const DIAG_PRESET_LABELS: Record<DiagPreset, { time: string; desc: string }> = {
 
 const PAGE_SIZE = 20;
 const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
+const DIAGNOSTIC_RUN_PARAMS = { endpoint_kind: 'network', limit: 200 } as const;
 
 const PHASE_CSS_COLORS: Record<string, string> = {
   dns: '#a78bfa',
@@ -227,7 +235,7 @@ function PhaseBar({ timings }: { timings: PhaseTimings }) {
           />
         ))}
       </div>
-      <div className="flex gap-4 text-[11px]">
+      <div className="flex gap-4 text-xs">
         {phases.map(p => (
           <span key={p.key} className="flex items-center gap-1.5 text-gray-400">
             <span
@@ -338,7 +346,7 @@ function UrlCard({
         aria-controls={`card-body-${host}`}
       >
         <span
-          className={`text-gray-500 text-[11px] flex-shrink-0 transition-transform duration-200 ${
+          className={`text-faint text-xs flex-shrink-0 transition-transform duration-200 ${
             expanded ? 'rotate-90' : ''
           }`}
           aria-hidden="true"
@@ -347,7 +355,7 @@ function UrlCard({
         </span>
 
         <div className="flex items-center gap-3 flex-1 min-w-0">
-          <span className={`text-[13px] font-medium truncate ${urlColor}`}>
+          <span className={`text-sm font-medium truncate ${urlColor}`}>
             {host}
           </span>
 
@@ -364,10 +372,10 @@ function UrlCard({
 
         <div className="flex items-center gap-3 flex-shrink-0">
           {sparklineValues.length >= 2 && <Sparkline values={sparklineValues} />}
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-gray-400 font-medium tabular-nums">
+          <span className="text-xs px-1.5 py-0.5 rounded bg-white/5 text-gray-400 font-medium tabular-nums">
             {runs.length}
           </span>
-          <span className="text-[11px] text-gray-500 whitespace-nowrap">
+          <span className="text-xs text-faint whitespace-nowrap">
             {timeAgo(lastRun.created_at)}
           </span>
           <span className={`w-[7px] h-[7px] rounded-full flex-shrink-0 ${dotColor}`} />
@@ -387,12 +395,12 @@ function UrlCard({
           <div className="mt-3">
             {groupedRuns.map(group => (
               <div key={group.label}>
-                <div className="text-[11px] text-gray-500 uppercase tracking-wider mb-1 mt-3 first:mt-0">
+                <div className="text-xs text-faint uppercase tracking-wider mb-1 mt-3 first:mt-0">
                   {group.label}
                 </div>
                 <table className="w-full text-xs tabular-nums">
                   <thead>
-                    <tr className="text-[10px] text-gray-500 uppercase tracking-wider">
+                    <tr className="text-xs text-faint uppercase tracking-wider">
                       <th className="text-left py-1 px-2 font-medium border-b border-gray-800/50">Time</th>
                       <th className="text-left py-1 px-2 font-medium border-b border-gray-800/50" />
                       <th className="text-left py-1 px-2 font-medium border-b border-gray-800/50">Status</th>
@@ -437,7 +445,7 @@ function UrlCard({
                             ) : verdict === 'running' || verdict === 'queued' ? (
                               <span className="text-cyan-400 motion-safe:animate-pulse">{'\u25CF'}</span>
                             ) : (
-                              <span className="text-gray-500">-</span>
+                              <span className="text-faint">-</span>
                             )}
                           </td>
                           <td className="py-1.5 px-2">
@@ -461,7 +469,7 @@ function UrlCard({
                 {group.runs
                   .filter(r => r.error_message)
                   .map(r => (
-                    <div key={`err-${r.id}`} className="text-[11px] text-red-400/70 pl-2 mt-1">
+                    <div key={`err-${r.id}`} className="text-xs text-red-400/70 pl-2 mt-1">
                       {stripAnsi(r.error_message!)}
                     </div>
                   ))}
@@ -473,13 +481,13 @@ function UrlCard({
           <div className="flex items-center gap-4 mt-4 pt-3 border-t border-gray-800">
             <button
               onClick={() => onRunAgain(host)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] border border-gray-800 rounded text-gray-400 hover:text-gray-200 hover:border-gray-600 transition-colors"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-800 rounded text-gray-400 hover:text-gray-200 hover:border-gray-600 transition-colors"
             >
               {'\u25B6'} Run again
             </button>
             <button
               onClick={() => onRemove(host, configIds)}
-              className="ml-auto text-[11px] text-gray-500 hover:text-red-400 transition-colors"
+              className="ml-auto text-xs text-faint hover:text-red-400 transition-colors"
             >
               Remove from watchlist
             </button>
@@ -494,6 +502,7 @@ function UrlCard({
 
 export function DiagnosticsPage() {
   const { projectId } = useProject();
+  const queryClient = useQueryClient();
   const addToast = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   usePageTitle('URL Probe');
@@ -508,11 +517,6 @@ export function DiagnosticsPage() {
   const [submitting, setSubmitting] = useState(false);
 
   // Data
-  const [configs, setConfigs] = useState<TestConfigListItem[]>([]);
-  const [configDetails, setConfigDetails] = useState<Map<string, TestConfig>>(new Map());
-  const [allRuns, setAllRuns] = useState<TestRun[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [pendingRunIds, setPendingRunIds] = useState<Set<string>>(new Set());
   const [testers, setTesters] = useState<TesterRow[]>([]);
   // null = "auto-pick", otherwise a specific tester_id. Persisted in URL so
   // a user can share a probe-URL that pins the runner.
@@ -541,60 +545,30 @@ export function DiagnosticsPage() {
 
   // ── Data loading ────────────────────────────────────────────────────
 
-  const loadData = useCallback(() => {
-    if (!projectId) return;
+  const configsQuery = useTestConfigsQuery(projectId, { intervalMs: 15_000 });
+  const configs = useMemo(
+    () => ((configsQuery.data ?? []) as Array<TestConfigListItem | TestConfig>).filter((config) => {
+      const kind = 'endpoint_kind' in config ? config.endpoint_kind : config.endpoint.kind;
+      return kind === 'network';
+    }),
+    [configsQuery.data],
+  );
+  const configIds = useMemo(() => configs.map((config) => config.id), [configs]);
+  const configDetailQueries = useTestConfigDetailsQueries(configIds);
+  const configDetails = useMemo(() => {
+    const details = new Map<string, TestConfig>();
+    for (const query of configDetailQueries) {
+      if (query.data) details.set(query.data.id, query.data);
+    }
+    return details;
+  }, [configDetailQueries]);
 
-    // Fetch configs + runs in parallel
-    Promise.all([
-      api.listTestConfigs(projectId),
-      api.listTestRuns(projectId, { endpoint_kind: 'network', limit: 200 }),
-    ]).then(([cfgs, runs]) => {
-      // Filter to only 'network' endpoint configs. The backend returns full
-      // TestConfig rows (endpoint.kind) here even though the client types it
-      // as TestConfigListItem (endpoint_kind), so accept either shape.
-      const networkConfigs = cfgs.filter((c) => {
-        const kind = 'endpoint_kind' in c
-          ? (c as TestConfigListItem).endpoint_kind
-          : (c as unknown as TestConfig).endpoint?.kind;
-        return kind === 'network';
-      });
-      setConfigs(networkConfigs);
-      setAllRuns(runs);
-      setLoading(false);
-
-      // Fetch full config details (to get host) for configs we don't have yet
-      const missing = networkConfigs.filter(c => !configDetails.has(c.id));
-      if (missing.length > 0) {
-        Promise.all(missing.map(c => api.getTestConfig(c.id).catch(() => null)))
-          .then(details => {
-            setConfigDetails(prev => {
-              const next = new Map(prev);
-              for (const d of details) {
-                if (d) next.set(d.id, d);
-              }
-              return next;
-            });
-          });
-      }
-
-      // Clear completed pending runs
-      setPendingRunIds(prev => {
-        const stillPending = new Set<string>();
-        for (const id of prev) {
-          const run = runs.find(r => r.id === id);
-          if (run && (run.status === 'queued' || run.status === 'running')) {
-            stillPending.add(id);
-          }
-        }
-        return stillPending.size !== prev.size ? stillPending : prev;
-      });
-    }).catch(() => {
-      setLoading(false);
-    });
-  }, [projectId, configDetails]);
-
-  const hasPending = pendingRunIds.size > 0;
-  usePolling(loadData, hasPending ? 5000 : 15000);
+  const runsQuery = useTestRunsQuery(projectId, DIAGNOSTIC_RUN_PARAMS, {
+    intervalMs: 15_000,
+    activeIntervalMs: 5_000,
+  });
+  const allRuns = useMemo(() => runsQuery.data ?? [], [runsQuery.data]);
+  const loading = configsQuery.isPending || runsQuery.isPending;
 
   // Load testers once so the runner-picker can show the list of runners the
   // user can pin their probe to. Auto-pick stays the default — this lets them
@@ -789,22 +763,34 @@ export function DiagnosticsPage() {
         configId = existing.id;
         createdOrExisting = existing;
       } else {
-        const created = await api.createTestConfig(projectId, config);
+        const created = await runsApi.createConfig(projectId, config);
         configId = created.id;
         createdOrExisting = created;
+        queryClient.setQueryData(runKeys.config(created.id), created);
+        queryClient.setQueryData<TestConfigListItem[]>(runKeys.configs(projectId), (previous = []) => [
+          {
+            id: created.id,
+            project_id: created.project_id,
+            name: created.name,
+            endpoint_kind: created.endpoint.kind,
+            modes: created.workload.modes,
+            has_methodology: created.methodology !== null,
+            created_at: created.created_at,
+            updated_at: created.updated_at,
+          },
+          ...previous.filter((item) => item.id !== created.id),
+        ]);
       }
-      const run = await api.launchTestConfig(configId, selectedTesterId ?? undefined);
+      const run = await runsApi.launchConfig(configId, selectedTesterId ?? undefined);
       addToast('success', `Diagnostic ${run.id.slice(0, 8)} launched for ${host}`);
 
-      setPendingRunIds(prev => new Set(prev).add(run.id));
-      setAllRuns(prev => [run, ...prev]);
-
-      // Update config details with the newly created / reused config
-      setConfigDetails(prev => {
-        const next = new Map(prev);
-        next.set(configId, createdOrExisting as TestConfig);
-        return next;
-      });
+      queryClient.setQueryData<TestRun[]>(runKeys.list(projectId, DIAGNOSTIC_RUN_PARAMS), (previous = []) => [
+        run,
+        ...previous.filter((item) => item.id !== run.id),
+      ]);
+      if ('endpoint' in createdOrExisting) {
+        queryClient.setQueryData(runKeys.config(configId), createdOrExisting);
+      }
     } catch (e) {
       addToast('error', `Diagnostic failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
@@ -814,11 +800,17 @@ export function DiagnosticsPage() {
 
   const handleRemove = async (host: string, configIds: Set<string>) => {
     try {
-      await Promise.all(Array.from(configIds).map(id => api.deleteTestConfig(id)));
+      await Promise.all(Array.from(configIds).map(id => runsApi.deleteConfig(id)));
       addToast('success', `Removed ${host} from watchlist`);
-      // Reload data
-      setAllRuns(prev => prev.filter(r => !configIds.has(r.test_config_id)));
-      setConfigs(prev => prev.filter(c => !configIds.has(c.id)));
+      queryClient.setQueryData<TestRun[]>(runKeys.list(projectId, DIAGNOSTIC_RUN_PARAMS), (previous = []) =>
+        previous.filter((run) => !configIds.has(run.test_config_id)),
+      );
+      queryClient.setQueryData<TestConfigListItem[]>(runKeys.configs(projectId), (previous = []) =>
+        previous.filter((config) => !configIds.has(config.id)),
+      );
+      for (const configId of configIds) {
+        queryClient.removeQueries({ queryKey: runKeys.config(configId) });
+      }
     } catch (e) {
       addToast('error', `Failed to remove: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -882,7 +874,7 @@ export function DiagnosticsPage() {
 
       {/* Probe input bar */}
       <div className="border border-gray-800 rounded p-4 mb-7">
-        <div className="text-[11px] tracking-wider text-gray-500 mb-2.5">Probe a URL</div>
+        <div className="text-xs tracking-wider text-faint mb-2.5">Probe a URL</div>
         <div className="flex items-center gap-2.5">
           <div className="flex-1 flex items-center gap-2">
             <label htmlFor="diag-url" className="text-xs text-gray-400 flex-shrink-0">URL:</label>
@@ -894,7 +886,7 @@ export function DiagnosticsPage() {
               onChange={e => setUrl(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && url.trim()) handleRun(); }}
               placeholder="Enter URL to test..."
-              className="flex-1 bg-[var(--bg-raised)] border border-gray-800 rounded px-3 py-2 text-[13px] text-cyan-400 focus:outline-none focus:border-cyan-500/50 placeholder:text-gray-600 transition-colors"
+              className="flex-1 bg-[var(--bg-raised)] border border-gray-800 rounded px-3 py-2 text-sm text-cyan-400 focus:outline-none focus:border-cyan-500/50 placeholder:text-gray-600 transition-colors"
               aria-label="URL or hostname to test"
             />
           </div>
@@ -941,26 +933,27 @@ export function DiagnosticsPage() {
                 );
               })}
           </select>
-          <button
+          <Button
+            variant="primary"
             onClick={() => handleRun()}
             disabled={submitting || !url.trim()}
-            className="flex items-center justify-center w-9 h-9 bg-cyan-400 text-gray-900 rounded font-bold text-base hover:opacity-85 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity flex-shrink-0"
+            className="w-9 h-9 !p-0 text-base flex-shrink-0"
             aria-label="Run diagnostic"
             title="Run diagnostic"
           >
             {submitting ? (
-              <span className="w-4 h-4 border-2 border-gray-900/30 border-t-gray-900 rounded-full motion-safe:animate-spin" />
+              <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full motion-safe:animate-spin" />
             ) : (
               '\u25B6'
             )}
-          </button>
+          </Button>
         </div>
       </div>
 
       {/* Recent host chips */}
       {recentHosts.length > 0 && (
         <div className="mb-6 flex flex-wrap gap-1.5 items-center">
-          <span className="text-xs text-gray-500 mr-1">Recent:</span>
+          <span className="text-xs text-faint mr-1">Recent:</span>
           {recentHosts.map(host => (
             <button
               key={host}
@@ -986,7 +979,7 @@ export function DiagnosticsPage() {
           </span>
           <span className="text-gray-700">&middot;</span>
           <span className="text-gray-400">
-            <strong className={`font-medium ${summary.healthy > 0 ? 'text-green-400' : 'text-gray-500'}`}>{summary.healthy}</strong> healthy
+            <strong className={`font-medium ${summary.healthy > 0 ? 'text-green-400' : 'text-faint'}`}>{summary.healthy}</strong> healthy
           </span>
           {summary.partial > 0 && (
             <>
@@ -998,7 +991,7 @@ export function DiagnosticsPage() {
           )}
           <span className="text-gray-700">&middot;</span>
           <span className="text-gray-400">
-            <strong className={`font-medium ${summary.failed > 0 ? 'text-red-400' : 'text-gray-500'}`}>{summary.failed}</strong> failed
+            <strong className={`font-medium ${summary.failed > 0 ? 'text-red-400' : 'text-faint'}`}>{summary.failed}</strong> failed
           </span>
           {summary.pending > 0 && (
             <>
@@ -1010,14 +1003,14 @@ export function DiagnosticsPage() {
           )}
           <span className="text-gray-700">&middot;</span>
           <span className="text-gray-400">
-            <strong className={`font-medium ${summary.stale > 0 ? 'text-yellow-400' : 'text-gray-500'}`}>{summary.stale}</strong> stale (no check in 24h)
+            <strong className={`font-medium ${summary.stale > 0 ? 'text-yellow-400' : 'text-faint'}`}>{summary.stale}</strong> stale (no check in 24h)
           </span>
         </div>
       )}
 
       {/* Toolbar */}
       <div className="flex items-center justify-between mb-3">
-        <span className="text-[11px] tracking-wider text-gray-500">
+        <span className="text-xs tracking-wider text-faint">
           Watched URLs ({filteredGroups.length})
         </span>
         <div className="flex items-center gap-3">
@@ -1027,10 +1020,10 @@ export function DiagnosticsPage() {
               <button
                 key={f}
                 onClick={() => setFilter(f)}
-                className={`px-3 py-1 text-[11px] border-r border-gray-800 last:border-r-0 transition-colors ${
+                className={`px-3 py-1 text-xs border-r border-gray-800 last:border-r-0 transition-colors ${
                   filter === f
                     ? 'bg-white/5 text-gray-200'
-                    : 'text-gray-500 hover:text-gray-400'
+                    : 'text-faint hover:text-gray-400'
                 }`}
                 aria-pressed={filter === f}
               >
@@ -1042,7 +1035,7 @@ export function DiagnosticsPage() {
           <select
             value={sort}
             onChange={e => setSort(e.target.value as SortMode)}
-            className="bg-transparent border border-gray-800 rounded px-2.5 py-1 text-[11px] text-gray-400 focus:outline-none appearance-none pr-6 cursor-pointer"
+            className="bg-transparent border border-gray-800 rounded px-2.5 py-1 text-xs text-gray-400 focus:outline-none appearance-none pr-6 cursor-pointer"
             style={{
               backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23475569' stroke-width='1.5'/%3E%3C/svg%3E")`,
               backgroundRepeat: 'no-repeat',
@@ -1096,7 +1089,7 @@ export function DiagnosticsPage() {
       {/* Pagination */}
       {totalPages > 1 && (
         <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-800">
-          <span className="text-xs text-gray-500">
+          <span className="text-xs text-faint">
             Showing {(safePage - 1) * PAGE_SIZE + 1}-{Math.min(safePage * PAGE_SIZE, filteredGroups.length)} of{' '}
             {filteredGroups.length} URLs
           </span>

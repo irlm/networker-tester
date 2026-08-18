@@ -204,7 +204,7 @@ export function BenchTokenHistoryTab() {
         <div className="border border-gray-800 rounded overflow-hidden">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-800 text-left text-[10px] text-gray-400 uppercase tracking-wider">
+              <tr className="border-b border-gray-800 text-left text-xs text-gray-400 uppercase tracking-wider">
                 <th className="px-4 py-2">Config</th>
                 <th className="px-4 py-2">VM</th>
                 <th className="px-4 py-2">User</th>
@@ -253,14 +253,14 @@ export function BenchTokenHistoryTab() {
 
           {/* Pagination */}
           <div className="flex items-center justify-between px-4 py-2.5 border-t border-gray-800 bg-gray-800/20">
-            <span className="text-[10px] text-gray-400">
+            <span className="text-xs text-gray-400">
               {rangeStart}-{rangeEnd} of {filtered.length}
             </span>
             <div className="flex items-center gap-1">
               <button
                 onClick={() => setPage(Math.max(0, safePage - 1))}
                 disabled={safePage === 0}
-                className="px-2 py-0.5 text-[10px] rounded text-gray-400 hover:text-gray-200 hover:bg-gray-700/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                className="px-2 py-0.5 text-xs rounded text-gray-400 hover:text-gray-200 hover:bg-gray-700/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 Prev
               </button>
@@ -280,7 +280,7 @@ export function BenchTokenHistoryTab() {
                   <button
                     key={pageNum}
                     onClick={() => setPage(pageNum)}
-                    className={`px-1.5 py-0.5 text-[10px] rounded transition-colors ${
+                    className={`px-1.5 py-0.5 text-xs rounded transition-colors ${
                       pageNum === safePage
                         ? 'bg-cyan-500/20 text-cyan-400'
                         : 'text-gray-400 hover:text-gray-300 hover:bg-gray-700/30'
@@ -293,7 +293,7 @@ export function BenchTokenHistoryTab() {
               <button
                 onClick={() => setPage(Math.min(totalPages - 1, safePage + 1))}
                 disabled={safePage >= totalPages - 1}
-                className="px-2 py-0.5 text-[10px] rounded text-gray-400 hover:text-gray-200 hover:bg-gray-700/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                className="px-2 py-0.5 text-xs rounded text-gray-400 hover:text-gray-200 hover:bg-gray-700/50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 Next
               </button>

@@ -142,7 +142,7 @@ export function MethodologyPanel({
                   />
                 </label>
               </div>
-              <div className="text-xs text-gray-500 pt-2">
+              <div className="text-xs text-faint pt-2">
                 Quality gates: CV &lt; {methodology.quality_gates.max_cv_pct}%, min {methodology.quality_gates.min_samples} samples.
                 Publication gate: failure rate &lt; {methodology.publication_gates.max_failure_pct}%.
               </div>

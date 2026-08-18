@@ -52,4 +52,22 @@ public class Phase3LogsAndPerfLogTests
         Assert.Equal("a\\\\b", PerfLogEndpoints.EscapeIlike("a\\b"));
         Assert.Equal("plain", PerfLogEndpoints.EscapeIlike("plain"));
     }
+
+    [Fact]
+    public void ResolveStatsLowerBound_honors_an_explicit_time_filter()
+    {
+        var since = new DateTimeOffset(2026, 8, 18, 7, 55, 0, TimeSpan.FromHours(-4));
+
+        var result = PerfLogEndpoints.ResolveStatsLowerBound(since, DateTime.UnixEpoch);
+
+        Assert.Equal(new DateTime(2026, 8, 18, 11, 55, 0, DateTimeKind.Utc), result);
+    }
+
+    [Fact]
+    public void ResolveStatsLowerBound_defaults_to_the_last_24_hours()
+    {
+        var now = new DateTime(2026, 8, 18, 12, 0, 0, DateTimeKind.Utc);
+
+        Assert.Equal(now.AddHours(-24), PerfLogEndpoints.ResolveStatsLowerBound(null, now));
+    }
 }

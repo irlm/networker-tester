@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-07-29T14:30:00Z",
+  "generatedAt": "2026-08-18T13:00:00Z",
   "title": "Design System: LagHound",
   "extensions": {
     "colorMeta": {
@@ -37,7 +37,7 @@
       "brand-violet": {
         "role": "secondary",
         "displayName": "Brand Violet (mark + runner semantic)",
-        "canonical": "#863bff",
+        "canonical": "#9b74e8",
         "tonalRamp": [
           "oklch(25% 0.15 295)",
           "oklch(35% 0.20 295)",
@@ -70,7 +70,7 @@
         "canonical": "#e5e7eb",
         "tonalRamp": [
           "#4b5563",
-          "#6b7280",
+          "#788294",
           "#9ca3af",
           "#d1d5db",
           "#e5e7eb",
@@ -92,6 +92,18 @@
           "oklch(80% 0.15 150)",
           "oklch(88% 0.10 150)",
           "oklch(95% 0.05 150)"
+        ]
+      },
+      "protocol-phase-categories": {
+        "role": "tertiary",
+        "displayName": "Protocol Phase Chart Categories",
+        "canonical": "#3b82f6",
+        "tonalRamp": [
+          "#3b82f6",
+          "#8b5cf6",
+          "#f59e0b",
+          "#ef4444",
+          "#10b981"
         ]
       },
       "status-failure": {
@@ -179,15 +191,31 @@
       "refersTo": "button-primary",
       "description": "The single cyan action key — instrument-press feedback, one per view section.",
       "html": "<button class=\"ds-btn-primary\">Launch Now</button>",
-      "css": ".ds-btn-primary { background: oklch(0.609 0.126 221.723); color: #fff; padding: 8px 16px; border: none; border-radius: 4px; font-family: 'Cascadia Code', 'JetBrains Mono', ui-monospace, Consolas, monospace; font-size: 0.875rem; font-weight: 500; cursor: pointer; transition: background-color 150ms; } .ds-btn-primary:hover { background: oklch(0.655 0.127 221.723); } .ds-btn-primary:active { transform: translateY(1px); } .ds-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }"
+      "css": ".ds-btn-primary { background: oklch(0.609 0.126 221.723); color: #0a0b0f; padding: 8px 16px; border: none; border-radius: 4px; font-family: 'Cascadia Code', 'JetBrains Mono', ui-monospace, Consolas, monospace; font-size: 0.875rem; font-weight: 600; cursor: pointer; transition: background-color 150ms; } .ds-btn-primary:hover { background: oklch(0.655 0.127 221.723); } .ds-btn-primary:active { transform: translateY(1px); } .ds-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Bordered neutral action key for supporting actions.",
+      "html": "<button class=\"ds-btn-secondary\">Save Config</button>",
+      "css": ".ds-btn-secondary { background: transparent; color: #d1d5db; padding: 8px 16px; border: 1px solid #374151; border-radius: 4px; font-family: 'Cascadia Code', 'JetBrains Mono', ui-monospace, Consolas, monospace; font-size: 0.875rem; cursor: pointer; transition: border-color 150ms, color 150ms; } .ds-btn-secondary:hover { border-color: #4b5563; color: #f3f4f6; } .ds-btn-secondary:active { transform: translateY(1px); } .ds-btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }"
     },
     {
       "name": "Ghost Button",
       "kind": "button",
       "refersTo": "button-ghost",
-      "description": "Secondary action — bordered, transparent, quiet until hovered.",
-      "html": "<button class=\"ds-btn-ghost\">Save Config</button>",
-      "css": ".ds-btn-ghost { background: transparent; color: #d1d5db; padding: 8px 16px; border: 1px solid #374151; border-radius: 4px; font-family: 'Cascadia Code', 'JetBrains Mono', ui-monospace, Consolas, monospace; font-size: 0.875rem; cursor: pointer; transition: border-color 150ms; } .ds-btn-ghost:hover { border-color: #4b5563; } .ds-btn-ghost:active { transform: translateY(1px); } .ds-btn-ghost:disabled { opacity: 0.4; cursor: not-allowed; }"
+      "description": "Borderless tertiary action, quiet until hovered.",
+      "html": "<button class=\"ds-btn-ghost\">Cancel</button>",
+      "css": ".ds-btn-ghost { background: transparent; color: #9ca3af; padding: 8px 16px; border: 1px solid transparent; border-radius: 4px; font-family: 'Cascadia Code', 'JetBrains Mono', ui-monospace, Consolas, monospace; font-size: 0.875rem; cursor: pointer; transition: color 150ms, background-color 150ms; } .ds-btn-ghost:hover { color: #e5e7eb; background: #12131a; } .ds-btn-ghost:active { transform: translateY(1px); } .ds-btn-ghost:disabled { opacity: 0.5; cursor: not-allowed; }"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "Destructive confirmation key; red is reserved for irreversible actions.",
+      "html": "<button class=\"ds-btn-danger\">Delete</button>",
+      "css": ".ds-btn-danger { background: rgba(248,113,113,.10); color: #f87171; padding: 8px 16px; border: 1px solid rgba(248,113,113,.30); border-radius: 4px; font-family: 'Cascadia Code', 'JetBrains Mono', ui-monospace, Consolas, monospace; font-size: 0.875rem; cursor: pointer; transition: background-color 150ms; } .ds-btn-danger:hover { background: rgba(248,113,113,.20); } .ds-btn-danger:active { transform: translateY(1px); } .ds-btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }"
     },
     {
       "name": "Text Input",
@@ -196,6 +224,22 @@
       "description": "Terminal well input — dark field, gray stroke, cyan focus shift (no ring, no glow).",
       "html": "<input class=\"ds-input\" type=\"text\" placeholder=\"URL or hostname to test\" />",
       "css": ".ds-input { width: 100%; background: #0a0b0f; border: 1px solid #374151; border-radius: 4px; padding: 6px 12px; font-family: 'Cascadia Code', 'JetBrains Mono', ui-monospace, Consolas, monospace; font-size: 0.875rem; color: #e5e7eb; outline: none; transition: border-color 150ms; } .ds-input:focus { border-color: oklch(0.609 0.126 221.723); } .ds-input::placeholder { color: #4b5563; }"
+    },
+    {
+      "name": "Modal / Drawer Shell",
+      "kind": "custom",
+      "refersTo": "modal",
+      "description": "The one accessible overlay shell: backdrop, Escape, focus trap/restoration, ARIA, and center or slide-over geometry.",
+      "html": "<div class=\"ds-backdrop\"><section class=\"ds-modal\" role=\"dialog\" aria-modal=\"true\"><h2>Dialog title</h2></section></div>",
+      "css": ".ds-backdrop { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.6); } .ds-modal { width: min(100% - 32px, 448px); max-height: 85vh; overflow: auto; padding: 24px; background: #0d0e14; border: 1px solid #1a1b25; border-radius: 8px; color: #e5e7eb; }"
+    },
+    {
+      "name": "Page Shell",
+      "kind": "custom",
+      "refersTo": "page-shell",
+      "description": "Canonical route padding and page-header rhythm with room for an action.",
+      "html": "<main class=\"ds-page-shell\"><header><h1>Runs</h1></header></main>",
+      "css": ".ds-page-shell { padding: 16px; } @media (min-width: 768px) { .ds-page-shell { padding: 24px; } }"
     },
     {
       "name": "Status Badge",
@@ -236,7 +280,7 @@
     "keyCharacteristics": [
       "Dark glass surfaces, flat: depth from four background steps + 1px borders, never shadows",
       "Monospace-first at every level, 12px data type as the default voice",
-      "One interactive accent (Phosphor Cyan); brand violet reserved for the mark",
+      "One interactive accent (Phosphor Cyan); brand violet reserved for the mark and runner/operator semantic",
       "Semantically fixed status colors, identical everywhere",
       "Tactile instrument-key controls: press feedback, focus border shifts, 150–200ms motion"
     ],
@@ -258,7 +302,7 @@
       },
       {
         "name": "The Data-First Rule",
-        "body": "12px monospace is the default voice; larger sizes are the exception and must earn their space.",
+        "body": "12px monospace is the default voice; larger sizes are the exception and must earn their space. SVG and canvas labels follow the same floor; narrow charts scroll or simplify instead of shrinking meaningful text.",
         "section": "typography"
       },
       {
@@ -268,8 +312,13 @@
       },
       {
         "name": "The AA Floor Rule",
-        "body": "Meaningful text never drops below 4.5:1 on its background: Muted #9ca3af is the workhorse, Faint #6b7280 the de-emphasis floor. Only placeholders and disabled states may go dimmer (#4b5563).",
+        "body": "Meaningful text never drops below 4.5:1 on its background: Muted #9ca3af is the workhorse, Faint #788294 the de-emphasis floor. Only placeholders and disabled states may go dimmer (#4b5563).",
         "section": "colors"
+      },
+      {
+        "name": "The One Shell Rule",
+        "body": "Use the canonical Button, FormControls, Modal, ConfirmDialog, PageShell, AsyncState, and DataTable primitives. Feature code does not hand-roll dialog mechanics, route padding, or primary action styles.",
+        "section": "components"
       }
     ],
     "dos": [
@@ -278,14 +327,18 @@
       "Do keep status colors semantically exact everywhere (green/red/amber/cyan/grey), including reports and charts.",
       "Do give every control press feedback (1px translate) and a 150ms border/fill transition — tactile, not animated.",
       "Do honor prefers-reduced-motion on every entrance animation.",
-      "Do keep muted text at gray-400 (#9ca3af) or brighter for anything a user must read."
+      "Do keep muted text at gray-400 (#9ca3af) or brighter for anything a user must read.",
+      "Do use the canonical shared primitives so accessibility and visual behavior improve in one place.",
+      "Do keep SVG and canvas labels at 12px or larger; let narrow visualizations scroll or simplify."
     ],
     "donts": [
       "Don't use Brand Violet outside its two meanings — the mark and the runner/admin semantic; never as a status or a second interactive accent.",
       "Don't add box-shadows, gradients, or glassmorphism — flat surfaces and borders only.",
       "Don't introduce a second interactive accent or re-purpose a status color decoratively.",
       "Don't put gray text on colored fills — use white/near-white or a darker shade of the fill.",
-      "Don't disable a control without disabled styling; a dead-looking-alive button is a bug."
+      "Don't disable a control without disabled styling; a dead-looking-alive button is a bug.",
+      "Don't introduce literal type sizes below the 12px Data step.",
+      "Don't hand-roll a modal, drawer, confirmation, or route page shell in feature code."
     ]
   }
 }

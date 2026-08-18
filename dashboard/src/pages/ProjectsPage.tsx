@@ -8,6 +8,7 @@ import { useToast } from '../hooks/useToast';
 import { RoleBadge } from '../components/common/RoleBadge';
 import { PageHeader } from '../components/common/PageHeader';
 import { EmptyState } from '../components/common/EmptyState';
+import { Button } from '../components/common/Button';
 
 export function ProjectsPage() {
   const [loading, setLoading] = useState(true);
@@ -77,9 +78,9 @@ export function ProjectsPage() {
       <PageHeader
         title="Workspaces"
         action={isPlatformAdmin ? (
-          <button onClick={() => setShowCreate(true)} className="btn-primary">
+          <Button variant="primary" onClick={() => setShowCreate(true)}>
             Create Workspace
-          </button>
+          </Button>
         ) : undefined}
       />
 
@@ -107,19 +108,21 @@ export function ProjectsPage() {
               />
             </div>
             <div className="flex gap-2">
-              <button
+              <Button
+                variant="primary"
                 onClick={handleCreate}
                 disabled={creating || !newName.trim()}
-                className="btn-primary"
+                loading={creating}
+                loadingLabel="Creating…"
               >
-                {creating ? 'Creating...' : 'Create'}
-              </button>
-              <button
+                Create
+              </Button>
+              <Button
+                variant="ghost"
                 onClick={() => { setShowCreate(false); setNewName(''); setNewDescription(''); }}
-                className="text-gray-400 hover:text-gray-200 px-4 py-1.5 text-sm"
               >
                 Cancel
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -149,7 +152,7 @@ export function ProjectsPage() {
               {project.description && (
                 <p className="text-xs text-gray-400 truncate mb-2">{project.description}</p>
               )}
-              <p className="text-xs text-gray-500">{project.slug}</p>
+              <p className="text-xs text-faint">{project.slug}</p>
             </button>
           ))}
         </div>

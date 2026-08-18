@@ -129,7 +129,7 @@ export function TesterRegionGroup({
                         <div className="w-32 text-right text-gray-400">
                           <div>{detail ?? ''}</div>
                           <div
-                            className="text-gray-500"
+                            className="text-faint"
                             title="last time the runner's agent key authenticated"
                           >
                             {t.api_key_last_used_at

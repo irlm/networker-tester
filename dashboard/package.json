@@ -10,10 +10,14 @@
     "test": "vitest run",
     "check:bundle-size": "node scripts/check-bundle-size.mjs",
     "preview": "vite preview",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:a11y": "playwright test e2e/accessibility.spec.ts",
+    "test:e2e:responsive": "playwright test e2e/responsive.spec.ts",
+    "test:e2e:bundle": "playwright test e2e/lazy-charts.spec.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",
+    "@tanstack/react-query": "^5.101.4",
     "@tanstack/react-virtual": "^3.14.9",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
@@ -24,6 +28,7 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.62.1",
     "@testing-library/jest-dom": "^7.0.1",

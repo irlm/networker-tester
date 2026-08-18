@@ -86,7 +86,7 @@ describe('SdkEndpointsPage', () => {
     await renderPage('operator');
     await user.click(screen.getByRole('button', { name: 'Delete Checkout API' }));
 
-    const dialog = screen.getByRole('dialog');
+    const dialog = screen.getByRole('alertdialog');
     expect(within(dialog).getByText('Delete SDK endpoint')).toBeInTheDocument();
     expect(deleteSdkEndpoint).not.toHaveBeenCalled();
 

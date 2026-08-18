@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.230] - 2026-08-18
+
+- **Dashboard architecture is now feature-oriented and reusable.** Shared API transport, TanStack Query hooks, page shells, form controls, dialogs, buttons, async states, and run-detail sections replace duplicated page-level implementations; heavy charts are loaded only when needed.
+- **Performance logs now return a fast, focused default view.** The page starts at the last five minutes and adds URL-backed time ranges, kind and path filters, pagination, filtered statistics, and active-view polling that respects Pause.
+- **The UI design contract is documented and enforced.** `DESIGN.md` and `dashboard/ARCHITECTURE.md` define tokens, component ownership, accessibility, responsive behavior, query boundaries, and testing expectations.
+- **Dashboard regression coverage is broader.** Unit and Playwright suites now cover shared primitives, query behavior, routes, accessibility, responsive layouts, performance-log filtering, and lazy-loaded chart bundles.
+
+---
+
 ## [0.28.229] - 2026-08-18
 
 ### Added
@@ -29,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (DB-backed) and `GET /api/admin/canary/runs` (live, degrades to an empty
   list when no `CANARY_GITHUB_TOKEN` is configured); both GlobalAdmin-gated
   like the rest of the canary surface.
+
+---
 
 ## [0.28.228] - 2026-08-18
 

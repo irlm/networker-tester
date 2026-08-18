@@ -1,15 +1,25 @@
-import { useState, useCallback, useMemo, useRef } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { DataTable } from '../components/common/DataTable';
 import { Link, useSearchParams } from 'react-router';
-import { api } from '../api/client';
-import { stableSet } from '../lib/stableUpdate';
+import { errorMessage } from '../api/client';
 import { timeAgo } from '../lib/format';
 import type { TestSchedule } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { FilterBar, FilterChip } from '../components/common/FilterBar';
 import { useToast } from '../hooks/useToast';
-import { usePolling } from '../hooks/usePolling';
 import { StatusFooter } from '../components/common/StatusFooter';
+import { Button } from '../components/common/Button';
+import { buttonClassName } from '../components/common/button-styles';
+import { ConfirmDialog } from '../components/common/ConfirmDialog';
+import { ErrorState, LoadingState } from '../components/common/AsyncState';
+import { Input, Select } from '../components/common/FormControls';
+import { PageShell } from '../components/common/PageShell';
+import {
+  useDeleteScheduleMutation,
+  useSchedulesQuery,
+  useTriggerScheduleMutation,
+  useUpdateScheduleMutation,
+} from '../features/runs/queries';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
 
@@ -58,7 +68,7 @@ function scheduleStatus(s: TestSchedule): { badge: string; label: string; detail
     if (mins < 60) return { badge: 'online', label: 'active', detail: `next in ${mins}m`, detailColor: 'text-gray-400' };
     const hrs = Math.floor(mins / 60);
     if (hrs < 24) return { badge: 'online', label: 'active', detail: `next in ${hrs}h`, detailColor: 'text-gray-400' };
-    return { badge: 'online', label: 'active', detail: `next in ${Math.floor(hrs / 24)}d`, detailColor: 'text-gray-500' };
+    return { badge: 'online', label: 'active', detail: `next in ${Math.floor(hrs / 24)}d`, detailColor: 'text-faint' };
   }
   return { badge: 'online', label: 'active', detail: '', detailColor: '' };
 }
@@ -66,12 +76,15 @@ function scheduleStatus(s: TestSchedule): { badge: string; label: string; detail
 export function SchedulesPage() {
   const { projectId, isOperator } = useProject();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [schedules, setSchedules] = useState<TestSchedule[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [toggling, setToggling] = useState<string | null>(null);
+  const [paused, setPaused] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const addToast = useToast();
-  const schedulesFingerprint = useRef('');
+  const schedulesQuery = useSchedulesQuery(projectId, !paused);
+  const updateSchedule = useUpdateScheduleMutation(projectId);
+  const triggerSchedule = useTriggerScheduleMutation(projectId);
+  const deleteSchedule = useDeleteScheduleMutation(projectId);
+  const schedules = useMemo(() => schedulesQuery.data ?? [], [schedulesQuery.data]);
+  const toggling = updateSchedule.isPending ? updateSchedule.variables?.scheduleId ?? null : null;
 
   const schedStatusFilter = searchParams.get('status') || 'all';
   const nameSearch = searchParams.get('name') || '';
@@ -89,56 +102,29 @@ export function SchedulesPage() {
 
   usePageTitle('Schedules');
 
-  // Declared above refresh because its setter is called inside the callback.
-  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
-
-  const refresh = useCallback(() => {
-    if (!projectId) return;
-    api.listTestSchedules(projectId)
-      .then(s => { stableSet(setSchedules, s, schedulesFingerprint); setLoading(false); setLastUpdatedAt(Date.now()); })
-      .catch(() => { addToast('error', 'Failed to load schedules'); setLoading(false); });
-  }, [addToast, projectId]);
-
-  // StatusFooter wiring: pause flips usePolling's enabled flag; refresh
-  // bumps resetKey (restarts the loop with an immediate tick).
-  const [paused, setPaused] = useState(false);
-  const [refreshTick, setRefreshTick] = useState(0);
-  usePolling(refresh, 10000, !paused, refreshTick);
-
   const handleToggle = async (id: string, currentEnabled: boolean) => {
-    setToggling(id);
     try {
-      await api.updateTestSchedule(id, { enabled: !currentEnabled });
+      await updateSchedule.mutateAsync({ scheduleId: id, enabled: !currentEnabled });
       addToast('success', `Schedule ${!currentEnabled ? 'enabled' : 'paused'}`);
-      refresh();
     } catch {
       addToast('error', 'Failed to toggle schedule');
-    } finally {
-      setToggling(null);
     }
   };
 
   const handleTrigger = async (id: string, name: string) => {
     try {
-      const run = await api.triggerTestSchedule(id);
+      const run = await triggerSchedule.mutateAsync(id);
       addToast('success', `Run started from "${name}" (${run.id.slice(0, 8)})`);
-      refresh();
     } catch {
       addToast('error', 'Failed to run test');
     }
   };
 
   const handleDelete = async (id: string) => {
-    if (confirmDelete !== id) {
-      setConfirmDelete(id);
-      setTimeout(() => setConfirmDelete(prev => prev === id ? null : prev), 3000);
-      return;
-    }
-    setConfirmDelete(null);
     try {
-      await api.deleteTestSchedule(id);
+      await deleteSchedule.mutateAsync(id);
       addToast('success', 'Schedule deleted');
-      refresh();
+      setConfirmDelete(null);
     } catch {
       addToast('error', 'Failed to delete schedule');
     }
@@ -172,14 +158,12 @@ export function SchedulesPage() {
     })),
     [filteredSchedules],
   );
+  const scheduleToDelete = schedules.find(schedule => schedule.id === confirmDelete);
 
-  if (loading && schedules.length === 0) {
+  if (schedulesQuery.isPending && schedules.length === 0) {
     return (
-      <div className="p-4 md:p-6">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold text-gray-100">Schedules</h2>
-          <div className="h-7 w-28 rounded bg-gray-800 motion-safe:animate-pulse" />
-        </div>
+      <PageShell title="Schedules">
+        <LoadingState label="Loading schedules…">
         <div className="hidden md:block table-container">
           <div className="bg-[var(--bg-surface)] px-4 py-2.5 border-b border-gray-800/50">
             <div className="flex gap-8">
@@ -196,25 +180,33 @@ export function SchedulesPage() {
             </div>
           ))}
         </div>
-      </div>
+        </LoadingState>
+      </PageShell>
+    );
+  }
+
+  if (schedulesQuery.error && schedules.length === 0) {
+    return (
+      <PageShell title="Schedules">
+        <ErrorState
+          title="Schedules unavailable"
+          message={errorMessage(schedulesQuery.error)}
+          onRetry={() => { void schedulesQuery.refetch(); }}
+        />
+      </PageShell>
     );
   }
 
   return (
-    <div className="p-4 md:p-6">
-      <div className="flex items-center justify-between mb-4 md:mb-6">
-        <div className="flex items-center gap-3 min-w-0">
-          <h2 className="text-lg md:text-xl font-bold text-gray-100">Schedules</h2>
-          {schedules.length > 0 && (
-            <span className="text-xs text-gray-500 hidden sm:inline">
-              <span className="text-green-400">{enabledCount}</span> active
-              {enabledCount !== schedules.length && (
-                <> · {schedules.length} total</>
-              )}
-            </span>
-          )}
-        </div>
-      </div>
+    <PageShell
+      title="Schedules"
+      action={schedules.length > 0 ? (
+        <span className="text-xs text-faint">
+          <span className="text-green-400">{enabledCount}</span> active
+          {enabledCount !== schedules.length && <> · {schedules.length} total</>}
+        </span>
+      ) : undefined}
+    >
 
       {/* No filter chrome before there is anything to filter (audit §10). */}
       {(schedules.length > 0 || schedFilterCount > 0) && (
@@ -230,26 +222,28 @@ export function SchedulesPage() {
           </>
         }
       >
-        <input
-          type="search"
-          value={nameSearch}
-          onChange={(e) => setFilter('name', e.target.value)}
-          placeholder="Search schedules..."
-          aria-label="Search schedules by name"
-          className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-300 w-40 md:w-48 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
-        />
-        <select
-          value={schedStatusFilter}
-          onChange={(e) => setFilter('status', e.target.value)}
-          aria-label="Filter by status"
-          className="bg-[var(--bg-base)] border border-gray-700 rounded px-2 md:px-3 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-cyan-500"
-        >
-          {SCHEDULE_STATUS_OPTIONS.map(s => (
-            <option key={s} value={s}>
-              {s === 'all' ? 'All statuses' : s.charAt(0).toUpperCase() + s.slice(1)}
-            </option>
-          ))}
-        </select>
+        <div className="w-40 md:w-48">
+          <Input
+            type="search"
+            value={nameSearch}
+            onChange={(e) => setFilter('name', e.target.value)}
+            placeholder="Search schedules..."
+            aria-label="Search schedules by name"
+          />
+        </div>
+        <div className="w-40">
+          <Select
+            value={schedStatusFilter}
+            onChange={(e) => setFilter('status', e.target.value)}
+            aria-label="Filter by status"
+          >
+            {SCHEDULE_STATUS_OPTIONS.map(s => (
+              <option key={s} value={s}>
+                {s === 'all' ? 'All statuses' : s.charAt(0).toUpperCase() + s.slice(1)}
+              </option>
+            ))}
+          </Select>
+        </div>
       </FilterBar>
       )}
 
@@ -293,7 +287,10 @@ export function SchedulesPage() {
               <button
                 onClick={() => handleToggle(s.id, s.enabled)}
                 disabled={toggling === s.id}
-                className={`w-9 h-5 rounded-full transition-colors relative inline-block ${
+                role="switch"
+                aria-checked={s.enabled}
+                aria-label={`${s.enabled ? 'Pause' : 'Resume'} ${s._name} schedule`}
+                className={`w-9 h-5 rounded-full transition-colors relative inline-block focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-cyan-400 ${
                   toggling === s.id ? 'opacity-50' : ''
                 } ${s.enabled ? 'bg-cyan-600' : 'bg-gray-700'}`}
                 title={s.enabled ? 'Pause' : 'Resume'}
@@ -310,20 +307,27 @@ export function SchedulesPage() {
             render: (s) =>
               isOperator ? (
                 <div className="flex items-center gap-2">
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="xs"
                     onClick={() => handleTrigger(s.id, s._name)}
-                    className="text-xs text-cyan-400 hover:text-cyan-300"
+                    className="!px-1.5 text-cyan-400 hover:text-cyan-300"
                     title="Run now"
+                    aria-label={`Run ${s._name} now`}
+                    disabled={triggerSchedule.isPending}
                   >
                     &#9654;
-                  </button>
-                  <button
-                    onClick={() => handleDelete(s.id)}
-                    className={`text-xs transition-colors ${confirmDelete === s.id ? 'text-red-400' : 'text-gray-500 hover:text-red-400'}`}
-                    title={confirmDelete === s.id ? 'Click again to confirm' : 'Delete'}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => setConfirmDelete(s.id)}
+                    className="!px-1.5 text-faint hover:text-red-400"
+                    title="Delete schedule"
+                    aria-label={`Delete ${s._name} schedule`}
                   >
-                    {confirmDelete === s.id ? 'delete?' : '\u2715'}
-                  </button>
+                    \u2715
+                  </Button>
                 </div>
               ) : null,
           },
@@ -335,12 +339,12 @@ export function SchedulesPage() {
             <p className="text-gray-400 text-sm">{schedFilterCount > 0 ? 'No schedules match the current filters' : 'No scheduled tests yet'}</p>
             {schedFilterCount === 0 && (
               <>
-                <p className="text-gray-500 text-xs mt-1">
+                <p className="text-faint text-xs mt-1">
                   Create one from the Full Stack benchmark wizard ("Add schedule" on the Review step).
                 </p>
                 <Link
                   to={`/projects/${projectId}/benchmarks/full-stack/new`}
-                  className="inline-block mt-3 px-4 py-1.5 text-xs bg-cyan-600 hover:bg-cyan-500 text-white rounded transition-colors"
+                  className={buttonClassName({ variant: 'primary', size: 'xs', className: 'mt-3' })}
                 >
                   New Full Stack Benchmark
                 </Link>
@@ -353,17 +357,30 @@ export function SchedulesPage() {
       <StatusFooter
         paused={paused}
         onPauseToggle={() => setPaused(p => !p)}
-        onRefresh={() => { setRefreshTick(t => t + 1); if (paused) refresh(); }}
-        lastUpdatedAt={lastUpdatedAt}
+        onRefresh={() => { void schedulesQuery.refetch(); }}
+        lastUpdatedAt={schedulesQuery.dataUpdatedAt || null}
         intervalMs={10000}
         pills={
-          <span className="text-gray-500">
+          <span className="text-faint">
             {computedSchedules.length} schedule{computedSchedules.length !== 1 ? 's' : ''}
             {enabledCount > 0 && ` · ${enabledCount} active`}
             {schedFilterCount > 0 && ` · ${schedFilterCount} filter${schedFilterCount !== 1 ? 's' : ''}`}
           </span>
         }
       />
-    </div>
+
+      <ConfirmDialog
+        open={!!scheduleToDelete}
+        title="Delete schedule?"
+        description={scheduleToDelete
+          ? `“${scheduleToDelete.config_name || 'Unnamed'}” will stop running automatically. Existing runs are preserved.`
+          : ''}
+        confirmLabel="Delete schedule"
+        danger
+        loading={deleteSchedule.isPending}
+        onConfirm={() => { if (scheduleToDelete) void handleDelete(scheduleToDelete.id); }}
+        onClose={() => setConfirmDelete(null)}
+      />
+    </PageShell>
   );
 }

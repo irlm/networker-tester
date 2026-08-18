@@ -9,7 +9,7 @@
  * types to avoid a transform layer — components can read fields directly.
  */
 
-import { request } from './client';
+import { request } from './http';
 
 export type PowerState =
   | 'provisioning'

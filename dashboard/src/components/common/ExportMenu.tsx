@@ -74,7 +74,7 @@ export function ExportMenu({ path, fileBase, label = 'Export' }: ExportMenuProps
       {open && (
         <div
           role="menu"
-          className="absolute right-0 mt-1 w-40 z-20 bg-gray-900 border border-gray-700 rounded shadow-lg py-1"
+          className="absolute right-0 mt-1 w-40 z-20 bg-gray-900 border border-gray-700 rounded py-1"
         >
           {FORMATS.map(f => (
             <button

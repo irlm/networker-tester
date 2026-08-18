@@ -1,19 +1,22 @@
-import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { DataTable } from '../components/common/DataTable';
 import { Link, useSearchParams } from 'react-router';
-import { api, errorMessage } from '../api/client';
 import type { TestRun, RunStatus, EndpointKind, TestConfig, TestConfigListItem } from '../api/types';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { RunResult } from '../components/common/RunResult';
 import { runDisplayStatus } from '../lib/runStatus';
 import { FilterBar, FilterChip } from '../components/common/FilterBar';
-import { usePolling } from '../hooks/usePolling';
 import { StatusFooter } from '../components/common/StatusFooter';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useRenderLog } from '../hooks/useRenderLog';
-import { stableSet } from '../lib/stableUpdate';
 import { timeAgo } from '../lib/format';
 import { useProject } from '../hooks/useProject';
+import { useTestConfigsQuery, useTestRunsQuery } from '../features/runs/queries';
+import type { RunListParams } from '../features/runs/api';
+import { PageShell } from '../components/common/PageShell';
+import { Button } from '../components/common/Button';
+import { buttonClassName } from '../components/common/button-styles';
+import { Select } from '../components/common/FormControls';
 
 const STATUS_OPTIONS: Array<RunStatus | 'all'> = ['all', 'queued', 'provisioning', 'running', 'completed', 'failed', 'cancelled'];
 const ARTIFACT_OPTIONS = ['all', 'yes', 'no'] as const;
@@ -29,10 +32,10 @@ const KIND_BADGE_CLASSES: Record<string, string> = {
 };
 
 function KindBadge({ kind }: { kind: string | null | undefined }) {
-  if (!kind) return <span className="text-gray-500">-</span>;
+  if (!kind) return <span className="text-faint">-</span>;
   const classes = KIND_BADGE_CLASSES[kind] || 'text-gray-400 bg-gray-500/10';
   return (
-    <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${classes}`}>
+    <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${classes}`}>
       {kind}
     </span>
   );
@@ -41,40 +44,7 @@ function KindBadge({ kind }: { kind: string | null | undefined }) {
 export function RunsPage() {
   const { projectId } = useProject();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [runs, setRuns] = useState<TestRun[]>([]);
-  // Backend returns full TestConfig objects from this endpoint even though the
-  // client typed it as TestConfigListItem. We read endpoint.kind off the union
-  // to stay robust against either shape.
-  const [configs, setConfigs] = useState<Array<TestConfigListItem | TestConfig>>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(0);
-  const runsFingerprint = useRef('');
-
-  // Build a config-id → {kind, name, modes} map so runs list can show endpoint_kind
-  // even when the backend doesn't denormalize it into the TestRun row.
-  const configMap = useMemo(() => {
-    const m = new Map<string, { name: string; endpoint_kind?: EndpointKind; modes?: string[] }>();
-    for (const c of configs) {
-      const endpoint_kind = 'endpoint_kind' in c
-        ? c.endpoint_kind
-        : (c.endpoint as { kind?: EndpointKind } | undefined)?.kind;
-      const modes = 'modes' in c
-        ? c.modes
-        : (c as TestConfig).workload?.modes;
-      m.set(c.id, { name: c.name, endpoint_kind, modes });
-    }
-    return m;
-  }, [configs]);
-
-  useEffect(() => {
-    if (!projectId) return;
-    let cancelled = false;
-    api.listTestConfigs(projectId).then((data) => {
-      if (!cancelled) setConfigs(data);
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [projectId]);
 
   const statusFilter = searchParams.get('status') || 'all';
   const endpointKindFilter = searchParams.get('endpoint_kind') || 'all';
@@ -125,43 +95,42 @@ export function RunsPage() {
 
   usePageTitle('Runs');
 
-  // Declared above loadRuns because its setter is called inside the callback.
-  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
+  const params = useMemo<RunListParams>(() => {
+    const next: RunListParams = { limit: 200 };
+    if (statusFilter !== 'all') next.status = statusFilter;
+    if (endpointKindFilter !== 'all') next.endpoint_kind = endpointKindFilter;
+    if (artifactFilter === 'yes') next.has_artifact = true;
+    if (artifactFilter === 'no') next.has_artifact = false;
+    if (comparisonGroupId) next.comparison_group_id = comparisonGroupId;
+    return next;
+  }, [statusFilter, endpointKindFilter, artifactFilter, comparisonGroupId]);
 
-  const loadRuns = useCallback(() => {
-    if (!projectId) return;
-    const params: {
-      status?: string;
-      endpoint_kind?: string;
-      has_artifact?: boolean;
-      comparison_group_id?: string;
-      limit?: number;
-    } = { limit: 200 };
-    if (statusFilter !== 'all') params.status = statusFilter;
-    if (endpointKindFilter !== 'all') params.endpoint_kind = endpointKindFilter;
-    if (artifactFilter === 'yes') params.has_artifact = true;
-    if (artifactFilter === 'no') params.has_artifact = false;
-    if (comparisonGroupId) params.comparison_group_id = comparisonGroupId;
-    api
-      .listTestRuns(projectId, params)
-      .then((data) => {
-        const changed = stableSet(setRuns, data, runsFingerprint);
-        if (changed) markRender('api:runs', data.length);
-        setError(null);
-        setLoading(false);
-        setLastUpdatedAt(Date.now());
-      })
-      .catch((e) => {
-        setError(errorMessage(e));
-        setLoading(false);
-      });
-  }, [statusFilter, endpointKindFilter, artifactFilter, comparisonGroupId, projectId, markRender]);
-
-  // StatusFooter wiring: pause flips usePolling's enabled flag; refresh
-  // bumps resetKey (restarts the loop with an immediate tick).
   const [paused, setPaused] = useState(false);
-  const [refreshTick, setRefreshTick] = useState(0);
-  usePolling(loadRuns, 15000, !paused, refreshTick);
+  const runsQuery = useTestRunsQuery(projectId, params, { polling: !paused });
+  const configsQuery = useTestConfigsQuery(projectId);
+  const runs = useMemo<TestRun[]>(() => runsQuery.data ?? [], [runsQuery.data]);
+  // Older control planes returned full configs from the list endpoint. Keep
+  // the tolerant enrichment while the feature transport normalizes rollout.
+  const configs = useMemo<Array<TestConfigListItem | TestConfig>>(
+    () => (configsQuery.data ?? []) as Array<TestConfigListItem | TestConfig>,
+    [configsQuery.data],
+  );
+
+  // Build a config-id → {kind, name, modes} map so runs list can show endpoint_kind
+  // even when the backend doesn't denormalize it into the TestRun row.
+  const configMap = useMemo(() => {
+    const m = new Map<string, { name: string; endpoint_kind?: EndpointKind; modes?: string[] }>();
+    for (const c of configs) {
+      const endpoint_kind = 'endpoint_kind' in c
+        ? c.endpoint_kind
+        : (c.endpoint as { kind?: EndpointKind } | undefined)?.kind;
+      const modes = 'modes' in c
+        ? c.modes
+        : (c as TestConfig).workload?.modes;
+      m.set(c.id, { name: c.name, endpoint_kind, modes });
+    }
+    return m;
+  }, [configs]);
 
   // Merge denormalized fields from the config map so the backend's sparse
   // TestRun payload (no endpoint_kind, no config_name) still drives the UI.
@@ -232,10 +201,9 @@ export function RunsPage() {
     !!comparisonGroupId,
   ].filter(Boolean).length;
 
-  if (loading && runs.length === 0) {
+  if (runsQuery.isPending && runs.length === 0) {
     return (
-      <div className="p-4 md:p-6">
-        <h2 className="text-lg md:text-xl font-bold text-gray-100 mb-6">Runs</h2>
+      <PageShell title="Runs">
         <div className="table-container">
           <table className="w-full text-sm">
             <thead>
@@ -262,19 +230,18 @@ export function RunsPage() {
             </tbody>
           </table>
         </div>
-      </div>
+      </PageShell>
     );
   }
 
-  if (error && runs.length === 0) {
+  if (runsQuery.isError && runs.length === 0) {
     return (
-      <div className="p-4 md:p-6">
-        <h2 className="text-lg md:text-xl font-bold text-gray-100 mb-6">Runs</h2>
+      <PageShell title="Runs">
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
           <h3 className="text-red-400 font-bold mb-2">Failed to load runs</h3>
           <p className="text-red-300 text-sm">Could not fetch test runs. Check your connection and try refreshing.</p>
         </div>
-      </div>
+      </PageShell>
     );
   }
 
@@ -286,16 +253,17 @@ export function RunsPage() {
   ];
 
   return (
-    <div className="p-4 md:p-6">
-      <div className="flex items-center justify-between mb-4 md:mb-6 gap-2">
-        <h2 className="text-lg md:text-xl font-bold text-gray-100">Runs</h2>
+    <PageShell
+      title="Runs"
+      action={
         <Link
           to={`/projects/${projectId}/tests/new`}
-          className="bg-cyan-600 hover:bg-cyan-500 text-white px-3 md:px-4 py-1.5 rounded text-sm transition-colors flex-shrink-0"
+          className={buttonClassName({ variant: 'primary', className: 'flex-shrink-0' })}
         >
           New Run
         </Link>
-      </div>
+      }
+    >
 
       {/* Kind tabs */}
       <div className="flex items-center gap-1 mb-4 border-b border-gray-800/50">
@@ -309,11 +277,11 @@ export function RunsPage() {
               className={`px-3 py-2 text-xs font-medium border-b-2 transition-colors ${
                 active
                   ? 'border-cyan-500 text-gray-100'
-                  : `border-transparent hover:text-gray-300 ${count === 0 ? 'text-gray-700' : 'text-gray-400'}`
+                  : `border-transparent hover:text-gray-300 ${count === 0 ? 'text-faint' : 'text-gray-400'}`
               }`}
             >
               {tab.label}
-              <span className={`ml-1.5 tabular-nums ${active ? 'text-cyan-400' : count === 0 ? 'text-gray-700' : 'text-gray-500'}`}>
+              <span className={`ml-1.5 tabular-nums ${active ? 'text-cyan-400' : 'text-faint'}`}>
                 {count}
               </span>
             </button>
@@ -339,31 +307,31 @@ export function RunsPage() {
           </>
         }
       >
-        <select
+        <Select
           value={statusFilter}
           onChange={(e) => setFilter('status', e.target.value)}
           aria-label="Filter by status"
-          className="bg-[var(--bg-base)] border border-gray-700 rounded px-2 md:px-3 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-cyan-500"
+          className="w-auto py-1.5"
         >
           {STATUS_OPTIONS.map(s => (
             <option key={s} value={s}>
               {s === 'all' ? 'Any status' : s.charAt(0).toUpperCase() + s.slice(1)}
             </option>
           ))}
-        </select>
+        </Select>
 
-        <select
+        <Select
           value={artifactFilter}
           onChange={(e) => setFilter('has_artifact', e.target.value)}
           aria-label="Filter by benchmark artifact"
-          className="bg-[var(--bg-base)] border border-gray-700 rounded px-2 md:px-3 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-cyan-500"
+          className="w-auto py-1.5"
         >
           {ARTIFACT_OPTIONS.map(a => (
             <option key={a} value={a}>
               {a === 'all' ? 'Any type' : a === 'yes' ? 'Benchmarks only' : 'Simple only'}
             </option>
           ))}
-        </select>
+        </Select>
 
         <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer select-none">
           <input
@@ -376,7 +344,7 @@ export function RunsPage() {
         </label>
       </FilterBar>
 
-      {error && (
+      {runsQuery.isError && (
         <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-4 mt-4 text-yellow-400 text-sm">
           Failed to refresh runs. Retrying automatically.
         </div>
@@ -400,7 +368,7 @@ export function RunsPage() {
                   {run.id.slice(0, 8)}
                 </Link>
                 {run.artifact_id && (
-                  <span className="ml-2 text-[10px] text-gray-300 bg-gray-500/10 px-1.5 py-0.5 rounded">benchmark</span>
+                  <span className="ml-2 text-xs text-gray-300 bg-gray-500/10 px-1.5 py-0.5 rounded">benchmark</span>
                 )}
               </>
             ),
@@ -463,11 +431,11 @@ export function RunsPage() {
       <StatusFooter
         paused={paused}
         onPauseToggle={() => setPaused(p => !p)}
-        onRefresh={() => { setRefreshTick(t => t + 1); if (paused) loadRuns(); }}
-        lastUpdatedAt={lastUpdatedAt}
+        onRefresh={() => { void runsQuery.refetch(); }}
+        lastUpdatedAt={runsQuery.dataUpdatedAt || null}
         intervalMs={15000}
         pills={
-          <span className="text-gray-500">
+          <span className="text-faint">
             {runsWithDates.length} run{runsWithDates.length !== 1 ? 's' : ''}
             {activeFilterCount > 0 && ` · ${activeFilterCount} filter${activeFilterCount !== 1 ? 's' : ''}`}
           </span>
@@ -481,26 +449,26 @@ export function RunsPage() {
             Showing {pageStart + 1}-{pageEnd} of {runsWithDates.length} runs
           </span>
           <div className="flex items-center gap-2">
-            <button
+            <Button
               onClick={() => setPage(p => Math.max(0, p - 1))}
               disabled={safePage === 0}
-              className="px-2.5 py-1 rounded border border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              size="xs"
             >
               Previous
-            </button>
+            </Button>
             <span className="tabular-nums text-gray-400">
               {safePage + 1} / {totalPages}
             </span>
-            <button
+            <Button
               onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
               disabled={safePage >= totalPages - 1}
-              className="px-2.5 py-1 rounded border border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              size="xs"
             >
               Next
-            </button>
+            </Button>
           </div>
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }

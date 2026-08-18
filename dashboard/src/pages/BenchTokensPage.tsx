@@ -353,7 +353,7 @@ export function BenchTokensPage() {
                         />
                       ))}
                     </div>
-                    <span className="text-gray-500">{run.tokens.length}</span>
+                    <span className="text-faint">{run.tokens.length}</span>
                   </button>
                 );
               })}
@@ -379,7 +379,7 @@ export function BenchTokensPage() {
                         <span className={`text-xs truncate ${run.configId === 'unknown' ? 'text-gray-400 italic' : 'text-cyan-400'}`}>
                           {label}
                         </span>
-                        <span className="text-[10px] text-gray-500 ml-2 shrink-0">
+                        <span className="text-xs text-faint ml-2 shrink-0">
                           {run.tokens.length}
                         </span>
                       </div>
@@ -430,7 +430,7 @@ export function BenchTokensPage() {
                 {/* VM table */}
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="border-b border-gray-800 text-left text-[10px] text-gray-400 uppercase tracking-wider">
+                    <tr className="border-b border-gray-800 text-left text-xs text-gray-400 uppercase tracking-wider">
                       <th className="px-4 py-2">VM</th>
                       <th className="px-4 py-2">User</th>
                       <th className="px-4 py-2">Created</th>
@@ -500,7 +500,7 @@ export function BenchTokensPage() {
         const s = Math.floor((now - lastRefresh) / 1000);
 
         return (
-          <div className="mt-3 flex items-center justify-between text-[10px] text-gray-500 border-t border-gray-800/50 pt-2">
+          <div className="mt-3 flex items-center justify-between text-xs text-faint border-t border-gray-800/50 pt-2">
             <div className="flex items-center gap-4">
               {healthy > 0 && <span><span className="text-green-400">{healthy}</span> healthy</span>}
               {warning > 0 && <span><span className="text-yellow-400">{warning}</span> expiring &lt;1h</span>}

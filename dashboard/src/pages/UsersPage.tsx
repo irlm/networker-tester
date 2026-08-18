@@ -212,10 +212,10 @@ export function UsersPage() {
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="text-sm text-gray-100 truncate">{u.email}</span>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${providerBadge[u.auth_provider] || providerBadge.local}`}>
+                  <span className={`text-xs px-1.5 py-0.5 rounded ${providerBadge[u.auth_provider] || providerBadge.local}`}>
                     {u.auth_provider}
                   </span>
-                  <span className="text-xs text-gray-500">{timeAgo(u.created_at)}</span>
+                  <span className="text-xs text-faint">{timeAgo(u.created_at)}</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <select
@@ -262,15 +262,15 @@ export function UsersPage() {
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="text-sm text-gray-100 truncate">{u.email}</span>
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${providerBadge[u.auth_provider] || providerBadge.local}`}>
+                    <span className={`text-xs px-1.5 py-0.5 rounded ${providerBadge[u.auth_provider] || providerBadge.local}`}>
                       {u.auth_provider}
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
                     {u.last_login_at && (
-                      <span className="text-xs text-gray-500">{timeAgo(u.last_login_at)}</span>
+                      <span className="text-xs text-faint">{timeAgo(u.last_login_at)}</span>
                     )}
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${roleBadge[u.role] || roleBadge.viewer}`}>
+                    <span className={`text-xs px-1.5 py-0.5 rounded ${roleBadge[u.role] || roleBadge.viewer}`}>
                       {u.role}
                     </span>
                   </div>
@@ -312,7 +312,7 @@ export function UsersPage() {
           {/* Disabled / denied users */}
           {disabledUsers.length > 0 && (
             <>
-              <div className="text-xs text-gray-500 mt-4 mb-1 tracking-wide">inactive</div>
+              <div className="text-xs text-faint mt-4 mb-1 tracking-wide">inactive</div>
               {disabledUsers.map((u) => (
                 <div
                   key={u.user_id}
@@ -320,7 +320,7 @@ export function UsersPage() {
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-sm text-gray-400 truncate">{u.email}</span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400">
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-red-500/20 text-red-400">
                       {u.status}
                     </span>
                   </div>

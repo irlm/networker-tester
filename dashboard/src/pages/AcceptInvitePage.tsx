@@ -100,7 +100,7 @@ export function AcceptInvitePage() {
           <h1 className="text-[#4ade80] text-2xl font-bold tracking-tight mb-1">
             {PRODUCT_NAME}
           </h1>
-          <p className="text-gray-500 text-xs uppercase tracking-widest">
+          <p className="text-faint text-xs uppercase tracking-widest">
             network diagnostics
           </p>
         </div>
@@ -136,7 +136,7 @@ export function AcceptInvitePage() {
             </div>
 
             <form onSubmit={handleSubmit}>
-              <h3 className="text-xs text-gray-500 uppercase tracking-wider mb-4 text-center">
+              <h3 className="text-xs text-faint uppercase tracking-wider mb-4 text-center">
                 {invite.has_account ? 'Sign in to accept' : 'Create your account'}
               </h3>
 
@@ -149,7 +149,7 @@ export function AcceptInvitePage() {
 
               {/* Email (read-only) */}
               <div className="mb-4">
-                <label className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">
+                <label className="block text-xs text-faint mb-1.5 uppercase tracking-wider">
                   Email
                 </label>
                 <div className="flex items-center border-b border-gray-700">
@@ -165,7 +165,7 @@ export function AcceptInvitePage() {
 
               {/* Password */}
               <div className="mb-4">
-                <label className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">
+                <label className="block text-xs text-faint mb-1.5 uppercase tracking-wider">
                   Password
                 </label>
                 <div className="flex items-center border-b border-gray-700 focus-within:border-green-500/50 transition-colors">
@@ -184,7 +184,7 @@ export function AcceptInvitePage() {
               {/* Confirm password (new accounts only) */}
               {!invite.has_account && (
                 <div className="mb-4">
-                  <label className="block text-xs text-gray-500 mb-1.5 uppercase tracking-wider">
+                  <label className="block text-xs text-faint mb-1.5 uppercase tracking-wider">
                     Confirm Password
                   </label>
                   <div className="flex items-center border-b border-gray-700 focus-within:border-green-500/50 transition-colors">
@@ -203,7 +203,7 @@ export function AcceptInvitePage() {
               <button
                 type="submit"
                 disabled={submitting}
-                className="w-full bg-cyan-600 hover:bg-cyan-500 text-white py-2.5 rounded text-sm font-medium transition-colors disabled:opacity-50 mt-2"
+                className="w-full bg-cyan-600 hover:bg-cyan-500 text-[var(--bg-base)] py-2.5 rounded text-sm font-medium transition-colors disabled:opacity-50 mt-2"
               >
                 {submitting
                   ? 'Accepting...'

@@ -126,7 +126,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
         <span className="text-base relative" aria-hidden="true">
           {item.icon}
           {isUsersWithPending && collapsed && (
-            <span className="absolute -top-1 -right-2 bg-yellow-500 text-[9px] text-black font-bold rounded-full w-3.5 h-3.5 flex items-center justify-center leading-none">
+            <span className="absolute -top-1.5 -right-2.5 bg-yellow-500 text-xs text-black font-bold rounded-full min-w-4 h-4 px-0.5 flex items-center justify-center leading-none">
               {pendingCount > 9 ? '9+' : pendingCount}
             </span>
           )}
@@ -135,7 +135,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
           <span className="flex items-center gap-2">
             {item.label}
             {isUsersWithPending && (
-              <span className="bg-yellow-500 text-[9px] text-black font-bold rounded-full px-1.5 py-0.5 leading-none">
+              <span className="bg-yellow-500 text-xs text-black font-bold rounded-full px-1.5 py-0.5 leading-none">
                 {pendingCount}
               </span>
             )}
@@ -181,7 +181,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
           {reportItems.length > 0 && (
             <div className="mt-4 pt-3 border-t border-gray-800/50">
               {!collapsed && (
-                <div className="px-3 mb-1 text-[10px] uppercase tracking-wider text-gray-500">
+                <div className="px-3 mb-1 text-xs uppercase tracking-wider text-faint">
                   reports
                 </div>
               )}
@@ -202,10 +202,10 @@ export function Sidebar({ connectionDot }: SidebarProps) {
               {!collapsed && (
                 <button
                   onClick={toggleAdmin}
-                  className="flex items-center justify-between w-full px-3 mb-1.5 text-[10px] uppercase tracking-wider text-gray-500 hover:text-gray-400 transition-colors"
+                  className="flex items-center justify-between w-full px-3 mb-1.5 text-xs uppercase tracking-wider text-faint hover:text-gray-400 transition-colors"
                 >
                   <span>admin</span>
-                  <span className="text-[8px]">{adminOpen ? '\u25B2' : '\u25BC'}</span>
+                  <span className="text-xs" aria-hidden="true">{adminOpen ? '\u25B2' : '\u25BC'}</span>
                 </button>
               )}
               {(collapsed || adminOpen) && adminItems.map(renderItem)}
@@ -235,7 +235,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
                     {email?.split('@')[0] ?? ''}
                   </div>
                   {(email?.split('@')[0] ?? '') !== (isPlatformAdmin ? 'admin' : role ?? 'viewer') && (
-                    <div className="text-[10px] text-gray-500">
+                    <div className="text-xs text-faint">
                       {isPlatformAdmin ? 'admin' : role ?? 'viewer'}
                     </div>
                   )}
@@ -243,7 +243,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
                 {/* Actions */}
                 <button
                   onClick={() => setShowPasswordDialog(true)}
-                  className="text-gray-500 hover:text-cyan-400 transition-colors p-1 rounded hover:bg-gray-800/50"
+                  className="text-faint hover:text-cyan-400 transition-colors p-1 rounded hover:bg-gray-800/50"
                   title="Change password"
                   aria-label="Change password"
                 >
@@ -253,7 +253,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
                 </button>
                 <button
                   onClick={logout}
-                  className="text-gray-500 hover:text-red-400 transition-colors p-1 rounded hover:bg-gray-800/50"
+                  className="text-faint hover:text-red-400 transition-colors p-1 rounded hover:bg-gray-800/50"
                   title="Log out"
                   aria-label="Log out"
                 >
@@ -266,14 +266,14 @@ export function Sidebar({ connectionDot }: SidebarProps) {
           ) : (
             <div className="flex flex-col items-center gap-1.5 py-2">
               <div
-                className="w-6 h-6 rounded-full bg-purple-600 text-white text-[10px] font-bold flex items-center justify-center"
+                className="w-6 h-6 rounded-full bg-purple-600 text-white text-xs font-bold flex items-center justify-center"
                 title={`${email?.split('@')[0] ?? ''} (${isPlatformAdmin ? 'admin' : role ?? 'viewer'})`}
               >
                 {email?.[0]?.toUpperCase() ?? '?'}
               </div>
               <button
                 onClick={() => setShowPasswordDialog(true)}
-                className="text-gray-500 hover:text-cyan-400 text-xs p-0.5"
+                className="text-faint hover:text-cyan-400 text-xs p-0.5"
                 title="Change password"
                 aria-label="Change password"
               >
@@ -281,7 +281,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
               </button>
               <button
                 onClick={logout}
-                className="text-gray-500 hover:text-red-400 text-xs p-0.5"
+                className="text-faint hover:text-red-400 text-xs p-0.5"
                 title="Log out"
                 aria-label="Log out"
               >
@@ -291,7 +291,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
           )}
           <button
             onClick={() => { const next = !collapsed; setCollapsed(next); localStorage.setItem('sidebar-collapsed', next ? '1' : '0'); }}
-            className="hidden md:flex w-full items-center justify-center py-2 text-gray-500 hover:text-gray-400 transition-colors text-xs"
+            className="hidden md:flex w-full items-center justify-center py-2 text-faint hover:text-gray-400 transition-colors text-xs"
             title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
             {collapsed ? '\u25B6' : '\u25C0'}

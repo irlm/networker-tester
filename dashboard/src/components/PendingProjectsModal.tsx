@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { api } from '../api/client';
 import type { PendingProject } from '../api/client';
+import { Button } from './common/Button';
+import { Modal } from './common/Modal';
 
 interface PendingProjectsModalProps {
   projects: PendingProject[];
@@ -16,7 +18,7 @@ const ROLE_COLORS: Record<string, string> = {
 function roleBadge(role: string) {
   const cls = ROLE_COLORS[role] ?? ROLE_COLORS.viewer;
   return (
-    <span className={`inline-block text-[10px] uppercase tracking-wider border rounded px-1.5 py-0.5 ${cls}`}>
+    <span className={`inline-block text-xs uppercase tracking-wider border rounded px-1.5 py-0.5 ${cls}`}>
       {role}
     </span>
   );
@@ -60,13 +62,13 @@ export function PendingProjectsModal({ projects: initialProjects, onComplete }: 
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="pending-projects-title"
-        className="w-full max-w-md mx-4 bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-lg overflow-hidden"
-      >
+    <Modal
+      onClose={onComplete}
+      labelledBy="pending-projects-title"
+      maxWidth="max-w-md"
+      closeDisabled={busy !== null}
+      panelClassName="!p-0 overflow-hidden"
+    >
         {/* Header */}
         <div className="px-5 py-4 border-b border-[var(--border-default)] flex items-center justify-between">
           <div>
@@ -115,27 +117,34 @@ export function PendingProjectsModal({ projects: initialProjects, onComplete }: 
                       </div>
                     </div>
                     <div className="flex items-center gap-2 mt-3">
-                      <button
+                      <Button
+                        variant="primary"
+                        size="xs"
                         disabled={isBusy}
                         onClick={() => handleAccept(p)}
-                        className="flex-1 text-xs py-1.5 rounded bg-green-900/50 border border-green-700/60 text-green-400 hover:bg-green-900/80 transition-colors disabled:opacity-40"
+                        loading={isBusy}
+                        loadingLabel="…"
+                        className="flex-1"
                       >
-                        {isBusy ? '...' : 'Accept'}
-                      </button>
-                      <button
+                        Accept
+                      </Button>
+                      <Button
+                        variant="danger"
+                        size="xs"
                         disabled={isBusy}
                         onClick={() => handleDeny(p)}
-                        className="flex-1 text-xs py-1.5 rounded bg-red-900/30 border border-red-700/50 text-red-400 hover:bg-red-900/60 transition-colors disabled:opacity-40"
+                        className="flex-1"
                       >
-                        {isBusy ? '...' : 'Deny'}
-                      </button>
-                      <button
+                        Deny
+                      </Button>
+                      <Button
+                        size="xs"
                         disabled={isBusy}
                         onClick={() => handleIgnore(p.project_id)}
-                        className="flex-1 text-xs py-1.5 rounded bg-transparent border border-gray-700 text-gray-400 hover:text-gray-400 hover:border-gray-600 transition-colors disabled:opacity-40"
+                        className="flex-1"
                       >
                         Ignore
-                      </button>
+                      </Button>
                     </div>
                   </li>
                 );
@@ -146,14 +155,10 @@ export function PendingProjectsModal({ projects: initialProjects, onComplete }: 
 
         {/* Footer */}
         <div className="px-5 py-4 border-t border-[var(--border-default)] flex justify-end">
-          <button
-            onClick={onComplete}
-            className="px-4 py-1.5 text-xs bg-cyan-700 hover:bg-cyan-600 text-white rounded transition-colors"
-          >
+          <Button variant="primary" size="xs" onClick={onComplete}>
             Continue
-          </button>
+          </Button>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

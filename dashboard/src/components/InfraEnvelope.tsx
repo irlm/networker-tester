@@ -60,7 +60,7 @@ export function InfraEnvelope({
             <DirectionRow key={a.direction} a={a} />
           ))}
           {cpuIdle && anyNetworkBound && (
-            <p className="text-[10px] text-gray-500 pt-1">
+            <p className="text-xs text-faint pt-1">
               runner CPU stayed idle (peak load {peakLoad.toFixed(2)} / {cores}{' '}
               cores) while a direction sat at its egress cap — the network, not
               compute, is the binding constraint of this infrastructure.
@@ -71,10 +71,10 @@ export function InfraEnvelope({
               {suggestions.map((s) => (
                 <div
                   key={`${s.side}:${s.to}`}
-                  className="flex items-baseline gap-2 text-[11px]"
+                  className="flex items-baseline gap-2 text-xs"
                 >
                   <span
-                    className={`shrink-0 px-1.5 py-0.5 rounded-sm border text-[10px] ${
+                    className={`shrink-0 px-1.5 py-0.5 rounded-sm border text-xs ${
                       s.kind === 'upsize'
                         ? 'border-cyan-600/60 bg-cyan-900/30 text-cyan-300'
                         : 'border-green-700/60 bg-green-900/20 text-green-300'
@@ -85,7 +85,7 @@ export function InfraEnvelope({
                   <span className="text-gray-400">{s.text}</span>
                 </div>
               ))}
-              <p className="text-[10px] text-gray-600">
+              <p className="text-xs text-gray-600">
                 prices: db cost_rates → curated cloud-costs table (list,
                 on-demand) — deltas are hourly, verify in your billing before
                 acting.
@@ -93,13 +93,13 @@ export function InfraEnvelope({
             </div>
           )}
           {wouldBenefitFromCeilingProbe(assessments) && (
-            <p className="text-[10px] text-cyan-600/80 pt-1">
+            <p className="text-xs text-cyan-600/80 pt-1">
               ceiling is an estimate — add the <span className="text-cyan-400">Multi-Conn
               (mthroughput)</span> mode to this config to measure the path&apos;s true
               multi-stream capacity; the envelope then uses the measured ceiling instead.
             </p>
           )}
-          <p className="text-[10px] text-gray-600">
+          <p className="text-xs text-gray-600">
             expected = sending side&apos;s egress expectation per the VM-size
             catalog (doc = provider size table · est = size&apos;s bandwidth not
             guaranteed by the provider), superseded by the measured multi-stream
@@ -117,14 +117,14 @@ function SideLine({ label, side }: { label: string; side: RunInfraSide | null })
   const s = side.specs;
   return (
     <div className="flex items-baseline gap-3 text-xs">
-      <span className="w-14 text-right text-gray-500 shrink-0">{label}</span>
+      <span className="w-14 text-right text-faint shrink-0">{label}</span>
       <span className="text-gray-300">{side.vm_size ?? 'unknown size'}</span>
-      <span className="text-gray-500">
+      <span className="text-faint">
         {side.cloud}
         {side.region ? ` ${side.region}` : ''}
       </span>
       {s ? (
-        <span className="text-gray-500">
+        <span className="text-faint">
           {s.vcpus} vCPU / {s.memory_gb} GB ·{' '}
           <span className="text-gray-400">
             {s.confidence === 'estimated' ? '~' : ''}
@@ -149,7 +149,7 @@ const VERDICT_CHIP: Record<DirectionAssessment['verdict'], string> = {
   'cpu-bound': 'border-yellow-600/60 bg-yellow-900/30 text-yellow-300',
   'path-bound': 'border-red-600/60 bg-red-900/30 text-red-300',
   headroom: 'border-gray-600/60 bg-gray-800/40 text-gray-300',
-  unknown: 'border-gray-700/60 bg-gray-800/30 text-gray-500',
+  unknown: 'border-gray-700/60 bg-gray-800/30 text-faint',
 };
 
 function DirectionRow({ a }: { a: DirectionAssessment }) {
@@ -175,14 +175,14 @@ function DirectionRow({ a }: { a: DirectionAssessment }) {
             {' / '}
             <span
               className={
-                a.confidence === 'measured' ? 'text-cyan-400' : 'text-gray-500'
+                a.confidence === 'measured' ? 'text-cyan-400' : 'text-faint'
               }
             >
               {a.confidence === 'estimated' ? '~' : ''}
               {formatMbps(a.expectedMbps)}
             </span>
             {a.utilization != null && (
-              <span className="text-gray-500">
+              <span className="text-faint">
                 {' '}
                 · {Math.round(a.utilization * 100)}%
               </span>
@@ -192,7 +192,7 @@ function DirectionRow({ a }: { a: DirectionAssessment }) {
         <span className="text-gray-600"> @ {formatBytes(a.payloadBytes)}</span>
       </span>
       <span
-        className={`shrink-0 px-1.5 py-0.5 rounded-sm border text-[10px] ${VERDICT_CHIP[a.verdict]}`}
+        className={`shrink-0 px-1.5 py-0.5 rounded-sm border text-xs ${VERDICT_CHIP[a.verdict]}`}
         title={verdictLabel(a)}
       >
         {a.verdict}

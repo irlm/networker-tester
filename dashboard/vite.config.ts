@@ -11,9 +11,8 @@ export default defineConfig({
         manualChunks(id) {
           if (!id.includes('node_modules')) return undefined
           if (id.includes('react') || id.includes('react-dom') || id.includes('react-router')) return 'react-vendor'
-          if (id.includes('recharts') || id.includes('d3-')) return 'charts-vendor'
           if (id.includes('monaco-editor')) return 'monaco-vendor'
-          return 'vendor'
+          return undefined
         },
       },
     },

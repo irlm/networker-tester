@@ -1,18 +1,36 @@
-import { useState, useCallback, useMemo, useRef } from 'react';
+import { useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useSearchParams } from 'react-router';
 import { KpiTile } from '../components/common/KpiTile';
 import { rampTextClass } from '../lib/severity';
-import { api, errorMessage } from '../api/client';
-import type { PerfLogRow, PerfLogStats } from '../api/types';
+import { errorMessage } from '../api/http';
 import { DataTable } from '../components/common/DataTable';
 import { FilterBar, FilterChip } from '../components/common/FilterBar';
-import { usePolling } from '../hooks/usePolling';
 import { StatusFooter } from '../components/common/StatusFooter';
+import { Button } from '../components/common/Button';
+import { ErrorState, LoadingState } from '../components/common/AsyncState';
+import { Input, Select } from '../components/common/FormControls';
+import { PageShell } from '../components/common/PageShell';
+import { usePerfLogsQuery, usePerfLogStatsQuery } from '../features/perf-logs/queries';
 import { usePageTitle } from '../hooks/usePageTitle';
-import { stableSet } from '../lib/stableUpdate';
 import { formatMsCompact as formatMs } from '../lib/format';
 
 type Tab = 'logs' | 'stats';
 type Kind = 'all' | 'api' | 'render';
+type TimeRange = '5m' | '15m' | '30m' | '1h' | '6h' | '24h' | '7d';
+
+const TIME_RANGES: ReadonlyArray<{ value: TimeRange; label: string; windowMs: number }> = [
+  { value: '5m', label: 'Last 5 minutes', windowMs: 5 * 60_000 },
+  { value: '15m', label: 'Last 15 minutes', windowMs: 15 * 60_000 },
+  { value: '30m', label: 'Last 30 minutes', windowMs: 30 * 60_000 },
+  { value: '1h', label: 'Last hour', windowMs: 60 * 60_000 },
+  { value: '6h', label: 'Last 6 hours', windowMs: 6 * 60 * 60_000 },
+  { value: '24h', label: 'Last 24 hours', windowMs: 24 * 60 * 60_000 },
+  { value: '7d', label: 'Last 7 days', windowMs: 7 * 24 * 60 * 60_000 },
+];
+
+function isTimeRange(value: string | null): value is TimeRange {
+  return TIME_RANGES.some(range => range.value === value);
+}
 
 // Latency renders on the shared cyan magnitude ramp (severity-v2) — red
 // only at breach. Thresholds unchanged from the old local ramp.
@@ -26,63 +44,53 @@ function renderSpeedColor(ms: number | null | undefined): string {
   return rampTextClass(ms, { mid: 16, high: 50, breach: 100 });
 }
 
-
+function kindBadgeClass(kind: string): string {
+  if (kind === 'api') {
+    return 'border-cyan-500/30 text-cyan-400 bg-cyan-500/5';
+  }
+  return 'border-green-500/30 text-green-400 bg-green-500/5';
+}
 
 const PAGE_SIZE = 50;
+const TABS: Tab[] = ['logs', 'stats'];
 
 export function PerfLogPage() {
   const [tab, setTab] = useState<Tab>('logs');
-  const [logs, setLogs] = useState<PerfLogRow[]>([]);
-  const [stats, setStats] = useState<PerfLogStats | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
   const [kindFilter, setKindFilter] = useState<Kind>('all');
   const [pathFilter, setPathFilter] = useState('');
   const [page, setPage] = useState(0);
-  const logsFingerprint = useRef('');
-  const statsFingerprint = useRef('');
+  const [paused, setPaused] = useState(false);
+  const tabRefs = useRef<Record<Tab, HTMLButtonElement | null>>({ logs: null, stats: null });
+  const rangeParam = searchParams.get('range');
+  const timeRange: TimeRange = isTimeRange(rangeParam) ? rangeParam : '5m';
+  const selectedRange = TIME_RANGES.find(range => range.value === timeRange) ?? TIME_RANGES[0];
+
+  const queryParams = useMemo(() => ({
+    kind: kindFilter === 'all' ? undefined : kindFilter,
+    path: pathFilter.trim() || undefined,
+    windowMs: selectedRange.windowMs,
+    limit: 200,
+  }), [kindFilter, pathFilter, selectedRange.windowMs]);
+  const logsQuery = usePerfLogsQuery(queryParams, tab === 'logs' && !paused);
+  const statsQuery = usePerfLogStatsQuery(selectedRange.windowMs, tab === 'stats' && !paused);
+  const logs = useMemo(() => logsQuery.data ?? [], [logsQuery.data]);
+  const stats = statsQuery.data;
 
   usePageTitle('Performance Log');
 
-  // Declared above loadLogs because its setter is called inside the callback.
-  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
+  const setTimeRange = (nextRange: TimeRange) => {
+    setSearchParams(previous => {
+      const next = new URLSearchParams(previous);
+      if (nextRange === '5m') next.delete('range');
+      else next.set('range', nextRange);
+      return next;
+    }, { replace: true });
+    setPage(0);
+  };
 
-  const loadLogs = useCallback(() => {
-    const params: { kind?: string; path?: string; limit?: number } = { limit: 200 };
-    if (kindFilter !== 'all') params.kind = kindFilter;
-    if (pathFilter.trim()) params.path = pathFilter.trim();
-    api.getPerfLogs(params).then(data => {
-      stableSet(setLogs, data, logsFingerprint);
-      setLoadError(null);
-      setLoading(false);
-      setLastUpdatedAt(Date.now());
-    }).catch((e: unknown) => {
-      // An API failure is NOT an empty log — keep them distinguishable.
-      setLoadError(errorMessage(e));
-      setLoading(false);
-    });
-  }, [kindFilter, pathFilter]);
-
-  const loadStats = useCallback(() => {
-    api.getPerfLogStats().then((data: PerfLogStats) => {
-      const fp = JSON.stringify(data);
-      if (fp !== statsFingerprint.current) {
-        statsFingerprint.current = fp;
-        setStats(data);
-      }
-    }).catch(() => {});
-  }, []);
-
-  // StatusFooter wiring (logs tab only): pause flips the logs poll's enabled
-  // flag; refresh bumps resetKey (restarts the loop with an immediate tick).
-  // The stats poll stays independent — the footer only speaks for the logs.
-  const [paused, setPaused] = useState(false);
-  const [refreshTick, setRefreshTick] = useState(0);
-  usePolling(loadLogs, 15000, !paused, refreshTick);
-  usePolling(loadStats, 15000);
-
-  // Reset page when filters change
-  const activeFilterCount = [kindFilter !== 'all', pathFilter].filter(Boolean).length;
+  const activeLogFilterCount = [timeRange !== '5m', kindFilter !== 'all', pathFilter].filter(Boolean).length;
+  const activeFilterCount = tab === 'logs' ? activeLogFilterCount : Number(timeRange !== '5m');
   const totalPages = Math.max(1, Math.ceil(logs.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages - 1);
   const pagedLogs = logs.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
@@ -105,80 +113,142 @@ export function PerfLogPage() {
       .slice(0, 10);
   }, [logs]);
 
-  if (loading && logs.length === 0) {
-    return (
-      <div className="p-4 md:p-6">
-        <h2 className="text-lg md:text-xl font-bold text-gray-100 mb-6">Performance Log</h2>
-        <div className="text-gray-400 motion-safe:animate-pulse">Loading performance data...</div>
-      </div>
-    );
-  }
+  const activeTabClass = 'border-cyan-500/30 text-cyan-400 bg-cyan-500/5';
+  const inactiveTabClass = 'border-gray-700 text-gray-400 hover:border-gray-600 hover:text-gray-300';
+  const tabClass = 'px-3 py-1.5 text-xs rounded border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70';
+  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, current: Tab) => {
+    const currentIndex = TABS.indexOf(current);
+    let next: Tab | undefined;
+    if (event.key === 'ArrowRight') next = TABS[(currentIndex + 1) % TABS.length];
+    if (event.key === 'ArrowLeft') next = TABS[(currentIndex - 1 + TABS.length) % TABS.length];
+    if (event.key === 'Home') next = TABS[0];
+    if (event.key === 'End') next = TABS[TABS.length - 1];
+    if (!next) return;
+    event.preventDefault();
+    setTab(next);
+    tabRefs.current[next]?.focus();
+  };
+  const tabActions = (
+    <div className="flex items-center gap-2" role="tablist" aria-label="Performance log views">
+      <button
+        type="button"
+        id="performance-log-tab"
+        role="tab"
+        aria-selected={tab === 'logs'}
+        aria-controls="performance-log-panel"
+        tabIndex={tab === 'logs' ? 0 : -1}
+        ref={node => { tabRefs.current.logs = node; }}
+        onClick={() => setTab('logs')}
+        onKeyDown={event => handleTabKeyDown(event, 'logs')}
+        className={`${tabClass} ${tab === 'logs' ? activeTabClass : inactiveTabClass}`}
+      >
+        Logs ({logs.length})
+      </button>
+      <button
+        type="button"
+        id="performance-stats-tab"
+        role="tab"
+        aria-selected={tab === 'stats'}
+        aria-controls="performance-stats-panel"
+        tabIndex={tab === 'stats' ? 0 : -1}
+        ref={node => { tabRefs.current.stats = node; }}
+        onClick={() => setTab('stats')}
+        onKeyDown={event => handleTabKeyDown(event, 'stats')}
+        className={`${tabClass} ${tab === 'stats' ? activeTabClass : inactiveTabClass}`}
+      >
+        Stats
+      </button>
+    </div>
+  );
 
-  if (loadError && logs.length === 0) {
-    return (
-      <div className="p-4 md:p-6">
-        <h2 className="text-lg md:text-xl font-bold text-gray-100 mb-6">Performance Log</h2>
-        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
-          <h3 className="text-red-400 font-bold mb-2">Failed to load performance logs</h3>
-          <p className="text-red-300 text-sm">{loadError}</p>
-          <p className="text-gray-400 text-xs mt-2">Retrying automatically every 15 seconds.</p>
-        </div>
-      </div>
-    );
-  }
+  const clearFilters = () => {
+    setTimeRange('5m');
+    if (tab === 'logs') {
+      setKindFilter('all');
+      setPathFilter('');
+    }
+  };
 
   return (
-    <div className="p-4 md:p-6">
-      <div className="flex items-center justify-between mb-4 md:mb-6 gap-2">
-        <h2 className="text-lg md:text-xl font-bold text-gray-100">Performance Log</h2>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setTab('logs')}
-            className={`px-3 py-1 text-xs rounded border ${tab === 'logs' ? 'border-cyan-500/30 text-cyan-400 bg-cyan-500/5' : 'border-gray-700 text-gray-400'}`}
-          >
-            Logs ({logs.length})
-          </button>
-          <button
-            onClick={() => setTab('stats')}
-            className={`px-3 py-1 text-xs rounded border ${tab === 'stats' ? 'border-cyan-500/30 text-cyan-400 bg-cyan-500/5' : 'border-gray-700 text-gray-400'}`}
-          >
-            Stats
-          </button>
-        </div>
-      </div>
-
-      {tab === 'logs' && (
-        <>
-          <FilterBar
-            activeCount={activeFilterCount}
-            onClearAll={() => { setKindFilter('all'); setPathFilter(''); }}
-            chips={
-              <>
-                {kindFilter !== 'all' && <FilterChip label="Kind" value={kindFilter} onClear={() => setKindFilter('all')} />}
-                {pathFilter && <FilterChip label="Path" value={pathFilter} onClear={() => setPathFilter('')} />}
-              </>
-            }
-          >
-            <select
+    <PageShell
+      title="Performance Log"
+      subtitle="Inspect recent API and render timings without scanning the full retention window."
+      action={tabActions}
+    >
+      <FilterBar
+        activeCount={activeFilterCount}
+        onClearAll={clearFilters}
+        chips={
+          <>
+            {timeRange !== '5m' && (
+              <FilterChip label="Time" value={selectedRange.label} onClear={() => setTimeRange('5m')} />
+            )}
+            {tab === 'logs' && kindFilter !== 'all' && (
+              <FilterChip label="Kind" value={kindFilter} onClear={() => { setKindFilter('all'); setPage(0); }} />
+            )}
+            {tab === 'logs' && pathFilter && (
+              <FilterChip label="Path" value={pathFilter} onClear={() => { setPathFilter(''); setPage(0); }} />
+            )}
+          </>
+        }
+      >
+        <Select
+          aria-label="Time range"
+          value={timeRange}
+          onChange={event => setTimeRange(event.target.value as TimeRange)}
+          className="w-full sm:w-auto"
+        >
+          {TIME_RANGES.map(range => (
+            <option key={range.value} value={range.value}>{range.label}</option>
+          ))}
+        </Select>
+        {tab === 'logs' && (
+          <>
+            <Select
+              aria-label="Log kind"
               value={kindFilter}
-              onChange={e => setKindFilter(e.target.value as Kind)}
-              className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-300 focus:outline-none focus:border-cyan-500"
+              onChange={event => { setKindFilter(event.target.value as Kind); setPage(0); }}
+              className="w-full sm:w-auto"
             >
               <option value="all">All types</option>
               <option value="api">API only</option>
               <option value="render">Render only</option>
-            </select>
-            <input
+            </Select>
+            <Input
               type="search"
+              aria-label="Filter logs by path"
               value={pathFilter}
-              onChange={e => setPathFilter(e.target.value)}
-              placeholder="Filter by path..."
-              className="bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-300 w-48 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
+              onChange={event => { setPathFilter(event.target.value); setPage(0); }}
+              placeholder="Filter by path…"
+              className="w-full sm:w-56"
             />
-          </FilterBar>
+          </>
+        )}
+      </FilterBar>
+
+      {tab === 'logs' && (
+        <div id="performance-log-panel" role="tabpanel" aria-labelledby="performance-log-tab" className="mt-4">
+          {logsQuery.isPending && logs.length === 0 && (
+            <LoadingState label="Loading performance data…" />
+          )}
+          {logsQuery.isError && logs.length === 0 && (
+            <ErrorState
+              title="Failed to load performance logs"
+              message={errorMessage(logsQuery.error)}
+              onRetry={() => { void logsQuery.refetch(); }}
+            />
+          )}
+          {logsQuery.isError && logs.length > 0 && (
+            <div className="mb-4">
+              <ErrorState
+                title="Could not refresh performance logs"
+                message={`${errorMessage(logsQuery.error)} Showing the last successful response.`}
+                onRetry={() => { void logsQuery.refetch(); }}
+              />
+            </div>
+          )}
 
           <DataTable
-            className="mt-4"
             columns={[
               {
                 key: 'time',
@@ -190,11 +260,7 @@ export function PerfLogPage() {
                 key: 'kind',
                 label: 'Kind',
                 render: log => (
-                  <span className={`text-[10px] uppercase px-1.5 py-0.5 rounded border ${
-                    log.kind === 'api'
-                      ? 'border-cyan-500/30 text-cyan-400 bg-cyan-500/5'
-                      : 'border-green-500/30 text-green-400 bg-green-500/5'
-                  }`}>
+                  <span className={`text-xs uppercase px-1.5 py-0.5 rounded border ${kindBadgeClass(log.kind)}`}>
                     {log.kind}
                   </span>
                 ),
@@ -213,7 +279,7 @@ export function PerfLogPage() {
                   return log.kind === 'api' ? (
                     <><span className="text-gray-400">{log.method} </span>{displayPath}</>
                   ) : (
-                    <><span className="text-gray-400">{log.component}</span> <span className="text-gray-500">{log.trigger}</span></>
+                    <><span className="text-gray-400">{log.component}</span> <span className="text-faint">{log.trigger}</span></>
                   );
                 },
               },
@@ -226,7 +292,7 @@ export function PerfLogPage() {
                       {log.status || '-'}
                     </span>
                   ) : (
-                    <span className="text-gray-500">{log.item_count ?? '-'}</span>
+                    <span className="text-faint">{log.item_count ?? '-'}</span>
                   )
                 ),
               },
@@ -258,7 +324,7 @@ export function PerfLogPage() {
                 key: 'source',
                 label: 'Source',
                 hideBelow: 'lg',
-                cellClass: 'text-gray-500',
+                cellClass: 'text-faint',
                 render: log => log.source || '-',
               },
             ]}
@@ -266,7 +332,7 @@ export function PerfLogPage() {
             rowKey={log => String(log.id)}
             empty={
               <span className="text-gray-400 text-sm">
-                No performance logs recorded yet. Logs are flushed every 30 seconds.
+                No performance logs in {selectedRange.label.toLowerCase()}. Logs are flushed every 30 seconds.
               </span>
             }
           />
@@ -274,34 +340,40 @@ export function PerfLogPage() {
             <div className="flex items-center justify-between px-3 py-2 border-t border-gray-800/50 text-xs text-gray-400">
               <span>{logs.length} rows &middot; page {currentPage + 1} of {totalPages}</span>
               <div className="flex items-center gap-1">
-                <button
+                <Button
+                  variant="ghost"
+                  size="xs"
                   onClick={() => setPage(0)}
                   disabled={currentPage === 0}
-                  className="px-2 py-1 rounded border border-gray-700 disabled:opacity-30 hover:border-cyan-500/30 hover:text-cyan-400 transition-colors"
+                  aria-label="First page"
                 >
                   &laquo;
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="xs"
                   onClick={() => setPage(p => Math.max(0, p - 1))}
                   disabled={currentPage === 0}
-                  className="px-2 py-1 rounded border border-gray-700 disabled:opacity-30 hover:border-cyan-500/30 hover:text-cyan-400 transition-colors"
                 >
                   &lsaquo; Prev
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="xs"
                   onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
                   disabled={currentPage >= totalPages - 1}
-                  className="px-2 py-1 rounded border border-gray-700 disabled:opacity-30 hover:border-cyan-500/30 hover:text-cyan-400 transition-colors"
                 >
                   Next &rsaquo;
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="xs"
                   onClick={() => setPage(totalPages - 1)}
                   disabled={currentPage >= totalPages - 1}
-                  className="px-2 py-1 rounded border border-gray-700 disabled:opacity-30 hover:border-cyan-500/30 hover:text-cyan-400 transition-colors"
+                  aria-label="Last page"
                 >
                   &raquo;
-                </button>
+                </Button>
               </div>
             </div>
           )}
@@ -312,21 +384,38 @@ export function PerfLogPage() {
           <StatusFooter
             paused={paused}
             onPauseToggle={() => setPaused(p => !p)}
-            onRefresh={() => { setRefreshTick(t => t + 1); if (paused) loadLogs(); }}
-            lastUpdatedAt={lastUpdatedAt}
+            onRefresh={() => { void logsQuery.refetch(); }}
+            lastUpdatedAt={logsQuery.dataUpdatedAt || null}
             intervalMs={15000}
             pills={
-              <span className="text-gray-500">
-                {logs.length} row{logs.length !== 1 ? 's' : ''}
+              <span className="text-faint">
+                {selectedRange.label} · {logs.length} row{logs.length !== 1 ? 's' : ''}
                 {activeFilterCount > 0 && ` · ${activeFilterCount} filter${activeFilterCount !== 1 ? 's' : ''}`}
               </span>
             }
           />
-        </>
+        </div>
       )}
 
-      {tab === 'stats' && stats && (
-        <div className="space-y-6">
+      {tab === 'stats' && (
+        <div id="performance-stats-panel" role="tabpanel" aria-labelledby="performance-stats-tab" className="mt-4 space-y-6">
+          {statsQuery.isPending && !stats && <LoadingState label="Loading performance statistics…" />}
+          {statsQuery.isError && !stats && (
+            <ErrorState
+              title="Failed to load performance statistics"
+              message={errorMessage(statsQuery.error)}
+              onRetry={() => { void statsQuery.refetch(); }}
+            />
+          )}
+          {statsQuery.isError && stats && (
+            <ErrorState
+              title="Could not refresh performance statistics"
+              message={`${errorMessage(statsQuery.error)} Showing the last successful response.`}
+              onRetry={() => { void statsQuery.refetch(); }}
+            />
+          )}
+          {stats && (
+            <>
           {/* Summary cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <KpiTile
@@ -375,7 +464,8 @@ export function PerfLogPage() {
           {/* Top slow paths */}
           {topSlowPaths.length > 0 && (
             <div>
-              <h3 className="text-xs text-gray-400 tracking-wider font-medium mb-3 uppercase">Slowest API Paths</h3>
+              <h3 className="text-xs text-gray-400 tracking-wider font-medium mb-1 uppercase">Slowest API Paths</h3>
+              <p className="mb-3 text-xs text-faint">Based on the latest loaded API rows in this time range.</p>
               <div className="table-container">
                 <table className="w-full text-sm">
                   <thead>
@@ -402,8 +492,10 @@ export function PerfLogPage() {
               </div>
             </div>
           )}
+            </>
+          )}
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }

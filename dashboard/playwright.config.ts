@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const externalBaseUrl = process.env.PLAYWRIGHT_BASE_URL;
+
 /**
  * Audit P2: browser E2E.
  *
@@ -28,7 +30,7 @@ export default defineConfig({
   expect: { timeout: 10_000 },
 
   use: {
-    baseURL: 'http://127.0.0.1:4173',
+    baseURL: externalBaseUrl ?? 'http://127.0.0.1:4173',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
@@ -37,7 +39,7 @@ export default defineConfig({
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
   ],
 
-  webServer: {
+  webServer: externalBaseUrl ? undefined : {
     // `vite preview` serves dist/, so `npm run build` must have run first.
     // --host 127.0.0.1 is load-bearing: `vite preview` otherwise binds only to
     // `localhost`, which resolves to ::1 on this toolchain, and the readiness

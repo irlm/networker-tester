@@ -31,7 +31,7 @@ export function NotificationBell({ projectId }: Props) {
   if (count === 0) return null;
 
   return (
-    <span className="bg-red-500 text-[9px] text-white font-bold rounded-full px-1.5 py-0.5 leading-none">
+    <span className="bg-red-500 text-xs text-white font-bold rounded-full px-1.5 py-0.5 leading-none">
       {count > 9 ? '9+' : count}
     </span>
   );

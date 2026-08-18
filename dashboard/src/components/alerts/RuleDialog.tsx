@@ -182,7 +182,7 @@ export function RuleDialog({ projectId, channels, configs, existing, onClose, on
               ))}
             </select>
             {scopeLocked && (
-              <p className="text-[11px] text-gray-500 mt-1">
+              <p className="text-xs text-faint mt-1">
                 A config-scoped rule cannot be widened back to all configs — recreate it instead.
               </p>
             )}
@@ -217,7 +217,7 @@ export function RuleDialog({ projectId, channels, configs, existing, onClose, on
             <button
               type="submit"
               disabled={saving}
-              className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50"
+              className="bg-cyan-600 hover:bg-cyan-500 text-[var(--bg-base)] px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50"
             >
               {saving ? 'Saving...' : existing ? 'Save Rule' : 'Create Rule'}
             </button>

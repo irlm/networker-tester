@@ -6,6 +6,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AlertsPage } from './AlertsPage';
 import { resetRoleStores, setProjectRole } from '../test/rbac-helpers';
 import { useToastStore } from '../hooks/useToast';
@@ -84,34 +85,40 @@ vi.mock('../api/client', () => {
     api: {
       listAlertRules: vi.fn(() => Promise.resolve([rule])),
       listAlertChannels: vi.fn(() => Promise.resolve([channel])),
-      listTestConfigs: vi.fn(() =>
-        Promise.resolve([
-          {
-            id: 'cfg-1',
-            project_id: 'p-1',
-            name: 'prod-api-latency',
-            endpoint_kind: 'network',
-            modes: ['http1'],
-            has_methodology: false,
-            created_at: '2026-07-18T00:00:00Z',
-            updated_at: '2026-07-18T00:00:00Z',
-          },
-        ]),
-      ),
       listAlertEvents: vi.fn(() => Promise.resolve(events)),
       deleteAlertChannel: vi.fn(),
     },
   };
 });
 
+vi.mock('../features/runs/api', () => ({
+  runsApi: {
+    listConfigs: vi.fn(() => Promise.resolve([
+      {
+        id: 'cfg-1',
+        project_id: 'p-1',
+        name: 'prod-api-latency',
+        endpoint_kind: 'network',
+        modes: ['http1'],
+        has_methodology: false,
+        created_at: '2026-07-18T00:00:00Z',
+        updated_at: '2026-07-18T00:00:00Z',
+      },
+    ])),
+  },
+}));
+
 import { api, ApiError } from '../api/client';
 
 function renderPage(tab: 'history' | 'channels') {
   setProjectRole('operator');
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MemoryRouter initialEntries={[`/projects/p-1/alerts?tab=${tab}`]}>
-      <AlertsPage />
-    </MemoryRouter>,
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={[`/projects/p-1/alerts?tab=${tab}`]}>
+        <AlertsPage />
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 
@@ -156,6 +163,21 @@ describe('AlertsPage history', () => {
     await waitFor(() =>
       expect(api.listAlertEvents).toHaveBeenCalledWith('p-1', { limit: 50, offset: 0, rule_id: 'r-1' }),
     );
+  });
+
+  it('provides complete keyboard tab behavior and labelled panels', async () => {
+    const user = userEvent.setup();
+    renderPage('history');
+    await waitFor(() => expect(screen.getByText('resolved')).toBeInTheDocument());
+
+    const historyTab = screen.getByRole('tab', { name: 'history' });
+    historyTab.focus();
+    await user.keyboard('{ArrowRight}');
+
+    const rulesTab = screen.getByRole('tab', { name: 'rules' });
+    expect(rulesTab).toHaveFocus();
+    expect(rulesTab).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', 'alerts-rules-tab');
   });
 
   it('surfaces the 409 conflict when deleting a channel that rules reference', async () => {

@@ -31,22 +31,22 @@ export function RunEnvelopeBlock({ envelope }: { envelope?: RunEnvelope | null }
   return (
     <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5">
       {fromLabel && (
-        <span className="text-xs text-gray-500">
+        <span className="text-xs text-faint">
           From: <span className="text-gray-400">{fromLabel}</span>
         </span>
       )}
       {toLabel && (
-        <span className="text-xs text-gray-500">
+        <span className="text-xs text-faint">
           To: <span className="text-gray-400">{toLabel}</span>
         </span>
       )}
       {offsetMs != null && (
-        <span className="text-xs text-gray-500">
+        <span className="text-xs text-faint">
           Clock offset: <span className="text-gray-400">{offsetMs > 0 ? '+' : ''}{offsetMs.toFixed(1)}ms</span>
         </span>
       )}
       {hasLoad && (
-        <span className="text-xs text-gray-500">
+        <span className="text-xs text-faint">
           Tester load: <span className="text-gray-400">
             {loadBefore?.toFixed(2) ?? '?'}
             {' → '}

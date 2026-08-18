@@ -44,7 +44,7 @@ export function FilterBar({ children, chips, activeCount = 0, onClearAll }: Filt
             <button
               type="button"
               onClick={onClearAll}
-              className="text-[11px] text-gray-400 hover:text-gray-300 ml-1"
+              className="text-xs text-gray-400 hover:text-gray-300 ml-1"
             >
               Clear all
             </button>

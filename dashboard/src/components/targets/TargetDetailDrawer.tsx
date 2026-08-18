@@ -6,6 +6,9 @@ import { StatusBadge } from '../common/StatusBadge';
 import { DetailList } from '../common/DetailList';
 import { TargetEndpointCard } from './TargetEndpointCard';
 import { formatDuration } from '../../lib/format';
+import { Modal } from '../common/Modal';
+import { Button } from '../common/Button';
+import { buttonClassName } from '../common/button-styles';
 
 interface TargetDetailDrawerProps {
   projectId: string;
@@ -54,14 +57,6 @@ export function TargetDetailDrawer({
   }, [projectId, depId]);
   const costEstimate = costFor && costFor.id === depId ? costFor.ce : null;
 
-  // Escape closes the drawer.
-  useEffect(() => {
-    if (!row) return;
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [row, onClose]);
-
   if (!row) return null;
   const endpoints = row.config?.endpoints ?? [];
   const firstOs = endpoints[0]?.os ?? endpoints[0]?.azure?.os ?? endpoints[0]?.aws?.os ?? endpoints[0]?.gcp?.os;
@@ -69,18 +64,13 @@ export function TargetDetailDrawer({
     && (row.endpoint_ips?.length ?? 0) > 0 && firstOs !== 'windows';
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end" data-testid="target-detail-drawer">
-      <div
-        className="absolute inset-0 bg-black/40 slide-over-backdrop"
-        onClick={onClose}
-        aria-hidden="true"
-      />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="target-detail-title"
-        className="relative w-full md:w-[560px] md:max-w-[95vw] bg-[var(--bg-base)] md:border-l border-gray-800 h-full overflow-y-auto slide-over-panel"
-      >
+    <Modal
+      onClose={onClose}
+      labelledBy="target-detail-title"
+      variant="slide-over"
+      panelClassName="md:w-[560px] md:max-w-[95vw]"
+      testId="target-detail-drawer"
+    >
         <div className="p-4 md:p-6 space-y-6">
           <div className="flex items-center justify-between">
             <div className="min-w-0">
@@ -91,14 +81,14 @@ export function TargetDetailDrawer({
                 {row.provider_summary ?? endpoints[0]?.provider ?? 'target'} · {row.deployment_id.slice(0, 8)}
               </p>
             </div>
-            <button
-              type="button"
+            <Button
               onClick={onClose}
-              className="text-gray-400 hover:text-gray-300 text-sm"
+              variant="ghost"
+              size="xs"
               aria-label="Close"
             >
               &#x2715;
-            </button>
+            </Button>
           </div>
 
           {/* ── Status ─────────────────────────────────────────────────── */}
@@ -145,28 +135,27 @@ export function TargetDetailDrawer({
           <section className="flex flex-wrap gap-2">
             <Link
               to={`/projects/${projectId}/deploy/${row.deployment_id}`}
-              className="px-3 py-1 text-xs rounded border border-gray-700 text-gray-300 hover:border-gray-600"
+              className={buttonClassName({ size: 'xs' })}
             >
               Open full page (log & config) →
             </Link>
             <Link
               to={`/projects/${projectId}/network/${row.deployment_id}`}
-              className="px-3 py-1 text-xs rounded border border-gray-700 text-gray-300 hover:border-gray-600"
+              className={buttonClassName({ size: 'xs' })}
             >
               ↗ Runs
             </Link>
             {canUpgrade && (
-              <button
-                type="button"
+              <Button
                 onClick={() => onUpgrade(row)}
-                className="px-3 py-1 text-xs rounded border border-cyan-700 text-cyan-300 hover:bg-cyan-900/30"
+                variant="primary"
+                size="xs"
               >
                 + Upgrade test support
-              </button>
+              </Button>
             )}
           </section>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

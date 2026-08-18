@@ -199,7 +199,7 @@ function GroupedTab() {
                     </td>
                     <td className={`py-2.5 px-3 text-right ${limited ? 'text-yellow-500' : 'text-gray-400'}`}>
                       {lang.run_count}
-                      {limited && <span className="text-gray-500 text-xs ml-1">*</span>}
+                      {limited && <span className="text-faint text-xs ml-1">*</span>}
                     </td>
                   </tr>
                 );
@@ -207,7 +207,7 @@ function GroupedTab() {
             </tbody>
           </table>
           {sortedForTable.some(l => l.run_count < 3) && (
-            <p className="text-xs text-gray-500 mt-2 px-3">
+            <p className="text-xs text-faint mt-2 px-3">
               * fewer than 3 runs — limited data, interpret with caution
             </p>
           )}
@@ -406,7 +406,7 @@ function TimelineTab({ runs }: { runs: BenchmarkRun[] }) {
               }`}>
                 {run.status}
               </span>
-              <span className="text-xs text-gray-500">
+              <span className="text-xs text-faint">
                 {new Date(run.started_at).toLocaleDateString()}
               </span>
             </button>
@@ -414,7 +414,7 @@ function TimelineTab({ runs }: { runs: BenchmarkRun[] }) {
               <div className="border-t border-gray-800 px-3 py-2 bg-gray-900/30">
                 <table className="w-full text-xs">
                   <thead>
-                    <tr className="text-gray-500 text-left">
+                    <tr className="text-faint text-left">
                       <th className="py-1 pr-3">Language</th>
                       <th className="py-1 pr-3">Runtime</th>
                       <th className="py-1 pr-3 text-right">Mean Latency</th>
@@ -509,7 +509,7 @@ export function LeaderboardPage() {
           </p>
         </div>
         {tab !== 'grouped' && entries.length > 0 && (
-          <span className="text-xs text-gray-500">
+          <span className="text-xs text-faint">
             {entries.length} {entries.length === 1 ? 'entry' : 'entries'}
           </span>
         )}

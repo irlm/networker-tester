@@ -94,7 +94,7 @@ export function ShareLinksPage() {
       {loading ? (
         <div className="text-gray-400 motion-safe:animate-pulse">Loading share links...</div>
       ) : links.length === 0 ? (
-        <div className="text-center py-16 text-gray-500">
+        <div className="text-center py-16 text-faint">
           <p className="text-lg mb-2">No share links</p>
           <p className="text-sm">Share links can be created from run and test detail pages.</p>
         </div>
@@ -105,7 +105,7 @@ export function ShareLinksPage() {
               key: 'label',
               label: 'Label',
               cellClass: 'text-gray-200',
-              render: (link) => link.label || <span className="text-gray-500 italic">no label</span>,
+              render: (link) => link.label || <span className="text-faint italic">no label</span>,
             },
             { key: 'type', label: 'Type', cellClass: 'text-gray-400', render: (link) => link.resource_type },
             { key: 'status', label: 'Status', render: (link) => statusBadge(link) },

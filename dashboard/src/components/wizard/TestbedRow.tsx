@@ -93,14 +93,14 @@ export function TestbedRow({
     <div className="border border-gray-800 p-3">
       {/* ── Row 1: Cloud account combobox ──────────────────────────────── */}
       <div className="flex items-center gap-2 mb-2">
-        <span className="text-[10px] text-gray-500 w-3">{index + 1}</span>
-        <span className="text-[11px] text-gray-400">{isDocker ? 'Provider' : 'Cloud account'}</span>
+        <span className="text-xs text-faint w-4">{index + 1}</span>
+        <span className="text-xs text-gray-400">{isDocker ? 'Provider' : 'Cloud account'}</span>
         {dockerAvailable && (
           <button
             type="button"
             onClick={selectDocker}
             aria-pressed={isDocker}
-            className={`px-2 py-0.5 text-[11px] border transition-colors ${
+            className={`px-2 py-0.5 text-xs border transition-colors ${
               isDocker
                 ? 'bg-purple-500/10 border-purple-500/50 text-purple-300'
                 : 'border-gray-700 text-gray-400 hover:text-gray-300'
@@ -112,14 +112,14 @@ export function TestbedRow({
         <button
           type="button"
           onClick={() => onRemove(testbed.key)}
-          className="text-[11px] text-gray-500 hover:text-red-400 transition-colors ml-auto"
+          className="text-xs text-faint hover:text-red-400 transition-colors ml-auto"
         >
           remove
         </button>
       </div>
 
       {isDocker ? (
-        <p className="text-[11px] text-gray-500">
+        <p className="text-xs text-faint">
           A target container on the control-plane host — no cloud account, no cost. One container = one proxy stack.
         </p>
       ) : (
