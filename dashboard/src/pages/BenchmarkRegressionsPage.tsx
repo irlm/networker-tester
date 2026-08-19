@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { Link } from 'react-router';
 import { api } from '../api/client';
-import type { BenchmarkRegressionWithConfig } from '../api/types';
+import type { BenchmarkRegressionSummary, BenchmarkRegressionWithConfig } from '../api/types';
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
@@ -43,15 +43,22 @@ function formatDelta(metric: string, delta: number): string {
 export function BenchmarkRegressionsPage() {
   const { projectId } = useProject();
   const [regressions, setRegressions] = useState<BenchmarkRegressionWithConfig[]>([]);
+  const [summary, setSummary] = useState<BenchmarkRegressionSummary | null>(null);
   const [loading, setLoading] = useState(true);
 
   usePageTitle('Benchmark Regressions');
 
   const refresh = useCallback(() => {
     if (!projectId) return;
+    // Both calls issued synchronously (usePolling request-source contract).
     api.listBenchmarkRegressions(projectId, 100)
       .then(r => { setRegressions(r); setLoading(false); })
       .catch(() => setLoading(false));
+    // Summary is progressive enhancement — a failure keeps the page usable
+    // with the generic empty-state copy.
+    api.getBenchmarkRegressionSummary(projectId)
+      .then(setSummary)
+      .catch(() => setSummary(null));
   }, [projectId]);
 
   usePolling(refresh, 30000);
@@ -74,6 +81,10 @@ export function BenchmarkRegressionsPage() {
   const criticalCount = regressions.filter(r => r.severity === 'critical').length;
   const warningCount = regressions.filter(r => r.severity === 'warning').length;
 
+  // #810: distinguish "detection has never compared anything" (no baselines
+  // exist) from "comparisons ran and found nothing".
+  const neverCompared = summary != null && summary.runs_compared === 0;
+
   return (
     <div className="p-4 md:p-6">
       <PageHeader
@@ -81,11 +92,59 @@ export function BenchmarkRegressionsPage() {
         subtitle={regressions.length > 0 ? `${criticalCount > 0 ? `${criticalCount} critical` : ''}${criticalCount > 0 && warningCount > 0 ? ' / ' : ''}${warningCount > 0 ? `${warningCount} warning` : ''} — ${regressions.length} total` : undefined}
       />
 
+      {/* Comparison-activity strip — the pipeline's pulse, shown whenever the
+          detector has ever had a baseline to compare against. Counts are
+          derived from run history (see the API's `semantics` field). */}
+      {summary && summary.runs_compared > 0 && (
+        <div
+          className="flex flex-wrap items-center gap-x-5 gap-y-1 py-3 mb-4 text-xs border-b border-gray-800/50"
+          title={summary.semantics}
+        >
+          <span className="text-gray-400">
+            Runs compared <span className="text-gray-200 font-semibold ml-1 tabular-nums">{summary.runs_compared}</span>
+          </span>
+          {summary.last_comparison_at && (
+            <span className="text-gray-400">
+              Last comparison <span className="text-gray-200 ml-1">{timeAgo(summary.last_comparison_at)}</span>
+            </span>
+          )}
+          <span className="text-gray-400">
+            Comparable configs <span className="text-gray-200 font-semibold ml-1 tabular-nums">{summary.comparable_configs}</span>
+          </span>
+          {summary.pinned_baseline_configs > 0 && (
+            <span className="text-gray-400">
+              Pinned baselines <span className="text-gray-200 font-semibold ml-1 tabular-nums">{summary.pinned_baseline_configs}</span>
+            </span>
+          )}
+          <span className="text-gray-400">
+            Regressions <span className={`font-semibold ml-1 tabular-nums ${summary.total_regressions > 0 ? 'text-red-400' : 'text-green-400'}`}>{summary.total_regressions}</span>
+          </span>
+        </div>
+      )}
+
       {regressions.length === 0 ? (
-        <EmptyState
-          message="No regressions detected"
-          detail="When a benchmark run completes, each case is compared against the same case in the baseline run (the config's pinned baseline, or the previous completed run): a p50 more than 10% worse or a success rate below 99% is flagged automatically. Cases with fewer than 10 samples on either side are skipped so noise-level runs are never flagged. Run a benchmark config at least twice to enable regression tracking."
-        />
+        neverCompared ? (
+          <EmptyState
+            message="No baselines available yet — detection has never compared anything"
+            detail={
+              <>
+                A comparison needs the same benchmark config to complete twice: the detector compares
+                each completed run against the config&apos;s pinned baseline, or its previous completed
+                run. Matrix launches create fresh configs per cell, so they never accumulate a baseline
+                on their own. To enable detection, <Link to={`/projects/${projectId}/schedules`} className="text-cyan-400 hover:text-cyan-300">schedule a benchmark config</Link> so
+                it re-runs (run #2 onward is compared automatically), or open a completed benchmark
+                run and pin it as baseline.
+              </>
+            }
+          />
+        ) : (
+          <EmptyState
+            message={summary
+              ? `No regressions detected — ${summary.runs_compared} ${summary.runs_compared === 1 ? 'run' : 'runs'} compared against baselines${summary.last_comparison_at ? ` (last: ${timeAgo(summary.last_comparison_at)})` : ''}`
+              : 'No regressions detected'}
+            detail="When a benchmark run completes, each case is compared against the same case in the baseline run (the config's pinned baseline, or the previous completed run): a p50 more than 10% worse or a success rate below 99% is flagged automatically. Cases with fewer than 10 samples on either side are skipped so noise-level runs are never flagged."
+          />
+        )
       ) : (
         <DataTable
           columns={[

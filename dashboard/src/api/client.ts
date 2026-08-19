@@ -660,6 +660,13 @@ export const api = {
       projectUrl(projectId, `benchmark-regressions${limit ? `?limit=${limit}` : ''}`)
     ),
 
+  // Comparison-activity summary (#810): distinguishes "detection has never
+  // compared anything" from "N comparisons ran, zero regressions".
+  getBenchmarkRegressionSummary: (projectId: string) =>
+    request<import('./types').BenchmarkRegressionSummary>(
+      projectUrl(projectId, 'benchmark-regressions/summary')
+    ),
+
   // ── Benchmark Tokens (platform admin only, NOT project-scoped) ──────
   listBenchTokens: () =>
     request<BenchTokenInfo[]>('/bench-tokens'),
