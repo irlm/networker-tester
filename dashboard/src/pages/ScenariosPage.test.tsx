@@ -24,20 +24,22 @@ vi.mock('../features/runs/queries', () => ({
 vi.mock('../hooks/useToast', () => ({ useToast: () => mocks.toast }));
 
 const ready: ScenarioReadinessResponse = {
-  agents: { data: [{ agent_id: 'a-1', name: 'runner', status: 'online' } as never], error: null },
+  runners: { data: [{ tester_id: 't-1', name: 'runner', power_state: 'running', agent_status: 'online' } as never], error: null },
   deployments: { data: [{ deployment_id: 'd-1', name: 'target', status: 'completed', endpoint_ips: ['192.0.2.1'] } as never], error: null },
   cloudAccounts: { data: [{ account_id: 'c-1', name: 'cloud', provider: 'aws', status: 'active' } as never], error: null },
 };
 
 function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return render(
+  const tree = (
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={['/projects/p-1/scenarios']}>
         <ScenariosPage />
       </MemoryRouter>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  const result = render(tree);
+  return { ...result, rerenderPage: () => result.rerender(tree) };
 }
 
 beforeEach(() => {
@@ -104,6 +106,29 @@ describe('ScenariosPage triage console', () => {
     expect(screen.getByText(/Uses the existing tested builder/)).toBeInTheDocument();
   });
 
+  it('keeps an id-keyed keyboard selection stable across readiness polls', async () => {
+    const user = userEvent.setup();
+    let currentReadiness = ready;
+    mocks.readiness.mockImplementation(() => ({
+      data: currentReadiness,
+      dataUpdatedAt: Date.now(),
+      isFetching: false,
+      refetch: vi.fn(),
+    }));
+    const { rerenderPage } = renderPage();
+
+    await user.keyboard('j');
+    const selected = screen.getByRole('heading', { name: 'Protocol & handshake deep-dive' }).closest('article');
+    expect(selected).toHaveAttribute('data-selected', 'true');
+
+    currentReadiness = { ...ready, runners: { data: [], error: null } };
+    rerenderPage();
+
+    expect(screen.getByRole('heading', { name: 'Protocol & handshake deep-dive' }).closest('article'))
+      .toHaveAttribute('data-selected', 'true');
+    expect(screen.getByRole('heading', { name: 'Quick latency & TLS check' })).toBeInTheDocument();
+  });
+
   it('does not offer one-click rerun for a provisioning benchmark', () => {
     mocks.runs.mockReturnValue({
       data: [{
@@ -120,5 +145,22 @@ describe('ScenariosPage triage console', () => {
     expect(screen.queryByRole('button', { name: 'Run with last configuration' })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Open result/ })).toHaveAttribute('href', '/projects/p-1/runs/run-1');
     expect(screen.getByText(/fresh testbed review/)).toBeInTheDocument();
+  });
+
+  it('fails closed when a recent run omits its test kind', () => {
+    mocks.runs.mockReturnValue({
+      data: [{
+        id: 'run-2', test_config_id: 'config-2', project_id: 'p-1', status: 'completed',
+        config_name: 'Partial projection', created_at: new Date().toISOString(),
+        success_count: 1, failure_count: 0,
+      }],
+      isPending: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    renderPage();
+
+    expect(screen.queryByRole('button', { name: 'Run with last configuration' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Open result/ })).toHaveAttribute('href', '/projects/p-1/runs/run-2');
   });
 });

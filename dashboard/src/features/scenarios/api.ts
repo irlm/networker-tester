@@ -1,5 +1,6 @@
 import { request, errorMessage } from '../../api/http';
-import type { Agent, CloudAccountSummary, Deployment } from '../../api/types';
+import { testersApi, type TesterRow } from '../../api/testers';
+import type { CloudAccountSummary, Deployment } from '../../api/types';
 
 export interface ReadinessResource<T> {
   data: T[] | null;
@@ -7,7 +8,7 @@ export interface ReadinessResource<T> {
 }
 
 export interface ScenarioReadinessResponse {
-  agents: ReadinessResource<Agent>;
+  runners: ReadinessResource<TesterRow>;
   deployments: ReadinessResource<Deployment>;
   cloudAccounts: ReadinessResource<CloudAccountSummary>;
 }
@@ -23,11 +24,8 @@ function settledResource<T>(result: PromiseSettledResult<T[]>): ReadinessResourc
 }
 
 export const scenariosApi = {
-  listAgents: (projectId: string, signal?: AbortSignal) =>
-    request<Agent[] | { agents: Agent[] }>(
-      `/projects/${projectId}/agents`,
-      withSignal(signal),
-    ).then((response) => (Array.isArray(response) ? response : response?.agents ?? [])),
+  listRunners: (projectId: string, signal?: AbortSignal) =>
+    testersApi.listTesters(projectId, signal),
 
   listDeployments: (projectId: string, signal?: AbortSignal) =>
     request<Deployment[]>(
@@ -42,8 +40,8 @@ export const scenariosApi = {
     ),
 
   async loadReadiness(projectId: string, signal?: AbortSignal): Promise<ScenarioReadinessResponse> {
-    const [agents, deployments, cloudAccounts] = await Promise.allSettled([
-      scenariosApi.listAgents(projectId, signal),
+    const [runners, deployments, cloudAccounts] = await Promise.allSettled([
+      scenariosApi.listRunners(projectId, signal),
       scenariosApi.listDeployments(projectId, signal),
       scenariosApi.listCloudAccounts(projectId, signal),
     ]);
@@ -51,7 +49,7 @@ export const scenariosApi = {
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
     return {
-      agents: settledResource(agents),
+      runners: settledResource(runners),
       deployments: settledResource(deployments),
       cloudAccounts: settledResource(cloudAccounts),
     };

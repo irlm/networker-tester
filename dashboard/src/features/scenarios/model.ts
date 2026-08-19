@@ -1,4 +1,5 @@
 import type { Scenario } from '../../lib/scenarios';
+import { isOnlineTester } from '../../lib/tester-readiness';
 import type { ScenarioReadinessResponse } from './api';
 
 export type ScenarioIntentId = 'url' | 'route' | 'endpoint' | 'benchmark';
@@ -76,9 +77,9 @@ export interface ScenarioAvailability {
   canConfigure: boolean;
 }
 
-function onlineAgents(readiness?: ScenarioReadinessResponse): number | null {
-  const agents = readiness?.agents.data;
-  return agents ? agents.filter((agent) => agent.status === 'online').length : null;
+function onlineRunners(readiness?: ScenarioReadinessResponse): number | null {
+  const runners = readiness?.runners.data;
+  return runners ? runners.filter(isOnlineTester).length : null;
 }
 
 function activeEndpoints(readiness?: ScenarioReadinessResponse): number | null {
@@ -99,8 +100,8 @@ function activeCloudAccounts(readiness?: ScenarioReadinessResponse): number | nu
 export function summarizeReadiness(
   readiness?: ScenarioReadinessResponse,
 ): ReadinessSummaryItem[] {
-  const runnerCount = onlineAgents(readiness);
-  const agentTotal = readiness?.agents.data?.length ?? null;
+  const runnerCount = onlineRunners(readiness);
+  const runnerTotal = readiness?.runners.data?.length ?? null;
   const endpointCount = activeEndpoints(readiness);
   const deploymentTotal = readiness?.deployments.data?.length ?? null;
   const cloudCount = activeCloudAccounts(readiness);
@@ -110,20 +111,20 @@ export function summarizeReadiness(
     runnerCount == null
       ? {
           id: 'runner', label: 'Runner', tone: 'unverified', value: 'UNVERIFIED',
-          detail: readiness?.agents.error ?? 'Checking runner inventory…',
+          detail: readiness?.runners.error ?? 'Checking runner inventory…',
           repairLabel: 'View runners', repairPath: (pid) => `/projects/${pid}/vms`,
         }
       : runnerCount > 0
         ? {
             id: 'runner', label: 'Runner', tone: 'ready', value: `${runnerCount} ONLINE`,
-            detail: `${runnerCount} of ${agentTotal} runners can accept work.`,
+            detail: `${runnerCount} of ${runnerTotal} runners can accept work.`,
             repairLabel: 'View runners', repairPath: (pid) => `/projects/${pid}/vms`,
           }
         : {
-            id: 'runner', label: 'Runner', tone: agentTotal ? 'attention' : 'blocked',
-            value: agentTotal ? 'OFFLINE' : 'REQUIRED',
-            detail: agentTotal ? `${agentTotal} registered runner${agentTotal === 1 ? ' is' : 's are'} offline.` : 'No runner is registered for this project.',
-            repairLabel: agentTotal ? 'View runners' : 'Add runner', repairPath: (pid) => `/projects/${pid}/vms`,
+            id: 'runner', label: 'Runner', tone: runnerTotal ? 'attention' : 'blocked',
+            value: runnerTotal ? 'OFFLINE' : 'REQUIRED',
+            detail: runnerTotal ? `${runnerTotal} registered runner${runnerTotal === 1 ? ' is' : 's are'} offline.` : 'No runner is registered for this project.',
+            repairLabel: runnerTotal ? 'View runners' : 'Add runner', repairPath: (pid) => `/projects/${pid}/vms`,
           },
     endpointCount == null
       ? {
@@ -174,9 +175,9 @@ export function scenarioAvailability(
   readiness?: ScenarioReadinessResponse,
 ): ScenarioAvailability {
   const summary = summarizeReadiness(readiness);
-  const runner = summary[0];
-  const endpoint = summary[1];
-  const cloud = summary[2];
+  const runner = summary.find((item) => item.id === 'runner')!;
+  const endpoint = summary.find((item) => item.id === 'endpoint')!;
+  const cloud = summary.find((item) => item.id === 'cloud')!;
   const configure: ScenarioAvailability = {
     tone: 'ready',
     label: 'READY',

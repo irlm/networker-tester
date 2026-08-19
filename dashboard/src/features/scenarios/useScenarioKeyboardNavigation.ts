@@ -1,11 +1,13 @@
 import { useEffect } from 'react';
+import { useDocsStore } from '../../stores/docsStore';
 import type { ScenarioIntentId } from './model';
 
 interface ScenarioKeyboardOptions {
   enabled: boolean;
+  activeIntent: ScenarioIntentId;
   scenarioIds: string[];
-  selectedIndex: number;
-  setSelectedIndex: (index: number) => void;
+  selectedScenarioId: string | null;
+  setSelectedScenarioId: (id: string) => void;
   setIntent: (intent: ScenarioIntentId) => void;
   toggleMethod: () => void;
   toggleReadiness: () => void;
@@ -26,9 +28,10 @@ function focusScenario(id: string) {
 
 export function useScenarioKeyboardNavigation({
   enabled,
+  activeIntent,
   scenarioIds,
-  selectedIndex,
-  setSelectedIndex,
+  selectedScenarioId,
+  setSelectedScenarioId,
   setIntent,
   toggleMethod,
   toggleReadiness,
@@ -40,7 +43,8 @@ export function useScenarioKeyboardNavigation({
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target as HTMLElement | null;
       if (target?.matches('input, textarea, select, [contenteditable="true"]')) return;
-      if (document.querySelector('.docs-panel-enter')) return;
+      const docs = useDocsStore.getState();
+      if (docs.paletteOpen || docs.helpOpen) return;
 
       const intent = INTENT_KEYS[event.key];
       if (intent) {
@@ -52,8 +56,7 @@ export function useScenarioKeyboardNavigation({
       if (event.key === 'h' || event.key === 'l') {
         event.preventDefault();
         const intents: ScenarioIntentId[] = ['url', 'route', 'endpoint', 'benchmark'];
-        const active = document.querySelector<HTMLElement>('[data-intent-active="true"]')?.dataset.intent as ScenarioIntentId | undefined;
-        const current = Math.max(0, intents.indexOf(active ?? 'url'));
+        const current = Math.max(0, intents.indexOf(activeIntent));
         const next = event.key === 'h'
           ? (current - 1 + intents.length) % intents.length
           : (current + 1) % intents.length;
@@ -64,15 +67,16 @@ export function useScenarioKeyboardNavigation({
       if ((event.key === 'j' || event.key === 'k') && scenarioIds.length) {
         event.preventDefault();
         const delta = event.key === 'j' ? 1 : -1;
-        const next = (selectedIndex + delta + scenarioIds.length) % scenarioIds.length;
-        setSelectedIndex(next);
+        const current = Math.max(0, scenarioIds.indexOf(selectedScenarioId ?? scenarioIds[0]));
+        const next = (current + delta + scenarioIds.length) % scenarioIds.length;
+        setSelectedScenarioId(scenarioIds[next]);
         focusScenario(scenarioIds[next]);
         return;
       }
 
       if (event.key === 'r' && scenarioIds[0]) {
         event.preventDefault();
-        setSelectedIndex(0);
+        setSelectedScenarioId(scenarioIds[0]);
         focusScenario(scenarioIds[0]);
       } else if (event.key === 's') {
         event.preventDefault();
@@ -80,16 +84,16 @@ export function useScenarioKeyboardNavigation({
       } else if (event.key === 'm') {
         event.preventDefault();
         toggleMethod();
-      } else if (event.key === 'Enter' && scenarioIds[selectedIndex]) {
+      } else if (event.key === 'Enter' && selectedScenarioId) {
         if (target?.closest('a, button')) return;
         event.preventDefault();
         document.querySelector<HTMLElement>(
-          `[data-scenario-id="${scenarioIds[selectedIndex]}"] [data-scenario-action]`,
+          `[data-scenario-id="${selectedScenarioId}"] [data-scenario-action]`,
         )?.click();
       }
     }
 
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [enabled, scenarioIds, selectedIndex, setIntent, setSelectedIndex, toggleMethod, toggleReadiness]);
+  }, [activeIntent, enabled, scenarioIds, selectedScenarioId, setIntent, setSelectedScenarioId, toggleMethod, toggleReadiness]);
 }

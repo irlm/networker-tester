@@ -62,7 +62,7 @@ interface ScenarioConsoleProps {
   scenarios: Scenario[];
   projectId: string;
   readiness?: ScenarioReadinessResponse;
-  selectedIndex: number;
+  selectedScenarioId: string | null;
   methodOpen: boolean;
   onToggleMethod: () => void;
 }
@@ -71,7 +71,7 @@ export function ScenarioConsole({
   scenarios,
   projectId,
   readiness,
-  selectedIndex,
+  selectedScenarioId,
   methodOpen,
   onToggleMethod,
 }: ScenarioConsoleProps) {
@@ -88,7 +88,8 @@ export function ScenarioConsole({
         </div>
         <article
           data-scenario-id={recommended.id}
-          className={`border bg-[var(--bg-surface)] ${selectedIndex === 0 ? 'border-cyan-500/80' : 'border-cyan-500/45'}`}
+          data-selected={selectedScenarioId === recommended.id}
+          className={`border bg-[var(--bg-surface)] ${selectedScenarioId === recommended.id ? 'border-cyan-500/80' : 'border-cyan-500/45'}`}
         >
           <div className="border-b border-cyan-500/25 px-4 py-2 text-xs text-cyan-300">
             RECOMMENDED · {recommended.badge}
@@ -140,13 +141,13 @@ export function ScenarioConsole({
         <section className="mt-7" aria-labelledby="alternative-heading">
           <h3 id="alternative-heading" className="mb-3 text-sm font-semibold text-gray-200">Other tests for this signal</h3>
           <div className="border-t border-[var(--border-default)]">
-            {alternatives.map((scenario, index) => (
+            {alternatives.map((scenario) => (
               <ScenarioRow
                 key={scenario.id}
                 scenario={scenario}
                 projectId={projectId}
                 readiness={readiness}
-                selected={selectedIndex === index + 1}
+                selected={selectedScenarioId === scenario.id}
               />
             ))}
           </div>
@@ -176,6 +177,7 @@ function ScenarioRow({ scenario, projectId, readiness, selected }: {
   return (
     <article
       data-scenario-id={scenario.id}
+      data-selected={selected}
       className={`grid gap-3 border-b border-[var(--border-default)] px-3 py-4 transition-colors md:grid-cols-[minmax(15rem,1.2fr)_minmax(7rem,.45fr)_minmax(14rem,1fr)_auto] md:items-center ${
         selected ? 'bg-cyan-500/5' : 'hover:bg-gray-900/30'
       }`}

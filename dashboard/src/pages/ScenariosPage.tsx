@@ -24,6 +24,18 @@ import { useToast } from '../hooks/useToast';
 import { ALL_SCENARIOS } from '../lib/scenarios';
 
 const KEYBOARD_STORAGE_KEY = 'scenario-keys-enabled';
+const SCENARIOS_BY_ID = new Map(ALL_SCENARIOS.map((scenario) => [scenario.id, scenario]));
+
+function rankedScenariosForIntent(intent: ScenarioIntentId, readiness?: Parameters<typeof rankScenarios>[1]) {
+  const definition = SCENARIO_INTENTS.find((item) => item.id === intent) ?? SCENARIO_INTENTS[0];
+  return rankScenarios(
+    definition.scenarioIds.flatMap((id) => {
+      const scenario = SCENARIOS_BY_ID.get(id);
+      return scenario ? [scenario] : [];
+    }),
+    readiness,
+  );
+}
 
 function initialKeyboardSetting(): boolean {
   if (typeof window === 'undefined') return true;
@@ -46,44 +58,56 @@ export function ScenariosPage() {
   const navigate = useNavigate();
   const addToast = useToast();
   const [intent, setIntentState] = useState<ScenarioIntentId>('url');
-  const [selectedIndex, setSelectedIndex] = useState(0);
   const [readinessOpen, setReadinessOpen] = useState(false);
   const [methodOpen, setMethodOpen] = useState(false);
   const [keyboardEnabled, setKeyboardEnabled] = useState(initialKeyboardSetting);
 
   const readinessQuery = useScenarioReadinessQuery(projectId);
   const recentRunsQuery = useTestRunsQuery(projectId, { limit: 10 }, { polling: false });
+  // Intentionally frozen between explicit user actions: the 15s readiness
+  // poll may update labels, but it must never move the Configure target under
+  // the pointer or silently change a keyboard selection.
+  const [scenarioIds, setScenarioIds] = useState<string[]>(() =>
+    rankedScenariosForIntent('url', readinessQuery.data).map((scenario) => scenario.id));
+  const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(() => scenarioIds[0] ?? null);
   const readinessItems = useMemo(
     () => summarizeReadiness(readinessQuery.data),
     [readinessQuery.data],
   );
 
-  const selectedIntent = SCENARIO_INTENTS.find((item) => item.id === intent) ?? SCENARIO_INTENTS[0];
-  const scenarios = useMemo(() => {
-    const byId = new Map(ALL_SCENARIOS.map((scenario) => [scenario.id, scenario]));
-    return rankScenarios(
-      selectedIntent.scenarioIds.flatMap((id) => {
-        const scenario = byId.get(id);
-        return scenario ? [scenario] : [];
-      }),
-      readinessQuery.data,
-    );
-  }, [readinessQuery.data, selectedIntent.scenarioIds]);
+  const scenarios = useMemo(
+    () => scenarioIds.flatMap((id) => {
+      const scenario = SCENARIOS_BY_ID.get(id);
+      return scenario ? [scenario] : [];
+    }),
+    [scenarioIds],
+  );
 
   const setIntent = useCallback((nextIntent: ScenarioIntentId) => {
+    const ranked = rankedScenariosForIntent(nextIntent, readinessQuery.data);
     setIntentState(nextIntent);
-    setSelectedIndex(0);
+    setScenarioIds(ranked.map((scenario) => scenario.id));
+    setSelectedScenarioId(ranked[0]?.id ?? null);
     setMethodOpen(false);
-  }, []);
+  }, [readinessQuery.data]);
+
+  const retryReadiness = useCallback(async () => {
+    const result = await readinessQuery.refetch();
+    const ranked = rankedScenariosForIntent(intent, result?.data ?? readinessQuery.data);
+    const nextIds = ranked.map((scenario) => scenario.id);
+    setScenarioIds(nextIds);
+    setSelectedScenarioId((selected) => selected && nextIds.includes(selected) ? selected : (nextIds[0] ?? null));
+  }, [intent, readinessQuery]);
 
   const toggleMethod = useCallback(() => setMethodOpen((open) => !open), []);
   const toggleReadiness = useCallback(() => setReadinessOpen((open) => !open), []);
 
   useScenarioKeyboardNavigation({
     enabled: keyboardEnabled,
-    scenarioIds: scenarios.map((scenario) => scenario.id),
-    selectedIndex,
-    setSelectedIndex,
+    activeIntent: intent,
+    scenarioIds,
+    selectedScenarioId,
+    setSelectedScenarioId,
     setIntent,
     toggleMethod,
     toggleReadiness,
@@ -95,7 +119,9 @@ export function ScenariosPage() {
 
   const latestRun = recentRunsQuery.data?.find((run) =>
     run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled');
-  const canRerun = Boolean(latestRun && isOperator && latestRun.test_kind !== 'benchmark');
+  const canRerun = Boolean(
+    latestRun && isOperator && latestRun.test_kind != null && latestRun.test_kind !== 'benchmark',
+  );
   const rerunMutation = useMutation({
     mutationFn: (configId: string) => runsApi.launchConfig(configId),
     onSuccess: (run) => {
@@ -121,7 +147,7 @@ export function ScenariosPage() {
         projectId={projectId}
         expanded={readinessOpen}
         onToggle={toggleReadiness}
-        onRetry={() => void readinessQuery.refetch()}
+        onRetry={() => void retryReadiness()}
         refreshing={readinessQuery.isFetching}
         checkedAt={readinessQuery.dataUpdatedAt || undefined}
       />
@@ -131,7 +157,7 @@ export function ScenariosPage() {
         scenarios={scenarios}
         projectId={projectId}
         readiness={readinessQuery.data}
-        selectedIndex={selectedIndex}
+        selectedScenarioId={selectedScenarioId}
         methodOpen={methodOpen}
         onToggleMethod={toggleMethod}
       />
