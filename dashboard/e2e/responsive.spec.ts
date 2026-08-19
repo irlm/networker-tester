@@ -18,6 +18,7 @@ const routes = [
   ['schedules', `/projects/${PID}/schedules`],
   ['alerts', `/projects/${PID}/alerts`],
   ['value report', `/projects/${PID}/reports/value`],
+  ['SDK endpoints', `/projects/${PID}/sdk-endpoints`],
   ['performance log', '/admin/perf-log'],
 ] as const;
 

@@ -1,12 +1,16 @@
 import { useState } from 'react';
 import { api, errorMessage } from '../api/client';
+import type { SdkEndpointCreate } from '../api/types';
 import { useToast } from '../hooks/useToast';
+import { Button } from './common/Button';
+import { FormField, Input } from './common/FormControls';
 import { Modal } from './common/Modal';
 
 interface CreateSdkEndpointDialogProps {
   projectId: string;
   onClose: () => void;
   onCreated: () => void;
+  initialValues?: Partial<SdkEndpointCreate>;
 }
 
 /** Default probe route mounted by the LagHound SDK. Matches the tester default. */
@@ -27,12 +31,17 @@ function isAbsoluteHttpUrl(raw: string): boolean {
  * CreateTlsProfileDialog. The LagHound token is a write-only password field —
  * it is sent on create and never displayed again (reads mask it as '********').
  */
-export function CreateSdkEndpointDialog({ projectId, onClose, onCreated }: CreateSdkEndpointDialogProps) {
-  const [name, setName] = useState('');
-  const [url, setUrl] = useState('');
-  const [token, setToken] = useState('');
-  const [route, setRoute] = useState(DEFAULT_ROUTE);
-  const [description, setDescription] = useState('');
+export function CreateSdkEndpointDialog({
+  projectId,
+  onClose,
+  onCreated,
+  initialValues,
+}: CreateSdkEndpointDialogProps) {
+  const [name, setName] = useState(initialValues?.name ?? '');
+  const [url, setUrl] = useState(initialValues?.url ?? '');
+  const [token, setToken] = useState(initialValues?.token ?? '');
+  const [route, setRoute] = useState(initialValues?.route ?? DEFAULT_ROUTE);
+  const [description, setDescription] = useState(initialValues?.description ?? '');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const addToast = useToast();
@@ -43,7 +52,7 @@ export function CreateSdkEndpointDialog({ projectId, onClose, onCreated }: Creat
   const trimmedRoute = route.trim();
   const nameValid = trimmedName.length > 0;
   const urlValid = isAbsoluteHttpUrl(trimmedUrl);
-  const tokenValid = token.length > 0;
+  const tokenValid = token.trim().length > 0;
   const routeValid = trimmedRoute === '' || (trimmedRoute.startsWith('/') && !trimmedRoute.includes(' '));
   const canSubmit = nameValid && urlValid && tokenValid && routeValid && !loading;
 
@@ -78,90 +87,93 @@ export function CreateSdkEndpointDialog({ projectId, onClose, onCreated }: Creat
 
   return (
     <Modal onClose={onClose} labelledBy="create-sdk-endpoint-title" variant="slide-over">
-        <form onSubmit={handleSubmit} className="p-4 md:p-6">
+      <form onSubmit={handleSubmit} className="p-4 md:p-6" noValidate>
           <div className="flex items-center justify-between mb-2">
             <h3 id="create-sdk-endpoint-title" className="text-lg font-bold text-gray-100">Register SDK endpoint</h3>
-            <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-300 text-sm" aria-label="Close">&#x2715;</button>
+            <Button variant="ghost" size="xs" onClick={onClose} aria-label="Close">&#x2715;</Button>
           </div>
           <p className="text-xs text-gray-400 mb-6">
             Point LagHound at a URL that mounts the SDK routes. Probes run the{' '}
-            <span className="text-purple-400">sdkprobe</span> mode and split latency into network vs server.
+            <span className="text-cyan-400">sdkprobe</span> mode and split latency into network versus application time.
           </p>
 
-          {error && <div className="bg-red-500/10 border border-red-500/30 rounded p-2 mb-4 text-red-400 text-sm">{error}</div>}
+          {error && <div className="alert alert-error mb-4 text-sm text-red-300" role="alert">{error}</div>}
 
-          <label htmlFor="sdk-name" className="block text-xs text-gray-400 mb-1">Name</label>
-          <input
-            id="sdk-name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Checkout API (prod)"
-            className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 mb-4 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
-          />
+          <FormField label="Name" htmlFor="sdk-name" required className="mb-4">
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Checkout API (prod)"
+              required
+            />
+          </FormField>
 
-          <label htmlFor="sdk-url" className="block text-xs text-gray-400 mb-1">Target URL</label>
-          <input
-            id="sdk-url"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://api.customer.com"
-            className={`w-full bg-[var(--bg-base)] border rounded px-3 py-2 text-sm text-gray-200 mb-1 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600 ${
-              trimmedUrl && !urlValid ? 'border-red-500/50' : 'border-gray-700'
-            }`}
-          />
-          {trimmedUrl && !urlValid && (
-            <p className="text-xs text-red-400 mb-3">Must be an absolute http(s) URL.</p>
-          )}
-          {(!trimmedUrl || urlValid) && <div className="mb-3" />}
+          <FormField
+            label="Target URL"
+            htmlFor="sdk-url"
+            required
+            error={trimmedUrl && !urlValid ? 'Must be an absolute http(s) URL.' : undefined}
+            className="mb-4"
+          >
+            <Input
+              type="url"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://api.customer.com"
+              required
+            />
+          </FormField>
 
-          <label htmlFor="sdk-token" className="block text-xs text-gray-400 mb-1">
-            LagHound token <span className="text-faint">(write-only)</span>
-          </label>
-          <input
-            id="sdk-token"
-            type="password"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            autoComplete="new-password"
-            placeholder="Sent as X-LagHound-Token"
-            className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 mb-1 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
-          />
-          <p className="text-xs text-faint mb-4">Encrypted at rest and never shown again — you can only replace it.</p>
+          <FormField
+            label={<>LagHound token <span className="text-faint">(write-only)</span></>}
+            htmlFor="sdk-token"
+            required
+            hint="Encrypted at rest and never shown again. Token rotation is not available on an existing registration yet."
+            error={token.length > 0 && !tokenValid ? 'Token cannot contain only whitespace.' : undefined}
+            className="mb-4"
+          >
+            <Input
+              type="password"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              autoComplete="new-password"
+              placeholder="Sent as X-LagHound-Token"
+              required
+            />
+          </FormField>
 
-          <label htmlFor="sdk-route" className="block text-xs text-gray-400 mb-1">
-            Probe route <span className="text-faint">(optional)</span>
-          </label>
-          <input
-            id="sdk-route"
-            value={route}
-            onChange={(e) => setRoute(e.target.value)}
-            placeholder={DEFAULT_ROUTE}
-            className={`w-full bg-[var(--bg-base)] border rounded px-3 py-2 text-sm text-gray-200 mb-1 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600 ${
-              !routeValid ? 'border-red-500/50' : 'border-gray-700'
-            }`}
-          />
-          {!routeValid && (
-            <p className="text-xs text-red-400 mb-3">Must be an absolute path beginning with &apos;/&apos;.</p>
-          )}
-          {routeValid && <div className="mb-3" />}
+          <FormField
+            label={<>Probe route <span className="text-faint">(optional)</span></>}
+            htmlFor="sdk-route"
+            error={!routeValid ? "Must be an absolute path beginning with '/'." : undefined}
+            className="mb-4"
+          >
+            <Input
+              value={route}
+              onChange={(e) => setRoute(e.target.value)}
+              placeholder={DEFAULT_ROUTE}
+            />
+          </FormField>
 
-          <label htmlFor="sdk-desc" className="block text-xs text-gray-400 mb-1">
-            Description <span className="text-faint">(optional)</span>
-          </label>
-          <input
-            id="sdk-desc"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            className="w-full bg-[var(--bg-base)] border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 mb-6 focus:outline-none focus:border-cyan-500 placeholder:text-gray-600"
-          />
+          <FormField
+            label={<>Description <span className="text-faint">(optional)</span></>}
+            htmlFor="sdk-desc"
+            className="mb-6"
+          >
+            <Input
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Production checkout service"
+            />
+          </FormField>
 
           <div className="flex justify-end gap-3 pt-4 border-t border-gray-800/50">
-            <button type="button" onClick={onClose} className="px-4 py-1.5 text-sm text-gray-400 hover:text-gray-200">Cancel</button>
-            <button type="submit" disabled={!canSubmit} className="bg-cyan-600 hover:bg-cyan-500 text-[var(--bg-base)] px-4 py-1.5 rounded text-sm transition-colors disabled:opacity-50">
-              {loading ? 'Registering...' : 'Register endpoint'}
-            </button>
+            <Button onClick={onClose}>Cancel</Button>
+            <Button type="submit" variant="primary" disabled={!canSubmit} loading={loading} loadingLabel="Registering…">
+              Register endpoint
+            </Button>
           </div>
-        </form>
+      </form>
     </Modal>
   );
 }
