@@ -8,6 +8,12 @@ Wave 1 (this document) is the backend: rules, channels, evaluation, delivery,
 and the REST surface. The dashboard UI has since shipped on top of these
 endpoints (`dashboard/src/pages/AlertsPage.tsx`).
 
+This system evaluates completed LagHound test runs and remains owned by the
+main control plane. The separately deployable API-monitoring and incident
+system is specified in [`monitoring-plane-design.md`](monitoring-plane-design.md).
+It deliberately keeps monitoring/reporting available for every configured API
+while making paging and incident creation opt-in for important monitors.
+
 ## Concepts
 
 | Object | What it is |

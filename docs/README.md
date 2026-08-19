@@ -17,6 +17,7 @@ points here for the detailed material.
 - [`setup-guide.md`](setup-guide.md): production deployment guide (infrastructure, SSO, cloud federation, email) — some manual-setup sections still show the legacy Rust service and are marked as such
 - [`cloud-auth.md`](cloud-auth.md): cloud authentication for the control plane — ambient CLI auth + AES-256-GCM stored credentials (materialised to 0600 temp files at provision time)
 - [`alerting.md`](alerting.md): threshold alert rules + notification channels (webhook/email) — concepts, API, webhook payload + signature contract
+- [`monitoring-plane-design.md`](monitoring-plane-design.md): accepted architecture for outage-independent API monitoring, reports, opt-in alerting, incidents, and correlated logs
 - [`schema-ownership.md`](schema-ownership.md): the control-plane PostgreSQL schema is owned by `src/Networker.Data` (migrations, migrator, compatibility guarantees)
 - [`ops-nginx-ws-redaction.md`](ops-nginx-ws-redaction.md): nginx access-log redaction for the `/ws/*` credential query strings — re-apply procedure for a VM rebuild
 - [`reports-app-network.md`](reports-app-network.md): the Application Network Performance report — splits SDK-probe latency into application (server) vs network time
