@@ -14,6 +14,7 @@ import { useToast } from '../hooks/useToast';
 import { familyOf, modeLabel } from '../components/common/mode-family';
 import { RunResult } from '../components/common/RunResult';
 import { unsupportedModes } from '../lib/mode-capabilities';
+import { isOnlineTester } from '../lib/tester-readiness';
 import { Button } from '../components/common/Button';
 import { testConfigQueryOptions, useTestRunsQuery } from '../features/runs/queries';
 
@@ -283,7 +284,7 @@ export function NetworkTestPage() {
     // "online" requires a CONNECTED agent, not just a powered-on VM —
     // matches the Infrastructure page and the dashboard KPI (2026-08 UI
     // pass). A running VM whose agent is dark can't take this job.
-    const online = testers.filter(t => t.power_state === 'running' && t.agent_status === 'online');
+    const online = testers.filter(isOnlineTester);
     const idle = online.filter(t => t.allocation === 'idle');
     return { online: online.length, idle: idle.length };
   }, [testers]);

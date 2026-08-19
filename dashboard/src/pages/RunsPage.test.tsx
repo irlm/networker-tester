@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   refetch: vi.fn(),
 }));
 
+const RECENT_RUN_ISO = new Date(Date.now() - 60 * 60_000).toISOString();
+
 vi.mock('../features/runs/queries', () => ({
   useTestRunsQuery: mocks.useTestRunsQuery,
 }));
@@ -28,7 +30,7 @@ const baseRun = {
   tester_id: null,
   worker_id: null,
   last_heartbeat: null,
-  created_at: '2026-08-18T12:00:00Z',
+  created_at: RECENT_RUN_ISO,
 } satisfies Omit<TestRun, 'id' | 'test_config_id'>;
 
 const runs: TestRun[] = [

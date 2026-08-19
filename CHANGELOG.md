@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.244] - 2026-08-19
+
+### Added
+
+- **Start a test is now an incident-ready triage console.** Tests are grouped
+  by the signal an operator needs, ranked without moving under the user during
+  background refreshes, and checked against the same runner, endpoint, and
+  cloud readiness rules used by the launch flows. Blocked tests lead directly
+  to the required repair, recent non-provisioning configurations can be safely
+  repeated, and all scenarios are searchable from the command palette. The
+  complete flow supports persisted Vim-style keyboard controls with an explicit
+  off switch and responsive, WCAG-checked layouts.
+
+---
+
 ## [0.28.243] - 2026-08-19
 
 ### Fixed
