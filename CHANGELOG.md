@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.242] - 2026-08-19
+
+### Fixed
+
+- **Windows-only runtimes no longer produce doomed Linux cells** in the
+  Application benchmark matrix. The Languages step promised "Linux testbeds
+  will skip .NET 4.8 automatically", but the promise lived only in the copy —
+  the cell fan-out created the Linux cell anyway and provisioning always
+  failed, burning a VM and a failed run (user-caught: csharp-net48 @ linux).
+  Cell expansion now applies `languageAllowedOnOs` (Windows-only runtimes
+  pair only with Windows testbeds), and the Review cell count reflects the
+  real number.
+
 ## [0.28.241] - 2026-08-18
 
 ### Added

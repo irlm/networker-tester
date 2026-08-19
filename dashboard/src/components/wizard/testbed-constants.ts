@@ -320,6 +320,14 @@ export function requiresWindows(langs: Set<string>): boolean {
   return [...langs].some(id => WINDOWS_ONLY_LANGS.has(id));
 }
 
+/** Whether a language may run on a testbed OS — Windows-only runtimes
+ *  (.NET Framework 4.8) must never produce Linux cells: such a cell always
+ *  fails provisioning, burning a VM and a doomed run (user-caught 2026-08-19,
+ *  csharp-net48 @ linux). Empty/absent language is always allowed. */
+export function languageAllowedOnOs(lang: string, os: 'linux' | 'windows'): boolean {
+  return !lang || !WINDOWS_ONLY_LANGS.has(lang) || os === 'windows';
+}
+
 // ── Methodology ─────────────────────────────────────────────────────────
 
 export interface MethodologyPreset {
