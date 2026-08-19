@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { CloudAccountSummary } from '../../api/types';
 import {
+  autoprovisionJumpStep,
   DEFAULT_METHODOLOGY,
+  FULL_STACK_REVIEW_STEP,
   languageAllowedOnOs,
   INSTANCE_TYPES,
   makeTestbed,
@@ -276,5 +278,45 @@ describe('runtime templates never seed doomed language cells', () => {
         ).toBe(true);
       }
     }
+  });
+});
+
+describe('autoprovisionJumpStep (#793 slice b — no unconditional jump to Review)', () => {
+  const prefilled = (over: Partial<ReturnType<typeof makeTestbed>> = {}) => {
+    const tb = makeTestbed(0, 'Azure', 'linux', ['nginx']);
+    tb.cloudAccountId = 'acct-1';
+    return { ...tb, ...over };
+  };
+
+  it('reaches Review when every prior step passes with the prefilled values', () => {
+    expect(autoprovisionJumpStep(prefilled(), ['http1', 'http2'])).toBe(FULL_STACK_REVIEW_STEP);
+  });
+
+  it('stops on Testbeds (0) when no cloud account is prefilled', () => {
+    expect(autoprovisionJumpStep(prefilled({ cloudAccountId: '' }), ['http1'])).toBe(0);
+  });
+
+  it('stops on Testbeds (0) when the testbed has no proxies', () => {
+    expect(autoprovisionJumpStep(prefilled({ proxies: [] }), ['http1'])).toBe(0);
+  });
+
+  it('stops on Workload (1) when ?modes= names only unsupported modes', () => {
+    // sdkprobe needs an SDK endpoint, apibench needs the reference APIs —
+    // neither can run against a provisioned proxy stack, so zero effective
+    // modes remain and Review (which used to 422 raw on Launch) is not reached.
+    expect(autoprovisionJumpStep(prefilled(), ['sdkprobe', 'apibench'])).toBe(1);
+  });
+
+  it('stops on Workload (1) when every mode is h3 and every proxy lacks QUIC', () => {
+    expect(autoprovisionJumpStep(prefilled({ proxies: ['apache'] }), ['http3'])).toBe(1);
+  });
+
+  it('reaches Review when at least one selected mode survives the stack gate', () => {
+    expect(autoprovisionJumpStep(prefilled({ proxies: ['apache'] }), ['http3', 'http1']))
+      .toBe(FULL_STACK_REVIEW_STEP);
+  });
+
+  it('checks Testbeds before Workload — the earliest failing step wins', () => {
+    expect(autoprovisionJumpStep(prefilled({ cloudAccountId: '' }), ['sdkprobe'])).toBe(0);
   });
 });

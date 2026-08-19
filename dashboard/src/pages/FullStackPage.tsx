@@ -24,6 +24,7 @@ import {
   makeTestbedForAccount,
   pickDefaultAccount,
   unhealthyAccountLaunchBlock,
+  autoprovisionJumpStep,
 } from '../components/wizard/testbed-constants';
 
 // Shared wizard chrome/submit live in components/wizard (WizardShell,
@@ -132,10 +133,15 @@ export function FullStackPage() {
 
   // Auto-provisioning scenario (?autoprovision=1): pre-fill a default testbed
   // from the project's first HEALTHY cloud account (+ scenario ?proxies / ?os)
-  // and jump straight to Review — the user reviews the provisioning notice and
-  // launches. When accounts exist but none is healthy, stay on the Testbeds
-  // step with an inline hint instead of silently launching against a broken
-  // account (#791/#793 P1-1) — the modes/proxies/name prefill still applies.
+  // and jump towards Review — the user reviews the provisioning notice and
+  // launches. The jump is NOT unconditional (#793 slice b): each prior step's
+  // canNext predicate is re-evaluated with the prefilled values and the wizard
+  // stops on the first failing step (autoprovisionJumpStep) — e.g. a
+  // ?modes=<all-unsupported> deep link stops on Workload instead of reaching
+  // Review with zero effective modes. When accounts exist but none is healthy,
+  // stay on the Testbeds step with an inline hint instead of silently
+  // launching against a broken account (#791/#793 P1-1) — the
+  // modes/proxies/name prefill still applies.
   // No-op (falls back to the manual testbed step) when no cloud account exists.
   const autoProvisionedRef = useRef(false);
   const [noHealthyAccount, setNoHealthyAccount] = useState(false);
@@ -161,9 +167,12 @@ export function FullStackPage() {
     // providerToCloud inside makeTestbedForAccount keeps the REGIONS /
     // INSTANCE_TYPES lookups resolving (#793 P1-2: the raw lowercase wire
     // provider produced Standard_B2s-on-AWS and an empty region).
-    setTestbeds([makeTestbedForAccount(Date.now(), acct, os, proxies.length ? proxies : ['nginx'])]);
-    setStep(3); // Review
-  }, [searchParams, cloudAccounts]);
+    const prefilled = makeTestbedForAccount(Date.now(), acct, os, proxies.length ? proxies : ['nginx']);
+    setTestbeds([prefilled]);
+    // Review only when every prior step's canNext passes with the prefilled
+    // values; otherwise land on the first failing step, where nextHint says why.
+    setStep(autoprovisionJumpStep(prefilled, rawSelectedModes));
+  }, [searchParams, cloudAccounts, rawSelectedModes]);
 
   // ── Navigation ──────────────────────────────────────────────────────
 
@@ -347,9 +356,12 @@ export function FullStackPage() {
             )
             : undefined}
           afterWorkload={
-            // Provisioning cost + runner-readiness — the last check before spend
+            // Provisioning cost + runner-readiness — the last check before
+            // spend. One VM per comparison cell (testbed × proxy): the
+            // orchestrator provisions each launched run separately (#793 P2-1
+            // — `testbeds.length` here undercounted a 2-VM launch as 1).
             <ProvisioningNotice
-              vmCount={testbeds.length}
+              vmCount={totalCells}
               cloud={new Set(testbeds.map(t => t.cloud)).size === 1 ? testbeds[0].cloud : 'multiple'}
               region={new Set(testbeds.map(t => t.region)).size === 1 ? testbeds[0].region : 'multiple'}
               onlineRunners={onlineRunners}
@@ -364,7 +376,14 @@ export function FullStackPage() {
           onSubmit={handleSubmit}
           launchLabel={isMatrixRun ? `Launch ${totalCells} Runs` : 'Launch Now'}
           cloudAccounts={cloudAccounts}
-          launchBlockedReason={unhealthyAccountLaunchBlock(testbeds, cloudAccounts)}
+          launchBlockedReason={
+            // Belt-and-braces re-check of the Workload gate: Review must never
+            // launch with zero effective modes (#793 slice b — the
+            // ?autoprovision jump is gated too, this keeps the invariant local).
+            selectedModes.size === 0
+              ? 'no runnable modes for this selection — pick at least one mode on the Workload step'
+              : unhealthyAccountLaunchBlock(testbeds, cloudAccounts)
+          }
         />
       )}
     </WizardShell>

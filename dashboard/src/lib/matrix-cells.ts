@@ -9,9 +9,12 @@ import {
 
 /**
  * Fan out each testbed across its selected proxies into comparison-group
- * cells. One testbed with [nginx, caddy] becomes 2 cells — the orchestrator
- * deduplicates by (cloud_account_id, region, vm_size, os) so they share one
- * deployment that installs both stacks side by side.
+ * cells. One testbed with [nginx, caddy] becomes 2 cells — and 2 VMs: the
+ * orchestrator provisions ONE VM PER LAUNCHED RUN
+ * (ProvisioningOrchestrator.KickOneAsync); there is no dedup by
+ * (cloud_account_id, region, vm_size, os). An earlier comment here claimed
+ * cells "share one deployment" — that code never existed, and the claim
+ * leaked into the UI as a cost undercount (#793 P2-1).
  *
  * Extracted from FullStackPage (audit P1-12) so it can be tested: the matrix
  * wizard — the feature whose end-to-end path was broken for the whole

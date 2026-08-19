@@ -38,4 +38,12 @@ describe('provisioningSummary', () => {
     expect(s.runner).toMatch(/no runner online/i);
     expect(s.runner).toMatch(/queues/i);
   });
+
+  it('vmCount is per comparison cell — 1 testbed × 3 proxies = 3 VMs, no dedup (#793 P2-1)', () => {
+    // The orchestrator provisions one VM per launched run (KickOneAsync);
+    // callers must pass the CELL count. FullStackPage used to pass
+    // testbeds.length, telling the user "1 VM" before a 3-VM launch.
+    const s = provisioningSummary({ vmCount: 3, cloud: 'Azure', region: 'eastus', onlineRunners: 1 });
+    expect(s.headline).toContain('3 VMs');
+  });
 });

@@ -149,9 +149,12 @@ export function CloudAccountCombobox({
           onKeyDown={onKeyDown}
           // No warning-amber on an untouched field (audit §8) — the wizard's
           // Next-button hint carries the "select an account" message instead.
+          // pr-8 keeps long account names clear of the chevron; hover border
+          // matches the interactive selects so the collapsed control doesn't
+          // read as a static label (#791 item 3).
           className={`w-full bg-[var(--bg-base)] border ${
-            open ? 'border-cyan-500/60' : 'border-gray-700'
-          } px-3 py-1.5 text-xs text-gray-200 focus:outline-none placeholder:text-faint ${
+            open ? 'border-cyan-500/60' : 'border-gray-700 hover:border-gray-600'
+          } px-3 py-1.5 pr-8 text-xs text-gray-200 focus:outline-none placeholder:text-faint ${
             selected && !open ? 'pl-7' : ''
           }`}
           role="combobox"
@@ -160,8 +163,17 @@ export function CloudAccountCombobox({
           aria-controls="cloud-account-listbox"
           aria-activedescendant={open && filtered.length > 0 ? `cloud-account-opt-${activeIdx}` : undefined}
         />
-        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 pointer-events-none">
-          {open ? '⌄' : '/'}
+        {/* Always a chevron — the old collapsed-state "/" made the control read
+            as a static label, so users never discovered the healthy Azure
+            account behind the broken AWS default (#791 item 3). */}
+        <span
+          data-testid="cloud-account-chevron"
+          aria-hidden="true"
+          className={`absolute right-3 top-1/2 -translate-y-1/2 text-xs pointer-events-none transition-transform ${
+            open ? 'rotate-180 text-cyan-400' : 'text-gray-400'
+          }`}
+        >
+          ⌄
         </span>
       </div>
 

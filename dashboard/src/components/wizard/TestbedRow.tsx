@@ -28,6 +28,11 @@ export interface TestbedRowProps {
   onRemove: (key: number) => void;
   /** Hide the "Runner VM" picker — used by the deploy wizard where there's no tester VM to pick. */
   hideTesterOs?: boolean;
+  /** Hide the "Use existing VM" control — the benchmark wizards discard the
+      value silently (buildComparisonCells never reads existingVm*; a fresh VM
+      is provisioned regardless, #793 P2-3). Defaults to false so the Deploy
+      wizards, which DO honor it, keep the control. */
+  hideExistingVm?: boolean;
   /** Offer the feature-flagged "Docker (local)" provider (no cloud account). */
   dockerAvailable?: boolean;
 }
@@ -42,6 +47,7 @@ export function TestbedRow({
   onUpdate,
   onRemove,
   hideTesterOs,
+  hideExistingVm,
   dockerAvailable,
 }: TestbedRowProps) {
   const isDocker = testbed.cloud === DOCKER_CLOUD_LABEL;
@@ -175,8 +181,8 @@ export function TestbedRow({
         </div>
       </div>
 
-      {/* ── Existing VM checkbox ───────────────────────────────────────── */}
-      {!isDocker && <div className="mt-2">
+      {/* ── Existing VM checkbox (hidden where the value would be discarded) ── */}
+      {!isDocker && !hideExistingVm && <div className="mt-2">
         <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
           <input
             type="checkbox"
