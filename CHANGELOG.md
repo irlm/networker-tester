@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.243] - 2026-08-19
+
+### Fixed
+
+- **C++ benchmark cells provision minutes faster.** The cpp reference-API
+  install pulled `libboost-all-dev` — the entire Boost suite (~1-2 GB,
+  hundreds of packages) — while the server links only Boost.System (+
+  headers) and zlib. On a burstable B2s behind slow mirrors this dominated
+  provisioning (~20 min observed). Now installs exactly
+  `libboost-system-dev libboost-dev zlib1g-dev` with
+  `--no-install-recommends`.
+
 ## [0.28.242] - 2026-08-19
 
 ### Fixed
