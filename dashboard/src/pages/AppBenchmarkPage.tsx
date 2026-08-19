@@ -18,6 +18,7 @@ import {
   RUNTIME_TEMPLATES,
   LANGUAGE_GROUPS,
   WINDOWS_PROXIES,
+  languageAllowedOnOs,
   requiresWindows,
   makeTestbed,
   resolveVmSize,
@@ -211,6 +212,12 @@ export function AppBenchmarkPage() {
     const langs = selectedLangs.size > 0 ? [...selectedLangs] : [''];
     for (const lang of langs) {
       for (const tb of testbeds) {
+        // Windows-only runtimes (e.g. .NET Framework 4.8) cannot run on a
+        // Linux testbed — the Languages step promises "Linux testbeds will
+        // skip .NET 4.8 automatically", but until now the promise lived only
+        // in the copy: the cell was created anyway and provisioning failed
+        // (user-caught: csharp-net48 @ linux cell burned a doomed launch).
+        if (!languageAllowedOnOs(lang, tb.os)) continue;
         const vmSize = resolveVmSize(tb.cloud, tb.vmSize);
         const topology = resolveTopology(tb.topology);
         for (const proxy of tb.proxies) {

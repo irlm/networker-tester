@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { CloudAccountSummary } from '../../api/types';
 import {
   DEFAULT_METHODOLOGY,
+  languageAllowedOnOs,
   INSTANCE_TYPES,
   makeTestbed,
   makeTestbedForAccount,
@@ -225,5 +226,17 @@ describe('unhealthyAccountLaunchBlock (Review launch gate, #793 P2-4)', () => {
     tb.cloudAccountId = 'v';
     const reason = unhealthyAccountLaunchBlock([tb], [account({ account_id: 'v', name: 'V', status: 'validating' })]);
     expect(reason).toContain("cloud account 'V' is in validating state — fix credentials");
+  });
+});
+
+describe('languageAllowedOnOs (net48-on-linux regression)', () => {
+  it('never allows Windows-only runtimes on a Linux testbed', () => {
+    expect(languageAllowedOnOs('csharp-net48', 'linux')).toBe(false);
+    expect(languageAllowedOnOs('csharp-net48', 'windows')).toBe(true);
+  });
+  it('allows cross-platform runtimes everywhere, and the empty language', () => {
+    expect(languageAllowedOnOs('csharp-net8', 'linux')).toBe(true);
+    expect(languageAllowedOnOs('go', 'windows')).toBe(true);
+    expect(languageAllowedOnOs('', 'linux')).toBe(true);
   });
 });
