@@ -137,4 +137,80 @@ public class ComparisonGroupLaunchTests
         Assert.Null(rewritten);
         Assert.Empty(dropped);
     }
+
+    // ── Cloud-account launch gate (#791 / #793 P1-1) ─────────────────────────
+    // The launch loop fails cells whose cloud account is not active — with the
+    // account's own validation_error — instead of provisioning against broken
+    // credentials (which burned a provision + readiness timeout per cell and
+    // surfaced only an unrelated cloud error).
+
+    private static readonly Guid AccountId = Guid.Parse("57ecde0d-5e00-49de-8142-2b14bba24347");
+
+    private static Networker.Data.Entities.CloudAccount Account(
+        string status, string? validationError = null, string name = "AWS prod") => new()
+    {
+        AccountId = AccountId,
+        Name = name,
+        Provider = "aws",
+        Status = status,
+        ValidationError = validationError,
+        ProjectId = "proj-cg-000001",
+        CredentialsEnc = [],
+        CredentialsNonce = [],
+    };
+
+    private static Dictionary<Guid, Networker.Data.Entities.CloudAccount> Accounts(
+        params Networker.Data.Entities.CloudAccount[] accounts)
+        => accounts.ToDictionary(a => a.AccountId);
+
+    [Fact]
+    public void Error_state_account_fails_the_cell_with_its_validation_error()
+    {
+        var reason = ComparisonGroupsEndpoints.CellAccountGateReason(
+            Cell("nginx"), Accounts(Account("error", "Invalid access key ID")));
+
+        Assert.Equal("cloud account 'AWS prod' is in error state: Invalid access key ID", reason);
+    }
+
+    [Theory]
+    [InlineData("validating")]
+    [InlineData("disabled")]
+    public void Any_non_active_status_blocks_even_without_a_validation_error(string status)
+    {
+        var reason = ComparisonGroupsEndpoints.CellAccountGateReason(
+            Cell("nginx"), Accounts(Account(status)));
+
+        Assert.Equal($"cloud account 'AWS prod' is in {status} state", reason);
+    }
+
+    [Fact]
+    public void Active_account_passes_the_gate()
+        => Assert.Null(ComparisonGroupsEndpoints.CellAccountGateReason(
+            Cell("nginx"), Accounts(Account("active", validationError: "stale text from a past failure"))));
+
+    [Fact]
+    public void Missing_account_is_reported_not_provisioned()
+    {
+        var reason = ComparisonGroupsEndpoints.CellAccountGateReason(
+            Cell("nginx"), Accounts());
+
+        Assert.Equal($"cloud account {AccountId} not found in this project", reason);
+    }
+
+    [Fact]
+    public void Non_pending_and_docker_cells_are_not_gated()
+    {
+        var network = new ComparisonGroupsEndpoints.CellSpec(
+            "net", """{"kind":"network","host":"example.com","port":443}""", "network", null);
+        Assert.Null(ComparisonGroupsEndpoints.CellAccountGateReason(network, Accounts()));
+        Assert.Null(ComparisonGroupsEndpoints.PendingCellAccountId(network));
+
+        var docker = new ComparisonGroupsEndpoints.CellSpec(
+            "docker", """{"kind":"pending","provider":"docker","proxy_stack":"nginx"}""", "pending", null);
+        Assert.Null(ComparisonGroupsEndpoints.CellAccountGateReason(docker, Accounts()));
+    }
+
+    [Fact]
+    public void PendingCellAccountId_reads_the_cell_endpoint()
+        => Assert.Equal(AccountId, ComparisonGroupsEndpoints.PendingCellAccountId(Cell("nginx")));
 }

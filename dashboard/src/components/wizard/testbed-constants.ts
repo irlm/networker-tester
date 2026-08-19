@@ -1,5 +1,7 @@
 // ── Shared constants for testbed-based wizards ─────────────────────────
 
+import type { CloudAccountSummary } from '../../api/types';
+
 export const REGIONS: Record<string, string[]> = {
   Azure: ['eastus', 'eastus2', 'westus2', 'westus3', 'centralus', 'northeurope', 'westeurope', 'southeastasia', 'japaneast', 'australiaeast'],
   AWS: ['us-east-1', 'us-east-2', 'us-west-2', 'eu-west-1', 'eu-central-1', 'ap-southeast-1', 'ap-northeast-1', 'ap-southeast-2'],
@@ -11,6 +13,39 @@ export const REGIONS: Record<string, string[]> = {
 
 /** Wizard cloud label for the docker provider (wire value: `docker`). */
 export const DOCKER_CLOUD_LABEL = 'Docker';
+
+/**
+ * Wire provider (`azure`/`aws`/`gcp`/`docker`, lowercase) → wizard cloud label
+ * (the key into REGIONS / INSTANCE_TYPES). Feeding the raw wire value into
+ * those tables silently misses every lookup — the autoprovision path did
+ * exactly that and produced Standard_B2s-on-AWS with an empty region (#793
+ * P1-2), so any provider-to-table hop MUST go through here.
+ */
+export function providerToCloud(provider: string): string {
+  const p = provider.toLowerCase();
+  if (p === 'azure') return 'Azure';
+  if (p === 'aws') return 'AWS';
+  if (p === 'gcp') return 'GCP';
+  if (p === 'docker') return DOCKER_CLOUD_LABEL;
+  return 'Azure';
+}
+
+/**
+ * Default cloud account for prefilled/autoprovision flows: the first ACTIVE
+ * account after an active-first sort (then provider, then name — the same
+ * order InfraDeployWizard presents), or null when no healthy account exists.
+ * Never returns an unhealthy account: silently defaulting to an
+ * alphabetically-first broken account is what launched #791's failed matrix.
+ */
+export function pickDefaultAccount(accounts: CloudAccountSummary[]): CloudAccountSummary | null {
+  const sorted = [...accounts].sort((a, b) => {
+    if (a.status === 'active' && b.status !== 'active') return -1;
+    if (a.status !== 'active' && b.status === 'active') return 1;
+    return a.provider.localeCompare(b.provider) || a.name.localeCompare(b.name);
+  });
+  const first = sorted[0];
+  return first && first.status === 'active' ? first : null;
+}
 
 export const TOPOLOGIES = ['Loopback', 'Same-region'] as const;
 
@@ -133,6 +168,50 @@ export function makeTestbed(key: number, cloud?: string, os?: 'linux' | 'windows
     existingVm: false,
     existingVmId: '',
   };
+}
+
+/**
+ * Launch gate for the Review step: when any testbed's selected cloud account
+ * is not active, return the reason Launch must stay disabled (mirrors the
+ * server-side gates in ComparisonGroupsEndpoints / ProvisioningOrchestrator);
+ * null when every selected account is healthy. Docker/unselected testbeds
+ * (empty cloudAccountId) don't gate here — other validation owns those.
+ */
+export function unhealthyAccountLaunchBlock(
+  testbeds: TestbedState[],
+  accounts: CloudAccountSummary[],
+): string | null {
+  const byId = new Map(accounts.map(a => [a.account_id, a]));
+  for (const tb of testbeds) {
+    if (!tb.cloudAccountId) continue;
+    const acct = byId.get(tb.cloudAccountId);
+    if (acct && acct.status !== 'active') {
+      const detail = acct.validation_error ? `: ${acct.validation_error}` : '';
+      return `cloud account '${acct.name}' is in ${acct.status} state${detail} — fix credentials in Settings → Cloud accounts or pick a healthy account`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Testbed prefilled from a cloud account (the autoprovision path). Routes the
+ * wire provider through providerToCloud so the REGIONS / INSTANCE_TYPES
+ * lookups resolve (#793 P1-2), and honors the account's default region only
+ * when it is a valid region for that cloud.
+ */
+export function makeTestbedForAccount(
+  key: number,
+  acct: CloudAccountSummary,
+  os?: 'linux' | 'windows',
+  proxies?: string[],
+): TestbedState {
+  const cloud = providerToCloud(acct.provider);
+  const tb = makeTestbed(key, cloud, os, proxies);
+  tb.cloudAccountId = acct.account_id;
+  if (acct.region_default && (REGIONS[cloud] ?? []).includes(acct.region_default)) {
+    tb.region = acct.region_default;
+  }
+  return tb;
 }
 
 /**

@@ -397,8 +397,10 @@ public sealed class ProvisioningOrchestrator : BackgroundService
         return torn;
     }
 
-    /// <returns><c>true</c> when this call kicked off the deployment.</returns>
-    private async Task<bool> KickOneAsync(NetworkerDbContext db, TestRun run, TestConfig cfg, CancellationToken ct)
+    /// <returns><c>true</c> when this call kicked off the deployment.
+    /// (Internal for the account-gate tests; production callers stay inside
+    /// <see cref="KickPendingRunsAsync"/>.)</returns>
+    internal async Task<bool> KickOneAsync(NetworkerDbContext db, TestRun run, TestConfig cfg, CancellationToken ct)
     {
         var pending = ParsePending(cfg.EndpointRef, _logger);
         if (pending is null)
@@ -430,18 +432,36 @@ public sealed class ProvisioningOrchestrator : BackgroundService
         }
         else
         {
-            provider = await db.CloudAccounts
+            var acct = await db.CloudAccounts
                 .AsNoTracking()
                 .Where(a => a.AccountId == pending.CloudAccountId)
-                .Select(a => a.Provider)
+                .Select(a => new { a.Provider, a.Name, a.Status, a.ValidationError })
                 .FirstOrDefaultAsync(ct);
-            if (string.IsNullOrEmpty(provider))
+            if (acct is null || string.IsNullOrEmpty(acct.Provider))
             {
                 _logger.LogWarning(
                     "Cloud account {AccountId} not found for run {RunId} — cannot provision",
                     pending.CloudAccountId, run.Id);
                 return false;
             }
+            // Launch gate (#791/#793 P1-1): a non-active account can never
+            // provision this run — fail it NOW with the account's validation
+            // error (mirrors the tester-create 422) instead of burning a
+            // provision + readiness timeout on the downstream cloud symptom.
+            if (CloudAccountGate.NotActiveReason(acct.Name, acct.Status, acct.ValidationError) is { } acctWhy)
+            {
+                await db.TestRuns
+                    .Where(r => r.Id == run.Id && r.Status == RunQueued)
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(r => r.Status, "failed")
+                        .SetProperty(r => r.ErrorMessage, acctWhy)
+                        .SetProperty(r => r.FinishedAt, DateTime.UtcNow), ct)
+                    .ConfigureAwait(false);
+                _logger.LogWarning(
+                    "Run {RunId} failed without provisioning: {Reason}", run.Id, acctWhy);
+                return false;
+            }
+            provider = acct.Provider;
         }
 
         var deployJson = BuildDeployJson(pending, provider, cfg.Name, run.Id);

@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { useSearchParams } from 'react-router';
 import { api } from '../api/client';
-import type { Workload, Methodology, ComparisonCell, LanguageCapability } from '../api/types';
+import type { Workload, Methodology, ComparisonCell, LanguageCapability, CloudAccountSummary } from '../api/types';
 import { WizardShell } from '../components/wizard/WizardShell';
 import { TestbedMatrix } from '../components/wizard/TestbedMatrix';
 import { MethodologyPanel } from '../components/wizard/MethodologyPanel';
@@ -22,6 +22,7 @@ import {
   makeTestbed,
   resolveVmSize,
   resolveTopology,
+  unhealthyAccountLaunchBlock,
   type RuntimeTemplate,
 } from '../components/wizard/testbed-constants';
 
@@ -56,6 +57,13 @@ export function AppBenchmarkPage() {
   const runs = 10;
   const concurrency = 1;
   const timeoutMs = 5000;
+
+  // Cloud accounts — the Review step shows each testbed's account name +
+  // status and blocks Launch on a non-active account (#793 P2-4).
+  const [cloudAccounts, setCloudAccounts] = useState<CloudAccountSummary[]>([]);
+  useEffect(() => {
+    api.getCloudAccounts(projectId).then(setCloudAccounts).catch(() => {});
+  }, [projectId]);
 
   // Language capability matrix (GET /api/modes → language_capabilities).
   // undefined = not loaded / unsupported control plane → no gating.
@@ -403,6 +411,8 @@ export function AppBenchmarkPage() {
           submitting={submitting}
           onSubmit={handleSubmit}
           launchLabel={isMatrixRun ? `Launch ${buildComparisonCells().length} Runs` : 'Launch Now'}
+          cloudAccounts={cloudAccounts}
+          launchBlockedReason={unhealthyAccountLaunchBlock(testbeds, cloudAccounts)}
         />
       )}
     </WizardShell>

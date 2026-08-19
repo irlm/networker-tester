@@ -20,7 +20,9 @@ import type { TestbedState } from '../components/wizard/testbed-constants';
 import {
   methodologyForPreset,
   makeTestbed,
-  REGIONS,
+  makeTestbedForAccount,
+  pickDefaultAccount,
+  unhealthyAccountLaunchBlock,
 } from '../components/wizard/testbed-constants';
 
 // Shared wizard chrome/submit live in components/wizard (WizardShell,
@@ -128,25 +130,37 @@ export function FullStackPage() {
   }, [projectId]);
 
   // Auto-provisioning scenario (?autoprovision=1): pre-fill a default testbed
-  // from the project's first cloud account (+ scenario ?proxies / ?os) and jump
-  // straight to Review — the user reviews the provisioning notice and launches.
+  // from the project's first HEALTHY cloud account (+ scenario ?proxies / ?os)
+  // and jump straight to Review — the user reviews the provisioning notice and
+  // launches. When accounts exist but none is healthy, stay on the Testbeds
+  // step with an inline hint instead of silently launching against a broken
+  // account (#791/#793 P1-1) — the modes/proxies/name prefill still applies.
   // No-op (falls back to the manual testbed step) when no cloud account exists.
   const autoProvisionedRef = useRef(false);
+  const [noHealthyAccount, setNoHealthyAccount] = useState(false);
   useAsyncEffect(() => {
     if (autoProvisionedRef.current) return;
     if (searchParams.get('autoprovision') !== '1') return;
     if (cloudAccounts.length === 0) return; // wait for load / nothing to pick
     autoProvisionedRef.current = true;
 
-    const acct = cloudAccounts[0];
     const os = searchParams.get('os') === 'windows' ? 'windows' : 'linux';
     const proxies = (searchParams.get('proxies') ?? '')
       .split(',').map(p => p.trim()).filter(Boolean);
-    const tb = makeTestbed(Date.now(), acct.provider, os, proxies.length ? proxies : ['nginx']);
-    tb.cloudAccountId = acct.account_id;
-    tb.region = acct.region_default || REGIONS[acct.provider]?.[0] || tb.region;
-    setTestbeds([tb]);
     setConfigName(prev => prev || searchParams.get('name') || 'Full-stack comparison');
+
+    const acct = pickDefaultAccount(cloudAccounts);
+    if (!acct) {
+      // Keep the proxy/os prefill on an account-less testbed; the user picks
+      // an account (or fixes credentials) on the step they land on.
+      setTestbeds([makeTestbed(Date.now(), undefined, os, proxies.length ? proxies : ['nginx'])]);
+      setNoHealthyAccount(true);
+      return; // stay on step 0 (Testbeds)
+    }
+    // providerToCloud inside makeTestbedForAccount keeps the REGIONS /
+    // INSTANCE_TYPES lookups resolving (#793 P1-2: the raw lowercase wire
+    // provider produced Standard_B2s-on-AWS and an empty region).
+    setTestbeds([makeTestbedForAccount(Date.now(), acct, os, proxies.length ? proxies : ['nginx'])]);
     setStep(3); // Review
   }, [searchParams, cloudAccounts]);
 
@@ -249,6 +263,11 @@ export function FullStackPage() {
       onNext={goNext}
       onBack={() => step > 0 && setStep(step - 1)}
     >
+      {step === 0 && noHealthyAccount && (
+        <p data-testid="no-healthy-account-hint" className="text-xs text-amber-400 border border-amber-500/30 px-3 py-2 mb-3">
+          No healthy cloud account — fix credentials in Settings → Cloud accounts or pick one manually.
+        </p>
+      )}
       {step === 0 && (
         <TestbedMatrix
           projectId={projectId}
@@ -343,6 +362,8 @@ export function FullStackPage() {
           submitting={submitting}
           onSubmit={handleSubmit}
           launchLabel={isMatrixRun ? `Launch ${totalCells} Runs` : 'Launch Now'}
+          cloudAccounts={cloudAccounts}
+          launchBlockedReason={unhealthyAccountLaunchBlock(testbeds, cloudAccounts)}
         />
       )}
     </WizardShell>
