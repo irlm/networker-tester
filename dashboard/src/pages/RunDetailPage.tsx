@@ -31,6 +31,7 @@ import {
   StatsRow,
   TimingRow,
 } from '../features/runs/components/RunDetailSections';
+import { RunErrorBanner } from '../features/runs/components/RunErrorBanner';
 import { groupByProtocol, groupByTargetUrl } from '../features/runs/grouping';
 import {
   computeProtocolStats,
@@ -264,6 +265,12 @@ export function RunDetailPage() {
           )}
         </div>
       </div>
+
+      {/* Why the run failed — rendered whenever the run carries an error,
+          not only while queued/running (#791: failed runs hid error_message). */}
+      {run?.error_message && (
+        <RunErrorBanner status={run.status} message={run.error_message} />
+      )}
 
       {showShareDialog && runId && (
         <ShareDialog

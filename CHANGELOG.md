@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.238] - 2026-08-19
+
+### Fixed
+
+- **Launching against a broken cloud account is now impossible to do blindly**
+  (#791, #793 P1-1/P1-2). Full Stack autoprovision picks the first HEALTHY
+  account (never one in error state; when none is healthy it stays on the
+  Testbeds step with an inline hint instead of jumping to Review), and the
+  provider is mapped correctly so region/VM-size defaults resolve —
+  previously the wizard submitted the hardcoded Azure SKU (and possibly an
+  empty region) to AWS/GCP accounts. Server-side, both the comparison-group
+  launch and the provisioning orchestrator fail cells/runs on non-active
+  accounts with the account's actual validation error instead of burning a
+  doomed launch. The Review step shows each testbed's account name + status
+  (red when broken) and blocks Launch with the reason.
+- **Failures are no longer invisible** (#791, #793 P1-3/P1-4). Run detail
+  pages show `error_message` whenever present (red for failed/cancelled) —
+  previously the reason rendered only while a run was queued/running.
+  Comparison-group launches report the REAL outcome: an error toast listing
+  per-cell errors when nothing launched, a partial notice when some cells
+  failed, and the returned launched count on success.
+
 ## [0.28.237] - 2026-08-19
 
 ### Fixed

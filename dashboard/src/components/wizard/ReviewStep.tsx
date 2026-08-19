@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { Methodology } from '../../api/types';
+import type { CloudAccountSummary, Methodology } from '../../api/types';
 import type { TestbedState } from './testbed-constants';
 import { PROXY_LABELS, TESTER_OS_OPTIONS } from './testbed-constants';
 
@@ -34,6 +34,13 @@ interface ReviewStepProps {
   submitting: boolean;
   onSubmit: (launchNow: boolean) => void;
   launchLabel: string;
+  /** Project cloud accounts — shows each testbed's account name + status on
+      its review line (red when not active). The decision that caused #791 was
+      invisible on the only step autoprovision users see (#793 P2-4). */
+  cloudAccounts?: CloudAccountSummary[];
+  /** When set, Launch/Save are disabled and this reason is shown (e.g. a
+      selected cloud account is in error state). */
+  launchBlockedReason?: string | null;
 }
 
 export function ReviewStep({
@@ -55,7 +62,12 @@ export function ReviewStep({
   submitting,
   onSubmit,
   launchLabel,
+  cloudAccounts,
+  launchBlockedReason,
 }: ReviewStepProps) {
+  const accountFor = (id: string): CloudAccountSummary | undefined =>
+    id ? cloudAccounts?.find(a => a.account_id === id) : undefined;
+  const blocked = !!launchBlockedReason;
   return (
     <div>
       <h3 className="text-sm font-semibold text-gray-200 mb-4">Review & Launch</h3>
@@ -79,10 +91,20 @@ export function ReviewStep({
       <div className="mb-4">
         <div className="text-xs uppercase tracking-wider text-faint mb-1.5">Testbeds</div>
         <div className="space-y-0.5">
-          {testbeds.map((testbed, idx) => (
+          {testbeds.map((testbed, idx) => {
+            const acct = accountFor(testbed.cloudAccountId);
+            return (
             <div key={testbed.key} className="flex items-center gap-2 text-xs py-1 border-b border-gray-800/50 last:border-0">
               <span className="text-gray-400 w-4">{idx + 1}</span>
               <span className="text-gray-200">{testbed.cloud}</span>
+              {acct && (
+                <span
+                  data-testid="review-account"
+                  className={acct.status === 'active' ? 'text-gray-400' : 'text-red-400'}
+                >
+                  {acct.name}{acct.status !== 'active' ? ` (${acct.status})` : ''}
+                </span>
+              )}
               <span className="text-gray-400">/</span>
               <span className="text-gray-300">{testbed.region}</span>
               <span className="text-xs px-1 text-gray-300">
@@ -93,7 +115,8 @@ export function ReviewStep({
               <span className="text-cyan-500/70">{testbed.proxies.map(p => PROXY_LABELS[p] ?? p).join(', ')}</span>
               <span className="text-faint">{TESTER_OS_OPTIONS.find(o => o.id === testbed.testerOs)?.label ?? testbed.testerOs}</span>
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
@@ -146,6 +169,14 @@ export function ReviewStep({
         </div>
       )}
 
+      {/* Launch gate: a selected cloud account in error state would fail every
+          cell server-side anyway — say so HERE instead of after the launch. */}
+      {launchBlockedReason && (
+        <p data-testid="launch-blocked-reason" className="text-xs text-red-400 border border-red-500/30 px-3 py-2 mb-3">
+          {launchBlockedReason}
+        </p>
+      )}
+
       {/* Launch buttons — matrix runs can't be saved as a single config
           (the save path would silently keep only the first cell). */}
       <div className="flex gap-2">
@@ -160,9 +191,11 @@ export function ReviewStep({
         )}
         <button
           onClick={() => onSubmit(true)}
-          disabled={submitting}
-          className={`text-[var(--bg-base)] px-6 py-2.5 text-sm font-medium transition-colors disabled:cursor-wait ${
-            submitting ? 'bg-cyan-700 cursor-wait' : 'bg-cyan-600 hover:bg-cyan-500'
+          disabled={submitting || blocked}
+          className={`text-[var(--bg-base)] px-6 py-2.5 text-sm font-medium transition-colors ${
+            submitting
+              ? 'bg-cyan-700 cursor-wait disabled:cursor-wait'
+              : 'bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed'
           }`}
         >
           {submitting ? (

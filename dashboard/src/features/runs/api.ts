@@ -32,6 +32,23 @@ function withSignal(signal?: AbortSignal): RequestInit | undefined {
   return signal ? { signal } : undefined;
 }
 
+/**
+ * What POST /comparison-groups/{id}/launch actually returns
+ * (ComparisonGroupsEndpoints launch handler): per-launch counts + the per-cell
+ * failure/adjustment detail. It was typed as ComparisonGroup, which let the
+ * submit hook toast "Launched N runs" from the REQUESTED count while every
+ * cell had failed (#793 P1-3).
+ */
+export interface ComparisonLaunchResult {
+  launched: number;
+  total: number;
+  failed: number;
+  /** Per-cell launch failures ("<cell label>: <reason>"); null/absent when none. */
+  errors?: string[] | null;
+  /** Per-cell mode adjustments (e.g. h3 dropped on a no-QUIC stack); null/absent when none. */
+  adjustments?: string[] | null;
+}
+
 /** Feature-owned TestConfig/TestRun/TestSchedule transport. */
 export const runsApi = {
   createConfig: (projectId: string, config: TestConfigCreate) =>
@@ -142,5 +159,5 @@ export const runsApi = {
     request<ComparisonGroup>(`/v2/comparison-groups/${groupId}`, withSignal(signal)),
 
   launchComparisonGroup: (groupId: string) =>
-    request<ComparisonGroup>(`/v2/comparison-groups/${groupId}/launch`, { method: 'POST' }),
+    request<ComparisonLaunchResult>(`/v2/comparison-groups/${groupId}/launch`, { method: 'POST' }),
 };
