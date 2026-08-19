@@ -61,3 +61,7 @@ test-results/
 /lab/.state-*/
 /lab/native/.state/
 /.dev.env
+
+# Prod UI smoke harness (scripts/prod-smoke.sh) — local token + run artifacts
+/.prod-smoke.env
+/dashboard/e2e/prod/artifacts/

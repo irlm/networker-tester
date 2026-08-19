@@ -16,11 +16,17 @@ vi.mock('../features/runs/queries', () => ({
 vi.mock('../hooks/useProject', () => ({ useProject: () => ({ projectId: 'project-1' }) }));
 vi.mock('../hooks/useRenderLog', () => ({ useRenderLog: () => vi.fn() }));
 
+// Relative timestamps: the ?time=24h spec filters client-side against NOW, so
+// a hardcoded date is a time bomb — the original '2026-08-18T12:00:00Z' fixture
+// started failing the day after it merged, once it aged past 24h.
+const RUN_STARTED_AT = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+const RUN_FINISHED_AT = new Date(Date.now() - 60 * 60 * 1000 + 5000).toISOString();
+
 const baseRun = {
   project_id: 'project-1',
   status: 'completed',
-  started_at: '2026-08-18T12:00:00Z',
-  finished_at: '2026-08-18T12:00:05Z',
+  started_at: RUN_STARTED_AT,
+  finished_at: RUN_FINISHED_AT,
   success_count: 2,
   failure_count: 0,
   error_message: null,
@@ -28,7 +34,7 @@ const baseRun = {
   tester_id: null,
   worker_id: null,
   last_heartbeat: null,
-  created_at: '2026-08-18T12:00:00Z',
+  created_at: RUN_STARTED_AT,
 } satisfies Omit<TestRun, 'id' | 'test_config_id'>;
 
 const runs: TestRun[] = [
