@@ -15,6 +15,7 @@ import { timeAgo } from '../lib/format';
 import { stripAnsi } from '../lib/ansi';
 import { isWatchlistConfigName } from '../lib/watchlist';
 import { Button } from '../components/common/Button';
+import { isOnlineTester } from '../lib/tester-readiness';
 import {
   runKeys,
   useTestConfigDetailsQueries,
@@ -1161,7 +1162,7 @@ function RunnerAvailabilityBanner({
   const addToast = useToast();
   const [starting, setStarting] = useState(false);
 
-  const online = testers.filter(t => t.power_state === 'running' && t.agent_status === 'online');
+  const online = testers.filter(isOnlineTester);
   if (online.length > 0) return null; // healthy — stay quiet
 
   const waking = testers.filter(t => t.power_state === 'starting');

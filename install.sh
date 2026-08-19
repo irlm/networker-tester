@@ -332,7 +332,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.242"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.246"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -11705,7 +11705,11 @@ NGINX_APP_EOF
         cpp)
             echo ">> Installing C++ server"
             sudo apt-get update -qq < /dev/null
-            sudo apt-get install -y -qq build-essential cmake libssl-dev libboost-all-dev < /dev/null
+            # Only Boost.System (+ headers) is linked (see reference-apis/cpp/
+            # CMakeLists.txt) — libboost-all-dev pulled the ENTIRE Boost suite
+            # (~1-2 GB, hundreds of packages) and dominated cpp cell provisioning
+            # (~20 min on a burstable B2s; user-caught 2026-08-19).
+            sudo apt-get install -y -qq --no-install-recommends build-essential cmake libssl-dev zlib1g-dev libboost-system-dev libboost-dev < /dev/null
             cd "$API_DIR/cpp"
             mkdir -p build && cd build
             cmake .. -DCMAKE_BUILD_TYPE=Release < /dev/null 2>/dev/null
