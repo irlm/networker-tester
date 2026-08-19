@@ -570,9 +570,35 @@ jobs:
       #
       # Chromium only, and --with-deps because the runner lacks the shared
       # libraries the browser needs. npm's cache does not cover browsers, so
-      # this adds a ~100MB download per run.
+      # the browser binaries are cached separately, keyed on the installed
+      # @playwright/test version. Without the timeout+retry the CDN download
+      # can stall FOREVER and hang the job until the 6h runner kill — it did
+      # exactly that twice in a row on 2026-08-19 (103 min + 94 min, PR #813).
+      - name: Resolve Playwright version
+        id: playwright-version
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+
       - name: Install Chromium for Playwright
-        run: npx playwright install chromium --with-deps
+        timeout-minutes: 15
+        run: |
+          # `timeout 240` bounds a single stalled download; three attempts
+          # cover transient CDN failures. install-deps is apt against the
+          # runner image and is retried with the same bound.
+          for attempt in 1 2 3; do
+            if timeout 240 npx playwright install chromium --with-deps; then
+              exit 0
+            fi
+            echo "::warning::playwright install attempt ${attempt} failed or stalled; retrying"
+            sleep 5
+          done
+          echo "::error::playwright install failed after 3 bounded attempts"
+          exit 1
 
       - name: Browser E2E
         run: npm run test:e2e
