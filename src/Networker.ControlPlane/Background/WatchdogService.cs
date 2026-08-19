@@ -1,5 +1,6 @@
 using System.Globalization;
 using Microsoft.EntityFrameworkCore;
+using Networker.ControlPlane.Provisioning;
 using Networker.ControlPlane.Realtime;
 using Networker.Data;
 
@@ -88,19 +89,59 @@ public sealed class WatchdogService : BackgroundService
     }
 
     /// <summary>
-    /// How long a deployment may sit in <c>pending</c>/<c>running</c> (or a run in
-    /// <c>provisioning</c> whose deployment is gone) before it is failed. The
-    /// deploy runs on a DETACHED in-process task; a control-plane restart
-    /// mid-deploy (every release!) orphans the deployment forever with nothing to
-    /// time it out (quality audit F3(b)). 30 min comfortably exceeds the
-    /// <c>DeployRunner.DeployTimeout</c> (30 min) plus slack, so a live deploy is
-    /// never falsely reaped.
+    /// Slack the stale-deploy sweep grants on top of the deployment's own
+    /// scaled <see cref="DeployRunner.DeployTimeoutFor"/> budget, so the deploy
+    /// runner's in-process timeout always fires FIRST (it tree-kills install.sh
+    /// and writes the richer "install.sh timed out after Nm" message). The
+    /// watchdog only wins when no runner is driving the deployment at all — a
+    /// control-plane crash orphaned it (quality audit F3(b)). Issue #804: the
+    /// old flat 30m cutoff undercut the scaled budget (#740) and killed a
+    /// legitimate 38m cpp deploy at 30 minutes.
     /// </summary>
-    private static readonly TimeSpan DeploymentStaleCutoff = TimeSpan.FromMinutes(30);
+    internal static readonly TimeSpan DeploymentBudgetSlack = TimeSpan.FromMinutes(5);
 
-    /// <summary>User-facing message for a deployment orphaned by a restart.</summary>
-    private const string DeploymentReapedError =
-        "Deployment did not finish within 30 minutes — the control plane may have restarted mid-deploy";
+    /// <summary>The stale-deploy sweep's reap threshold for one deployment:
+    /// the SAME scaled budget the deploy runner enforces (single source of
+    /// truth — <see cref="DeployRunner.DeployTimeoutFor"/>) plus
+    /// <see cref="DeploymentBudgetSlack"/>.</summary>
+    internal static TimeSpan DeploymentReapCutoffFor(string deployJson)
+        => DeployRunner.DeployTimeoutFor(deployJson) + DeploymentBudgetSlack;
+
+    /// <summary>User-facing message for a reaped stale deployment: states the
+    /// budget that was enforced, and blames a control-plane restart only when a
+    /// recovery re-run actually happened (recovery_attempts &gt; 0, V052) —
+    /// the old message claimed "the control plane may have restarted" even for
+    /// plain flat-timeout kills (issue #804).</summary>
+    internal static string DeploymentReapedErrorFor(string deployJson, bool recoveredFromRestart)
+    {
+        var budget = DeployRunner.DeployTimeoutFor(deployJson);
+        var languages = DeployRunner.LanguageCountFor(deployJson);
+        var langNote = languages switch
+        {
+            0 => "stack-only",
+            1 => "1 language",
+            _ => $"{languages} languages",
+        };
+        var msg = string.Format(
+            CultureInfo.InvariantCulture,
+            "Deployment did not finish within its {0:F0}m budget ({1})",
+            budget.TotalMinutes, langNote);
+        return recoveredFromRestart
+            ? msg + " — a control-plane restart interrupted it mid-deploy and the recovery re-run also ran out of time"
+            : msg;
+    }
+
+    /// <summary>
+    /// How long a run may sit in <c>provisioning</c> with its deployment row
+    /// gone/missing before it is failed. Deliberately FLAT (unlike the
+    /// deployment sweep above): this arm only fires when the deployment row no
+    /// longer exists, so there is no config to scale a budget from and no live
+    /// install to protect — 30m is pure grace. A run whose deployment row still
+    /// exists is never touched here (a #785 recovery re-uses the SAME
+    /// deployment row, so recovered deploys keep their run out of this arm by
+    /// construction).
+    /// </summary>
+    private static readonly TimeSpan ProvisioningOrphanCutoff = TimeSpan.FromMinutes(30);
 
     /// <summary>User-facing message for a provisioning run whose deployment is gone.</summary>
     private const string ProvisioningOrphanError =
@@ -337,46 +378,76 @@ public sealed class WatchdogService : BackgroundService
         // The deploy runs on a detached in-process Task.Run; a control-plane
         // restart mid-deploy orphans the deployment at pending/running forever,
         // and with it any run in `provisioning`. Nothing else times these out.
-        // Fail deployments older than the cutoff — the orchestrator's next tick
-        // then fails their run via the DeploymentFailed arm (quality audit F3(b)).
+        // Fail deployments older than THEIR OWN scaled budget + slack — the
+        // orchestrator's next tick then fails their run via the DeploymentFailed
+        // arm (quality audit F3(b)).
+        //
+        // Threshold: DeployRunner.DeployTimeoutFor(config) + slack — the SAME
+        // scaled budget (#740) the runner's own timeout enforces, so a deploy
+        // legitimately using its language budget is never watchdog-killed
+        // (issue #804: a 38m cpp deploy died at the old flat 30m). The config
+        // parse can't run in SQL, so the query prefilters at the MINIMUM
+        // possible threshold (base budget + slack) and the per-deployment
+        // scaled threshold is applied per row below.
+        //
         // Age basis is COALESCE(started_at, created_at): the runner stamps
         // started_at when the deploy actually flips to running, and the startup
-        // recovery pass (issue #764) stamps it when it re-runs an interrupted
-        // deployment — so a recovered attempt gets a fresh window instead of
-        // being reaped against the ORIGINAL attempt's created_at. Pre-V052
-        // rows (started_at null) keep the created_at basis unchanged.
-        var deploymentStaleBefore = now - DeploymentStaleCutoff;
+        // recovery pass (issues #764/#785) stamps it when it re-claims an
+        // interrupted deployment — so a recovered attempt gets a fresh window
+        // instead of being reaped against the ORIGINAL attempt's created_at.
+        // Pre-V052 rows (started_at null) keep the created_at basis unchanged.
+        var deploymentStaleBefore = now - (DeployRunner.BaseDeployTimeout + DeploymentBudgetSlack);
         var stuckDeployments = await db.Deployments
             .Where(d => (d.Status == "pending" || d.Status == "running")
                 && (d.StartedAt ?? d.CreatedAt) < deploymentStaleBefore)
-            .Select(d => d.DeploymentId)
+            .Select(d => new { d.DeploymentId, d.Config, d.StartedAt, d.CreatedAt, d.RecoveryAttempts })
             .ToListAsync(ct)
             .ConfigureAwait(false);
 
         var reapedDeployments = 0;
-        foreach (var deploymentId in stuckDeployments)
+        foreach (var dep in stuckDeployments)
         {
+            var reapCutoff = DeploymentReapCutoffFor(dep.Config);
+            var basis = dep.StartedAt ?? dep.CreatedAt;
+            if (now - basis < reapCutoff)
+            {
+                // Within its own scaled budget (+slack) — the deploy runner's
+                // timeout owns this deployment; leave it alone.
+                continue;
+            }
+
+            var reapError = DeploymentReapedErrorFor(dep.Config, recoveredFromRestart: dep.RecoveryAttempts > 0);
+            // The update re-checks the aging basis: a concurrent recovery
+            // re-claim (another replica's startup pass, #785) re-stamps
+            // started_at between our SELECT and this UPDATE — the fresh stamp
+            // must win, not the reap.
+            var reapBasisBefore = now - reapCutoff;
             var affected = await db.Deployments
-                .Where(d => d.DeploymentId == deploymentId
-                    && (d.Status == "pending" || d.Status == "running"))
+                .Where(d => d.DeploymentId == dep.DeploymentId
+                    && (d.Status == "pending" || d.Status == "running")
+                    && (d.StartedAt ?? d.CreatedAt) < reapBasisBefore)
                 .ExecuteUpdateAsync(
                     s => s
                         .SetProperty(d => d.Status, "failed")
-                        .SetProperty(d => d.ErrorMessage, DeploymentReapedError)
+                        .SetProperty(d => d.ErrorMessage, reapError)
                         .SetProperty(d => d.FinishedAt, now),
                     ct)
                 .ConfigureAwait(false);
 
             if (affected == 0)
             {
-                // The deploy runner finished it between query and update.
+                // The deploy runner finished it (or a recovery pass re-claimed
+                // it) between query and update.
                 continue;
             }
 
             reapedDeployments++;
             _logger.LogWarning(
-                "Reaped stale deployment {DeploymentId} — pending/running for more than {Cutoff}m (control plane likely restarted mid-deploy)",
-                deploymentId, DeploymentStaleCutoff.TotalMinutes);
+                "Reaped stale deployment {DeploymentId} — pending/running past its {Budget}m budget (+{Slack}m slack; recovery_attempts={Recoveries})",
+                dep.DeploymentId,
+                DeployRunner.DeployTimeoutFor(dep.Config).TotalMinutes,
+                DeploymentBudgetSlack.TotalMinutes,
+                dep.RecoveryAttempts);
         }
 
         // ── Orphaned `provisioning` runs whose deployment is gone/missing ────
@@ -384,7 +455,7 @@ public sealed class WatchdogService : BackgroundService
         // (or was never created) can never be promoted or failed by the
         // orchestrator (its DeploymentFailed/Cancelled arms need a deployment
         // row). Fail such runs directly once they are older than the cutoff.
-        var provisioningStaleBefore = now - DeploymentStaleCutoff;
+        var provisioningStaleBefore = now - ProvisioningOrphanCutoff;
         var provisioningRuns = await db.TestRuns
             .Where(r => r.Status == "provisioning" && r.CreatedAt < provisioningStaleBefore)
             .Select(r => new { r.Id, r.ProvisioningDeploymentId })
