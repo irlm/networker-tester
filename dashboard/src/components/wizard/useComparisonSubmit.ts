@@ -1,8 +1,25 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
-import { runsApi } from '../../features/runs/api';
+import { runsApi, type ComparisonLaunchResult } from '../../features/runs/api';
 import type { Workload, Methodology, TestConfigCreate, ComparisonCell, ComparisonGroupCreate } from '../../api/types';
-import { useToast } from '../../hooks/useToast';
+import { useToast, type ToastType } from '../../hooks/useToast';
+
+/**
+ * Toast for a comparison-group launch, from what the server ACTUALLY did.
+ * The old code toasted `Launched ${cells.length} runs` from the requested
+ * count, so a fully-failed launch showed a success toast (#793 P1-3 / #791).
+ */
+export function launchOutcomeToast(res: ComparisonLaunchResult): { type: ToastType; message: string } {
+  const errors = res.errors ?? [];
+  const detail = errors.length > 0 ? ` — ${errors.join('; ')}` : '';
+  if (res.launched === 0) {
+    return { type: 'error', message: `Launch failed: 0 of ${res.total} runs launched${detail}` };
+  }
+  if (res.failed > 0) {
+    return { type: 'info', message: `Launched ${res.launched} of ${res.total} runs — ${res.failed} failed${detail}` };
+  }
+  return { type: 'success', message: `Launched ${res.launched} run${res.launched === 1 ? '' : 's'}` };
+}
 
 /**
  * The one submit path for the benchmark wizards (FullStack + Application —
@@ -55,8 +72,9 @@ export function useComparisonSubmit({
           cells,
         };
         const group = await runsApi.createComparisonGroup(projectId, body);
-        await runsApi.launchComparisonGroup(group.id);
-        addToast('success', `Launched ${cells.length} run${cells.length === 1 ? '' : 's'}`);
+        const result = await runsApi.launchComparisonGroup(group.id);
+        const toast = launchOutcomeToast(result);
+        addToast(toast.type, toast.message);
         navigate(`/projects/${projectId}/runs?comparison_group=${group.id}`);
         return;
       }
