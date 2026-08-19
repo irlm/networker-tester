@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.244] - 2026-08-19
+
+### Added
+
+- **Production UI smoke harness** (`scripts/prod-smoke.sh` +
+  `dashboard/e2e/prod/`): 11 read-only Playwright specs against the live
+  dashboard — runs list + purpose tabs, URL probe, Start-a-test cards, both
+  benchmark wizards' gates, comparison pivots, run detail (incl. the failed-
+  run error banner), the canary panel, and system versions — each with a
+  full-page screenshot and page-error collection. Auth by session-token
+  injection (never a password); the runner auto-files a GitHub issue with
+  the failing screenshot (secret gist) per failed spec, de-duped against
+  open issues. Never mutates: no launches, no dispatches. Setup in
+  docs/prod-smoke.md.
+
+### Fixed
+
+- RunsPage's time-filter unit test used hardcoded 2026-08-18 fixtures and
+  became a date time-bomb (red on main once the fixture aged past the 24h
+  window it asserted); timestamps are now relative to the test clock.
+
 ## [0.28.243] - 2026-08-19
 
 ### Fixed
