@@ -13,22 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
-## [0.28.245] - 2026-08-19
-
-### Fixed
-
-- **CI: matrix-launch tests seed the active cloud account the #795 launch
-  gate requires.** The tests referenced a cloud-account id no fixture ever
-  created; once the gate (correctly) started failing cells whose account is
-  missing or not active, all four tests failed with zero launched runs —
-  blocking every C#-touching PR. The tests now seed an active account,
-  matching the real-project contract the gate enforces.
-
-## [0.28.244] - 2026-08-19
+## [0.28.246] - 2026-08-19
 
 ### Added
 
-<<<<<<< HEAD
 - **Production UI smoke harness** (`scripts/prod-smoke.sh` +
   `dashboard/e2e/prod/`): 11 read-only Playwright specs against the live
   dashboard — runs list + purpose tabs, URL probe, Start-a-test cards, both
@@ -45,7 +33,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - RunsPage's time-filter unit test used hardcoded 2026-08-18 fixtures and
   became a date time-bomb (red on main once the fixture aged past the 24h
   window it asserted); timestamps are now relative to the test clock.
-=======
+
+---
+
+## [0.28.245] - 2026-08-19
+
+### Fixed
+
+- **CI: matrix-launch tests seed the active cloud account the #795 launch
+  gate requires.** The tests referenced a cloud-account id no fixture ever
+  created; once the gate (correctly) started failing cells whose account is
+  missing or not active, all four tests failed with zero launched runs —
+  blocking every C#-touching PR. The tests now seed an active account,
+  matching the real-project contract the gate enforces.
+
+## [0.28.244] - 2026-08-19
+
+### Added
+
 - **Start a test is now an incident-ready triage console.** Tests are grouped
   by the signal an operator needs, ranked without moving under the user during
   background refreshes, and checked against the same runner, endpoint, and
