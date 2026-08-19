@@ -2112,19 +2112,36 @@ function Invoke-VerifyStackServing ($stack, $httpPort, $httpsPort) {
         if ($svc) { Write-Err "  service status: $($svc.Status)" }
         throw "$stack install failed: HTTP port $httpPort not serving after start"
     }
+    # HTTPS leg: the control plane's readiness gate is a PLAIN TCP probe of
+    # this port (ProvisioningOrchestrator.ProxyHttpsPort), so a TCP accept is
+    # the faithful — and PS-edition-proof — assertion. (An HttpWebRequest with
+    # ServerCertificateValidationCallback was tried first and failed a WORKING
+    # caddy/traefik on the pwsh 7 runner image — scriptblock delegates for
+    # that callback are unreliable there; CI 2026-08-19.) A best-effort
+    # SslStream handshake runs after the accept purely for the log.
     $httpsOk = $false
     foreach ($i in 1..5) {
+        $client = New-Object System.Net.Sockets.TcpClient
         try {
-            $req = [System.Net.HttpWebRequest]::Create("https://localhost:$httpsPort/")
-            $req.ServerCertificateValidationCallback = { $true }
-            $req.Timeout = 8000
-            ([System.Net.HttpWebResponse]$req.GetResponse()).Close()
-            $httpsOk = $true; break
-        } catch [System.Net.WebException] {
-            # An HTTP-status error (403/404/...) still proves the TLS listener.
-            if ($_.Exception.Response) { $httpsOk = $true; break }
-            Start-Sleep -Seconds 3
-        } catch { Start-Sleep -Seconds 3 }
+            $iar = $client.BeginConnect("127.0.0.1", $httpsPort, $null, $null)
+            if ($iar.AsyncWaitHandle.WaitOne(5000) -and $client.Connected) {
+                $client.EndConnect($iar)
+                $httpsOk = $true
+                try {
+                    $ssl = New-Object System.Net.Security.SslStream(
+                        $client.GetStream(), $false,
+                        [System.Net.Security.RemoteCertificateValidationCallback]{ $true })
+                    $ssl.AuthenticateAsClient("localhost")
+                    Write-Info "$stack TLS handshake on ${httpsPort}: $($ssl.SslProtocol)"
+                    $ssl.Dispose()
+                } catch {
+                    Write-Info "$stack TCP ${httpsPort} accepts (TLS handshake probe inconclusive: $($_.Exception.Message))"
+                }
+                break
+            }
+        } catch { }
+        finally { $client.Dispose() }
+        Start-Sleep -Seconds 3
     }
     if (-not $httpsOk) {
         Write-Err "$stack HTTPS port $httpsPort is not serving -- the readiness gate probes exactly this port."
