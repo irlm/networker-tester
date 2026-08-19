@@ -13,6 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [0.28.249] - 2026-08-19
+
+### Fixed
+
+- **The deploy wedge-watchdog enforces the SAME scaled budget as the deploy
+  runner** (#804). It killed deploys at a flat 30 minutes while #740's scaled
+  budget legitimately allowed more (a 1-language cpp deploy had 38m; the
+  watchdog always won the race). The watchdog now computes the shared budget
+  (+5m slack) per deployment, the reap re-checks the aging basis so a
+  concurrent #785 recovery re-claim wins, and the timeout message states the
+  enforced budget and language count — with the control-plane-restart hint
+  only when a recovery actually occurred.
+
 ## [0.28.248] - 2026-08-19
 
 ### Added
