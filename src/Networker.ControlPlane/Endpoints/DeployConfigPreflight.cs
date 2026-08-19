@@ -16,11 +16,15 @@ namespace Networker.ControlPlane.Endpoints;
 /// </summary>
 public static class DeployConfigPreflight
 {
-    /// <summary>Languages install.sh's deploy_benchmark_server deploys on Linux.</summary>
+    /// <summary>Languages install.sh's deploy_benchmark_server deploys on Linux.
+    /// ALL .NET AOT variants are Linux-deployable (net9-aot/net10-aot missing
+    /// here and in install.sh made every net9-aot@linux matrix cell fail with
+    /// "install.sh exited with code 1" — issue #801 pattern A).</summary>
     internal static readonly HashSet<string> LinuxLanguages = new(StringComparer.Ordinal)
     {
         "rust", "nginx", "go", "nodejs", "python", "java", "cpp", "ruby", "php",
-        "csharp-net8", "csharp-net8-aot", "csharp-net9", "csharp-net10",
+        "csharp-net8", "csharp-net8-aot", "csharp-net9", "csharp-net9-aot",
+        "csharp-net10", "csharp-net10-aot",
     };
 
     /// <summary>Languages install.ps1 -BenchmarkServer deploys on Windows (v0.28.204).</summary>

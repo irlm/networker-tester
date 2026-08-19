@@ -2091,6 +2091,47 @@ function Invoke-EnsureFirewallRule ($name, $protocol, $ports) {
         -LocalPort $ports -Action Allow -ErrorAction SilentlyContinue | Out-Null
 }
 
+function Invoke-VerifyStackServing ($stack, $httpPort, $httpsPort) {
+    # Port-serving check -- a registered or "started" service is NOT success
+    # (nssm reports started for a process that exits immediately; v0.28.150
+    # windows-exec caught exactly that). HTTP first, then HTTPS: the HTTPS
+    # port is what the control plane's readiness gate TCP-probes
+    # (ProvisioningOrchestrator.ProxyHttpsPort) -- a stack that serves HTTP
+    # but not HTTPS used to verify green here and then kill the matrix cell
+    # with an opaque 6-minute gate timeout (issue #801 pattern B). The stacks
+    # serve self-signed certs by design and -SkipCertificateCheck is
+    # unreliable across PS editions, so HTTPS uses HttpWebRequest with a
+    # per-request trust callback (same pattern as the IIS in-guest
+    # diagnostics in install.sh).
+    Start-Sleep -Seconds 3
+    try {
+        $null = Invoke-WebRequest -Uri "http://localhost:$httpPort/" -UseBasicParsing -TimeoutSec 8
+    } catch {
+        Write-Err "$stack registered but port $httpPort (HTTP) is not serving."
+        $svc = Get-Service "networker-$stack" -ErrorAction SilentlyContinue
+        if ($svc) { Write-Err "  service status: $($svc.Status)" }
+        throw "$stack install failed: HTTP port $httpPort not serving after start"
+    }
+    $httpsOk = $false
+    foreach ($i in 1..5) {
+        try {
+            $req = [System.Net.HttpWebRequest]::Create("https://localhost:$httpsPort/")
+            $req.ServerCertificateValidationCallback = { $true }
+            $req.Timeout = 8000
+            ([System.Net.HttpWebResponse]$req.GetResponse()).Close()
+            $httpsOk = $true; break
+        } catch [System.Net.WebException] {
+            # An HTTP-status error (403/404/...) still proves the TLS listener.
+            if ($_.Exception.Response) { $httpsOk = $true; break }
+            Start-Sleep -Seconds 3
+        } catch { Start-Sleep -Seconds 3 }
+    }
+    if (-not $httpsOk) {
+        Write-Err "$stack HTTPS port $httpsPort is not serving -- the readiness gate probes exactly this port."
+        throw "$stack install failed: HTTPS port $httpsPort not serving after start"
+    }
+}
+
 function Invoke-EnsureNssm {
     # nssm wraps a plain executable as a Windows service. Used by proxies that
     # have no native --install-service flag (caddy on some versions, traefik).
@@ -2114,16 +2155,30 @@ function Invoke-EnsureNssm {
         if ($nssmCmd) { return $nssmCmd.Source }
     }
 
-    # Fallback: direct download (choco mirror)
+    # Fallback: direct download from nssm.cc
     $nssmZip = Join-Path $env:TEMP "nssm.zip"
     $nssmDir = Join-Path $script:NetworkerStackDir "nssm"
     New-Item -ItemType Directory -Force $nssmDir | Out-Null
-    Invoke-WebRequest -Uri "https://nssm.cc/release/nssm-2.24.zip" -OutFile $nssmZip -UseBasicParsing
-    Expand-Archive -Path $nssmZip -DestinationPath $nssmDir -Force
-    $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "x86") { "win32" } else { "win64" }
-    $nssmExe = Join-Path $nssmDir "nssm-2.24\$arch\nssm.exe"
-    if (Test-Path $nssmExe) { return $nssmExe }
-    throw "Failed to install nssm -- cannot register service without it."
+    try {
+        Invoke-WebRequest -Uri "https://nssm.cc/release/nssm-2.24.zip" -OutFile $nssmZip -UseBasicParsing -TimeoutSec 120
+        Expand-Archive -Path $nssmZip -DestinationPath $nssmDir -Force
+        $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "x86") { "win32" } else { "win64" }
+        $nssmExe = Join-Path $nssmDir "nssm-2.24\$arch\nssm.exe"
+        if (Test-Path $nssmExe) { return $nssmExe }
+    } catch {
+        Write-Warn "nssm.cc download failed ($($_.Exception.Message)) -- trying chocolatey..."
+    }
+
+    # Last resort: chocolatey (nssm.cc has a history of extended outages, and
+    # on fresh Azure Server VMs -- no winget -- it was the ONLY source, making
+    # every Windows caddy/traefik matrix cell hostage to one flaky site;
+    # issue #801 pattern B).
+    Install-Chocolatey
+    & choco install nssm -y --no-progress | Out-Null
+    $env:PATH = "$env:PATH;$env:ProgramData\chocolatey\bin"
+    $nssmCmd = Get-Command nssm -ErrorAction SilentlyContinue
+    if ($nssmCmd) { return $nssmCmd.Source }
+    throw "Failed to install nssm (winget, nssm.cc, chocolatey all unavailable) -- cannot register service without it."
 }
 
 # ── Caddy (ports 8091 / 8454) ────────────────────────────────────────────────
@@ -2157,9 +2212,21 @@ function Invoke-SetupCaddy {
         $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
         $caddyExe = Join-Path $stackDir "caddy.exe"
         Write-Info "Downloading Caddy from caddyserver.com..."
-        Invoke-WebRequest -UseBasicParsing `
-            -Uri "https://caddyserver.com/api/download?os=windows&arch=${arch}" `
-            -OutFile $caddyExe -TimeoutSec 120
+        try {
+            Invoke-WebRequest -UseBasicParsing `
+                -Uri "https://caddyserver.com/api/download?os=windows&arch=${arch}" `
+                -OutFile $caddyExe -TimeoutSec 120
+        } catch {
+            # The build service compiles on demand and can time out or 5xx.
+            # Second source: the version-pinned GitHub release zip (the same
+            # v2.8.4 the Linux binary fallback pins).
+            Write-Warn "caddyserver.com download failed ($($_.Exception.Message)) -- trying the GitHub release..."
+            $zip = Join-Path $env:TEMP "caddy.zip"
+            Invoke-WebRequest -UseBasicParsing `
+                -Uri "https://github.com/caddyserver/caddy/releases/download/v2.8.4/caddy_2.8.4_windows_${arch}.zip" `
+                -OutFile $zip -TimeoutSec 120
+            Expand-Archive -Path $zip -DestinationPath $stackDir -Force
+        }
         if (-not (Test-Path $caddyExe) -or (Get-Item $caddyExe).Length -lt 1MB) {
             Write-Err "Caddy download failed -- skipping."
             throw "caddy install failed: download unavailable"
@@ -2246,15 +2313,8 @@ function Invoke-SetupCaddy {
     Invoke-EnsureFirewallRule "Networker-Caddy-HTTPS" "TCP" @(8454)
     Invoke-EnsureFirewallRule "Networker-Caddy-QUIC"  "UDP" @(8454)
 
-    # Port-serving check — service-active or registered is NOT success.
-    Start-Sleep -Seconds 3
-    try {
-        $null = Invoke-WebRequest -Uri "http://localhost:8091/" -UseBasicParsing -TimeoutSec 8
-        Write-Ok "Caddy serving test page on ports 8091 (HTTP) / 8454 (HTTPS+H3)"
-    } catch {
-        Write-Err "Caddy service registered but port 8091 is not serving."
-        throw "caddy install failed: port not serving after start"
-    }
+    Invoke-VerifyStackServing "caddy" 8091 8454
+    Write-Ok "Caddy serving test page on ports 8091 (HTTP) / 8454 (HTTPS+H3)"
 }
 
 # ── Traefik (ports 8092 / 8455) ──────────────────────────────────────────────
@@ -2362,19 +2422,8 @@ tls:
     Invoke-EnsureFirewallRule "Networker-Traefik-HTTPS" "TCP" @(8455)
     Invoke-EnsureFirewallRule "Networker-Traefik-QUIC"  "UDP" @(8455)
 
-    # Port-serving check — nssm reports "started" for a process that exits
-    # immediately, so the service being registered proves nothing. The v0.28.150
-    # windows-exec job caught exactly this: "OK Traefik serving" printed while
-    # BOTH ports refused connections (same class as the caddy fixes).
-    Start-Sleep -Seconds 3
-    try {
-        $null = Invoke-WebRequest -Uri "http://localhost:8092/" -UseBasicParsing -TimeoutSec 8
-        Write-Ok "Traefik serving test page on ports 8092 (HTTP) / 8455 (HTTPS+H3)"
-    } catch {
-        Write-Err "Traefik service registered but port 8092 is not serving."
-        Write-Err "  nssm status: $(& $nssm status networker-traefik 2>&1)"
-        throw "traefik install failed: port not serving after start"
-    }
+    Invoke-VerifyStackServing "traefik" 8092 8455
+    Write-Ok "Traefik serving test page on ports 8092 (HTTP) / 8455 (HTTPS)"
 }
 
 # ── HAProxy (ports 8093 / 8456) ──────────────────────────────────────────────
@@ -2456,6 +2505,7 @@ backend endpoint-https
 
     Invoke-EnsureFirewallRule "Networker-HAProxy-HTTP"  "TCP" @(8093)
     Invoke-EnsureFirewallRule "Networker-HAProxy-HTTPS" "TCP" @(8456)
+    Invoke-VerifyStackServing "haproxy" 8093 8456
     Write-Ok "HAProxy serving test page on ports 8093 (HTTP) / 8456 (HTTPS). HTTP/3 not supported on Windows builds."
 }
 
@@ -2575,6 +2625,7 @@ LogLevel warn
 
     Invoke-EnsureFirewallRule "Networker-Apache-HTTP"  "TCP" @(8094)
     Invoke-EnsureFirewallRule "Networker-Apache-HTTPS" "TCP" @(8457)
+    Invoke-VerifyStackServing "apache" 8094 8457
     Write-Ok "Apache serving test page on ports 8094 (HTTP) / 8457 (HTTPS). HTTP/3 not available in Apache httpd."
 }
 
@@ -4160,6 +4211,10 @@ if ($Setup) {
         exit 1
     }
     Invoke-HttpStackSetup $wanted
+    # Machine-readable success marker: install.sh's _azure_win_setup_proxy
+    # greps run-command output for this line (a thrown setup otherwise looks
+    # identical to success from the orchestrating side — #801 pattern B).
+    Write-Host "STACK_SETUP_OK: $wanted"
     exit 0
 }
 

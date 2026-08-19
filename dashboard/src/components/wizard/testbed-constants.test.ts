@@ -10,6 +10,7 @@ import {
   methodologyForPreset,
   nextTestbedKey,
   pickDefaultAccount,
+  RUNTIME_TEMPLATES,
   providerToCloud,
   REGIONS,
   unhealthyAccountLaunchBlock,
@@ -238,5 +239,42 @@ describe('languageAllowedOnOs (net48-on-linux regression)', () => {
     expect(languageAllowedOnOs('csharp-net8', 'linux')).toBe(true);
     expect(languageAllowedOnOs('go', 'windows')).toBe(true);
     expect(languageAllowedOnOs('', 'linux')).toBe(true);
+  });
+});
+
+describe('languageAllowedOnOs (AOT-on-windows regression, #801 pattern A)', () => {
+  it('never allows .NET AOT variants on a Windows testbed (VS C++ toolchain not in the payload)', () => {
+    for (const lang of ['csharp-net8-aot', 'csharp-net9-aot', 'csharp-net10-aot']) {
+      expect(languageAllowedOnOs(lang, 'windows')).toBe(false);
+      expect(languageAllowedOnOs(lang, 'linux')).toBe(true);
+    }
+  });
+  it('never allows the other Linux-only runtimes on a Windows testbed', () => {
+    for (const lang of ['cpp', 'ruby', 'php', 'rust', 'nginx']) {
+      expect(languageAllowedOnOs(lang, 'windows')).toBe(false);
+      expect(languageAllowedOnOs(lang, 'linux')).toBe(true);
+    }
+  });
+  it('keeps the non-AOT .NET ladder cross-platform', () => {
+    for (const lang of ['csharp-net8', 'csharp-net9', 'csharp-net10']) {
+      expect(languageAllowedOnOs(lang, 'windows')).toBe(true);
+      expect(languageAllowedOnOs(lang, 'linux')).toBe(true);
+    }
+  });
+});
+
+describe('runtime templates never seed doomed language cells', () => {
+  it('every template defaultLanguage is allowed on the template defaultOs', () => {
+    // The windows-api-stack template used to seed nginx + AOT variants on
+    // Windows — Linux-only, so those cells always failed (#801 pattern A).
+    for (const t of RUNTIME_TEMPLATES) {
+      if (!t.defaultOs) continue;
+      for (const lang of t.defaultLanguages) {
+        expect(
+          languageAllowedOnOs(lang, t.defaultOs),
+          `${t.id}: '${lang}' is not deployable on ${t.defaultOs}`,
+        ).toBe(true);
+      }
+    }
   });
 });
