@@ -827,7 +827,9 @@ export function NetworkTestPage() {
               {runnerMode === 'specific' && testers.length > 0 && (
                 <div className="space-y-1">
                   {testers.map(row => {
-                    const isOnline = row.power_state === 'running';
+                    // STRICT shared definition (running VM + connected agent):
+                    // power_state alone let a dark-agent runner be pinned (#793 P3).
+                    const isOnline = isOnlineTester(row);
                     const isIdle = row.allocation === 'idle';
                     const checked = selectedTesterId === row.tester_id;
                     return (
@@ -840,8 +842,10 @@ export function NetworkTestPage() {
                         <input type="radio" name="runner" checked={checked} disabled={!isOnline} onChange={() => setSelectedTesterId(row.tester_id)} className="accent-cyan-400" />
                         <span className="text-gray-200">{row.name}</span>
                         <span className="text-xs text-gray-400">· {row.cloud}/{row.region}</span>
-                        <span className={`ml-auto text-xs ${isIdle ? 'text-green-400' : 'text-gray-400'}`}>
-                          {isOnline ? (isIdle ? 'idle' : row.allocation) : row.power_state}
+                        <span className={`ml-auto text-xs ${isOnline && isIdle ? 'text-green-400' : 'text-gray-400'}`}>
+                          {isOnline
+                            ? (isIdle ? 'idle' : row.allocation)
+                            : row.power_state === 'running' ? 'agent offline' : row.power_state}
                         </span>
                       </label>
                     );

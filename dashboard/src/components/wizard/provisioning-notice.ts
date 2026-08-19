@@ -2,7 +2,10 @@
 // component file exports only a component (react-refresh/only-export-components).
 
 export interface ProvisioningNoticeProps {
-  /** Endpoint VMs that will be provisioned (one per testbed; proxies co-locate). */
+  /** Endpoint VMs that will be provisioned — one PER COMPARISON CELL
+   *  (testbed × proxy × language): the orchestrator provisions each launched
+   *  run separately (KickOneAsync — no dedup, #793 P2-1). Pass the cell
+   *  count, never testbeds.length. */
   vmCount: number;
   /** Cloud label, or 'multiple' when testbeds span clouds. */
   cloud: string;

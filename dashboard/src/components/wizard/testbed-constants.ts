@@ -1,6 +1,7 @@
 // ── Shared constants for testbed-based wizards ─────────────────────────
 
 import type { CloudAccountSummary } from '../../api/types';
+import { unsupportedReason } from '../../lib/mode-capabilities';
 
 export const REGIONS: Record<string, string[]> = {
   Azure: ['eastus', 'eastus2', 'westus2', 'westus3', 'centralus', 'northeurope', 'westeurope', 'southeastasia', 'japaneast', 'australiaeast'],
@@ -212,6 +213,32 @@ export function makeTestbedForAccount(
     tb.region = acct.region_default;
   }
   return tb;
+}
+
+/** Review step index in the Full Stack wizard (Testbeds/Workload/Methodology/Review). */
+export const FULL_STACK_REVIEW_STEP = 3;
+
+/**
+ * Where an ?autoprovision deep link may land after prefilling (#793 slice b):
+ * each prior step's canNext predicate is evaluated with the PREFILLED values
+ * and the jump stops on the first failing step — Review is reachable only
+ * when every prior step passes (the wizard's nextHint machinery then explains
+ * the stop). This also closes the ?modes=<all-unsupported> hole: when zero
+ * modes survive the proxy-stack gate for the prefilled testbed, the jump
+ * stops on Workload instead of reaching Review with nothing to launch (which
+ * used to 422 raw on Launch).
+ */
+export function autoprovisionJumpStep(testbed: TestbedState, rawModes: Iterable<string>): number {
+  // Step 0 (Testbeds) — same predicate as the wizard's canNext.
+  if (testbed.cloudAccountId === '' || testbed.proxies.length === 0) return 0;
+  // Step 1 (Workload) — at least one selected mode must be EFFECTIVE against
+  // the prefilled proxy stacks (mirrors the page's derived selectedModes).
+  const effective = [...rawModes].filter(
+    m => unsupportedReason(m, { kind: 'endpoint', stack: testbed.proxies }) === null,
+  );
+  if (effective.length === 0) return 1;
+  // Step 2 (Methodology) always passes — it has no canNext condition.
+  return FULL_STACK_REVIEW_STEP;
 }
 
 /**

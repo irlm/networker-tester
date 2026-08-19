@@ -5,14 +5,18 @@ import type { CloudAccountSummary } from '../../api/types';
 import { TestbedRow } from './TestbedRow';
 import type { TestbedState } from './testbed-constants';
 import { makeTestbed, nextTestbedKey, updateTestbedState } from './testbed-constants';
+import { isOnlineTester } from '../../lib/tester-readiness';
 
 // ── Runner helpers ────────────────────────────────────────────────────
+// "Online" is the STRICT shared predicate (running VM + connected agent,
+// lib/tester-readiness). This file used power_state alone, so a runner whose
+// agent was dark counted as online and was pinnable (#793 P3).
 
 function testerStatusClass(row: TesterRow): string {
   if (row.power_state === 'error') return 'text-red-400 border-red-500/40 bg-red-500/5';
   if (row.power_state === 'stopped' || row.power_state === 'stopping') return 'text-gray-400 border-gray-700 bg-gray-800/40';
   if (row.allocation === 'locked' || row.allocation === 'upgrading') return 'text-yellow-300 border-yellow-500/40 bg-yellow-500/5';
-  if (row.power_state === 'running' && row.allocation === 'idle') return 'text-green-400 border-green-500/40 bg-green-500/5';
+  if (isOnlineTester(row) && row.allocation === 'idle') return 'text-green-400 border-green-500/40 bg-green-500/5';
   return 'text-gray-400 border-gray-700';
 }
 
@@ -20,7 +24,10 @@ function testerStatusLabel(row: TesterRow): string {
   if (row.power_state === 'error') return 'error';
   if (row.allocation === 'locked') return 'busy';
   if (row.allocation === 'upgrading') return 'upgrading';
-  if (row.power_state === 'running' && row.allocation === 'idle') return 'idle';
+  // Running VM whose agent is not connected: it cannot accept work — say so
+  // instead of showing a green "idle" on a row the strict gate disables.
+  if (row.power_state === 'running' && !isOnlineTester(row)) return 'agent offline';
+  if (isOnlineTester(row) && row.allocation === 'idle') return 'idle';
   return row.power_state;
 }
 
@@ -70,7 +77,7 @@ export function TestbedMatrix({
   }, [projectId]);
 
   const runnerStats = useMemo(() => {
-    const online = testers.filter(t => t.power_state === 'running');
+    const online = testers.filter(isOnlineTester);
     const busy = online.filter(t => t.allocation === 'locked');
     const idle = online.filter(t => t.allocation === 'idle');
     return { online: online.length, busy: busy.length, idle: idle.length };
@@ -142,6 +149,11 @@ export function TestbedMatrix({
             cloudAccounts={cloudAccounts}
             onUpdate={updateTestbed}
             onRemove={removeTestbed}
+            // The benchmark wizards (this matrix's only hosts) silently
+            // discard existingVm* — buildComparisonCells never reads them, a
+            // fresh VM is provisioned regardless — so don't offer the control
+            // (#793 P2-3). The Deploy wizards honor it and keep it visible.
+            hideExistingVm
           />
         ))}
       </div>
@@ -184,7 +196,7 @@ export function TestbedMatrix({
               {testersLoading && <p className="text-xs text-gray-400 motion-safe:animate-pulse">Loading runners...</p>}
               {!testersLoading && testers.length === 0 && <p className="text-xs text-gray-400">No runners available.</p>}
               {!testersLoading && testers.length > 0 && testers.map(row => {
-                const isOnline = row.power_state === 'running';
+                const isOnline = isOnlineTester(row);
                 const isIdle = isOnline && row.allocation === 'idle';
                 const isBusy = isOnline && row.allocation === 'locked';
                 const checked = selectedTesterId === row.tester_id;

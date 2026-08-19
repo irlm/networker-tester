@@ -8,10 +8,13 @@ import { TestbedMatrix } from '../components/wizard/TestbedMatrix';
 import { MethodologyPanel } from '../components/wizard/MethodologyPanel';
 import { LanguageSelector } from '../components/wizard/LanguageSelector';
 import { ReviewStep } from '../components/wizard/ReviewStep';
+import { ProvisioningNotice } from '../components/wizard/ProvisioningNotice';
 import { useComparisonSubmit } from '../components/wizard/useComparisonSubmit';
 import { h3DropsPerCell } from '../lib/matrix-cells';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
+import { testersApi } from '../api/testers';
+import { isOnlineTester } from '../lib/tester-readiness';
 import type { TestbedState } from '../components/wizard/testbed-constants';
 import {
   methodologyForPreset,
@@ -62,8 +65,15 @@ export function AppBenchmarkPage() {
   // Cloud accounts — the Review step shows each testbed's account name +
   // status and blocks Launch on a non-active account (#793 P2-4).
   const [cloudAccounts, setCloudAccounts] = useState<CloudAccountSummary[]>([]);
+  // Online runners (STRICT: running VM + connected agent) for the Review
+  // step's provisioning notice — this wizard has the largest VM fan-out
+  // (languages × testbeds × proxies) and had no cost/runner notice (#793 P2-2).
+  const [onlineRunners, setOnlineRunners] = useState(0);
   useEffect(() => {
     api.getCloudAccounts(projectId).then(setCloudAccounts).catch(() => {});
+    testersApi.listTesters(projectId)
+      .then(rows => setOnlineRunners(rows.filter(isOnlineTester).length))
+      .catch(() => {});
   }, [projectId]);
 
   // Language capability matrix (GET /api/modes → language_capabilities).
@@ -203,10 +213,13 @@ export function AppBenchmarkPage() {
 
   // ── Submit ──────────────────────────────────────────────────────────
 
-  // Fan out across (testbed × proxy × language). One deployment will be
-  // created per unique (cloud_account_id, region, vm_size, os) — the
-  // orchestrator dedups and stacks languages/proxies into its http_stacks
-  // array when install.sh runs.
+  // Fan out across (testbed × proxy × language). EVERY cell provisions its
+  // own VM: the orchestrator creates one deployment per launched run
+  // (ProvisioningOrchestrator.KickOneAsync) — there is no dedup by
+  // (cloud_account_id, region, vm_size, os). An earlier comment here claimed
+  // the orchestrator dedups and stacks languages/proxies onto shared VMs;
+  // that code never existed and the claim leaked into the UI as a cost
+  // undercount (#793 P2-1).
   const buildComparisonCells = (): ComparisonCell[] => {
     const cells: ComparisonCell[] = [];
     const langs = selectedLangs.size > 0 ? [...selectedLangs] : [''];
@@ -244,7 +257,8 @@ export function AppBenchmarkPage() {
     return cells;
   };
 
-  const isMatrixRun = buildComparisonCells().length > 1;
+  const totalCells = buildComparisonCells().length;
+  const isMatrixRun = totalCells > 1;
   // Cells whose proxy stack has no QUIC will not run the h3 modes — the
   // comparison-group launch drops them per cell (shared/http-stacks.json);
   // say so on Review instead of surprising the user with N/A columns.
@@ -390,7 +404,7 @@ export function AppBenchmarkPage() {
           matrixNote={isMatrixRun || h3Drops.length > 0
             ? (
               <>
-                {isMatrixRun && <>Comparison group: {testbeds.length} testbed{testbeds.length !== 1 ? 's' : ''} x {selectedLangs.size} language{selectedLangs.size !== 1 ? 's' : ''} = {buildComparisonCells().length} runs</>}
+                {isMatrixRun && <>Comparison group: {testbeds.length} testbed{testbeds.length !== 1 ? 's' : ''} x {selectedLangs.size} language{selectedLangs.size !== 1 ? 's' : ''} = {totalCells} runs</>}
                 {h3Drops.map(d => (
                   <div key={d.label} data-testid="h3-drop-note" className="text-amber-400/90">
                     {d.label}: {d.dropped.join(', ')} skipped — {d.stack} has no HTTP/3 (see shared/http-stacks.json)
@@ -400,15 +414,26 @@ export function AppBenchmarkPage() {
             )
             : undefined}
           afterWorkload={
-            <div className="mb-4">
-              <div className="text-xs uppercase tracking-wider text-faint mb-1.5">Languages</div>
-              <div className="text-xs text-gray-400">
-                {[...selectedLangs].sort().map(lang => {
-                  const entry = LANGUAGE_GROUPS.flatMap(g => g.entries).find(e => e.id === lang);
-                  return entry?.label ?? lang;
-                }).join(', ')}
+            <>
+              <div className="mb-4">
+                <div className="text-xs uppercase tracking-wider text-faint mb-1.5">Languages</div>
+                <div className="text-xs text-gray-400">
+                  {[...selectedLangs].sort().map(lang => {
+                    const entry = LANGUAGE_GROUPS.flatMap(g => g.entries).find(e => e.id === lang);
+                    return entry?.label ?? lang;
+                  }).join(', ')}
+                </div>
               </div>
-            </div>
+              {/* Provisioning cost + runner-readiness — one VM per comparison
+                  cell (language × testbed × proxy); the widest fan-out wizard
+                  had NO notice at all (#793 P2-2). */}
+              <ProvisioningNotice
+                vmCount={totalCells}
+                cloud={new Set(testbeds.map(t => t.cloud)).size === 1 ? testbeds[0].cloud : 'multiple'}
+                region={new Set(testbeds.map(t => t.region)).size === 1 ? testbeds[0].region : 'multiple'}
+                onlineRunners={onlineRunners}
+              />
+            </>
           }
           addSchedule={addSchedule}
           onAddScheduleChange={setAddSchedule}
@@ -417,7 +442,7 @@ export function AppBenchmarkPage() {
           isMatrixRun={isMatrixRun}
           submitting={submitting}
           onSubmit={handleSubmit}
-          launchLabel={isMatrixRun ? `Launch ${buildComparisonCells().length} Runs` : 'Launch Now'}
+          launchLabel={isMatrixRun ? `Launch ${totalCells} Runs` : 'Launch Now'}
           cloudAccounts={cloudAccounts}
           launchBlockedReason={unhealthyAccountLaunchBlock(testbeds, cloudAccounts)}
         />
