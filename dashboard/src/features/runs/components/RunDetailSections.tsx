@@ -64,6 +64,10 @@ export function ArtifactSection({ artifact }: { artifact: BenchmarkArtifact }) {
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b border-gray-800 text-gray-400">
+                  {/* Case identity matters when one run carries several cases
+                      per protocol — apibench emits one http1 case per measured
+                      /api/* workload (#796). */}
+                  <th className="px-4 py-2 text-left">Case</th>
                   <th className="px-4 py-2 text-left">Protocol</th>
                   <th className="px-4 py-2 text-left">Metric</th>
                   <th className="px-4 py-2 text-right">N</th>
@@ -77,6 +81,7 @@ export function ArtifactSection({ artifact }: { artifact: BenchmarkArtifact }) {
               <tbody>
                 {(Array.isArray(artifact.summaries) ? artifact.summaries : [artifact.summaries]).map((s, i) => (
                   <tr key={i} className="border-b border-gray-800/30 hover:bg-gray-800/10">
+                    <td className="px-4 py-2 text-gray-200">{s.case_id}</td>
                     <td className="px-4 py-2 text-gray-200">{s.protocol}</td>
                     <td className="px-4 py-2 text-gray-400">{s.metric_name} ({s.metric_unit})</td>
                     <td className="px-4 py-2 text-gray-400 text-right">{s.included_sample_count}</td>

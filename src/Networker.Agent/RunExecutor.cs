@@ -26,7 +26,9 @@ namespace Networker.Agent;
 ///      but parseable → completed; unparseable → failed (+ error frame).
 ///   8. For each attempt emit <c>attempt_event</c>, tracking success/failure
 ///      counts, emitting <c>run_progress</c> every 10 attempts + a final one.
-///   9. Synthesize the placeholder <c>BenchmarkArtifact</c> iff benchmark mode.
+///   9. Synthesize the <c>BenchmarkArtifact</c> iff benchmark mode — real
+///      per-case <c>cases</c>/<c>summaries</c> accumulated from the observed
+///      attempts (<see cref="BenchmarkArtifactBuilder"/>, #796).
 ///  10. Emit <c>run_finished</c> with the terminal status + artifact.
 ///
 /// Cancellation: the <see cref="CancellationToken"/> (fired by cancel_run /
@@ -155,6 +157,12 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         var failureCount = 0u;
         JsonElement? envelope = null;
 
+        // Per-case artifact synthesis (#796): for benchmark configs, every
+        // observed attempt — streamed or parsed at exit — feeds the per-case
+        // accumulator so the terminal artifact carries real cases/summaries
+        // instead of the old empty placeholder.
+        var artifactBuilder = config.IsBenchmark ? new BenchmarkArtifactBuilder() : null;
+
         // Overall per-invocation wall-clock budget (audit F4): a tester that
         // wedges without EOF-ing stdout would otherwise park this task forever
         // and permanently consume one of the MaxConcurrentRuns slots.
@@ -164,7 +172,8 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         {
             var outcome = await RunTesterOnceAsync(
                     binPath, args, workload, runId, correlationId, sink,
-                    successCount, failureCount, invocationDeadline, cancellationToken)
+                    successCount, failureCount, invocationDeadline, artifactBuilder,
+                    cancellationToken)
                 .ConfigureAwait(false);
 
             successCount = outcome.SuccessCount;
@@ -195,7 +204,7 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         sink.TrySend(new RunProgressMessage(runId, successCount, failureCount));
 
         var artifact = config.IsBenchmark
-            ? BuildArtifact(config, successCount, failureCount)
+            ? BuildArtifact(config, artifactBuilder)
             : null;
 
         // E2E P3-13: the terminal relay is now visible agent-side.
@@ -326,6 +335,7 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         uint successCount,
         uint failureCount,
         TimeSpan invocationDeadline,
+        BenchmarkArtifactBuilder? artifactBuilder,
         CancellationToken cancellationToken)
     {
         var label = workload is null ? "tester" : $"tester/{workload}";
@@ -454,6 +464,7 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
                     if (okNow) { successCount++; totalNow = successCount; }
                     else { failureCount++; totalNow = failureCount; }
                     streamedAttempts++;
+                    artifactBuilder?.Record(workload, streamed);
                     sink.TrySend(new AttemptEventMessage(runId, streamed));
                     if (totalNow % 10 == 0)
                         sink.TrySend(new RunProgressMessage(runId, successCount, failureCount));
@@ -610,6 +621,7 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
                         total = failureCount;
                     }
 
+                    artifactBuilder?.Record(workload, attempt);
                     sink.TrySend(new AttemptEventMessage(runId, attempt.Clone()));
 
                     if (total % 10 == 0)
@@ -832,9 +844,20 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         return redacted;
     }
 
-    // ── Placeholder BenchmarkArtifact (Rust parity) ──────────────────────────────
+    // ── Agent-side BenchmarkArtifact synthesis (#796) ────────────────────────────
+    /// <summary>
+    /// Build the terminal artifact from the run's accumulated per-case stats.
+    /// Replaces the old placeholder (empty <c>cases</c>, <c>{success,failure}</c>
+    /// <c>summaries</c> object) that made per-case apibench results
+    /// unretrievable from the artifact API and — because
+    /// <c>RegressionAnalyzer.ParseSummaries</c> expects a per-case ARRAY —
+    /// silently disabled regression detection for agent-executed runs.
+    /// <c>summaries</c> is now always the per-case array (the tester's
+    /// <c>BenchmarkSummary</c> contract shape); run-level totals stay on the
+    /// run row via <c>attempts_ok</c>/<c>attempts_failed</c>.
+    /// </summary>
     private static BenchmarkArtifactPayload BuildArtifact(
-        TestConfigView config, uint successCount, uint failureCount)
+        TestConfigView config, BenchmarkArtifactBuilder? builder)
     {
         JsonElement El(string json) => JsonDocument.Parse(json).RootElement.Clone();
 
@@ -853,28 +876,16 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             ? El("null")
             : config.Methodology.Clone();
 
-        var summaries = El(JsonSerializer.Serialize(new Dictionary<string, uint>
-        {
-            ["success"] = successCount,
-            ["failure"] = failureCount,
-        }));
-
-        var dataQuality = El("""
-            {
-              "noise_level": null,
-              "publication_ready": false,
-              "blockers": ["agent-side artifact synthesis is a placeholder pending Agent A/B"]
-            }
-            """);
+        builder ??= new BenchmarkArtifactBuilder();
 
         return new BenchmarkArtifactPayload(
             Environment: environment,
             Methodology: methodology,
             Launches: El("[]"),
-            Cases: El("[]"),
+            Cases: El(builder.BuildCasesJson()),
             Samples: null,
-            Summaries: summaries,
-            DataQuality: dataQuality);
+            Summaries: El(builder.BuildSummariesJson()),
+            DataQuality: El(builder.BuildDataQualityJson()));
     }
 
     /// <summary>The terminal <c>run_finished</c> — always via the critical

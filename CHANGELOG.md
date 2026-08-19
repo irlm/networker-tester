@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.239] - 2026-08-19
+
+### Fixed
+
+- **Benchmark artifacts now carry real per-case results** (#796). The agent's
+  artifact builder was a placeholder that shipped `cases: []` and bare
+  success/failure counts for every agent-executed benchmark run — the
+  per-case apibench data (sort/hash/aggregate/search/compress) was never
+  produced, and **benchmark regression detection was silently dead** for
+  agent runs (it parsed the placeholder to an empty list and compared
+  nothing). A real per-case accumulator now synthesizes the tester's
+  BenchmarkSummary shape (percentile ladder, counts, rps, rank-based median
+  CI, honest data_quality) from the streamed attempts; the run detail page
+  gains a Case column. No schema change — the columns were always free-form
+  JSON; regression detection starts working automatically. Existing empty
+  prod artifacts are not backfilled.
+
 ## [0.28.238] - 2026-08-19
 
 ### Fixed
