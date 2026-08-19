@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   useRunsAttemptsQueries: vi.fn(),
   useRunsArtifactsQueries: vi.fn(),
   useComparisonGroupQuery: vi.fn(),
+  deleteMutate: vi.fn(),
 }));
 
 vi.mock('../features/runs/queries', () => ({
@@ -17,8 +18,9 @@ vi.mock('../features/runs/queries', () => ({
   useRunsAttemptsQueries: mocks.useRunsAttemptsQueries,
   useRunsArtifactsQueries: mocks.useRunsArtifactsQueries,
   useComparisonGroupQuery: mocks.useComparisonGroupQuery,
+  useDeleteComparisonGroupMutation: () => ({ mutate: mocks.deleteMutate, isPending: false }),
 }));
-vi.mock('../hooks/useProject', () => ({ useProject: () => ({ projectId: 'p-1' }) }));
+vi.mock('../hooks/useProject', () => ({ useProject: () => ({ projectId: 'p-1', isOperator: true }) }));
 
 const GROUP_ID = '485406f0-0000-4000-8000-000000000000';
 
@@ -241,5 +243,50 @@ describe('ComparisonResultsPage', () => {
     mocks.useRunsArtifactsQueries.mockImplementation((rows: TestRun[]) => rows.map(() => ({ data: null })));
     renderPage();
     expect(screen.getByText(/No runs found for this comparison group/)).toBeInTheDocument();
+  });
+
+  // ── #803: completion banner + group actions ─────────────────────────────────
+
+  it('shows the completion banner with failed cells listed by label and ANSI-stripped reason', () => {
+    const withFailure = [
+      ...runs.slice(0, 3),
+      run('run-py-caddy', `python @ azure/eastus @ linux @ caddy${suffix(3)}`, {
+        status: 'failed',
+        success_count: 0,
+        error_message: '\u001b[31mprovisioning timed out\u001b[0m',
+      }),
+    ];
+    mocks.useTestRunsQuery.mockReturnValue({ data: withFailure, isPending: false, error: null });
+    renderPage();
+
+    const banner = screen.getByRole('status');
+    expect(banner.textContent).toContain('3/4 completed');
+    expect(banner.textContent).toContain('1 failed');
+    expect(within(banner).getByText('python @ azure/eastus @ linux @ caddy')).toBeInTheDocument();
+    expect(banner.textContent).toContain('provisioning timed out');
+    expect(banner.textContent).not.toContain('\u001b[31m');
+    expect(within(banner).getByRole('link', { name: /run run-py-c/ })).toHaveAttribute(
+      'href', '/projects/p-1/runs/run-py-caddy',
+    );
+  });
+
+  it('counts N from the group definition, so missing cells are visible (12 defined, 4 fetched)', () => {
+    mocks.useComparisonGroupQuery.mockReturnValue({
+      data: { ...group, cells: Array.from({ length: 12 }, (_, i) => group.cells[i % 4]) },
+    });
+    renderPage();
+    expect(screen.getByRole('status').textContent).toContain('4/12 completed');
+  });
+
+  it('deletes the group after confirmation', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByRole('button', { name: 'Delete group' }));
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog.textContent).toContain('NOT');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete group' }));
+
+    expect(mocks.deleteMutate).toHaveBeenCalledWith(GROUP_ID, expect.anything());
   });
 });

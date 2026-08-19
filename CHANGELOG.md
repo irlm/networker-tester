@@ -13,6 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [0.28.248] - 2026-08-19
+
+### Added
+
+- **Group-first benchmark results** (#803). Comparison groups render as ONE
+  expandable row on the Runs list (live progress `X/N · F failed`, aggregate
+  status, fastest-so-far chip) linking to the group's comparison page;
+  benchmark wizards land on the comparison page after launch; run detail
+  pages of group members gain a group breadcrumb and cell X-of-N prev/next
+  navigation; the comparison page gets a completion banner listing failed
+  cells with their reasons, and a Delete-group action. Standalone runs and
+  individual run URLs are unchanged.
+
 ## [0.28.247] - 2026-08-19
 
 ### Fixed

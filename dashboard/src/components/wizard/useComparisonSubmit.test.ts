@@ -1,5 +1,31 @@
-import { describe, expect, it } from 'vitest';
-import { launchOutcomeToast } from './useComparisonSubmit';
+import { act, renderHook } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Methodology, Workload } from '../../api/types';
+import { launchOutcomeToast, useComparisonSubmit } from './useComparisonSubmit';
+
+const mocks = vi.hoisted(() => ({
+  navigate: vi.fn(),
+  addToast: vi.fn(),
+  createComparisonGroup: vi.fn(),
+  launchComparisonGroup: vi.fn(),
+}));
+
+vi.mock('react-router', () => ({ useNavigate: () => mocks.navigate }));
+vi.mock('../../hooks/useToast', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  useToast: () => mocks.addToast,
+}));
+vi.mock('../../features/runs/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../features/runs/api')>();
+  return {
+    ...actual,
+    runsApi: {
+      ...actual.runsApi,
+      createComparisonGroup: mocks.createComparisonGroup,
+      launchComparisonGroup: mocks.launchComparisonGroup,
+    },
+  };
+});
 
 // #793 P1-3: the submit hook toasted `Launched ${cells.length} runs` from the
 // REQUESTED count — a fully-failed matrix launch showed a success toast. The
@@ -49,5 +75,54 @@ describe('launchOutcomeToast', () => {
     const t = launchOutcomeToast({ launched: 0, total: 1, failed: 1, errors: null });
     expect(t.type).toBe('error');
     expect(t.message).toBe('Launch failed: 0 of 1 runs launched');
+  });
+});
+
+// #803: a matrix launch is ONE experiment — success lands on the group's
+// compare page (which live-polls), not on the filtered runs list.
+describe('useComparisonSubmit matrix redirect', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.createComparisonGroup.mockResolvedValue({ id: 'group-123' });
+    mocks.launchComparisonGroup.mockResolvedValue({ launched: 2, total: 2, failed: 0 });
+  });
+
+  function renderSubmit() {
+    return renderHook(() =>
+      useComparisonSubmit({
+        projectId: 'p-1',
+        buildCells: () => [
+          { label: 'go @ az', endpoint: { kind: 'network', host: 'a.example.com' } },
+          { label: 'py @ az', endpoint: { kind: 'network', host: 'b.example.com' } },
+        ],
+        buildWorkload: () => ({ modes: ['apibench'], runs: 10 } as unknown as Workload),
+        methodology: { warmup_runs: 1 } as unknown as Methodology,
+        effectiveName: () => 'go vs py',
+        addSchedule: false,
+        cronExpr: '',
+        selectedTesterId: null,
+        isMatrixRun: true,
+        emptyCellsError: 'no cells',
+      }),
+    );
+  }
+
+  it('navigates to the compare page after a matrix launch', async () => {
+    const { result } = renderSubmit();
+    await act(() => result.current.handleSubmit(true));
+
+    expect(mocks.launchComparisonGroup).toHaveBeenCalledWith('group-123');
+    expect(mocks.navigate).toHaveBeenCalledWith('/projects/p-1/benchmarks/compare/group-123');
+  });
+
+  it('still redirects to the compare page on a partial launch (the banner shows the failures)', async () => {
+    mocks.launchComparisonGroup.mockResolvedValue({
+      launched: 1, total: 2, failed: 1, errors: ['py @ az: quota'],
+    });
+    const { result } = renderSubmit();
+    await act(() => result.current.handleSubmit(true));
+
+    expect(mocks.addToast).toHaveBeenCalledWith('info', expect.stringContaining('1 failed'));
+    expect(mocks.navigate).toHaveBeenCalledWith('/projects/p-1/benchmarks/compare/group-123');
   });
 });

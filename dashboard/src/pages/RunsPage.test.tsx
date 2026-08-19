@@ -5,24 +5,39 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TestRun } from '../api/types';
 import { RunsPage } from './RunsPage';
 
+interface GroupQueryStub {
+  data?: { id: string; name: string; cells: Array<{ label: string }> };
+  isError: boolean;
+}
+
 const mocks = vi.hoisted(() => ({
   useTestRunsQuery: vi.fn(),
+  useComparisonGroupsQueries: vi.fn(
+    (groupIds: string[]): GroupQueryStub[] => groupIds.map(() => ({ data: undefined, isError: false })),
+  ),
   refetch: vi.fn(),
 }));
 
-const RECENT_RUN_ISO = new Date(Date.now() - 60 * 60_000).toISOString();
-
 vi.mock('../features/runs/queries', () => ({
   useTestRunsQuery: mocks.useTestRunsQuery,
+  useComparisonGroupsQueries: mocks.useComparisonGroupsQueries,
+  runKeys: {
+    detail: (runId: string) => ['runs', 'detail', runId],
+    attempts: (runId: string) => ['runs', 'detail', runId, 'attempts'],
+  },
 }));
 vi.mock('../hooks/useProject', () => ({ useProject: () => ({ projectId: 'project-1' }) }));
 vi.mock('../hooks/useRenderLog', () => ({ useRenderLog: () => vi.fn() }));
 
+// Anchored to the wall clock: the "Last 24 hours" filter test broke a day
+// after this fixture's hard-coded 2026-08-18 timestamps aged out.
+const anHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+
 const baseRun = {
   project_id: 'project-1',
   status: 'completed',
-  started_at: '2026-08-18T12:00:00Z',
-  finished_at: '2026-08-18T12:00:05Z',
+  started_at: anHourAgo,
+  finished_at: anHourAgo,
   success_count: 2,
   failure_count: 0,
   error_message: null,
@@ -30,7 +45,7 @@ const baseRun = {
   tester_id: null,
   worker_id: null,
   last_heartbeat: null,
-  created_at: RECENT_RUN_ISO,
+  created_at: anHourAgo,
 } satisfies Omit<TestRun, 'id' | 'test_config_id'>;
 
 const runs: TestRun[] = [
@@ -147,5 +162,110 @@ describe('RunsPage filters', () => {
     expect(screen.getByLabelText('Filter by time range')).toHaveValue('all');
     const params = mocks.useTestRunsQuery.mock.calls.at(-1)?.[1];
     expect(params).not.toHaveProperty('since');
+  });
+});
+
+// ── Comparison-group rows (#803) ──────────────────────────────────────────────
+
+const GROUP_ID = 'deadbeef-0000-4000-8000-000000000000';
+
+const groupCellRuns: TestRun[] = [
+  {
+    ...baseRun,
+    id: '55555555-5555-4555-8555-555555555555',
+    test_config_id: 'config-cell-go',
+    config_name: 'azure/eastus linux · nginx · cg-deadbeef·0·ab12',
+    endpoint_kind: 'runtime',
+    test_kind: 'benchmark',
+    modes: ['apibench'],
+    comparison_group_id: GROUP_ID,
+  },
+  {
+    ...baseRun,
+    id: '66666666-6666-4666-8666-666666666666',
+    test_config_id: 'config-cell-py',
+    config_name: 'azure/eastus linux · caddy · cg-deadbeef·1·ab12',
+    endpoint_kind: 'runtime',
+    test_kind: 'benchmark',
+    modes: ['apibench'],
+    comparison_group_id: GROUP_ID,
+    status: 'running',
+  },
+];
+
+describe('RunsPage comparison-group rows', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.useTestRunsQuery.mockReturnValue({
+      data: [...groupCellRuns, ...runs],
+      isPending: false,
+      isError: false,
+      dataUpdatedAt: Date.now(),
+      refetch: mocks.refetch,
+    });
+    mocks.useComparisonGroupsQueries.mockImplementation((groupIds: string[]) =>
+      groupIds.map(() => ({
+        data: {
+          id: GROUP_ID,
+          name: 'nginx vs caddy',
+          cells: Array.from({ length: 14 }, (_, i) => ({ label: `cell-${i}` })),
+        },
+        isError: false,
+      })),
+    );
+  });
+
+  it('collapses group cells into one row: name from the group API, X/N progress, running chip', () => {
+    renderPage();
+
+    const groupLink = screen.getByRole('link', { name: 'nginx vs caddy' });
+    expect(groupLink).toHaveAttribute('href', `/projects/project-1/benchmarks/compare/${GROUP_ID}`);
+    // Cells are hidden until expanded.
+    expect(screen.queryByText(/nginx · cg-deadbeef/)).not.toBeInTheDocument();
+    // Progress: 1 terminal of 14 defined cells (authoritative count, no "+").
+    expect(screen.getByText(/1\/14/)).toBeInTheDocument();
+    // One cell still running → aggregate chip is running.
+    expect(screen.getByText('running')).toBeInTheDocument();
+    // Standalone runs render exactly as before, as siblings.
+    expect(screen.getByText('Checkout connectivity')).toBeInTheDocument();
+  });
+
+  it('expanding the group reveals the cell rows; view-as-list applies the group filter', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByRole('button', { name: /Expand group nginx vs caddy/ }));
+
+    expect(screen.getByText('azure/eastus linux · nginx · cg-deadbeef·0·ab12')).toBeInTheDocument();
+    expect(screen.getByText('azure/eastus linux · caddy · cg-deadbeef·1·ab12')).toBeInTheDocument();
+    // Individual run URLs unchanged.
+    expect(screen.getByRole('link', { name: '55555555' })).toHaveAttribute(
+      'href',
+      '/projects/project-1/runs/55555555-5555-4555-8555-555555555555',
+    );
+    expect(screen.getByRole('link', { name: 'view as list' })).toHaveAttribute(
+      'href',
+      `/projects/project-1/runs?comparison_group=${GROUP_ID}`,
+    );
+  });
+
+  it('falls back to in-window counts with a "+" and a prefix-derived name when the group API 404s', () => {
+    mocks.useComparisonGroupsQueries.mockImplementation((groupIds: string[]) =>
+      groupIds.map(() => ({ data: undefined, isError: true })),
+    );
+    renderPage();
+
+    // Deleted group (SET NULL): 1 terminal of the 2 visible cells, at least.
+    expect(screen.getByText(/1\/2\+/)).toBeInTheDocument();
+    // Name degrades to the cells' shared config-name prefix.
+    expect(screen.getByRole('link', { name: 'azure/eastus linux' })).toBeInTheDocument();
+  });
+
+  it('the ?comparison_group= filter view stays a flat list (no group row)', () => {
+    renderPage(`/projects/project-1/runs?comparison_group=${GROUP_ID}`);
+
+    expect(screen.queryByRole('button', { name: /Expand group/ })).not.toBeInTheDocument();
+    expect(screen.getByText('azure/eastus linux · nginx · cg-deadbeef·0·ab12')).toBeInTheDocument();
+    expect(screen.getByText('azure/eastus linux · caddy · cg-deadbeef·1·ab12')).toBeInTheDocument();
   });
 });
