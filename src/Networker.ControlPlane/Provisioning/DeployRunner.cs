@@ -29,8 +29,11 @@ namespace Networker.ControlPlane.Provisioning;
 ///   <item>On success: persist <c>endpoint_ips</c> + <c>endpoint_hosts</c>
 ///     (V050; the proxy resolver prefers the hostname — SNI → HTTP/3 through
 ///     IIS) + status <c>completed</c>.
-///     On failure: persist <c>error_message</c> + status <c>failed</c>. Either
-///     way persist the full log and publish a <see cref="DeployComplete"/>.</item>
+///     On failure: persist <c>error_message</c> + status <c>failed</c> and
+///     leave any existing <c>endpoint_ips</c>/<c>endpoint_hosts</c> untouched
+///     (an update re-run over a live deployment must not orphan its
+///     still-serving endpoints). Either way persist the full log and publish
+///     a <see cref="DeployComplete"/>.</item>
 /// </list>
 ///
 /// <para><b>CI-safe soft-fail:</b> if <c>install.sh</c> can't be located, or
@@ -239,7 +242,11 @@ public sealed class DeployRunner
         var error = success
             ? null
             : interrupted
-                ? $"Deployment interrupted (install.sh received {(exitCode == 137 ? "SIGKILL" : "SIGTERM")}, exit {exitCode}) — "
+                // Built on the classifier's shared prefix: the startup recovery
+                // pass and the orchestrator's interrupted-retry arm key on this
+                // exact marker to auto-re-run the deployment (issue #764).
+                ? ProvisioningFailureClassifier.InterruptedErrorPrefix
+                  + $"{(exitCode == 137 ? "KILL" : "TERM")}, exit {exitCode}) — "
                   + "the control plane restarted or was shut down while deploying. Any VM it had already created is "
                   + "reaped by the orphan sweep; retry the deployment."
                 : $"install.sh exited with code {exitCode ?? -1}";
@@ -536,9 +543,16 @@ public sealed class DeployRunner
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<NetworkerDbContext>();
+        // Both callers flip to `running` — stamp started_at (issue #764's
+        // "`started_at` is null" observation; also the watchdog's stale-deploy
+        // age basis, so a recovered re-run gets a fresh 30-minute window
+        // instead of being reaped against the ORIGINAL attempt's created_at).
+        var now = DateTime.UtcNow;
         await db.Deployments
             .Where(d => d.DeploymentId == deploymentId)
-            .ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, status), ct)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(d => d.Status, status)
+                .SetProperty(d => d.StartedAt, now), ct)
             .ConfigureAwait(false);
     }
 
@@ -571,16 +585,37 @@ public sealed class DeployRunner
                 : null;
             var now = DateTime.UtcNow;
 
-            await db.Deployments
-                .Where(d => d.DeploymentId == deploymentId)
-                .ExecuteUpdateAsync(s => s
-                    .SetProperty(d => d.Status, status)
-                    .SetProperty(d => d.Log, log)
-                    .SetProperty(d => d.EndpointIps, success ? ipsJson : (string?)null)
-                    .SetProperty(d => d.EndpointHosts, hostsJson)
-                    .SetProperty(d => d.ErrorMessage, error)
-                    .SetProperty(d => d.FinishedAt, now), CancellationToken.None)
-                .ConfigureAwait(false);
+            if (success)
+            {
+                await db.Deployments
+                    .Where(d => d.DeploymentId == deploymentId)
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(d => d.Status, status)
+                        .SetProperty(d => d.Log, log)
+                        .SetProperty(d => d.EndpointIps, ipsJson)
+                        .SetProperty(d => d.EndpointHosts, hostsJson)
+                        .SetProperty(d => d.ErrorMessage, error)
+                        .SetProperty(d => d.FinishedAt, now), CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                // Failure: leave endpoint_ips/endpoint_hosts UNTOUCHED. This
+                // used to null them, which was harmless on a first deploy (they
+                // were already null) but destructive on an UPDATE re-run over a
+                // live deployment: the still-serving endpoints vanished from the
+                // deployed-targets/version panels, and DELETE's VM teardown lost
+                // its reverse-lookup inputs — orphaning the VM to the reaper
+                // (silent-update investigation, 2026-08-18).
+                await db.Deployments
+                    .Where(d => d.DeploymentId == deploymentId)
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(d => d.Status, status)
+                        .SetProperty(d => d.Log, log)
+                        .SetProperty(d => d.ErrorMessage, error)
+                        .SetProperty(d => d.FinishedAt, now), CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
         }
         catch (Exception ex)
         {

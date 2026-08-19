@@ -13,6 +13,7 @@ import { useProject } from '../hooks/useProject';
 import { useToast } from '../hooks/useToast';
 import { timeAgo } from '../lib/format';
 import { stripAnsi } from '../lib/ansi';
+import { isWatchlistConfigName } from '../lib/watchlist';
 import { Button } from '../components/common/Button';
 import {
   runKeys,
@@ -549,7 +550,11 @@ export function DiagnosticsPage() {
   const configs = useMemo(
     () => ((configsQuery.data ?? []) as Array<TestConfigListItem | TestConfig>).filter((config) => {
       const kind = 'endpoint_kind' in config ? config.endpoint_kind : config.endpoint.kind;
-      return kind === 'network';
+      // Only this page's own probe configs are watch entries — see
+      // isWatchlistConfigName. Runs from other network-kind configs
+      // (benchmark cells, canary, SDK endpoints) are excluded downstream too:
+      // their config detail is never fetched and their names don't parse.
+      return kind === 'network' && isWatchlistConfigName(config.name);
     }),
     [configsQuery.data],
   );
@@ -728,20 +733,33 @@ export function DiagnosticsPage() {
   // ── Handlers ──────────────────────────────────────────────────────
 
   const handleRun = async (targetHost?: string) => {
-    const host = targetHost || extractHost(url);
-    if (!host) {
+    // Multi-URL set (#782): the input accepts several URLs separated by
+    // whitespace, commas, or newlines — they are probed TOGETHER in one run
+    // (same tick, comparable conditions) via endpoint.hosts[].
+    const rawEntries = (targetHost || url)
+      .split(/[\s,]+/)
+      .map(e => e.trim())
+      .filter(Boolean);
+    const entries = [...new Set(rawEntries)];
+    const host = entries.length > 1 ? extractHost(entries[0]) : (targetHost || extractHost(url));
+    if (!host || entries.length === 0) {
       addToast('error', 'Enter a URL or hostname to test');
       return;
     }
+    const isSet = entries.length > 1;
 
     setSubmitting(true);
     try {
       const presetLabel = preset.charAt(0).toUpperCase() + preset.slice(1);
-      const configName = `Diag: ${host} (${presetLabel})`;
+      const configName = isSet
+        ? `Diag set: ${host} +${entries.length - 1} (${presetLabel})`
+        : `Diag: ${host} (${presetLabel})`;
       // Probe the URL as entered (root by default) — a bare host would get
       // `/health` appended by the agent (E2E P1-4). `host` stays bare for the
       // display name / watchlist grouping.
-      const endpoint: EndpointRef = { kind: 'network', host: toProbeUrl(targetHost || url) };
+      const endpoint: EndpointRef = isSet
+        ? { kind: 'network', host: toProbeUrl(entries[0]), hosts: entries.map(toProbeUrl) }
+        : { kind: 'network', host: toProbeUrl(targetHost || url) };
       const workload: Workload = {
         modes: DIAG_PRESETS[preset],
         runs: 1,
@@ -750,7 +768,7 @@ export function DiagnosticsPage() {
         payload_sizes: [],
         capture_mode: 'headers-only',
       };
-      const config: TestConfigCreate = { name: configName, endpoint, workload };
+      const config: TestConfigCreate = { name: configName, test_kind: 'url_probe', endpoint, workload };
 
       // `test_config` has UNIQUE (project_id, name), so re-running a diagnostic
       // against the same host+preset must reuse the existing config rather than
@@ -772,6 +790,7 @@ export function DiagnosticsPage() {
             id: created.id,
             project_id: created.project_id,
             name: created.name,
+            test_kind: created.test_kind,
             endpoint_kind: created.endpoint.kind,
             modes: created.workload.modes,
             has_methodology: created.methodology !== null,
@@ -782,7 +801,9 @@ export function DiagnosticsPage() {
         ]);
       }
       const run = await runsApi.launchConfig(configId, selectedTesterId ?? undefined);
-      addToast('success', `Diagnostic ${run.id.slice(0, 8)} launched for ${host}`);
+      addToast('success', isSet
+        ? `Diagnostic set ${run.id.slice(0, 8)} launched for ${entries.length} URLs`
+        : `Diagnostic ${run.id.slice(0, 8)} launched for ${host}`);
 
       queryClient.setQueryData<TestRun[]>(runKeys.list(projectId, DIAGNOSTIC_RUN_PARAMS), (previous = []) => [
         run,
@@ -878,6 +899,9 @@ export function DiagnosticsPage() {
         <div className="flex items-center gap-2.5">
           <div className="flex-1 flex items-center gap-2">
             <label htmlFor="diag-url" className="text-xs text-gray-400 flex-shrink-0">URL:</label>
+            {/* Ligatures off (#765): coding fonts render `//` as a slashed
+                ligature that reads as ` /` in a URL field. The stored value
+                was always correct — display only. */}
             <input
               ref={inputRef}
               id="diag-url"
@@ -885,8 +909,8 @@ export function DiagnosticsPage() {
               value={url}
               onChange={e => setUrl(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && url.trim()) handleRun(); }}
-              placeholder="Enter URL to test..."
-              className="flex-1 bg-[var(--bg-raised)] border border-gray-800 rounded px-3 py-2 text-sm text-cyan-400 focus:outline-none focus:border-cyan-500/50 placeholder:text-gray-600 transition-colors"
+              placeholder="Enter URL(s) to test — several at once, separated by spaces or commas..."
+              className="flex-1 bg-[var(--bg-raised)] border border-gray-800 rounded px-3 py-2 text-sm text-cyan-400 focus:outline-none focus:border-cyan-500/50 placeholder:text-gray-600 transition-colors [font-variant-ligatures:none]"
               aria-label="URL or hostname to test"
             />
           </div>

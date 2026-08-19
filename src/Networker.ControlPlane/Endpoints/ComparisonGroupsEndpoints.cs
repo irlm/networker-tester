@@ -195,6 +195,22 @@ public static class ComparisonGroupsEndpoints
                     "comparison group has no cells to launch");
             }
 
+            // Preload the health of every cloud account referenced by a pending
+            // cell: a non-active account fails its cells NOW with the account's
+            // validation error (mirrors the tester-create 422) instead of
+            // burning a provision + readiness timeout per cell (#791/#793 P1-1).
+            var referencedAccountIds = cells
+                .Select(PendingCellAccountId)
+                .Where(a => a is not null)
+                .Select(a => a!.Value)
+                .Distinct()
+                .ToList();
+            var accountsById = referencedAccountIds.Count == 0
+                ? new Dictionary<Guid, Data.Entities.CloudAccount>()
+                : await db.CloudAccounts.AsNoTracking()
+                    .Where(a => a.ProjectId == group.ProjectId && referencedAccountIds.Contains(a.AccountId))
+                    .ToDictionaryAsync(a => a.AccountId, ct);
+
             var now = DateTime.UtcNow;
             var launched = new List<Guid>(cells.Count);
             var failures = new List<string>();
@@ -216,6 +232,14 @@ public static class ComparisonGroupsEndpoints
                     // timeout every matrix round — HAProxy has no native
                     // Windows build).
                     failures.Add($"{cell.Label}: {why}");
+                    continue;
+                }
+                if (CellAccountGateReason(cell, accountsById) is { } acctWhy)
+                {
+                    // A broken cloud account can never provision this cell —
+                    // fail it at launch with the credentials problem instead of
+                    // the downstream cloud symptom.
+                    failures.Add($"{cell.Label}: {acctWhy}");
                     continue;
                 }
                 // Per-cell capability trim: a matrix over nginx + apache must not
@@ -248,6 +272,7 @@ public static class ComparisonGroupsEndpoints
                         ProjectId = group.ProjectId,
                         Name = CellConfigName(cell.Label, id, i, launchNonce),
                         EndpointKind = cell.EndpointKind,
+                        TestKind = TestConfigKinds.Benchmark,
                         EndpointRef = cell.EndpointRaw,
                         Workload = cellWorkload ?? group.BaseWorkload,
                         Methodology = group.Methodology,
@@ -464,6 +489,38 @@ public static class ComparisonGroupsEndpoints
             return "Apache httpd has no scriptable Windows binary source — pre-install it manually on an existing VM or use a Linux Apache cell";
         }
         return null;
+    }
+
+    /// <summary>The cloud account a pending cell will provision against, or
+    /// null for non-pending cells, docker cells, and malformed refs (the
+    /// existing parse/kick guards own those).</summary>
+    internal static Guid? PendingCellAccountId(CellSpec cell)
+    {
+        if (cell.EndpointKind != "pending")
+        {
+            return null;
+        }
+        return Provisioning.ProvisioningOrchestrator.ParsePending(cell.EndpointRaw)?.CloudAccountId;
+    }
+
+    /// <summary>Launch gate: the reason a pending cell must fail because its
+    /// cloud account is missing or not <c>active</c> (mirrors the tester-create
+    /// 422, <c>TesterWriteEndpoints.Create</c>); null when the cell may
+    /// proceed. <paramref name="accountsById"/> holds the project's accounts
+    /// referenced by this launch, keyed by account id.</summary>
+    internal static string? CellAccountGateReason(
+        CellSpec cell,
+        IReadOnlyDictionary<Guid, Data.Entities.CloudAccount> accountsById)
+    {
+        if (PendingCellAccountId(cell) is not { } accountId)
+        {
+            return null;
+        }
+        if (!accountsById.TryGetValue(accountId, out var acct))
+        {
+            return $"cloud account {accountId} not found in this project";
+        }
+        return Provisioning.CloudAccountGate.NotActiveReason(acct.Name, acct.Status, acct.ValidationError);
     }
 
     /// <summary>Parse the group's <c>cells</c> JSON into launch specs. Each cell

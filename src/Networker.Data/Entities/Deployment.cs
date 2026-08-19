@@ -39,4 +39,10 @@ public partial class Deployment
     public string ProjectId { get; set; } = null!;
 
     public Guid? CloudAccountId { get; set; }
+
+    /// <summary>How many times the startup recovery pass has automatically
+    /// re-run this deployment after a control-plane restart/crash interrupted
+    /// its in-flight <c>install.sh</c> (V052, issue #764). Caps the automatic
+    /// loop; the UI Retry button remains the manual path past the cap.</summary>
+    public short RecoveryAttempts { get; set; }
 }

@@ -5,25 +5,48 @@ import type {
   ComparisonGroupCreate,
   ComparisonReport,
   LiveAttempt,
+  EndpointKind,
   RunInfra,
+  RunStatus,
   TestConfig,
   TestConfigCreate,
   TestConfigListItem,
+  TestKind,
   TestRun,
   TestSchedule,
 } from '../../api/types';
 
 export interface RunListParams {
-  status?: string;
-  endpoint_kind?: string;
+  status?: RunStatus;
+  endpoint_kind?: EndpointKind;
+  test_kind?: TestKind;
+  q?: string;
   has_artifact?: boolean;
   comparison_group_id?: string;
   limit?: number;
+  since?: string;
   before?: string;
 }
 
 function withSignal(signal?: AbortSignal): RequestInit | undefined {
   return signal ? { signal } : undefined;
+}
+
+/**
+ * What POST /comparison-groups/{id}/launch actually returns
+ * (ComparisonGroupsEndpoints launch handler): per-launch counts + the per-cell
+ * failure/adjustment detail. It was typed as ComparisonGroup, which let the
+ * submit hook toast "Launched N runs" from the REQUESTED count while every
+ * cell had failed (#793 P1-3).
+ */
+export interface ComparisonLaunchResult {
+  launched: number;
+  total: number;
+  failed: number;
+  /** Per-cell launch failures ("<cell label>: <reason>"); null/absent when none. */
+  errors?: string[] | null;
+  /** Per-cell mode adjustments (e.g. h3 dropped on a no-QUIC stack); null/absent when none. */
+  adjustments?: string[] | null;
 }
 
 /** Feature-owned TestConfig/TestRun/TestSchedule transport. */
@@ -59,9 +82,12 @@ export const runsApi = {
     const search = new URLSearchParams();
     if (params.status) search.set('status', params.status);
     if (params.endpoint_kind) search.set('endpoint_kind', params.endpoint_kind);
+    if (params.test_kind) search.set('test_kind', params.test_kind);
+    if (params.q) search.set('q', params.q);
     if (params.has_artifact !== undefined) search.set('has_artifact', String(params.has_artifact));
     if (params.comparison_group_id) search.set('comparison_group_id', params.comparison_group_id);
     if (params.limit) search.set('limit', String(params.limit));
+    if (params.since) search.set('since', params.since);
     if (params.before) search.set('before', params.before);
     const qs = search.toString();
     return request<TestRun[]>(`/v2/projects/${projectId}/test-runs${qs ? `?${qs}` : ''}`, withSignal(signal));
@@ -133,5 +159,5 @@ export const runsApi = {
     request<ComparisonGroup>(`/v2/comparison-groups/${groupId}`, withSignal(signal)),
 
   launchComparisonGroup: (groupId: string) =>
-    request<ComparisonGroup>(`/v2/comparison-groups/${groupId}/launch`, { method: 'POST' }),
+    request<ComparisonLaunchResult>(`/v2/comparison-groups/${groupId}/launch`, { method: 'POST' }),
 };

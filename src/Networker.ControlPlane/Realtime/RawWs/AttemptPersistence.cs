@@ -155,11 +155,13 @@ public static class AttemptPersister
             var shape = await DetectShapeAsync(conn, ct);
             var extraCol = shape.ExtraJsonColumn is { } ec ? $", {ec}" : string.Empty;
             var extraVal = shape.ExtraJsonColumn is not null ? ", @extra" : string.Empty;
+            var urlCol = shape.HasAttemptTargetUrl ? ", TargetUrl" : string.Empty;
+            var urlVal = shape.HasAttemptTargetUrl ? ", @turl" : string.Empty;
             var inserted = await ExecAsync(conn, tx, ct,
                 "INSERT INTO RequestAttempt "
                 + "(AttemptId, RunId, Protocol, SequenceNum, StartedAt, FinishedAt, "
-                + $"Success, ErrorMessage, RetryCount{extraCol}) "
-                + $"VALUES (@id, @run, @proto, @seq, @started, @finished, @ok, @err, @retry{extraVal}) "
+                + $"Success, ErrorMessage, RetryCount{urlCol}{extraCol}) "
+                + $"VALUES (@id, @run, @proto, @seq, @started, @finished, @ok, @err, @retry{urlVal}{extraVal}) "
                 + "ON CONFLICT (AttemptId) DO NOTHING",
                 p =>
                 {
@@ -172,6 +174,10 @@ public static class AttemptPersister
                     p.AddWithValue("ok", a.Success);
                     AddNullable(p, "err", a.ErrorMessage);
                     p.AddWithValue("retry", a.RetryCount);
+                    if (shape.HasAttemptTargetUrl)
+                    {
+                        AddNullable(p, "turl", a.AttemptTargetUrl);
+                    }
                     if (shape.ExtraJsonColumn is not null)
                     {
                         p.Add(new NpgsqlParameter("extra", NpgsqlDbType.Jsonb)
@@ -212,7 +218,10 @@ public static class AttemptPersister
     ///   finding) and stays minimal where they are not.</item>
     /// </list>
     /// </summary>
-    internal sealed record ProbeSchemaShape(string? ExtraJsonColumn, IReadOnlySet<string> TestRunColumns);
+    internal sealed record ProbeSchemaShape(
+        string? ExtraJsonColumn,
+        IReadOnlySet<string> TestRunColumns,
+        bool HasAttemptTargetUrl = false);
 
     private static ProbeSchemaShape? _shape;
 
@@ -237,7 +246,9 @@ public static class AttemptPersister
             : null;
         var wanted = new HashSet<string>(StringComparer.Ordinal) { "startedat", "modes", "clientos", "clientversion" };
         wanted.IntersectWith(testRun);
-        return new ProbeSchemaShape(extra, wanted);
+        // V006 (#782): the per-attempt TargetUrl column — present after the
+        // bootstrap DDL or the tester's own migrate; absent on older DBs.
+        return new ProbeSchemaShape(extra, wanted, attempt.Contains("targeturl"));
     }
 
     private static async Task<ProbeSchemaShape> DetectShapeAsync(NpgsqlConnection conn, CancellationToken ct)

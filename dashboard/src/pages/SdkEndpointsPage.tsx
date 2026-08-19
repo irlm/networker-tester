@@ -11,13 +11,24 @@ import { useProject } from '../hooks/useProject';
 import { useToast } from '../hooks/useToast';
 import { Button } from '../components/common/Button';
 import { ConfirmDialog } from '../components/common/ConfirmDialog';
+import { timeAgo } from '../lib/format';
+import { sdkReachability, type SdkReachability } from '../lib/sdkReachability';
 
 /**
  * LagHound SDK-endpoint management. Register a customer endpoint (target URL +
  * write-only token + optional route), list existing endpoints (token shown
  * masked), and delete with confirmation. Mutations are operator-gated; viewers
- * get a read-only list.
+ * get a read-only list. The Status column surfaces the latest sdkprobe run's
+ * outcome (#765: dead endpoints rendered identically to live ones).
  */
+
+const REACHABILITY_CHIP: Record<SdkReachability, { label: string; className: string }> = {
+  reachable: { label: 'reachable', className: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' },
+  partial: { label: 'partial', className: 'text-yellow-400 border-yellow-500/30 bg-yellow-500/10' },
+  unreachable: { label: 'unreachable', className: 'text-red-400 border-red-500/30 bg-red-500/10' },
+  probing: { label: 'probing', className: 'text-cyan-400 border-cyan-500/30 bg-cyan-500/10' },
+  none: { label: 'never probed', className: 'text-gray-500 border-gray-700 bg-transparent' },
+};
 export function SdkEndpointsPage() {
   const { projectId, isOperator } = useProject();
   const [endpoints, setEndpoints] = useState<SdkEndpoint[]>([]);
@@ -186,6 +197,31 @@ export function SdkEndpointsPage() {
                   ) : (
                     <span className="text-yellow-500">not set</span>
                   ),
+              },
+              {
+                key: 'status',
+                label: 'Status',
+                render: (ep) => {
+                  const verdict = sdkReachability(ep);
+                  const chip = REACHABILITY_CHIP[verdict];
+                  return (
+                    <>
+                      <span
+                        className={`inline-block border rounded px-1.5 py-0.5 text-xs ${chip.className}`}
+                        title={
+                          ep.last_run_status
+                            ? `Last probe run: ${ep.last_run_status} (${ep.last_run_success_count ?? 0} ok / ${ep.last_run_failure_count ?? 0} failed)`
+                            : 'No sdkprobe run has targeted this endpoint yet'
+                        }
+                      >
+                        {chip.label}
+                      </span>
+                      {ep.last_run_at && (
+                        <div className="text-xs text-faint mt-0.5">{timeAgo(ep.last_run_at)}</div>
+                      )}
+                    </>
+                  );
+                },
               },
               {
                 key: 'created',

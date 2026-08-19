@@ -32,6 +32,24 @@ public static class ProvisioningFailureClassifier
         return ContainsSignature(log) || ContainsSignature(errorMessage);
     }
 
+    /// <summary>Prefix of the error message <see cref="DeployRunner"/> writes when
+    /// install.sh died to a signal (exit 143/137) — i.e. the control plane was
+    /// restarted/killed mid-deploy (issue #764). Shared so the startup recovery
+    /// pass and the orchestrator's retry arm match the EXACT message the runner
+    /// produces, never a paraphrase that could drift.</summary>
+    public const string InterruptedErrorPrefix = "Deployment interrupted (install.sh received SIG";
+
+    /// <summary>True when the deployment's failure is the runner's
+    /// interrupted-by-restart marker (<see cref="InterruptedErrorPrefix"/>).
+    /// Interruption is transient by construction — the restart that caused it is
+    /// already over by the time anyone can classify the failure — so callers
+    /// retry instead of failing terminally (issue #764).</summary>
+    public static bool IsInterruptedFailure(string? errorMessage)
+    {
+        return errorMessage is not null
+               && errorMessage.StartsWith(InterruptedErrorPrefix, StringComparison.Ordinal);
+    }
+
     private static bool ContainsSignature(string? text)
     {
         if (string.IsNullOrEmpty(text))

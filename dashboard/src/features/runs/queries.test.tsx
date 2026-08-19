@@ -89,7 +89,7 @@ describe('run query architecture', () => {
   it('forwards cancellation and stores the requested polling interval', async () => {
     const listSpy = vi.spyOn(runsApi, 'list').mockResolvedValue([]);
     const client = createClient();
-    const params = { status: 'running' };
+    const params: RunListParams = { status: 'running' };
     const { result } = renderHook(
       () => useTestRunsQuery('project-1', params, { intervalMs: 2_500 }),
       { wrapper: wrapperFor(client) },
@@ -103,7 +103,7 @@ describe('run query architecture', () => {
   it('can explicitly disable polling', async () => {
     vi.spyOn(runsApi, 'list').mockResolvedValue([]);
     const client = createClient();
-    const params = { status: 'completed' };
+    const params: RunListParams = { status: 'completed' };
     const { result } = renderHook(
       () => useTestRunsQuery('project-1', params, { polling: false }),
       { wrapper: wrapperFor(client) },
@@ -116,7 +116,7 @@ describe('run query architecture', () => {
   it('polls active run lists faster without page-owned timers', async () => {
     vi.spyOn(runsApi, 'list').mockResolvedValue([{ ...completedRun, status: 'running' }]);
     const client = createClient();
-    const params = { endpoint_kind: 'network', limit: 200 };
+    const params: RunListParams = { endpoint_kind: 'network', limit: 200 };
     const { result } = renderHook(
       () => useTestRunsQuery('project-1', params, { intervalMs: 15_000, activeIntervalMs: 5_000 }),
       { wrapper: wrapperFor(client) },
@@ -179,7 +179,8 @@ describe('run query architecture', () => {
     });
     const client = createClient();
     const { result, rerender } = renderHook(
-      ({ status }: { status: string }) => useTestRunsQuery('project-1', { status }, { polling: false }),
+      ({ status }: { status: NonNullable<RunListParams['status']> }) =>
+        useTestRunsQuery('project-1', { status }, { polling: false }),
       { initialProps: { status: 'completed' }, wrapper: wrapperFor(client) },
     );
 

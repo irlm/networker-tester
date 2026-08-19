@@ -31,7 +31,8 @@ import {
   StatsRow,
   TimingRow,
 } from '../features/runs/components/RunDetailSections';
-import { groupByProtocol } from '../features/runs/grouping';
+import { RunErrorBanner } from '../features/runs/components/RunErrorBanner';
+import { groupByProtocol, groupByTargetUrl } from '../features/runs/grouping';
 import {
   computeProtocolStats,
   computeTimingBreakdown,
@@ -226,6 +227,18 @@ export function RunDetailPage() {
             {run?.config_name && <>Config: <span className="text-gray-300">{run.config_name}</span> · </>}
             {run?.modes && <>Modes: <span className="text-gray-300">{run.modes.join(', ')}</span> · </>}
             {probeCount} attempts{attemptsMissing ? ' (summary only)' : ''}
+            {/* Comparison-group cell → cross-cell pivots (#794). */}
+            {run?.comparison_group_id && (
+              <>
+                {' · '}
+                <Link
+                  to={`/projects/${projectId}/benchmarks/compare/${run.comparison_group_id}`}
+                  className="text-cyan-400 hover:text-cyan-300"
+                >
+                  View group comparison &rarr;
+                </Link>
+              </>
+            )}
           </p>
           {/* Run-envelope context (V046 pass-through) — data-gated: old runs
               have no envelope and render nothing here. */}
@@ -264,6 +277,12 @@ export function RunDetailPage() {
           )}
         </div>
       </div>
+
+      {/* Why the run failed — rendered whenever the run carries an error,
+          not only while queued/running (#791: failed runs hid error_message). */}
+      {run?.error_message && (
+        <RunErrorBanner status={run.status} message={run.error_message} />
+      )}
 
       {showShareDialog && runId && (
         <ShareDialog
@@ -463,17 +482,31 @@ export function RunDetailPage() {
           </Button>
         </div>
       )}
-      {Object.entries(groupByProtocol(attempts)).map(([protocol, group]) => {
-        const isExpanded = expandedProtocols.has(protocol);
+      {Object.entries(groupByTargetUrl(attempts))
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([targetUrl, urlAttempts], _idx, urlEntries) => {
+        // Single-URL runs (and pre-#782 attempts with no target_url) keep the
+        // flat protocol layout; a URL-set run gets one labelled section per URL.
+        const multiUrl = urlEntries.filter(([u]) => u !== '').length > 1;
+        return (
+        <div key={targetUrl || 'all'}>
+        {multiUrl && (
+          <h3 className="mt-4 mb-1 px-1 text-xs font-medium tracking-wider text-cyan-400 font-mono">
+            {targetUrl || 'unattributed'}
+          </h3>
+        )}
+      {Object.entries(groupByProtocol(urlAttempts)).map(([protocol, group]) => {
+        const sectionKey = multiUrl ? `${targetUrl}|${protocol}` : protocol;
+        const isExpanded = expandedProtocols.has(sectionKey);
         const protoSuccess = group.filter((a) => a.success).length;
         const protoFail = group.length - protoSuccess;
         const values = group.filter((a) => a.success).map(primaryMetricValue).filter((v): v is number => v != null);
         const stats = computeStats(values);
 
         return (
-          <div key={protocol} className="table-container mb-2">
+          <div key={sectionKey} className="table-container mb-2">
             <button
-              onClick={() => toggleProtocol(protocol)}
+              onClick={() => toggleProtocol(sectionKey)}
               className="w-full px-4 py-2.5 flex items-center justify-between text-left hover:bg-gray-800/10 transition-colors"
               aria-expanded={isExpanded}
             >
@@ -501,6 +534,9 @@ export function RunDetailPage() {
               </div>
             )}
           </div>
+        );
+      })}
+        </div>
         );
       })}
 

@@ -411,6 +411,7 @@ export function NetworkTestPage() {
       const name = `${selectedDeployment.name}-${[...selectedModes].slice(0, 3).join('-')}-${Date.now().toString(36).slice(-4)}`;
       const config: TestConfigCreate = {
         name,
+        test_kind: 'network',
         endpoint: { kind: 'proxy', proxy_endpoint_id: selectedDeployment.deployment_id },
         workload,
       };

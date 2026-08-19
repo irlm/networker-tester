@@ -206,6 +206,7 @@ fn html_contains_error_section_for_failed_attempt() {
         client_geo: None,
         target_geo: None,
         attempts: vec![RequestAttempt {
+            target_url: None,
             phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
@@ -287,6 +288,7 @@ fn html_contains_throughput_section_for_download_attempt() {
         client_geo: None,
         target_geo: None,
         attempts: vec![RequestAttempt {
+            target_url: None,
             phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
@@ -389,6 +391,7 @@ fn html_contains_tls_section_for_tls_attempt() {
         client_geo: None,
         target_geo: None,
         attempts: vec![RequestAttempt {
+            target_url: None,
             phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
@@ -494,6 +497,7 @@ fn html_contains_page_load_section() {
         client_geo: None,
         target_geo: None,
         attempts: vec![RequestAttempt {
+            target_url: None,
             phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,
@@ -597,6 +601,7 @@ fn append_proto_row_averages_ttfb_correctly() {
 #[test]
 fn append_proto_row_no_http_shows_dashes() {
     let a = RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id: Uuid::new_v4(),
         run_id: Uuid::new_v4(),
@@ -679,6 +684,7 @@ fn append_attempt_row_failed_shows_err_class() {
 #[test]
 fn append_attempt_row_udp_echo_shows_rtt() {
     let a = RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id: Uuid::new_v4(),
         run_id: Uuid::new_v4(),
@@ -734,6 +740,7 @@ fn append_attempt_row_udp_echo_shows_rtt() {
 #[test]
 fn append_attempt_row_udp_throughput_shows_transfer_ms() {
     let a = RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id: Uuid::new_v4(),
         run_id: Uuid::new_v4(),
@@ -785,6 +792,7 @@ fn append_attempt_row_udp_throughput_shows_transfer_ms() {
 #[test]
 fn append_attempt_row_no_results_shows_dashes() {
     let a = RequestAttempt {
+        target_url: None,
         phase: None,
         attempt_id: Uuid::new_v4(),
         run_id: Uuid::new_v4(),
@@ -913,6 +921,7 @@ fn html_contains_browser_section() {
         client_geo: None,
         target_geo: None,
         attempts: vec![RequestAttempt {
+            target_url: None,
             phase: None,
             attempt_id: Uuid::new_v4(),
             run_id,

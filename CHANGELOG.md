@@ -11,6 +11,182 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.240] - 2026-08-19
+
+### Added
+
+- **Comparison groups get a real results page** (#794):
+  `/projects/:pid/benchmarks/compare/:groupId`, linked from the Runs group
+  chip ("Compare") and from member run detail pages. Two pivots: **by
+  server** — every language ranked side-by-side per environment
+  (cloud/region/OS/proxy) with box-whisker latency charts, fastest
+  highlighted; **by language** — each language across its environments,
+  labeled by the axes that differ, with explicit p50 deltas vs the fastest
+  cell and a "multiple variables differ" fairness flag when cells vary in
+  more than one axis. A per-case matrix (case × language, honoring
+  higher-is-better) renders from benchmark artifacts — populated for runs
+  executed on v0.28.239+; older artifacts show attempt-derived stats with a
+  note. Every cell links to its individual run.
+
+## [0.28.239] - 2026-08-19
+
+### Fixed
+
+- **Benchmark artifacts now carry real per-case results** (#796). The agent's
+  artifact builder was a placeholder that shipped `cases: []` and bare
+  success/failure counts for every agent-executed benchmark run — the
+  per-case apibench data (sort/hash/aggregate/search/compress) was never
+  produced, and **benchmark regression detection was silently dead** for
+  agent runs (it parsed the placeholder to an empty list and compared
+  nothing). A real per-case accumulator now synthesizes the tester's
+  BenchmarkSummary shape (percentile ladder, counts, rps, rank-based median
+  CI, honest data_quality) from the streamed attempts; the run detail page
+  gains a Case column. No schema change — the columns were always free-form
+  JSON; regression detection starts working automatically. Existing empty
+  prod artifacts are not backfilled.
+
+## [0.28.238] - 2026-08-19
+
+### Fixed
+
+- **Launching against a broken cloud account is now impossible to do blindly**
+  (#791, #793 P1-1/P1-2). Full Stack autoprovision picks the first HEALTHY
+  account (never one in error state; when none is healthy it stays on the
+  Testbeds step with an inline hint instead of jumping to Review), and the
+  provider is mapped correctly so region/VM-size defaults resolve —
+  previously the wizard submitted the hardcoded Azure SKU (and possibly an
+  empty region) to AWS/GCP accounts. Server-side, both the comparison-group
+  launch and the provisioning orchestrator fail cells/runs on non-active
+  accounts with the account's actual validation error instead of burning a
+  doomed launch. The Review step shows each testbed's account name + status
+  (red when broken) and blocks Launch with the reason.
+- **Failures are no longer invisible** (#791, #793 P1-3/P1-4). Run detail
+  pages show `error_message` whenever present (red for failed/cancelled) —
+  previously the reason rendered only while a run was queued/running.
+  Comparison-group launches report the REAL outcome: an error toast listing
+  per-cell errors when nothing launched, a partial notice when some cells
+  failed, and the returned launched count on success.
+
+## [0.28.237] - 2026-08-19
+
+### Fixed
+
+- **Two testbeds no longer change in lockstep in the benchmark wizards.**
+  Testbed rows are patched by key, but keys came from two uncoordinated
+  counters (the Application wizard's template counter and a matrix-local
+  counter re-initialized to the list length on every step remount) — after
+  a template re-apply or a remove + step navigation, two rows could share a
+  key, and toggling one row's OS (or any field) mutated both, making a
+  Linux + Windows comparison impossible to configure (user-caught on the
+  api-compute template). Keys now come from one allocator
+  (`nextTestbedKey` = max existing + 1), the per-component counters are
+  gone, and a regression test pins the remove-then-add reuse case.
+
+## [0.28.236] - 2026-08-19
+
+### Added
+
+- **Run history now reflects why each test was run.** URL probes, SDK probes,
+  network tests, and benchmarks have a persisted purpose and dedicated Runs
+  tabs, with migration backfill for existing data.
+- **Runs can be narrowed without mixing unrelated concepts.** Search, time,
+  status, target, mode family, artifact, and queued-run filters are separate,
+  URL-backed controls; the API supports purpose, name, and time filtering and
+  returns purpose and modes with each row.
+
+---
+
+## [0.28.235] - 2026-08-19
+
+### Fixed
+
+- **The deployed-target "update" button no longer succeeds-but-lies.** The
+  update re-ran install.sh, which replaced the endpoint binary on disk and
+  then `systemctl start`-ed an already-running unit — a no-op, so the OLD
+  process kept serving; the health check got its 200 from that old process
+  and every layer reported success. Now: the three Linux endpoint-service
+  paths `systemctl restart` (GCP/LAN had the same defect; Windows was
+  already correct); binary replacement uses a same-directory rename;
+  `_remote_verify_health` FAILS the deploy when the running /health version
+  differs from the installed one (with the exact ssh remediation); a failed
+  update no longer wipes the target's endpoint hosts/IPs from the row; and
+  the UI surfaces rejected updates, scans the event buffer for the
+  completion event (a heartbeat could swallow it forever), and re-probes the
+  live version after "completed" instead of trusting exit 0.
+
+## [0.28.234] - 2026-08-19
+
+### Fixed
+
+- **E2E-pass minor findings cluster (#765).** Orphan agent rows are reaped:
+  the ReaperService purges retired, unlinked, disconnected agent rows not
+  referenced by any deployment (the ~35 accumulated prod rows drain on their
+  own). The URL-probe watchlist shows only the page's own probes — matrix
+  cells, canary configs and SDK endpoints no longer pollute it (and its
+  per-config detail fetches), fixing the 76-requests-on-load behaviour. The
+  six legacy redirects are pinned by a regression test that replays every
+  path-relative <Navigate> through react-router's own resolver. SDK
+  endpoints now show a reachability chip (reachable / partial / unreachable /
+  probing / never probed + age) derived from their latest sdkprobe run — no
+  new probing infrastructure. URL input no longer renders // as a ligature.
+
+## [0.28.233] - 2026-08-19
+
+### Fixed
+
+- **A control-plane restart no longer strands in-flight endpoint deployments**
+  (#764). install.sh --deploy runs as a child of the control-plane process, so
+  every release restart SIGTERMed mid-install deployments (exit 143) and
+  nothing re-drove them. New `DeploymentRecoveryService` (one-shot at startup,
+  before the orchestrator's first tick) reclaims crash-wedged pending/running
+  rows and recently-interrupted failures (30-min window), flips them back to
+  pending and re-runs the stored config — capped at 3 recovery attempts
+  (migration V052: `deployment.recovery_attempts`). Interrupted-classed
+  failures on the run path also re-queue through the V049 retry machinery
+  instead of failing terminally. Deployments now stamp `started_at` when they
+  start running and record `created_by` on wizard creates.
+
+## [0.28.232] - 2026-08-19
+
+### Fixed
+
+- **install.sh's dashboard TLS vhost now serves HTTP/2 on both paths**
+  (#762, repo half). The Let's Encrypt path appends the `http2` parameter to
+  certbot's managed `listen 443 ssl;` lines after certbot succeeds
+  (idempotent sed + `nginx -t` gate; parameter form for nginx 1.24 compat),
+  and the self-signed fallback vhost declares `listen 443 ssl http2;`
+  directly. Without h2 the SPA's held SSE streams pin the browser's
+  6-connection cap and API calls stall ~5.8 s. New bats test locks both
+  listeners in. (scripts/deploy-dashboard.sh was already fixed by #770;
+  the live prod VM still needs the one-time vhost edit.)
+
+## [0.28.231] - 2026-08-18
+
+### Added
+
+- **URL sets — probe several URLs together in ONE run (#782 P1).** The URL
+  Probe input now accepts multiple URLs (space/comma/newline separated); they
+  are probed by a single tester invocation (repeated `--target`), so every
+  cycle measures all URLs under the same network conditions — the fairness
+  basis for the upcoming comparison report. One run row per set (not N).
+  Every attempt is now stamped with the `target_url` it probed (tester
+  `dispatch_once` choke point; streamed frames and the `extra_json` artifact
+  carry it automatically, no schema change), the attempts API surfaces it
+  (`target_url`, recovered from the raw-attempt JSON column), and the run
+  detail page groups results per URL when a run probed more than one.
+  Agent: `endpoint.hosts[]` on network endpoints (back-compat: `host` stays
+  the first URL; classic single-URL configs are byte-identical on the wire).
+  Persistence is a real column — tester migration **V006**
+  (`RequestAttempt.TargetUrl`, mirrored in `shared/tester-schema.postgres.sql`
+  so control-plane bootstrap creates it too): the raw-JSON ride-along worked
+  only on prod-shaped DBs (lab e2e caught it), and legacy install.sh-seeded
+  schemas keep working via a per-column insert fallback ladder.
+
+### Fixed
+
+- The long-dead single-run HTML snapshot pin (stale since ~v0.28.86 — the
+  suite is not part of CI's test invocation) is re-pinned to the current
+  deterministic renderer output.
 ## [0.28.230] - 2026-08-18
 
 - **Dashboard architecture is now feature-oriented and reusable.** Shared API transport, TanStack Query hooks, page shells, form controls, dialogs, buttons, async states, and run-detail sections replace duplicated page-level implementations; heavy charts are loaded only when needed.

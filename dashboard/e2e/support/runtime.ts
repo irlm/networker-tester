@@ -88,6 +88,28 @@ export async function stubRuntime(page: Page) {
     }
     if (path.endsWith('/api/auth/sso/providers')) return json({ providers: [] });
     if (path.endsWith('/api/projects')) return json({ projects: [project()] });
+    if (path.endsWith(`/api/v2/projects/${PID}/test-runs`) && url.searchParams.get('limit') === '200') {
+      const common = {
+        project_id: PID,
+        status: 'completed',
+        started_at: '2026-08-18T12:00:00Z',
+        finished_at: '2026-08-18T12:00:05Z',
+        success_count: 2,
+        failure_count: 0,
+        error_message: null,
+        artifact_id: null,
+        tester_id: null,
+        worker_id: null,
+        last_heartbeat: null,
+        created_at: '2026-08-18T12:00:00Z',
+      };
+      return json([
+        { ...common, id: 'run-list-network', test_config_id: 'config-network', config_name: 'Checkout connectivity', endpoint_kind: 'proxy', test_kind: 'network', modes: ['tcp'] },
+        { ...common, id: 'run-list-url', test_config_id: 'config-url', config_name: 'Diag: api.example.com (Quick)', endpoint_kind: 'network', test_kind: 'url_probe', modes: ['http2'] },
+        { ...common, id: 'run-list-sdk', test_config_id: 'config-sdk', config_name: 'Payments SDK', endpoint_kind: 'network', test_kind: 'sdk_probe', modes: ['sdkprobe'] },
+        { ...common, id: 'run-list-benchmark', test_config_id: 'config-benchmark', config_name: 'Runtime throughput', endpoint_kind: 'runtime', test_kind: 'benchmark', modes: ['apibench', 'download'], artifact_id: 'artifact-1' },
+      ]);
+    }
     if (path.endsWith(`/api/projects/${PID}`)) return json(project());
     if (path.endsWith('/api/me/pending-projects')) return json({ pending: [] });
     if (path.includes('/vm-history')) return json({ events: [], has_more: false });

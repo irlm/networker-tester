@@ -1,9 +1,17 @@
 // ── REST v2 types (spec §2) ──────────────────────────────────────────────
 
 export type EndpointKind = 'network' | 'proxy' | 'runtime' | 'pending';
+export type TestKind = 'network' | 'url_probe' | 'sdk_probe' | 'benchmark';
 
 export type EndpointRef =
-  | { kind: 'network'; host: string; port?: number }
+  | {
+      kind: 'network';
+      host: string;
+      port?: number;
+      /** Multi-URL set (#782): all URLs probed together in ONE run (repeated
+       *  tester --target). `host` stays the first element for back-compat. */
+      hosts?: string[];
+    }
   | { kind: 'proxy'; proxy_endpoint_id: string }
   | { kind: 'runtime'; runtime_id: string; language: string }
   | {
@@ -66,6 +74,7 @@ export interface TestConfig {
   project_id: string;
   name: string;
   description: string | null;
+  test_kind?: TestKind;
   endpoint: EndpointRef;
   workload: Workload;
   methodology: Methodology | null;
@@ -80,6 +89,7 @@ export interface TestConfigListItem {
   id: string;
   project_id: string;
   name: string;
+  test_kind?: TestKind;
   endpoint_kind: EndpointKind;
   modes: string[];
   has_methodology: boolean;
@@ -90,6 +100,7 @@ export interface TestConfigListItem {
 export interface TestConfigCreate {
   name: string;
   description?: string;
+  test_kind?: TestKind;
   endpoint: EndpointRef;
   workload: Workload;
   methodology?: Methodology;
@@ -116,7 +127,10 @@ export interface TestRun {
   /** Denormalized from test_config for list display */
   config_name?: string;
   endpoint_kind?: EndpointKind;
+  test_kind?: TestKind;
   modes?: string[];
+  /** Set when this run was launched as a comparison-group cell (#794). */
+  comparison_group_id?: string | null;
   /** V046 run-envelope pass-through (detail route only; absent on old runs). */
   envelope?: RunEnvelope;
 }
@@ -563,6 +577,8 @@ export interface Attempt {
   success: boolean;
   error_message: string | null;
   retry_count: number;
+  /** URL this attempt probed — set on multi-URL set runs (#782, tester ≥0.28.231). */
+  target_url?: string | null;
   // Per-phase detail rows (GET /test-runs/{id}/attempts). Omitted entirely for
   // runs whose tester didn't persist phase rows — same shapes as LiveAttempt
   // so both feed the run-detail attempt view through one code path.
@@ -787,6 +803,8 @@ export interface LiveAttempt {
   protocol: string;
   sequence_num: number;
   started_at: string;
+  /** URL this attempt probed — set on multi-URL set runs (#782, tester ≥0.28.231). */
+  target_url?: string | null;
   finished_at: string | null;
   success: boolean;
   retry_count: number;
@@ -1685,6 +1703,12 @@ export interface SdkEndpoint {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  /** Latest sdkprobe run's timestamp — the reachability signal (#765). All
+   * four last_run_* fields are null when the endpoint was never probed. */
+  last_run_at: string | null;
+  last_run_status: string | null;
+  last_run_success_count: number | null;
+  last_run_failure_count: number | null;
 }
 
 /** Create body for an SDK endpoint. `token` is required and write-only. */

@@ -55,9 +55,9 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
     // ── Migration chain ─────────────────────────────────────────────────
 
     [Fact]
-    public void Fresh_database_applies_the_full_chain_v002_to_v051()
+    public void Fresh_database_applies_the_full_chain_v002_to_v053()
     {
-        Assert.Equal(Enumerable.Range(2, 50), _fx.FreshRun.Applied);
+        Assert.Equal(Enumerable.Range(2, 52), _fx.FreshRun.Applied);
         Assert.Empty(_fx.FreshRun.AlreadyApplied);
     }
 
@@ -70,7 +70,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
 
         Assert.True(second.WasUpToDate);
         Assert.Empty(second.Applied);
-        Assert.Equal(Enumerable.Range(2, 50), second.AlreadyApplied);
+        Assert.Equal(Enumerable.Range(2, 52), second.AlreadyApplied);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
             }
         }
 
-        Assert.Equal(Enumerable.Range(2, 50), recorded);
+        Assert.Equal(Enumerable.Range(2, 52), recorded);
     }
 
     // ── EF-model equivalence ────────────────────────────────────────────
@@ -603,6 +603,29 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
     }
 
     [Fact]
+    public async Task V052_added_the_recovery_attempts_counter()
+    {
+        await using var conn = new NpgsqlConnection(_fx.ConnectionString);
+        await conn.OpenAsync();
+
+        await using var cols = new NpgsqlCommand(
+            """
+            SELECT data_type, is_nullable, column_default
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'deployment'
+              AND column_name = 'recovery_attempts'
+            """, conn);
+        await using var reader = await cols.ExecuteReaderAsync();
+        // Restart-recovery counter (issue #764): NOT NULL with default 0 so
+        // pre-V052 rows read as never auto-recovered.
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal("smallint", reader.GetString(0));
+        Assert.Equal("NO", reader.GetString(1));
+        Assert.Contains("0", reader.GetString(2));
+        Assert.False(await reader.ReadAsync());
+    }
+
+    [Fact]
     public async Task V048_strips_endpoint_only_modes_from_url_configs_only()
     {
         await using var conn = new NpgsqlConnection(_fx.ConnectionString);
@@ -661,6 +684,76 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
         Assert.Equal("""["dns", "http2", "browser1"]""", modesById[urlId]);
         // Proxy config: untouched — endpoint targets legitimately run these.
         Assert.Equal("""["udp", "pageload", "download"]""", modesById[proxyId]);
+    }
+
+    [Fact]
+    public async Task V053_backfills_each_test_config_purpose()
+    {
+        await using var conn = new NpgsqlConnection(_fx.ConnectionString);
+        await conn.OpenAsync();
+        var userId = Guid.NewGuid();
+        var networkId = Guid.NewGuid();
+        var urlId = Guid.NewGuid();
+        var urlSetId = Guid.NewGuid();
+        var legacyProbeId = Guid.NewGuid();
+        var matrixCellId = Guid.NewGuid();
+        var sdkId = Guid.NewGuid();
+        var benchmarkId = Guid.NewGuid();
+
+        await using (var seed = new NpgsqlCommand(
+            """
+            INSERT INTO project (project_id, name, slug, settings, created_at, updated_at)
+            VALUES ('projv053000001', 'v053', 'v053', '{}', now(), now())
+            ON CONFLICT DO NOTHING;
+            INSERT INTO dash_user (user_id, email, role, created_at, must_change_password, status, auth_provider)
+            VALUES (@user, 'v053@test.local', 'admin', now(), false, 'active', 'local')
+            ON CONFLICT DO NOTHING;
+            INSERT INTO test_config
+              (id, project_id, name, endpoint_kind, endpoint_ref, workload, methodology, created_by, created_at, updated_at)
+            VALUES
+              (@network, 'projv053000001', 'Connectivity', 'network', '{}', '{"modes":["tcp"]}', NULL, @user, now(), now()),
+              (@url, 'projv053000001', 'Diag: api.example.com (Quick)', 'network', '{}', '{"modes":["http2"]}', NULL, @user, now(), now()),
+              (@urlSet, 'projv053000001', 'Diag set: api.example.com +2 (Quick)', 'network', '{}', '{"modes":["http2"]}', NULL, @user, now(), now()),
+              (@legacyProbe, 'projv053000001', 'Probe: old.example.com (Full)', 'network', '{}', '{"modes":["http1"]}', NULL, @user, now(), now()),
+              (@matrixCell, 'projv053000001', 'Azure/eastus nginx · cg-a1b2c3d4·0·xy', 'network', '{}', '{"modes":["http2"]}', NULL, @user, now(), now()),
+              (@sdk, 'projv053000001', 'SDK endpoint', 'network', '{}', '{"modes":["sdkprobe"]}', NULL, @user, now(), now()),
+              (@benchmark, 'projv053000001', 'Benchmark', 'runtime', '{}', '{"modes":["apibench"]}', '{}', @user, now(), now());
+            """, conn))
+        {
+            seed.Parameters.AddWithValue("user", userId);
+            seed.Parameters.AddWithValue("network", networkId);
+            seed.Parameters.AddWithValue("url", urlId);
+            seed.Parameters.AddWithValue("urlSet", urlSetId);
+            seed.Parameters.AddWithValue("legacyProbe", legacyProbeId);
+            seed.Parameters.AddWithValue("matrixCell", matrixCellId);
+            seed.Parameters.AddWithValue("sdk", sdkId);
+            seed.Parameters.AddWithValue("benchmark", benchmarkId);
+            await seed.ExecuteNonQueryAsync();
+        }
+
+        await using (var replay = new NpgsqlCommand(SchemaMigrator.GetScript(53), conn))
+        {
+            await replay.ExecuteNonQueryAsync();
+        }
+
+        var kinds = new Dictionary<Guid, string>();
+        await using (var command = new NpgsqlCommand(
+            "SELECT id, test_kind FROM test_config WHERE project_id = 'projv053000001'", conn))
+        await using (var reader = await command.ExecuteReaderAsync())
+        {
+            while (await reader.ReadAsync()) kinds[reader.GetGuid(0)] = reader.GetString(1);
+        }
+
+        Assert.Equal(TestConfigKinds.Network, kinds[networkId]);
+        Assert.Equal(TestConfigKinds.UrlProbe, kinds[urlId]);
+        // All URL-probe naming generations land under url_probe (a miss here
+        // is PERMANENT — find-or-create reuses by name, never re-classifies).
+        Assert.Equal(TestConfigKinds.UrlProbe, kinds[urlSetId]);
+        Assert.Equal(TestConfigKinds.UrlProbe, kinds[legacyProbeId]);
+        // Methodology-less matrix cells are still benchmark cells.
+        Assert.Equal(TestConfigKinds.Benchmark, kinds[matrixCellId]);
+        Assert.Equal(TestConfigKinds.SdkProbe, kinds[sdkId]);
+        Assert.Equal(TestConfigKinds.Benchmark, kinds[benchmarkId]);
     }
 }
 
@@ -726,6 +819,8 @@ public sealed class MigrationScriptFreezeTests
         ["V049_provision_retry_columns.sql"] = "d06c0e1967f6228523284609dc6bdd54b10d3044762bc6cf2c6eabdcadc93c9d",
         ["V050_deployment_endpoint_hosts.sql"] = "8d76716d824e8e00e23741e866cc874324a5fa6fc580ebb71bbb315df0f572dc",
         ["V051_canary_dispatch.sql"] = "9c1a5053fe3ca9218b959793fc8275c843d32a41a65e62200adf1f360f03cfad",
+        ["V052_deployment_recovery.sql"] = "a679dd0d9d4a1d108cadbdbbf58f93bbb5d1f05c7286526dcc72e07191343724",
+        ["V053_test_config_kind.sql"] = "efa47c3dd51365625528f74f91c05082dbf5881adac784bf2e3feebeca143267",
     };
 
     [Fact]
@@ -745,7 +840,7 @@ public sealed class MigrationScriptFreezeTests
             Assert.Contains(version, scripted);
         }
 
-        Assert.Equal(49, scripted.Count);
+        Assert.Equal(51, scripted.Count);
     }
 
     [Fact]

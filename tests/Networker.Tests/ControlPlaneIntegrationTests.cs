@@ -371,6 +371,54 @@ public sealed class ControlPlaneIntegrationTests : IClassFixture<ControlPlaneFix
     }
 
     [Fact]
+    public async Task Run_list_filters_by_purpose_name_and_time_and_returns_modes()
+    {
+        var marker = $"api-contract-{Guid.NewGuid():N}";
+        var configId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+        await using (var ctx = _fixture.NewDbContext())
+        {
+            ctx.TestConfigs.Add(new TestConfig
+            {
+                Id = configId,
+                ProjectId = ControlPlaneFixture.SeededProjectId,
+                Name = marker,
+                EndpointKind = "network",
+                TestKind = TestConfigKinds.UrlProbe,
+                EndpointRef = """{"kind":"network","host":"https://api.example.com"}""",
+                Workload = """{"modes":["http2"],"runs":1}""",
+                MaxDurationSecs = 60,
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+            ctx.TestRuns.Add(new TestRun
+            {
+                Id = runId,
+                TestConfigId = configId,
+                ProjectId = ControlPlaneFixture.SeededProjectId,
+                Status = "completed",
+                SuccessCount = 1,
+                CreatedAt = now,
+            });
+            await ctx.SaveChangesAsync();
+        }
+
+        var since = Uri.EscapeDataString(now.AddMinutes(-1).ToString("O"));
+        var client = _fixture.CreateAuthenticatedClient();
+        var response = await client.GetAsync(
+            $"/api/v2/projects/{ControlPlaneFixture.SeededProjectId}/test-runs"
+            + $"?test_kind=url_probe&q={marker}&since={since}");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var row = Assert.Single(json.RootElement.EnumerateArray());
+        Assert.Equal(runId, row.GetProperty("id").GetGuid());
+        Assert.Equal("url_probe", row.GetProperty("test_kind").GetString());
+        Assert.Equal("http2", Assert.Single(row.GetProperty("modes").EnumerateArray()).GetString());
+    }
+
+    [Fact]
     public async Task Cloud_account_create_encrypts_credentials_and_round_trips()
     {
         var client = _fixture.CreateAuthenticatedClient();

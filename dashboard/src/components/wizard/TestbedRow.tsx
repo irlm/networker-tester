@@ -11,6 +11,7 @@ import {
   PROXY_LABELS,
   TESTER_OS_OPTIONS,
   DOCKER_CLOUD_LABEL,
+  providerToCloud,
 } from './testbed-constants';
 import { DOCKER_LABEL } from '../../hooks/useDockerProvider';
 
@@ -29,17 +30,6 @@ export interface TestbedRowProps {
   hideTesterOs?: boolean;
   /** Offer the feature-flagged "Docker (local)" provider (no cloud account). */
   dockerAvailable?: boolean;
-}
-
-// ── Helpers ────────────────────────────────────────────────────────────
-
-function providerToCloud(provider: string): string {
-  const p = provider.toLowerCase();
-  if (p === 'azure') return 'Azure';
-  if (p === 'aws') return 'AWS';
-  if (p === 'gcp') return 'GCP';
-  if (p === 'docker') return DOCKER_CLOUD_LABEL;
-  return 'Azure';
 }
 
 // ── Component ──────────────────────────────────────────────────────────
