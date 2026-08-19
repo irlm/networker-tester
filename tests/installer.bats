@@ -697,6 +697,38 @@ JSON
     echo "$output" | grep -q "'ruby' is not deployable on a windows endpoint" || { echo "expected ruby-on-windows rejection, got: $output" >&2; exit 1; }
 }
 
+@test "_deploy_validate_config: accepts ALL .NET AOT variants on a linux endpoint (#801 pattern A)" {
+    # net9-aot/net10-aot were missing from linux_langs (only net8-aot was
+    # listed) — every net9-aot@linux matrix cell died with a bare
+    # "install.sh exited with code 1" (field group 47a7b726, issue #801).
+    local cfg="$TEST_TMPDIR/aot-linux.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "azure", "http_stacks": ["nginx"], "languages": ["csharp-net8-aot", "csharp-net9-aot", "csharp-net10-aot"], "azure": { "region": "eastus", "os": "linux" } }]
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -eq 0 ] || { echo "AOT variants must validate clean on linux (got $DEPLOY_VALIDATE_ERRORS errors)" >&2; exit 1; }
+}
+
+@test "_deploy_validate_config: still rejects .NET AOT variants on a windows endpoint (#801 pattern A)" {
+    # Native AOT publish needs the VS C++ toolchain on Windows — not in the
+    # install.ps1 payload. The wizard + launch gate exclude these cells; the
+    # validator is the last line of defense.
+    local cfg="$TEST_TMPDIR/aot-win.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "azure", "http_stacks": ["iis"], "languages": ["csharp-net9-aot"], "azure": { "region": "eastus", "os": "windows" } }]
+}
+JSON
+    run _deploy_validate_config "$cfg"
+    echo "$output" | grep -q "'csharp-net9-aot' is not deployable on a windows endpoint" || { echo "expected net9-aot-on-windows rejection, got: $output" >&2; exit 1; }
+}
+
 @test "_deploy_validate_config: rejects csharp-net48 on a LINUX endpoint (Windows-only language)" {
     # .NET Framework 4.8 requires Windows; since v0.28.204 it IS deployable —
     # on Windows endpoints. On Linux it must still fail up front.

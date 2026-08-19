@@ -292,7 +292,8 @@ Config-driven deploy:
 Benchmark server (used by orchestrator):
   --benchmark-server LANG  Deploy a benchmark reference API server for LANG on port 8443.
                            Supported: rust, nginx, go, nodejs, python, java, cpp, ruby, php,
-                           csharp-net8, csharp-net8-aot, csharp-net9, csharp-net10, csharp-net48.
+                           csharp-net8, csharp-net8-aot, csharp-net9, csharp-net9-aot,
+                           csharp-net10, csharp-net10-aot, csharp-net48 (Windows).
                            Non-interactive. Installs runtime, clones reference API, starts server.
   --benchmark-port N       Override the benchmark server port (implies app mode, no TLS).
                            Used by the deploy path to run a language server on 8085
@@ -331,7 +332,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.242"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.248"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -6354,10 +6355,37 @@ Invoke-WebRequest -Uri '${installer_url}' -OutFile \$installPath -UseBasicParsin
 PS_SETUP
 )"
 
-    az vm run-command invoke \
+    # Capture output instead of discarding it (>/dev/null hid EVERY in-guest
+    # failure: matrix Caddy cells reported "Provisioned endpoint" while
+    # -Setup caddy had thrown, and the cell then timed out the readiness gate
+    # on :8454 six minutes later with no cause — issue #801 pattern B).
+    local output
+    output="$(az vm run-command invoke \
         --resource-group "$rg" --name "$vm" \
         --command-id RunPowerShellScript \
-        --scripts "$ps_script" >/dev/null 2>&1 || true
+        --scripts "$ps_script" 2>&1)" || true
+
+    # Azure allows ONE run-command per VM at a time; a straggler from the
+    # preceding step (IIS install, or the guest agent re-provisioning after
+    # the IIS HTTP/3 reboot) surfaces as Conflict here. Same class as the
+    # 2026-08-03 IIS fix — wait and retry once.
+    if echo "$output" | grep -q "Conflict"; then
+        print_info "Run-command busy on $vm — waiting 60s and retrying ${proxy} setup…"
+        sleep 60
+        output="$(az vm run-command invoke \
+            --resource-group "$rg" --name "$vm" \
+            --command-id RunPowerShellScript \
+            --scripts "$ps_script" 2>&1)" || true
+    fi
+
+    print_info "${proxy} setup output (tail):"
+    echo "$output" | tail -12 | sed 's/^/    | /'
+    if ! echo "$output" | grep -q "STACK_SETUP_OK: ${proxy}"; then
+        # No success marker — either the in-guest script failed (its error is
+        # in the tail above) or run-command truncated the output (~4KB). The
+        # port probes below are the truncation-proof source of truth.
+        print_warn "${proxy} setup did not confirm in run-command output — verifying ports directly…"
+    fi
 
     # Open the firewall on Azure NSG for the proxy's ports (run-command hits
     # the VM's local firewall rules, but Azure's NSG also needs both opened).
@@ -6368,7 +6396,8 @@ PS_SETUP
             --query 'networkSecurityGroup.id' -o tsv 2>/dev/null \
         | xargs -I{} basename {} 2>/dev/null)"
     if [[ -n "$nsg" ]]; then
-        # Priority 2100-2199 reserved for proxy comparison ports.
+        # Priority 2100-2199 reserved for proxy comparison ports (TCP);
+        # 2200-2299 for the matching UDP (h3) rules below.
         local prio=$((2100 + RANDOM % 100))
         az network nsg rule create \
             --resource-group "$rg" --nsg-name "$nsg" \
@@ -6377,14 +6406,41 @@ PS_SETUP
             --destination-port-ranges "${http_port}" "${https_port}" \
             --description "Networker ${proxy} HTTP stack comparison" \
             >/dev/null 2>&1 || true
+        # Caddy serves h3 (QUIC) on the HTTPS port — UDP too.
+        if [[ "$proxy" == "caddy" ]]; then
+            az network nsg rule create \
+                --resource-group "$rg" --nsg-name "$nsg" \
+                --name "Networker-${proxy}-udp-${https_port}" \
+                --priority "$((prio + 100))" --access Allow --protocol Udp \
+                --destination-port-ranges "${https_port}" \
+                --description "Networker ${proxy} h3 (QUIC)" \
+                >/dev/null 2>&1 || true
+        fi
     fi
 
     # Verify. Proxies don't reliably serve /health (only nginx/IIS do), so
     # we check the root path on both ports and accept any 2xx/3xx/4xx response
-    # — 5xx or no-response is a real failure.
+    # — 5xx or no-response is a real failure. Retry for up to ~90s (services
+    # cold-start; NSG rules take a beat — same reasoning as the IIS probe
+    # loop), and FAIL the setup when the HTTPS port never answers: that port
+    # is exactly what the readiness gate TCP-probes (ProxyHttpsPort), so a
+    # dead listener here otherwise becomes an opaque 6-minute gate timeout
+    # downstream (issue #801 pattern B).
     if [[ -n "$ip" ]]; then
-        sleep 3  # give the service a moment to bind
-        local ok=true
+        local ok=true attempt
+        for attempt in 1 2 3 4 5 6; do
+            ok=true
+            for url in "http://${ip}:${http_port}/" "https://${ip}:${https_port}/"; do
+                local scheme="${url%%://*}"
+                local curl_flags="--max-time 8 -s -o /dev/null -w %{http_code}"
+                [[ "$scheme" == "https" ]] && curl_flags="$curl_flags -k"
+                local code
+                code="$(curl $curl_flags "$url" 2>/dev/null || echo 000)"
+                [[ "$code" =~ ^[234][0-9][0-9]$ ]] || ok=false
+            done
+            $ok && break
+            [[ "$attempt" -lt 6 ]] && sleep 15
+        done
         for url in "http://${ip}:${http_port}/" "https://${ip}:${https_port}/"; do
             local scheme="${url%%://*}"
             local curl_flags="--max-time 8 -s -o /dev/null -w %{http_code}"
@@ -6395,10 +6451,21 @@ PS_SETUP
                 print_ok "  $url → $code"
             else
                 print_warn "  $url → $code"
-                ok=false
             fi
         done
-        $ok || print_warn "${proxy} verification failed — check 'az vm run-command invoke' output on $vm"
+        if ! $ok; then
+            # Capture in-guest state INTO the deploy log before failing — the
+            # failed VM is deleted with the deploy, so this is the only
+            # diagnostic window (mirrors the IIS verify-failure capture).
+            print_info "${proxy} verify failed — capturing in-guest diagnostics…"
+            az vm run-command invoke \
+                --resource-group "$rg" --name "$vm" \
+                --command-id RunPowerShellScript \
+                --scripts "(Get-Service networker-${proxy} -EA SilentlyContinue).Status; (netstat -an | Select-String 'LISTENING' | Select-String ':${http_port}|:${https_port}').Line -join ' / '; (Get-NetFirewallRule -Direction Inbound -Enabled True -EA SilentlyContinue | Where-Object DisplayName -like '*Networker*').DisplayName -join ','; \$sd = Join-Path \$env:ProgramData 'networker\\${proxy}'; Get-ChildItem \$sd -EA SilentlyContinue | ForEach-Object { \$_.Name }" \
+                --query "value[0].message" -o tsv 2>&1 | head -10 || true
+            print_err "${proxy} is not serving on ${http_port}/${https_port} after setup"
+            return 1
+        fi
     else
         print_ok "${proxy} setup dispatched (no IP for verification)"
     fi
@@ -9666,10 +9733,16 @@ _deploy_validate_config() {
                 # Linux = install.sh deploy_benchmark_server; Windows =
                 # install.ps1 -BenchmarkServer (v0.28.208). net48 is
                 # Windows-ONLY (.NET Framework); cpp/ruby/php + AOT variants
-                # are Linux-only (MSVC/devkit/swoole constraints).
+                # are Linux-only (MSVC/devkit/swoole constraints). ALL .NET
+                # AOT variants belong in the Linux set: net9-aot/net10-aot
+                # missing here (only net8-aot was listed) made every
+                # net9-aot@linux matrix cell die with a bare "install.sh
+                # exited with code 1" — issue #801 pattern A. Keep in lockstep
+                # with DeployConfigPreflight.cs (C#) and LINUX_ONLY_LANGS in
+                # dashboard/src/components/wizard/testbed-constants.ts.
                 local langs_count; langs_count="$(jq ".endpoints[$i].languages | length // 0" "$cfg" 2>/dev/null)"
                 if [[ "${langs_count:-0}" -gt 0 ]]; then
-                    local linux_langs="rust nginx go nodejs python java cpp ruby php csharp-net8 csharp-net8-aot csharp-net9 csharp-net10"
+                    local linux_langs="rust nginx go nodejs python java cpp ruby php csharp-net8 csharp-net8-aot csharp-net9 csharp-net9-aot csharp-net10 csharp-net10-aot"
                     local windows_langs="csharp-net48 csharp-net8 csharp-net9 csharp-net10 go nodejs python java"
                     local valid_langs
                     if [[ "$ep_os" == "windows" ]]; then
@@ -10899,11 +10972,17 @@ deploy_from_config() {
                                 ;;
                             caddy|apache|haproxy|traefik)
                                 if [[ "$AZURE_ENDPOINT_OS" == "windows" ]]; then
-                                    # Windows: fetch install.ps1 on the VM and run -Setup <proxy>
+                                    # Windows: fetch install.ps1 on the VM and run -Setup <proxy>.
+                                    # Fatal on failure, like the Linux arm below: this proxy IS
+                                    # the cell's requested stack — without it the run just times
+                                    # out the readiness gate 6 minutes later (#801 pattern B).
                                     next_step "Set up $_ls for HTTP stack comparison (Azure Windows)"
                                     _azure_win_setup_proxy \
                                         "$AZURE_ENDPOINT_RG" "$AZURE_ENDPOINT_VM" \
-                                        "$AZURE_ENDPOINT_IP" "$_ls"
+                                        "$AZURE_ENDPOINT_IP" "$_ls" || {
+                                        print_err "Deploy failed: could not set up $_ls on Azure Windows endpoint"
+                                        exit 1
+                                    }
                                 else
                                     # Fatal on failure: a matrix cell without its
                                     # proxy just times out the readiness gate.
@@ -11626,7 +11705,11 @@ NGINX_APP_EOF
         cpp)
             echo ">> Installing C++ server"
             sudo apt-get update -qq < /dev/null
-            sudo apt-get install -y -qq build-essential cmake libssl-dev libboost-all-dev < /dev/null
+            # Only Boost.System (+ headers) is linked (see reference-apis/cpp/
+            # CMakeLists.txt) — libboost-all-dev pulled the ENTIRE Boost suite
+            # (~1-2 GB, hundreds of packages) and dominated cpp cell provisioning
+            # (~20 min on a burstable B2s; user-caught 2026-08-19).
+            sudo apt-get install -y -qq --no-install-recommends build-essential cmake libssl-dev zlib1g-dev libboost-system-dev libboost-dev < /dev/null
             cd "$API_DIR/cpp"
             mkdir -p build && cd build
             cmake .. -DCMAKE_BUILD_TYPE=Release < /dev/null 2>/dev/null
@@ -11679,10 +11762,26 @@ NGINX_APP_EOF
                 *) echo "ERROR: Unknown C# variant: $lang"; return 1 ;;
             esac
             echo ">> Installing .NET $dotnet_version SDK"
-            # Install .NET SDK via Microsoft feed
+            # Install .NET SDK via Microsoft feed. The channel check matters
+            # even when dotnet already exists: a VM with only (say) SDK 8
+            # cannot publish a net9.0/net10.0 project — mirror install.ps1's
+            # Install-BenchRuntime --list-sdks gate (issue #801 pattern A).
+            local dotnet_major="${dotnet_version%%.*}"
             if ! command -v dotnet >/dev/null 2>&1; then
                 curl -fsSL https://dot.net/v1/dotnet-install.sh < /dev/null | bash -s -- --channel "$dotnet_version"
                 export PATH="$HOME/.dotnet:$PATH"
+            elif ! dotnet --list-sdks 2>/dev/null | grep -q "^${dotnet_major}\."; then
+                echo ">> dotnet present but SDK channel $dotnet_version missing — installing"
+                curl -fsSL https://dot.net/v1/dotnet-install.sh < /dev/null | bash -s -- --channel "$dotnet_version"
+                export PATH="$HOME/.dotnet:$PATH"
+            fi
+            if $is_aot && command -v apt-get >/dev/null 2>&1; then
+                # Native AOT publish (PublishAot=true in every *-aot csproj)
+                # shells out to clang + needs zlib headers; a minimal image
+                # without them fails at ILCompiler link time (#801 pattern A).
+                echo ">> Installing Native AOT prerequisites (clang, zlib1g-dev)"
+                sudo apt-get update -qq < /dev/null
+                sudo apt-get install -y -qq clang zlib1g-dev < /dev/null
             fi
             local csharp_dir="$API_DIR/$lang"
             if [ ! -d "$csharp_dir" ]; then
@@ -11691,13 +11790,32 @@ NGINX_APP_EOF
             fi
             if [ -d "$csharp_dir" ]; then
                 cd "$csharp_dir"
+                # Publish output goes to a .log in $BENCH_DIR (not /dev/null):
+                # the health-check diagnostics tail every $BENCH_DIR/*.log, so
+                # a failed publish becomes visible in the deploy log.
+                local publish_ok=1
                 if $is_aot; then
-                    dotnet publish -c Release -r linux-x64 --self-contained -o "$BENCH_DIR/$lang" < /dev/null 2>/dev/null
+                    dotnet publish -c Release -r linux-x64 --self-contained -o "$BENCH_DIR/$lang" < /dev/null > "$BENCH_DIR/${lang}-publish.log" 2>&1 || publish_ok=0
                 else
-                    dotnet publish -c Release -o "$BENCH_DIR/$lang" < /dev/null 2>/dev/null
+                    dotnet publish -c Release -o "$BENCH_DIR/$lang" < /dev/null > "$BENCH_DIR/${lang}-publish.log" 2>&1 || publish_ok=0
+                fi
+                if [ "$publish_ok" -ne 1 ]; then
+                    echo "ERROR: dotnet publish failed for $lang — last 30 lines:"
+                    tail -n 30 "$BENCH_DIR/${lang}-publish.log" 2>/dev/null || true
+                    return 1
                 fi
                 chmod +x "$BENCH_DIR/$lang/$lang" 2>/dev/null || true
-                nohup "$BENCH_DIR/$lang/$lang" > "$BENCH_DIR/$lang.log" 2>&1 &
+                # The apphost launcher does NOT probe ~/.dotnet — only
+                # DOTNET_ROOT, /etc/dotnet/install_location, and the system
+                # dirs (/usr/share|lib/dotnet). A framework-dependent publish
+                # whose runtime came from dotnet-install therefore dies at
+                # startup with "You must install or update .NET" (verified
+                # locally; #801 pattern A). Pin DOTNET_ROOT to the install
+                # that owns the `dotnet` we just published with. Harmless for
+                # AOT variants (self-contained native binary).
+                local dotnet_root
+                dotnet_root="$(dirname "$(readlink -f "$(command -v dotnet)" 2>/dev/null || command -v dotnet)")"
+                DOTNET_ROOT="$dotnet_root" nohup "$BENCH_DIR/$lang/$lang" > "$BENCH_DIR/$lang.log" 2>&1 &
             else
                 echo "ERROR: No reference API found for $lang at $csharp_dir"
                 return 1

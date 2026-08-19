@@ -16,6 +16,7 @@ import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
 import { testersApi, type TesterRow } from '../api/testers';
 import type { CloudAccountSummary, Methodology } from '../api/types';
+import { isOnlineTester } from '../lib/tester-readiness';
 import type { TestbedState } from '../components/wizard/testbed-constants';
 import {
   methodologyForPreset,
@@ -124,7 +125,7 @@ export function FullStackPage() {
     testersApi.listTesters(projectId)
       .then(rows => {
         setTesterRows(rows);
-        setOnlineRunners(rows.filter(t => t.power_state === 'running' && t.agent_status === 'online').length);
+        setOnlineRunners(rows.filter(isOnlineTester).length);
       })
       .catch(() => {});
   }, [projectId]);

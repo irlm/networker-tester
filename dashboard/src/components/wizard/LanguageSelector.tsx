@@ -3,6 +3,7 @@ import type { LanguageCapability } from '../../api/types';
 import {
   LANGUAGE_GROUPS,
   ALL_LANGUAGE_IDS,
+  LINUX_ONLY_LANGS,
   TOP_5_IDS,
   SYSTEMS_IDS,
   requiresWindows,
@@ -173,6 +174,16 @@ export function LanguageSelector({ selectedLangs, onLangsChange, testbeds, selec
           <p className="text-xs text-yellow-300">
             C# .NET 4.8 requires Windows Server. It will only run on testbeds configured with Windows OS.
             Linux testbeds will skip .NET 4.8 automatically.
+          </p>
+        </div>
+      )}
+
+      {[...selectedLangs].some(l => LINUX_ONLY_LANGS.has(l)) && testbeds.some(tb => tb.os === 'windows') && (
+        <div className="mt-3 border border-yellow-500/30 bg-yellow-500/5 p-3">
+          <p className="text-xs text-yellow-300">
+            .NET AOT variants, C++, Ruby, PHP, Rust and nginx deploy on Linux only
+            (AOT needs a native toolchain the Windows payload does not carry).
+            Windows testbeds will skip them automatically.
           </p>
         </div>
       )}

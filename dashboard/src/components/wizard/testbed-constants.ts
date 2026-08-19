@@ -316,16 +316,36 @@ export const SYSTEMS_IDS = ['rust', 'go', 'cpp'];
 
 export const WINDOWS_ONLY_LANGS = new Set(['csharp-net48']);
 
+/** Languages install.ps1 -BenchmarkServer cannot deploy — Linux-only.
+ *  Mirror of install.sh's per-OS validator sets and
+ *  DeployConfigPreflight.cs (C#); keep all three in lockstep.
+ *  - *-aot: Native AOT publish needs the VS C++ toolchain on Windows —
+ *    multi-GB, far outside the provisioning budget (issue #801 pattern A:
+ *    every net8-aot/net9-aot @ windows cell died "install.sh exited with
+ *    code 1").
+ *  - cpp (MSVC+boost build), ruby (devkit gem builds), php (swoole is
+ *    Linux-only), rust/nginx (Linux install paths only). */
+export const LINUX_ONLY_LANGS = new Set([
+  'csharp-net8-aot', 'csharp-net9-aot', 'csharp-net10-aot',
+  'cpp', 'ruby', 'php', 'rust', 'nginx',
+]);
+
 export function requiresWindows(langs: Set<string>): boolean {
   return [...langs].some(id => WINDOWS_ONLY_LANGS.has(id));
 }
 
-/** Whether a language may run on a testbed OS — Windows-only runtimes
- *  (.NET Framework 4.8) must never produce Linux cells: such a cell always
- *  fails provisioning, burning a VM and a doomed run (user-caught 2026-08-19,
- *  csharp-net48 @ linux). Empty/absent language is always allowed. */
+/** Whether a language may run on a testbed OS. Windows-only runtimes
+ *  (.NET Framework 4.8) must never produce Linux cells, and Linux-only
+ *  runtimes (.NET AOT variants, cpp/ruby/php/rust/nginx) must never produce
+ *  Windows cells: such a cell always fails provisioning, burning a VM and a
+ *  doomed run (net48 @ linux user-caught 2026-08-19 #800; AOT @ windows and
+ *  net9-aot @ linux field-confirmed 2026-08-19 #801).
+ *  Empty/absent language is always allowed. */
 export function languageAllowedOnOs(lang: string, os: 'linux' | 'windows'): boolean {
-  return !lang || !WINDOWS_ONLY_LANGS.has(lang) || os === 'windows';
+  if (!lang) return true;
+  if (WINDOWS_ONLY_LANGS.has(lang)) return os === 'windows';
+  if (LINUX_ONLY_LANGS.has(lang)) return os === 'linux';
+  return true;
 }
 
 // ── Methodology ─────────────────────────────────────────────────────────
@@ -401,11 +421,14 @@ export const RUNTIME_TEMPLATES: RuntimeTemplate[] = [
   {
     id: 'windows-api-stack',
     name: 'Windows API Stack',
-    description: 'IIS + nginx proxies, .NET ecosystem.',
+    description: 'IIS + Caddy proxies, .NET ecosystem.',
     defaultTestbedCount: 1,
     defaultOs: 'windows',
-    defaultLanguages: ['nginx', 'csharp-net48', 'csharp-net8', 'csharp-net8-aot', 'csharp-net9', 'csharp-net9-aot'],
-    defaultProxies: ['iis', 'nginx'],
+    // Windows-deployable set only (install.ps1 -BenchmarkServer): the old
+    // defaults seeded nginx + AOT variants, all Linux-only — every such cell
+    // either got silently dropped or failed provisioning (#801 pattern A).
+    defaultLanguages: ['csharp-net48', 'csharp-net8', 'csharp-net9', 'csharp-net10', 'java'],
+    defaultProxies: ['iis', 'caddy'],
     defaultModes: ['http1', 'http2', 'http3', 'download', 'upload'],
     methodology: 'standard',
   },

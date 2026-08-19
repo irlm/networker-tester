@@ -5,6 +5,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { useProjectStore } from '../../stores/projectStore';
 import { DOC_ENTRIES, DOC_CATEGORIES, type DocEntry } from '../../lib/docs/content';
 import { searchDocs } from '../../lib/docs/search';
+import { ALL_SCENARIOS, type Scenario } from '../../lib/scenarios';
 import { DocEntryView } from './DocEntryView';
 import {
   NAV_ENTRIES,
@@ -17,6 +18,7 @@ import {
 /** A palette row: a page to jump to, or a manual entry to read. */
 type PaletteResult =
   | { kind: 'nav'; nav: NavEntry; path: string }
+  | { kind: 'scenario'; scenario: Scenario; path: string }
   | { kind: 'doc'; doc: DocEntry };
 
 /**
@@ -56,6 +58,34 @@ function searchNav(
   });
 }
 
+/** Scenario results reuse the central catalog, so palette links cannot drift from the launcher. */
+function searchScenarios(query: string, projectId: string | null): PaletteResult[] {
+  const q = query.trim().toLowerCase();
+  if (!q || !projectId) return [];
+
+  return ALL_SCENARIOS
+    .map((scenario, index) => {
+      const title = scenario.title.toLowerCase();
+      const searchable = [
+        scenario.summary,
+        scenario.badge,
+        scenario.needs,
+        ...scenario.measures,
+        ...scenario.modes,
+      ].join(' ').toLowerCase();
+      const score = title.startsWith(q) ? 3 : title.includes(q) ? 2 : searchable.includes(q) ? 1 : 0;
+      return { scenario, index, score };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .slice(0, 4)
+    .map(({ scenario }) => ({
+      kind: 'scenario' as const,
+      scenario,
+      path: scenario.href(projectId),
+    }));
+}
+
 export default function CommandPalette() {
   const { closePalette } = useDocsStore();
   const navigate = useNavigate();
@@ -83,17 +113,22 @@ export default function CommandPalette() {
     isPlatformAdmin,
   }), [activeProjectId, authRole, isPlatformAdmin]);
   const navResults = useMemo(() => searchNav(query, gateCtx), [query, gateCtx]);
+  const scenarioResults = useMemo(
+    () => searchScenarios(query, activeProjectId ?? null),
+    [activeProjectId, query],
+  );
   const visibleResults: PaletteResult[] = useMemo(() => {
     const docResults = searchDocs(DOC_ENTRIES, query);
     const maxVisible = 20;
     return [
       ...navResults,
-      ...docResults.slice(0, maxVisible - navResults.length).map(doc => ({ kind: 'doc' as const, doc })),
+      ...scenarioResults,
+      ...docResults.slice(0, maxVisible - navResults.length - scenarioResults.length).map(doc => ({ kind: 'doc' as const, doc })),
     ];
-  }, [query, navResults]);
+  }, [query, navResults, scenarioResults]);
 
   const activate = useCallback((result: PaletteResult) => {
-    if (result.kind === 'nav') {
+    if (result.kind === 'nav' || result.kind === 'scenario') {
       closePalette();
       navigate(result.path);
     } else {
@@ -344,6 +379,18 @@ export default function CommandPalette() {
                       {gKey && (
                         <span className="text-gray-600 text-xs ml-auto flex-shrink-0">g {gKey}</span>
                       )}
+                    </button>
+                  );
+                }
+                if (result.kind === 'scenario') {
+                  return (
+                    <button key={`scenario:${result.scenario.id}`} {...rowProps} onClick={() => activate(result)}>
+                      <span className="text-xs uppercase tracking-wider text-cyan-300 w-16 flex-shrink-0">
+                        test
+                      </span>
+                      <span className="text-gray-500 flex-shrink-0" aria-hidden="true">▷</span>
+                      <span className="text-cyan-400 flex-shrink-0">{result.scenario.title}</span>
+                      <span className="text-faint text-xs truncate">{result.scenario.summary}</span>
                     </button>
                   );
                 }

@@ -21,6 +21,10 @@ const externalBaseUrl = process.env.PLAYWRIGHT_BASE_URL;
  */
 export default defineConfig({
   testDir: './e2e',
+  // The prod smoke specs (e2e/prod/) run ONLY via playwright.prod.config.ts
+  // against a live deployment with an injected session token — they must
+  // never run in the local/CI harness (no token there; they'd fail).
+  testIgnore: ['**/prod/**'],
   // A failing E2E must be reproducible, not "sometimes". Retries hide flake;
   // on CI one retry absorbs genuine infrastructure blips only.
   retries: process.env.CI ? 1 : 0,

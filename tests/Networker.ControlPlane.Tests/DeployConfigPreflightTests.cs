@@ -57,7 +57,9 @@ public class DeployConfigPreflightTests
     [InlineData("php")]  // swoole is Linux-only
     [InlineData("ruby")] // devkit gem builds
     [InlineData("cpp")]  // MSVC+boost build
-    [InlineData("csharp-net8-aot")] // needs the VS C++ toolchain
+    [InlineData("csharp-net8-aot")]  // needs the VS C++ toolchain
+    [InlineData("csharp-net9-aot")]  // needs the VS C++ toolchain
+    [InlineData("csharp-net10-aot")] // needs the VS C++ toolchain
     public void linux_only_languages_are_rejected_on_windows(string lang)
     {
         var errors = DeployConfigPreflight.Validate(Config($$"""
@@ -75,6 +77,22 @@ public class DeployConfigPreflightTests
               "azure": { "region": "eastus", "os": "linux" } }
             """));
         Assert.Contains(errors, e => e.Contains("'csharp-net48' is not deployable on a linux endpoint"));
+    }
+
+    [Theory]
+    [InlineData("csharp-net8-aot")]
+    [InlineData("csharp-net9-aot")]
+    [InlineData("csharp-net10-aot")]
+    public void all_dotnet_aot_variants_pass_on_linux(string lang)
+    {
+        // Issue #801 pattern A: net9-aot/net10-aot were missing from the
+        // Linux set (only net8-aot was listed), so every net9-aot@linux
+        // matrix cell failed provisioning at install.sh's validator.
+        var errors = DeployConfigPreflight.Validate(Config($$"""
+            { "provider": "azure", "http_stacks": ["nginx"], "languages": ["{{lang}}"],
+              "azure": { "region": "eastus", "os": "linux" } }
+            """));
+        Assert.Empty(errors);
     }
 
     [Fact]
