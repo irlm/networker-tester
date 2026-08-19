@@ -117,6 +117,19 @@ jobs:
           node-version: 22
 
       - name: Build dashboard frontend
+        # The SDK Endpoints page's reference-app cards (SdkExamplesPanel) light
+        # up — "Live on Azure" + Open live app + one-click Use example — only
+        # when these VITE_ values are baked into the bundle at build time.
+        # They are repo *variables* (Settings → Secrets and variables →
+        # Actions → Variables), not secrets: the URLs and demo token are
+        # public by design (see dashboard/.env.example). Unset variables
+        # resolve to empty strings and the cards stay in the "Deploy ready"
+        # state, so this is a no-op until examples/azure/deploy.sh has stood
+        # the demos up and the variables are filled in.
+        env:
+          VITE_LAGHOUND_CSHARP_DEMO_URL: ${{ vars.LAGHOUND_CSHARP_DEMO_URL }}
+          VITE_LAGHOUND_RUST_DEMO_URL: ${{ vars.LAGHOUND_RUST_DEMO_URL }}
+          VITE_LAGHOUND_PUBLIC_DEMO_TOKEN: ${{ vars.LAGHOUND_PUBLIC_DEMO_TOKEN }}
         run: |
           cd dashboard && npm ci --ignore-scripts && npm run build
           tar czf "../dist/dashboard-frontend.tar.gz" -C dist .
