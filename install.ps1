@@ -2098,11 +2098,7 @@ function Invoke-VerifyStackServing ($stack, $httpPort, $httpsPort) {
     # port is what the control plane's readiness gate TCP-probes
     # (ProvisioningOrchestrator.ProxyHttpsPort) -- a stack that serves HTTP
     # but not HTTPS used to verify green here and then kill the matrix cell
-    # with an opaque 6-minute gate timeout (issue #801 pattern B). The stacks
-    # serve self-signed certs by design and -SkipCertificateCheck is
-    # unreliable across PS editions, so HTTPS uses HttpWebRequest with a
-    # per-request trust callback (same pattern as the IIS in-guest
-    # diagnostics in install.sh).
+    # with an opaque 6-minute gate timeout (issue #801 pattern B).
     Start-Sleep -Seconds 3
     try {
         $null = Invoke-WebRequest -Uri "http://localhost:$httpPort/" -UseBasicParsing -TimeoutSec 8
@@ -2139,12 +2135,16 @@ function Invoke-VerifyStackServing ($stack, $httpPort, $httpsPort) {
                 }
                 break
             }
-        } catch { }
+        } catch {
+            # PSAvoidUsingEmptyCatchBlock: refused/reset means the listener
+            # is not up yet -- fall through to the retry sleep below.
+            $httpsOk = $false
+        }
         finally { $client.Dispose() }
         Start-Sleep -Seconds 3
     }
     if (-not $httpsOk) {
-        Write-Err "$stack HTTPS port $httpsPort is not serving -- the readiness gate probes exactly this port."
+        Write-Err "$stack HTTPS port $httpsPort is not listening -- the readiness gate TCP-probes exactly this port."
         throw "$stack install failed: HTTPS port $httpsPort not serving after start"
     }
 }

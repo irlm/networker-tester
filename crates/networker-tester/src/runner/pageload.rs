@@ -3192,6 +3192,29 @@ mod tests {
     impl TestEndpoint {
         async fn start() -> Self {
             init_crypto();
+            // free_*_port() is check-then-bind (TOCTOU): with the whole unit
+            // suite in parallel, another test can grab a probed port before
+            // the endpoint's real bind, and a UDP bind conflict refuses
+            // startup (v0.28.167) — the old `.ok()` discarded that error and
+            // the port-wait burned its full budget before blaming slowness
+            // ("Endpoint port N did not start", windows-latest flake on
+            // PR #806). Surface the real error and retry with fresh ports —
+            // same treatment tests/integration.rs got on 2026-08-06.
+            for attempt in 1..=3 {
+                match Self::try_start().await {
+                    Ok(ep) => return ep,
+                    Err(e) if attempt < 3 => {
+                        eprintln!(
+                            "TestEndpoint start attempt {attempt} failed ({e}); retrying with fresh ports"
+                        );
+                    }
+                    Err(e) => panic!("TestEndpoint failed to start after {attempt} attempts: {e}"),
+                }
+            }
+            unreachable!("loop above always returns or panics")
+        }
+
+        async fn try_start() -> Result<Self, String> {
             let http_port = free_port();
             let https_port = free_port();
             let udp_port = free_udp_port();
@@ -3205,31 +3228,37 @@ mod tests {
                 stamp_port: free_udp_port(),
                 api_upstream: None,
             };
+            let startup_err = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+            let startup_err_tx = std::sync::Arc::clone(&startup_err);
             tokio::spawn(async move {
-                networker_endpoint::run_with_shutdown(cfg, rx).await.ok();
+                if let Err(e) = networker_endpoint::run_with_shutdown(cfg, rx).await {
+                    *startup_err_tx.lock().unwrap() = Some(format!("{e:#}"));
+                }
             });
             // Wait for HTTP + HTTPS
             for port in [http_port, https_port] {
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
                 loop {
+                    if let Some(err) = startup_err.lock().unwrap().as_deref() {
+                        return Err(format!("endpoint exited during startup: {err}"));
+                    }
                     if tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
                         .await
                         .is_ok()
                     {
                         break;
                     }
-                    assert!(
-                        std::time::Instant::now() < deadline,
-                        "Endpoint port {port} did not start"
-                    );
+                    if std::time::Instant::now() >= deadline {
+                        return Err(format!("endpoint port {port} did not start within 30s"));
+                    }
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 }
             }
-            Self {
+            Ok(Self {
                 http_port,
                 https_port,
                 _shutdown: tx,
-            }
+            })
         }
 
         fn http_url(&self, path: &str) -> url::Url {
