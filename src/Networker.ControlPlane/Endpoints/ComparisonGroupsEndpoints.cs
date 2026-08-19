@@ -467,8 +467,10 @@ public static class ComparisonGroupsEndpoints
         => $"{label} · cg-{groupId.ToString()[..8]}·{index}·{launchNonce}";
 
     /// <summary>Combos the installers can never satisfy — failed at launch
-    /// with the real reason instead of a doomed provision. Currently only
-    /// windows·haproxy (no native Windows build exists).</summary>
+    /// with the real reason instead of a doomed provision: windows·haproxy /
+    /// windows·apache (no scriptable Windows binaries) and any language
+    /// outside its OS's installer set (issue #801: AOT variants on Windows
+    /// burned a VM each and died as bare "install.sh exited with code 1").</summary>
     internal static string? UnsupportedComboReason(CellSpec cell)
     {
         if (cell.EndpointKind != "pending")
@@ -487,6 +489,23 @@ public static class ComparisonGroupsEndpoints
             // residential networks 2026-08-04 — and httpd.apache.org ships no
             // Windows binaries. Only a manually pre-installed Apache24 works.
             return "Apache httpd has no scriptable Windows binary source — pre-install it manually on an existing VM or use a Linux Apache cell";
+        }
+        if (pending?.Language is { Length: > 0 } lang)
+        {
+            // Same per-OS sets the deploy-config preflight and install.sh's
+            // validator enforce — the wizard filters these cells too
+            // (languageAllowedOnOs), but the API must not accept what the
+            // installers will reject anyway.
+            var allowed = pending.Os == "windows"
+                ? DeployConfigPreflight.WindowsLanguages
+                : DeployConfigPreflight.LinuxLanguages;
+            if (!allowed.Contains(lang))
+            {
+                return $"'{lang}' is not deployable on a {pending.Os} endpoint — " +
+                    (pending.Os == "windows"
+                        ? "AOT variants and cpp/ruby/php/rust/nginx are Linux-only (install.ps1 -BenchmarkServer set); use a Linux cell"
+                        : ".NET Framework 4.8 requires Windows; use a Windows cell");
+            }
         }
         return null;
     }

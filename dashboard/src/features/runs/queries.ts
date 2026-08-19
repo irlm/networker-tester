@@ -5,6 +5,8 @@ interface PollingOptions {
   polling?: boolean;
   intervalMs?: number;
   activeIntervalMs?: number;
+  /** Gate the query off entirely (e.g. a run with no comparison group). */
+  enabled?: boolean;
 }
 
 export const runKeys = {
@@ -56,7 +58,7 @@ export function useTestRunsQuery(
   return useQuery({
     queryKey: runKeys.list(projectId, params),
     queryFn: ({ signal }) => runsApi.list(projectId, params, signal),
-    enabled: !!projectId,
+    enabled: !!projectId && (options.enabled ?? true),
     refetchInterval: options.polling === false
       ? false
       : options.activeIntervalMs
@@ -141,6 +143,37 @@ export function useComparisonGroupQuery(groupId: string) {
     // The group row may 404 for older runs whose group was deleted (ON DELETE
     // SET NULL keeps the runs) — the page degrades to name parsing.
     retry: false,
+  });
+}
+
+/**
+ * One group-detail query per comparison group visible on the runs list —
+ * authoritative cell counts + name for the group rows (#803). Shares
+ * runKeys.comparisonGroup with the single-group hook. retry: false because a
+ * 404 is a real answer (deleted group, SET NULL cells) the row falls back on.
+ */
+export function useComparisonGroupsQueries(groupIds: string[]) {
+  return useQueries({
+    queries: groupIds.map((groupId) => ({
+      queryKey: runKeys.comparisonGroup(groupId),
+      queryFn: ({ signal }: { signal?: AbortSignal }) => runsApi.getComparisonGroup(groupId, signal),
+      enabled: !!groupId,
+      staleTime: 60_000,
+      retry: false,
+    })),
+  });
+}
+
+export function useDeleteComparisonGroupMutation() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (groupId: string) => runsApi.deleteComparisonGroup(groupId),
+    // The cells' runs survive but lose their group linkage — refresh both the
+    // run lists (group chips/rows) and the cached group detail.
+    onSuccess: (_void, groupId) => Promise.all([
+      client.invalidateQueries({ queryKey: runKeys.lists() }),
+      client.removeQueries({ queryKey: runKeys.comparisonGroup(groupId) }),
+    ]),
   });
 }
 

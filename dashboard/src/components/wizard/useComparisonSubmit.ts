@@ -75,7 +75,10 @@ export function useComparisonSubmit({
         const result = await runsApi.launchComparisonGroup(group.id);
         const toast = launchOutcomeToast(result);
         addToast(toast.type, toast.message);
-        navigate(`/projects/${projectId}/runs?comparison_group=${group.id}`);
+        // Land on the compare page — the group IS the experiment, and the
+        // compare page live-polls its cells (#803). The filtered runs list
+        // stays reachable from the group row's "view as list".
+        navigate(`/projects/${projectId}/benchmarks/compare/${group.id}`);
         return;
       }
 

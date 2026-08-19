@@ -242,6 +242,35 @@ jobs:
           done
           exit $FAILED
 
+  # ── #801 pattern A coverage: the two Linux language-install paths that ─────
+  # failed in the field with zero CI execution: a framework-dependent .NET
+  # publish on a runner whose system SDK set may not include the channel
+  # (csharp-net9 — exercises the --list-sdks channel gate and the
+  # DOTNET_ROOT-pinned apphost launch), and a Native AOT publish
+  # (csharp-net9-aot — exercises the clang/zlib prerequisites + ILCompiler).
+  linux-bench-exec:
+    name: Linux reference-API execution (net9 + net9-aot)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.installer == 'true'
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+
+      - name: Deploy csharp-net9 (framework-dependent) and assert health
+        run: |
+          sudo -E bash install.sh --benchmark-server csharp-net9 --benchmark-port 8085 < /dev/null
+          curl -sf http://127.0.0.1:8085/health | grep -q '"runtime":"csharp-net9"'
+          curl -sf 'http://127.0.0.1:8085/api/users?limit=2' -o /dev/null
+          echo "csharp-net9 healthy on :8085"
+
+      - name: Deploy csharp-net9-aot (Native AOT) and assert health
+        run: |
+          sudo -E bash install.sh --benchmark-server csharp-net9-aot --benchmark-port 8086 < /dev/null
+          curl -sf http://127.0.0.1:8086/health | grep -q '"runtime":"csharp-net9-aot"'
+          curl -sf 'http://127.0.0.1:8086/api/users?limit=2' -o /dev/null
+          echo "csharp-net9-aot healthy on :8086"
+
   # ── P0-3 (2026-08 audit): EXECUTE the Windows installer + proxy stacks ─────
   # install.ps1 had ZERO automated execution — PSScriptAnalyzer is lint-only —
   # while every Windows proxy stack was asserted by grepping install.sh. That

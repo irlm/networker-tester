@@ -63,6 +63,9 @@ function project() {
   };
 }
 
+/** The stubbed comparison group behind the runs list's group row (#803). */
+export const GROUP_E2E_ID = 'e2e0e2e0-0000-4000-8000-000000000000';
+
 /** Shared deterministic browser backend for route, responsive, and a11y suites. */
 export async function stubRuntime(page: Page) {
   await page.routeWebSocket('**/ws/**', socket => socket.close({ code: 1000, reason: 'browser test' }));
@@ -88,7 +91,7 @@ export async function stubRuntime(page: Page) {
     }
     if (path.endsWith('/api/auth/sso/providers')) return json({ providers: [] });
     if (path.endsWith('/api/projects')) return json({ projects: [project()] });
-    if (path.endsWith(`/api/v2/projects/${PID}/test-runs`) && url.searchParams.get('limit') === '200') {
+    if (path.endsWith(`/api/v2/projects/${PID}/test-runs`)) {
       const common = {
         project_id: PID,
         status: 'completed',
@@ -103,12 +106,33 @@ export async function stubRuntime(page: Page) {
         last_heartbeat: null,
         created_at: '2026-08-18T12:00:00Z',
       };
+      // Two cells of one comparison group (#803): the list clusters them into
+      // one expandable group row; the compare page lists them as cells.
+      const groupCells = [
+        { ...common, id: 'run-cell-nginx', test_config_id: 'config-cell-nginx', config_name: 'lab/loop linux · nginx · cg-cge2e·0·ab12', endpoint_kind: 'runtime', test_kind: 'benchmark', modes: ['apibench'], comparison_group_id: GROUP_E2E_ID },
+        { ...common, id: 'run-cell-caddy', test_config_id: 'config-cell-caddy', config_name: 'lab/loop linux · caddy · cg-cge2e·1·ab12', endpoint_kind: 'runtime', test_kind: 'benchmark', modes: ['apibench'], comparison_group_id: GROUP_E2E_ID },
+      ];
+      if (url.searchParams.get('comparison_group_id') === GROUP_E2E_ID) return json(groupCells);
+      if (url.searchParams.get('limit') !== '200') return json([]);
       return json([
+        ...groupCells,
         { ...common, id: 'run-list-network', test_config_id: 'config-network', config_name: 'Checkout connectivity', endpoint_kind: 'proxy', test_kind: 'network', modes: ['tcp'] },
         { ...common, id: 'run-list-url', test_config_id: 'config-url', config_name: 'Diag: api.example.com (Quick)', endpoint_kind: 'network', test_kind: 'url_probe', modes: ['http2'] },
         { ...common, id: 'run-list-sdk', test_config_id: 'config-sdk', config_name: 'Payments SDK', endpoint_kind: 'network', test_kind: 'sdk_probe', modes: ['sdkprobe'] },
         { ...common, id: 'run-list-benchmark', test_config_id: 'config-benchmark', config_name: 'Runtime throughput', endpoint_kind: 'runtime', test_kind: 'benchmark', modes: ['apibench', 'download'], artifact_id: 'artifact-1' },
       ]);
+    }
+    if (path.endsWith(`/api/v2/comparison-groups/${GROUP_E2E_ID}`)) {
+      return json({
+        id: GROUP_E2E_ID,
+        project_id: PID,
+        name: 'Stack shootout',
+        base_workload: { modes: ['apibench'], runs: 5 },
+        cells: [{ label: 'lab/loop linux · nginx' }, { label: 'lab/loop linux · caddy' }, { label: 'lab/loop linux · haproxy' }],
+        status: 'completed',
+        created_at: '2026-08-18T11:55:00Z',
+        runs: [],
+      });
     }
     if (path.endsWith(`/api/projects/${PID}`)) return json(project());
     if (path.endsWith('/api/me/pending-projects')) return json({ pending: [] });

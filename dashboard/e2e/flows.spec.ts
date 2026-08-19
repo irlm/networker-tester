@@ -200,6 +200,22 @@ test.describe('application benchmark wizard', () => {
         body: JSON.stringify({ launched: 2 }),
       });
     });
+    // The post-launch compare page (#803) reads the group detail.
+    await page.route('**/api/v2/comparison-groups/cg-e2e-0001', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: 'cg-e2e-0001',
+          project_id: PID,
+          name: 'Validation Run',
+          base_workload: createBody?.base_workload ?? { modes: [], runs: 0 },
+          cells: createBody?.cells ?? [],
+          status: 'running',
+          created_at: new Date().toISOString(),
+          runs: [],
+        }),
+      }));
 
     await page.goto(`/projects/${PID}/benchmarks/application/new`);
 
@@ -235,8 +251,10 @@ test.describe('application benchmark wizard', () => {
     expect(createBody!.base_workload.modes.length).toBeGreaterThan(0);
     expect(createBody!.base_workload.runs).toBeGreaterThan(0);
 
-    // And the wizard hands off to the runs view filtered on the group.
-    await expect(page).toHaveURL(/comparison_group=cg-e2e-0001/);
+    // The group IS the experiment: launch lands on its compare page (#803),
+    // which live-polls the cells — not on the filtered runs list.
+    await expect(page).toHaveURL(/benchmarks\/compare\/cg-e2e-0001/);
+    await expect(page.getByRole('heading', { name: 'Validation Run' })).toBeVisible();
     expect(problems()).toEqual([]);
   });
 });
