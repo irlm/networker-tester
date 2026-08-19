@@ -98,7 +98,7 @@ describe('CreateSdkEndpointDialog', () => {
     const { onCreated } = renderDialog();
     await user.type(screen.getByLabelText(/^Name/), 'Checkout API');
     await user.type(screen.getByLabelText(/^Target URL/), 'https://api.customer.com');
-    await user.type(screen.getByLabelText(/LagHound token/i), 'lh-secret');
+    await user.type(screen.getByLabelText(/LagHound token/i), 'lh-secret ');
 
     const submit = screen.getByRole('button', { name: 'Register endpoint' });
     await waitFor(() => expect(submit).toBeEnabled());

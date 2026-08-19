@@ -27,7 +27,7 @@ async fn main() {
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(8084);
-    let public_demo = std::env::var("LAGHOUND_PUBLIC_DEMO").is_ok_and(|v| v == "1");
+    let public_demo = is_truthy(std::env::var("LAGHOUND_PUBLIC_DEMO").ok().as_deref());
 
     // The LagHound endpoint, mounted at its default `/laghound` prefix. Fails
     // closed if the token is missing/too short — here it always has a default.
@@ -48,7 +48,7 @@ async fn main() {
     let laghound = laghound::router(config).expect("laghound config is valid");
 
     let app = Router::new()
-        .route("/", get(|| async { Html(include_str!("index.html")) }))
+        .route("/", get(|| async { Html(demo_page()) }))
         .route(
             "/work",
             get(|| async {
@@ -73,4 +73,32 @@ async fn main() {
     )
     .await
     .expect("server error");
+}
+
+fn demo_page() -> String {
+    include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../examples/sdk-demo/index.html"
+    ))
+    .replace("{{LANGUAGE}}", "Rust")
+    .replace("{{LANGUAGE_LABEL}}", "RUST · AXUM / TOWER")
+    .replace("{{RUNTIME}}", "axum")
+    .replace(
+        "{{SOURCE_URL}}",
+        "https://github.com/irlm/networker-tester/tree/main/sdk/rust/example",
+    )
+    .replace(
+        "{{MOUNT_SNIPPET}}",
+        "let app = Router::new().merge(laghound::router(\n  laghound::Config::new(token)\n)?);",
+    )
+}
+
+fn is_truthy(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        let value = value.trim();
+        value.eq_ignore_ascii_case("1")
+            || value.eq_ignore_ascii_case("true")
+            || value.eq_ignore_ascii_case("yes")
+            || value.eq_ignore_ascii_case("on")
+    })
 }

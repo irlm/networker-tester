@@ -14,6 +14,7 @@ RUST_CONTAINER="${RUST_CONTAINER:-laghound-rust-demo-local}"
 CSHARP_PORT="${CSHARP_PORT:-18081}"
 RUST_PORT="${RUST_PORT:-18084}"
 LAGHOUND_TOKEN="${LAGHOUND_TOKEN:-demo-token-laghound}"
+PUBLIC_DEMO_VALUE="${PUBLIC_DEMO_VALUE:-1}"
 
 if [ "${#LAGHOUND_TOKEN}" -lt 16 ]; then
   echo "LAGHOUND_TOKEN must be at least 16 bytes" >&2
@@ -38,7 +39,7 @@ docker run --detach --init \
   --name "$CSHARP_CONTAINER" \
   --publish "$CSHARP_PORT:8080" \
   --env PORT=8080 \
-  --env LAGHOUND_PUBLIC_DEMO=1 \
+  --env "LAGHOUND_PUBLIC_DEMO=$PUBLIC_DEMO_VALUE" \
   --env "LAGHOUND_TOKEN=$LAGHOUND_TOKEN" \
   "$CSHARP_IMAGE" >/dev/null
 
@@ -46,7 +47,7 @@ docker run --detach --init \
   --name "$RUST_CONTAINER" \
   --publish "$RUST_PORT:8080" \
   --env PORT=8080 \
-  --env LAGHOUND_PUBLIC_DEMO=1 \
+  --env "LAGHOUND_PUBLIC_DEMO=$PUBLIC_DEMO_VALUE" \
   --env "LAGHOUND_TOKEN=$LAGHOUND_TOKEN" \
   "$RUST_IMAGE" >/dev/null
 
@@ -82,6 +83,16 @@ assert_authenticated_contains() {
   esac
 }
 
+assert_not_contains() {
+  url="$1"
+  unexpected="$2"
+  body="$(curl -fsS --max-time 5 "$url")"
+  case "$body" in
+    *"$unexpected"*) echo "Unexpected '$unexpected' in $url" >&2; return 1 ;;
+    *) ;;
+  esac
+}
+
 assert_status() {
   expected="$1"
   url="$2"
@@ -97,6 +108,10 @@ wait_for_page "http://127.0.0.1:$CSHARP_PORT/"
 wait_for_page "http://127.0.0.1:$RUST_PORT/"
 assert_contains "http://127.0.0.1:$CSHARP_PORT/" "LIVE REFERENCE"
 assert_contains "http://127.0.0.1:$RUST_PORT/" "LIVE REFERENCE"
+assert_contains "http://127.0.0.1:$CSHARP_PORT/" "C# · ASP.NET CORE"
+assert_contains "http://127.0.0.1:$RUST_PORT/" "RUST · AXUM / TOWER"
+assert_not_contains "http://127.0.0.1:$CSHARP_PORT/" "{{"
+assert_not_contains "http://127.0.0.1:$RUST_PORT/" "{{"
 assert_contains "http://127.0.0.1:$CSHARP_PORT/work" "C# handler completed"
 assert_contains "http://127.0.0.1:$RUST_PORT/work" "Rust handler completed"
 assert_authenticated_contains "http://127.0.0.1:$CSHARP_PORT/laghound/health" '"status":"ok"'

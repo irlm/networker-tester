@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { api, errorMessage } from '../api/client';
 import type { SdkEndpointCreate } from '../api/types';
 import { useToast } from '../hooks/useToast';
+import { isAbsoluteHttpUrl } from '../lib/url';
 import { Button } from './common/Button';
 import { FormField, Input } from './common/FormControls';
 import { Modal } from './common/Modal';
@@ -15,16 +16,6 @@ interface CreateSdkEndpointDialogProps {
 
 /** Default probe route mounted by the LagHound SDK. Matches the tester default. */
 const DEFAULT_ROUTE = '/laghound/echo';
-
-/** True for an absolute http(s) URL — mirrors the C# TryNormalizeUrl guard. */
-function isAbsoluteHttpUrl(raw: string): boolean {
-  try {
-    const u = new URL(raw.trim());
-    return u.protocol === 'http:' || u.protocol === 'https:';
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Register a LagHound SDK endpoint. Slide-over form matching
@@ -69,7 +60,7 @@ export function CreateSdkEndpointDialog({
       await api.createSdkEndpoint(projectId, {
         name: trimmedName,
         url: trimmedUrl,
-        token,
+        token: token.trim(),
         route: trimmedRoute || undefined,
         description: description.trim() || undefined,
       });

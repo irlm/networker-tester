@@ -10,7 +10,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 string token = Environment.GetEnvironmentVariable("LAGHOUND_TOKEN") ?? "demo-token-laghound";
 string port = Environment.GetEnvironmentVariable("PORT") ?? "8081";
-bool publicDemo = Environment.GetEnvironmentVariable("LAGHOUND_PUBLIC_DEMO") == "1";
+bool publicDemo = IsTruthy(Environment.GetEnvironmentVariable("LAGHOUND_PUBLIC_DEMO"));
 builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 
 builder.Services.AddLagHound(o =>
@@ -50,3 +50,13 @@ app.MapGet("/work", async () =>
 });
 
 app.Run();
+
+static bool IsTruthy(string? value)
+{
+    var normalized = value?.Trim();
+    return normalized is not null && (
+        string.Equals(normalized, "1", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(normalized, "true", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(normalized, "yes", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(normalized, "on", StringComparison.OrdinalIgnoreCase));
+}

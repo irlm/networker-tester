@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>LagHound Rust SDK demo</title>
+  <title>LagHound {{LANGUAGE}} SDK demo</title>
   <style>
     :root {
       --base: #0a0b0f;
@@ -62,31 +62,29 @@
 <body>
   <main>
     <header>
-      <div class="status"><span class="dot" aria-hidden="true"></span>LIVE REFERENCE · RUST · AXUM</div>
+      <div class="status"><span class="dot" aria-hidden="true"></span>LIVE REFERENCE · {{LANGUAGE_LABEL}}</div>
       <h1>This app can explain where a request spent its time.</h1>
-      <p class="lede">A minimal axum service with the LagHound endpoint mounted at <code>/laghound</code>. LagHound measures the trip from outside; the SDK reports the application-time slice from inside.</p>
+      <p class="lede">A minimal {{RUNTIME}} service with the LagHound endpoint mounted at <code>/laghound</code>. LagHound measures the trip from outside; the SDK reports the application-time slice from inside.</p>
     </header>
 
     <section class="signal" aria-labelledby="signal-title">
       <div class="signal-head"><span id="signal-title">REQUEST SIGNAL</span><span>endpoint contract v1</span></div>
       <div class="phases">
         <div class="phase"><strong>DNS → TCP → TLS → transfer</strong><span>measured by a LagHound runner</span></div>
-        <div class="phase"><strong>application</strong><span>reported by this Rust SDK</span></div>
+        <div class="phase"><strong>application</strong><span>reported by this {{LANGUAGE}} SDK</span></div>
       </div>
     </section>
 
     <div class="actions">
       <button type="button" id="run-work">Run the 30 ms handler</button>
-      <a class="button" href="https://github.com/irlm/networker-tester/tree/main/sdk/rust/example">View Rust source</a>
+      <a class="button" href="{{SOURCE_URL}}">View {{LANGUAGE}} source</a>
     </div>
     <p id="result" aria-live="polite"></p>
 
     <section class="details">
       <div>
         <h2>Mount it</h2>
-        <pre><code>let app = Router::new().merge(laghound::router(
-  laghound::Config::new(token)
-)?);</code></pre>
+        <pre><code>{{MOUNT_SNIPPET}}</code></pre>
       </div>
       <div>
         <h2>Probe it</h2>
