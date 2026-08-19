@@ -136,6 +136,137 @@ public sealed class WriteEndpointCoverageTests : IClassFixture<ControlPlaneFixtu
     }
 
     [Fact]
+    public async Task Post_test_config_find_or_create_returns_existing_row_with_same_id()
+    {
+        // #812: find-or-create by name over the capped list is unsound — the
+        // idempotent create is the sound replacement. Same name + flag → 200
+        // with the EXISTING row (same id), and no duplicate is persisted.
+        var client = _fixture.CreateAdminClient();
+        var name = Uniq("cfg-foc");
+        var firstId = await CreateTestConfigAsync(client, name);
+
+        var body = new
+        {
+            name,
+            endpoint = new { kind = "network", host = "https://example.com" },
+            workload = new { modes = new[] { "http11" }, runs = 3 },
+            find_or_create = true,
+        };
+        var resp = await client.PostAsJsonAsync($"/api/v2/projects/{Pid}/test-configs", body);
+
+        Assert.True(resp.StatusCode == HttpStatusCode.OK,
+            $"POST find_or_create duplicate → {(int)resp.StatusCode} (want 200); body: {await Body(resp)}");
+        using var doc = JsonDocument.Parse(await Body(resp));
+        Assert.Equal(firstId, doc.RootElement.GetProperty("id").GetGuid());
+        // Same DTO shape as a fresh create — the frontend consumes it unchanged.
+        Assert.Equal(name, doc.RootElement.GetProperty("name").GetString());
+        Assert.Equal(JsonValueKind.Object, doc.RootElement.GetProperty("endpoint").ValueKind);
+        Assert.Equal(JsonValueKind.Object, doc.RootElement.GetProperty("workload").ValueKind);
+
+        await using var ctx = _fixture.NewDbContext();
+        Assert.Equal(1, await ctx.TestConfigs.CountAsync(c => c.ProjectId == Pid && c.Name == name));
+    }
+
+    [Fact]
+    public async Task Post_test_config_duplicate_name_without_flag_still_conflicts_409()
+    {
+        // Intentional duplicates elsewhere must keep failing loudly — the
+        // idempotent behavior is opt-in only (#812).
+        var client = _fixture.CreateAdminClient();
+        var name = Uniq("cfg-dup");
+        await CreateTestConfigAsync(client, name);
+
+        var body = new
+        {
+            name,
+            endpoint = new { kind = "network", host = "https://example.com" },
+            workload = new { modes = new[] { "http11" }, runs = 3 },
+        };
+        var resp = await client.PostAsJsonAsync($"/api/v2/projects/{Pid}/test-configs", body);
+
+        Assert.True(resp.StatusCode == HttpStatusCode.Conflict,
+            $"POST duplicate without find_or_create → {(int)resp.StatusCode} (want 409); body: {await Body(resp)}");
+    }
+
+    [Fact]
+    public async Task List_test_configs_name_filter_finds_configs_beyond_the_200_cap()
+    {
+        // #812 root cause reproduced: an OLD config pushed out of the 200-newest
+        // list window is invisible to the unfiltered list, but ?name=<exact>
+        // bypasses the cap and still finds it (and only it). find_or_create
+        // must reuse it rather than 409.
+        var client = _fixture.CreateAdminClient();
+        var oldName = Uniq("cfg-old-beyond-cap");
+        var oldId = await CreateTestConfigAsync(client, oldName);
+
+        // Bury it under 200 newer rows (seeded straight into the DB — the cap
+        // is what's under test, not the create path).
+        var newer = DateTime.UtcNow.AddMinutes(5);
+        await using (var seed = _fixture.NewDbContext())
+        {
+            seed.TestConfigs.AddRange(Enumerable.Range(0, 200).Select(i => new TestConfig
+            {
+                Id = Guid.NewGuid(),
+                ProjectId = Pid,
+                Name = Uniq($"cfg-filler-{i}"),
+                EndpointKind = "network",
+                TestKind = "network",
+                EndpointRef = """{"kind":"network","host":"https://example.com"}""",
+                Workload = """{"modes":["http11"],"runs":1}""",
+                MaxDurationSecs = 60,
+                CreatedAt = newer,
+                UpdatedAt = newer,
+            }));
+            await seed.SaveChangesAsync();
+        }
+
+        // Unfiltered list: capped at the 200 newest → the old name is gone.
+        var listResp = await client.GetAsync($"/api/v2/projects/{Pid}/test-configs");
+        Assert.True(listResp.StatusCode == HttpStatusCode.OK,
+            $"GET test-configs → {(int)listResp.StatusCode}; body: {await Body(listResp)}");
+        using (var listDoc = JsonDocument.Parse(await Body(listResp)))
+        {
+            Assert.Equal(200, listDoc.RootElement.GetArrayLength());
+            Assert.DoesNotContain(
+                listDoc.RootElement.EnumerateArray(),
+                e => e.GetProperty("name").GetString() == oldName);
+        }
+
+        // Name filter: bypasses the cap — exactly the old row comes back.
+        var filtered = await client.GetAsync(
+            $"/api/v2/projects/{Pid}/test-configs?name={Uri.EscapeDataString(oldName)}");
+        Assert.True(filtered.StatusCode == HttpStatusCode.OK,
+            $"GET test-configs?name= → {(int)filtered.StatusCode}; body: {await Body(filtered)}");
+        using (var filteredDoc = JsonDocument.Parse(await Body(filtered)))
+        {
+            Assert.Equal(1, filteredDoc.RootElement.GetArrayLength());
+            Assert.Equal(oldId, filteredDoc.RootElement[0].GetProperty("id").GetGuid());
+            Assert.Equal(oldName, filteredDoc.RootElement[0].GetProperty("name").GetString());
+        }
+
+        // A name that matches nothing returns an empty array, not the capped list.
+        var miss = await client.GetAsync(
+            $"/api/v2/projects/{Pid}/test-configs?name={Uri.EscapeDataString(Uniq("cfg-no-such"))}");
+        using var missDoc = JsonDocument.Parse(await Body(miss));
+        Assert.Equal(0, missDoc.RootElement.GetArrayLength());
+
+        // And find_or_create against the buried name reuses it — the exact
+        // production failure (URL Probe 409) now resolved server-side.
+        var focBody = new
+        {
+            name = oldName,
+            endpoint = new { kind = "network", host = "https://example.com" },
+            workload = new { modes = new[] { "http11" }, runs = 3 },
+            find_or_create = true,
+        };
+        var focResp = await client.PostAsJsonAsync($"/api/v2/projects/{Pid}/test-configs", focBody);
+        Assert.True(focResp.StatusCode == HttpStatusCode.OK,
+            $"POST find_or_create (buried name) → {(int)focResp.StatusCode} (want 200); body: {await Body(focResp)}");
+        using var focDoc = JsonDocument.Parse(await Body(focResp));
+        Assert.Equal(oldId, focDoc.RootElement.GetProperty("id").GetGuid());
+    }
+
+    [Fact]
     public async Task Patch_test_config_updates_field_and_returns_200()
     {
         var client = _fixture.CreateAdminClient();

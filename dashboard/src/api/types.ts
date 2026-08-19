@@ -105,6 +105,14 @@ export interface TestConfigCreate {
   workload: Workload;
   methodology?: Methodology;
   max_duration_secs?: number;
+  /**
+   * Server-side idempotent create (#812): on a UNIQUE(project_id, name)
+   * collision the server returns the EXISTING config (200, same shape as a
+   * fresh create) instead of 409. Use for reuse-by-name flows (URL Probe) —
+   * client-side find over the 200-newest list window misses old names.
+   * Omit where a duplicate name must keep failing loudly.
+   */
+  find_or_create?: boolean;
 }
 
 export type RunStatus = 'queued' | 'provisioning' | 'running' | 'completed' | 'failed' | 'cancelled';

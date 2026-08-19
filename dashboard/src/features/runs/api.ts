@@ -57,8 +57,13 @@ export const runsApi = {
       body: JSON.stringify(config),
     }),
 
-  listConfigs: (projectId: string, signal?: AbortSignal) =>
-    request<TestConfigListItem[]>(`/v2/projects/${projectId}/test-configs`, withSignal(signal)),
+  // `name` is the exact-name equality filter (#812) — it bypasses the list's
+  // 200-newest cap, so a match comes back regardless of the config's age.
+  listConfigs: (projectId: string, signal?: AbortSignal, name?: string) =>
+    request<TestConfigListItem[]>(
+      `/v2/projects/${projectId}/test-configs${name ? `?name=${encodeURIComponent(name)}` : ''}`,
+      withSignal(signal),
+    ),
 
   getConfig: (configId: string, signal?: AbortSignal) =>
     request<TestConfig>(`/v2/test-configs/${configId}`, withSignal(signal)),

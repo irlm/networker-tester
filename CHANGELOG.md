@@ -13,6 +13,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [0.28.251] - 2026-08-19
+
+### Fixed
+
+- **URL Probe no longer 409s on previously-probed hosts** (#812). The probe
+  page's find-or-create matched config names against the 200-newest list, so
+  a config older than 200 rows (easy after heavy matrix testing) was missed
+  and the create hit the UNIQUE(project_id, name) constraint. Config create
+  now supports opt-in idempotency (`find_or_create: true` returns the
+  existing row, race-free via the unique-violation catch), the config list
+  gains an exact `?name=` filter that bypasses the cap, and the probe page
+  uses both. Same failure class as the historical canary wedge — now dead
+  product-wide.
+
 ## [0.28.250] - 2026-08-19
 
 ### Added

@@ -73,6 +73,25 @@ public static class TestConfigWriteEndpoints
                 return ApiError.BadRequest("test_kind must be one of: network, url_probe, sdk_probe, benchmark");
             }
 
+            // Idempotent create, opt-in (#812): `find_or_create: true` makes a
+            // name collision return the EXISTING row (200, same DTO as a fresh
+            // create) instead of 409. Find-or-create by name over the capped
+            // LIST endpoint is unsound (the 200-newest window silently drops
+            // old names — the URL Probe 409 and the canary wedge before it);
+            // this is the race-free server-side replacement. The pre-check here
+            // handles the common case and mirrors the client's reuse fast path
+            // (no re-run of the capability gate for a config that already
+            // exists); the UNIQUE-violation catch below closes the TOCTOU race.
+            if (req.FindOrCreate == true)
+            {
+                var existing = await db.TestConfigs.AsNoTracking()
+                    .FirstOrDefaultAsync(c => c.ProjectId == projectId && c.Name == req.Name, ct);
+                if (existing is not null)
+                {
+                    return Results.Ok(ToDto(existing));
+                }
+            }
+
             // Phase 2 capability enforcement: reject (mode, target) combos that
             // can only ever fail — e.g. throughput / sdkprobe / apibench against a
             // raw URL (endpoint.kind "network"), or an HTTP/3 mode through a
@@ -134,6 +153,21 @@ public static class TestConfigWriteEndpoints
             }
             catch (DbUpdateException ex) when (IsUniqueViolation(ex))
             {
+                if (req.FindOrCreate == true)
+                {
+                    // Lost the race to a concurrent create — the row exists NOW
+                    // even though the pre-check missed it. Return it (#812).
+                    db.Entry(cfg).State = EntityState.Detached;
+                    var existing = await db.TestConfigs.AsNoTracking()
+                        .FirstOrDefaultAsync(c => c.ProjectId == projectId && c.Name == req.Name, ct);
+                    if (existing is not null)
+                    {
+                        return Results.Ok(ToDto(existing));
+                    }
+                    // Created-then-deleted between the violation and the re-read:
+                    // fall through to the honest conflict (the caller retries).
+                }
+
                 // UNIQUE(project_id, name) → 409, matching Rust's 23505 mapping.
                 return ApiError.Conflict("a test config with this name already exists");
             }
@@ -345,7 +379,10 @@ public static class TestConfigWriteEndpoints
 
     // ── Request DTOs (snake_case bodies) ──────────────────────────────────────
 
-    /// <summary>Mirrors Rust <c>CreateTestConfigRequest</c>.</summary>
+    /// <summary>Mirrors Rust <c>CreateTestConfigRequest</c>, plus the C#-side
+    /// <c>find_or_create</c> flag (#812): when true, a UNIQUE(project_id, name)
+    /// collision returns the existing config (200) instead of 409. Absent/false
+    /// keeps the loud conflict for intentional duplicate detection.</summary>
     public sealed record CreateTestConfigRequest(
         [property: JsonPropertyName("name")] string Name,
         [property: JsonPropertyName("description")] string? Description,
@@ -353,7 +390,8 @@ public static class TestConfigWriteEndpoints
         [property: JsonPropertyName("workload")] JsonElement Workload,
         [property: JsonPropertyName("methodology")] JsonElement? Methodology,
         [property: JsonPropertyName("max_duration_secs")] int? MaxDurationSecs,
-        [property: JsonPropertyName("test_kind")] string? TestKind = null);
+        [property: JsonPropertyName("test_kind")] string? TestKind = null,
+        [property: JsonPropertyName("find_or_create")] bool? FindOrCreate = null);
 
     /// <summary>
     /// Mirrors Rust <c>UpdateTestConfigRequest</c>. The double-Option fields
