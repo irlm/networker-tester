@@ -13,6 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [0.28.253] - 2026-08-19
+
+### Fixed
+
+- **The Benchmark Regressions page finally says why it is empty** (#810). An
+  empty state now distinguishes "these runs were never compared" (with a
+  pointer to how comparisons get produced) from "compared, no regressions
+  found", and a run can be pinned as the comparison baseline directly from
+  its detail page instead of the baseline being implicit.
+
 ## [0.28.252] - 2026-08-19
 
 ### Fixed

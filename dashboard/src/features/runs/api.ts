@@ -6,6 +6,7 @@ import type {
   ComparisonReport,
   LiveAttempt,
   EndpointKind,
+  PinBaselineResult,
   RunInfra,
   RunStatus,
   TestConfig,
@@ -115,6 +116,14 @@ export const runsApi = {
 
   cancel: (runId: string) =>
     request<void>(`/v2/test-runs/${runId}/cancel`, { method: 'POST' }),
+
+  // Pin/unpin this run as its config's regression baseline (#810). Pin is
+  // only accepted for completed runs with a benchmark artifact.
+  pinBaseline: (runId: string) =>
+    request<PinBaselineResult>(`/v2/test-runs/${runId}/pin-baseline`, { method: 'POST' }),
+
+  unpinBaseline: (runId: string) =>
+    request<PinBaselineResult>(`/v2/test-runs/${runId}/pin-baseline`, { method: 'DELETE' }),
 
   compare: (runIds: string[], signal?: AbortSignal) =>
     request<ComparisonReport>('/v2/test-runs/compare', {

@@ -17,9 +17,11 @@ import { useToast } from '../hooks/useToast';
 import {
   useCancelRunMutation,
   useComparisonGroupQuery,
+  usePinBaselineMutation,
   useRunArtifactQuery,
   useRunAttemptsQuery,
   useRunInfraQuery,
+  useTestConfigQuery,
   useTestRunQuery,
   useTestRunsQuery,
 } from '../features/runs/queries';
@@ -53,7 +55,7 @@ import {
 const RunDetailCharts = lazy(() => import('../features/runs/components/RunDetailCharts'));
 
 export function RunDetailPage() {
-  const { projectId, isProjectAdmin } = useProject();
+  const { projectId, isProjectAdmin, isOperator } = useProject();
   const { runId } = useParams<{ runId: string }>();
   const addToast = useToast();
   const [expandedProtocols, setExpandedProtocols] = useState<Set<string>>(new Set());
@@ -69,6 +71,14 @@ export function RunDetailPage() {
   const artifactQuery = useRunArtifactQuery(id, run?.artifact_id);
   const infraQuery = useRunInfraQuery(id);
   const cancelRun = useCancelRunMutation(id);
+
+  // ── Pin-as-baseline (#810): completed benchmark runs (artifact-bearing —
+  //    the detector's own gate) can be pinned as the config's regression
+  //    baseline. The config detail carries the current pin.
+  const isBenchmarkRun = !!run?.artifact_id && run.status === 'completed';
+  const configQuery = useTestConfigQuery(run?.test_config_id ?? '', isBenchmarkRun);
+  const isPinnedBaseline = isBenchmarkRun && configQuery.data?.baseline_run_id === id;
+  const pinBaseline = usePinBaselineMutation(id, run?.test_config_id);
 
   // ── Comparison-group context (#803): breadcrumb + prev/next cell nav ──
   const groupId = run?.comparison_group_id ?? '';
@@ -259,6 +269,14 @@ export function RunDetailPage() {
             {run?.artifact_id && (
               <span className="text-xs text-gray-300 bg-gray-500/10 px-1.5 py-0.5 rounded">benchmark</span>
             )}
+            {isPinnedBaseline && (
+              <span
+                className="text-xs text-cyan-400 bg-cyan-500/10 px-1.5 py-0.5 rounded"
+                title="This run is the config's pinned regression baseline"
+              >
+                baseline
+              </span>
+            )}
           </div>
           <p className="text-sm text-gray-400">
             {run?.config_name && <>Config: <span className="text-gray-300">{run.config_name}</span> · </>}
@@ -331,6 +349,28 @@ export function RunDetailPage() {
               loadingLabel="Cancelling…"
             >
               Cancel
+            </Button>
+          )}
+          {/* Pin/unpin this run as the config's regression baseline (#810) —
+              operator write, only for completed artifact-bearing runs (the
+              detector can only compare against those). */}
+          {isOperator && isBenchmarkRun && configQuery.data && (
+            <Button
+              onClick={() => {
+                pinBaseline.mutate(!isPinnedBaseline, {
+                  onSuccess: () => addToast('info', isPinnedBaseline
+                    ? 'Baseline unpinned — detection falls back to each run’s previous run'
+                    : `Run ${shortId} pinned as the config’s regression baseline`),
+                  onError: (e) => addToast('error', `Failed to ${isPinnedBaseline ? 'unpin' : 'pin'} baseline: ${errorMessage(e)}`),
+                });
+              }}
+              size="xs"
+              loading={pinBaseline.isPending}
+              title={isPinnedBaseline
+                ? 'Stop using this run as the regression baseline'
+                : 'Compare every future run of this config against this run'}
+            >
+              {isPinnedBaseline ? 'Unpin baseline' : 'Pin as baseline'}
             </Button>
           )}
           {/* Read-only document export — available to every role that can see

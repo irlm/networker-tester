@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   useCancelRunMutation: vi.fn(),
   useComparisonGroupQuery: vi.fn(),
   useTestRunsQuery: vi.fn(),
+  useTestConfigQuery: vi.fn(),
+  usePinBaselineMutation: vi.fn(),
 }));
 
 vi.mock('../features/runs/queries', () => ({
@@ -25,6 +27,8 @@ vi.mock('../features/runs/queries', () => ({
   useCancelRunMutation: mocks.useCancelRunMutation,
   useComparisonGroupQuery: mocks.useComparisonGroupQuery,
   useTestRunsQuery: mocks.useTestRunsQuery,
+  useTestConfigQuery: mocks.useTestConfigQuery,
+  usePinBaselineMutation: mocks.usePinBaselineMutation,
 }));
 vi.mock('../hooks/useProject', () => ({
   useProject: () => ({ projectId: 'p-1', isProjectAdmin: false }),
@@ -68,6 +72,8 @@ function mockAll(current: TestRun) {
   mocks.useCancelRunMutation.mockReturnValue({ mutate: vi.fn(), isPending: false });
   mocks.useComparisonGroupQuery.mockReturnValue({ data: { id: GROUP_ID, name: 'my matrix' } });
   mocks.useTestRunsQuery.mockReturnValue({ data: siblings, isPending: false });
+  mocks.useTestConfigQuery.mockReturnValue({ data: null });
+  mocks.usePinBaselineMutation.mockReturnValue({ mutate: vi.fn(), isPending: false });
 }
 
 function renderPage(runId: string) {

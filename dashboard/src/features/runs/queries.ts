@@ -239,3 +239,25 @@ export function useCancelRunMutation(runId: string) {
     onSuccess: () => client.invalidateQueries({ queryKey: runKeys.detail(runId) }),
   });
 }
+
+/** Single-config detail (baseline pin state on the run page). */
+export function useTestConfigQuery(configId: string, enabled = true) {
+  return useQuery({
+    ...testConfigQueryOptions(configId),
+    enabled: !!configId && enabled,
+  });
+}
+
+/**
+ * Pin/unpin this run as its config's regression baseline (#810). Refreshes
+ * the cached config detail so the page's pinned state flips immediately.
+ */
+export function usePinBaselineMutation(runId: string, configId: string | undefined) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (pin: boolean) => (pin ? runsApi.pinBaseline(runId) : runsApi.unpinBaseline(runId)),
+    onSuccess: () => (configId
+      ? client.invalidateQueries({ queryKey: runKeys.config(configId) })
+      : undefined),
+  });
+}

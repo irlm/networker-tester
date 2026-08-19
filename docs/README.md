@@ -22,6 +22,7 @@ points here for the detailed material.
 - [`ops-nginx-ws-redaction.md`](ops-nginx-ws-redaction.md): nginx access-log redaction for the `/ws/*` credential query strings — re-apply procedure for a VM rebuild
 - [`reports-app-network.md`](reports-app-network.md): the Application Network Performance report — splits SDK-probe latency into application (server) vs network time
 - [`reports-perf-per-cost.md`](reports-perf-per-cost.md): the provider performance-per-cost report — probe results + tester metadata + curated price table
+- [`benchmark-regressions.md`](benchmark-regressions.md): benchmark regression detection — baseline resolution, the schedules pathway (matrix launches never accumulate baselines), pin-as-baseline, and the comparison-activity summary semantics
 - [`sdk/`](sdk/README.md): the LagHound SDK — embeddable diagnostic endpoint spec ([`sdk/contract-v1.md`](sdk/contract-v1.md) is the v1 wire contract)
 - [`dead-code-removal-strategy.md`](dead-code-removal-strategy.md): the post-decommission dead-code sweep plan (what dies with the retired crates, what is a deliberate keep)
 - [`dotnet-migration.md`](dotnet-migration.md): the Rust↔C# seam — versioned JSON contract, differential-testing architecture

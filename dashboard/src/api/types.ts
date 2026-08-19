@@ -1484,6 +1484,31 @@ export interface BenchmarkRegressionWithConfig extends BenchmarkRegression {
   config_name: string;
 }
 
+/**
+ * Comparison-activity summary (#810) — derived from run history, not stored
+ * counters; the `semantics` field states exactly what the numbers mean.
+ */
+export interface BenchmarkRegressionSummary {
+  /** Configs whose next completed run will be compared against a baseline. */
+  comparable_configs: number;
+  /** Configs with a pinned baseline_run_id. */
+  pinned_baseline_configs: number;
+  /** Runs that had a baseline to compare against (approximation — see semantics). */
+  runs_compared: number;
+  last_comparison_at: string | null;
+  /** Exact count of persisted breach rows. */
+  total_regressions: number;
+  last_regression_at: string | null;
+  /** Server statement of how the derived counts are computed. */
+  semantics: string;
+}
+
+/** Response of POST/DELETE /v2/test-runs/{id}/pin-baseline. */
+export interface PinBaselineResult {
+  config_id: string;
+  baseline_run_id: string | null;
+}
+
 export interface GroupedLeaderboardEntry {
   language: string;
   run_count: number;
