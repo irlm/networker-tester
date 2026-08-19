@@ -13,6 +13,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [0.28.247] - 2026-08-19
+
+### Fixed
+
+- **.NET language installs unbroken across the board** (#801). net9-aot and
+  net10-aot were missing from the Linux allowed-language list (instant
+  install failure); plain net9 failed whenever a system dotnet existed (the
+  SDK-channel check was skipped and the publish error silenced); launches
+  now pin DOTNET_ROOT so dotnet-install runtimes resolve. AOT publishes get
+  clang/zlib prerequisites on Linux. AOT on Windows is genuinely
+  unsupportable (needs VS C++ Build Tools) and is now EXCLUDED at the wizard
+  (languageAllowedOnOs both directions) and rejected server-side — no more
+  doomed cells.
+- **Caddy-on-Windows failures are no longer invisible** (#801 pattern B —
+  4/4 systematic in the field). The Windows proxy setup surfaced no remote
+  output, never retried Conflicts, and only warned on verify failure; now:
+  output captured, Conflict retry, success marker required, ~90s serve
+  verify (HTTP + HTTPS) inside install.ps1, UDP 8454 NSG rule for h3, and a
+  fatal error with diagnostics instead of a silent 6-minute reachability
+  death. One live Windows Caddy cell after deploy pinpoints any remaining
+  in-guest cause.
+
 ## [0.28.246] - 2026-08-19
 
 ### Added
