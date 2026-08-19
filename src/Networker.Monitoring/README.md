@@ -20,7 +20,7 @@ This foundation provides:
 
 | Setting | Required | Purpose |
 |---|---:|---|
-| `ConnectionStrings__Monitoring` or `MONITORING_DB_URL_NPGSQL` | Production | Connection to the monitoring-owned PostgreSQL database |
+| `ConnectionStrings__Monitoring` or `MONITORING_DB_URL_NPGSQL` | Outside Development | Connection to the monitoring-owned PostgreSQL database (startup fails without it; the localhost default exists only in Development) |
 | `MONITORING_API_KEY` | Outside Development | Independent service-to-service management key |
 | `MONITORING_RUN_MIGRATIONS=0` | No | Disable startup migrations for externally managed/test hosts |
 | `MONITORING_BACKGROUND_SERVICES=1` | To execute checks | Explicitly enable the scheduler and runner |
@@ -29,6 +29,24 @@ The scheduler is disabled by default. Do not enable it for untrusted target
 configuration until the target-address, redirect, and DNS-rebinding controls
 from the hardening phase are present. The foundation client does not follow
 redirects.
+
+### Target-address guard (foundation scope)
+
+`MonitorTargetGuard` provides minimal SSRF protection today, in two layers:
+
+- **Create/update validation** rejects targets that are obviously non-global —
+  `localhost`, `*.localhost`, `*.local`, and literal loopback, link-local,
+  RFC1918, CGNAT, ULA, unspecified, or multicast addresses.
+- **Probe execution** resolves the target host before every request and
+  records a `blocked_target` failed check (no request is sent) whenever any
+  resolved address is non-global — including the cloud metadata endpoint
+  `169.254.169.254`.
+
+This is address rejection only. **DNS-rebinding-grade hardening** — pinning
+the vetted resolved address for the actual connection and re-validating
+redirect destinations — lands in the next PR and is a blocking prerequisite
+before any deployment sets `MONITORING_BACKGROUND_SERVICES=1` for untrusted
+target configuration.
 
 The API key is a bootstrap boundary for the service foundation. The integrated
 dashboard and standalone outage console will use independently validated signed

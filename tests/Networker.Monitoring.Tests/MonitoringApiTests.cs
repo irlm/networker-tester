@@ -96,6 +96,32 @@ public sealed class MonitoringApiTests(MonitoringFixture fixture)
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
+    [Theory]
+    [InlineData("http://localhost:5030/health")]
+    [InlineData("http://api.localhost/health")]
+    [InlineData("https://printer.local/health")]
+    [InlineData("http://127.0.0.1/health")]
+    [InlineData("https://10.0.0.8/health")]
+    [InlineData("http://169.254.169.254/latest/meta-data")]
+    [InlineData("http://[::1]/health")]
+    public async Task Create_rejects_obviously_non_global_targets(string targetUrl)
+    {
+        using var client = CreateAuthenticatedClient();
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/v1/projects/project-{Guid.NewGuid():N}/monitors",
+            new
+            {
+                name = "Internal target",
+                target_url = targetUrl,
+                method = "GET",
+            });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Contains("publicly routable", body.GetProperty("error").GetString());
+    }
+
     private HttpClient CreateAuthenticatedClient()
     {
         var client = fixture.CreateClient();

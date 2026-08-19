@@ -38,23 +38,43 @@ public sealed class MonitorScheduler(
         while (await timer.WaitForNextTickAsync(stoppingToken));
     }
 
-    private async Task RunTickAsync(CancellationToken cancellationToken)
+    internal async Task RunTickAsync(CancellationToken cancellationToken)
     {
-        using var leaseScope = scopeFactory.CreateScope();
-        var db = leaseScope.ServiceProvider.GetRequiredService<MonitoringDbContext>();
-        var leases = await MonitorLeaseService.LeaseDueAsync(
-            db,
-            _workerId,
-            timeProvider.GetUtcNow(),
-            batchSize: 10,
-            leaseDuration: TimeSpan.FromSeconds(45),
-            cancellationToken);
-
-        foreach (var lease in leases)
+        IReadOnlyList<LeasedMonitor> leases;
+        using (var leaseScope = scopeFactory.CreateScope())
         {
-            using var runScope = scopeFactory.CreateScope();
-            var runner = runScope.ServiceProvider.GetRequiredService<MonitorCheckRunner>();
-            await runner.RunAsync(lease, cancellationToken);
+            var db = leaseScope.ServiceProvider.GetRequiredService<MonitoringDbContext>();
+            leases = await MonitorLeaseService.LeaseDueAsync(
+                db,
+                _workerId,
+                timeProvider.GetUtcNow(),
+                batchSize: 10,
+                leaseDuration: TimeSpan.FromSeconds(45),
+                cancellationToken);
         }
+
+        // Each lease runs in its own scope and its failure is isolated: one
+        // broken monitor (or one failed persist) must never abort the rest of
+        // the batch. Parallelism is naturally bounded by the lease batch size.
+        await Task.WhenAll(leases.Select(async lease =>
+        {
+            try
+            {
+                using var runScope = scopeFactory.CreateScope();
+                var runner = runScope.ServiceProvider.GetRequiredService<MonitorCheckRunner>();
+                await runner.RunAsync(lease, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Shutdown: the lease simply expires and another worker retries.
+            }
+            catch (Exception exception)
+            {
+                logger.LogError(
+                    exception,
+                    "Monitoring lease execution failed for monitor {MonitorId}",
+                    lease.Monitor.MonitorId);
+            }
+        }));
     }
 }

@@ -39,6 +39,57 @@ public sealed class ProbeExecutorTests
     }
 
     [Fact]
+    public async Task Healthy_check_reports_ttfb_equal_to_total_until_body_assertions_exist()
+    {
+        var executor = NewExecutor(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        var monitor = NewMonitor(new MonitorAssertions());
+
+        var check = await executor.ExecuteAsync(
+            monitor, Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow, CancellationToken.None);
+
+        Assert.NotNull(check.TtfbMs);
+        Assert.Equal(check.TotalMs, check.TtfbMs);
+    }
+
+    [Fact]
+    public async Task Non_global_target_is_rejected_before_any_request_is_sent()
+    {
+        var requested = false;
+        var executor = NewExecutor(_ =>
+        {
+            requested = true;
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+        var monitor = NewMonitor(new MonitorAssertions());
+        monitor.TargetUrl = "http://169.254.169.254/latest/meta-data";
+
+        var check = await executor.ExecuteAsync(
+            monitor, Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow, CancellationToken.None);
+
+        Assert.False(requested);
+        Assert.Equal("critical", check.Outcome);
+        Assert.Equal("blocked_target", check.FailureKind);
+        Assert.Null(check.StatusCode);
+        Assert.Contains("non_global_address", check.AssertionResults);
+    }
+
+    [Theory]
+    [InlineData("http://127.0.0.1:5030/health")]
+    [InlineData("https://10.1.2.3/internal")]
+    [InlineData("http://localhost/admin")]
+    public async Task Private_targets_are_recorded_as_blocked(string targetUrl)
+    {
+        var executor = NewExecutor(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        var monitor = NewMonitor(new MonitorAssertions());
+        monitor.TargetUrl = targetUrl;
+
+        var check = await executor.ExecuteAsync(
+            monitor, Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow, CancellationToken.None);
+
+        Assert.Equal("blocked_target", check.FailureKind);
+    }
+
+    [Fact]
     public async Task Timeout_is_target_critical_not_runner_unknown()
     {
         var executor = NewExecutor(async (_, cancellationToken) =>

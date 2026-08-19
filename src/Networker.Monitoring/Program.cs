@@ -12,8 +12,18 @@ using Networker.Monitoring.Scheduling;
 var builder = WebApplication.CreateBuilder(args);
 
 var connectionString = builder.Configuration.GetConnectionString("Monitoring")
-    ?? builder.Configuration["MONITORING_DB_URL_NPGSQL"]
-    ?? "Host=127.0.0.1;Port=5432;Database=networker_monitoring;Username=networker;Password=networker";
+    ?? builder.Configuration["MONITORING_DB_URL_NPGSQL"];
+if (string.IsNullOrEmpty(connectionString))
+{
+    if (!builder.Environment.IsDevelopment())
+    {
+        throw new InvalidOperationException(
+            "MONITORING_DB_URL_NPGSQL (or ConnectionStrings:Monitoring) is required outside Development. " +
+            "Point it at the monitoring-owned PostgreSQL database — the service must not fall back to localhost in production.");
+    }
+
+    connectionString = "Host=127.0.0.1;Port=5432;Database=networker_monitoring;Username=networker;Password=networker";
+}
 
 var apiKeyValue = builder.Configuration["MONITORING_API_KEY"];
 if (string.IsNullOrEmpty(apiKeyValue))

@@ -28,12 +28,31 @@ public sealed class HttpMonitorProbeExecutor(
 
         try
         {
-            using var request = new HttpRequestMessage(new HttpMethod(monitor.Method), monitor.TargetUrl);
+            var targetUri = new Uri(monitor.TargetUrl, UriKind.Absolute);
+            var blockedAddress = await MonitorTargetGuard.FindBlockedAddressAsync(
+                targetUri.DnsSafeHost, timeout.Token);
+            if (blockedAddress is not null)
+            {
+                stopwatch.Stop();
+                return BuildCheck(
+                    monitor, locationId, checkId, scheduledAt, startedAt,
+                    "critical", "blocked_target", null,
+                    ttfbMs: null, totalMs: ToBoundedMilliseconds(stopwatch.Elapsed),
+                    "{\"target\":{\"passed\":false,\"reason\":\"non_global_address\"}}",
+                    $"Target resolves to a non-global address ({blockedAddress}); the probe refuses to contact it.");
+            }
+
+            using var request = new HttpRequestMessage(new HttpMethod(monitor.Method), targetUri);
             request.Headers.TryAddWithoutValidation("X-LagHound-Check-Id", checkId.ToString());
             using var response = await httpClientFactory.CreateClient("monitor-probe")
                 .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
             stopwatch.Stop();
 
+            // ResponseHeadersRead stops the clock at headers arrival, so this
+            // measurement IS the time-to-first-byte; total_ms deliberately
+            // excludes body transfer time until body assertions arrive (the
+            // response body is never read in the foundation release). Both
+            // columns carry the same honest number until then.
             var totalMs = ToBoundedMilliseconds(stopwatch.Elapsed);
             var statusCode = (int)response.StatusCode;
             var statusOk = statusCode >= assertions.StatusMin && statusCode <= assertions.StatusMax;
@@ -58,7 +77,7 @@ public sealed class HttpMonitorProbeExecutor(
 
             return BuildCheck(
                 monitor, locationId, checkId, scheduledAt, startedAt, outcome,
-                failureKind, statusCode, totalMs,
+                failureKind, statusCode, ttfbMs: totalMs, totalMs: totalMs,
                 JsonSerializer.Serialize(new
                 {
                     status = new
@@ -82,7 +101,8 @@ public sealed class HttpMonitorProbeExecutor(
             stopwatch.Stop();
             return BuildCheck(
                 monitor, locationId, checkId, scheduledAt, startedAt,
-                "critical", "timeout", null, ToBoundedMilliseconds(stopwatch.Elapsed),
+                "critical", "timeout", null, ttfbMs: null,
+                totalMs: ToBoundedMilliseconds(stopwatch.Elapsed),
                 "{\"request\":{\"passed\":false,\"reason\":\"timeout\"}}",
                 $"Request exceeded the {monitor.TimeoutMs} ms timeout.");
         }
@@ -91,7 +111,8 @@ public sealed class HttpMonitorProbeExecutor(
             stopwatch.Stop();
             return BuildCheck(
                 monitor, locationId, checkId, scheduledAt, startedAt,
-                "critical", "connect", null, ToBoundedMilliseconds(stopwatch.Elapsed),
+                "critical", "connect", null, ttfbMs: null,
+                totalMs: ToBoundedMilliseconds(stopwatch.Elapsed),
                 "{\"request\":{\"passed\":false,\"reason\":\"connect\"}}",
                 BoundError(exception.Message));
         }
@@ -106,6 +127,7 @@ public sealed class HttpMonitorProbeExecutor(
         string outcome,
         string? failureKind,
         int? statusCode,
+        int? ttfbMs,
         int totalMs,
         string assertionResults,
         string? errorSummary)
@@ -122,6 +144,7 @@ public sealed class HttpMonitorProbeExecutor(
             Outcome = outcome,
             FailureKind = failureKind,
             StatusCode = statusCode,
+            TtfbMs = ttfbMs,
             TotalMs = totalMs,
             AssertionResults = assertionResults,
             ErrorSummary = errorSummary,

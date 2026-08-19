@@ -15,4 +15,8 @@
     <ProjectReference Include="..\Networker.Monitoring.Data\Networker.Monitoring.Data.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Networker.Monitoring.Tests" />
+  </ItemGroup>
+
 </Project>

@@ -48,6 +48,7 @@ public sealed record MonitorCheckView(
     string Outcome,
     string? FailureKind,
     int? StatusCode,
+    int? TtfbMs,
     int? TotalMs,
     object AssertionResults,
     string? ErrorSummary);

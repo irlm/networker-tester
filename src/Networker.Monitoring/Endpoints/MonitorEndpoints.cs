@@ -346,6 +346,9 @@ public static class MonitorEndpoints
             || string.IsNullOrEmpty(uri.Host)
             || !string.IsNullOrEmpty(uri.UserInfo))
             return "Target URL must be an absolute HTTP or HTTPS URL without embedded credentials.";
+        if (Probe.MonitorTargetGuard.IsObviouslyNonGlobalHost(uri.DnsSafeHost))
+            return "Target host must be publicly routable — localhost, *.local, and literal private, "
+                + "link-local, or otherwise non-global addresses are not allowed.";
         if (NormalizeMethod(method) is not ("GET" or "HEAD"))
             return "Method must be GET or HEAD in the foundation release.";
         if (intervalSeconds is < 60 or > 86_400)
@@ -408,6 +411,7 @@ public static class MonitorEndpoints
             check.Outcome,
             check.FailureKind,
             check.StatusCode,
+            check.TtfbMs,
             check.TotalMs,
             JsonSerializer.Deserialize<object>(check.AssertionResults, JsonOptions) ?? new { },
             check.ErrorSummary);

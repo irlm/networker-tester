@@ -39,6 +39,8 @@ public sealed class MonitoringFixture : WebApplicationFactory<Program>, IAsyncLi
         await _database.DisposeAsync();
     }
 
+    public string ConnectionString => _database.GetConnectionString();
+
     public MonitoringDbContext NewDbContext() =>
         new(new DbContextOptionsBuilder<MonitoringDbContext>()
             .UseNpgsql(_database.GetConnectionString())
