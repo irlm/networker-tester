@@ -13,6 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [0.28.252] - 2026-08-19
+
+### Fixed
+
+- **Launch-flow hardening, #793 slices (b)+(d) plus the last #791 item.** The
+  wizard's review jump is gated until autoprovision actually completes, cost
+  and runner notices state what they will really do (no more silent runner
+  reuse surprises), "runner online" now means `power_state == running` AND
+  `agent_status == online` everywhere the wizard checks readiness, and the
+  cloud-account combobox looks like the control it is. Closes #793 and #791.
+
 ## [0.28.251] - 2026-08-19
 
 ### Fixed
