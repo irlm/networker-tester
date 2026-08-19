@@ -114,9 +114,11 @@ public class CellMaxDurationTests
 /// <summary>Pins the launch-time unsupported-combo gate (v0.28.141).</summary>
 public class UnsupportedComboTests
 {
-    private static ComparisonGroupsEndpoints.CellSpec Cell(string os, string stack) => new(
+    private static ComparisonGroupsEndpoints.CellSpec Cell(string os, string stack, string? language = null) => new(
         $"Azure/eastus {os} · {stack}",
-        $$"""{"kind":"pending","cloud_account_id":"{{Guid.NewGuid()}}","region":"eastus","vm_size":"Standard_B2s","os":"{{os}}","proxy_stack":"{{stack}}"}""",
+        language is null
+            ? $$"""{"kind":"pending","cloud_account_id":"{{Guid.NewGuid()}}","region":"eastus","vm_size":"Standard_B2s","os":"{{os}}","proxy_stack":"{{stack}}"}"""
+            : $$"""{"kind":"pending","cloud_account_id":"{{Guid.NewGuid()}}","region":"eastus","vm_size":"Standard_B2s","os":"{{os}}","proxy_stack":"{{stack}}","language":"{{language}}"}""",
         "pending",
         null);
 
@@ -147,6 +149,32 @@ public class UnsupportedComboTests
     [InlineData("linux", "nginx")]
     public void Supported_combos_pass(string os, string stack)
         => Assert.Null(ComparisonGroupsEndpoints.UnsupportedComboReason(Cell(os, stack)));
+
+    // Issue #801 pattern A: language×OS combos the installers reject must be
+    // refused at launch too, not burn a VM and die as "install.sh exited with
+    // code 1". Same per-OS sets as DeployConfigPreflight / install.sh.
+    [Theory]
+    [InlineData("windows", "csharp-net8-aot")]
+    [InlineData("windows", "csharp-net9-aot")]
+    [InlineData("windows", "csharp-net10-aot")]
+    [InlineData("windows", "cpp")]
+    [InlineData("windows", "nginx")]
+    [InlineData("linux", "csharp-net48")]
+    public void Language_outside_its_os_installer_set_is_rejected(string os, string lang)
+    {
+        var why = ComparisonGroupsEndpoints.UnsupportedComboReason(Cell(os, os == "windows" ? "iis" : "nginx", lang));
+        Assert.NotNull(why);
+        Assert.Contains($"'{lang}' is not deployable on a {os} endpoint", why);
+    }
+
+    [Theory]
+    [InlineData("linux", "csharp-net9-aot")]
+    [InlineData("linux", "csharp-net10-aot")]
+    [InlineData("windows", "csharp-net10")]
+    [InlineData("windows", "go")]
+    public void Language_inside_its_os_installer_set_passes(string os, string lang)
+        => Assert.Null(ComparisonGroupsEndpoints.UnsupportedComboReason(
+            Cell(os, os == "windows" ? "iis" : "nginx", lang)));
 
     [Fact]
     public void Non_pending_cells_are_never_gated()
