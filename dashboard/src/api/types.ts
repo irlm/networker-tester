@@ -129,6 +129,8 @@ export interface TestRun {
   endpoint_kind?: EndpointKind;
   test_kind?: TestKind;
   modes?: string[];
+  /** Set when this run was launched as a comparison-group cell (#794). */
+  comparison_group_id?: string | null;
   /** V046 run-envelope pass-through (detail route only; absent on old runs). */
   envelope?: RunEnvelope;
 }

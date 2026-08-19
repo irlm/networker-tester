@@ -19,6 +19,7 @@ export const runKeys = {
   configs: (projectId: string) => ['test-configs', projectId] as const,
   config: (configId: string) => ['test-configs', 'detail', configId] as const,
   schedules: (projectId: string) => ['test-schedules', projectId] as const,
+  comparisonGroup: (groupId: string) => ['comparison-groups', 'detail', groupId] as const,
 };
 
 export function useTestConfigsQuery(projectId: string, options: PollingOptions = {}) {
@@ -103,6 +104,43 @@ export function useRunArtifactQuery(runId: string, artifactId?: string | null) {
     queryFn: ({ signal }) => runsApi.getArtifact(runId, signal),
     enabled: !!runId && !!artifactId,
     staleTime: Infinity,
+  });
+}
+
+/** One attempts query per run — the comparison page's per-cell stat source.
+ *  Shares runKeys.attempts(runId) with the run-detail page cache. */
+export function useRunsAttemptsQueries(runIds: string[]) {
+  return useQueries({
+    queries: runIds.map((runId) => ({
+      queryKey: runKeys.attempts(runId),
+      queryFn: ({ signal }: { signal?: AbortSignal }) => runsApi.getAttempts(runId, signal),
+      enabled: !!runId,
+      staleTime: 60_000,
+    })),
+  });
+}
+
+/** One artifact query per run with an artifact_id (post-#796 per-case depth). */
+export function useRunsArtifactsQueries(runs: { id: string; artifact_id: string | null }[]) {
+  return useQueries({
+    queries: runs.map((run) => ({
+      queryKey: runKeys.artifact(run.id),
+      queryFn: ({ signal }: { signal?: AbortSignal }) => runsApi.getArtifact(run.id, signal),
+      enabled: !!run.id && !!run.artifact_id,
+      staleTime: Infinity,
+    })),
+  });
+}
+
+export function useComparisonGroupQuery(groupId: string) {
+  return useQuery({
+    queryKey: runKeys.comparisonGroup(groupId),
+    queryFn: ({ signal }) => runsApi.getComparisonGroup(groupId, signal),
+    enabled: !!groupId,
+    staleTime: 60_000,
+    // The group row may 404 for older runs whose group was deleted (ON DELETE
+    // SET NULL keeps the runs) — the page degrades to name parsing.
+    retry: false,
   });
 }
 
