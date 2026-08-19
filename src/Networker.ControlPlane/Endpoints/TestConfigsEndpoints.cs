@@ -28,13 +28,31 @@ public static class TestConfigsEndpoints
     {
         // GET /api/v2/projects/{projectId}/test-configs — list (newest first,
         // capped at 200). Mirrors Rust list_handler + db::test_configs::list.
+        //
+        // `?name=<exact>` (#812) is an equality filter that BYPASSES the
+        // 200-newest cap: a name-filtered query returns its matches regardless
+        // of age. Find-or-create-by-name over the capped window is unsound
+        // (old names silently vanish from the list → create → UNIQUE 409);
+        // this gives callers a sound exact lookup. UNIQUE(project_id, name)
+        // means at most one row comes back.
         app.MapGet("/api/v2/projects/{projectId}/test-configs", async (
             string projectId,
+            string? name,
             NetworkerDbContext db) =>
         {
-            var rows = await db.TestConfigs
+            var query = db.TestConfigs
                 .AsNoTracking()
-                .Where(c => c.ProjectId == projectId)
+                .Where(c => c.ProjectId == projectId);
+
+            if (!string.IsNullOrEmpty(name))
+            {
+                var matches = await query
+                    .Where(c => c.Name == name)
+                    .ToListAsync();
+                return Results.Ok(matches.Select(ToDto));
+            }
+
+            var rows = await query
                 .OrderByDescending(c => c.CreatedAt)
                 .Take(ListLimit)
                 .ToListAsync();

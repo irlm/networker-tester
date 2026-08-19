@@ -4,7 +4,8 @@ import { useNow } from '../hooks/useNow';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { runsApi } from '../features/runs/api';
 import { testersApi, type TesterRow } from '../api/testers';
-import type { EndpointRef, TestConfig, TestConfigCreate, TestConfigListItem, TestRun, Workload } from '../api/types';
+import type { TestConfig, TestConfigListItem, TestRun } from '../api/types';
+import { buildDiagRequest, extractHost, type DiagPreset } from '../lib/diag-request';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { RunResult } from '../components/common/RunResult';
 import { runDisplayStatus } from '../lib/runStatus';
@@ -25,7 +26,6 @@ import {
 
 // ── Types ───────────────────────────────────────────────────────────────
 
-type DiagPreset = 'quick' | 'standard' | 'full' | 'route';
 type FilterMode = 'all' | 'healthy' | 'partial' | 'failed' | 'pending' | 'stale';
 type SortMode = 'last-checked' | 'name' | 'slowest' | 'most-runs';
 
@@ -39,21 +39,6 @@ interface UrlGroup {
 }
 
 // ── Constants ───────────────────────────────────────────────────────────
-
-// Endpoint-only modes (udp echo, native pageload asset ladder) are excluded:
-// URL diagnostics always target arbitrary URLs, where those modes fail by
-// construction (user-caught 2026-08-12 — 4 guaranteed-failed attempts per Full
-// run). Real-site page load is covered by the browser* modes. Keep in lockstep
-// with mode-capabilities.ts / shared/modes.json `requires`.
-const DIAG_PRESETS: Record<DiagPreset, string[]> = {
-  quick: ['dns', 'tcp', 'tls', 'http2'],
-  standard: ['dns', 'tcp', 'tls', 'tlsresume', 'native', 'http1', 'http2', 'http3'],
-  full: ['dns', 'tcp', 'tls', 'tlsresume', 'native', 'http1', 'http2', 'http3', 'curl', 'browser1', 'browser2', 'browser3'],
-  // Reachability & route diagnostics (v0.28.78 modes — all `any`-target).
-  // ping may need ICMP privileges on the runner (Linux ping_group_range);
-  // a denial surfaces as an honest per-attempt Config error, not a hang.
-  route: ['ping', 'path', 'dualstack', 'pmtud'],
-};
 
 const DIAG_PRESET_LABELS: Record<DiagPreset, { time: string; desc: string }> = {
   quick: { time: '~3s', desc: 'dns, tcp, tls, http2' },
@@ -75,37 +60,6 @@ const PHASE_CSS_COLORS: Record<string, string> = {
 };
 
 // ── Helpers ─────────────────────────────────────────────────────────────
-
-function extractHost(input: string): string {
-  const trimmed = input.trim();
-  if (!trimmed) return '';
-  try {
-    if (trimmed.includes('://')) {
-      return new URL(trimmed).hostname;
-    }
-    const candidate = new URL(`https://${trimmed}`);
-    return candidate.hostname;
-  } catch {
-    return trimmed;
-  }
-}
-
-/**
- * Full URL to actually probe — the URL Probe hits the URL AS ENTERED (root when
- * no path is given), not `<host>/health`. A bare host becomes `https://<host>/`;
- * a full URL is preserved. Passed as the config's endpoint host so the agent
- * uses it verbatim (a bare host would get `/health` appended — the E2E P1-4
- * false-failure on arbitrary sites like example.com).
- */
-function toProbeUrl(input: string): string {
-  const t = input.trim();
-  try {
-    const u = t.includes('://') ? new URL(t) : new URL(`https://${t}`);
-    return u.toString();
-  } catch {
-    return t;
-  }
-}
 
 function getHostFromConfig(config: TestConfigListItem | TestConfig): string | null {
   // The endpoint is stored as JSON on TestConfigListItem, but we need to check
@@ -737,44 +691,22 @@ export function DiagnosticsPage() {
     // Multi-URL set (#782): the input accepts several URLs separated by
     // whitespace, commas, or newlines — they are probed TOGETHER in one run
     // (same tick, comparable conditions) via endpoint.hosts[].
-    const rawEntries = (targetHost || url)
-      .split(/[\s,]+/)
-      .map(e => e.trim())
-      .filter(Boolean);
-    const entries = [...new Set(rawEntries)];
-    const host = entries.length > 1 ? extractHost(entries[0]) : (targetHost || extractHost(url));
-    if (!host || entries.length === 0) {
+    const diag = buildDiagRequest(targetHost || url, preset);
+    if (!diag) {
       addToast('error', 'Enter a URL or hostname to test');
       return;
     }
-    const isSet = entries.length > 1;
+    const { host, entries, isSet, configName, config } = diag;
 
     setSubmitting(true);
     try {
-      const presetLabel = preset.charAt(0).toUpperCase() + preset.slice(1);
-      const configName = isSet
-        ? `Diag set: ${host} +${entries.length - 1} (${presetLabel})`
-        : `Diag: ${host} (${presetLabel})`;
-      // Probe the URL as entered (root by default) — a bare host would get
-      // `/health` appended by the agent (E2E P1-4). `host` stays bare for the
-      // display name / watchlist grouping.
-      const endpoint: EndpointRef = isSet
-        ? { kind: 'network', host: toProbeUrl(entries[0]), hosts: entries.map(toProbeUrl) }
-        : { kind: 'network', host: toProbeUrl(targetHost || url) };
-      const workload: Workload = {
-        modes: DIAG_PRESETS[preset],
-        runs: 1,
-        concurrency: 1,
-        timeout_ms: 5000,
-        payload_sizes: [],
-        capture_mode: 'headers-only',
-      };
-      const config: TestConfigCreate = { name: configName, test_kind: 'url_probe', endpoint, workload };
-
       // `test_config` has UNIQUE (project_id, name), so re-running a diagnostic
       // against the same host+preset must reuse the existing config rather than
       // try (and fail) to create a duplicate. This also keeps the Watched URLs
-      // list grouped by host instead of exploding every click.
+      // list grouped by host instead of exploding every click. The client-side
+      // find is only a fast path over the 200-newest list window — when the
+      // name fell out of it, the create itself is idempotent (find_or_create,
+      // #812) and returns the existing config instead of 409.
       const existing = configs.find(c => c.name === configName);
       let configId: string;
       let createdOrExisting: TestConfig | TestConfigListItem;
