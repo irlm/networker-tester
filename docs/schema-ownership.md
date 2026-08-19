@@ -1,5 +1,12 @@
 # Database schema ownership
 
+> **Monitoring database:** the independent API-monitoring service does not use
+> this control-plane schema. Its additive migration chain and bookkeeping table
+> (`_monitoring_migrations`) are owned by
+> `src/Networker.Monitoring.Data`. See
+> [`monitoring-plane-design.md`](monitoring-plane-design.md) for the failure-domain
+> boundary.
+
 **The control-plane PostgreSQL schema is owned by `src/Networker.Data` — not by
 the Rust dashboard.** This removes the last structural dependency on
 `crates/networker-dashboard` and unblocks deleting the Rust control-plane crates

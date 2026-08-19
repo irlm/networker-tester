@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.241] - 2026-08-18
+
+### Added
+
+- **API-monitoring service foundation** (#786): a new, separately runnable
+  `src/Networker.Monitoring` service (own solution projects
+  `Networker.Monitoring` + `Networker.Monitoring.Data`, own PostgreSQL
+  database and additive migration ledger `_monitoring_migrations` — fully
+  independent of the control-plane schema). Ships API-key-protected monitor
+  CRUD + check history under `/api/v1`, a DB-leased scheduler
+  (`FOR UPDATE SKIP LOCKED`) gated behind `MONITORING_BACKGROUND_SERVICES=1`,
+  and HTTP probe evaluation with status/latency assertions
+  (`healthy`/`warning`/`critical`/`unknown` outcomes). Includes a minimal
+  non-global-address SSRF guard at both create-time validation and probe
+  execution; full DNS-rebinding-grade hardening is a blocking follow-up
+  before any deployment enables the scheduler. The service is **dormant**
+  until deliberately deployed — nothing in the existing control plane,
+  agent, or release pipeline starts it.
+
+---
+
 ## [0.28.240] - 2026-08-19
 
 ### Added
