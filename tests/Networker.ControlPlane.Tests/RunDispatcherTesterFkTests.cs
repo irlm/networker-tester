@@ -43,7 +43,9 @@ public sealed class RunDispatcherTesterFkTests
     // A relational provider (Sqlite) is used, not InMemory, because the
     // production code paths use ExecuteUpdateAsync — which the InMemory provider
     // does not support. Sqlite (in-memory, shared open connection) supports it.
-    private static ServiceProvider BuildHost(string dbName)
+    // Internal: WatchdogDeploymentBudgetTests reuses the same host wiring
+    // (Sqlite + minimal schema + registry/bus) to drive watchdog ticks.
+    internal static ServiceProvider BuildHost(string dbName)
     {
         // One shared, kept-open in-memory Sqlite connection per host so the
         // schema built by EnsureCreated survives across the multiple DI scopes

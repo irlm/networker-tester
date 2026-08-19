@@ -61,13 +61,18 @@ public sealed class DeployRunner
     // downloads — the .NET 10 SDK alone is 300 MB), so the budget scales per
     // language. A 3-stack + 8-language Windows deploy was killed at the flat
     // 30m ceiling mid-install (field, 2026-08-16).
-    private static readonly TimeSpan BaseDeployTimeout = TimeSpan.FromMinutes(30);
+    // Internal (not private): the WatchdogService's stale-deploy sweep uses the
+    // base as its SQL prefilter floor so its threshold can never undercut the
+    // runner's budget (issue #804 — the watchdog killed a legitimate cpp deploy
+    // at a flat 30m while the runner's scaled budget was 38m).
+    internal static readonly TimeSpan BaseDeployTimeout = TimeSpan.FromMinutes(30);
     private static readonly TimeSpan PerLanguageBudget = TimeSpan.FromMinutes(8);
     private static readonly TimeSpan MaxDeployTimeout = TimeSpan.FromMinutes(120);
 
-    /// <summary>Workload-scaled install.sh budget: base + 8m per requested
-    /// reference-API language across all endpoints, capped at 2h.</summary>
-    internal static TimeSpan DeployTimeoutFor(string deployJson)
+    /// <summary>How many reference-API languages the deploy config requests,
+    /// summed across all endpoints. 0 for stack-only or unparseable configs
+    /// (the latter fail validation inside install.sh anyway).</summary>
+    internal static int LanguageCountFor(string deployJson)
     {
         var languages = 0;
         try
@@ -90,7 +95,17 @@ public sealed class DeployRunner
         {
             // Unparseable config fails validation inside install.sh anyway.
         }
-        var total = BaseDeployTimeout + languages * PerLanguageBudget;
+        return languages;
+    }
+
+    /// <summary>Workload-scaled install.sh budget: base + 8m per requested
+    /// reference-API language across all endpoints, capped at 2h. The single
+    /// source of truth for the deploy budget — the watchdog's stale-deploy
+    /// sweep derives its (later) reap threshold from this same function, so
+    /// the runner's own timeout always fires first with its richer message.</summary>
+    internal static TimeSpan DeployTimeoutFor(string deployJson)
+    {
+        var total = BaseDeployTimeout + LanguageCountFor(deployJson) * PerLanguageBudget;
         return total > MaxDeployTimeout ? MaxDeployTimeout : total;
     }
 
