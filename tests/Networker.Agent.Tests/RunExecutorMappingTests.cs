@@ -159,7 +159,11 @@ public class RunExecutorMappingTests : IDisposable
     [Fact]
     public async Task Benchmark_config_synthesizes_artifact_on_completion()
     {
-        var testerJson = """{"schema_version":"1.0","attempts":[{"attempt_id":"a1","success":true}]}""";
+        var testerJson = """
+            {"schema_version":"1.0",
+             "attempts":[{"attempt_id":"a1","protocol":"http1","success":true,
+                          "http":{"total_duration_ms":12.5}}]}
+            """.ReplaceLineEndings(" ");
         var meth = """{ "warmup_runs":5, "measured_runs":30, "cooldown_ms":100 }""";
         var exec = MakeExecutor(WriteFakeTester(testerJson));
         var sink = new CollectingSink();
@@ -169,8 +173,83 @@ public class RunExecutorMappingTests : IDisposable
         var finished = Assert.IsType<RunFinishedMessage>(sink.Messages[^1]);
         Assert.Equal("completed", finished.Status);
         Assert.NotNull(finished.Artifact);
-        Assert.Equal(1, finished.Artifact!.Summaries.GetProperty("success").GetInt32());
-        Assert.Equal(0, finished.Artifact.Summaries.GetProperty("failure").GetInt32());
+
+        // #796: summaries is the per-case ARRAY (tester BenchmarkSummary shape,
+        // the one RegressionAnalyzer.ParseSummaries reads) — not the old
+        // {success,failure} placeholder object.
+        var summary = Assert.Single(finished.Artifact!.Summaries.EnumerateArray());
+        Assert.Equal("http1:default:default", summary.GetProperty("case_id").GetString());
+        Assert.Equal(1, summary.GetProperty("success_count").GetInt64());
+        Assert.Equal(0, summary.GetProperty("failure_count").GetInt64());
+        Assert.Equal(1, summary.GetProperty("included_sample_count").GetInt64());
+        Assert.Equal(12.5, summary.GetProperty("p50").GetDouble());
+
+        var benchCase = Assert.Single(finished.Artifact.Cases.EnumerateArray());
+        Assert.Equal("http1:default:default", benchCase.GetProperty("id").GetString());
+        Assert.Equal("http1", benchCase.GetProperty("protocol").GetString());
+        Assert.Equal("ms", benchCase.GetProperty("metric_unit").GetString());
+    }
+
+    /// <summary>#796: the per-case apibench results (one case per measured
+    /// /api/* workload with real p50/p95/success stats) must ride the terminal
+    /// artifact — the empty-cases placeholder made them unretrievable from
+    /// GET /api/v2/test-runs/{id}/artifact.</summary>
+    [Fact]
+    public async Task Apibench_benchmark_run_artifact_carries_one_case_per_workload()
+    {
+        // The same fake tester serves every workload invocation: two successful
+        // http1 attempts (10ms, 20ms) and one failure per workload.
+        var testerJson = """
+            {"schema_version":"1.0",
+             "attempts":[{"attempt_id":"a1","protocol":"http1","success":true,
+                          "http":{"total_duration_ms":10.0}},
+                         {"attempt_id":"a2","protocol":"http1","success":true,
+                          "http":{"total_duration_ms":20.0}},
+                         {"attempt_id":"a3","protocol":"http1","success":false}]}
+            """.ReplaceLineEndings(" ");
+        var exec = MakeExecutor(WriteFakeTester(testerJson));
+        var sink = new CollectingSink();
+        var apibenchBenchmarkConfig = JsonDocument.Parse("""
+            { "id":"55555555-5555-5555-5555-555555555555",
+              "endpoint": { "kind":"network", "host":"example.com", "port":8443 },
+              "workload": { "modes":["apibench"], "runs":3, "concurrency":1, "timeout_ms":3000,
+                            "payload_sizes":[], "capture_mode":"headers-only", "insecure":true },
+              "methodology": { "warmup_runs":0, "measured_runs":3 } }
+            """).RootElement.Clone();
+
+        await exec.ExecuteAsync(Guid.NewGuid(), apibenchBenchmarkConfig, sink, CancellationToken.None);
+
+        var finished = Assert.IsType<RunFinishedMessage>(sink.Messages[^1]);
+        Assert.Equal("completed", finished.Status);
+        Assert.NotNull(finished.Artifact);
+
+        var expectedIds = ApibenchWorkloads.All.Select(w => w.Name)
+            .OrderBy(n => n, StringComparer.Ordinal).ToArray();
+
+        // One case per workload, identified by the workload NAME (stable
+        // across runs so regression baselines match).
+        var caseIds = finished.Artifact!.Cases.EnumerateArray()
+            .Select(c => c.GetProperty("id").GetString()).ToArray();
+        Assert.Equal(expectedIds, caseIds);
+
+        // One summary per workload with real per-case stats.
+        var summaries = finished.Artifact.Summaries.EnumerateArray().ToList();
+        Assert.Equal(expectedIds.Length, summaries.Count);
+        foreach (var s in summaries)
+        {
+            Assert.Contains(s.GetProperty("case_id").GetString(), expectedIds);
+            Assert.Equal("http1", s.GetProperty("protocol").GetString());
+            Assert.Equal(2, s.GetProperty("success_count").GetInt64());
+            Assert.Equal(1, s.GetProperty("failure_count").GetInt64());
+            Assert.Equal(2, s.GetProperty("included_sample_count").GetInt64());
+            Assert.Equal(15.0, s.GetProperty("p50").GetDouble()); // median of 10, 20
+            Assert.Equal(19.5, s.GetProperty("p95").GetDouble()); // 10 + 0.95*(20-10)
+            Assert.False(s.GetProperty("higher_is_better").GetBoolean());
+        }
+
+        // Data quality must stay honest: agent-side synthesis is not the
+        // tester's phase-controlled pipeline.
+        Assert.False(finished.Artifact.DataQuality.GetProperty("publication_ready").GetBoolean());
     }
 
     [Fact]
