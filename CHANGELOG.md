@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.245] - 2026-08-19
+
+### Fixed
+
+- **CI: matrix-launch tests seed the active cloud account the #795 launch
+  gate requires.** The tests referenced a cloud-account id no fixture ever
+  created; once the gate (correctly) started failing cells whose account is
+  missing or not active, all four tests failed with zero launched runs —
+  blocking every C#-touching PR. The tests now seed an active account,
+  matching the real-project contract the gate enforces.
+
 ## [0.28.244] - 2026-08-19
 
 ### Added
