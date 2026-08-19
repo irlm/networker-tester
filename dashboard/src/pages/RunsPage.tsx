@@ -391,7 +391,16 @@ export function RunsPage() {
               <FilterChip label="Search" value={routeNameQuery.trim()} onClear={() => setFilter('q', '')} />
             )}
             {comparisonGroupId && (
-              <FilterChip label="Group" value={comparisonGroupId.slice(0, 8)} onClear={clearComparisonGroup} />
+              <>
+                <FilterChip label="Group" value={comparisonGroupId.slice(0, 8)} onClear={clearComparisonGroup} />
+                {/* Cross-cell pivots for the filtered group (#794). */}
+                <Link
+                  to={`/projects/${projectId}/benchmarks/compare/${comparisonGroupId}`}
+                  className="text-xs text-cyan-400 hover:text-cyan-300"
+                >
+                  Compare &rarr;
+                </Link>
+              </>
             )}
           </>
         }

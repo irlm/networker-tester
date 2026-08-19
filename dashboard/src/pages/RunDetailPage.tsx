@@ -227,6 +227,18 @@ export function RunDetailPage() {
             {run?.config_name && <>Config: <span className="text-gray-300">{run.config_name}</span> · </>}
             {run?.modes && <>Modes: <span className="text-gray-300">{run.modes.join(', ')}</span> · </>}
             {probeCount} attempts{attemptsMissing ? ' (summary only)' : ''}
+            {/* Comparison-group cell → cross-cell pivots (#794). */}
+            {run?.comparison_group_id && (
+              <>
+                {' · '}
+                <Link
+                  to={`/projects/${projectId}/benchmarks/compare/${run.comparison_group_id}`}
+                  className="text-cyan-400 hover:text-cyan-300"
+                >
+                  View group comparison &rarr;
+                </Link>
+              </>
+            )}
           </p>
           {/* Run-envelope context (V046 pass-through) — data-gated: old runs
               have no envelope and render nothing here. */}

@@ -71,6 +71,7 @@ const AlertsPage = lazyPage(() => import('./pages/AlertsPage'), 'AlertsPage');
 const AppBenchmarkPage = lazyPage(() => import('./pages/AppBenchmarkPage'), 'AppBenchmarkPage');
 const SdkEndpointsPage = lazyPage(() => import('./pages/SdkEndpointsPage'), 'SdkEndpointsPage');
 const AppNetworkReportPage = lazyPage(() => import('./pages/AppNetworkReportPage'), 'AppNetworkReportPage');
+const ComparisonResultsPage = lazyPage(() => import('./pages/ComparisonResultsPage'), 'ComparisonResultsPage');
 
 const statusColors: Record<ConnectionStatus, string> = {
   connected: 'bg-green-400',
@@ -219,6 +220,10 @@ function AuthenticatedApp() {
             <Route path="/projects/:projectId/tests/new" element={<NetworkTestPage />} />
             <Route path="/projects/:projectId/benchmarks/full-stack/new" element={<FullStackPage />} />
             <Route path="/projects/:projectId/benchmarks/application/new" element={<AppBenchmarkPage />} />
+            {/* Comparison-group pivots (#794) — same-testbed language ranking
+                + same-language across environments. Bare /benchmarks/compare
+                (no group) still redirects to the ad-hoc run compare below. */}
+            <Route path="/projects/:projectId/benchmarks/compare/:groupId" element={<ComparisonResultsPage />} />
             {/* PROBE — canonical /probe; legacy /diagnostics redirected */}
             <Route path="/projects/:projectId/probe" element={<DiagnosticsPage />} />
             <Route path="/projects/:projectId/diagnostics" element={<Navigate to="../probe" replace relative="path" />} />
