@@ -83,6 +83,12 @@ const ALLOWED_CONSOLE_PATTERNS: RegExp[] = [
   /websocket/i,
   /wss?:\/\//i,
   /live updates/i,
+  // Chrome aborts in-flight requests (most visibly the always-open SSE
+  // stream) whenever a LOCAL network interface changes — Docker bridge/veth
+  // churn on the machine running this harness triggers it constantly. The
+  // app auto-reconnects; failing a prod spec on it would be a false alarm.
+  /ERR_NETWORK_CHANGED/,
+  /\/api\/events\/approval/,
 ];
 
 function slugify(title: string): string {
