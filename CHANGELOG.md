@@ -13,6 +13,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [0.28.250] - 2026-08-19
+
+### Added
+
+- **Local C# and Rust SDK demo deployments.** Runnable SDK examples
+  (sdk/csharp/Example, sdk/rust/example) with Dockerfiles and local/Azure
+  run scripts under examples/, plus an SDK examples panel and refreshed
+  create-endpoint dialog on the SDK Endpoints page.
+
 ## [0.28.249] - 2026-08-19
 
 ### Fixed

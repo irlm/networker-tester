@@ -148,14 +148,15 @@ test.
 ## Sample app
 
 `example/` is a runnable axum service nesting `laghound::router` at `/laghound`
-plus two app routes:
+plus an interactive reference page and a simulated-work route. It is also the
+Rust service used by the scale-to-zero Azure reference deployment:
 
 ```bash
 cd example
 cargo run
 # LAGHOUND_TOKEN defaults to "demo-token-laghound", PORT to 8084.
 
-curl -s http://localhost:8084/            # -> "rust sample ok"
+open http://localhost:8084/               # interactive reference page
 curl -s http://localhost:8084/work        # -> ~30ms of work (tokio sleep)
 
 # LagHound routes (need the token):
@@ -167,3 +168,6 @@ curl -si -H "Authorization: Bearer demo-token-laghound" \
 ```
 
 Override with `PORT=9000 LAGHOUND_TOKEN=my-secret-token cargo run`.
+Set `LAGHOUND_PUBLIC_DEMO=1` to disable transfer routes and tighten rate limits
+when the known demo token is intentionally shared. See
+[`examples/azure/`](../../examples/azure/README.md) for the Azure deployment.

@@ -6,6 +6,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CreateSdkEndpointDialog } from './CreateSdkEndpointDialog';
+import type { SdkEndpointCreate } from '../api/types';
 
 const createSdkEndpoint = vi.fn(() => Promise.resolve({}));
 
@@ -19,10 +20,17 @@ vi.mock('../api/client', () => ({
 const addToast = vi.fn();
 vi.mock('../hooks/useToast', () => ({ useToast: () => addToast }));
 
-function renderDialog() {
+function renderDialog(initialValues?: Partial<SdkEndpointCreate>) {
   const onClose = vi.fn();
   const onCreated = vi.fn();
-  render(<CreateSdkEndpointDialog projectId="p-1" onClose={onClose} onCreated={onCreated} />);
+  render(
+    <CreateSdkEndpointDialog
+      projectId="p-1"
+      initialValues={initialValues}
+      onClose={onClose}
+      onCreated={onCreated}
+    />,
+  );
   return { onClose, onCreated };
 }
 
@@ -42,12 +50,37 @@ describe('CreateSdkEndpointDialog', () => {
   it('rejects a non-absolute URL and keeps submit disabled', async () => {
     const user = userEvent.setup();
     renderDialog();
-    await user.type(screen.getByLabelText('Name'), 'Checkout');
-    await user.type(screen.getByLabelText('Target URL'), 'not-a-url');
+    await user.type(screen.getByLabelText(/^Name/), 'Checkout');
+    await user.type(screen.getByLabelText(/^Target URL/), 'not-a-url');
     await user.type(screen.getByLabelText(/LagHound token/i), 'secret-token');
     expect(screen.getByText('Must be an absolute http(s) URL.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Register endpoint' })).toBeDisabled();
     expect(createSdkEndpoint).not.toHaveBeenCalled();
+  });
+
+  it('rejects an all-whitespace token before the API call', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    await user.type(screen.getByLabelText(/^Name/), 'Checkout');
+    await user.type(screen.getByLabelText(/^Target URL/), 'https://api.customer.com');
+    await user.type(screen.getByLabelText(/LagHound token/i), '   ');
+    expect(screen.getByText('Token cannot contain only whitespace.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Register endpoint' })).toBeDisabled();
+    expect(createSdkEndpoint).not.toHaveBeenCalled();
+  });
+
+  it('prefills a live example draft', () => {
+    renderDialog({
+      name: 'LagHound Rust reference',
+      url: 'https://rust.example.test',
+      token: 'public-demo-token',
+      route: '/laghound/echo',
+      description: 'Public Rust reference',
+    });
+    expect(screen.getByLabelText(/^Name/)).toHaveValue('LagHound Rust reference');
+    expect(screen.getByLabelText(/^Target URL/)).toHaveValue('https://rust.example.test');
+    expect(screen.getByLabelText(/LagHound token/i)).toHaveValue('public-demo-token');
+    expect(screen.getByRole('button', { name: 'Register endpoint' })).toBeEnabled();
   });
 
   it('rejects a route that does not start with /', async () => {
@@ -63,9 +96,9 @@ describe('CreateSdkEndpointDialog', () => {
   it('submits the typed create body when the form is valid', async () => {
     const user = userEvent.setup();
     const { onCreated } = renderDialog();
-    await user.type(screen.getByLabelText('Name'), 'Checkout API');
-    await user.type(screen.getByLabelText('Target URL'), 'https://api.customer.com');
-    await user.type(screen.getByLabelText(/LagHound token/i), 'lh-secret');
+    await user.type(screen.getByLabelText(/^Name/), 'Checkout API');
+    await user.type(screen.getByLabelText(/^Target URL/), 'https://api.customer.com');
+    await user.type(screen.getByLabelText(/LagHound token/i), 'lh-secret ');
 
     const submit = screen.getByRole('button', { name: 'Register endpoint' });
     await waitFor(() => expect(submit).toBeEnabled());

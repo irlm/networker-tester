@@ -94,6 +94,7 @@ describe('SdkEndpointsPage', () => {
 
     const dialog = screen.getByRole('alertdialog');
     expect(within(dialog).getByText('Delete SDK endpoint')).toBeInTheDocument();
+    expect(within(dialog).getByText(/past probe runs, and report history/)).toBeInTheDocument();
     expect(deleteSdkEndpoint).not.toHaveBeenCalled();
 
     await user.click(within(dialog).getByRole('button', { name: 'Delete' }));
