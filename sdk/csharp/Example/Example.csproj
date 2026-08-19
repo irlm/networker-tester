@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\LagHound.Endpoint\LagHound.Endpoint.csproj" />
+    <EmbeddedResource Include="../../../examples/sdk-demo/index.html" LogicalName="LagHound.Example.demo.html" />
   </ItemGroup>
 
 </Project>

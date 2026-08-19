@@ -27,7 +27,7 @@ Each sample exposes three routes (per the [SDK contract](../docs/sdk/README.md))
 
 | Route          | What it is                                                    |
 |----------------|--------------------------------------------------------------|
-| `GET /`        | the app's own liveness route (`<lang> sample ok`)            |
+| `GET /`        | the app's own reference page or liveness response             |
 | `GET /work`    | ~30 ms of simulated work (realistic server-side split)       |
 | `/laghound/*`  | the LagHound endpoint — `health`/`echo`/`download`/`upload`/`info`, token-gated |
 
@@ -98,3 +98,7 @@ this harness is the *live, cross-process, cross-language* complement.
 
 See [`deploy-to-vm.md`](deploy-to-vm.md) for Azure/AWS/GCP steps (install Docker,
 clone, `compose up`, open ports 8081-8085 or reverse-proxy them).
+
+For the smaller public C# + Rust reference deployment, see
+[`azure/`](azure/README.md). It uses Azure Container Apps Consumption with the
+minimum allocation and scale-to-zero instead of an always-on VM.

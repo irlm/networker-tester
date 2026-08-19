@@ -6,6 +6,9 @@
 .superpowers
 .worktrees
 target
+sdk/**/target
+sdk/csharp/**/bin
+sdk/csharp/**/obj
 benchmarks/orchestrator/target
 benchmarks/metrics-agent/target
 benchmarks/reference-apis/cpp/build

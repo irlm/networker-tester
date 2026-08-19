@@ -4,12 +4,12 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
-# The Example project references ../LagHound.Endpoint, so copy the whole csharp
-# tree (excludes tests via publish — they aren't referenced by Example).
-COPY sdk/csharp/LagHound.Endpoint ./LagHound.Endpoint
-COPY sdk/csharp/Example ./Example
+# The Example project references ../LagHound.Endpoint and embeds the shared
+# demo page from examples/sdk-demo, so preserve the repository layout here.
+COPY sdk/csharp ./sdk/csharp
+COPY examples/sdk-demo ./examples/sdk-demo
 
-RUN dotnet publish Example/Example.csproj -c Release -o /app --nologo
+RUN dotnet publish sdk/csharp/Example/Example.csproj -c Release -o /app --nologo
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app

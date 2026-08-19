@@ -1,10 +1,12 @@
 import { useCallback, useState } from 'react';
 import { Link } from 'react-router';
 import { api, errorMessage, type SdkEndpoint } from '../api/client';
+import type { SdkEndpointCreate } from '../api/types';
 import { CreateSdkEndpointDialog } from '../components/CreateSdkEndpointDialog';
-import { PageHeader } from '../components/common/PageHeader';
+import { SdkExamplesPanel } from '../components/SdkExamplesPanel';
 import { EmptyState } from '../components/common/EmptyState';
 import { DataTable, type DataTableColumn } from '../components/common/DataTable';
+import { PageShell } from '../components/common/PageShell';
 import { usePolling } from '../hooks/usePolling';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useProject } from '../hooks/useProject';
@@ -33,6 +35,7 @@ export function SdkEndpointsPage() {
   const { projectId, isOperator } = useProject();
   const [endpoints, setEndpoints] = useState<SdkEndpoint[]>([]);
   const [showCreate, setShowCreate] = useState(false);
+  const [createDefaults, setCreateDefaults] = useState<Partial<SdkEndpointCreate>>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<SdkEndpoint | null>(null);
@@ -58,6 +61,16 @@ export function SdkEndpointsPage() {
 
   usePolling(load, 20000);
 
+  const openCreate = (defaults?: Partial<SdkEndpointCreate>) => {
+    setCreateDefaults(defaults);
+    setShowCreate(true);
+  };
+
+  const closeCreate = () => {
+    setShowCreate(false);
+    setCreateDefaults(undefined);
+  };
+
   const handleDelete = async () => {
     if (!projectId || !confirmDelete) return;
     setDeleting(true);
@@ -75,45 +88,50 @@ export function SdkEndpointsPage() {
 
   if (loading && endpoints.length === 0) {
     return (
-      <div className="p-4 md:p-6">
-        <h2 className="text-lg md:text-xl font-bold text-gray-100 mb-6">SDK Endpoints</h2>
-        <div className="text-gray-400 motion-safe:animate-pulse">Loading SDK endpoints...</div>
-      </div>
+      <PageShell title="SDK Endpoints" subtitle="Split request time into network and application work.">
+        <div className="text-sm text-gray-400 motion-safe:animate-pulse">Loading registered endpoints…</div>
+      </PageShell>
     );
   }
 
   if (error && endpoints.length === 0) {
     return (
-      <div className="p-4 md:p-6">
-        <h2 className="text-lg md:text-xl font-bold text-gray-100 mb-6">SDK Endpoints</h2>
-        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
+      <PageShell title="SDK Endpoints" subtitle="Split request time into network and application work.">
+        <div className="alert alert-error">
           <h3 className="text-red-400 font-bold mb-2">Failed to load SDK endpoints</h3>
-          <p className="text-red-300 text-sm">Could not fetch SDK endpoints. Check your connection and try refreshing.</p>
+          <p className="text-red-300 text-sm">{error}</p>
+          <Button className="mt-4" onClick={load}>Retry</Button>
         </div>
-      </div>
+      </PageShell>
     );
   }
 
   return (
-    <div className="p-4 md:p-6">
-      <PageHeader
-        title="SDK Endpoints"
-        subtitle="LagHound-instrumented customer endpoints probed with the sdkprobe mode."
-        action={
-          isOperator ? (
-            <Button
-              variant="primary"
-              onClick={() => setShowCreate(true)}
-            >
-              + SDK endpoint
-            </Button>
-          ) : undefined
-        }
-      />
+    <PageShell
+      title="SDK Endpoints"
+      subtitle="Split request time into network and application work."
+      action={
+        isOperator ? (
+          <Button
+            variant="primary"
+            onClick={() => openCreate()}
+          >
+            + SDK endpoint
+          </Button>
+        ) : undefined
+      }
+    >
 
       {showCreate && projectId && (
-        <CreateSdkEndpointDialog projectId={projectId} onClose={() => setShowCreate(false)} onCreated={load} />
+        <CreateSdkEndpointDialog
+          projectId={projectId}
+          initialValues={createDefaults}
+          onClose={closeCreate}
+          onCreated={load}
+        />
       )}
+
+      <SdkExamplesPanel isOperator={isOperator} onUseExample={openCreate} />
 
       {error && endpoints.length > 0 && (
         <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-4 text-yellow-400 text-sm">
@@ -121,44 +139,36 @@ export function SdkEndpointsPage() {
         </div>
       )}
 
-      {endpoints.length === 0 ? (
-        <EmptyState
-          message="No SDK endpoints yet"
-          detail={
-            <>
-              Register a URL that mounts the{' '}
-              <a
-                href="https://github.com/laghound"
-                className="text-cyan-400 hover:underline"
-                target="_blank"
-                rel="noreferrer"
-              >
-                LagHound SDK
-              </a>{' '}
-              routes to measure how much of its latency is your application versus the network.
-            </>
-          }
-          action={
-            isOperator ? (
-              <Button
-                variant="primary"
-                onClick={() => setShowCreate(true)}
-              >
-                Register your first SDK endpoint
-              </Button>
-            ) : undefined
-          }
-        />
-      ) : (
-        <>
-          <div className="text-xs text-gray-400 mb-3">
-            {endpoints.length} SDK endpoint{endpoints.length === 1 ? '' : 's'}
-            {' · '}
-            <Link to={`/projects/${projectId}/reports/app-network`} className="text-cyan-400 hover:underline">
-              View Application Network Performance report
-            </Link>
+      <section className="section-divider" aria-labelledby="registered-sdk-endpoints">
+        <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 id="registered-sdk-endpoints" className="text-sm font-bold text-gray-100">Registered endpoints</h2>
+            <p className="mt-1 text-xs text-faint">
+              {endpoints.length} endpoint{endpoints.length === 1 ? '' : 's'} in this project
+            </p>
           </div>
+          {endpoints.length > 0 && (
+            <Link to={`/projects/${projectId}/reports/app-network`} className="text-xs text-cyan-400 hover:underline">
+              Application Network Performance report →
+            </Link>
+          )}
+        </div>
 
+        {endpoints.length === 0 ? (
+          <EmptyState
+            message="No SDK endpoints yet"
+            detail="Use a live reference app above or register a service that mounts the LagHound SDK routes."
+            action={
+              isOperator ? (
+                <Button
+                  onClick={() => openCreate()}
+                >
+                  Register your first SDK endpoint
+                </Button>
+              ) : undefined
+            }
+          />
+        ) : (
           <DataTable
             columns={[
               {
@@ -251,19 +261,19 @@ export function SdkEndpointsPage() {
             rows={endpoints}
             rowKey={(ep) => ep.id}
           />
-        </>
-      )}
+        )}
+      </section>
 
       <ConfirmDialog
         open={Boolean(confirmDelete)}
         title="Delete SDK endpoint"
-        description={confirmDelete ? `Delete ${confirmDelete.name}? This removes the endpoint and its stored token. Past probe runs and report history are kept.` : ''}
+        description={confirmDelete ? `Delete ${confirmDelete.name}? This permanently removes the endpoint, its stored token, past probe runs, and report history.` : ''}
         confirmLabel="Delete"
         danger
         loading={deleting}
         onClose={() => setConfirmDelete(null)}
         onConfirm={() => void handleDelete()}
       />
-    </div>
+    </PageShell>
   );
 }

@@ -7,9 +7,10 @@ WORKDIR /src
 
 # The example crate is a standalone workspace that depends on the SDK at `..`
 # via a path dependency, so both trees are needed to build.
-COPY sdk/rust ./rust
+COPY sdk/rust ./sdk/rust
+COPY examples/sdk-demo ./examples/sdk-demo
 
-WORKDIR /src/rust/example
+WORKDIR /src/sdk/rust/example
 RUN cargo build --release && \
     cp target/release/laghound-sample /laghound-sample
 
