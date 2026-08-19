@@ -1,9 +1,13 @@
 import { useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router';
+import { Link, useNavigate, useParams } from 'react-router';
 import { useProject } from '../hooks/useProject';
 import { usePageTitle } from '../hooks/usePageTitle';
+import { useToast } from '../hooks/useToast';
 import { errorMessage } from '../api/client';
+import { stripAnsi } from '../lib/ansi';
 import { Breadcrumb } from '../components/common/Breadcrumb';
+import { Button } from '../components/common/Button';
+import { ConfirmDialog } from '../components/common/ConfirmDialog';
 import { PageShell } from '../components/common/PageShell';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { runDisplayStatus } from '../lib/runStatus';
@@ -17,6 +21,7 @@ import {
 } from '../components/charts/HorizontalBoxWhiskerChart';
 import {
   useComparisonGroupQuery,
+  useDeleteComparisonGroupMutation,
   useRunsArtifactsQueries,
   useRunsAttemptsQueries,
   useTestRunsQuery,
@@ -341,16 +346,72 @@ function LanguagePivotSection({
   );
 }
 
+// ── Group completion banner (#803) ────────────────────────────────────────────
+
+/**
+ * `X/N completed · F failed`, with every failed cell listed inline with its
+ * error_message — the group-level extension of #795's launch honesty. N is
+ * the group's defined cell count when the group row still exists; a deleted
+ * group (SET NULL) degrades to the fetched run count.
+ */
+function GroupCompletionBanner({ cells, definedCellCount }: { cells: CellResult[]; definedCellCount: number | null }) {
+  const completed = cells.filter((c) => c.run.status === 'completed').length;
+  const failedCells = cells.filter((c) => runDisplayStatus(c.run) === 'failed');
+  const total = Math.max(definedCellCount ?? 0, cells.length);
+  if (total === 0) return null;
+
+  const tone = failedCells.length > 0
+    ? 'border-red-500/30 bg-red-500/10'
+    : completed === total
+      ? 'border-green-500/30 bg-green-500/10'
+      : 'border-gray-700 bg-gray-500/5';
+
+  return (
+    <div className={`border rounded-lg p-3 mb-6 text-sm ${tone}`} role="status">
+      <p className="text-gray-200">
+        <span className="tabular-nums">{completed}/{total}</span> completed
+        {' · '}
+        <span className={failedCells.length > 0 ? 'text-red-400' : 'text-gray-400'}>
+          {failedCells.length} failed
+        </span>
+      </p>
+      {failedCells.length > 0 && (
+        <ul className="mt-2 space-y-1 text-xs">
+          {failedCells.map((cell) => (
+            <li key={cell.run.id} className="text-red-300">
+              <span className="text-red-400 font-medium">{cell.cellLabel}</span>
+              {cell.run.error_message && (
+                <> &mdash; {stripAnsi(cell.run.error_message)}</>
+              )}
+              {' '}
+              <Link
+                to={`/projects/${cell.run.project_id}/runs/${cell.run.id}`}
+                className="text-cyan-400 hover:text-cyan-300 whitespace-nowrap"
+              >
+                run {cell.run.id.slice(0, 8)} &rarr;
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 const STATUS_ORDER: RunStatus[] = ['completed', 'running', 'provisioning', 'queued', 'failed', 'cancelled'];
 
 export function ComparisonResultsPage() {
-  const { projectId } = useProject();
+  const { projectId, isOperator } = useProject();
   const { groupId } = useParams<{ groupId: string }>();
   const gid = groupId ?? '';
   const shortId = gid.slice(0, 8);
   const [pivot, setPivot] = useState<Pivot>('environment');
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const navigate = useNavigate();
+  const addToast = useToast();
+  const deleteGroup = useDeleteComparisonGroupMutation();
 
   const groupQuery = useComparisonGroupQuery(gid);
   const group = groupQuery.data ?? null;
@@ -426,6 +487,22 @@ export function ComparisonResultsPage() {
           {statusCounts.map(({ status, count }) => (
             <StatusBadge key={status} status={status} label={`${count} ${status}`} />
           ))}
+          {/* Group actions (#803). Relaunch: intentionally absent — the
+              wizards' only prefill query params today are template ids and the
+              full-stack autoprovision shortcut (os/proxies/name), which cannot
+              express an arbitrary group's cells (clouds/regions/languages).
+              TODO(#803 follow-up): add a relaunch that POSTs the existing
+              group's launch route or a wizard prefill contract. */}
+          {isOperator && group && (
+            <Button
+              variant="danger"
+              size="xs"
+              className="ml-auto"
+              onClick={() => setConfirmDelete(true)}
+            >
+              Delete group
+            </Button>
+          )}
         </div>
         <p className="text-sm text-gray-400">
           {runs.length} cell{runs.length !== 1 ? 's' : ''}
@@ -437,6 +514,38 @@ export function ComparisonResultsPage() {
           )}
         </p>
       </div>
+
+      {runs.length > 0 && (
+        <GroupCompletionBanner cells={cells} definedCellCount={group ? group.cells.length : null} />
+      )}
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title="Delete comparison group?"
+        description={
+          <>
+            Deletes the group <span className="text-gray-200">{group?.name ?? shortId}</span> and
+            its comparison view. The {runs.length} cell run{runs.length !== 1 ? 's' : ''} are NOT
+            deleted — they stay on the Runs list as standalone runs.
+          </>
+        }
+        confirmLabel="Delete group"
+        danger
+        loading={deleteGroup.isPending}
+        onClose={() => setConfirmDelete(false)}
+        onConfirm={() => {
+          deleteGroup.mutate(gid, {
+            onSuccess: () => {
+              addToast('success', `Comparison group ${group?.name ?? shortId} deleted`);
+              navigate(`/projects/${projectId}/runs`);
+            },
+            onError: (e) => {
+              setConfirmDelete(false);
+              addToast('error', `Failed to delete group: ${errorMessage(e)}`);
+            },
+          });
+        }}
+      />
 
       {runs.length === 0 && (
         <div className="text-sm text-gray-400 py-8">

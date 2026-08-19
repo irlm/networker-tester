@@ -16,11 +16,14 @@ import { usePageTitle } from '../hooks/usePageTitle';
 import { useToast } from '../hooks/useToast';
 import {
   useCancelRunMutation,
+  useComparisonGroupQuery,
   useRunArtifactQuery,
   useRunAttemptsQuery,
   useRunInfraQuery,
   useTestRunQuery,
+  useTestRunsQuery,
 } from '../features/runs/queries';
+import { groupFallbackName, sortCellsByName } from '../features/runs/list-grouping';
 import { Button } from '../components/common/Button';
 import { buttonClassName } from '../components/common/button-styles';
 import { ErrorState } from '../components/common/AsyncState';
@@ -66,6 +69,40 @@ export function RunDetailPage() {
   const artifactQuery = useRunArtifactQuery(id, run?.artifact_id);
   const infraQuery = useRunInfraQuery(id);
   const cancelRun = useCancelRunMutation(id);
+
+  // ── Comparison-group context (#803): breadcrumb + prev/next cell nav ──
+  const groupId = run?.comparison_group_id ?? '';
+  const groupQuery = useComparisonGroupQuery(groupId);
+  const siblingsQuery = useTestRunsQuery(
+    projectId,
+    { comparison_group_id: groupId },
+    { enabled: !!groupId, polling: false },
+  );
+  const groupNav = useMemo(() => {
+    if (!groupId) return null;
+    const siblings = sortCellsByName(siblingsQuery.data ?? []);
+    const index = siblings.findIndex((r) => r.id === id);
+    return {
+      name: groupQuery.data?.name
+        ?? groupFallbackName(siblings)
+        ?? `Group ${groupId.slice(0, 8)}`,
+      siblings,
+      index,
+      prev: index > 0 ? siblings[index - 1] : null,
+      next: index >= 0 && index < siblings.length - 1 ? siblings[index + 1] : null,
+    };
+  }, [groupId, siblingsQuery.data, groupQuery.data, id]);
+
+  const breadcrumbItems = groupNav
+    ? [
+        { label: 'Runs', to: `/projects/${projectId}/runs` },
+        { label: groupNav.name, to: `/projects/${projectId}/benchmarks/compare/${groupId}` },
+        { label: `Run ${shortId}` },
+      ]
+    : [
+        { label: 'Runs', to: `/projects/${projectId}/runs` },
+        { label: `Run ${shortId}` },
+      ];
 
   const attempts = useMemo<LiveAttempt[]>(() => attemptsQuery.data ?? [], [attemptsQuery.data]);
   const artifact = artifactQuery.data ?? null;
@@ -211,7 +248,7 @@ export function RunDetailPage() {
   const probeCount = attemptsMissing ? run.success_count + run.failure_count : attempts.length;
 
   return (
-    <PageShell before={<Breadcrumb items={[{ label: 'Runs', to: `/projects/${projectId}/runs` }, { label: `Run ${shortId}` }]} />}>
+    <PageShell before={<Breadcrumb items={breadcrumbItems} />}>
 
       {/* Header */}
       <div className="mb-6 flex items-start justify-between">
@@ -240,6 +277,40 @@ export function RunDetailPage() {
               </>
             )}
           </p>
+          {/* Prev/next through the group's sibling cells (#803), ordered by
+              cell label like the compare page. */}
+          {groupNav && groupNav.index >= 0 && groupNav.siblings.length > 1 && (
+            <p className="text-sm text-gray-400 mt-1 flex items-center gap-2">
+              <span>
+                cell <span className="text-gray-300 tabular-nums">{groupNav.index + 1}</span> of{' '}
+                <span className="text-gray-300 tabular-nums">{groupNav.siblings.length}</span>
+              </span>
+              {groupNav.prev ? (
+                <Link
+                  to={`/projects/${projectId}/runs/${groupNav.prev.id}`}
+                  aria-label="Previous cell"
+                  title={groupNav.prev.config_name ?? groupNav.prev.id.slice(0, 8)}
+                  className="text-cyan-400 hover:text-cyan-300"
+                >
+                  &larr; prev
+                </Link>
+              ) : (
+                <span className="text-faint" aria-hidden="true">&larr; prev</span>
+              )}
+              {groupNav.next ? (
+                <Link
+                  to={`/projects/${projectId}/runs/${groupNav.next.id}`}
+                  aria-label="Next cell"
+                  title={groupNav.next.config_name ?? groupNav.next.id.slice(0, 8)}
+                  className="text-cyan-400 hover:text-cyan-300"
+                >
+                  next &rarr;
+                </Link>
+              ) : (
+                <span className="text-faint" aria-hidden="true">next &rarr;</span>
+              )}
+            </p>
+          )}
           {/* Run-envelope context (V046 pass-through) — data-gated: old runs
               have no envelope and render nothing here. */}
           <RunEnvelopeBlock envelope={run?.envelope} />

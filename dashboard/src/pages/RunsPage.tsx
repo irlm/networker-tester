@@ -12,8 +12,19 @@ import { useRenderLog } from '../hooks/useRenderLog';
 import { useNow } from '../hooks/useNow';
 import { timeAgo } from '../lib/format';
 import { useProject } from '../hooks/useProject';
-import { useTestRunsQuery } from '../features/runs/queries';
+import { runKeys, useComparisonGroupsQueries, useTestRunsQuery } from '../features/runs/queries';
 import type { RunListParams } from '../features/runs/api';
+import {
+  clusterComparisonGroups,
+  groupAggregateStatus,
+  groupFallbackName,
+  groupProgress,
+  type RunListRow,
+} from '../features/runs/list-grouping';
+import { computeCellStats, stripCellNameSuffix } from '../features/runs/compare';
+import { queryClient } from '../app/queryClient';
+import { formatMs } from '../lib/analysis';
+import type { LiveAttempt } from '../api/types';
 import { PageShell } from '../components/common/PageShell';
 import { Button } from '../components/common/Button';
 import { buttonClassName } from '../components/common/button-styles';
@@ -74,6 +85,30 @@ function PurposeBadge({ kind }: { kind: TestKind | undefined }) {
   );
 }
 
+/**
+ * Fastest-so-far chip for a group row: min HTTP-total p50 among completed
+ * cells, computed ONLY from attempts already sitting in the react-query cache
+ * (the compare page — the group's primary surface — fills it). Fetching every
+ * cell's attempts just for a list chip would be N extra requests per group;
+ * requiring ≥2 cells with data keeps "fastest" honest.
+ */
+function fastestCachedCell(runs: TestRun[]): { label: string; p50: number } | null {
+  let best: { label: string; p50: number } | null = null;
+  let cellsWithStats = 0;
+  for (const run of runs) {
+    if (run.status !== 'completed') continue;
+    const attempts = queryClient.getQueryData<LiveAttempt[]>(runKeys.attempts(run.id));
+    if (!attempts || attempts.length === 0) continue;
+    const p50 = computeCellStats(attempts).total?.p50 ?? null;
+    if (p50 === null) continue;
+    cellsWithStats += 1;
+    if (!best || p50 < best.p50) {
+      best = { label: stripCellNameSuffix(run.config_name ?? run.id.slice(0, 8)), p50 };
+    }
+  }
+  return cellsWithStats >= 2 ? best : null;
+}
+
 function matchesModeFamily(modes: string[] | undefined, family: string): boolean {
   if (family === 'all') return true;
   if (family === 'app') return modes?.some(mode => mode.toLowerCase() === 'apibench') ?? false;
@@ -122,6 +157,7 @@ export function RunsPage() {
   const { projectId } = useProject();
   const [searchParams, setSearchParams] = useSearchParams();
   const [page, setPage] = useState(0);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const pendingSearchParams = useRef(searchParams);
 
   const statusFilter = (searchParams.get('status') || 'all') as RunStatus | 'all';
@@ -256,12 +292,63 @@ export function RunsPage() {
     }));
   }, [secondaryFilteredRuns, testKindFilter]);
 
-  // Pagination
-  const totalPages = Math.max(1, Math.ceil(runsWithDates.length / PAGE_SIZE));
+  // Cluster comparison-group cells into one expandable row each (#803) —
+  // EXCEPT when the list is already scoped to one group (?comparison_group=):
+  // that is the "view as list" surface and stays flat.
+  type RunRow = (typeof runsWithDates)[number];
+  const displayRows = useMemo<RunListRow<RunRow>[]>(() => {
+    if (comparisonGroupId) return runsWithDates.map((run) => ({ kind: 'run' as const, run }));
+    return clusterComparisonGroups(runsWithDates);
+  }, [runsWithDates, comparisonGroupId]);
+
+  // Pagination counts a collapsed group as ONE row unit; expanding a group
+  // reveals its cells in place without re-paginating.
+  const totalPages = Math.max(1, Math.ceil(displayRows.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages - 1);
   const pageStart = safePage * PAGE_SIZE;
-  const pageEnd = Math.min(pageStart + PAGE_SIZE, runsWithDates.length);
-  const pageRuns = runsWithDates.slice(pageStart, pageEnd);
+  const pageEnd = Math.min(pageStart + PAGE_SIZE, displayRows.length);
+  const pageUnits = useMemo(() => displayRows.slice(pageStart, pageEnd), [displayRows, pageStart, pageEnd]);
+
+  // Authoritative cell counts + group names for the visible group rows. A 404
+  // (deleted group — cells survive via SET NULL) degrades to in-window counts.
+  const pageGroupIds = useMemo(
+    () => pageUnits.filter((row) => row.kind === 'group').map((row) => row.groupId),
+    [pageUnits],
+  );
+  const groupQueries = useComparisonGroupsQueries(pageGroupIds);
+  const groupDetails = new Map(pageGroupIds.map((id, i) => [id, groupQueries[i]]));
+
+  const pageRows = useMemo(
+    () =>
+      pageUnits.flatMap((row) =>
+        row.kind === 'group' && expandedGroups.has(row.groupId)
+          ? [row, ...row.runs.map((run) => ({ kind: 'run' as const, run, inGroup: true }))]
+          : [row],
+      ),
+    [pageUnits, expandedGroups],
+  );
+
+  const toggleGroup = useCallback((groupId: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  }, []);
+
+  // Plain functions (not memoized): groupDetails is rebuilt from useQueries
+  // results every render anyway, and a page holds at most PAGE_SIZE groups.
+  const groupName = (row: { groupId: string; runs: RunRow[] }): string =>
+    groupDetails.get(row.groupId)?.data?.name
+    ?? groupFallbackName(row.runs)
+    ?? `Group ${row.groupId.slice(0, 8)}`;
+
+  const groupCellCount = (groupId: string): number | null => {
+    const query = groupDetails.get(groupId);
+    // Loading or 404 → null: the row shows the in-window count with a "+".
+    return query?.data ? query.data.cells.length : null;
+  };
 
   const clearComparisonGroup = useCallback(() => {
     updateSearchParams(next => {
@@ -494,16 +581,35 @@ export function RunsPage() {
           {
             key: 'run',
             label: 'Run',
-            render: (run) => (
-              <>
-                <Link
-                  to={`/projects/${projectId}/runs/${run.id}`}
-                  className="text-cyan-400 hover:underline"
+            render: (row) =>
+              row.kind === 'group' ? (
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(row.groupId)}
+                  aria-expanded={expandedGroups.has(row.groupId)}
+                  aria-label={`${expandedGroups.has(row.groupId) ? 'Collapse' : 'Expand'} group ${groupName(row)}`}
+                  className="flex items-center gap-1.5 text-cyan-400 hover:text-cyan-300"
                 >
-                  {run.id.slice(0, 8)}
-                </Link>
-              </>
-            ),
+                  <span
+                    aria-hidden="true"
+                    className="text-gray-400 text-xs transition-transform"
+                    style={{ transform: expandedGroups.has(row.groupId) ? 'rotate(90deg)' : '' }}
+                  >
+                    {'▶'}
+                  </span>
+                  {row.groupId.slice(0, 8)}
+                </button>
+              ) : (
+                <>
+                  {row.inGroup && <span className="text-faint mr-1.5" aria-hidden="true">{'└'}</span>}
+                  <Link
+                    to={`/projects/${projectId}/runs/${row.run.id}`}
+                    className="text-cyan-400 hover:underline"
+                  >
+                    {row.run.id.slice(0, 8)}
+                  </Link>
+                </>
+              ),
           },
           {
             // Name gets the width — it's the most scannable column; Modes
@@ -511,48 +617,106 @@ export function RunsPage() {
             key: 'name',
             label: 'Name',
             cellClass: 'text-gray-300 truncate max-w-72',
-            titleOf: (run) => run.config_name || undefined,
-            render: (run) => run.config_name || run.test_config_id.slice(0, 8),
+            titleOf: (row) => (row.kind === 'group' ? groupName(row) : row.run.config_name || undefined),
+            render: (row) =>
+              row.kind === 'group' ? (
+                <span className="flex flex-col gap-0.5 min-w-0">
+                  <Link
+                    to={`/projects/${projectId}/benchmarks/compare/${row.groupId}`}
+                    className="text-gray-100 font-medium hover:text-cyan-300 truncate"
+                  >
+                    {groupName(row)}
+                  </Link>
+                  <Link
+                    to={`/projects/${projectId}/runs?comparison_group=${row.groupId}`}
+                    // py-1/-my-1 keeps the row compact while the hit target
+                    // meets WCAG 2.5.8's 24px minimum (axe target-size).
+                    className="text-faint text-xs hover:text-cyan-400 w-fit inline-block py-1.5 -my-1.5"
+                  >
+                    view as list
+                  </Link>
+                </span>
+              ) : (
+                row.run.config_name || row.run.test_config_id.slice(0, 8)
+              ),
           },
           {
             key: 'purpose',
             label: 'Purpose',
-            render: (run) => <PurposeBadge kind={run.test_kind} />,
+            render: (row) =>
+              row.kind === 'group' ? (
+                <span className="text-xs font-medium px-1.5 py-0.5 rounded text-gray-300 bg-gray-500/10">
+                  Comparison
+                </span>
+              ) : (
+                <PurposeBadge kind={row.run.test_kind} />
+              ),
           },
           {
             key: 'target',
             label: 'Target',
             hideBelow: 'lg',
-            render: (run) => <TargetBadge kind={run.endpoint_kind} />,
+            render: (row) =>
+              row.kind === 'group' ? <span className="text-faint">-</span> : <TargetBadge kind={row.run.endpoint_kind} />,
           },
           {
             key: 'status',
             label: 'Status',
-            render: (run) => <StatusBadge status={runDisplayStatus(run)} />,
+            render: (row) => (
+              <StatusBadge
+                status={row.kind === 'group' ? groupAggregateStatus(row.runs) : runDisplayStatus(row.run)}
+              />
+            ),
           },
           {
             key: 'result',
             label: 'Result',
-            render: (run) => <RunResult ok={run.success_count} fail={run.failure_count} />,
+            render: (row) => {
+              if (row.kind !== 'group') {
+                return <RunResult ok={row.run.success_count} fail={row.run.failure_count} />;
+              }
+              const progress = groupProgress(row.runs, groupCellCount(row.groupId));
+              const fastest = fastestCachedCell(row.runs);
+              return (
+                <span className="flex flex-col gap-0.5">
+                  <span className="tabular-nums text-gray-300 whitespace-nowrap">
+                    {progress.terminal}/{progress.total}
+                    {progress.approximate ? '+' : ''}
+                    {progress.failed > 0 && (
+                      <span className="text-red-400"> &middot; {progress.failed} failed</span>
+                    )}
+                  </span>
+                  {fastest && (
+                    <span className="text-xs text-cyan-300 whitespace-nowrap">
+                      fastest: {fastest.label} &middot; {formatMs(fastest.p50)}
+                    </span>
+                  )}
+                </span>
+              );
+            },
           },
           {
             key: 'modes',
             label: 'Modes',
             hideBelow: 'lg',
             cellClass: 'text-gray-400 truncate max-w-40',
-            titleOf: (run) => run.modes?.join(', ') || undefined,
-            render: (run) => run.modes?.join(', ') || '-',
+            titleOf: (row) => (row.kind === 'group' ? undefined : row.run.modes?.join(', ') || undefined),
+            render: (row) =>
+              row.kind === 'group'
+                ? `${row.runs.length} cell${row.runs.length !== 1 ? 's' : ''} in window`
+                : row.run.modes?.join(', ') || '-',
           },
           {
             key: 'created',
             label: 'Created',
             cellClass: 'text-gray-400',
-            titleOf: (run) => run._createdIso,
-            render: (run) => run._createdAgo,
+            titleOf: (row) => (row.kind === 'group' ? row.runs[0]?._createdIso : row.run._createdIso),
+            render: (row) => (row.kind === 'group' ? row.runs[0]?._createdAgo : row.run._createdAgo),
           },
         ]}
-        rows={pageRuns}
-        rowKey={(run) => run.id}
+        rows={pageRows}
+        rowKey={(row) => (row.kind === 'group' ? `group-${row.groupId}` : row.run.id)}
+        rowClass={(row) => (row.kind === 'run' && row.inGroup ? 'bg-gray-800/10' : undefined)}
         empty={
           <>
             <p className="text-gray-400 text-sm">{activeFilterCount > 0 ? 'No runs match the current filters' : 'No runs yet'}</p>
@@ -579,11 +743,11 @@ export function RunsPage() {
         }
       />
 
-      {/* Pagination footer */}
-      {runsWithDates.length > 0 && (
+      {/* Pagination footer — a collapsed comparison group counts as one row. */}
+      {displayRows.length > 0 && (
         <div className="flex items-center justify-between mt-4 text-xs text-gray-400">
           <span>
-            Showing {pageStart + 1}-{pageEnd} of {runsWithDates.length} runs
+            Showing {pageStart + 1}-{pageEnd} of {displayRows.length} rows
           </span>
           <div className="flex items-center gap-2">
             <Button

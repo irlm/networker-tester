@@ -160,4 +160,9 @@ export const runsApi = {
 
   launchComparisonGroup: (groupId: string) =>
     request<ComparisonLaunchResult>(`/v2/comparison-groups/${groupId}/launch`, { method: 'POST' }),
+
+  // Hard-deletes the group row only — the cells' runs survive detached
+  // (comparison_group_id FK is ON DELETE SET NULL, #780).
+  deleteComparisonGroup: (groupId: string) =>
+    request<void>(`/v2/comparison-groups/${groupId}`, { method: 'DELETE' }),
 };
