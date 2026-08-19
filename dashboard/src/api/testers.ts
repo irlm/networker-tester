@@ -145,8 +145,8 @@ function base(projectId: string, suffix = ''): string {
 }
 
 export const testersApi = {
-  listTesters: (projectId: string) =>
-    request<TesterRow[]>(base(projectId)),
+  listTesters: (projectId: string, signal?: AbortSignal) =>
+    request<TesterRow[]>(base(projectId), signal ? { signal } : undefined),
 
   getTester: (projectId: string, testerId: string) =>
     request<TesterRow>(base(projectId, `/${testerId}`)),

@@ -12,6 +12,7 @@ const authenticatedRoutes = [
   ['dashboard', `/projects/${PID}`],
   ['runs', `/projects/${PID}/runs`],
   ['run detail', `/projects/${PID}/runs/run-e2e-1`],
+  ['start a test', `/projects/${PID}/scenarios`],
   ['network test', `/projects/${PID}/tests/new`],
   ['URL probe', `/projects/${PID}/probe`],
   ['schedules', `/projects/${PID}/schedules`],

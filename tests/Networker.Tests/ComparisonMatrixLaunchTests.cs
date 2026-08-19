@@ -28,6 +28,36 @@ public class ComparisonMatrixLaunchTests : IClassFixture<ControlPlaneFixture>
 
     public ComparisonMatrixLaunchTests(ControlPlaneFixture fx) => _fx = fx;
 
+    /// <summary>The cloud account every PendingCell references. Since the
+    /// #795 launch gate, a cell whose account is missing or not ACTIVE fails
+    /// at launch with the credentials reason — so these tests must seed an
+    /// active account, exactly like a real project has. (Pre-gate, the launch
+    /// never looked the account up, which is why this fixture historically
+    /// got away with a dangling id.)</summary>
+    private static readonly Guid CellAccountId = Guid.Parse("00000000-0000-4000-8000-0000000000aa");
+
+    private async Task EnsureActiveAccountAsync()
+    {
+        await using var db = _fx.NewDbContext();
+        if (await db.CloudAccounts.AnyAsync(a => a.AccountId == CellAccountId))
+        {
+            return;
+        }
+        db.CloudAccounts.Add(new Networker.Data.Entities.CloudAccount
+        {
+            AccountId = CellAccountId,
+            ProjectId = ControlPlaneFixture.SeededProjectId,
+            Name = "matrix-test-azure",
+            Provider = "azure",
+            Status = "active",
+            CredentialsEnc = [1, 2, 3],
+            CredentialsNonce = [4, 5, 6],
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+    }
+
     private static object PendingCell(string label, string os, string stack) => new
     {
         label,
@@ -44,6 +74,7 @@ public class ComparisonMatrixLaunchTests : IClassFixture<ControlPlaneFixture>
 
     private async Task<Guid> CreateGroupAsync(HttpClient client, string name, object[] cells)
     {
+        await EnsureActiveAccountAsync();
         var resp = await client.PostAsJsonAsync(
             $"/api/v2/projects/{ControlPlaneFixture.SeededProjectId}/comparison-groups",
             new
