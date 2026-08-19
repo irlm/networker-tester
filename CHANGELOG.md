@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.240] - 2026-08-19
+
+### Added
+
+- **Comparison groups get a real results page** (#794):
+  `/projects/:pid/benchmarks/compare/:groupId`, linked from the Runs group
+  chip ("Compare") and from member run detail pages. Two pivots: **by
+  server** — every language ranked side-by-side per environment
+  (cloud/region/OS/proxy) with box-whisker latency charts, fastest
+  highlighted; **by language** — each language across its environments,
+  labeled by the axes that differ, with explicit p50 deltas vs the fastest
+  cell and a "multiple variables differ" fairness flag when cells vary in
+  more than one axis. A per-case matrix (case × language, honoring
+  higher-is-better) renders from benchmark artifacts — populated for runs
+  executed on v0.28.239+; older artifacts show attempt-derived stats with a
+  note. Every cell links to its individual run.
+
 ## [0.28.239] - 2026-08-19
 
 ### Fixed
