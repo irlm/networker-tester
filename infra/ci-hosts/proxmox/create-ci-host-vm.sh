@@ -228,10 +228,13 @@ cmd_windows() {
   qm start "$VMID"
   # OVMF + a Windows ISO show "Press any key to boot from CD or DVD…" for a
   # few seconds; an unattended install must not stall on it. Tap Enter on the
-  # VM's keyboard through QEMU for the first 25 s (harmless once Setup is up).
-  log "VM $VMID ($NAME) started from the ISO${ANSWER_ISO:+ with answer ISO $ANSWER_ISO} — pressing Enter past the CD-boot prompt"
+  # VM's keyboard through QEMU for the first 12 s only: the prompt is gone by
+  # ~8 s and Setup's UI cannot appear before ~30 s (boot.wim load) — tapping
+  # for 25 s on the first real run hit Setup's Cancel button and raised an
+  # "Are you sure you want to quit?" dialog mid-install.
+  log "VM $VMID ($NAME) started from the ISO${ANSWER_ISO:+ with answer ISO $ANSWER_ISO} — pressing Enter past the CD-boot prompt (12 s)"
   local i
-  for i in $(seq 1 50); do qm sendkey "$VMID" ret >/dev/null 2>&1 || true; sleep 0.5; done
+  for i in $(seq 1 24); do qm sendkey "$VMID" ret >/dev/null 2>&1 || true; sleep 0.5; done
   log "Windows Setup should be running — unattended with the answer ISO (~15 min), then first-logon.ps1 enables ssh"
 }
 
