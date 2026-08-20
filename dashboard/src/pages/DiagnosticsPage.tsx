@@ -30,6 +30,22 @@ import {
   isWatchlistConfigName,
   probeRunVerdict,
 } from '../lib/watchlist';
+import {
+  NO_RUNNER,
+  UNKNOWN_RUNNER,
+  capacityOptions,
+  matchesRunnerFilter,
+  parseProbeGroupBy,
+  probeBucketFor,
+  providerOptions,
+  runnerIdentityForRun,
+  summarizeBucketRunners,
+  type BucketRunnerSummary,
+  type ProbeBucket,
+  type ProbeGroupBy,
+  type RunnerIdentity,
+} from '../lib/probe-grouping';
+import { cloudProviderBadge } from '../lib/provider';
 import { Button } from '../components/common/Button';
 import { isOnlineTester } from '../lib/tester-readiness';
 import {
@@ -48,7 +64,13 @@ type FilterMode = 'all' | 'healthy' | 'partial' | 'failed' | 'pending' | 'stale'
 type SortMode = 'last-checked' | 'name' | 'slowest' | 'most-runs';
 
 interface UrlGroup {
+  /** Row identity: the host under host grouping; host + runner axes otherwise
+   *  (lib/probe-grouping.ts). Keys expanded/pending state and the card DOM id. */
+  key: string;
   host: string;
+  bucket: ProbeBucket;
+  /** Region(s) / catalog specs of the runners behind this row's runs. */
+  runner: BucketRunnerSummary;
   runs: TestRun[];
   configIds: Set<string>;
   lastRun: TestRun;
@@ -72,6 +94,16 @@ const DIAGNOSTIC_RUN_PARAMS = { endpoint_kind: 'network', limit: 200 } as const;
 // "hourly" badge/button state — an API-created daily schedule on the same
 // config must not read as "Monitoring hourly".
 const HOURLY_CRON = '0 * * * *';
+
+// The toolbar's compact select (sort + the runner-axis group/provider/size
+// selects share it) — same chevron as the probe bar's selects, tighter padding.
+const TOOLBAR_SELECT_CLASS =
+  'bg-transparent border border-gray-800 rounded px-2.5 py-1 text-xs text-gray-400 focus:outline-none appearance-none pr-6 cursor-pointer';
+const TOOLBAR_SELECT_STYLE = {
+  backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23475569' stroke-width='1.5'/%3E%3C/svg%3E")`,
+  backgroundRepeat: 'no-repeat',
+  backgroundPosition: 'right 8px center',
+} as const;
 
 const PHASE_CSS_COLORS: Record<string, string> = {
   dns: '#a78bfa',
@@ -244,8 +276,18 @@ function UrlCard({
   onToggleMonitor: (schedule: TestSchedule) => void;
 }) {
   const navigate = useNavigate();
-  const { host, runs, lastRun, lastStatus, configIds } = group;
+  const { host, runs, lastRun, lastStatus, configIds, bucket, runner } = group;
   const isActive = lastRun.status === 'queued' || lastRun.status === 'running';
+  // Runner axis facts for grouped views (SideLine style, InfraEnvelope.tsx):
+  // provider badge · size · region · vCPU / GB. Region is not part of a
+  // capacity key, so a row spanning several regions says so instead of
+  // picking one.
+  const regionLabel =
+    runner.regions.length === 1
+      ? runner.regions[0]
+      : runner.regions.length > 1
+        ? `${runner.regions.length} regions`
+        : null;
 
   // Determine card border class
   const borderClass =
@@ -318,7 +360,7 @@ function UrlCard({
         onClick={onToggle}
         className="flex items-center w-full px-4 py-3 gap-3 text-left hover:bg-white/[0.015] transition-colors cursor-pointer"
         aria-expanded={expanded}
-        aria-controls={`card-body-${host}`}
+        aria-controls={`card-body-${group.key}`}
       >
         <span
           className={`text-faint text-xs flex-shrink-0 transition-transform duration-200 ${
@@ -333,6 +375,41 @@ function UrlCard({
           <span className={`text-sm font-medium truncate ${urlColor}`}>
             {host}
           </span>
+
+          {/* Runner axis (provider / capacity grouping only) */}
+          {bucket.groupBy !== 'host' && (
+            <span className="flex items-center gap-2 text-xs whitespace-nowrap">
+              {bucket.unknownRunner ? (
+                <span
+                  className="px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-400"
+                  title="No runner identity for these runs: no tester bound, or the tester row was deleted"
+                >
+                  unknown runner
+                </span>
+              ) : (
+                <>
+                  {bucket.cloud !== null ? (
+                    <span className={`px-1.5 py-0.5 rounded ${cloudProviderBadge(bucket.cloud)}`}>
+                      {bucket.cloud}
+                    </span>
+                  ) : (
+                    <span className="px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-400">unknown provider</span>
+                  )}
+                  {bucket.groupBy === 'capacity' && (
+                    <span className="text-gray-300">{bucket.vmSize ?? 'unknown size'}</span>
+                  )}
+                  {regionLabel && <span className="text-faint">{regionLabel}</span>}
+                  {bucket.groupBy === 'capacity' && (
+                    runner.vcpus !== null && runner.memoryGb !== null ? (
+                      <span className="text-faint">{runner.vcpus} vCPU / {runner.memoryGb} GB</span>
+                    ) : bucket.vmSize !== null ? (
+                      <span className="text-gray-600">no spec in catalog</span>
+                    ) : null
+                  )}
+                </>
+              )}
+            </span>
+          )}
 
           {/* Inline phase timings - show total duration if no phase breakdown */}
           {totalDuration != null && (
@@ -370,7 +447,7 @@ function UrlCard({
 
       {/* Expanded body */}
       {expanded && (
-        <div id={`card-body-${host}`} className="px-4 pb-4">
+        <div id={`card-body-${group.key}`} className="px-4 pb-4">
           {/* Phase breakdown bar */}
           <PhaseBar timings={lastTimings} />
 
@@ -539,6 +616,13 @@ export function DiagnosticsPage() {
   // UI state
   const [filter, setFilter] = useState<FilterMode>('all');
   const [sort, setSort] = useState<SortMode>('last-checked');
+  // Runner axes (lib/probe-grouping.ts): split a host's history by the
+  // provider / VM size of the runner that probed it, and narrow to one
+  // provider or size. All three ride the query string (?group=, ?provider=,
+  // ?size=) next to ?host= so a comparison view is shareable.
+  const [groupBy, setGroupBy] = useState<ProbeGroupBy>(() => parseProbeGroupBy(searchParams.get('group')));
+  const [providerFilter, setProviderFilter] = useState<string>(() => searchParams.get('provider') ?? '');
+  const [sizeFilter, setSizeFilter] = useState<string>(() => searchParams.get('size') ?? '');
   const [page, setPage] = useState(1);
   const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
 
@@ -555,6 +639,21 @@ export function DiagnosticsPage() {
       return next;
     }, { replace: true });
   }, [url, setSearchParams]);
+
+  // Grouping / runner filters → query string. Defaults are omitted so the
+  // plain /probe URL stays clean.
+  useEffect(() => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      if (groupBy !== 'host') next.set('group', groupBy);
+      else next.delete('group');
+      if (providerFilter) next.set('provider', providerFilter);
+      else next.delete('provider');
+      if (sizeFilter) next.set('size', sizeFilter);
+      else next.delete('size');
+      return next;
+    }, { replace: true });
+  }, [groupBy, providerFilter, sizeFilter, setSearchParams]);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -656,10 +755,53 @@ export function DiagnosticsPage() {
     };
   }, [configById, configDetails]);
 
-  const baseUrlGroups = useMemo(() => {
-    const hostMap = new Map<string, { runs: TestRun[]; configIds: Set<string> }>();
+  // ── Runner identity per run (provider / capacity axes) ────────────────
+  // Denormalized runner_* list fields first; the testers map fills gaps by
+  // tester_id; neither → the explicit unknown-runner bucket.
+  const testersById = useMemo(
+    () => new Map(testers.map(t => [t.tester_id, t])),
+    [testers],
+  );
+  // Every run in allRuns has an entry; NO_RUNNER is only the type-level
+  // fallback for a lookup miss.
+  const runnerByRunId = useMemo(() => {
+    const map = new Map<string, RunnerIdentity>();
+    for (const run of allRuns) map.set(run.id, runnerIdentityForRun(run, testersById));
+    return map;
+  }, [allRuns, testersById]);
+  const allRunners = useMemo(
+    () => allRuns.map(run => runnerByRunId.get(run.id) ?? NO_RUNNER),
+    [allRuns, runnerByRunId],
+  );
 
-    for (const run of allRuns) {
+  // Filter options come from what is actually loaded — provider over every
+  // run, size over the runs under the chosen provider (so the size list
+  // never offers an Azure SKU while GCP is selected).
+  const providerOpts = useMemo(() => providerOptions(allRunners), [allRunners]);
+  const capacityOpts = useMemo(
+    () => capacityOptions(allRunners.filter(r => matchesRunnerFilter(r, providerFilter || null, null))),
+    [allRunners, providerFilter],
+  );
+
+  // Runs that survive the provider / size filters — the grouping input.
+  const visibleRuns = useMemo(
+    () => (providerFilter || sizeFilter
+      ? allRuns.filter(run => matchesRunnerFilter(
+        runnerByRunId.get(run.id) ?? NO_RUNNER, providerFilter || null, sizeFilter || null,
+      ))
+      : allRuns),
+    [allRuns, runnerByRunId, providerFilter, sizeFilter],
+  );
+
+  const baseUrlGroups = useMemo(() => {
+    const bucketMap = new Map<string, {
+      bucket: ProbeBucket;
+      runs: TestRun[];
+      configIds: Set<string>;
+      runners: RunnerIdentity[];
+    }>();
+
+    for (const run of visibleRuns) {
       // Hosts this run covers: a single-URL config yields one; a set config
       // (#820) yields EVERY member, so the run lands on each member's row.
       // Resolution order: list item (endpoint-aware, no fetch needed) →
@@ -679,24 +821,34 @@ export function DiagnosticsPage() {
         hosts = hostsFromDiagConfigName(run.config_name);
       }
 
+      // Under host grouping the bucket IS the host (unchanged behaviour);
+      // under provider / capacity the same run lands on the host's row for
+      // its runner's cloud (and size).
+      const runner = runnerByRunId.get(run.id) ?? NO_RUNNER;
       for (const host of hosts) {
-        if (!hostMap.has(host)) {
-          hostMap.set(host, { runs: [], configIds: new Set() });
+        const bucket = probeBucketFor(host, groupBy, runner);
+        let entry = bucketMap.get(bucket.key);
+        if (!entry) {
+          entry = { bucket, runs: [], configIds: new Set(), runners: [] };
+          bucketMap.set(bucket.key, entry);
         }
-        const entry = hostMap.get(host)!;
         entry.runs.push(run);
         entry.configIds.add(run.test_config_id);
+        entry.runners.push(runner);
       }
     }
 
     const groups: UrlGroup[] = [];
-    for (const [host, { runs, configIds }] of hostMap) {
+    for (const { bucket, runs, configIds, runners } of bucketMap.values()) {
       // Sort runs by created_at desc
       runs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
       const lastRun = runs[0];
 
       groups.push({
-        host,
+        key: bucket.key,
+        host: bucket.host,
+        bucket,
+        runner: summarizeBucketRunners(runners),
         runs,
         configIds,
         lastRun,
@@ -708,7 +860,7 @@ export function DiagnosticsPage() {
     }
 
     return groups;
-  }, [allRuns, configById, configDetails, now]);
+  }, [visibleRuns, configById, configDetails, now, groupBy, runnerByRunId]);
 
   // ── Per-URL health for set runs (#820) ────────────────────────────────
   // A set run's run-level counts aggregate every member URL — one flaky
@@ -795,7 +947,8 @@ export function DiagnosticsPage() {
         case 'last-checked':
           return new Date(b.lastRun.created_at).getTime() - new Date(a.lastRun.created_at).getTime();
         case 'name':
-          return a.host.localeCompare(b.host);
+          // Same host under provider/capacity grouping: keep its rows together.
+          return a.host.localeCompare(b.host) || a.key.localeCompare(b.key);
         case 'slowest':
           return (b.totalDurationMs ?? 0) - (a.totalDurationMs ?? 0);
         case 'most-runs':
@@ -817,10 +970,11 @@ export function DiagnosticsPage() {
   const recentHosts = useMemo(() => {
     // Copy before sorting — urlGroups is a memoized array shared with the
     // summary/filter pipeline; sorting it in place mutates that cache.
-    return [...urlGroups]
+    // Grouped views carry several rows per host — dedupe before slicing.
+    const hosts = [...urlGroups]
       .sort((a, b) => new Date(b.lastRun.created_at).getTime() - new Date(a.lastRun.created_at).getTime())
-      .slice(0, 8)
       .map(g => g.host);
+    return [...new Set(hosts)].slice(0, 8);
   }, [urlGroups]);
 
   // ── Handlers ──────────────────────────────────────────────────────
@@ -968,7 +1122,7 @@ export function DiagnosticsPage() {
   const schedules = useMemo(() => schedulesQuery.data ?? [], [schedulesQuery.data]);
   const updateSchedule = useUpdateScheduleMutation(projectId);
 
-  // In-flight guard for "Monitor hourly" (keyed by group.host): a double
+  // In-flight guard for "Monitor hourly" (keyed by group.key): a double
   // click, or two clicks before the schedules query refreshes, must not
   // create duplicate schedule rows.
   const [monitorPending, setMonitorPending] = useState<Set<string>>(new Set());
@@ -996,8 +1150,8 @@ export function DiagnosticsPage() {
   };
 
   const handleMonitorHourly = async (group: UrlGroup) => {
-    if (monitorPending.has(group.host)) return;
-    setMonitorPending(prev => new Set(prev).add(group.host));
+    if (monitorPending.has(group.key)) return;
+    setMonitorPending(prev => new Set(prev).add(group.key));
     try {
       // Re-check against the FRESHEST schedule data before POSTing — the
       // schedule may exist already (created from another member's card, or a
@@ -1027,7 +1181,7 @@ export function DiagnosticsPage() {
     } finally {
       setMonitorPending(prev => {
         const next = new Set(prev);
-        next.delete(group.host);
+        next.delete(group.key);
         return next;
       });
     }
@@ -1059,19 +1213,21 @@ export function DiagnosticsPage() {
   const handleHostClick = (host: string) => {
     setUrl(host);
     inputRef.current?.focus();
-    // Scroll to the card for this host if it exists
-    const card = document.getElementById(`card-body-${host}`);
-    if (card) {
+    // Scroll to the host's first card if it exists (grouped views have one
+    // per runner bucket; the first in display order is the nearest match).
+    const target = filteredGroups.find(g => g.host === host);
+    const card = target ? document.getElementById(`card-body-${target.key}`) : null;
+    if (target && card) {
       card.closest('[class*="border-gray-800"]')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      setExpandedCards(prev => new Set(prev).add(host));
+      setExpandedCards(prev => new Set(prev).add(target.key));
     }
   };
 
-  const toggleCard = (host: string) => {
+  const toggleCard = (key: string) => {
     setExpandedCards(prev => {
       const next = new Set(prev);
-      if (next.has(host)) next.delete(host);
-      else next.add(host);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
@@ -1080,7 +1236,7 @@ export function DiagnosticsPage() {
   // previous-value comparison React documents for this, rather than in an
   // effect: the effect version rendered page N of the new filter first, then
   // re-rendered at page 1 — a visible flash of the wrong slice.
-  const filterKey = `${filter}\u0000${sort}`;
+  const filterKey = `${filter}\u0000${sort}\u0000${groupBy}\u0000${providerFilter}\u0000${sizeFilter}`;
   const [prevFilterKey, setPrevFilterKey] = useState(filterKey);
   if (filterKey !== prevFilterKey) {
     setPrevFilterKey(filterKey);
@@ -1237,7 +1393,10 @@ export function DiagnosticsPage() {
         <div className="flex items-center gap-4 mb-4 text-xs">
           {/* Color carries signal — zero counts stay grey (audit: colored zeros). */}
           <span className="text-gray-400">
-            <strong className="text-gray-400 font-medium">{summary.total}</strong> {summary.total === 1 ? 'URL' : 'URLs'}
+            <strong className="text-gray-400 font-medium">{summary.total}</strong>{' '}
+            {groupBy === 'host'
+              ? (summary.total === 1 ? 'URL' : 'URLs')
+              : `URL × ${groupBy === 'provider' ? 'provider' : 'capacity'} ${summary.total === 1 ? 'row' : 'rows'}`}
           </span>
           <span className="text-gray-700">&middot;</span>
           <span className="text-gray-400">
@@ -1271,11 +1430,58 @@ export function DiagnosticsPage() {
       )}
 
       {/* Toolbar */}
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
         <span className="text-xs tracking-wider text-faint">
-          Watched URLs ({filteredGroups.length})
+          {groupBy === 'host'
+            ? `Watched URLs (${filteredGroups.length})`
+            : `Watched URLs × ${groupBy === 'provider' ? 'provider' : 'capacity'} (${filteredGroups.length})`}
         </span>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* Runner axes: group + provider + capacity filters */}
+          <select
+            value={groupBy}
+            onChange={e => setGroupBy(parseProbeGroupBy(e.target.value))}
+            className={TOOLBAR_SELECT_CLASS}
+            style={TOOLBAR_SELECT_STYLE}
+            aria-label="Group rows by"
+            title="Split each host's history by the runner that probed it — Azure vs GCP numbers differ for infrastructure reasons, not network-path reasons"
+          >
+            <option value="host">By host</option>
+            <option value="provider">By provider</option>
+            <option value="capacity">By capacity</option>
+          </select>
+          <select
+            value={providerFilter}
+            onChange={e => { setProviderFilter(e.target.value); setSizeFilter(''); }}
+            className={TOOLBAR_SELECT_CLASS}
+            style={TOOLBAR_SELECT_STYLE}
+            aria-label="Filter by runner provider"
+            title="Only runs probed from this cloud provider"
+          >
+            <option value="">All providers</option>
+            {providerOpts.map(o => (
+              <option key={o.value} value={o.value}>{o.label} ({o.count})</option>
+            ))}
+            {providerFilter && !providerOpts.some(o => o.value === providerFilter) && (
+              <option value={providerFilter}>{providerFilter} (no runs)</option>
+            )}
+          </select>
+          <select
+            value={sizeFilter}
+            onChange={e => setSizeFilter(e.target.value)}
+            className={`${TOOLBAR_SELECT_CLASS} max-w-[18rem]`}
+            style={TOOLBAR_SELECT_STYLE}
+            aria-label="Filter by runner VM size"
+            title="Only runs probed from this runner VM size (vCPU / memory from the VM-size catalog)"
+          >
+            <option value="">All sizes</option>
+            {capacityOpts.map(o => (
+              <option key={o.value} value={o.value}>{o.label} ({o.count})</option>
+            ))}
+            {sizeFilter && !capacityOpts.some(o => o.value === sizeFilter) && (
+              <option value={sizeFilter}>{sizeFilter === UNKNOWN_RUNNER ? 'unknown size' : sizeFilter} (no runs)</option>
+            )}
+          </select>
           {/* Filter toggle */}
           <div className="flex border border-gray-800 rounded overflow-hidden">
             {(['all', 'healthy', 'partial', 'pending', 'failed', 'stale'] as FilterMode[]).map(f => (
@@ -1297,12 +1503,8 @@ export function DiagnosticsPage() {
           <select
             value={sort}
             onChange={e => setSort(e.target.value as SortMode)}
-            className="bg-transparent border border-gray-800 rounded px-2.5 py-1 text-xs text-gray-400 focus:outline-none appearance-none pr-6 cursor-pointer"
-            style={{
-              backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23475569' stroke-width='1.5'/%3E%3C/svg%3E")`,
-              backgroundRepeat: 'no-repeat',
-              backgroundPosition: 'right 8px center',
-            }}
+            className={TOOLBAR_SELECT_CLASS}
+            style={TOOLBAR_SELECT_STYLE}
             aria-label="Sort URLs by"
           >
             <option value="last-checked">Last checked</option>
@@ -1327,25 +1529,27 @@ export function DiagnosticsPage() {
       ) : paginatedGroups.length === 0 ? (
         <div className="border border-gray-800 rounded p-12 text-center">
           <p className="text-gray-400 text-sm">
-            {filter !== 'all'
-              ? `No ${filter} URLs found. Try changing the filter.`
-              : 'No probes yet. Enter a URL above to discover what it supports.'}
+            {providerFilter || sizeFilter
+              ? 'No runs from that runner provider / size. Try another filter or pin a runner above and probe again.'
+              : filter !== 'all'
+                ? `No ${filter} URLs found. Try changing the filter.`
+                : 'No probes yet. Enter a URL above to discover what it supports.'}
           </p>
         </div>
       ) : (
         <div>
           {paginatedGroups.map(group => (
             <UrlCard
-              key={group.host}
+              key={group.key}
               group={group}
               projectId={projectId}
-              expanded={expandedCards.has(group.host)}
-              onToggle={() => toggleCard(group.host)}
+              expanded={expandedCards.has(group.key)}
+              onToggle={() => toggleCard(group.key)}
               onRunAgain={host => handleRun(host)}
               onRemove={handleRemove}
               schedule={scheduleForGroup(group)}
               onMonitorHourly={() => handleMonitorHourly(group)}
-              monitorPending={monitorPending.has(group.host)}
+              monitorPending={monitorPending.has(group.key)}
               onToggleMonitor={schedule => handleToggleMonitor(group, schedule)}
             />
           ))}
@@ -1357,7 +1561,7 @@ export function DiagnosticsPage() {
         <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-800">
           <span className="text-xs text-faint">
             Showing {(safePage - 1) * PAGE_SIZE + 1}-{Math.min(safePage * PAGE_SIZE, filteredGroups.length)} of{' '}
-            {filteredGroups.length} URLs
+            {filteredGroups.length} {groupBy === 'host' ? 'URLs' : 'rows'}
           </span>
           <div className="flex items-center gap-2">
             <button

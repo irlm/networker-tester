@@ -11,6 +11,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.269] - 2026-08-20
+
+### Added
+
+- **URL Probe: compare a host by runner provider and by runner capacity.**
+  The Watched URLs list folded every run on a host into one row no matter
+  which tester VM probed it, so picking `microsoft.com` averaged an Azure
+  `Standard_B1s` against a GCP `e2-standard-4` and the spread read as a
+  network-path difference when it was a runner-infrastructure one. The
+  toolbar gains a **By host / By provider / By capacity** select (host is
+  the unchanged default; provider = host × runner cloud; capacity = host ×
+  runner cloud × VM size) plus **Provider** and **Size** filters whose
+  options are the values present in the loaded runs — sizes labelled with
+  the VM catalog's `N vCPU / N GB` and sorted by vCPU, memory, then name.
+  Grouped rows render the provider badge, size, region (or `N regions` when
+  a capacity row spans several) and catalog specs in the infra-envelope
+  `SideLine` style. A run whose runner cannot be resolved lands in an
+  explicit **unknown runner** row — never silently merged into a real
+  bucket. `?group=`, `?provider=` and `?size=` persist next to `?host=` so a
+  comparison view is shareable. Pure bucket-key / option helpers live in
+  `dashboard/src/lib/probe-grouping.ts` with vitest coverage.
+- **Run list carries the runner identity.** `GET
+  /api/v2/projects/{projectId}/test-runs` items gain the additive
+  snake_case fields `runner_cloud`, `runner_region`, `runner_vm_size`
+  (from the run's tester; null when the run has no tester or the tester
+  was deleted) and `runner_vcpus` / `runner_memory_gb` (from
+  `VmNetworkSpecs`; null when the size is not catalogued). The list
+  projection is now a `RunListRow` + `BuildRunListItem` seam, mirroring
+  `BuildRunDetail`, and `TestRunsContractTests` pins the list field set.
+  The run DETAIL shape is unchanged.
+
+---
+
 ## [0.28.268] - 2026-08-20
 
 ### Fixed

@@ -105,62 +105,44 @@ public static class TestRunsEndpoints
                 query = query.Where(r => r.TestConfig.Name.ToLower().Contains(term));
             }
 
+            // Projection = base run columns + the TestConfig join (the Runs
+            // table's denormalized name / kind / modes — why this endpoint is
+            // "fuller" than the base TestRun shape) + the run's bound tester
+            // identity through the optional Tester nav (LEFT JOIN: null when
+            // the run never bound a tester or the tester row was deleted —
+            // test_run.tester_id is ON DELETE SET NULL).
             var rows = await query
                 .OrderByDescending(r => r.CreatedAt)
                 .Take(take)
-                .Select(r => new
-                {
-                    id = r.Id,
-                    test_config_id = r.TestConfigId,
-                    project_id = r.ProjectId,
-                    status = r.Status,
-                    started_at = r.StartedAt,
-                    finished_at = r.FinishedAt,
-                    success_count = r.SuccessCount,
-                    failure_count = r.FailureCount,
-                    error_message = r.ErrorMessage,
-                    artifact_id = r.ArtifactId,
-                    tester_id = r.TesterId,
-                    worker_id = r.WorkerId,
-                    last_heartbeat = r.LastHeartbeat,
-                    created_at = r.CreatedAt,
-                    comparison_group_id = r.ComparisonGroupId,
-                    // Extra denormalized fields the Runs table needs; the join is
-                    // why this endpoint is "fuller" than the base TestRun shape.
-                    config_name = r.TestConfig.Name,
-                    endpoint_kind = r.TestConfig.EndpointKind,
-                    test_kind = r.TestConfig.TestKind,
-                    workload = r.TestConfig.Workload,
-                })
+                .Select(r => new RunListRow(
+                    r.Id,
+                    r.TestConfigId,
+                    r.ProjectId,
+                    r.Status,
+                    r.StartedAt,
+                    r.FinishedAt,
+                    r.SuccessCount,
+                    r.FailureCount,
+                    r.ErrorMessage,
+                    r.ArtifactId,
+                    r.TesterId,
+                    r.WorkerId,
+                    r.LastHeartbeat,
+                    r.CreatedAt,
+                    r.ComparisonGroupId,
+                    r.TestConfig.Name,
+                    r.TestConfig.EndpointKind,
+                    r.TestConfig.TestKind,
+                    r.TestConfig.Workload,
+                    r.Tester == null ? null : r.Tester.Cloud,
+                    r.Tester == null ? null : r.Tester.Region,
+                    r.Tester == null ? null : r.Tester.VmSize))
                 .ToListAsync();
 
-            // result_status is computed in memory (RunVerdict is not
-            // EF-translatable) — `status` stays the raw stored value.
-            var shaped = rows.Select(r => new
-            {
-                r.id,
-                r.test_config_id,
-                r.project_id,
-                r.status,
-                result_status = RunVerdict.ResultStatus(r.status, r.success_count, r.failure_count),
-                r.started_at,
-                r.finished_at,
-                r.success_count,
-                r.failure_count,
-                r.error_message,
-                r.artifact_id,
-                r.tester_id,
-                r.worker_id,
-                r.last_heartbeat,
-                r.created_at,
-                r.comparison_group_id,
-                r.config_name,
-                r.endpoint_kind,
-                r.test_kind,
-                modes = ModesFromWorkload(r.workload),
-            });
-
-            return Results.Ok(shaped);
+            // result_status / modes / runner specs are computed in memory
+            // (RunVerdict and the VM catalog are not EF-translatable) —
+            // `status` stays the raw stored value.
+            return Results.Ok(rows.Select(BuildRunListItem));
         }).RequireAuthorization(AuthPolicies.ProjectMember);
 
         // GET /api/v2/test-runs/{id} — single run detail.
@@ -472,6 +454,65 @@ public static class TestRunsEndpoints
         }
 
         return [];
+    }
+
+    /// <summary>
+    /// One <c>test_run</c> row as read for the LIST route — the base run
+    /// columns plus the config join and the run's bound tester identity.
+    /// <see cref="BuildRunListItem"/> shapes it into the wire payload
+    /// (extracted so the field set is unit-testable without a database).
+    /// </summary>
+    internal sealed record RunListRow(
+        Guid Id, Guid TestConfigId, string ProjectId, string Status,
+        DateTime? StartedAt, DateTime? FinishedAt, int SuccessCount, int FailureCount,
+        string? ErrorMessage, Guid? ArtifactId, Guid? TesterId, string? WorkerId,
+        DateTime? LastHeartbeat, DateTime CreatedAt, Guid? ComparisonGroupId,
+        string ConfigName, string EndpointKind, string TestKind, string Workload,
+        string? RunnerCloud, string? RunnerRegion, string? RunnerVmSize);
+
+    /// <summary>
+    /// Shape one run-list item. The <c>runner_*</c> fields are ADDITIVE
+    /// (list route only — the pinned run-detail shape is untouched): the
+    /// tester's cloud / region / VM size denormalized from the run's
+    /// <c>tester_id</c>, plus <c>runner_vcpus</c> / <c>runner_memory_gb</c>
+    /// from the VM-size catalog (<see cref="Infra.VmNetworkSpecs"/>). They let
+    /// the URL Probe page split a host's history by provider and by runner
+    /// capacity instead of averaging an Azure B1s against a GCP e2-standard-4.
+    /// All five are null when the run has no tester (standalone agent, or the
+    /// tester row was deleted); the two spec fields are also null when the
+    /// size is not in the catalog. Pinned by <c>TestRunsContractTests</c>.
+    /// </summary>
+    internal static object BuildRunListItem(RunListRow r)
+    {
+        var spec = Infra.VmNetworkSpecs.Lookup(r.RunnerCloud, r.RunnerVmSize);
+        return new
+        {
+            id = r.Id,
+            test_config_id = r.TestConfigId,
+            project_id = r.ProjectId,
+            status = r.Status,
+            result_status = RunVerdict.ResultStatus(r.Status, r.SuccessCount, r.FailureCount),
+            started_at = r.StartedAt,
+            finished_at = r.FinishedAt,
+            success_count = r.SuccessCount,
+            failure_count = r.FailureCount,
+            error_message = r.ErrorMessage,
+            artifact_id = r.ArtifactId,
+            tester_id = r.TesterId,
+            worker_id = r.WorkerId,
+            last_heartbeat = r.LastHeartbeat,
+            created_at = r.CreatedAt,
+            comparison_group_id = r.ComparisonGroupId,
+            config_name = r.ConfigName,
+            endpoint_kind = r.EndpointKind,
+            test_kind = r.TestKind,
+            modes = ModesFromWorkload(r.Workload),
+            runner_cloud = r.RunnerCloud,
+            runner_region = r.RunnerRegion,
+            runner_vm_size = r.RunnerVmSize,
+            runner_vcpus = spec?.Vcpus,
+            runner_memory_gb = spec?.MemoryGb,
+        };
     }
 
     /// <summary>

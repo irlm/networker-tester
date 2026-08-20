@@ -215,6 +215,117 @@ public sealed class TestRunsContractTests
         Assert.Equal(4, envelope["client_info"]!["cpu_cores"]!.GetValue<int>());
     }
 
+    // ── Run list: runner identity for provider / capacity grouping ──────────
+
+    private static TestRunsEndpoints.RunListRow SampleRunListRow(
+        string? cloud, string? region, string? vmSize) => new(
+        Id: Guid.Parse("11111111-2222-3333-4444-555555555555"),
+        TestConfigId: Guid.Parse("66666666-7777-8888-9999-aaaaaaaaaaaa"),
+        ProjectId: "p1",
+        Status: "completed",
+        StartedAt: new DateTime(2026, 8, 20, 1, 22, 0, DateTimeKind.Utc),
+        FinishedAt: new DateTime(2026, 8, 20, 1, 23, 0, DateTimeKind.Utc),
+        SuccessCount: 4,
+        FailureCount: 0,
+        ErrorMessage: null,
+        ArtifactId: null,
+        TesterId: cloud is null ? null : Guid.Parse("bbbbbbbb-cccc-dddd-eeee-ffffffffffff"),
+        WorkerId: "worker-1",
+        LastHeartbeat: null,
+        CreatedAt: new DateTime(2026, 8, 20, 1, 21, 0, DateTimeKind.Utc),
+        ComparisonGroupId: null,
+        ConfigName: "Diag: microsoft.com (Quick)",
+        EndpointKind: "network",
+        TestKind: "url_probe",
+        Workload: """{"modes":["dns","tcp","tls","http2"]}""",
+        RunnerCloud: cloud,
+        RunnerRegion: region,
+        RunnerVmSize: vmSize);
+
+    /// The list item's field set: the pre-existing list shape (base run +
+    /// config join + computed result_status/modes) followed by the ADDITIVE
+    /// runner identity fields. Appended, never interleaved, so a consumer
+    /// reading by position keeps working.
+    private static readonly string[] RunListFields =
+    {
+        "id", "test_config_id", "project_id", "status", "result_status",
+        "started_at", "finished_at", "success_count", "failure_count",
+        "error_message", "artifact_id", "tester_id", "worker_id",
+        "last_heartbeat", "created_at", "comparison_group_id",
+        "config_name", "endpoint_kind", "test_kind", "modes",
+        "runner_cloud", "runner_region", "runner_vm_size",
+        "runner_vcpus", "runner_memory_gb",
+    };
+
+    [Fact]
+    public void Run_list_item_pins_the_field_set_with_runner_identity_appended()
+    {
+        var json = JsonSerializer.Serialize(
+            TestRunsEndpoints.BuildRunListItem(SampleRunListRow("gcp", "us-central1", "e2-medium")),
+            WebOptions);
+        var root = JsonNode.Parse(json)!.AsObject();
+
+        Assert.Equal(RunListFields, root.Select(p => p.Key).ToArray());
+        Assert.Equal("completed", root["result_status"]!.GetValue<string>());
+        Assert.Equal(
+            new[] { "dns", "tcp", "tls", "http2" },
+            root["modes"]!.AsArray().Select(m => m!.GetValue<string>()).ToArray());
+    }
+
+    [Fact]
+    public void Run_list_item_resolves_runner_specs_from_the_vm_catalog()
+    {
+        // The probe page's capacity axis: cloud + size straight from the
+        // tester row, vCPU / memory from VmNetworkSpecs so every list
+        // consumer sees the same numbers the infra envelope shows.
+        var json = JsonSerializer.Serialize(
+            TestRunsEndpoints.BuildRunListItem(SampleRunListRow("gcp", "us-central1", "e2-medium")),
+            WebOptions);
+        var root = JsonNode.Parse(json)!.AsObject();
+
+        Assert.Equal("gcp", root["runner_cloud"]!.GetValue<string>());
+        Assert.Equal("us-central1", root["runner_region"]!.GetValue<string>());
+        Assert.Equal("e2-medium", root["runner_vm_size"]!.GetValue<string>());
+        Assert.Equal(2, root["runner_vcpus"]!.GetValue<int>());
+        Assert.Equal(4.0, root["runner_memory_gb"]!.GetValue<double>());
+    }
+
+    [Fact]
+    public void Run_list_item_without_a_tester_emits_null_runner_fields()
+    {
+        // No tester (standalone agent) or a deleted tester (tester_id is
+        // ON DELETE SET NULL): identity and specs are null, the keys stay so
+        // the frontend's "unknown runner" bucket is an explicit null, never a
+        // missing-vs-present ambiguity.
+        var json = JsonSerializer.Serialize(
+            TestRunsEndpoints.BuildRunListItem(SampleRunListRow(null, null, null)),
+            WebOptions);
+        var root = JsonNode.Parse(json)!.AsObject();
+
+        Assert.Equal(RunListFields, root.Select(p => p.Key).ToArray());
+        foreach (var field in new[] { "tester_id", "runner_cloud", "runner_region", "runner_vm_size", "runner_vcpus", "runner_memory_gb" })
+        {
+            Assert.Null(root[field]);
+        }
+    }
+
+    [Fact]
+    public void Run_list_item_with_an_uncatalogued_size_keeps_identity_but_nulls_specs()
+    {
+        // A size the catalog does not know (custom / brand-new SKU): the
+        // provider axis still works (cloud + size pass through), only the
+        // capacity numbers are unknown.
+        var json = JsonSerializer.Serialize(
+            TestRunsEndpoints.BuildRunListItem(SampleRunListRow("azure", "westeurope", "Standard_Z99_v9")),
+            WebOptions);
+        var root = JsonNode.Parse(json)!.AsObject();
+
+        Assert.Equal("azure", root["runner_cloud"]!.GetValue<string>());
+        Assert.Equal("Standard_Z99_v9", root["runner_vm_size"]!.GetValue<string>());
+        Assert.Null(root["runner_vcpus"]);
+        Assert.Null(root["runner_memory_gb"]);
+    }
+
     [Fact]
     public void Null_optional_phase_fields_are_omitted_within_a_phase()
     {

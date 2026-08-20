@@ -148,6 +148,19 @@ export interface TestRun {
   comparison_group_id?: string | null;
   /** V046 run-envelope pass-through (detail route only; absent on old runs). */
   envelope?: RunEnvelope;
+  /**
+   * Runner identity, denormalized from the run's tester on the LIST route
+   * only (the pinned detail shape is unchanged). Null when the run has no
+   * tester or the tester row was deleted — the probe page's provider /
+   * capacity grouping falls back to the loaded testers map, then to an
+   * explicit "unknown runner" bucket.
+   */
+  runner_cloud?: string | null;
+  runner_region?: string | null;
+  runner_vm_size?: string | null;
+  /** From the VM-size catalog (VmNetworkSpecs); null when the size is unknown. */
+  runner_vcpus?: number | null;
+  runner_memory_gb?: number | null;
 }
 
 export interface TestSchedule {
