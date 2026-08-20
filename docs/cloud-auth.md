@@ -85,7 +85,7 @@ be visible in `ps` / logs):
 | Azure protected settings / API key | `--protected-settings @<file>` |
 | Azure custom-data bootstrap (carries API key) | `--custom-data @<file>` |
 | AWS user-data bootstrap | `--user-data file://<file>` |
-| GCP service-account key | `GOOGLE_APPLICATION_CREDENTIALS=<file>` (env, not argv) |
+| GCP service-account key | `CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE=<file>` + `GOOGLE_APPLICATION_CREDENTIALS=<file>` (env, not argv — the first is what the gcloud CLI reads, #827; the same pair, plus an isolated `CLOUDSDK_CONFIG`, is handed to `install.sh --deploy` for GCP endpoint deploys, #833) |
 | GCP startup script | `--metadata-from-file startup-script=<file>` |
 
 When spawning a process whose args contain a credential, the provisioner logs

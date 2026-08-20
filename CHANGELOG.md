@@ -11,6 +11,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.262] - 2026-08-20
+
+### Fixed
+
+- **GCP endpoint deploys authenticate install.sh** (#833 — the #827 auth bug
+  at its fourth site). Endpoint deployments delegate VM creation to
+  `install.sh --deploy` on the control-plane host, and the deploy runner
+  spawned it with no cloud credentials, so install.sh's GCP pre-flight — a
+  bare `gcloud auth list` against the host's never-authenticated config
+  store — failed every GCP comparison cell in seconds with "Not authenticated
+  to GCP". The runner now decrypts the cloud account's service-account key
+  (the deployment's account, or the project's single active GCP account for
+  wizard deploys), stages it 0600 inside a 0700 throwaway `CLOUDSDK_CONFIG`,
+  hands install.sh `CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE` /
+  `GOOGLE_APPLICATION_CREDENTIALS` / `CLOUDSDK_CORE_PROJECT`, records what it
+  did in the persisted deploy log, and deletes the staging dir afterwards.
+- **install.sh accepts credential-file auth for GCP.** The `--deploy`
+  pre-flight and both interactive GCP checks prove a supplied key with a real
+  token exchange instead of `gcloud auth list` (which cannot see the
+  override); a key that does not authenticate is reported as the cause rather
+  than answered with a device-code login prompt; `GOOGLE_APPLICATION_CREDENTIALS`
+  alone is promoted to the variable gcloud actually reads; and the project is
+  taken from `CLOUDSDK_CORE_PROJECT` / the key's `project_id` before any
+  gcloud round-trip.
+
 ## [0.28.261] - 2026-08-20
 
 ### Fixed
@@ -55,8 +80,6 @@ first:
   breaches the flat 1800s cap and dies mid-flight.
 
 ---
-
-
 
 ## [0.28.260] - 2026-08-20
 

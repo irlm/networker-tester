@@ -248,10 +248,26 @@ public sealed class DeployRunner
         _bus.Publish(new DeployLog(deploymentId, "Deployment started...", "stdout"));
 
         var output = new DeployOutput();
+
+        // GCP endpoints: install.sh provisions the VM with the gcloud CLI, which
+        // authenticates ONLY from its config store or a per-process credential
+        // override — never from anything this process knows. Stage the cloud
+        // account's service-account key for the installer (#833); the outcome
+        // line goes into the persisted log so a pre-flight failure is never a
+        // guessing game again. The staging dir is deleted when this scope ends,
+        // whatever path the deploy takes out of here.
+        var gcp = await GcpInstallerCredentials.PrepareAsync(_scopeFactory, deploymentId, deployJson, _logger, ct)
+            .ConfigureAwait(false);
+        using var gcpCredentials = gcp.Credentials;
+        if (gcp.Note is not null)
+        {
+            PumpLine(deploymentId, output, gcp.Note, "stdout");
+        }
+
         int? exitCode;
         try
         {
-            exitCode = await ShellInstallAsync(deploymentId, installSh, deployFile, output, ct)
+            exitCode = await ShellInstallAsync(deploymentId, installSh, deployFile, output, gcpCredentials?.Env, ct)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -515,9 +531,16 @@ public sealed class DeployRunner
 
     /// <summary>Spawn <c>bash install.sh --deploy &lt;file&gt;</c>, stream both
     /// pipes into <paramref name="output"/>, wait for exit. Returns the exit
-    /// code; a timeout tree-kills the tree and returns a non-zero code.</summary>
+    /// code; a timeout tree-kills the tree and returns a non-zero code.
+    /// <paramref name="extraEnv"/> (the staged GCP credential env, #833) is
+    /// layered over the inherited environment.</summary>
     private async Task<int?> ShellInstallAsync(
-        Guid deploymentId, string installSh, string deployFile, DeployOutput output, CancellationToken ct)
+        Guid deploymentId,
+        string installSh,
+        string deployFile,
+        DeployOutput output,
+        IReadOnlyDictionary<string, string>? extraEnv,
+        CancellationToken ct)
     {
         var psi = new ProcessStartInfo
         {
@@ -531,6 +554,13 @@ public sealed class DeployRunner
         psi.ArgumentList.Add(installSh);
         psi.ArgumentList.Add("--deploy");
         psi.ArgumentList.Add(deployFile);
+        if (extraEnv is not null)
+        {
+            foreach (var (k, v) in extraEnv)
+            {
+                psi.Environment[k] = v;
+            }
+        }
 
         var deployTimeout = DeployTimeoutFor(await File.ReadAllTextAsync(deployFile, ct).ConfigureAwait(false));
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
