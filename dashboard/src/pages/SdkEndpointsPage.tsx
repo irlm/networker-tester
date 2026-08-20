@@ -67,7 +67,11 @@ export function SdkEndpointsPage() {
     // slow/dead sample must never block the endpoint list from rendering.
     api
       .getSdkSamples(projectId)
-      .then((res) => setSamples(res.samples))
+      // Trust the status code, not the shape: a proxy, an older control plane,
+      // or a stub can answer 200 with something that has no `samples`, and
+      // `undefined.length` in render takes the whole page down behind the
+      // error boundary rather than degrading to "no samples".
+      .then((res) => setSamples(Array.isArray(res?.samples) ? res.samples : []))
       .catch(() => setSamples([]));
   }, [projectId]);
 
