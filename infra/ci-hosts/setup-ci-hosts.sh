@@ -112,19 +112,26 @@ PVE_DIR=/root/ci-hosts                     # where the building blocks live on t
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new)
 
 # ── GitHub API ───────────────────────────────────────────────────────────────
-gh_api() { # gh_api METHOD path [curl args...] → body; sets GH_CODE
+# gh_api METHOD path [curl args...] → sets GH_CODE (HTTP status) and GH_BODY
+# (response text). Globals on purpose: a function that PRINTS the body gets
+# called inside $(...), which runs it in a subshell and loses the status —
+# the first real run died with "GH_CODE: unbound variable".
+GH_CODE=000; GH_BODY=""
+gh_api() {
   local method="$1" path="$2"; shift 2
   local body; body="$(mktemp)"
   GH_CODE="$(curl -sS --max-time 30 -X "$method" -o "$body" -w '%{http_code}' \
     -H "Authorization: Bearer ${CI_HOSTS_PAT}" -H "Accept: application/vnd.github+json" \
     -H "X-GitHub-Api-Version: 2022-11-28" "$@" "https://api.github.com${path}" || echo 000)"
-  cat "$body"; rm -f "$body"
+  GH_BODY="$(cat "$body")"; rm -f "$body"
 }
 pat_works() { # the real check: can it mint a registration token (admin)?
-  local out; out="$(gh_api POST "/repos/${GH_REPO}/actions/runners/registration-token")"
-  [ "$GH_CODE" = 201 ] && jq -e '.token' <<<"$out" >/dev/null 2>&1
+  gh_api POST "/repos/${GH_REPO}/actions/runners/registration-token"
+  [ "$GH_CODE" = 201 ] && jq -e '.token' <<<"$GH_BODY" >/dev/null 2>&1
 }
-list_hosts() { gh_api GET "/repos/${GH_REPO}/actions/runners?per_page=100"; }
+list_hosts() { # prints the runners listing (use gh_api directly when the status matters)
+  gh_api GET "/repos/${GH_REPO}/actions/runners?per_page=100"; printf '%s' "$GH_BODY"
+}
 host_online() { # host_online NAME
   list_hosts | jq -e --arg n "$1" '.runners[] | select(.name == $n and .status == "online")' >/dev/null 2>&1
 }
@@ -386,7 +393,8 @@ step_windows() {
 
 # ── step 5: verify ───────────────────────────────────────────────────────────
 print_hosts_table() {
-  local out; out="$(list_hosts)"
+  gh_api GET "/repos/${GH_REPO}/actions/runners?per_page=100"
+  local out="$GH_BODY"
   [ "$GH_CODE" = 200 ] || { warn "GET /repos/$GH_REPO/actions/runners → HTTP $GH_CODE"; return 1; }
   printf '   %-16s %-8s %-5s %s\n' NAME STATUS BUSY LABELS
   jq -r '.runners[] | [.name, .status, (.busy|tostring), ([.labels[].name] | join(","))] | @tsv' <<<"$out" \
