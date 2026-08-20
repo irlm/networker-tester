@@ -103,8 +103,9 @@ SSH_PUBKEY_FILE="${SSH_PUBKEY_FILE:-$(default_pubkey)}"; WAIT_ONLINE_MINUTES="${
 SNIP_DIR=/var/lib/vz/snippets              # refreshed from the node by pve_snippets (storage-dependent)
 WINDOWS_ENABLE="${WINDOWS_ENABLE:-no}"; WINDOWS_VMID="${WINDOWS_VMID:-310}"; WINDOWS_EXISTING_VMID="${WINDOWS_EXISTING_VMID:-}"
 WINDOWS_ISO="${WINDOWS_ISO:-local:iso/26100.32230.260111-0550.lt_release_svc_refresh_SERVER_EVAL_x64FRE_en-us.iso}"
-WINDOWS_VIRTIO_ISO="${WINDOWS_VIRTIO_ISO:-local:iso/virtio-win.iso}"; WINDOWS_ANSWER_ISO="${WINDOWS_ANSWER_ISO:-local:iso/win-answer.iso}"
+WINDOWS_VIRTIO_ISO="${WINDOWS_VIRTIO_ISO:-local:iso/virtio-win.iso}"; WINDOWS_ANSWER_ISO="${WINDOWS_ANSWER_ISO:-}"
 WINDOWS_CORES="${WINDOWS_CORES:-6}"; WINDOWS_MEMORY_MB="${WINDOWS_MEMORY_MB:-16384}"; WINDOWS_DISK="${WINDOWS_DISK:-120G}"; WINDOWS_SSH="${WINDOWS_SSH:-}"
+WINDOWS_ADMIN_PASSWORD="${WINDOWS_ADMIN_PASSWORD:-}"; WINDOWS_WAIT_MINUTES="${WINDOWS_WAIT_MINUTES:-40}"; WINDOWS_SSH_KEY="${WINDOWS_SSH_KEY:-}"
 MAC_ENABLE="${MAC_ENABLE:-yes}"; MAC_SSH="${MAC_SSH:-macmini}"; MAC_NAME="${MAC_NAME:-ci-macos-1}"
 DESTROY_CONFIRM="${DESTROY_CONFIRM:-no}"
 CI_HOSTS_PAT="${CI_HOSTS_PAT:-}"
@@ -350,6 +351,30 @@ windows_manual_steps() {
      3. Re-run this orchestrator with WINDOWS_SSH=Administrator@<ip> to do step 2 over ssh next time.
 TXT
 }
+windows_make_answer_iso() { # render + burn local:iso/ci-win-answer.iso on the node (no PAT on it)
+  local pwfile="${ENV_FILE}.windows-admin" tmp
+  if [ -z "$WINDOWS_ADMIN_PASSWORD" ]; then
+    if [ -s "$pwfile" ]; then
+      WINDOWS_ADMIN_PASSWORD="$(head -n1 "$pwfile")"
+    else
+      WINDOWS_ADMIN_PASSWORD="$(LC_ALL=C tr -dc 'A-Za-z0-9@#%^*_+=-' < /dev/urandom | head -c 20)A1!"
+      ( umask 077; printf '%s\n' "$WINDOWS_ADMIN_PASSWORD" > "$pwfile" )
+      say "   generated the Windows Administrator password → $pwfile (0600 — keep it; it is on the answer ISO too)"
+    fi
+  fi
+  tmp="$(mktemp -d)"
+  ( umask 077; printf '%s\n' "$WINDOWS_ADMIN_PASSWORD" > "$tmp/admin-password" )
+  cp "$HERE/windows/autounattend.xml.tmpl" "$HERE/windows/first-logon.ps1" "$tmp/"
+  cp "$SSH_PUBKEY_FILE" "$tmp/authorized_keys"
+  pve "install -d -m 0700 $PVE_DIR/answer"
+  scp -q "${SSH_OPTS[@]}" "$tmp"/* "$PVE_HOST:$PVE_DIR/answer/"; rm -rf "$tmp"
+  pve "$PVE_DIR/create-ci-host-vm.sh make-answer-iso --answer-src $PVE_DIR/answer --answer-out ci-win-answer.iso \
+         --name ci-windows-1 --password-file $PVE_DIR/answer/admin-password && rm -f $PVE_DIR/answer/admin-password"
+  WINDOWS_ANSWER_ISO="local:iso/ci-win-answer.iso"
+}
+windows_ssh_ok() { # windows_ssh_ok user@host
+  ssh "${SSH_OPTS[@]}" -i "$WINDOWS_SSH_KEY" "$1" 'powershell -NoProfile -Command "echo ok"' 2>/dev/null | grep -q ok
+}
 step_windows() {
   step "4/5 Windows CI host (optional)"
   ask WINDOWS_ENABLE "Create/manage a Windows CI host? (yes/no)" "$WINDOWS_ENABLE"
@@ -357,38 +382,58 @@ step_windows() {
   if host_online ci-windows-1; then ok "ci-windows-1 already online"; return 0; fi
   ask PVE_HOST "Proxmox node (ssh alias or user@host)" "$PVE_HOST"; pve true || die "cannot ssh to $PVE_HOST"
   pve_sync_scripts
+  ask SSH_PUBKEY_FILE "ssh public key for the Windows Administrator (answer ISO)" "$SSH_PUBKEY_FILE"
+  SSH_PUBKEY_FILE="${SSH_PUBKEY_FILE/#\~/$HOME}"; [ -s "$SSH_PUBKEY_FILE" ] || die "$SSH_PUBKEY_FILE not found"
+  WINDOWS_SSH_KEY="${WINDOWS_SSH_KEY:-${SSH_PUBKEY_FILE%.pub}}"
   ask WINDOWS_EXISTING_VMID "Reuse an EXISTING Windows VM? (VMID, e.g. 101 'WindowsDesktop'; empty = create a new one)" "$WINDOWS_EXISTING_VMID" optional
+  local vmid
   if [ -n "$WINDOWS_EXISTING_VMID" ]; then
-    pve "$PVE_DIR/create-ci-host-vm.sh start --vmid $WINDOWS_EXISTING_VMID"
-    say "   using existing VM $WINDOWS_EXISTING_VMID — skip to the in-guest install below"
+    vmid="$WINDOWS_EXISTING_VMID"
+    pve "$PVE_DIR/create-ci-host-vm.sh start --vmid $vmid"
+    say "   using existing VM $vmid — OpenSSH Server + an Administrators key must already be enabled in that guest"
   else
-    ask WINDOWS_VMID "New Windows VMID" "$WINDOWS_VMID"
-    if ! pve "qm status $WINDOWS_VMID" >/dev/null 2>&1; then
+    ask WINDOWS_VMID "New Windows VMID" "$WINDOWS_VMID"; vmid="$WINDOWS_VMID"
+    if ! pve "qm status $vmid" >/dev/null 2>&1; then
       ask WINDOWS_ISO "Windows Server 2025 Evaluation ISO (storage:iso/file)" "$WINDOWS_ISO"
       ask WINDOWS_VIRTIO_ISO "virtio-win ISO (storage:iso/file, empty to skip)" "$WINDOWS_VIRTIO_ISO" optional
-      ask WINDOWS_ANSWER_ISO "autounattend answer ISO (storage:iso/file, empty = interactive install)" "$WINDOWS_ANSWER_ISO" optional
-      if [ -n "$WINDOWS_ANSWER_ISO" ] && ! pve "pvesm list ${WINDOWS_ANSWER_ISO%%:*} --content iso" 2>/dev/null | grep -q "${WINDOWS_ANSWER_ISO}"; then
-        warn "$WINDOWS_ANSWER_ISO not found on $PVE_HOST — continuing without an answer ISO"; WINDOWS_ANSWER_ISO=""
+      ask WINDOWS_ANSWER_ISO "autounattend answer ISO (storage:iso/file; empty = generate from infra/ci-hosts/windows)" "$WINDOWS_ANSWER_ISO" optional
+      if [ -z "$WINDOWS_ANSWER_ISO" ]; then
+        say "   generating the answer ISO (hostname ci-windows-1, OpenSSH + your key at first logon, no PAT on it)"
+        windows_make_answer_iso
+      elif ! pve "pvesm list ${WINDOWS_ANSWER_ISO%%:*} --content iso" 2>/dev/null | grep -q "${WINDOWS_ANSWER_ISO}"; then
+        warn "$WINDOWS_ANSWER_ISO not found on $PVE_HOST — generating one instead"; windows_make_answer_iso
       fi
       ask WINDOWS_CORES "vCPU" "$WINDOWS_CORES"; ask WINDOWS_MEMORY_MB "RAM (MB)" "$WINDOWS_MEMORY_MB"; ask WINDOWS_DISK "Disk" "$WINDOWS_DISK"
-      pve "$PVE_DIR/create-ci-host-vm.sh windows --vmid $WINDOWS_VMID --name ci-windows-1 --iso '$WINDOWS_ISO' \
-           ${WINDOWS_VIRTIO_ISO:+--virtio-iso '$WINDOWS_VIRTIO_ISO'} ${WINDOWS_ANSWER_ISO:+--answer-iso '$WINDOWS_ANSWER_ISO'} \
+      pve "$PVE_DIR/create-ci-host-vm.sh windows --vmid $vmid --name ci-windows-1 --iso '$WINDOWS_ISO' \
+           ${WINDOWS_VIRTIO_ISO:+--virtio-iso '$WINDOWS_VIRTIO_ISO'} --answer-iso '$WINDOWS_ANSWER_ISO' \
            --cores $WINDOWS_CORES --memory $WINDOWS_MEMORY_MB \
            --disk $WINDOWS_DISK --storage $PVE_STORAGE --bridge $PVE_BRIDGE ${PVE_VLAN:+--vlan $PVE_VLAN}"
-      say "   VM created and booted from the ISO — press a key at the console's 'Press any key to boot from CD' prompt;"
-      say "   with the answer ISO the rest of the OS install is unattended."
+    else
+      say "   VM $vmid already exists — continuing with it"
     fi
   fi
-  ask WINDOWS_SSH "Windows ssh target once OpenSSH Server is enabled (empty = print manual steps)" "$WINDOWS_SSH" optional
-  if [ -z "$WINDOWS_SSH" ] || ! ssh "${SSH_OPTS[@]}" "$WINDOWS_SSH" 'powershell -NoProfile -Command "echo ok"' 2>/dev/null | grep -q ok; then
-    [ -n "$WINDOWS_SSH" ] && warn "cannot reach $WINDOWS_SSH over ssh"
+
+  # ── reach the guest: the unattended install + first-logon.ps1 take 15-30 min ──
+  if [ -z "$WINDOWS_SSH" ] || ! windows_ssh_ok "$WINDOWS_SSH"; then
+    printf '   waiting for the guest agent + sshd on VM %s (up to %s min) ' "$vmid" "$WINDOWS_WAIT_MINUTES"
+    local deadline ip=""
+    deadline=$(( $(date +%s) + WINDOWS_WAIT_MINUTES * 60 ))
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+      ip="$(pve "$PVE_DIR/create-ci-host-vm.sh ip --vmid $vmid" 2>/dev/null | tail -1)"
+      if [ -n "$ip" ] && windows_ssh_ok "Administrator@$ip"; then WINDOWS_SSH="Administrator@$ip"; break; fi
+      printf '.'; sleep 30
+    done
+    echo
+  fi
+  if [ -z "$WINDOWS_SSH" ] || ! windows_ssh_ok "$WINDOWS_SSH"; then
+    warn "could not reach the Windows guest over ssh${WINDOWS_SSH:+ ($WINDOWS_SSH)}"
     windows_manual_steps; return 0
   fi
-  ok "ssh to $WINDOWS_SSH works — installing over ssh"
-  ssh "${SSH_OPTS[@]}" "$WINDOWS_SSH" 'powershell -NoProfile -Command "New-Item -ItemType Directory -Force C:\ProgramData\ci-host | Out-Null; [IO.File]::WriteAllText(\"C:\ProgramData\ci-host\token\", [Console]::In.ReadToEnd().Trim())"' <<<"$CI_HOSTS_PAT"
-  scp -q "${SSH_OPTS[@]}" "$HERE/windows/install-ci-host.ps1" "$WINDOWS_SSH:C:/ProgramData/ci-host/install-ci-host.ps1"
-  ssh "${SSH_OPTS[@]}" "$WINDOWS_SSH" "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\ProgramData\\ci-host\\install-ci-host.ps1 -Repo $GH_REPO -Name ci-windows-1${RUNNER_GROUP:+ -RunnerGroup $RUNNER_GROUP}"
-  wait_online ci-windows-1 15 || true
+  ok "ssh to $WINDOWS_SSH works — installing the CI host over ssh"
+  ssh "${SSH_OPTS[@]}" -i "$WINDOWS_SSH_KEY" "$WINDOWS_SSH" 'powershell -NoProfile -Command "New-Item -ItemType Directory -Force C:\ProgramData\ci-host | Out-Null; [IO.File]::WriteAllText(\"C:\ProgramData\ci-host\token\", [Console]::In.ReadToEnd().Trim())"' <<<"$CI_HOSTS_PAT"
+  scp -q "${SSH_OPTS[@]}" -i "$WINDOWS_SSH_KEY" "$HERE/windows/install-ci-host.ps1" "$WINDOWS_SSH:C:/ProgramData/ci-host/install-ci-host.ps1"
+  ssh "${SSH_OPTS[@]}" -i "$WINDOWS_SSH_KEY" "$WINDOWS_SSH" "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\ProgramData\\ci-host\\install-ci-host.ps1 -Repo $GH_REPO -Name ci-windows-1${RUNNER_GROUP:+ -RunnerGroup $RUNNER_GROUP}"
+  wait_online ci-windows-1 20 || true
 }
 
 # ── step 5: verify ───────────────────────────────────────────────────────────

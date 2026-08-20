@@ -38,6 +38,7 @@ command -v qm >/dev/null 2>&1 || die "qm not found — run this on the Proxmox n
 CMD="${1:-}"; [ $# -gt 0 ] && shift
 TEMPLATE_ID=9001 VMID="" NAME="" CORES=4 MEMORY=8192 DISK=60G STORAGE=local-lvm BRIDGE=vmbr0 VLAN=""
 USER_DATA="" SNIPPET_STORAGE=local IP=dhcp GW="" PREFIX=ci- ISO="" VIRTIO_ISO="" ANSWER_ISO="" FORCE=0
+ANSWER_SRC="" ANSWER_OUT="" PASSWORD_FILE=""
 IMAGE_BASE="${CI_HOST_CLOUD_IMAGE_BASE:-https://cloud-images.ubuntu.com/noble/current}"
 IMAGE_NAME=noble-server-cloudimg-amd64.img
 
@@ -60,6 +61,9 @@ while [ $# -gt 0 ]; do
     --iso) ISO="$2"; shift ;;
     --virtio-iso) VIRTIO_ISO="$2"; shift ;;
     --answer-iso) ANSWER_ISO="$2"; shift ;;
+    --answer-src) ANSWER_SRC="$2"; shift ;;
+    --answer-out) ANSWER_OUT="$2"; shift ;;
+    --password-file) PASSWORD_FILE="$2"; shift ;;
     --image-base) IMAGE_BASE="$2"; shift ;;
     --force) FORCE=1 ;;
     -h|--help) sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -213,7 +217,39 @@ cmd_windows() {
   [ -n "$ANSWER_ISO" ] && qm set "$VMID" --ide1 "${ANSWER_ISO},media=cdrom" >/dev/null
   qm set "$VMID" --description "networker CI host (Windows). After the OS install: enable OpenSSH Server → infra/ci-hosts/windows/install-ci-host.ps1 (or setup-ci-hosts.sh does it over ssh)" >/dev/null
   qm start "$VMID"
-  log "VM $VMID ($NAME) started from the ISO${ANSWER_ISO:+ with answer ISO $ANSWER_ISO} — watch the console (docs/self-hosted-ci.md § Windows)"
+  # OVMF + a Windows ISO show "Press any key to boot from CD or DVD…" for a
+  # few seconds; an unattended install must not stall on it. Tap Enter on the
+  # VM's keyboard through QEMU for the first 25 s (harmless once Setup is up).
+  log "VM $VMID ($NAME) started from the ISO${ANSWER_ISO:+ with answer ISO $ANSWER_ISO} — pressing Enter past the CD-boot prompt"
+  local i
+  for i in $(seq 1 50); do qm sendkey "$VMID" ret >/dev/null 2>&1 || true; sleep 0.5; done
+  log "Windows Setup should be running — unattended with the answer ISO (~15 min), then first-logon.ps1 enables ssh"
+}
+
+# Render autounattend.xml.tmpl + first-logon.ps1 + the operator's authorized_keys
+# into a small answer ISO under the ISO storage. The Administrator password
+# comes from a file (never argv). Re-running overwrites the ISO.
+cmd_make_answer_iso() {
+  [ -n "$ANSWER_SRC" ] && [ -d "$ANSWER_SRC" ] || die "make-answer-iso needs --answer-src <dir with autounattend.xml.tmpl, first-logon.ps1, authorized_keys>"
+  [ -n "$ANSWER_OUT" ] || die "make-answer-iso needs --answer-out <file.iso>"
+  [ -n "$NAME" ] || die "make-answer-iso needs --name <computer name>"
+  [ -n "$PASSWORD_FILE" ] && [ -s "$PASSWORD_FILE" ] || die "make-answer-iso needs --password-file <file holding the Administrator password>"
+  command -v xorriso >/dev/null 2>&1 || die "xorriso not found on this node (apt install xorriso)"
+  local tmpl="$ANSWER_SRC/autounattend.xml.tmpl" pw work iso_dir
+  [ -s "$tmpl" ] || die "$tmpl missing"
+  pw="$(head -n1 "$PASSWORD_FILE")"
+  case "$pw" in *'&'*|*'<'*|*'>'*|*'"'*|*"'"*|*'|'*) die "the Administrator password must not contain & < > \" ' | (XML/sed-unsafe)" ;; esac
+  work="$(mktemp -d)"
+  sed -e "s|@@COMPUTERNAME@@|${NAME}|g" -e "s|@@ADMIN_PASSWORD@@|${pw}|g" "$tmpl" > "$work/autounattend.xml"
+  install -m 0644 "$ANSWER_SRC/first-logon.ps1" "$work/first-logon.ps1"
+  [ -s "$ANSWER_SRC/authorized_keys" ] && install -m 0644 "$ANSWER_SRC/authorized_keys" "$work/authorized_keys"
+  iso_dir="$(dirname "$(pvesm path "local:iso/x" 2>/dev/null || echo /var/lib/vz/template/iso/x)")"
+  install -d -m 0755 "$iso_dir"
+  xorriso -as mkisofs -quiet -o "$iso_dir/$ANSWER_OUT" -V CIANSWER -J -R "$work" >/dev/null 2>&1 \
+    || die "xorriso failed building $iso_dir/$ANSWER_OUT"
+  chmod 0600 "$iso_dir/$ANSWER_OUT"   # it carries the Administrator password
+  rm -rf "$work"
+  log "answer ISO ready: local:iso/$ANSWER_OUT (computer name $NAME; first-logon.ps1 + $( [ -s "$ANSWER_SRC/authorized_keys" ] && echo "authorized_keys" || echo "NO authorized_keys"))"
 }
 
 cmd_start() {
@@ -256,6 +292,7 @@ case "$CMD" in
   ensure-template) cmd_ensure_template ;;
   create) cmd_create ;;
   windows) cmd_windows ;;
+  make-answer-iso) cmd_make_answer_iso ;;
   start) cmd_start ;;
   destroy) cmd_destroy ;;
   list) cmd_list ;;

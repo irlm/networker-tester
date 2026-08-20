@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  infra/ci-hosts/windows/autounattend.xml.tmpl — unattended Windows Server 2025
+  (Evaluation) install for a networker CI host on Proxmox. Rendered by
+  `create-ci-host-vm.sh make-answer-iso` (placeholders @@COMPUTERNAME@@ and
+  @@ADMIN_PASSWORD@@), burned onto a small ISO next to first-logon.ps1 and the
+  operator's ssh public key (authorized_keys), and attached as a second CD.
+
+  VirtIO: WinPE assigns CD letters dynamically, so the vioscsi/NetKVM driver
+  paths are listed for D: through H:. Index 2 = Standard (Desktop Experience).
+  First logon runs first-logon.ps1 from the answer ISO: OpenSSH Server + the
+  operator key, QEMU guest agent, then disables auto-logon. The GitHub runner
+  itself is installed afterwards over ssh (install-ci-host.ps1) — the PAT is
+  never on this ISO.
+-->
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+  <settings pass="windowsPE">
+    <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" language="neutral" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <SetupUILanguage><UILanguage>en-US</UILanguage></SetupUILanguage>
+      <InputLocale>en-US</InputLocale>
+      <SystemLocale>en-US</SystemLocale>
+      <UILanguage>en-US</UILanguage>
+      <UserLocale>en-US</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" language="neutral" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <DriverPaths>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="1"><Path>D:\vioscsi\2k25\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="2"><Path>D:\NetKVM\2k25\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="3"><Path>E:\vioscsi\2k25\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="4"><Path>E:\NetKVM\2k25\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="5"><Path>F:\vioscsi\2k25\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="6"><Path>F:\NetKVM\2k25\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="7"><Path>G:\vioscsi\2k25\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="8"><Path>G:\NetKVM\2k25\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="9"><Path>H:\vioscsi\2k25\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="10"><Path>H:\NetKVM\2k25\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="11"><Path>D:\vioscsi\2k22\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="12"><Path>D:\NetKVM\2k22\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="13"><Path>E:\vioscsi\2k22\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="14"><Path>E:\NetKVM\2k22\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="15"><Path>F:\vioscsi\2k22\amd64</Path></PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="16"><Path>F:\NetKVM\2k22\amd64</Path></PathAndCredentials>
+      </DriverPaths>
+      <DiskConfiguration>
+        <Disk wcm:action="add">
+          <DiskID>0</DiskID>
+          <WillWipeDisk>true</WillWipeDisk>
+          <CreatePartitions>
+            <CreatePartition wcm:action="add"><Order>1</Order><Size>500</Size><Type>EFI</Type></CreatePartition>
+            <CreatePartition wcm:action="add"><Order>2</Order><Size>128</Size><Type>MSR</Type></CreatePartition>
+            <CreatePartition wcm:action="add"><Order>3</Order><Extend>true</Extend><Type>Primary</Type></CreatePartition>
+          </CreatePartitions>
+          <ModifyPartitions>
+            <ModifyPartition wcm:action="add"><Order>1</Order><PartitionID>1</PartitionID><Format>FAT32</Format><Label>EFI</Label></ModifyPartition>
+            <ModifyPartition wcm:action="add"><Order>2</Order><PartitionID>3</PartitionID><Format>NTFS</Format><Label>Windows</Label></ModifyPartition>
+          </ModifyPartitions>
+        </Disk>
+      </DiskConfiguration>
+      <ImageInstall>
+        <OSImage>
+          <InstallTo><DiskID>0</DiskID><PartitionID>3</PartitionID></InstallTo>
+          <InstallFrom>
+            <MetaData wcm:action="add"><Key>/IMAGE/INDEX</Key><Value>2</Value></MetaData>
+          </InstallFrom>
+        </OSImage>
+      </ImageInstall>
+      <UserData>
+        <AcceptEula>true</AcceptEula>
+        <ProductKey><WillShowUI>Never</WillShowUI></ProductKey>
+      </UserData>
+    </component>
+  </settings>
+  <settings pass="specialize">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" language="neutral" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <ComputerName>@@COMPUTERNAME@@</ComputerName>
+      <TimeZone>UTC</TimeZone>
+    </component>
+  </settings>
+  <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" language="neutral" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <InputLocale>en-US</InputLocale>
+      <SystemLocale>en-US</SystemLocale>
+      <UILanguage>en-US</UILanguage>
+      <UserLocale>en-US</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" language="neutral" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <OOBE>
+        <HideEULAPage>true</HideEULAPage>
+        <HideLocalAccountScreen>true</HideLocalAccountScreen>
+        <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+        <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+        <ProtectYourPC>3</ProtectYourPC>
+      </OOBE>
+      <UserAccounts>
+        <AdministratorPassword><Value>@@ADMIN_PASSWORD@@</Value><PlainText>true</PlainText></AdministratorPassword>
+      </UserAccounts>
+      <AutoLogon>
+        <Enabled>true</Enabled>
+        <Username>Administrator</Username>
+        <Password><Value>@@ADMIN_PASSWORD@@</Value><PlainText>true</PlainText></Password>
+        <LogonCount>1</LogonCount>
+      </AutoLogon>
+      <FirstLogonCommands>
+        <SynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <CommandLine>powershell.exe -ExecutionPolicy Bypass -Command "foreach ($d in 'D','E','F','G','H') { $p = \"${d}:\first-logon.ps1\"; if (Test-Path $p) { &amp; $p; break } }"</CommandLine>
+          <Description>networker CI host: OpenSSH + operator key + guest agent (first-logon.ps1 from the answer ISO)</Description>
+          <RequiresUserInput>false</RequiresUserInput>
+        </SynchronousCommand>
+      </FirstLogonCommands>
+    </component>
+  </settings>
+</unattend>

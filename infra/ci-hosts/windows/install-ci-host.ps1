@@ -111,7 +111,7 @@ if (-not $SkipToolchains) {
         Invoke-WebRequest -Uri https://win.rustup.rs/x86_64 -OutFile "$env:TEMP\rustup-init.exe"
         & "$env:TEMP\rustup-init.exe" -y --profile minimal --default-toolchain stable-x86_64-pc-windows-msvc --no-modify-path
     }
-    & "$cargoHome\bin\rustup.exe" toolchain install stable-x86_64-pc-windows-msvc --profile minimal --component rustfmt clippy
+    & "$cargoHome\bin\rustup.exe" toolchain install stable-x86_64-pc-windows-msvc --profile minimal --component rustfmt,clippy
     & "$cargoHome\bin\rustup.exe" default stable-x86_64-pc-windows-msvc
     $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     if ($machinePath -notlike "*$cargoHome\bin*") {
