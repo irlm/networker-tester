@@ -176,6 +176,30 @@ describe('RunDetailPage — burst sampling median & spread', () => {
     ).toBeInTheDocument();
   });
 
+  it('says every sample failed rather than showing a blank median', () => {
+    // A URL that is entirely down in a set run: five samples ran, five
+    // failed. The row must report that, not an empty median cell.
+    mockAll([
+      ...[10, 12, 11].map((ms, i) => burstSample(i, ms)),
+      ...[0, 1].map((i) => ({
+        ...burstSample(i, 0),
+        attempt_id: `a-down-${i}`,
+        target_url: 'https://down.example/',
+        success: false,
+        http: undefined,
+        error_message: 'connection refused',
+      })),
+    ]);
+    renderPage();
+
+    const section = burstSection();
+    expect(within(section).getByText(/no usable sample/)).toBeInTheDocument();
+    expect(within(section).getByText(/2 failed/)).toBeInTheDocument();
+    // The healthy URL still gets its median — one dead URL does not blank the
+    // whole section.
+    expect(within(section).getByText('11.00ms')).toBeInTheDocument();
+  });
+
   it('renders no median section for a run whose points ran once each', () => {
     mockAll([burstSample(0, 10)]);
     renderPage();
