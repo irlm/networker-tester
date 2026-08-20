@@ -11,6 +11,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.274] - 2026-08-20
+
+### Added
+
+- **CI hosts watchdog (`.github/workflows/ci-hosts-watchdog.yml`).**
+  `pick-ci-hosts` decides once, when a run starts; if a CI host goes offline
+  between that decision and the job being dispatched, the job queues against
+  labels nothing can satisfy and sits there for GitHub's 24-hour limit.
+  `timeout-minutes` does **not** cover this — that clock only starts when a job
+  starts *running*. Every 13 minutes the watchdog looks for jobs queued longer
+  than 12 minutes on `self-hosted` labels, checks whether any online host
+  carries every one of those labels, and cancels only the runs that are
+  genuinely unsatisfiable (a job waiting behind a *busy* host is left alone).
+  Re-running such a run routes it to GitHub-hosted, because the fresh picker
+  sees no online host. Found the hard way: on 2026-08-20 a power cut rebooted
+  the Mac mini mid-release and `Build x86_64-apple-darwin` wedged v0.28.268
+  twice until it was cancelled by hand.
+- **`macos/install-ci-host.sh --daemon` — a CI host that survives a reboot.**
+  The LaunchAgent the script installed until now only runs while the user is
+  logged in, so the same power cut left `ci-macos-1` offline with the Mac up
+  and reachable. `--daemon` installs `/Library/LaunchDaemons` instead, running
+  the loop at boot as the invoking user (`UserName`/`GroupName`/`HOME` set
+  explicitly, since a daemon inherits none of them), at the cost of one sudo.
+  `--agent` keeps the old zero-sudo behaviour and now warns about the reboot
+  gap; `setup-ci-hosts.sh` asks (`MAC_BOOT_DAEMON`, default yes) and never
+  leaves both a daemon and an agent registered under the same runner name.
+
+### Fixed
+
+- **Rust 1.98 clippy broke `main` for every PR.** `dtolnay/rust-toolchain@stable`
+  started resolving to 1.98.0 (released 2026-08-18) mid-afternoon, and two lint
+  families fired repo-wide: `chunks_exact_to_as_chunks` (new) at
+  `runner/ping.rs` and two sites in `runner/http.rs`, and a tightened
+  `result_large_err` on `run_one_tls_http_request`, whose ~288-byte error tuple
+  every `Result` carried on the success path too. The slice sites now use
+  `as_chunks::<N>()`/`as_chunks_mut::<N>()`; the TLS failure tuple is boxed
+  behind a documented `TlsRequestFailure` alias (the failure path is cold, so
+  the allocation costs nothing measurable). Verified against a locally pinned
+  1.98.0 toolchain, not just the current stable.
+- **`sdk-js` was a `block` lint section that CI never ran — and it was
+  failing.** The `frontend` job only invokes `frontend-eslint` and is gated on
+  `dashboard/` changes; `sdk-conformance` builds and tests `sdk/js` without
+  type-checking it. So 12 `TS18046`/`TS2571` errors sat on pristine `main`
+  with nobody to see them. `lint-all` now runs `sdk-js` unconditionally,
+  alongside json/version/workflows — a baseline that only runs on some paths
+  is not a baseline. The errors themselves were real: undici types
+  `Response.json()` as `Promise<unknown>`, so every contract assertion on a
+  wire field needed a cast; `test/helpers.ts` now exports a documented
+  `jsonBody()` and the three suites go through it. (Reported by a parallel
+  session working in the same tree.)
+- **The `streaming memory bound` JS conformance test no longer races its
+  probe.** It attached a `data` listener per `nextLine()` call and removed it
+  on resolve, so the child's `RESULT` line — written while the parent was busy
+  draining 32 MiB — could land with no listener attached and be lost when the
+  stream ended, surfacing as a flaky `memprobe exited early (0)` on loaded CI
+  hosts. (v0.28.268 moved the give-up signal from `exit` to `close`, which
+  narrowed the window without closing it.) One persistent reader now collects
+  every line for the child's lifetime and `nextLine()` polls that buffer; the
+  failure message quotes what the child actually printed.
+- **Self-hosted jobs get the toolchain PATH — for real this time.** The PATH a
+  *job step* runs with comes from `<runner>/.path`, not from `.env` and not
+  from the Listener's own environment: the runner writes `.path` at configure
+  time and reuses the file. v0.28.268 fixed the Listener's environment, which
+  was not enough — jobs using `setup-*`/`dtolnay/rust-toolchain` masked it
+  (those prepend via `GITHUB_PATH`), while a step calling the toolchain
+  directly still got `cargo: command not found` (validate-bench-apis'
+  canonical Rust baseline, on every Linux host). All three installers now
+  write `.path` explicitly and the loops restore it after each registration,
+  because `config.sh` rewrites it from its own environment.
+
+### Changed
+
+- **CI hosts stop paying for the GitHub cache over a home uplink.** `sccache`
+  used the Actions cache backend everywhere (`SCCACHE_GHA_ENABLED=true`), so
+  on a self-hosted host every cache hit was a download across home broadband —
+  which is why the musl build still took 4-6 min there against 8 min on a
+  hosted runner with no local cache at all. Self-hosted runs now point sccache
+  at `/var/cache/ci-host/sccache`, which survives the per-job workspace wipe,
+  and skip `Swatinem/rust-cache` entirely: `CARGO_HOME` already persists on
+  the host, so restoring the same registry over the uplink was pure cost.
+  GitHub-hosted runs are unchanged (`runner.environment` decides).
+- **`validate-bench-apis` retries the base-image pull.** `TLS handshake
+  timeout` to registry-1.docker.io and `failed to fetch anonymous token` from
+  auth.docker.io each killed a real run on 2026-08-20 — not rate limiting (94
+  of 100 anonymous pulls were left), just a flaky uplink. Three attempts with
+  backoff instead of a manual re-run.
+- **36 routed jobs got a `timeout-minutes`.** They inherited GitHub's 6-hour
+  default, so a CI host that dies mid-job held a slot for hours; the caps are
+  roughly 3x observed runtime (e.g. `Test (windows-latest)` 45, `Coverage` 30,
+  `bats` 30, `action-pins` 10). This bounds a hung job, not a queued one —
+  the watchdog above is what handles queueing.
+
+---
 ## [0.28.273] - 2026-08-20
 
 ### Fixed

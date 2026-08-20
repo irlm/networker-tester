@@ -39,6 +39,7 @@ jobs:
   ci_hosts:
     name: Pick CI hosts
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       linux_host: ${{ steps.ci_hosts.outputs.linux }}
       windows_host: ${{ steps.ci_hosts.outputs.windows }}
@@ -56,6 +57,7 @@ jobs:
   cargo-test:
     name: cargo test (networker-endpoint)
     runs-on: ${{ fromJSON(needs.ci_hosts.outputs.linux_host) }}
+    timeout-minutes: 25
     needs: [ci_hosts]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
@@ -80,6 +82,7 @@ jobs:
   bats:
     name: bats (endpoint integration)
     runs-on: ${{ fromJSON(needs.ci_hosts.outputs.linux_host) }}
+    timeout-minutes: 20
     needs: [ci_hosts]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
@@ -110,6 +113,7 @@ jobs:
   json-api-validation:
     name: JSON API validation (Rust endpoint)
     runs-on: ${{ fromJSON(needs.ci_hosts.outputs.linux_host) }}
+    timeout-minutes: 20
     needs: [ci_hosts]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5

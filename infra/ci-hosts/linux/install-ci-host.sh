@@ -164,7 +164,9 @@ fi
 
 # ── 9. persistent caches (survive ephemeral re-registration) ─────────────────
 install -d -m 0755 "$CACHE_DIR"
-for d in npm nuget dotnet-cli playwright; do install -d -o "$CI_USER" -g "$CI_USER" -m 0755 "$CACHE_DIR/$d"; done
+# sccache: ci.yml points RUSTC_WRAPPER here on self-hosted rather than at
+# the GitHub Actions cache backend, which would be a download per hit.
+for d in npm nuget dotnet-cli playwright sccache; do install -d -o "$CI_USER" -g "$CI_USER" -m 0755 "$CACHE_DIR/$d"; done
 
 # ── 10. the actions-runner package ───────────────────────────────────────────
 if [ -z "$RUNNER_VERSION" ]; then
@@ -201,6 +203,15 @@ RUSTUP_HOME=$CI_HOME/.rustup
 ENV
 chown "$CI_USER:$CI_USER" "$RUNNER_DIR/.env"
 
+# The PATH a JOB sees comes from RUNNER_DIR/.path, not from .env and not from
+# the Listener's own environment — the runner writes .path at configure time
+# from whatever PATH it had then and reuses the file afterwards. A job that
+# leans on a `setup-*` action never notices (those prepend via GITHUB_PATH),
+# but a step calling the toolchain directly gets "cargo: command not found"
+# (seen: validate-bench-apis' canonical Rust baseline). Write it explicitly.
+printf '%s\n' "$CI_HOME/.cargo/bin:/usr/share/dotnet:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" > "$RUNNER_DIR/.path"
+chown "$CI_USER:$CI_USER" "$RUNNER_DIR/.path"
+
 # ── 11. ephemeral registration loop + systemd unit ───────────────────────────
 cat > /usr/local/bin/ci-host-loop.sh <<'LOOP'
 #!/usr/bin/env bash
@@ -233,6 +244,10 @@ while :; do
     echo "config.sh failed — retrying in 30s" >&2
     sleep 30; continue
   fi
+  # config.sh rewrites .path from its own environment, so restore it after
+  # every registration — this is the file job steps inherit their PATH from.
+  printf '%s\n' "$JOB_PATH" > "$RUNNER_DIR/.path"
+  chown "$CI_USER:$CI_USER" "$RUNNER_DIR/.path"
   runuser -u "$CI_USER" -- env PATH="$JOB_PATH" "$RUNNER_DIR/run.sh"
   # An ephemeral registration removes itself after the job; clear the local
   # credentials so the next config.sh starts clean.

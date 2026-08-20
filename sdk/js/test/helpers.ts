@@ -103,3 +103,20 @@ export function isBare404(status: number, headers: Headers | IncomingMessage["he
     get("www-authenticate") === null
   );
 }
+
+/**
+ * Body of a JSON response, loosely typed on purpose.
+ *
+ * undici declares `Response.json()` as `Promise<unknown>`, so every assertion
+ * on a wire field ("j.error.code", "j.contract") would otherwise need its own
+ * cast. These are CONTRACT tests: the assertion is the type check, and the
+ * shapes they check are defined by shared/sdk-contract-v1.json, not by
+ * TypeScript. Narrow once, here, instead of scattering casts through the
+ * suites — and never use this in src/, where the real types live.
+ */
+export type JsonBody = Record<string, any>;
+
+/** `await r.json()` with {@link JsonBody}'s loose typing. */
+export async function jsonBody(r: Response): Promise<JsonBody> {
+  return (await r.json()) as JsonBody;
+}

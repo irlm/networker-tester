@@ -4,7 +4,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { auth, rawRequest, startServer, TOKEN } from "./helpers.ts";
+import { auth, rawRequest, startServer, TOKEN, jsonBody } from "./helpers.ts";
 import { laghound } from "../src/index.ts";
 
 // --- 5 fail-closed init ---------------------------------------------------
@@ -83,7 +83,7 @@ describe("rate limits", () => {
         if (r.status === 429) {
           sawLimited = true;
           assert.ok(r.headers.get("retry-after"));
-          const j = await r.json();
+          const j = await jsonBody(r);
           assert.equal(j.error.code, "rate_limited");
           assert.equal(typeof j.error.retry_after_ms, "number");
           break;
@@ -204,41 +204,69 @@ describe("streaming memory bound", () => {
     const probe = fileURLToPath(new URL("./memprobe.ts", import.meta.url));
     const child = spawn(process.execPath, ["--expose-gc", probe], { stdio: ["ignore", "pipe", "inherit"] });
 
+    // ONE persistent reader for the child's whole lifetime. The previous
+    // shape attached a 'data' listener per nextLine() call and removed it on
+    // resolve, so anything the child wrote between two calls — notably the
+    // RESULT line, emitted while the parent was busy draining 32 MiB — could
+    // land with no listener attached and be missed once the stream ended.
+    // That surfaced as a flaky "memprobe exited early (0)" on loaded CI hosts.
+    // Accumulate everything, then let nextLine() poll the buffer.
     const lines: string[] = [];
     let pending = "";
+    let closed: number | null = null;
+    let notify: (() => void) | null = null;
+
+    child.stdout.on("data", (c: Buffer) => {
+      pending += c.toString();
+      let nl: number;
+      while ((nl = pending.indexOf("\n")) !== -1) {
+        lines.push(pending.slice(0, nl));
+        pending = pending.slice(nl + 1);
+      }
+      notify?.();
+    });
+    // 'close', not 'exit': it fires only after every stdio stream has drained,
+    // so any line the child wrote is already in `lines` by the time we give up.
+    child.once("close", (code) => {
+      closed = code ?? 0;
+      notify?.();
+    });
+    let failed: Error | null = null;
+    child.once("error", (err) => {
+      failed = err;
+      notify?.();
+    });
+
+    const take = (prefix: string): string | null => {
+      const i = lines.findIndex((l) => l.startsWith(prefix));
+      return i === -1 ? null : lines.splice(i, 1)[0].slice(prefix.length).trim();
+    };
+
     const nextLine = (prefix: string): Promise<string> =>
       new Promise((resolve, reject) => {
-        const scan = (): boolean => {
-          for (let i = 0; i < lines.length; i++) {
-            if (lines[i].startsWith(prefix)) {
-              const v = lines.splice(i, 1)[0].slice(prefix.length).trim();
-              resolve(v);
-              return true;
-            }
+        const attempt = (): void => {
+          const value = take(prefix);
+          if (value !== null) {
+            notify = null;
+            resolve(value);
+            return;
           }
-          return false;
-        };
-        if (scan()) return;
-        const onData = (c: Buffer): void => {
-          pending += c.toString();
-          let nl: number;
-          while ((nl = pending.indexOf("\n")) !== -1) {
-            lines.push(pending.slice(0, nl));
-            pending = pending.slice(nl + 1);
+          if (failed) {
+            notify = null;
+            reject(failed);
+            return;
           }
-          if (scan()) child.stdout.off("data", onData);
+          if (closed !== null) {
+            notify = null;
+            // Quote what the child DID say — a bare "exited early" tells the
+            // next reader nothing about why.
+            reject(new Error(
+              `memprobe exited (${closed}) without a "${prefix}" line; output was: ${JSON.stringify(lines)}`,
+            ));
+          }
         };
-        child.stdout.on("data", onData);
-        child.once("error", reject);
-        // 'close', not 'exit': the child writes its RESULT line and then lets
-        // the process end, and Node may emit 'exit' before the final stdout
-        // chunk has been delivered to this process (seen on a self-hosted CI
-        // host as "memprobe exited early (0)" with a correct result in
-        // flight). 'close' fires only after every stdio stream has drained,
-        // so a line the child already wrote is always scanned first.
-        child.once("close", (code) => {
-          if (!scan()) reject(new Error(`memprobe exited early (${code})`));
-        });
+        notify = attempt;
+        attempt();
       });
 
     try {
