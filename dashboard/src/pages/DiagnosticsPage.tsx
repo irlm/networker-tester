@@ -396,7 +396,11 @@ function UrlCard({
             type="checkbox"
             checked={selected}
             onChange={e => onSelectedChange(e.target.checked)}
-            className="w-3.5 h-3.5 accent-cyan-500 cursor-pointer"
+            // 24 CSS px is the WCAG 2.2 AA minimum target size, and axe measures
+            // the INPUT's own box — the label's padding around it does not count.
+            // The repo's coarse-pointer hit-area rule only covers <button>, since
+            // ::after does not render on a replaced element like a checkbox.
+            className="w-6 h-6 accent-cyan-500 cursor-pointer"
             aria-label={`Select ${host} for a URL set`}
           />
         </label>
@@ -1822,7 +1826,11 @@ export function DiagnosticsPage() {
                   return next;
                 });
               }}
-              className="w-3.5 h-3.5 accent-cyan-500 cursor-pointer"
+              // 24 CSS px is the WCAG 2.2 AA minimum target size, and axe measures
+            // the INPUT's own box — the label's padding around it does not count.
+            // The repo's coarse-pointer hit-area rule only covers <button>, since
+            // ::after does not render on a replaced element like a checkbox.
+            className="w-6 h-6 accent-cyan-500 cursor-pointer"
             />
             Select all {paginatedGroups.length} on this page
           </label>
