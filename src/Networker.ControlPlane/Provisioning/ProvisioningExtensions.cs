@@ -31,6 +31,10 @@ public static class ProvisioningExtensions
         services.TryAddSingleton<CliComputeProvisioner>();
         services.TryAddSingleton<DockerComputeProvisioner>();
         services.TryAddSingleton<IComputeProvisioner, RoutingComputeProvisioner>();
+        // Read-only cloud enumeration for GET /api/projects/{id}/inventory.
+        // Singleton for the same reason as the provisioners: stateless, every
+        // call spawns its own short-lived CLI processes.
+        services.TryAddSingleton<CloudInventoryScanner>();
         return services;
     }
 }

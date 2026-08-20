@@ -11,6 +11,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.276] - 2026-08-20
+
+### Added
+
+- **The cloud inventory scan is real** (`GET /api/projects/{id}/inventory`, the
+  Settings page's "scan all providers" button). It was a stub that always
+  answered `{vms: [], errors: []}` behind a `TODO(phase3)` whose reason — "the
+  `az`/`aws`/`gcloud` CLIs are not available in the C# ControlPlane" — stopped
+  being true a long time ago: the control plane provisions, reaps and validates
+  production VMs through those same CLIs. Clicking the button did nothing
+  visible, so it read as dead. (Closes the fidelity audit's F27.)
+
+  `Provisioning/CloudInventoryScanner.cs` now enumerates every **active** cloud
+  account on the project **in parallel**, each authenticated with its own stored
+  credentials the way the rest of the control plane does it — Azure signs the
+  service principal into an isolated `AZURE_CONFIG_DIR`, GCP goes through
+  `CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE` pointing at a 0600 key file in a 0700
+  throwaway `CLOUDSDK_CONFIG` (#827), AWS passes its keys through the process
+  environment across the account's default region plus the five common ones.
+  Every command is an enumeration: the endpoint is open to any project member
+  and can never create, start, stop or delete anything.
+
+- **Honest inventory errors.** Anything that stops a *configured* account from
+  being enumerated — inactive account, undecryptable credentials, missing CLI
+  (named with its `AZ_CMD`/`AWS_CMD`/`GCLOUD_CMD` override var), failed sign-in,
+  non-zero exit, per-call timeout, exhausted account budget, unreadable output —
+  is an `errors[]` line naming the provider and the account, never a silently
+  empty list. Repeated per-region AWS failures fold into one line. Vendor
+  boilerplate is stripped with the existing `ProviderCredentialValidator`
+  helpers, and any credential value that leaks into a CLI's stderr is redacted
+  before it reaches the response.
+
+  A provider the project has **no** account for is deliberately *not* an error —
+  nothing failed — so it is reported in the new `not_configured` field instead.
+  The response also gained `scanned` (providers actually queried) and
+  `scanned_at`; `vms[]` and `errors[]` are unchanged.
+
+### Fixed
+
+- **The inventory panel can no longer look dead.** After a scan that found
+  nothing, `SettingsPage` re-rendered `Click "scan all providers" to discover
+  VMs…` — byte-identical to never having clicked. It now tracks scan state and
+  says what happened: `no VMs found — scanned azure, aws at 16:14 · not scanned:
+  gcp (no cloud account configured)`, with the same provenance line under a
+  populated table and a distinct message when the request itself failed. The
+  wording lives in `dashboard/src/lib/inventory-scan.ts` and is unit-tested.
+
+- **Bounded cloud CLI calls.** Each inventory CLI invocation is capped at 45s
+  and each account's whole scan at 90s (the request at 150s); a hung CLI is
+  tree-killed and reported as a timeout instead of stalling the Settings page.
+
+### Changed
+
+- **One hardened cloud-CLI process runner.** `CloudCli.RunAsync` now owns the
+  spawn/drain/timeout/tree-kill semantics that `CliComputeProvisioner` and
+  `OrphanReaperService` each carried their own copy of; both delegate to it and
+  the inventory scan reuses it rather than adding a third copy. Behaviour is
+  unchanged — missing binary, timeout and non-zero exit stay distinguishable at
+  each call site.
+
+- **Inventory scan scope diverges from the retired Rust handler on purpose.**
+  The Rust scan filtered to resource groups / instance names containing
+  `networker-endpoint` / `networker-tester`; those names have not existed for
+  many releases (VMs are `nwk-a-*`, `nwk-ep-*`, `tester-*`, `ab-*`), so that
+  filter would have hidden every VM we create on AWS and GCP. The scan now
+  enumerates what the credential itself is scoped to and lets `managed` mark
+  which rows are ours, capped at 500 VMs per account with an explicit note when
+  the cap bites.
+
+---
+
 ## [0.28.275] - 2026-08-20
 
 ### Added

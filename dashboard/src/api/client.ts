@@ -336,6 +336,12 @@ export const api = {
         managed: boolean;
       }[];
       errors: string[];
+      /** Providers actually queried (v0.28.276+; absent on older servers). */
+      scanned?: string[];
+      /** Providers with no cloud account on this project — an absence, not an error. */
+      not_configured?: string[];
+      /** When the server finished the scan (RFC3339). */
+      scanned_at?: string;
     }>(projectUrl(projectId, 'inventory')),
 
   // Users (admin-only, NOT project-scoped)
