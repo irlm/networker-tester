@@ -1,5 +1,13 @@
 name: Installer Tests
 
+# A newer push to the same PR cancels that PR's previous run: the self-hosted
+# CI hosts are a small pool and a superseded run must not hold them (the
+# first real day stacked eight workflows per push). Pushes to main and
+# dispatches never cancel — auto-tag/release depend on them finishing.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # Run on every push/PR that touches the installer or its tests.
 #
 # REQUIRED-CHECK COMPATIBLE: the pull_request trigger deliberately has NO
@@ -31,10 +39,22 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       installer: ${{ steps.detect.outputs.installer }}
+      # Where the rest of this workflow runs (docs/self-hosted-ci.md).
+      # This job itself stays on ubuntu-latest: it is the hop that decides.
+      linux_host: ${{ steps.ci_hosts.outputs.linux }}
+      windows_host: ${{ steps.ci_hosts.outputs.windows }}
+      macos_host: ${{ steps.ci_hosts.outputs.macos }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
         with:
           fetch-depth: 0
+
+      - name: Pick CI hosts (self-hosted when online, else GitHub-hosted)
+        id: ci_hosts
+        uses: ./.github/actions/pick-ci-hosts
+        with:
+          token: ${{ secrets.CI_HOSTS_STATUS_TOKEN }}
+          mode: ${{ vars.CI_HOSTS_MODE }}
 
       - name: Detect
         id: detect
@@ -66,9 +86,9 @@ jobs:
   # ── shellcheck: static analysis for install.sh ─────────────────────────────
   shellcheck:
     name: shellcheck
-    needs: changes
+    needs: [changes]
     if: needs.changes.outputs.installer == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
 
@@ -86,9 +106,9 @@ jobs:
   # ── bats: unit tests for install.sh ────────────────────────────────────────
   bats:
     name: bats (installer unit tests)
-    needs: changes
+    needs: [changes]
     if: needs.changes.outputs.installer == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
 
@@ -126,9 +146,9 @@ jobs:
   # ── shellcheck on Windows installer (PowerShell syntax is checked by PSScriptAnalyzer) ──
   psscriptanalyzer:
     name: PSScriptAnalyzer (install.ps1)
-    needs: changes
+    needs: [changes]
     if: needs.changes.outputs.installer == 'true'
-    runs-on: windows-latest
+    runs-on: ${{ fromJSON(needs.changes.outputs.windows_host) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
 
@@ -175,8 +195,15 @@ jobs:
   # both its HTTP and HTTPS listeners.
   stack-exec:
     name: Linux stack execution (setup-stack + proxy round-trip)
+    # Pinned to GitHub-hosted on purpose: this job runs the REAL install.sh as
+    # root, which installs system services (nginx/caddy/apache/haproxy/
+    # traefik, networker-*.service, the bench servers under /opt/bench). A
+    # hosted VM is thrown away afterwards; a self-hosted CI host persists, and
+    # those leftovers broke later jobs (networker-endpoint's PRNG-fallback
+    # tests found /opt/bench/bench-data.json; ports 8085-8094 stayed bound).
+    # docs/self-hosted-ci.md § "What stays on GitHub-hosted".
     runs-on: ubuntu-latest
-    needs: changes
+    needs: [changes]
     if: needs.changes.outputs.installer == 'true'
     timeout-minutes: 25
     steps:
@@ -198,7 +225,7 @@ jobs:
             --http-port 8080 --https-port 8443 \
             --udp-port 9999 --udp-throughput-port 9998 \
             > /tmp/endpoint.log 2>&1 &
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             curl -sf http://127.0.0.1:8080/health && break
             sleep 1
           done
@@ -248,8 +275,9 @@ jobs:
   # (csharp-net9-aot — exercises the clang/zlib prerequisites + ILCompiler).
   linux-bench-exec:
     name: Linux reference-API execution (net9 + net9-aot)
+    # Pinned to GitHub-hosted: real install.sh --benchmark-server run (see stack-exec).
     runs-on: ubuntu-latest
-    needs: changes
+    needs: [changes]
     if: needs.changes.outputs.installer == 'true'
     timeout-minutes: 25
     steps:
@@ -278,8 +306,11 @@ jobs:
   # can run on a GitHub runner, asserting each serves.
   windows-exec:
     name: Windows installer execution (unit script + stack setup)
+    # Pinned to GitHub-hosted for the same reason as stack-exec: a real
+    # install.ps1 run mutates the machine, and a self-hosted Windows host
+    # persists between jobs. docs/self-hosted-ci.md § "What stays on GitHub-hosted".
     runs-on: windows-latest
-    needs: changes
+    needs: [changes]
     if: needs.changes.outputs.installer == 'true'
     timeout-minutes: 30
     steps:

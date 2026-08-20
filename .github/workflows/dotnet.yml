@@ -1,5 +1,13 @@
 name: .NET
 
+# A newer push to the same PR cancels that PR's previous run: the self-hosted
+# CI hosts are a small pool and a superseded run must not hold them (the
+# first real day stacked eight workflows per push). Pushes to main and
+# dispatches never cancel — auto-tag/release depend on them finishing.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # Builds and audits the C# solution (Networker.sln) that is replacing the Rust
 # control plane / agent / endpoint.
 #
@@ -34,10 +42,22 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       csharp: ${{ steps.detect.outputs.csharp }}
+      # Where the rest of this workflow runs (docs/self-hosted-ci.md).
+      # This job itself stays on ubuntu-latest: it is the hop that decides.
+      linux_host: ${{ steps.ci_hosts.outputs.linux }}
+      windows_host: ${{ steps.ci_hosts.outputs.windows }}
+      macos_host: ${{ steps.ci_hosts.outputs.macos }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
         with:
           fetch-depth: 0
+
+      - name: Pick CI hosts (self-hosted when online, else GitHub-hosted)
+        id: ci_hosts
+        uses: ./.github/actions/pick-ci-hosts
+        with:
+          token: ${{ secrets.CI_HOSTS_STATUS_TOKEN }}
+          mode: ${{ vars.CI_HOSTS_MODE }}
 
       - name: Detect
         id: detect
@@ -67,9 +87,9 @@ jobs:
 
   build:
     name: Build & audit (C#)
-    needs: changes
+    needs: [changes]
     if: needs.changes.outputs.csharp == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
 
@@ -122,9 +142,9 @@ jobs:
   # This runs the real generated script against real release assets.
   reinstall-exec:
     name: Reinstall script execution
-    needs: changes
+    needs: [changes]
     if: needs.changes.outputs.csharp == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
@@ -160,6 +180,15 @@ jobs:
             --filter "FullyQualifiedName~ReinstallScriptExecution" \
             --verbosity normal
 
+      # A self-hosted CI host persists between jobs (docs/self-hosted-ci.md);
+      # leave no stub unit behind for the next job — or for the stack tests,
+      # which look for a REAL networker-agent.service.
+      - name: Remove the stub networker-agent unit
+        if: always()
+        run: |
+          sudo systemctl stop networker-agent 2>/dev/null || true
+          sudo rm -f /etc/systemd/system/networker-agent.service
+          sudo systemctl daemon-reload
       - name: Show what landed
         if: always()
         run: |

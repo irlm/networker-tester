@@ -1,0 +1,154 @@
+name: pick-ci-hosts
+description: >-
+  Decide, per OS, whether this workflow run's jobs go to the repo's self-hosted
+  CI hosts (GitHub "self-hosted runners" carrying the labels
+  self-hosted,<os>,networker-ci) or to GitHub-hosted runners. Self-hosted is
+  chosen only when at least one such host is ONLINE right now; any doubt (no
+  token, API error, no online host, fork PR) resolves to GitHub-hosted so a
+  powered-off VM can never stall CI. Design + rollout: docs/self-hosted-ci.md.
+
+inputs:
+  token:
+    description: >-
+      Fine-grained PAT with repository "Administration: read" (secret
+      CI_HOSTS_STATUS_TOKEN). GITHUB_TOKEN cannot list the repo's runners. Empty (e.g. a
+      fork PR never sees secrets) means "hosted" in auto mode.
+    required: false
+    default: ""
+  mode:
+    description: >-
+      auto (default) | hosted | self-hosted. Callers pass vars.CI_HOSTS_MODE;
+      an empty or unknown value falls back to auto.
+    required: false
+    default: "auto"
+
+outputs:
+  linux:
+    description: JSON array of runs-on labels for Linux jobs
+    value: ${{ steps.pick.outputs.linux }}
+  windows:
+    description: JSON array of runs-on labels for Windows jobs
+    value: ${{ steps.pick.outputs.windows }}
+  macos:
+    description: JSON array of runs-on labels for macOS jobs
+    value: ${{ steps.pick.outputs.macos }}
+
+runs:
+  using: composite
+  steps:
+    - id: pick
+      shell: bash
+      env:
+        TOKEN: ${{ inputs.token }}
+        MODE: ${{ inputs.mode }}
+        REPO: ${{ github.repository }}
+        API_URL: ${{ github.api_url }}
+        # A pull_request whose head lives in another repository. Fork code
+        # must never execute on the owner's VMs, whatever CI_HOSTS_MODE says.
+        FORK_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+      run: |
+        set -euo pipefail
+
+        hosted_linux='["ubuntu-latest"]'
+        hosted_windows='["windows-latest"]'
+        hosted_macos='["macos-latest"]'
+        self_linux='["self-hosted","linux","networker-ci"]'
+        self_windows='["self-hosted","windows","networker-ci"]'
+        self_macos='["self-hosted","macos","networker-ci"]'
+
+        # Normalise the mode: the caller forwards vars.CI_HOSTS_MODE verbatim,
+        # so "unset" arrives as an empty string.
+        mode="$(printf '%s' "${MODE:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+        case "$mode" in
+          ""|auto) mode=auto ;;
+          hosted|self-hosted) ;;
+          *) echo "::warning title=pick-ci-hosts::CI_HOSTS_MODE='${MODE}' is not auto|hosted|self-hosted — treating as auto"; mode=auto ;;
+        esac
+
+        choose() { # choose <os> <self|hosted> <reason>
+          local os="$1" which="$2" reason="$3" labels
+          case "${os}:${which}" in
+            linux:self)     labels="$self_linux" ;;
+            windows:self)   labels="$self_windows" ;;
+            macos:self)     labels="$self_macos" ;;
+            linux:hosted)   labels="$hosted_linux" ;;
+            windows:hosted) labels="$hosted_windows" ;;
+            macos:hosted)   labels="$hosted_macos" ;;
+            *) echo "::error title=pick-ci-hosts::internal: unknown os/which ${os}/${which}"; exit 1 ;;
+          esac
+          echo "${os}=${labels}" >> "$GITHUB_OUTPUT"
+          echo "::notice title=pick-ci-hosts::${os} -> ${labels} (${reason})"
+          printf '| %s | `%s` | %s |\n' "$os" "$labels" "$reason" >> "$GITHUB_STEP_SUMMARY"
+        }
+
+        {
+          echo "### pick-ci-hosts (mode: ${mode})"
+          echo
+          echo "| os | runs-on | why |"
+          echo "|---|---|---|"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        if [ "${FORK_PR}" = "true" ]; then
+          for os in linux windows macos; do choose "$os" hosted "pull request from a fork — never routed to self-hosted"; done
+          exit 0
+        fi
+
+        case "$mode" in
+          hosted)
+            for os in linux windows macos; do choose "$os" hosted "CI_HOSTS_MODE=hosted"; done
+            exit 0 ;;
+          self-hosted)
+            for os in linux windows macos; do choose "$os" self "CI_HOSTS_MODE=self-hosted (forced, no online check)"; done
+            exit 0 ;;
+        esac
+
+        # ── auto: ask the API which CI hosts are online right now ───────────
+        if [ -z "${TOKEN}" ]; then
+          for os in linux windows macos; do choose "$os" hosted "auto: no CI_HOSTS_STATUS_TOKEN available to this run"; done
+          exit 0
+        fi
+
+        body="$(mktemp)"
+        code="$(curl -sS --max-time 20 -o "$body" -w '%{http_code}' \
+          -H "Authorization: Bearer ${TOKEN}" \
+          -H "Accept: application/vnd.github+json" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          "${API_URL}/repos/${REPO}/actions/runners?per_page=100" || echo "000")"
+        if [ "$code" != "200" ]; then
+          msg="$(jq -r '.message // empty' "$body" 2>/dev/null || true)"
+          echo "::warning title=pick-ci-hosts::GET /repos/${REPO}/actions/runners returned HTTP ${code}${msg:+ (${msg})} — falling back to GitHub-hosted for every OS"
+          for os in linux windows macos; do choose "$os" hosted "auto: runners API HTTP ${code}"; done
+          exit 0
+        fi
+        if ! jq -e '.runners | type == "array"' "$body" >/dev/null 2>&1; then
+          echo "::warning title=pick-ci-hosts::runners API returned an unexpected body — falling back to GitHub-hosted"
+          for os in linux windows macos; do choose "$os" hosted "auto: unparseable runners listing"; done
+          exit 0
+        fi
+
+        total="$(jq -r '.total_count // (.runners | length)' "$body")"
+        echo "registered self-hosted runners (CI hosts): ${total}"
+        jq -r '.runners[] | "  \(.name)\tstatus=\(.status)\tbusy=\(.busy)\tlabels=\([.labels[].name] | join(","))"' "$body"
+
+        for os in linux windows macos; do
+          # Online AND carrying all three labels, compared case-insensitively:
+          # GitHub registers its own "Linux"/"X64"/"macOS"/"Windows" labels and
+          # folds a lowercase "linux" into them, so the listing shows "Linux"
+          # while runs-on matching stays case-insensitive (seen on the first
+          # real registration). Busy hosts still count:
+          # the job queues behind them, which is cheaper than hosted minutes.
+          # Ephemeral hosts drop off after each job and re-register from the
+          # systemd/launchd loop, so "online" is the right liveness signal.
+          online="$(jq -r --arg os "$os" '
+            [ .runners[]
+              | select(.status == "online")
+              | select(any(.labels[].name | ascii_downcase; . == "self-hosted"))
+              | select(any(.labels[].name | ascii_downcase; . == $os))
+              | select(any(.labels[].name | ascii_downcase; . == "networker-ci"))
+            ] | length' "$body")"
+          if [ "${online}" -gt 0 ]; then
+            choose "$os" self "auto: ${online} online CI host(s) with labels self-hosted,${os},networker-ci"
+          else
+            choose "$os" hosted "auto: no online CI host with labels self-hosted,${os},networker-ci"
+          fi
+        done
