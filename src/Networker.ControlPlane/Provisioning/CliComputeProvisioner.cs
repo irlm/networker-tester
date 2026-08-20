@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using Networker.Data.Entities;
@@ -57,6 +58,16 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
     /// narrow divergence from the Rust source (documented in the PR).
     /// </summary>
     private static readonly TimeSpan CreateTimeout = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// Resolved GCP zone per (project_id, region). The provisioner is a DI
+    /// singleton (<see cref="ProvisioningExtensions"/>), so this is
+    /// process-lifetime — zone topology changes are rare enough that one extra
+    /// gcloud roundtrip per (project, region) is the right trade. Only
+    /// successful listings are cached; a transient listing failure must not pin
+    /// the "<c>-a</c>" fallback for the life of the process (#829).
+    /// </summary>
+    private readonly ConcurrentDictionary<(string ProjectId, string Region), string> _gcpZoneCache = new();
 
     public Task<ProvisionResult> StartAsync(
         ProjectTester tester, ProviderCredentials? credentials, CancellationToken ct) =>
@@ -1447,6 +1458,91 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
 
     // ── GCP create ───────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Resolve the zone to create in for a GCP region. Not every region has an
+    /// "<c>-a</c>" zone — <c>us-east1</c> and <c>europe-west1</c> are
+    /// <c>-b/-c/-d</c> — so the old <c>{region}-a</c> assumption made creates in
+    /// those regions fail "Permission denied on 'locations/us-east1-a' (or it
+    /// may not exist)" (#829). Lists the region's zones with the SAME
+    /// credential env as the create itself and picks the first
+    /// <c>status: UP</c> zone by ordinal name order (deterministic).
+    ///
+    /// <para>Returns <c>(zone, null)</c> on a resolved zone, or
+    /// <c>({region}-a, listingError)</c> when the listing failed or yielded no
+    /// usable zone — callers fold the listing error into any downstream create
+    /// failure so the operator sees WHY the fallback zone was attempted.
+    /// Successful resolutions are cached in <see cref="_gcpZoneCache"/>.</para>
+    /// </summary>
+    internal async Task<(string Zone, string? ListingError)> ResolveGcpZoneAsync(
+        IReadOnlyDictionary<string, string> env, string projectId, string region, CancellationToken ct)
+    {
+        if (_gcpZoneCache.TryGetValue((projectId, region), out var cached))
+        {
+            return (cached, null);
+        }
+
+        var fallback = $"{region}-a";
+        var res = await RunAsync(
+            CloudCli.GcloudBin(),
+            new List<string>
+            {
+                "compute", "zones", "list",
+                $"--filter=region:({region})",
+                "--format=json",
+            },
+            env, ct, CommandTimeout).ConfigureAwait(false);
+        if (!res.Success)
+        {
+            return (fallback, $"gcloud compute zones list failed: {res.Error ?? res.StdErr}");
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(res.StdOut);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                return (fallback, "gcloud compute zones list returned non-array JSON");
+            }
+
+            string? best = null;
+            foreach (var z in doc.RootElement.EnumerateArray())
+            {
+                if (z.ValueKind != JsonValueKind.Object
+                    || !z.TryGetProperty("name", out var nameProp)
+                    || nameProp.ValueKind != JsonValueKind.String
+                    || nameProp.GetString() is not { Length: > 0 } name
+                    // Belt-and-braces against the substring semantics of the
+                    // gcloud --filter: only zones of THIS region qualify.
+                    || !name.StartsWith($"{region}-", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                if (!z.TryGetProperty("status", out var statusProp)
+                    || statusProp.ValueKind != JsonValueKind.String
+                    || !string.Equals(statusProp.GetString(), "UP", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                if (best is null || string.CompareOrdinal(name, best) < 0)
+                {
+                    best = name;
+                }
+            }
+
+            if (best is null)
+            {
+                return (fallback, $"gcloud compute zones list returned no UP zone for region {region}");
+            }
+
+            _gcpZoneCache[(projectId, region)] = best;
+            return (best, null);
+        }
+        catch (JsonException ex)
+        {
+            return (fallback, $"gcloud compute zones list produced non-JSON output: {ex.Message}");
+        }
+    }
+
     private async Task<VmCreateResult> CreateGcpVmAsync(
         VmCreateRequest request, ProviderCredentials? creds, CancellationToken ct)
     {
@@ -1487,9 +1583,6 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         // selected" (#827). See BuildGcloudEnv.
         var env = BuildGcloudEnv(keyFile, projectId);
 
-        // GCP needs a zone, not just a region — first zone in the region.
-        var zone = $"{request.Region}-a";
-
         // ssh-keys metadata from the dashboard host's local key, when present.
         // Home resolution survives a systemd unit without $HOME (audit F3).
         string? sshMetadataPath = null;
@@ -1515,8 +1608,15 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         }
 
         ProvisionResult res;
+        string zone;
+        string? zoneListingError;
         try
         {
+            // GCP needs a zone, not just a region — resolved from the live zone
+            // listing (never assumed: us-east1 has no "-a" zone, #829). The key
+            // tempfile must outlive this call, hence inside the try/finally.
+            (zone, zoneListingError) = await ResolveGcpZoneAsync(env, projectId, request.Region, ct)
+                .ConfigureAwait(false);
             var args = BuildGcpCreateArgs(request, zone, sshMetadataPath, startupScriptPath);
             res = await RunAsync(CloudCli.GcloudBin(), args, env, ct, CreateTimeout).ConfigureAwait(false);
         }
@@ -1537,7 +1637,14 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
 
         if (!res.Success)
         {
-            return VmCreateResult.Fail($"gcloud compute instances create failed: {res.Error ?? res.StdErr}");
+            var detail = $"gcloud compute instances create failed: {res.Error ?? res.StdErr}";
+            if (zoneListingError is not null)
+            {
+                // The create ran against the guessed "{region}-a" fallback —
+                // say why, so a zone-shaped failure isn't a guessing game.
+                detail += $" (zone fell back to {zone}: {zoneListingError})";
+            }
+            return VmCreateResult.Fail(detail);
         }
 
         try
