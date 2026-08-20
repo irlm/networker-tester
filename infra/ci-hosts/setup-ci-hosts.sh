@@ -90,7 +90,9 @@ GH_REPO="${GH_REPO:-}"; RUNNER_GROUP="${RUNNER_GROUP:-}"
 PVE_HOST="${PVE_HOST:-pve}"; PVE_STORAGE="${PVE_STORAGE:-local-lvm}"; PVE_SNIPPET_STORAGE="${PVE_SNIPPET_STORAGE:-local}"
 PVE_BRIDGE="${PVE_BRIDGE:-vmbr0}"; PVE_VLAN="${PVE_VLAN:-}"; PVE_TEMPLATE_ID="${PVE_TEMPLATE_ID:-9001}"
 LINUX_COUNT="${LINUX_COUNT:-3}"; LINUX_VMID_BASE="${LINUX_VMID_BASE:-301}"
-LINUX_CORES="${LINUX_CORES:-4}"; LINUX_MEMORY_MB="${LINUX_MEMORY_MB:-8192}"; LINUX_DISK="${LINUX_DISK:-60G}"
+# 8 vCPU on a 20-core node: musl and the Windows/C# builds are CPU-bound and
+# the hosts rarely all build at once, so 2:1 oversubscription buys real time.
+LINUX_CORES="${LINUX_CORES:-8}"; LINUX_MEMORY_MB="${LINUX_MEMORY_MB:-8192}"; LINUX_DISK="${LINUX_DISK:-60G}"
 LINUX_IP="${LINUX_IP:-dhcp}"; LINUX_GW="${LINUX_GW:-}"
 default_pubkey() { # first key that exists; the plain ed25519 name if none does
   local k

@@ -83,6 +83,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **CI hosts stop paying for the GitHub cache over a home uplink.** `sccache`
+  used the Actions cache backend everywhere (`SCCACHE_GHA_ENABLED=true`), so
+  on a self-hosted host every cache hit was a download across home broadband —
+  which is why the musl build still took 4-6 min there against 8 min on a
+  hosted runner with no local cache at all. Self-hosted runs now point sccache
+  at `/var/cache/ci-host/sccache`, which survives the per-job workspace wipe,
+  and skip `Swatinem/rust-cache` entirely: `CARGO_HOME` already persists on
+  the host, so restoring the same registry over the uplink was pure cost.
+  GitHub-hosted runs are unchanged (`runner.environment` decides).
+- **`validate-bench-apis` retries the base-image pull.** `TLS handshake
+  timeout` to registry-1.docker.io and `failed to fetch anonymous token` from
+  auth.docker.io each killed a real run on 2026-08-20 — not rate limiting (94
+  of 100 anonymous pulls were left), just a flaky uplink. Three attempts with
+  backoff instead of a manual re-run.
 - **36 routed jobs got a `timeout-minutes`.** They inherited GitHub's 6-hour
   default, so a CI host that dies mid-job held a slot for hours; the caps are
   roughly 3x observed runtime (e.g. `Test (windows-latest)` 45, `Coverage` 30,

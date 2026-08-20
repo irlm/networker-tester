@@ -308,7 +308,12 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      # GitHub-hosted only: a CI host keeps CARGO_HOME on local disk between
+      # jobs (it is outside the workspace the loop wipes), so restoring the
+      # same registry over a home uplink is pure cost. sccache covers the
+      # compilation-unit cache there.
       - name: Cache cargo
+        if: runner.environment == 'github-hosted'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.1
         with:
           key: lint
@@ -349,7 +354,12 @@ jobs:
         with:
           targets: x86_64-unknown-linux-musl
 
+      # GitHub-hosted only: a CI host keeps CARGO_HOME on local disk between
+      # jobs (it is outside the workspace the loop wipes), so restoring the
+      # same registry over a home uplink is pure cost. sccache covers the
+      # compilation-unit cache there.
       - name: Cache cargo
+        if: runner.environment == 'github-hosted'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.1
         with:
           key: musl-check
@@ -396,7 +406,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      # GitHub-hosted only: a CI host keeps CARGO_HOME on local disk between
+      # jobs (it is outside the workspace the loop wipes), so restoring the
+      # same registry over a home uplink is pure cost. sccache covers the
+      # compilation-unit cache there.
       - name: Cache cargo
+        if: runner.environment == 'github-hosted'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.1
         with:
           key: cargo-vet
@@ -425,7 +440,12 @@ jobs:
         with:
           components: clippy
 
+      # GitHub-hosted only: a CI host keeps CARGO_HOME on local disk between
+      # jobs (it is outside the workspace the loop wipes), so restoring the
+      # same registry over a home uplink is pure cost. sccache covers the
+      # compilation-unit cache there.
       - name: Cache cargo
+        if: runner.environment == 'github-hosted'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.1
         with:
           key: orchestrator
@@ -467,9 +487,32 @@ jobs:
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
 
+      # On a CI host, the GitHub Actions cache backend is on the far side of a
+      # home broadband link: every hit is a download, which is why musl still
+      # took 4-6 min there. /var/cache/ci-host survives the per-job workspace
+      # wipe, so point sccache at local disk instead and restart the server so
+      # it picks the new backend up (the action starts it with GHA settings).
+      - name: sccache on local disk (self-hosted only)
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: |
+          dir=/var/cache/ci-host/sccache
+          mkdir -p "$dir" || { echo "::warning::cannot create $dir — leaving sccache on the GHA backend"; exit 0; }
+          sccache --stop-server >/dev/null 2>&1 || true
+          {
+            echo "SCCACHE_GHA_ENABLED=false"
+            echo "SCCACHE_DIR=$dir"
+            echo "SCCACHE_CACHE_SIZE=20G"
+          } >> "$GITHUB_ENV"
+
       # Swatinem still handles the warm path (registry + a lockfile-keyed target
       # restore); sccache layers under it for the cold path.
+      # GitHub-hosted only: a CI host keeps CARGO_HOME on local disk between
+      # jobs (it is outside the workspace the loop wipes), so restoring the
+      # same registry over a home uplink is pure cost. sccache covers the
+      # compilation-unit cache there.
       - name: Cache cargo
+        if: runner.environment == 'github-hosted'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.1
         with:
           key: ubuntu-test
@@ -534,10 +577,33 @@ jobs:
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
 
+      # On a CI host, the GitHub Actions cache backend is on the far side of a
+      # home broadband link: every hit is a download, which is why musl still
+      # took 4-6 min there. /var/cache/ci-host survives the per-job workspace
+      # wipe, so point sccache at local disk instead and restart the server so
+      # it picks the new backend up (the action starts it with GHA settings).
+      - name: sccache on local disk (self-hosted only)
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        run: |
+          dir=/var/cache/ci-host/sccache
+          mkdir -p "$dir" || { echo "::warning::cannot create $dir — leaving sccache on the GHA backend"; exit 0; }
+          sccache --stop-server >/dev/null 2>&1 || true
+          {
+            echo "SCCACHE_GHA_ENABLED=false"
+            echo "SCCACHE_DIR=$dir"
+            echo "SCCACHE_CACHE_SIZE=20G"
+          } >> "$GITHUB_ENV"
+
       # Swatinem/rust-cache caches a pruned target/ (deps only) + registry,
       # keyed on lockfile+rustc+job — the warm path when the lockfile matches.
       # sccache (above) layers under it to accelerate the cold path.
+      # GitHub-hosted only: a CI host keeps CARGO_HOME on local disk between
+      # jobs (it is outside the workspace the loop wipes), so restoring the
+      # same registry over a home uplink is pure cost. sccache covers the
+      # compilation-unit cache there.
       - name: Cache cargo
+        if: runner.environment == 'github-hosted'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.1
         with:
           key: windows-test
@@ -580,7 +646,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      # GitHub-hosted only: a CI host keeps CARGO_HOME on local disk between
+      # jobs (it is outside the workspace the loop wipes), so restoring the
+      # same registry over a home uplink is pure cost. sccache covers the
+      # compilation-unit cache there.
       - name: Cache cargo
+        if: runner.environment == 'github-hosted'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.1
         with:
           key: macos-test
@@ -713,7 +784,12 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
+      # GitHub-hosted only: a CI host keeps CARGO_HOME on local disk between
+      # jobs (it is outside the workspace the loop wipes), so restoring the
+      # same registry over a home uplink is pure cost. sccache covers the
+      # compilation-unit cache there.
       - name: Cache cargo
+        if: runner.environment == 'github-hosted'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.1
 
       - name: Build tester + endpoint
@@ -780,7 +856,12 @@ jobs:
 
       - uses: taiki-e/install-action@39b03b784b1fb8d2e38e4d6dcf888b991e3c5898 # cargo-llvm-cov
 
+      # GitHub-hosted only: a CI host keeps CARGO_HOME on local disk between
+      # jobs (it is outside the workspace the loop wipes), so restoring the
+      # same registry over a home uplink is pure cost. sccache covers the
+      # compilation-unit cache there.
       - name: Cache cargo
+        if: runner.environment == 'github-hosted'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.1
         with:
           key: ubuntu-coverage
@@ -850,7 +931,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
+      # GitHub-hosted only: a CI host keeps CARGO_HOME on local disk between
+      # jobs (it is outside the workspace the loop wipes), so restoring the
+      # same registry over a home uplink is pure cost. sccache covers the
+      # compilation-unit cache there.
       - name: Cache cargo
+        if: runner.environment == 'github-hosted'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.1
         with:
           key: sql-integration
@@ -887,7 +973,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
+      # GitHub-hosted only: a CI host keeps CARGO_HOME on local disk between
+      # jobs (it is outside the workspace the loop wipes), so restoring the
+      # same registry over a home uplink is pure cost. sccache covers the
+      # compilation-unit cache there.
       - name: Cache cargo
+        if: runner.environment == 'github-hosted'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.1
         with:
           key: postgres-integration

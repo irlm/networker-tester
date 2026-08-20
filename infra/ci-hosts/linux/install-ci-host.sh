@@ -164,7 +164,9 @@ fi
 
 # ── 9. persistent caches (survive ephemeral re-registration) ─────────────────
 install -d -m 0755 "$CACHE_DIR"
-for d in npm nuget dotnet-cli playwright; do install -d -o "$CI_USER" -g "$CI_USER" -m 0755 "$CACHE_DIR/$d"; done
+# sccache: ci.yml points RUSTC_WRAPPER here on self-hosted rather than at
+# the GitHub Actions cache backend, which would be a download per hit.
+for d in npm nuget dotnet-cli playwright sccache; do install -d -o "$CI_USER" -g "$CI_USER" -m 0755 "$CACHE_DIR/$d"; done
 
 # ── 10. the actions-runner package ───────────────────────────────────────────
 if [ -z "$RUNNER_VERSION" ]; then
