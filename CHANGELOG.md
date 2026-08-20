@@ -24,6 +24,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every rendered route, the 320–1920px width matrix, intermediate resizing,
   touch navigation, and representative overlay interactions.
 
+  The coarse-pointer touch-target rule now lives in `@layer base` rather than
+  guarding itself with `:not(.fixed):not(.absolute):not(.sticky)`. Layer order
+  beats specificity, so an unlayered rule outranked every Tailwind positioning
+  utility — that is what forced `position: relative` onto fixed controls in
+  the first place. Layered, the utilities win by construction, including on
+  buttons positioned by a component class or an inline style, which a
+  class-name guard would still have clobbered.
+
+  Overlay scroll locking is refcounted (`lib/useBodyScrollLock.ts`). Saving
+  and restoring `document.body.style.overflow` per overlay loses the page's
+  own value as soon as two overlap — open a modal over the mobile drawer and
+  whichever unmounts first unlocks the page behind the other.
+
 ## [0.28.271] - 2026-08-20
 
 ### Added

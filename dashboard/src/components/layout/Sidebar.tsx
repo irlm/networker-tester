@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useBodyScrollLock } from '../../lib/useBodyScrollLock';
 import { Link, useLocation } from 'react-router';
 import { useAuthStore } from '../../stores/authStore';
 import { useProject } from '../../hooks/useProject';
@@ -34,6 +35,9 @@ export function Sidebar({ connectionDot }: SidebarProps) {
   // A persisted desktop preference must not turn the mobile drawer into an
   // icon-only strip. Opening the drawer always exposes its labels and actions.
   const navCollapsed = collapsed && !mobileOpen;
+  // Refcounted: a plain save/restore of body.overflow loses the page's own
+  // value when another overlay unmounts first (lib/useBodyScrollLock.ts).
+  useBodyScrollLock(mobileOpen);
 
   const pid = projectId;
   const isAdmin = role === 'admin' || isPlatformAdmin;
@@ -102,15 +106,6 @@ export function Sidebar({ connectionDot }: SidebarProps) {
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [mobileOpen]);
-
-  useEffect(() => {
-    if (!mobileOpen) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = previousOverflow;
-    };
   }, [mobileOpen]);
 
   // ── Render helpers ──────────────────────────────────────────────────

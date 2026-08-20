@@ -42,7 +42,10 @@ export default defineConfig({
 
   projects: [
     {
-      name: browserChannel ?? 'chromium',
+      // Name stays 'chromium' whatever channel is used, so `--project=chromium`
+      // keeps working; PLAYWRIGHT_BROWSER_CHANNEL only swaps the binary
+      // (e.g. 'chrome' to run against installed Google Chrome).
+      name: 'chromium',
       use: {
         ...devices['Desktop Chrome'],
         ...(browserChannel ? { channel: browserChannel } : {}),
