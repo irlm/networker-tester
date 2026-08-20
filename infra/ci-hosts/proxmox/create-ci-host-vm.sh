@@ -203,14 +203,23 @@ cmd_windows() {
   # ide2 = install ISO, ide0 = virtio-win drivers, ide1 = autounattend answer
   # ISO (optional — with it the install runs unattended after the "press any
   # key to boot from CD" prompt on the console).
-  log "creating Windows VM $VMID ($NAME): q35 + OVMF + vTPM, ${CORES} vCPU, ${MEMORY} MB, ${DISK}"
+  # In-box drivers only: a SATA (AHCI) disk and an e1000 NIC need no driver
+  # during Setup or at first logon. The first real run with virtio-scsi
+  # stalled on "Select location to install" with an EMPTY disk list — the
+  # new Server 2025 Setup never picked the vioscsi driver up from the answer
+  # file's DriverPaths, and without a NIC driver first-logon.ps1 could not
+  # have reached anything either. CI throughput does not need virtio; the
+  # guest can switch to virtio drivers later from the attached virtio-win ISO.
+  log "creating Windows VM $VMID ($NAME): q35 + OVMF + vTPM, ${CORES} vCPU, ${MEMORY} MB, ${DISK} (SATA disk, e1000 NIC — in-box drivers)"
+  local win_net="e1000,bridge=${BRIDGE}"
+  [ -n "$VLAN" ] && win_net="${win_net},tag=${VLAN}"
   qm create "$VMID" --name "$NAME" --ostype win11 --machine q35 --bios ovmf \
     --cores "$CORES" --memory "$MEMORY" --balloon 0 --cpu host \
     --scsihw virtio-scsi-single --agent enabled=1 --onboot 1 \
-    --net0 "$(net_arg)" \
+    --net0 "$win_net" \
     --efidisk0 "${STORAGE}:1,efitype=4m,pre-enrolled-keys=1" \
     --tpmstate0 "${STORAGE}:1,version=v2.0" \
-    --scsi0 "${STORAGE}:${DISK%G},discard=on,ssd=1" \
+    --sata0 "${STORAGE}:${DISK%G},discard=on,ssd=1" \
     --ide2 "${ISO},media=cdrom" --boot order=ide2 \
     --vga std >/dev/null
   [ -n "$VIRTIO_ISO" ] && qm set "$VMID" --ide0 "${VIRTIO_ISO},media=cdrom" >/dev/null
