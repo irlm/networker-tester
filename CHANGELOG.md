@@ -13,6 +13,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [0.28.260] - 2026-08-20
+
+### Fixed
+
+- **GCP endpoint deployments get a real zone too** (#831). deploy.json's GCP
+  block now carries the zone resolved through the authenticated listing (shared
+  cache with tester creation) instead of hardcoding "<region>-a"; the hardcoded
+  form survives only as the documented no-credentials fallback.
+
 ## [0.28.259] - 2026-08-20
 
 ### Fixed
