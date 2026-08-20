@@ -506,6 +506,36 @@ networker-tester \
 
 ---
 
+## URL Probe page (dashboard)
+
+`/projects/{id}/probe` is the managed twin of the workflow above: enter one or
+more hosts, pick a preset (`quick` / `standard` / `full` / `route`), optionally
+pin a runner, and the control plane dispatches a `url_probe` config to a
+tester VM. Results accumulate per host in the **Watched URLs** list.
+
+**Grouping by runner (provider / capacity).** A host's history is probed from
+whichever runner the dispatcher picked, and an Azure `Standard_B1s` and a GCP
+`e2-standard-4` do not measure the same thing — the spread is runner
+infrastructure, not network path. The toolbar's **By host / By provider / By
+capacity** select splits each host into one row per runner cloud, or per
+runner cloud × VM size; the **Provider** and **Size** selects narrow the list
+to one cloud or one size (sizes are labelled with the catalog's `N vCPU / N GB`
+and sorted smallest first). Grouped rows show the provider badge, the size,
+the region (or `N regions` when a capacity row spans several), and the
+catalog specs. Runs whose runner cannot be resolved — no tester bound, or the
+tester row was deleted — sit in an explicit **unknown runner** row rather
+than being merged into a real one. The three choices ride the query string
+(`?group=provider|capacity`, `?provider=<cloud>`, `?size=<vm_size>`) next to
+`?host=` so a comparison view can be shared.
+
+The runner identity comes from the run-list payload
+(`GET /api/v2/projects/{projectId}/test-runs` → `runner_cloud`,
+`runner_region`, `runner_vm_size`, plus `runner_vcpus` / `runner_memory_gb`
+from the VM-size catalog); the page falls back to the project's testers list
+by `tester_id` when a field is null.
+
+---
+
 ## GeoIP / ASN Enrichment (optional, offline)
 
 The tester can add geo/ISP/ASN context to each run for both sides of the path.
