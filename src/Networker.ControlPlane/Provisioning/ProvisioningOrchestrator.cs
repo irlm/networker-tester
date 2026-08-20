@@ -2,8 +2,10 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Background;
+using Networker.ControlPlane.Security;
 using Networker.Data;
 using Networker.Data.Entities;
+using Networker.Security;
 
 namespace Networker.ControlPlane.Provisioning;
 
@@ -417,6 +419,7 @@ public sealed class ProvisioningOrchestrator : BackgroundService
         // Docker (local): no account — the pending ref names the provider itself
         // and the deploy runner starts a target container instead of install.sh.
         string? provider;
+        string? gcpZone = null;
         if (DockerProviderOptions.IsDocker(pending.Provider))
         {
             using var kickScope = _scopeFactory.CreateScope();
@@ -435,7 +438,7 @@ public sealed class ProvisioningOrchestrator : BackgroundService
             var acct = await db.CloudAccounts
                 .AsNoTracking()
                 .Where(a => a.AccountId == pending.CloudAccountId)
-                .Select(a => new { a.Provider, a.Name, a.Status, a.ValidationError })
+                .Select(a => new { a.Provider, a.Name, a.Status, a.ValidationError, a.CredentialsEnc, a.CredentialsNonce })
                 .FirstOrDefaultAsync(ct);
             if (acct is null || string.IsNullOrEmpty(acct.Provider))
             {
@@ -462,9 +465,23 @@ public sealed class ProvisioningOrchestrator : BackgroundService
                 return false;
             }
             provider = acct.Provider;
+
+            if (provider == "gcp")
+            {
+                // GCP endpoint deploys need a concrete zone in deploy.json —
+                // install.sh consumes it verbatim as $GCP_ZONE. Resolve it from
+                // the account's live zone listing (same class as #829, this is
+                // the endpoint-deploy site: not every region has an "-a" zone —
+                // us-east1 and europe-west1 are -b/-c/-d, #831). On any failure
+                // this stays null and BuildDeployJson keeps the historical
+                // {region}-a fallback.
+                gcpZone = await ResolveGcpDeployZoneAsync(
+                    acct.CredentialsEnc, acct.CredentialsNonce, pending.Region, run.Id, ct)
+                    .ConfigureAwait(false);
+            }
         }
 
-        var deployJson = BuildDeployJson(pending, provider, cfg.Name, run.Id);
+        var deployJson = BuildDeployJson(pending, provider, cfg.Name, run.Id, gcpZone);
         var deployText = deployJson.ToJsonString();
         var providerSummary = BuildProviderSummary(deployJson);
 
@@ -527,6 +544,68 @@ public sealed class ProvisioningOrchestrator : BackgroundService
         }, CancellationToken.None);
 
         return true;
+    }
+
+    /// <summary>
+    /// Resolve the GCP zone for an endpoint deploy from the cloud account's
+    /// encrypted credentials: decrypt the <c>json_key</c>, then delegate to
+    /// <see cref="CliComputeProvisioner.ResolveGcpZoneFromKeyAsync"/> (the
+    /// singleton provisioner, so the per-(project, region) zone cache is shared
+    /// with the tester-create path from #830). Returns null — meaning "keep the
+    /// <c>{region}-a</c> fallback" — when the cipher/provisioner isn't
+    /// registered (bare test hosts), the credentials don't decrypt, or there is
+    /// no <c>json_key</c>; a failed listing also falls back, with the listing
+    /// failure logged so a zone-shaped create failure isn't a guessing game.
+    /// </summary>
+    private async Task<string?> ResolveGcpDeployZoneAsync(
+        byte[] credentialsEnc, byte[] credentialsNonce, string region, Guid runId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var cipher = scope.ServiceProvider.GetService<CredentialCipher>();
+        var provisioner = scope.ServiceProvider.GetService<CliComputeProvisioner>();
+        if (cipher is null || provisioner is null)
+        {
+            _logger.LogWarning(
+                "Run {RunId}: no {Missing} available — deploy.json keeps the {Region}-a zone guess",
+                runId, cipher is null ? "credential cipher" : "CLI provisioner", region);
+            return null;
+        }
+
+        string? jsonKey;
+        try
+        {
+            jsonKey = CredentialJson.ToMap(cipher.Decrypt(credentialsEnc, credentialsNonce))
+                .GetValueOrDefault("json_key");
+        }
+        catch (Exception ex)
+        {
+            // Undecryptable account (key rotation, corrupt nonce) — same
+            // soft-fail posture as the reaper; the deploy itself may still work
+            // on the host's ambient gcloud auth.
+            _logger.LogWarning(
+                "Run {RunId}: cloud account credentials failed to decrypt ({Error}) — deploy.json keeps the {Region}-a zone guess",
+                runId, ex.Message, region);
+            return null;
+        }
+
+        if (string.IsNullOrEmpty(jsonKey))
+        {
+            _logger.LogWarning(
+                "Run {RunId}: gcp cloud account has no json_key — deploy.json keeps the {Region}-a zone guess",
+                runId, region);
+            return null;
+        }
+
+        var (zone, listingError) = await provisioner
+            .ResolveGcpZoneFromKeyAsync(jsonKey, region, ct)
+            .ConfigureAwait(false);
+        if (listingError is not null)
+        {
+            _logger.LogWarning(
+                "Run {RunId}: GCP zone resolution for {Region} fell back to {Zone}: {Error}",
+                runId, region, zone, listingError);
+        }
+        return zone;
     }
 
     // ── Promote: provisioning runs whose deployment finished ─────────────────
@@ -1023,8 +1102,17 @@ public sealed class ProvisioningOrchestrator : BackgroundService
     /// …"), so a name-prefix label made every cell race to create the SAME
     /// Azure VM — nine lost with Conflict, the winner's endpoint was stomped
     /// by the other cells' installers (10-cell matrix, 2026-07-31). The run-id
-    /// suffix matches the deployment row's name suffix for correlation.</summary>
-    internal static JsonObject BuildDeployJson(PendingEndpoint p, string provider, string cfgName, Guid runId)
+    /// suffix matches the deployment row's name suffix for correlation.
+    ///
+    /// <para><paramref name="gcpZone"/> is the zone resolved from the account's
+    /// live <c>gcloud compute zones list</c> (via
+    /// <see cref="CliComputeProvisioner.ResolveGcpZoneFromKeyAsync"/>) — required
+    /// because not every GCP region has an "<c>-a</c>" zone (#831). Null (no
+    /// credentials / cipher / listing available) keeps the historical
+    /// <c>{region}-a</c> guess so the credential-less edge behaves exactly as
+    /// before.</para></summary>
+    internal static JsonObject BuildDeployJson(
+        PendingEndpoint p, string provider, string cfgName, Guid runId, string? gcpZone = null)
     {
         var vmLabel = SanitizeVmLabel($"nwk-a-{ShortId(runId)}");
 
@@ -1045,7 +1133,7 @@ public sealed class ProvisioningOrchestrator : BackgroundService
             "gcp" => new JsonObject
             {
                 ["region"] = p.Region,
-                ["zone"] = $"{p.Region}-a",
+                ["zone"] = gcpZone ?? $"{p.Region}-a",
                 ["machine_type"] = p.VmSize,
                 ["os"] = p.Os,
                 ["instance_name"] = vmLabel,
