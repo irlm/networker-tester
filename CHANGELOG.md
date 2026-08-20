@@ -61,6 +61,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wire field needed a cast; `test/helpers.ts` now exports a documented
   `jsonBody()` and the three suites go through it. (Reported by a parallel
   session working in the same tree.)
+- **The `streaming memory bound` JS conformance test no longer races its
+  probe.** It attached a `data` listener per `nextLine()` call and removed it
+  on resolve, so the child's `RESULT` line — written while the parent was busy
+  draining 32 MiB — could land with no listener attached and be lost when the
+  stream ended, surfacing as a flaky `memprobe exited early (0)` on loaded CI
+  hosts. (v0.28.268 moved the give-up signal from `exit` to `close`, which
+  narrowed the window without closing it.) One persistent reader now collects
+  every line for the child's lifetime and `nextLine()` polls that buffer; the
+  failure message quotes what the child actually printed.
 - **Self-hosted jobs get the toolchain PATH — for real this time.** The PATH a
   *job step* runs with comes from `<runner>/.path`, not from `.env` and not
   from the Listener's own environment: the runner writes `.path` at configure
