@@ -332,7 +332,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.265"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.266"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -8446,14 +8446,31 @@ step_check_gcp_prereqs() {
     fi
 }
 
-# Create a GCE firewall rule for the endpoint ports (idempotent).
+# The canonical port list for the GCE endpoint firewall rule. ONE definition
+# shared by create and update (#840): the rule is matched by NAME, and this
+# list has grown six times since the rule first shipped (v0.12.83: only
+# 22/80/443/8080/8443 + UDP) — an existing rule that is merely "reused" keeps
+# its original ports, so every proxy-stack port (8081/8444 nginx, 8091/8454
+# caddy, …) stayed closed on long-lived projects and each cell died at the
+# readiness gate while install.sh reported nginx "configured".
+GCP_ENDPOINT_FIREWALL_RULES="tcp:22,tcp:80,tcp:443,tcp:3389,tcp:8080-8082,tcp:8091-8094,tcp:8443-8445,tcp:8454-8457,udp:8443-8445,udp:8454,udp:9997,udp:9998,udp:9999"
+
+# Create or reconcile the GCE firewall rule for the endpoint ports (idempotent:
+# an existing rule is UPDATED to the canonical list, never assumed current).
 _gcp_create_firewall_rule() {
     local rule_name="networker-endpoint-allow"
 
-    # Check if already exists
     if gcloud compute firewall-rules describe "$rule_name" \
-            --project "$GCP_PROJECT" &>/dev/null 2>&1; then
-        print_ok "Firewall rule '$rule_name' already exists — reusing"
+            --project "$GCP_PROJECT" &>/dev/null </dev/null; then
+        print_info "Firewall rule '$rule_name' exists — reconciling its port list…"
+        if gcloud compute firewall-rules update "$rule_name" \
+                --project "$GCP_PROJECT" \
+                --rules="$GCP_ENDPOINT_FIREWALL_RULES" \
+                --quiet </dev/null; then
+            print_ok "Firewall rule '$rule_name' reconciled: TCP 22/80/443/3389/8080-8082/8091-8094/8443-8445/8454-8457, UDP 8443-8445/8454/9997-9999"
+        else
+            print_warn "Could not update firewall rule '$rule_name' — proxy-stack ports may stay closed (check: gcloud compute firewall-rules describe $rule_name)"
+        fi
         return 0
     fi
 
@@ -8464,11 +8481,11 @@ _gcp_create_firewall_rule() {
         --priority=1000 \
         --network=default \
         --action=ALLOW \
-        --rules=tcp:22,tcp:80,tcp:443,tcp:3389,tcp:8080-8082,tcp:8091-8094,tcp:8443-8445,tcp:8454-8457,udp:8443-8445,udp:8454,udp:9997,udp:9998,udp:9999 \
+        --rules="$GCP_ENDPOINT_FIREWALL_RULES" \
         --source-ranges=0.0.0.0/0 \
         --target-tags=networker-endpoint \
-        --quiet
-    print_ok "Firewall rule created: TCP 22/80/443/3389/8080-8082/8091-8094/8443-8445/8454-8457, UDP 8443-8445/8454/9998/9999"
+        --quiet </dev/null
+    print_ok "Firewall rule created: TCP 22/80/443/3389/8080-8082/8091-8094/8443-8445/8454-8457, UDP 8443-8445/8454/9997-9999"
 }
 
 # Create a GCE instance.

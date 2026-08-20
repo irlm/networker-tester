@@ -33,7 +33,7 @@ teardown() {
           STUB_SSH_FAIL_VERSION STUB_CURL_FAIL STUB_CARGO_FAIL STUB_SCP_FAIL \
           STUB_GH_FAIL STUB_TESTER_FAIL STUB_UNAME_RESULT \
           STUB_GCLOUD_LOG STUB_GCLOUD_ACTIVE STUB_GCLOUD_TOKEN_FAIL STUB_GCLOUD_FAIL \
-          STUB_GCLOUD_SSH_LOG STUB_GCLOUD_SSH_RC \
+          STUB_GCLOUD_SSH_LOG STUB_GCLOUD_SSH_RC STUB_GCLOUD_FW_MISSING \
           CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE CLOUDSDK_CONFIG CLOUDSDK_CORE_PROJECT \
           GOOGLE_APPLICATION_CREDENTIALS 2>/dev/null || true
 }
@@ -2176,6 +2176,49 @@ EOF
     _installer_self_for_ssh
     [ "$INSTALLER_SELF_PATH" = "$SCRIPT" ]
     [ -z "$INSTALLER_SELF_TMP" ]
+}
+
+# ===========================================================================
+# GCP firewall rule reconciliation (#840): the rule is matched by NAME and its
+# port list has grown over releases — an existing rule must be UPDATED to the
+# canonical list, never "reused" as-is (that left every proxy-stack port
+# closed on long-lived projects).
+# ===========================================================================
+
+@test "_gcp_create_firewall_rule: an existing rule is updated to the canonical port list (no create)" {
+    export STUB_GCLOUD_LOG="$TEST_TMPDIR/gcloud.log"
+    GCP_PROJECT=proj-x
+    run _gcp_create_firewall_rule
+    [ "$status" -eq 0 ] || { echo "$output" >&2; exit 1; }
+    grep -q "^compute firewall-rules describe networker-endpoint-allow --project proj-x" "$STUB_GCLOUD_LOG"
+    grep -q "^compute firewall-rules update networker-endpoint-allow --project proj-x --rules=$GCP_ENDPOINT_FIREWALL_RULES --quiet" "$STUB_GCLOUD_LOG"
+    ! grep -q "^compute firewall-rules create" "$STUB_GCLOUD_LOG"
+    [[ "$output" == *"reconciled"* ]]
+    [[ "$output" != *"already exists — reusing"* ]]
+}
+
+@test "_gcp_create_firewall_rule: a missing rule is created with the same canonical port list" {
+    export STUB_GCLOUD_LOG="$TEST_TMPDIR/gcloud.log" STUB_GCLOUD_FW_MISSING=1
+    GCP_PROJECT=proj-x
+    run _gcp_create_firewall_rule
+    [ "$status" -eq 0 ] || { echo "$output" >&2; exit 1; }
+    grep -q "^compute firewall-rules create networker-endpoint-allow --project proj-x .*--rules=$GCP_ENDPOINT_FIREWALL_RULES .*--target-tags=networker-endpoint" "$STUB_GCLOUD_LOG"
+    ! grep -q "^compute firewall-rules update" "$STUB_GCLOUD_LOG"
+    [[ "$output" == *"Firewall rule created"* ]]
+}
+
+@test "_gcp_create_firewall_rule: canonical list covers every proxy-stack port from shared/http-stacks.json" {
+    # Every stack's http/https ports must be inside the rule's ranges.
+    local ports
+    ports="$(jq -r '.stacks // . | to_entries[] | .value | (.http_port // .http // empty), (.https_port // .https // empty)' "$BATS_TEST_DIRNAME/../shared/http-stacks.json" 2>/dev/null | sort -un)"
+    [ -n "$ports" ] || skip "http-stacks.json shape not recognised"
+    local p
+    for p in $ports; do
+        case "$p" in
+            80|443|8080|8081|8082|8091|8092|8093|8094|8443|8444|8445|8454|8455|8456|8457) ;;
+            *) echo "port $p from http-stacks.json is not covered by GCP_ENDPOINT_FIREWALL_RULES" >&2; exit 1 ;;
+        esac
+    done
 }
 
 @test "_deploy_parse_config: reads tester.gcp.project_id (canonical key)" {
