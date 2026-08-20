@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Text.Json;
 using Networker.Data.Entities;
 
@@ -28,10 +27,11 @@ namespace Networker.ControlPlane.Provisioning;
 /// </para>
 ///
 /// <para>
-/// Process handling reuses the hardened pattern from
-/// <c>Networker.Agent.ProbeRunner</c>: streams drained concurrently and awaited
-/// after exit (no pipe-buffer deadlock), a hard timeout that kills the whole
-/// process tree, and <c>UseShellExecute=false</c> + <c>CreateNoWindow=true</c>.
+/// Process handling goes through <see cref="CloudCli.RunAsync"/> — the shared
+/// hardened runner (streams drained concurrently and awaited after exit, a hard
+/// timeout that kills the whole process tree, <c>UseShellExecute=false</c> +
+/// <c>CreateNoWindow=true</c>) that the orphan reaper and the inventory scan
+/// use too, so the semantics can't drift apart.
 /// </para>
 ///
 /// <para>
@@ -1954,7 +1954,7 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         || stderr.Contains("was not found", StringComparison.OrdinalIgnoreCase)
         || stderr.Contains("404", StringComparison.OrdinalIgnoreCase);
 
-    // ── Hardened process runner (ported from ProbeRunner) ────────────────────
+    // ── Process runner (the shared hardened one in CloudCli) ─────────────────
 
     private async Task<ProvisionResult> RunAsync(
         string file,
@@ -1965,93 +1965,33 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         bool sensitiveArgs = false)
     {
         var effectiveTimeout = timeout ?? CommandTimeout;
-        var psi = new ProcessStartInfo
-        {
-            FileName = file,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        foreach (var a in args)
-        {
-            psi.ArgumentList.Add(a);
-        }
-        if (env is not null)
-        {
-            foreach (var (k, v) in env)
-            {
-                psi.Environment[k] = v;
-            }
-        }
 
         logger.LogInformation(
             "Provisioner spawning {File} {Args}",
             file,
             sensitiveArgs ? "(args redacted: contains credentials)" : string.Join(' ', args));
 
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(effectiveTimeout);
-        var ct = timeoutCts.Token;
+        var res = await CloudCli.RunAsync(file, args, env, effectiveTimeout, cancellationToken).ConfigureAwait(false);
 
-        using var process = new Process { StartInfo = psi };
-        try
-        {
-            process.Start();
-        }
-        catch (Exception ex)
+        if (!res.Spawned)
         {
             // The common CI path: the cloud CLI isn't installed. Still a soft
             // failure (the caller logs it and returns 202 with the DB transition
-            // done), but the message now names the binary and its override env
-            // var so the soft-fail is diagnosable, not silent (audit F12).
-            var message = CloudCli.LaunchFailureMessage(file, ex.Message);
-            logger.LogWarning(ex, "Failed to launch provisioner CLI '{File}': {Hint}", file, message);
+            // done), but the message names the binary and its override env var
+            // so the soft-fail is diagnosable, not silent (audit F12).
+            var message = res.LaunchError ?? CloudCli.LaunchFailureMessage(file, "spawn failed");
+            logger.LogWarning("Failed to launch provisioner CLI '{File}': {Hint}", file, message);
             return ProvisionResult.SpawnError(message);
         }
 
-        // Drain both streams concurrently, await AFTER exit (avoids the
-        // pipe-buffer deadlock + the BeginOutputReadLine flush race).
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
-        var stderrTask = process.StandardError.ReadToEndAsync(ct);
-
-        string stdout, stderr;
-        try
+        if (res.TimedOut)
         {
-            await process.WaitForExitAsync(ct).ConfigureAwait(false);
-            stdout = (await stdoutTask.ConfigureAwait(false)).Trim();
-            stderr = (await stderrTask.ConfigureAwait(false)).Trim();
-        }
-        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested
-                                                 && !cancellationToken.IsCancellationRequested)
-        {
-            KillTree(process);
             return ProvisionResult.SpawnError(
                 $"provisioner CLI '{file}' timed out after {effectiveTimeout.TotalSeconds:0}s and was killed");
         }
-        catch (OperationCanceledException)
-        {
-            KillTree(process); // caller cancelled — don't leave the child running
-            throw;
-        }
 
-        return process.ExitCode == 0
-            ? ProvisionResult.Ok(process.ExitCode, stdout, stderr)
-            : ProvisionResult.Failed(process.ExitCode, stdout, stderr);
-    }
-
-    private static void KillTree(Process process)
-    {
-        try
-        {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-            }
-        }
-        catch
-        {
-            // Best-effort — may have exited between the check and the kill.
-        }
+        return res.ExitCode == 0
+            ? ProvisionResult.Ok(res.ExitCode, res.StdOut, res.StdErr)
+            : ProvisionResult.Failed(res.ExitCode, res.StdOut, res.StdErr);
     }
 }

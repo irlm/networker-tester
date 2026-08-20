@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Security;
@@ -889,34 +888,26 @@ public sealed class OrphanReaperService : BackgroundService
         || stderr.Contains("404", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Spawn a CLI, drain stdout/stderr concurrently, enforce a hard timeout with
-    /// tree-kill. Total: a missing binary returns <c>spawned = false</c> rather
-    /// than throwing — the CI no-op path. Ported from
-    /// <see cref="Provisioning.CliComputeProvisioner"/>.
+    /// Spawn a CLI through the shared hardened runner
+    /// (<see cref="Provisioning.CloudCli.RunAsync"/>: concurrent stream drain,
+    /// hard timeout, tree-kill). Total: a missing binary returns
+    /// <c>spawned = false</c> rather than throwing — the CI no-op path.
     /// </summary>
     private async Task<(bool Spawned, int ExitCode, string StdOut, string StdErr)> RunAsync(
         string file, List<string> args, IReadOnlyDictionary<string, string>? env,
         CancellationToken cancellationToken, bool sensitiveArgs = false)
     {
-        var psi = new ProcessStartInfo
+        // Keep az's Python warnings out of stdout so JSON parsing stays clean;
+        // the caller's env wins if it sets the same key.
+        var merged = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            FileName = file,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
+            ["PYTHONWARNINGS"] = "ignore",
         };
-        foreach (var a in args)
-        {
-            psi.ArgumentList.Add(a);
-        }
-        // Keep az's Python warnings out of stdout so JSON parsing stays clean.
-        psi.Environment["PYTHONWARNINGS"] = "ignore";
         if (env is not null)
         {
             foreach (var (k, v) in env)
             {
-                psi.Environment[k] = v;
+                merged[k] = v;
             }
         }
 
@@ -925,59 +916,24 @@ public sealed class OrphanReaperService : BackgroundService
             _logger.LogDebug("Orphan-reaper spawning {File} (args redacted: contains credentials)", file);
         }
 
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(CommandTimeout);
-        var ct = timeoutCts.Token;
+        var res = await Provisioning.CloudCli
+            .RunAsync(file, args, merged, CommandTimeout, cancellationToken)
+            .ConfigureAwait(false);
 
-        using var process = new Process { StartInfo = psi };
-        try
-        {
-            process.Start();
-        }
-        catch (Exception ex)
+        if (!res.Spawned)
         {
             // The common CI path: the cloud CLI isn't installed. Soft failure.
-            _logger.LogDebug(ex, "Orphan-reaper: failed to launch CLI '{File}'", file);
+            _logger.LogDebug("Orphan-reaper: failed to launch CLI '{File}': {Hint}", file, res.LaunchError);
             return (false, -1, string.Empty, string.Empty);
         }
-
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
-        var stderrTask = process.StandardError.ReadToEndAsync(ct);
-        try
+        if (res.TimedOut)
         {
-            await process.WaitForExitAsync(ct).ConfigureAwait(false);
-            var stdout = (await stdoutTask.ConfigureAwait(false)).Trim();
-            var stderr = (await stderrTask.ConfigureAwait(false)).Trim();
-            return (true, process.ExitCode, stdout, stderr);
-        }
-        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested
-                                                 && !cancellationToken.IsCancellationRequested)
-        {
-            KillTree(process);
             _logger.LogWarning("Orphan-reaper: CLI '{File}' timed out after {Secs}s and was killed",
                 file, CommandTimeout.TotalSeconds);
             return (true, -1, string.Empty, "timed out");
         }
-        catch (OperationCanceledException)
-        {
-            KillTree(process); // caller cancelled — don't leave the child running
-            throw;
-        }
-    }
 
-    private static void KillTree(Process process)
-    {
-        try
-        {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-            }
-        }
-        catch
-        {
-            // Best-effort — may have exited between the check and the kill.
-        }
+        return (true, res.ExitCode, res.StdOut, res.StdErr);
     }
 
     private static void TryDeleteDir(string path)
