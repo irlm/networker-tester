@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { cloudProviderText } from '../lib/provider';
 import { useAsyncEffect } from '../hooks/useAsyncEffect';
+import { usePolling } from '../hooks/usePolling';
 import { api, errorMessage } from '../api/client';
 import type { Deployment, CloudConnection } from '../api/types';
 import { usePageTitle } from '../hooks/usePageTitle';
@@ -65,6 +66,13 @@ export function SettingsPage() {
   }, [projectId, isProjectAdmin]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Deployment statuses / endpoint versions drift server-side (updates, new
+  // releases), so re-pull every 60s. Silent by construction: loadData never
+  // re-raises the loading flag after the first load, so no flash. WS events
+  // still drive the in-flight update flow; this only keeps idle sessions
+  // from going stale.
+  usePolling(loadData, 60_000, !!projectId);
 
   // Auto-scroll log
   useEffect(() => {

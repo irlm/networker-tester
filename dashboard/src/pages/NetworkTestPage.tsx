@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { timeAgo } from '../lib/format';
-import { useAsyncEffect } from '../hooks/useAsyncEffect';
+import { usePolling } from '../hooks/usePolling';
 import { useNavigate } from 'react-router';
 import { api } from '../api/client';
 import { runsApi } from '../features/runs/api';
@@ -16,7 +16,7 @@ import { RunResult } from '../components/common/RunResult';
 import { unsupportedModes } from '../lib/mode-capabilities';
 import { isOnlineTester } from '../lib/tester-readiness';
 import { Button } from '../components/common/Button';
-import { testConfigQueryOptions, useTestRunsQuery } from '../features/runs/queries';
+import { runKeys, testConfigQueryOptions, useTestRunsQuery } from '../features/runs/queries';
 
 // ── Mode families (source of truth is ModeChip.tsx) ────────────────────
 
@@ -150,10 +150,11 @@ export function NetworkTestPage() {
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [testers, setTesters] = useState<TesterRow[]>([]);
   const [resourcesLoading, setResourcesLoading] = useState(true);
+  // Default 15s polling (freshness audit): with `polling: false` a run
+  // launched FROM THIS PAGE never appeared in the recent-runs panel.
   const recentRunsQuery = useTestRunsQuery(
     projectId,
     { endpoint_kind: 'network', limit: 5 },
-    { polling: false },
   );
   const recentRuns = useMemo(() => recentRunsQuery.data ?? [], [recentRunsQuery.data]);
   const loading = resourcesLoading || recentRunsQuery.isPending;
@@ -259,22 +260,27 @@ export function NetworkTestPage() {
 
   // ── Data loading ─────────────────────────────────────────────────────
 
-  // `loading` starts true, so the removed synchronous setLoading(true) only
-  // mattered on a projectId change — where the list now stays visible until the
-  // new data lands instead of flashing a spinner. useAsyncEffect owns the
-  // cancellation flag this effect used to hand-roll.
-  useAsyncEffect((cancelled) => Promise.all([
+  // 30s poll (freshness audit): the form sits open while deployments finish
+  // and runners connect/drop — a one-shot load froze the target picker and
+  // the online-runner count at mount time. Silent after the first load:
+  // `resourcesLoading` starts true and is only ever cleared, so poll ticks
+  // swap the lists in place with no spinner. Both requests are assembled
+  // synchronously in the tick (usePolling's request-source contract).
+  usePolling(() => {
+    void Promise.all([
       api.getDeployments(projectId, { limit: 50 }).catch(() => [] as Deployment[]),
       testersApi.listTesters(projectId).catch(() => [] as TesterRow[]),
     ]).then(([deps, rnrs]) => {
-      if (cancelled()) return;
       // Only COMPLETED deployments are runnable targets — failed/cancelled ones
       // have no live endpoint and used to be listed (and selectable!) here,
       // producing guaranteed-failing runs (E2E P2-9).
       setDeployments(deps.filter(d => d.status === 'completed'));
       setTesters(rnrs);
       setResourcesLoading(false);
-    }), [projectId]);
+    });
+    // resetKey=projectId: a project switch reloads immediately (the old
+    // effect's [projectId] dep) instead of waiting out the interval.
+  }, 30_000, !!projectId, projectId);
 
   // ── Derived ──────────────────────────────────────────────────────────
 
@@ -360,6 +366,9 @@ export function NetworkTestPage() {
     setSubmitting(true);
     try {
       const run = await runsApi.launchConfig(configId);
+      // Invalidate the cached run lists so the new run is there the moment the
+      // user navigates back — not a poll interval later.
+      void queryClient.invalidateQueries({ queryKey: runKeys.lists() });
       addToast('success', `Run ${run.id.slice(0, 8)} launched`);
       navigate(`/projects/${projectId}/runs/${run.id}`);
     } catch (e) {
@@ -367,7 +376,7 @@ export function NetworkTestPage() {
     } finally {
       setSubmitting(false);
     }
-  }, [submitting, addToast, navigate, projectId]);
+  }, [submitting, addToast, navigate, projectId, queryClient]);
 
   const tweakFromRun = useCallback(async (run: TestRun) => {
     try {
@@ -418,6 +427,9 @@ export function NetworkTestPage() {
       };
       const created = await runsApi.createConfig(projectId, config);
       const run = await runsApi.launchConfig(created.id, selectedTesterId ?? undefined);
+      // Invalidate the cached run lists so the recent-runs panel shows the new
+      // run the moment the user navigates back — not a poll interval later.
+      void queryClient.invalidateQueries({ queryKey: runKeys.lists() });
       addToast('success', `Run ${run.id.slice(0, 8)} launched`);
       navigate(`/projects/${projectId}/runs/${run.id}`);
     } catch (e) {
@@ -425,7 +437,7 @@ export function NetworkTestPage() {
     } finally {
       setSubmitting(false);
     }
-  }, [canLaunch, submitting, selectedDeployment, selectedModes, selectedTesterId, payloadSizes, projectId, addToast, navigate]);
+  }, [canLaunch, submitting, selectedDeployment, selectedModes, selectedTesterId, payloadSizes, projectId, addToast, navigate, queryClient]);
 
   // ── Keyboard shortcuts ───────────────────────────────────────────────
 

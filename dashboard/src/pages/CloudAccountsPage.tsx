@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import { timeAgo } from '../lib/format';
 import { cloudProviderText } from '../lib/provider';
 import { useAsyncEffect } from '../hooks/useAsyncEffect';
+import { usePolling } from '../hooks/usePolling';
 import { api } from '../api/client';
 import type { CloudAccountSummary } from '../api/types';
 import { useProject } from '../hooks/useProject';
@@ -116,20 +117,30 @@ export function CloudAccountsPage() {
   const addToast = useToast();
   usePageTitle('Settings');
 
-  const loadAccounts = useCallback(async () => {
+  // silent=true drops the error toast — a background poll that toasts on
+  // every failed tick would spam the page while the API is unreachable.
+  // The loading flag is never re-raised after the first load, so refreshes
+  // never flash.
+  const loadAccounts = useCallback(async (silent = false) => {
     if (!projectId) return;
     try {
       const data = await api.getCloudAccounts(projectId);
       setAccounts(data);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Unknown error';
-      addToast('error', `Failed to load cloud accounts: ${msg}`);
+      if (!silent) {
+        const msg = err instanceof Error ? err.message : 'Unknown error';
+        addToast('error', `Failed to load cloud accounts: ${msg}`);
+      }
     } finally {
       setLoading(false);
     }
   }, [projectId, addToast]);
 
   useAsyncEffect(() => loadAccounts(), [loadAccounts]);
+
+  // Account `status` flips server-side (background credential validation),
+  // so a one-shot list never shows the transition — re-pull every 30s.
+  usePolling(() => void loadAccounts(true), 30_000, !!projectId);
 
   const resetForm = () => {
     setShowForm(false);

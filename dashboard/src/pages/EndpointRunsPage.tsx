@@ -77,11 +77,16 @@ export function EndpointRunsPage() {
   const [search, setSearch] = useState('');
   const [presetFilter, setPresetFilter] = useState<string>('all');
 
-  // Load the deployment metadata for the hero.
-  useEffect(() => {
+  // Deployment metadata for the hero. Polled (30s, slower than the 15s runs
+  // poll — status/IPs drift but rarely) instead of one-shot so the hero
+  // doesn't freeze on stale state. Silent: no loading flag involved, and a
+  // failed tick keeps the last-good hero instead of blanking it.
+  const loadDeployment = useCallback(() => {
     if (!endpointId || !projectId) return;
-    api.getDeployment(projectId, endpointId).then(setDeployment).catch(() => setDeployment(null));
+    api.getDeployment(projectId, endpointId).then(setDeployment).catch(() => {});
   }, [projectId, endpointId]);
+  useEffect(loadDeployment, [loadDeployment]);
+  usePolling(loadDeployment, 30_000, !!endpointId && !!projectId);
 
   // Load network-kind runs and refresh on poll. Endpoint-scoped filter is
   // a backend follow-up; we currently ask for all and trust the search UI.

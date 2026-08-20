@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef } from 'react';
 import { useAsyncEffect } from '../hooks/useAsyncEffect';
+import { usePolling } from '../hooks/usePolling';
 import { api } from '../api/client';
 import type { ProjectMember, WorkspaceInvite, ImportResult } from '../api/types';
 import { useProject } from '../hooks/useProject';
@@ -73,7 +74,10 @@ export function ProjectMembersPage() {
 
   usePageTitle('Settings');
 
-  const loadData = useCallback(async () => {
+  // silent=true drops the error toast so the background poll can't spam it
+  // on every failed tick. The loading flag is never re-raised after the
+  // first load, so refreshes never flash.
+  const loadData = useCallback(async (silent = false) => {
     if (!projectId) return;
     try {
       const [membersData, invitesData] = await Promise.all([
@@ -83,13 +87,18 @@ export function ProjectMembersPage() {
       setMembers(membersData);
       setInvites(invitesData);
     } catch {
-      addToast('error', 'Failed to load members');
+      if (!silent) addToast('error', 'Failed to load members');
     } finally {
       setLoading(false);
     }
   }, [projectId, addToast]);
 
   useAsyncEffect(() => loadData(), [loadData]);
+
+  // Invites are accepted/denied by OTHER users — without a poll a pending
+  // row never flips for a viewer who keeps the page open. 60s: membership
+  // churn is slow, this is a staleness bound not a live feed.
+  usePolling(() => void loadData(true), 60_000, !!projectId);
 
   const handleInvite = async () => {
     if (!projectId || !newEmail.trim()) return;

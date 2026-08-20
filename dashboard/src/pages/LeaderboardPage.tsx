@@ -1,6 +1,7 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { EmptyState } from '../components/common/EmptyState';
 import { useAsyncEffect } from '../hooks/useAsyncEffect';
+import { usePolling } from '../hooks/usePolling';
 import { api } from '../api/client';
 import type { BenchmarkLeaderboardEntry, BenchmarkRun, GroupedLeaderboard } from '../api/types';
 import { HorizontalBoxWhiskerChart } from '../components/charts/HorizontalBoxWhiskerChart';
@@ -77,6 +78,24 @@ function GroupedTab() {
     setSelectedGroup(group);
     void fetchGrouped(group || undefined);
   }, [fetchGrouped]);
+
+  // Latest selection, for in-flight poll responses: a slow silent refresh of a
+  // previously-selected group must not overwrite the current group's data.
+  const selectedGroupRef = useRef(selectedGroup);
+  useEffect(() => { selectedGroupRef.current = selectedGroup; }, [selectedGroup]);
+
+  // 30s poll of the selected group — rankings shift as new benchmark runs land.
+  // Silent (no loading flip, errors keep the stale chart); user-visible loads go
+  // through fetchGrouped. Gated on a group being selected ("All" is a transient
+  // mixed view). The api call is issued synchronously per usePolling's
+  // request-source tagging constraint.
+  usePolling(() => {
+    const group = selectedGroup;
+    if (!group) return;
+    api.getGroupedLeaderboard(group)
+      .then((res) => { if (selectedGroupRef.current === group) setData(res); })
+      .catch(() => {}); // keep stale data on a failed silent refresh
+  }, 30_000, !!selectedGroup);
 
   const hboxGroups: HBoxGroup[] = (data?.languages ?? []).map((lang) => {
     const limited = lang.run_count < 3;
@@ -365,6 +384,8 @@ function TimelineTab({ runs }: { runs: BenchmarkRun[] }) {
       return;
     }
     setExpandedId(runId);
+    // Cached forever on purpose: a leaderboard run's detail is effectively
+    // immutable once the run appears in the list, so no refresh is needed.
     if (!details[runId]) {
       try {
         const run = await api.getLeaderboardRun(runId);
@@ -491,6 +512,16 @@ export function LeaderboardPage() {
   useAsyncEffect(() => {
     if (tab !== 'grouped') return fetchData();
   }, [fetchData, tab]);
+
+  // 30s poll — new benchmark runs reshuffle the rankings server-side. Silent
+  // (no loading flip) so a tick never blanks the tables; same tab gate as the
+  // initial fetch. The api calls are issued synchronously per usePolling's
+  // request-source tagging constraint.
+  usePolling(() => {
+    Promise.all([api.getLeaderboard(), api.getLeaderboardRuns()])
+      .then(([lb, r]) => { setEntries(lb); setRuns(r); })
+      .catch(() => {}); // keep stale data on a failed silent refresh
+  }, 30_000, tab !== 'grouped');
 
   const tabs: { key: Tab; label: string }[] = [
     { key: 'grouped', label: 'Distribution' },

@@ -8,6 +8,8 @@ import {
   runKeys,
   testConfigQueryOptions,
   useCancelRunMutation,
+  useComparisonGroupQuery,
+  useRunsAttemptsQueries,
   useTestConfigDetailsQueries,
   useTestConfigsQuery,
   useTestRunQuery,
@@ -142,6 +144,62 @@ describe('run query architecture', () => {
     const interval = cachedRefetchInterval(client, runKeys.detail('run-1'));
     expect(typeof interval).toBe('function');
     expect((interval as (value: typeof query) => number | false)(query)).toBe(false);
+  });
+
+  it('polls the comparison group row at 15s only when the caller opts in', async () => {
+    vi.spyOn(runsApi, 'getComparisonGroup')
+      .mockResolvedValue({ id: 'group-1', name: 'Group' } as Awaited<ReturnType<typeof runsApi.getComparisonGroup>>);
+    const client = createClient();
+    const { result, rerender } = renderHook(
+      ({ polling }: { polling: boolean }) => useComparisonGroupQuery('group-1', polling),
+      { initialProps: { polling: true }, wrapper: wrapperFor(client) },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(cachedRefetchInterval(client, runKeys.comparisonGroup('group-1'))).toBe(15_000);
+
+    rerender({ polling: false });
+    expect(cachedRefetchInterval(client, runKeys.comparisonGroup('group-1'))).toBe(false);
+  });
+
+  it('defaults the comparison group query to no polling', async () => {
+    vi.spyOn(runsApi, 'getComparisonGroup')
+      .mockResolvedValue({ id: 'group-1', name: 'Group' } as Awaited<ReturnType<typeof runsApi.getComparisonGroup>>);
+    const client = createClient();
+    const { result } = renderHook(
+      () => useComparisonGroupQuery('group-1'),
+      { wrapper: wrapperFor(client) },
+    );
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(cachedRefetchInterval(client, runKeys.comparisonGroup('group-1'))).toBe(false);
+  });
+
+  it('polls per-run attempts at 15s only while the caller reports activity', async () => {
+    vi.spyOn(runsApi, 'getAttempts').mockResolvedValue([]);
+    const client = createClient();
+    const { result, rerender } = renderHook(
+      ({ polling }: { polling: boolean }) => useRunsAttemptsQueries(['run-1'], polling),
+      { initialProps: { polling: true }, wrapper: wrapperFor(client) },
+    );
+
+    await waitFor(() => expect(result.current[0].isSuccess).toBe(true));
+    expect(cachedRefetchInterval(client, runKeys.attempts('run-1'))).toBe(15_000);
+
+    rerender({ polling: false });
+    expect(cachedRefetchInterval(client, runKeys.attempts('run-1'))).toBe(false);
+  });
+
+  it('defaults per-run attempts queries to no polling', async () => {
+    vi.spyOn(runsApi, 'getAttempts').mockResolvedValue([]);
+    const client = createClient();
+    const { result } = renderHook(
+      () => useRunsAttemptsQueries(['run-1']),
+      { wrapper: wrapperFor(client) },
+    );
+
+    await waitFor(() => expect(result.current[0].isSuccess).toBe(true));
+    expect(cachedRefetchInterval(client, runKeys.attempts('run-1'))).toBe(false);
   });
 
   it('shares full config detail requests through stable keys', async () => {

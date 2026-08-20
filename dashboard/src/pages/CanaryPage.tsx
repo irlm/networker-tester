@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Link } from 'react-router';
 import { api, errorMessage } from '../api/client';
 import { usePageTitle } from '../hooks/usePageTitle';
+import { usePolling } from '../hooks/usePolling';
 import { useToast } from '../hooks/useToast';
 import { useProjectStore } from '../stores/projectStore';
 
@@ -102,8 +103,6 @@ export function CanaryPage() {
       .catch((e: unknown) => setStatusError(errorMessage(e)));
   }, []);
 
-  useEffect(loadStatus, [loadStatus]);
-
   // Durable history from OUR database — must render even when GitHub is down.
   const loadHistory = useCallback(() => {
     api
@@ -126,8 +125,18 @@ export function CanaryPage() {
       .catch((e: unknown) => setGhDetail(errorMessage(e)));
   }, []);
 
-  useEffect(loadHistory, [loadHistory]);
-  useEffect(loadGhRuns, [loadGhRuns]);
+  // One 30s tick for all three fetches (status folded in rather than a
+  // second 60s loop — it's one cheap GET and one timer beats two). 30s
+  // because a canary run's queued→in_progress→conclusion transitions are
+  // minutes apart; anything faster just burns GitHub API quota. Silent by
+  // construction: none of the loaders sets a loading flag, so poll ticks swap
+  // rows in place — only the initial null state renders as empty. All calls
+  // are issued synchronously (usePolling's request-source contract).
+  usePolling(() => {
+    loadStatus();
+    loadHistory();
+    loadGhRuns();
+  }, 30_000);
 
   const dispatch = useCallback(() => {
     // Short-circuit the common local case with a clean message — the endpoint
@@ -289,6 +298,7 @@ export function CanaryPage() {
           <button
             type="button"
             onClick={() => {
+              loadStatus();
               loadHistory();
               loadGhRuns();
             }}
