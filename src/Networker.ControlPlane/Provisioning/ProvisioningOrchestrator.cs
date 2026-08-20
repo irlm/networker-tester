@@ -586,17 +586,25 @@ public sealed class ProvisioningOrchestrator : BackgroundService
             case DeploymentFailed:
                 var msg = deployment.ErrorMessage ?? "deployment failed";
 
-                // ── Interrupted-by-restart failures retry instead of failing ──
-                // install.sh dies with SIGTERM whenever the control plane
-                // restarts — every release (issue #764). The startup
-                // DeploymentRecoveryService normally revives the deployment
-                // itself before this arm ever sees a failed row; this is the
-                // backstop for the shapes it skips (recovery cap reached, the
-                // retry window missed, or an install killed without a restart).
-                // The interruption is over by the time anyone can classify it,
-                // so re-queue promptly — a short backoff, then a FRESH kick.
-                if (ProvisioningFailureClassifier.IsInterruptedFailure(msg))
+                // ── Retryable infrastructure kills retry instead of failing ──
+                // Two shapes, one arm (both are the system's fault, not the
+                // config's — nothing about the cell can have failed
+                // permanently):
+                //  * interrupted-by-restart (#764) — install.sh dies with
+                //    SIGTERM whenever the control plane restarts (every
+                //    release). The startup DeploymentRecoveryService normally
+                //    revives the deployment itself before this arm ever sees a
+                //    failed row; this is the backstop for the shapes it skips
+                //    (recovery cap reached, the retry window missed, or an
+                //    install killed without a restart).
+                //  * never-started watchdog reap (#817) — the deploy driver
+                //    died before install.sh ever ran; the watchdog reaps the
+                //    pending row with the retryable marker.
+                // The kill is over by the time anyone can classify it, so
+                // re-queue promptly — a short backoff, then a FRESH kick.
+                if (ProvisioningFailureClassifier.IsRetryableInfrastructureKill(msg))
                 {
+                    var neverStarted = ProvisioningFailureClassifier.IsNeverStartedReap(msg);
                     var interruptedAttempts = await db.TestRuns.AsNoTracking()
                         .Where(r => r.Id == runId)
                         .Select(r => r.ProvisionAttempts)
@@ -606,6 +614,9 @@ public sealed class ProvisioningOrchestrator : BackgroundService
                     {
                         var attempt = (short)(interruptedAttempts + 1);
                         var backoff = TimeSpan.FromMinutes(1);
+                        var retryNote = neverStarted
+                            ? "Provisioning was reaped before its install ever started"
+                            : "Control-plane restart interrupted provisioning";
                         await db.TestRuns
                             .Where(r => r.Id == runId && r.Status == RunProvisioning)
                             .ExecuteUpdateAsync(s => s
@@ -614,7 +625,7 @@ public sealed class ProvisioningOrchestrator : BackgroundService
                                 .SetProperty(r => r.ProvisionAttempts, attempt)
                                 .SetProperty(r => r.NextProvisionAttemptAt, DateTime.UtcNow + backoff)
                                 .SetProperty(r => r.ErrorMessage,
-                                    $"Control-plane restart interrupted provisioning — retry {attempt}/{MaxProvisionAttempts} "
+                                    $"{retryNote} — retry {attempt}/{MaxProvisionAttempts} "
                                     + $"scheduled in {backoff.TotalMinutes:0}m"), ct)
                             .ConfigureAwait(false);
                         // Release the dead deployment's throttle slot, keeping
@@ -631,8 +642,9 @@ public sealed class ProvisioningOrchestrator : BackgroundService
                                 .SetProperty(d => d.FinishedAt, d => d.FinishedAt ?? DateTime.UtcNow), ct)
                             .ConfigureAwait(false);
                         _logger.LogInformation(
-                            "Run {RunId} provisioning was interrupted by a control-plane restart — re-queued (attempt {Attempt}/{Max}, backoff {Backoff}m)",
-                            runId, attempt, MaxProvisionAttempts, backoff.TotalMinutes);
+                            "Run {RunId} provisioning was killed by infrastructure ({Shape}) — re-queued (attempt {Attempt}/{Max}, backoff {Backoff}m)",
+                            runId, neverStarted ? "never-started reap" : "restart interruption",
+                            attempt, MaxProvisionAttempts, backoff.TotalMinutes);
                         return true;
                     }
 
@@ -641,12 +653,15 @@ public sealed class ProvisioningOrchestrator : BackgroundService
                         .ExecuteUpdateAsync(s => s
                             .SetProperty(r => r.Status, "failed")
                             .SetProperty(r => r.ErrorMessage,
-                                $"Provisioning was interrupted by control-plane restarts {MaxProvisionAttempts} times — "
-                                + "relaunch the run once the release wave settles")
+                                neverStarted
+                                    ? $"Provisioning was reaped {MaxProvisionAttempts} times before its install could start — "
+                                      + "check control-plane health, then relaunch the run"
+                                    : $"Provisioning was interrupted by control-plane restarts {MaxProvisionAttempts} times — "
+                                      + "relaunch the run once the release wave settles")
                             .SetProperty(r => r.FinishedAt, DateTime.UtcNow), ct)
                         .ConfigureAwait(false);
                     _logger.LogWarning(
-                        "Run {RunId} failed: provisioning interrupted by restarts {Max} times",
+                        "Run {RunId} failed: provisioning killed by infrastructure {Max} times",
                         runId, MaxProvisionAttempts);
                     return true;
                 }

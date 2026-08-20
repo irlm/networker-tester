@@ -13,6 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [0.28.255] - 2026-08-20
+
+### Fixed
+
+- **Install budgets age from install start, and infrastructure kills retry** (#817).
+  The deploy timeout re-arms with the full scaled budget when install.sh reaches
+  its install step, so quota-contended cloud provisioning no longer burns the
+  window an AOT publish needs; the watchdog shares the same anchor. Kills during
+  a control-plane shutdown and reaps of never-started deployments are marked
+  retryable and go through the existing retry machinery instead of failing
+  terminally; credential failures stay terminal.
+
 ## [0.28.254] - 2026-08-20
 
 ### Fixed

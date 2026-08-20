@@ -107,6 +107,26 @@ public sealed class WatchdogService : BackgroundService
     internal static TimeSpan DeploymentReapCutoffFor(string deployJson)
         => DeployRunner.DeployTimeoutFor(deployJson) + DeploymentBudgetSlack;
 
+    /// <summary>User-facing message for a reaped deployment whose install NEVER
+    /// started: the row is still <c>pending</c> — <see cref="DeployRunner"/>
+    /// flips to <c>running</c> immediately before spawning install.sh, so a
+    /// budget-aged pending row means the deploy driver died before any install
+    /// ran (control-plane crash between kick and spawn, or a recovery claim
+    /// whose re-run never launched). Built on the classifier's
+    /// <see cref="ProvisioningFailureClassifier.NeverStartedReapPrefix"/> so
+    /// the orchestrator's retry arm re-queues the linked run instead of failing
+    /// it terminally (issue #817) — nothing was attempted, so nothing can have
+    /// failed permanently.</summary>
+    internal static string NeverStartedReapedErrorFor(string deployJson)
+    {
+        var budget = DeployRunner.DeployTimeoutFor(deployJson);
+        return ProvisioningFailureClassifier.NeverStartedReapPrefix
+            + string.Format(
+                CultureInfo.InvariantCulture,
+                " — it sat pending past its {0:F0}m budget with no deploy driver (control-plane crash or lost driver); the linked run is retried automatically",
+                budget.TotalMinutes);
+    }
+
     /// <summary>User-facing message for a reaped stale deployment: states the
     /// budget that was enforced, and blames a control-plane restart only when a
     /// recovery re-run actually happened (recovery_attempts &gt; 0, V052) —
@@ -400,7 +420,7 @@ public sealed class WatchdogService : BackgroundService
         var stuckDeployments = await db.Deployments
             .Where(d => (d.Status == "pending" || d.Status == "running")
                 && (d.StartedAt ?? d.CreatedAt) < deploymentStaleBefore)
-            .Select(d => new { d.DeploymentId, d.Config, d.StartedAt, d.CreatedAt, d.RecoveryAttempts })
+            .Select(d => new { d.DeploymentId, d.Config, d.Status, d.StartedAt, d.CreatedAt, d.RecoveryAttempts })
             .ToListAsync(ct)
             .ConfigureAwait(false);
 
@@ -412,19 +432,32 @@ public sealed class WatchdogService : BackgroundService
             if (now - basis < reapCutoff)
             {
                 // Within its own scaled budget (+slack) — the deploy runner's
-                // timeout owns this deployment; leave it alone.
+                // timeout owns this deployment; leave it alone. (The runner
+                // re-stamps started_at when the install phase starts, #817, so
+                // this basis ages the same re-anchored window the runner's own
+                // timer enforces.)
                 continue;
             }
 
-            var reapError = DeploymentReapedErrorFor(dep.Config, recoveredFromRestart: dep.RecoveryAttempts > 0);
-            // The update re-checks the aging basis: a concurrent recovery
-            // re-claim (another replica's startup pass, #785) re-stamps
-            // started_at between our SELECT and this UPDATE — the fresh stamp
-            // must win, not the reap.
+            // A still-`pending` deployment never ran any install (the runner
+            // flips to `running` before spawning install.sh) — reap it with the
+            // RETRYABLE never-started marker so the orchestrator re-queues the
+            // linked run instead of failing it terminally (issue #817). A
+            // `running` one keeps the terminal budget message (#804/#808).
+            var neverStarted = dep.Status == "pending";
+            var reapError = neverStarted
+                ? NeverStartedReapedErrorFor(dep.Config)
+                : DeploymentReapedErrorFor(dep.Config, recoveredFromRestart: dep.RecoveryAttempts > 0);
+            // The update re-checks the aging basis AND pins the status we
+            // classified: a concurrent recovery re-claim (another replica's
+            // startup pass, #785) re-stamps started_at between our SELECT and
+            // this UPDATE — the fresh stamp must win, not the reap — and a
+            // pending→running flip (the runner picked it up) must invalidate
+            // the never-started classification, not carry it over.
             var reapBasisBefore = now - reapCutoff;
             var affected = await db.Deployments
                 .Where(d => d.DeploymentId == dep.DeploymentId
-                    && (d.Status == "pending" || d.Status == "running")
+                    && d.Status == dep.Status
                     && (d.StartedAt ?? d.CreatedAt) < reapBasisBefore)
                 .ExecuteUpdateAsync(
                     s => s
@@ -443,11 +476,13 @@ public sealed class WatchdogService : BackgroundService
 
             reapedDeployments++;
             _logger.LogWarning(
-                "Reaped stale deployment {DeploymentId} — pending/running past its {Budget}m budget (+{Slack}m slack; recovery_attempts={Recoveries})",
+                "Reaped stale deployment {DeploymentId} — {Status} past its {Budget}m budget (+{Slack}m slack; recovery_attempts={Recoveries}; retryable={Retryable})",
                 dep.DeploymentId,
+                dep.Status,
                 DeployRunner.DeployTimeoutFor(dep.Config).TotalMinutes,
                 DeploymentBudgetSlack.TotalMinutes,
-                dep.RecoveryAttempts);
+                dep.RecoveryAttempts,
+                neverStarted);
         }
 
         // ── Orphaned `provisioning` runs whose deployment is gone/missing ────
