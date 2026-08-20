@@ -83,6 +83,16 @@ pub struct Cli {
     #[arg(long)]
     pub runs: Option<u32>,
 
+    /// Burst sampling: take N back-to-back samples of every logical attempt
+    /// (per target, per mode, per run) instead of one. Every sample is
+    /// published as its own attempt carrying `sample_index` 0..N-1, so a
+    /// single point has a real median and spread instead of one noisy value.
+    /// Retries are NOT samples: `--retries` still replaces a failed sample in
+    /// place and only the final outcome of each sample is published.
+    /// Default 1 (no burst). Clamped to 1..=50.
+    #[arg(long)]
+    pub samples: Option<u32>,
+
     /// Number of concurrent attempts within a single probe mode (best-effort).
     /// Different probe modes always run sequentially so cross-mode contention
     /// cannot distort latency or throughput measurements.
@@ -583,6 +593,7 @@ pub struct ConfigFile {
     pub targets: Option<Vec<String>>, // list of targets; merged with CLI --target flags
     pub modes: Option<Vec<String>>,
     pub runs: Option<u32>,
+    pub samples: Option<u32>,
     pub concurrency: Option<usize>,
     pub timeout: Option<u64>,
     pub payload_size: Option<usize>,
@@ -677,6 +688,10 @@ pub struct ResolvedConfig {
     pub url_test_json: bool,
     pub modes: Vec<String>,
     pub runs: u32,
+    /// Burst-sample count per logical attempt (`--samples`, issue #782 P2).
+    /// Always >= 1; 1 means no burst (one sample per logical attempt, the
+    /// pre-#782 behaviour).
+    pub samples: u32,
     pub concurrency: usize,
     pub timeout: u64,
     pub payload_size: usize,
@@ -896,6 +911,13 @@ impl Cli {
             url_test_json: self.url_test_json,
             modes: pick!(modes, vec!["http1".into(), "http2".into(), "udp".into()]),
             runs: pick!(runs, 3),
+            // Burst size (#782 P2). Default 1 = one sample per logical attempt,
+            // i.e. byte-identical behaviour to every pre-#782 invocation: the
+            // tester is also the benchmark / endpoint-deploy / lab engine, so
+            // the 5-sample default belongs to the URL-probe surface that asks
+            // for it, never to the engine. Clamped: 0 would publish nothing,
+            // and an unbounded value turns one config into a runaway run.
+            samples: pick!(samples, 1).clamp(1, 50),
             concurrency: pick!(concurrency, 1),
             timeout: pick!(timeout, 30),
             payload_size: pick!(payload_size, 0),
@@ -1541,9 +1563,38 @@ mod tests {
     }
 
     #[test]
+    fn samples_defaults_to_one_and_is_clamped() {
+        // Default 1: the engine must not silently 5× every benchmark /
+        // endpoint-deploy / lab invocation. The burst is opt-in (#782 P2).
+        let cfg = Cli::parse_from(["networker-tester"]).resolve(None);
+        assert_eq!(cfg.samples, 1);
+
+        let cfg = Cli::parse_from(["networker-tester", "--samples", "5"]).resolve(None);
+        assert_eq!(cfg.samples, 5);
+
+        // Config-file key works too, and both ends are clamped: 0 would
+        // publish nothing, a huge value turns one config into a runaway run.
+        let file: ConfigFile = serde_json::from_str(r#"{"samples": 0}"#).unwrap();
+        assert_eq!(
+            Cli::parse_from(["networker-tester"])
+                .resolve(Some(file))
+                .samples,
+            1
+        );
+        let file: ConfigFile = serde_json::from_str(r#"{"samples": 9999}"#).unwrap();
+        assert_eq!(
+            Cli::parse_from(["networker-tester"])
+                .resolve(Some(file))
+                .samples,
+            50
+        );
+    }
+
+    #[test]
     fn resolved_defaults() {
         let cfg = Cli::parse_from(["networker-tester"]).resolve(None);
         assert_eq!(cfg.runs, 3);
+        assert_eq!(cfg.samples, 1);
         assert_eq!(cfg.targets, vec!["http://localhost:8080/health"]);
         assert_eq!(cfg.udp_port, 9999);
         assert!(!cfg.insecure);

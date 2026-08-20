@@ -782,6 +782,7 @@ mod tests {
             url_test_json: false,
             modes: vec![],
             runs: 1,
+            samples: 1,
             concurrency: 1,
             timeout: 1000,
             payload_size: 0,

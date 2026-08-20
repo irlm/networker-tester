@@ -2518,3 +2518,169 @@ async fn sdkprobe_bad_token_is_config_error() {
         err.message
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Burst sampling (#782 P2) — end to end through the real CLI
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Not on Windows. These are the first tests in the tree to SPAWN the tester
+// binary rather than call a runner function, and on windows-latest the spawned
+// **debug-profile** binary dies with STATUS_STACK_OVERFLOW (0xC00000FD,
+// "thread 'main' has overflowed its stack") before it probes anything. That is
+// a property of the debug build, not of burst sampling: the invocation WITHOUT
+// `--samples` — byte-identical to the pre-#782 command line — overflows too.
+// `#[tokio::main]` puts the whole async main state machine on the main thread,
+// whose stack on MSVC is the 1 MB linker default, and an unoptimised build of
+// that state machine does not fit. Release builds (what ships, what the native
+// Windows lab and the installer CI job run) are unaffected.
+//
+// Gating rather than deleting: the burst logic itself IS covered on Windows by
+// the `published_logical_attempts_*` unit tests, and these two keep guarding
+// the real CLI everywhere else. Tracked as #853.
+
+/// `--samples N` must actually produce N published attempts per mode per
+/// target in ONE run, each carrying its own `sample_index` — not one attempt
+/// (the pre-#782 last-one-wins behaviour) and not N indistinguishable rows.
+///
+/// This drives the shipped binary, not a runner function, because the burst
+/// lives in the CLI's per-target loop (`target_runner.rs`) and the whole point
+/// of the change is what comes out of `--json-stdout`, which is exactly what
+/// the agent relays and the control plane persists.
+#[tokio::test]
+#[cfg(not(windows))]
+async fn cli_samples_flag_publishes_every_sample() {
+    let ep = Endpoint::start().await;
+    let target = ep.http_url("/health").to_string();
+    let out_dir = std::env::temp_dir().join(format!("networker-burst-{}", Uuid::new_v4()));
+    let spawn_dir = out_dir.clone();
+    let output = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(env!("CARGO_BIN_EXE_networker-tester"))
+            .args([
+                "--target",
+                &target,
+                "--modes",
+                "tcp,http1",
+                "--runs",
+                "1",
+                "--samples",
+                "5",
+                "--timeout",
+                "5",
+                "--output-dir",
+                spawn_dir.to_str().expect("temp dir path is utf-8"),
+                "--json-stdout",
+            ])
+            .output()
+            .expect("spawn networker-tester")
+    })
+    .await
+    .expect("join tester process");
+
+    assert!(
+        output.status.success(),
+        "tester exited {:?}: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("tester stdout is utf-8");
+    let run: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("tester stdout is not one TestRun JSON ({e}): {stdout}"));
+    let attempts = run["attempts"].as_array().expect("attempts array");
+
+    // 2 modes × 1 run × 5 samples = 10 published attempts.
+    assert_eq!(
+        attempts.len(),
+        10,
+        "expected 5 samples for each of 2 modes, got {} attempts",
+        attempts.len()
+    );
+
+    for mode in ["tcp", "http1"] {
+        let mut indices: Vec<u64> = attempts
+            .iter()
+            .filter(|a| a["protocol"] == mode)
+            .map(|a| {
+                a["sample_index"]
+                    .as_u64()
+                    .unwrap_or_else(|| panic!("{mode} attempt is missing sample_index: {a}"))
+            })
+            .collect();
+        indices.sort_unstable();
+        assert_eq!(
+            indices,
+            vec![0, 1, 2, 3, 4],
+            "{mode} must publish samples 0..4 exactly once each"
+        );
+        // Sequence numbers stay unique per sample, so every burst attempt is
+        // individually addressable in the live stream.
+        let mut seqs: Vec<u64> = attempts
+            .iter()
+            .filter(|a| a["protocol"] == mode)
+            .map(|a| a["sequence_num"].as_u64().expect("sequence_num"))
+            .collect();
+        seqs.sort_unstable();
+        seqs.dedup();
+        assert_eq!(
+            seqs.len(),
+            5,
+            "{mode} samples must not share a sequence_num"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+/// The default (no `--samples`) must stay exactly one sample per mode per run:
+/// the tester is also the benchmark / endpoint-deploy / lab engine and a
+/// silent 5× would change every one of those workloads' cost and semantics.
+#[tokio::test]
+#[cfg(not(windows))]
+async fn cli_without_samples_flag_keeps_one_attempt_per_mode() {
+    let ep = Endpoint::start().await;
+    let target = ep.http_url("/health").to_string();
+    let out_dir = std::env::temp_dir().join(format!("networker-burst-{}", Uuid::new_v4()));
+    let spawn_dir = out_dir.clone();
+    let output = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(env!("CARGO_BIN_EXE_networker-tester"))
+            .args([
+                "--target",
+                &target,
+                "--modes",
+                "tcp",
+                "--runs",
+                "2",
+                "--timeout",
+                "5",
+                "--output-dir",
+                spawn_dir.to_str().expect("temp dir path is utf-8"),
+                "--json-stdout",
+            ])
+            .output()
+            .expect("spawn networker-tester")
+    })
+    .await
+    .expect("join tester process");
+
+    assert!(
+        output.status.success(),
+        "tester exited {:?}: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("tester stdout is utf-8");
+    let run: serde_json::Value = serde_json::from_str(stdout.trim()).expect("TestRun JSON");
+    let attempts = run["attempts"].as_array().expect("attempts array");
+
+    assert_eq!(attempts.len(), 2, "--runs 2 with no burst = 2 attempts");
+    for a in attempts {
+        assert_eq!(
+            a["sample_index"].as_u64(),
+            Some(0),
+            "a non-burst attempt is sample 0 of its logical attempt"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+}

@@ -960,6 +960,7 @@ fn throughput_protocol_comparison_higher_is_better() {
             udp: None,
             error: None,
             retry_count: 0,
+            sample_index: 0,
             server_timing: None,
             udp_throughput: None,
             page_load: None,

@@ -11,6 +11,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.278] - 2026-08-20
+
+### Added
+
+- **Burst sampling: every sample is published, with a `sample_index`
+  (#782 P2).** One probe of a URL was one number, and one cold DNS cache or one
+  TCP retransmit was enough to decide what that number said. The tester now
+  takes N back-to-back samples of each logical attempt (`--samples N`, default
+  1) and publishes **all** of them, so a point has a real median and a real
+  spread instead of a single reading.
+  - `published_logical_attempts` (`crates/networker-tester/src/dispatch.rs`)
+    used to keep only the LAST attempt of a logical attempt. It now collapses
+    *within* a sample and keeps *across* samples: a **retry** replaces a failed
+    try of one sample (so "success" for a logical attempt is unchanged and a
+    retried sample still counts once), a **sample** is an intentional repeat
+    that keeps its own row. Failed samples stay in the output as failed
+    samples — never dropped, never synthesised.
+  - New `RequestAttempt.sample_index` (Rust `metrics.rs`, tester JSON, live
+    attempt stream, `AttemptView` on `GET /test-runs/{id}/attempts`, and the
+    frontend `Attempt`/`LiveAttempt` types). Orthogonal to `retry_count`.
+  - Tester schema **V007**: `RequestAttempt.SampleIndex INT NOT NULL DEFAULT 0`
+    (`shared/tester-schema.postgres.sql`, applied by the tester's own
+    `migrate()` and by the control plane's lazy bootstrap). `0` is not a
+    guess — burst sampling did not exist before this migration, so every
+    historical row IS the first and only sample of its logical attempt.
+    PostgreSQL 11+ stores the default in the catalog, so the ALTER is
+    metadata-only.
+  - Workload gains `samples` (`workload.samples` → agent `--samples`), added to
+    the tester command line only when > 1 so a default workload spawns a
+    byte-identical command line to the pre-#782 one. The URL Probe's Samples
+    selector now drives it instead of `runs`.
+- **Run detail reports the median and the spread (#782 P2).** New
+  "burst sampling — median & spread per point" section: one row per
+  (URL × mode × payload) with the median as the headline and p95 / min / max /
+  p95-over-p50 jitter beside it. Honest by construction — the usable/total
+  sample counts and failed-sample count are shown, and a point resting on fewer
+  than three usable samples is labelled `(1 sample)` with no p95 rather than
+  being presented as a median.
+
+### Changed
+
+- The agent's fallback invocation deadline (used when a config carries no
+  `max_duration_secs`) now multiplies by `samples`; a x5 workload would
+  otherwise have been killed mid-flight.
+- `insert_request_attempt` (postgres backend) builds its optional-column list
+  dynamically instead of enumerating every on/off combination — three optional
+  columns (`TargetUrl`, `SampleIndex`, `extra_json`) would have been eight
+  hand-written statements. Each still degrades independently on a legacy
+  schema via the savepoint retry.
+
+### Notes
+
+- The two new integration tests that SPAWN the tester binary are
+  `#[cfg(not(windows))]`: on Windows a debug-profile `networker-tester.exe`
+  dies with `STATUS_STACK_OVERFLOW` before probing anything — including on an
+  invocation with no `--samples` at all, so it is a property of the debug build
+  and not of burst sampling. Tracked as #853; release builds are unaffected.
+
+---
+
 ## [0.28.277] - 2026-08-20
 
 ### Added

@@ -27,6 +27,13 @@ public sealed record ParsedAttempt(
     /// Distinct from <see cref="TargetUrl"/>, the best-effort RUN-level host
     /// for the V001 testrun parent row.</summary>
     string? AttemptTargetUrl,
+    /// <summary>Which SAMPLE of its logical attempt this is (frame
+    /// <c>sample_index</c>, tester ≥0.28.278 — burst sampling, #782 P2).
+    /// 0 from older testers and from every non-burst run, which is the
+    /// truthful value: without a burst a logical attempt has exactly one
+    /// sample. Orthogonal to <see cref="RetryCount"/> — a retry REPLACES a
+    /// failed try of one sample, a sample is an intentional repeat.</summary>
+    int SampleIndex,
     ParsedDns? Dns,
     ParsedTcp? Tcp,
     ParsedTls? Tls,
@@ -114,6 +121,7 @@ public static class AttemptExtract
             TargetHost: host,
             TargetUrl: host,
             AttemptTargetUrl: Str(attempt, "target_url"),
+            SampleIndex: Int(attempt, "sample_index") ?? 0,
             Dns: ParseDns(dns),
             Tcp: ParseTcp(Child(attempt, "tcp")),
             Tls: ParseTls(Child(attempt, "tls")),

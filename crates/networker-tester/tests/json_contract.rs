@@ -124,6 +124,7 @@ fn sample_run() -> TestRun {
         udp: None,
         error: None,
         retry_count: 0,
+        sample_index: 0,
         server_timing: None,
         udp_throughput: None,
         page_load: None,

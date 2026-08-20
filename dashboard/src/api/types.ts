@@ -34,6 +34,10 @@ export type CaptureMode = 'headers-only' | 'full' | 'metrics-only';
 export interface Workload {
   modes: string[];
   runs: number;
+  /** Burst sampling (#782 P2): N back-to-back samples of every logical attempt
+   *  within one run, so a single point has a median and a spread. Absent or 1
+   *  = no burst. Maps to the tester's `--samples`. */
+  samples?: number;
   concurrency: number;
   timeout_ms: number;
   payload_sizes: number[];
@@ -605,6 +609,11 @@ export interface Attempt {
   success: boolean;
   error_message: string | null;
   retry_count: number;
+  /** Which SAMPLE of its logical attempt this is (burst sampling, #782 P2,
+   *  tester ≥0.28.278). 0 on every non-burst and pre-#782 attempt — truthful,
+   *  not filler: without a burst a logical attempt has exactly one sample.
+   *  Orthogonal to retry_count, which counts retries WITHIN one sample. */
+  sample_index?: number;
   /** URL this attempt probed — set on multi-URL set runs (#782, tester ≥0.28.231). */
   target_url?: string | null;
   // Per-phase detail rows (GET /test-runs/{id}/attempts). Omitted entirely for
@@ -836,6 +845,8 @@ export interface LiveAttempt {
   finished_at: string | null;
   success: boolean;
   retry_count: number;
+  /** Which SAMPLE of its logical attempt this is (burst sampling, #782 P2). */
+  sample_index?: number;
   dns?: { duration_ms: number; query_name: string; resolved_ips: string[] };
   tcp?: { connect_duration_ms: number; remote_addr: string; mss_bytes?: number; rtt_estimate_ms?: number; retransmits?: number; total_retrans?: number; snd_cwnd?: number; congestion_algorithm?: string; delivery_rate_bps?: number; min_rtt_ms?: number };
   tls?: { handshake_duration_ms: number; protocol_version: string; cipher_suite: string; alpn_negotiated?: string; cert_expiry?: string; resumed?: boolean; handshake_kind?: string; tls_backend?: string };

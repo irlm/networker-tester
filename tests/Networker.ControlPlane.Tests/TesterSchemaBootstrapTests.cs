@@ -39,6 +39,11 @@ public class TesterSchemaBootstrapTests
         }
         // V005 column the persister writes when the schema is available.
         Assert.Contains("ALTER TABLE ServerTimingResult ADD COLUMN IF NOT EXISTS SrvCpuMs", sql);
+        // V006/V007 (#782): per-attempt target attribution + burst sample index.
+        Assert.Contains("ALTER TABLE RequestAttempt ADD COLUMN IF NOT EXISTS TargetUrl", sql);
+        Assert.Contains(
+            "ALTER TABLE RequestAttempt ADD COLUMN IF NOT EXISTS SampleIndex INT NOT NULL DEFAULT 0",
+            sql);
     }
 
     [Fact]
@@ -106,6 +111,27 @@ public class TesterSchemaBootstrapTests
         ]);
         Assert.Null(shape.ExtraJsonColumn);
         Assert.Equal(4, shape.TestRunColumns.Count);
+    }
+
+    [Fact]
+    public void Shape_DetectsTheV006AndV007AttemptColumns()
+    {
+        // A database migrated through V007 has both; the writes then include
+        // TargetUrl and SampleIndex.
+        var migrated = AttemptPersister.DeriveShape(
+        [
+            ("requestattempt", "attemptid"), ("requestattempt", "targeturl"),
+            ("requestattempt", "sampleindex"),
+        ]);
+        Assert.True(migrated.HasAttemptTargetUrl);
+        Assert.True(migrated.HasAttemptSampleIndex);
+
+        // An older fielded schema has neither — the write must degrade to the
+        // columns that exist rather than 42703-ing the whole attempt.
+        var legacy = AttemptPersister.DeriveShape(
+            [("requestattempt", "attemptid"), ("requestattempt", "retrycount")]);
+        Assert.False(legacy.HasAttemptTargetUrl);
+        Assert.False(legacy.HasAttemptSampleIndex);
     }
 
     [Fact]

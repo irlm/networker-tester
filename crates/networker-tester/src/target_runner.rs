@@ -402,6 +402,17 @@ pub(crate) async fn run_for_target(
              distort latency or throughput readings"
         );
     }
+    // Burst sampling (#782 P2): every logical attempt takes `samples`
+    // back-to-back samples instead of one, and ALL of them are published (see
+    // `published_logical_attempts`). 1 = the pre-#782 single-sample behaviour.
+    let samples = cfg.samples.max(1);
+    if samples > 1 {
+        info!(
+            samples,
+            "--samples > 1: burst sampling — every mode is probed {samples}× per run per target; \
+             each sample is published with its own sample_index so the point has a median and spread"
+        );
+    }
     let collect_iteration = |seq: &mut u32| {
         let futures: Vec<(Protocol, _)> = mode_tasks
             .iter()
@@ -417,10 +428,16 @@ pub(crate) async fn run_for_target(
                 let pageload_cfg_clone = pageload_cfg.clone();
                 let shared_h2_clone = shared_h2.clone();
                 let shared_h3_clone = shared_h3.clone();
-                let current_seq = *seq;
-                *seq += 1;
+                // One sequence number per SAMPLE (retries of a sample reuse
+                // theirs, as they always have), so every published attempt of
+                // a burst stays individually addressable in the stream.
+                let base_seq = *seq;
+                *seq += samples;
 
                 let fut = async move {
+                    // Declared here so `do_dispatch!` can read it; assigned
+                    // per sample by the burst loop below (never read before).
+                    let mut current_seq: u32;
                     macro_rules! do_dispatch {
                         () => {{
                             if matches!(proto, Protocol::PageLoad2) {
@@ -493,16 +510,24 @@ pub(crate) async fn run_for_target(
                     }
 
                     let mut attempts = Vec::new();
-                    let first_attempt = do_dispatch!();
-                    attempts.push(first_attempt);
+                    // Burst: `samples` intentional repeats of this one logical
+                    // attempt, each with its own retry ladder. Retries collapse
+                    // within a sample; samples do not collapse at all.
+                    for sample_index in 0..samples {
+                        current_seq = base_seq + sample_index;
+                        let mut first_attempt = do_dispatch!();
+                        first_attempt.sample_index = sample_index;
+                        attempts.push(first_attempt);
 
-                    for retry_num in 1..=retries {
-                        if attempts.last().is_some_and(|attempt| attempt.success) {
-                            break;
+                        for retry_num in 1..=retries {
+                            if attempts.last().is_some_and(|attempt| attempt.success) {
+                                break;
+                            }
+                            let mut retry_attempt = do_dispatch!();
+                            retry_attempt.retry_count = retry_num;
+                            retry_attempt.sample_index = sample_index;
+                            attempts.push(retry_attempt);
                         }
-                        let mut retry_attempt = do_dispatch!();
-                        retry_attempt.retry_count = retry_num;
-                        attempts.push(retry_attempt);
                     }
 
                     for attempt in &attempts {
@@ -686,7 +711,10 @@ pub(crate) async fn run_for_target(
     let mut measured_stop_reason: Option<&'static str> = None;
     let mut completed_runs = 0u32;
     let mut progress_request_counter = 0u32;
-    let total_estimated_requests = max_run_count.saturating_mul(mode_tasks.len() as u32);
+    // Each run probes every mode task `samples` times (burst sampling, #782 P2).
+    let total_estimated_requests = max_run_count
+        .saturating_mul(mode_tasks.len() as u32)
+        .saturating_mul(samples);
 
     while completed_runs < max_run_count {
         info!("Run {}/{}", completed_runs + 1, max_run_count);
@@ -850,32 +878,11 @@ pub(crate) async fn run_for_target(
                         (&stack_https_url, &stack_pageload_cfg)
                     };
                     let mut attempts = Vec::new();
-                    let mut attempt = dispatch_once(
-                        proto,
-                        None,
-                        run_id,
-                        seq,
-                        stack_target,
-                        cfg,
-                        &probe_cfg,
-                        &udp_cfg,
-                        &udp_throughput_cfg,
-                        &throughput_cfg,
-                        stack_pl_cfg,
-                    )
-                    .await;
-                    seq += 1;
-
-                    // Tag with the HTTP stack name
-                    attempt.http_stack = Some(stack.name.clone());
-                    attempts.push(attempt);
-
-                    // Retry loop
-                    for retry_num in 1..=retries {
-                        if attempts.last().is_some_and(|candidate| candidate.success) {
-                            break;
-                        }
-                        let mut retry_a = dispatch_once(
+                    // Same burst semantics as the primary loop (#782 P2):
+                    // `samples` intentional repeats, each with its own retry
+                    // ladder, all of them published.
+                    for sample_index in 0..samples {
+                        let mut attempt = dispatch_once(
                             proto,
                             None,
                             run_id,
@@ -890,9 +897,37 @@ pub(crate) async fn run_for_target(
                         )
                         .await;
                         seq += 1;
-                        retry_a.retry_count = retry_num;
-                        retry_a.http_stack = Some(stack.name.clone());
-                        attempts.push(retry_a);
+
+                        // Tag with the HTTP stack name
+                        attempt.http_stack = Some(stack.name.clone());
+                        attempt.sample_index = sample_index;
+                        attempts.push(attempt);
+
+                        // Retry loop
+                        for retry_num in 1..=retries {
+                            if attempts.last().is_some_and(|candidate| candidate.success) {
+                                break;
+                            }
+                            let mut retry_a = dispatch_once(
+                                proto,
+                                None,
+                                run_id,
+                                seq,
+                                stack_target,
+                                cfg,
+                                &probe_cfg,
+                                &udp_cfg,
+                                &udp_throughput_cfg,
+                                &throughput_cfg,
+                                stack_pl_cfg,
+                            )
+                            .await;
+                            seq += 1;
+                            retry_a.retry_count = retry_num;
+                            retry_a.sample_index = sample_index;
+                            retry_a.http_stack = Some(stack.name.clone());
+                            attempts.push(retry_a);
+                        }
                     }
 
                     for attempt in &attempts {

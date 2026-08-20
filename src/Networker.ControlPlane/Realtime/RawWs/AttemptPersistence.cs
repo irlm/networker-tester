@@ -23,7 +23,7 @@ namespace Networker.ControlPlane.Realtime.RawWs;
 public static class AttemptPersister
 {
     /// <summary>
-    /// The full tester probe schema (V001–V005, PostgreSQL) — embedded copy of
+    /// The full tester probe schema (V001–V007, PostgreSQL) — embedded copy of
     /// <c>shared/tester-schema.postgres.sql</c>, which mirrors the
     /// <c>networker-tester</c> crate's own migrations (guarded by a Rust unit
     /// test). Applied lazily by the INGEST because on the streamed-attempt path
@@ -68,7 +68,7 @@ public static class AttemptPersister
 
     /// <summary>
     /// Ensure the tester probe schema exists (idempotent DDL under the tester's
-    /// migration advisory lock, one transaction) and record V001–V005 in the
+    /// migration advisory lock, one transaction) and record V001–V007 in the
     /// tester's <c>_schema_versions</c> bookkeeping so a DB-backed tester that
     /// later points at this database skips them. Returns whether the schema
     /// (incl. V005) is available for the writes.
@@ -98,7 +98,7 @@ public static class AttemptPersister
                 // postgres.rs writes). Best-effort inside the same transaction.
                 await using (var rec = new NpgsqlCommand(
                     "CREATE TABLE IF NOT EXISTS _schema_versions (version VARCHAR(20) NOT NULL PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now()); "
-                    + "INSERT INTO _schema_versions (version) VALUES ('V001'),('V002'),('V003'),('V004'),('V005') ON CONFLICT DO NOTHING",
+                    + "INSERT INTO _schema_versions (version) VALUES ('V001'),('V002'),('V003'),('V004'),('V005'),('V006'),('V007') ON CONFLICT DO NOTHING",
                     conn, tx))
                 {
                     await rec.ExecuteNonQueryAsync(ct);
@@ -157,11 +157,13 @@ public static class AttemptPersister
             var extraVal = shape.ExtraJsonColumn is not null ? ", @extra" : string.Empty;
             var urlCol = shape.HasAttemptTargetUrl ? ", TargetUrl" : string.Empty;
             var urlVal = shape.HasAttemptTargetUrl ? ", @turl" : string.Empty;
+            var sampleCol = shape.HasAttemptSampleIndex ? ", SampleIndex" : string.Empty;
+            var sampleVal = shape.HasAttemptSampleIndex ? ", @sample" : string.Empty;
             var inserted = await ExecAsync(conn, tx, ct,
                 "INSERT INTO RequestAttempt "
                 + "(AttemptId, RunId, Protocol, SequenceNum, StartedAt, FinishedAt, "
-                + $"Success, ErrorMessage, RetryCount{urlCol}{extraCol}) "
-                + $"VALUES (@id, @run, @proto, @seq, @started, @finished, @ok, @err, @retry{urlVal}{extraVal}) "
+                + $"Success, ErrorMessage, RetryCount{urlCol}{sampleCol}{extraCol}) "
+                + $"VALUES (@id, @run, @proto, @seq, @started, @finished, @ok, @err, @retry{urlVal}{sampleVal}{extraVal}) "
                 + "ON CONFLICT (AttemptId) DO NOTHING",
                 p =>
                 {
@@ -177,6 +179,10 @@ public static class AttemptPersister
                     if (shape.HasAttemptTargetUrl)
                     {
                         AddNullable(p, "turl", a.AttemptTargetUrl);
+                    }
+                    if (shape.HasAttemptSampleIndex)
+                    {
+                        p.AddWithValue("sample", a.SampleIndex);
                     }
                     if (shape.ExtraJsonColumn is not null)
                     {
@@ -221,7 +227,8 @@ public static class AttemptPersister
     internal sealed record ProbeSchemaShape(
         string? ExtraJsonColumn,
         IReadOnlySet<string> TestRunColumns,
-        bool HasAttemptTargetUrl = false);
+        bool HasAttemptTargetUrl = false,
+        bool HasAttemptSampleIndex = false);
 
     private static ProbeSchemaShape? _shape;
 
@@ -246,9 +253,11 @@ public static class AttemptPersister
             : null;
         var wanted = new HashSet<string>(StringComparer.Ordinal) { "startedat", "modes", "clientos", "clientversion" };
         wanted.IntersectWith(testRun);
-        // V006 (#782): the per-attempt TargetUrl column — present after the
-        // bootstrap DDL or the tester's own migrate; absent on older DBs.
-        return new ProbeSchemaShape(extra, wanted, attempt.Contains("targeturl"));
+        // V006 (#782) TargetUrl / V007 (#782 P2) SampleIndex: present after
+        // the bootstrap DDL or the tester's own migrate; absent on older DBs,
+        // where the write degrades to the columns that do exist.
+        return new ProbeSchemaShape(
+            extra, wanted, attempt.Contains("targeturl"), attempt.Contains("sampleindex"));
     }
 
     private static async Task<ProbeSchemaShape> DetectShapeAsync(NpgsqlConnection conn, CancellationToken ct)

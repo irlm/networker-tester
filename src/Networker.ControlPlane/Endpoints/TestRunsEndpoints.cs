@@ -833,7 +833,7 @@ public static class TestRunsEndpoints
         // detect the column once and select it as a uniform alias — NULL when
         // the column (or the key) is absent. Appended LAST so every tier's
         // positional ordinals stay untouched.
-        var (extraCol, hasUrlCol) = await GetAttemptShapeAsync(dataSource, ct);
+        var (extraCol, hasUrlCol, hasSampleCol) = await GetAttemptShapeAsync(dataSource, ct);
         var targetSelA = (hasUrlCol, extraCol) switch
         {
             // V006 column first, older extra-json rows as fallback.
@@ -849,6 +849,14 @@ public static class TestRunsEndpoints
             (false, { } ec) => $", {ec}->>'target_url' AS target_url",
             _ => ", NULL AS target_url",
         };
+        // Burst sampling (#782 P2): which sample of its logical attempt a row
+        // is. V007 column first, older extra-json rows as fallback, and 0 when
+        // neither exists — 0 is the truthful value for a pre-burst row, not a
+        // filler: without a burst a logical attempt has exactly one sample.
+        // Appended after target_url, and read by NAME like it, so the
+        // positional phase ordinals stay untouched on every tier.
+        var sampleSelA = SampleIndexSelect("a.", hasSampleCol, extraCol);
+        var sampleSelFlat = SampleIndexSelect(string.Empty, hasSampleCol, extraCol);
 
         // V005 tier: everything in richSql PLUS ServerTimingResult.SrvCpuMs
         // and the MthroughputResult capacity columns (appended, so the shared
@@ -870,7 +878,7 @@ public static class TestRunsEndpoints
                    st.ProcessingMs, st.RecvBodyMs, st.TotalServerMs,
                    st.SrvCpuMs,
                    mt.CapacityDownMbps, mt.CapacityUpMbps, mt.ConnsDown, mt.ConnsUp,
-                   mt.FairShareSpreadDownPct, mt.FairShareSpreadUpPct{targetSelA}
+                   mt.FairShareSpreadDownPct, mt.FairShareSpreadUpPct{targetSelA}{sampleSelA}
             FROM RequestAttempt a
             LEFT JOIN LATERAL (SELECT * FROM DnsResult  x WHERE x.AttemptId = a.AttemptId LIMIT 1) d  ON TRUE
             LEFT JOIN LATERAL (SELECT * FROM TcpResult  x WHERE x.AttemptId = a.AttemptId LIMIT 1) t  ON TRUE
@@ -897,7 +905,7 @@ public static class TestRunsEndpoints
                    h.BodySizeBytes, h.RedirectCount, h.PayloadBytes, h.ThroughputMbps,
                    u.RttAvgMs, u.RttMinMs, u.RttP95Ms, u.JitterMs, u.LossPercent,
                    u.ProbeCount, u.SuccessCount,
-                   st.ProcessingMs, st.RecvBodyMs, st.TotalServerMs{targetSelA}
+                   st.ProcessingMs, st.RecvBodyMs, st.TotalServerMs{targetSelA}{sampleSelA}
             FROM RequestAttempt a
             LEFT JOIN LATERAL (SELECT * FROM DnsResult  x WHERE x.AttemptId = a.AttemptId LIMIT 1) d  ON TRUE
             LEFT JOIN LATERAL (SELECT * FROM TcpResult  x WHERE x.AttemptId = a.AttemptId LIMIT 1) t  ON TRUE
@@ -915,7 +923,7 @@ public static class TestRunsEndpoints
         // the flat rows it used to instead of degrading to an empty list.
         var flatSql = $"""
             SELECT AttemptId, Protocol, SequenceNum, StartedAt, FinishedAt,
-                   Success, ErrorMessage, RetryCount{targetSelFlat}
+                   Success, ErrorMessage, RetryCount{targetSelFlat}{sampleSelFlat}
             FROM RequestAttempt
             WHERE RunId = $1
             ORDER BY SequenceNum, StartedAt
@@ -989,6 +997,7 @@ public static class TestRunsEndpoints
                 ErrorMessage: reader.IsDBNull(6) ? null : AnsiText.Strip(reader.GetString(6)),
                 RetryCount: reader.GetInt32(7),
                 TargetUrl: ReadTargetUrl(reader),
+                SampleIndex: ReadSampleIndex(reader),
                 Dns: rich ? ReadDns(reader) : null,
                 Tcp: rich ? ReadTcp(reader) : null,
                 Tls: rich ? ReadTls(reader) : null,
@@ -1009,16 +1018,45 @@ public static class TestRunsEndpoints
         return r.IsDBNull(i) ? null : r.GetString(i);
     }
 
+    /// <summary>
+    /// The <c>sample_index</c> select fragment for one query tier: the V007
+    /// column when the schema has it, else the raw-attempt JSON key, else the
+    /// literal 0. The JSON fallback is digit-guarded — an unparseable value in
+    /// one row must not fail the WHOLE attempts query with 22P02, and 0 is the
+    /// same truthful default a pre-burst row carries.
+    /// </summary>
+    /// <param name="prefix">Table alias prefix (<c>"a."</c>) or empty.</param>
+    private static string SampleIndexSelect(string prefix, bool hasColumn, string? extraJsonColumn)
+    {
+        var fromJson = extraJsonColumn is { } ec
+            ? $"CASE WHEN {prefix}{ec}->>'sample_index' ~ '^[0-9]+$' "
+              + $"THEN ({prefix}{ec}->>'sample_index')::int ELSE 0 END"
+            : "0";
+        return hasColumn
+            ? $", COALESCE({prefix}SampleIndex, {fromJson}) AS sample_index"
+            : $", {fromJson} AS sample_index";
+    }
+
+    /// <summary>sample_index is selected under a stable alias as the LAST
+    /// column of every tier (0 where the V007 column and the extra-json key
+    /// are both absent), so it is read by name — the positional phase ordinals
+    /// stay untouched.</summary>
+    private static int ReadSampleIndex(NpgsqlDataReader r)
+    {
+        var i = r.GetOrdinal("sample_index");
+        return r.IsDBNull(i) ? 0 : r.GetInt32(i);
+    }
+
     /// <summary>Name of the raw-attempt JSON column on RequestAttempt
     /// (<c>extrajson</c> | <c>extra_json</c> | null when absent), detected once
     /// per process — the same divergence AttemptPersistence handles on the
     /// write side. Null means target_url cannot be recovered for DB-read
     /// attempts (pre-#782 tester schemas); the live stream still carries it.</summary>
-    private static (string? ExtraJsonColumn, bool HasTargetUrl)? _attemptShape;
+    private static (string? ExtraJsonColumn, bool HasTargetUrl, bool HasSampleIndex)? _attemptShape;
 
     internal static void ResetExtraJsonColumnCacheForTests() => _attemptShape = null;
 
-    private static async Task<(string? ExtraJsonColumn, bool HasTargetUrl)> GetAttemptShapeAsync(
+    private static async Task<(string? ExtraJsonColumn, bool HasTargetUrl, bool HasSampleIndex)> GetAttemptShapeAsync(
         NpgsqlDataSource dataSource, CancellationToken ct)
     {
         if (_attemptShape is { } cached)
@@ -1029,7 +1067,7 @@ public static class TestRunsEndpoints
         await using (var cmd = dataSource.CreateCommand(
             "SELECT lower(column_name) FROM information_schema.columns " +
             "WHERE lower(table_name) = 'requestattempt' " +
-            "AND lower(column_name) IN ('extrajson','extra_json','targeturl')"))
+            "AND lower(column_name) IN ('extrajson','extra_json','targeturl','sampleindex')"))
         await using (var reader = await cmd.ExecuteReaderAsync(ct))
         {
             while (await reader.ReadAsync(ct))
@@ -1040,7 +1078,7 @@ public static class TestRunsEndpoints
         var found = cols.Contains("extrajson") ? "extrajson"
             : cols.Contains("extra_json") ? "extra_json"
             : null;
-        var shape = (found, cols.Contains("targeturl"));
+        var shape = (found, cols.Contains("targeturl"), cols.Contains("sampleindex"));
         _attemptShape = shape;
         return shape;
     }
@@ -1164,6 +1202,14 @@ public sealed record AttemptView(
     [property: JsonPropertyName("target_url"),
      JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? TargetUrl = null,
+    /// <summary>Which SAMPLE of its logical attempt this row is (tester
+    /// <c>sample_index</c>, burst sampling #782 P2). 0 for every non-burst and
+    /// pre-#782 attempt — a logical attempt without a burst has exactly one
+    /// sample, so 0 is the truthful value rather than a filler. Distinct from
+    /// <see cref="RetryCount"/>: a retry replaces a failed try of ONE sample,
+    /// a sample is an intentional repeat that gets its own row.</summary>
+    [property: JsonPropertyName("sample_index")]
+    int SampleIndex = 0,
     [property: JsonPropertyName("dns"),
      JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     AttemptDnsView? Dns = null,

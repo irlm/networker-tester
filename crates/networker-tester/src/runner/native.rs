@@ -68,6 +68,7 @@ pub async fn run_native_probe(
                 occurred_at: Utc::now(),
             }),
             retry_count: 0,
+            sample_index: 0,
             server_timing: None,
             udp_throughput: None,
             page_load: None,
@@ -439,6 +440,7 @@ async fn run_native_probe_impl(
                 })
             },
             retry_count: 0,
+            sample_index: 0,
             server_timing: None,
             udp_throughput: None,
             page_load: None,
@@ -746,6 +748,7 @@ async fn run_native_https(
             })
         },
         retry_count: 0,
+        sample_index: 0,
         server_timing: None,
         udp_throughput: None,
         page_load: None,
@@ -885,6 +888,7 @@ fn make_failed(
             occurred_at: Utc::now(),
         }),
         retry_count: 0,
+        sample_index: 0,
         server_timing: None,
         udp_throughput: None,
         page_load: None,

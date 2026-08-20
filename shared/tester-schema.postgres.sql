@@ -1,6 +1,6 @@
 -- ─── networker-tester probe-result schema (PostgreSQL) ────────────────────────
 -- CANONICAL SOURCE: crates/networker-tester/src/output/db/postgres.rs
--- (V001_MIGRATION … V005_MIGRATION, concatenated verbatim). A unit test in that
+-- (V001_MIGRATION … V007_MIGRATION, concatenated verbatim). A unit test in that
 -- file fails if this copy drifts. Do not edit here — edit postgres.rs and
 -- regenerate: cargo test -p networker-tester --lib shared_tester_schema
 --
@@ -469,3 +469,19 @@ ALTER TABLE ServerTimingResult ADD COLUMN IF NOT EXISTS SrvCpuMs DOUBLE PRECISIO
 -- tester stamps it on every attempt from v0.28.231 (dispatch_once).
 
 ALTER TABLE RequestAttempt ADD COLUMN IF NOT EXISTS TargetUrl TEXT NULL;
+
+-- V007: Burst sampling — which SAMPLE of a logical attempt this row is
+-- (issue #782 P2). `--samples N` probes the same point N times back to back
+-- and publishes all N attempts; without an index the rows are
+-- indistinguishable from N retries, and a retry means the opposite thing (it
+-- REPLACES a failed try, so it must not count as a second measurement).
+--
+-- NOT NULL DEFAULT 0 rather than NULL: 0 is not a guess, it is the true
+-- value for every row already in the table. Burst sampling did not exist
+-- before this migration, so every historical attempt IS the first (and only)
+-- sample of its logical attempt. NULL would mean "unknown" about something we
+-- know, and would force every reader to handle a third state. PostgreSQL 11+
+-- stores the default in the catalog, so this is a metadata-only rewrite even
+-- on a large RequestAttempt table.
+
+ALTER TABLE RequestAttempt ADD COLUMN IF NOT EXISTS SampleIndex INT NOT NULL DEFAULT 0;

@@ -469,6 +469,7 @@ Server CSW (`sCSW`) is reported by the endpoint via `Server-Timing: csw-v;dur=N,
 | `--target URL` | required | Base URL of the server. Repeat for multi-target comparison: `--target URL1 --target URL2` |
 | `--modes MODE,...` | `http1` | Comma-separated probe modes |
 | `--runs N` | `3` | Probes per mode per payload size |
+| `--samples N` | `1` | Burst sampling: N back-to-back samples of every probe, all published with `sample_index` 0..N-1, so one point has a median and a spread (clamped to 1..50). Unlike `--runs` these repeat the SAME probe immediately rather than re-running every mode; unlike `--retries` they are intentional repeats, not replacements for a failure |
 | `--insecure` | false | Skip TLS certificate verification |
 | `--payload-sizes LIST` | none | Sizes for download/upload (e.g., `64k,1m`) |
 | `--page-assets N` | `20` | Assets per page-load simulation |
@@ -476,7 +477,7 @@ Server CSW (`sCSW`) is reported by the endpoint via `Server-Timing: csw-v;dur=N,
 | `--html-report` | `report.html` | HTML filename (relative to `--output-dir`) |
 | `--excel` | false | Write Excel report to `output/report.xlsx` |
 | `--output-dir` | `./output` | Directory for JSON, HTML, and Excel output |
-| `--retries N` | `0` | Retry failed probes |
+| `--retries N` | `0` | Retry failed probes. A retry REPLACES its sample, so only the final outcome of each sample is published |
 | `--no-default-features` | off | Exclude HTTP/3 for a minimal build |
 | `--http-stacks LIST` | none | Compare HTTP stacks (e.g. `nginx,iis`). Probes each stack on its assigned ports. |
 | `--connection-reuse` | false | Reuse TCP/QUIC connections for pageload2/3 warm probes |

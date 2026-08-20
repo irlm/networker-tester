@@ -1108,6 +1108,15 @@ pub struct RequestAttempt {
     /// Number of retries performed before this attempt succeeded (0 = first try succeeded).
     #[serde(default)]
     pub retry_count: u32,
+    /// 0-based index of this sample WITHIN its logical attempt's burst
+    /// (`--samples N` → `0..N-1`; issue #782 P2). A sample is an intentional
+    /// repeat of the same measurement point, so every sample is published;
+    /// `retry_count` counts the retries taken *inside* one sample, and a retry
+    /// REPLACES its sample rather than adding one. A run without burst
+    /// sampling takes exactly one sample per logical attempt, so 0 is both the
+    /// default and the truthful value for every pre-#782 attempt.
+    #[serde(default)]
+    pub sample_index: u32,
     /// The target URL this attempt probed. `Some` on every attempt produced by
     /// `dispatch_once` (stamped centrally there) — the field that lets a
     /// multi-target ("URL set") run attribute each streamed attempt to its URL
@@ -4546,6 +4555,7 @@ mod tests {
             udp: None,
             error: None,
             retry_count: 0,
+            sample_index: 0,
             server_timing: None,
             udp_throughput: None,
             page_load: None,
@@ -4883,6 +4893,7 @@ mod tests {
             udp: None,
             error: None,
             retry_count: 0,
+            sample_index: 0,
             server_timing: None,
             udp_throughput: None,
             page_load: None,

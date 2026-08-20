@@ -17,6 +17,13 @@ public sealed class TestConfigView
     public EndpointNetwork? Network { get; init; }
     public required IReadOnlyList<string> Modes { get; init; }
     public required uint Runs { get; init; }
+
+    /// <summary>Burst sampling (#782 P2): how many back-to-back samples the
+    /// tester takes of every logical attempt (workload <c>samples</c> →
+    /// tester <c>--samples</c>). Absent/0/1 = no burst, and the flag is then
+    /// not passed at all, so a default workload spawns a byte-identical
+    /// command line to the pre-#782 one.</summary>
+    public uint Samples { get; init; } = 1;
     public required uint Concurrency { get; init; }
     public required uint TimeoutMs { get; init; }
     public required IReadOnlyList<uint> PayloadSizes { get; init; }
@@ -112,6 +119,7 @@ public sealed class TestConfigView
             Network = network,
             Modes = modes,
             Runs = GetUInt(workload, "runs", 1),
+            Samples = Math.Max(1u, GetUInt(workload, "samples", 1)),
             Concurrency = GetUInt(workload, "concurrency", 1),
             TimeoutMs = GetUInt(workload, "timeout_ms", 30_000),
             PayloadSizes = payloadSizes,

@@ -177,6 +177,28 @@ public class AttemptExtractTests
     }
 
     [Fact]
+    public void Parses_burst_sample_index_and_defaults_it_to_zero()
+    {
+        // #782 P2: the burst's sample_index rides the same frame as
+        // retry_count and means the OPPOSITE thing — a retry replaces a failed
+        // try of one sample, a sample is an intentional repeat that keeps its
+        // own row. Both must survive extraction independently.
+        var burst = AttemptExtract.Parse(Guid.NewGuid(), Json("""
+            {
+              "attempt_id": "55555555-5555-5555-5555-555555555555",
+              "protocol": "http1", "retry_count": 2, "sample_index": 4
+            }
+            """))!;
+        Assert.Equal(4, burst.SampleIndex);
+        Assert.Equal(2, burst.RetryCount);
+
+        // A pre-#782 tester sends no sample_index at all: 0 is the truthful
+        // value (one sample per logical attempt), not a placeholder.
+        var legacy = AttemptExtract.Parse(Guid.NewGuid(), Json(HttpAttempt))!;
+        Assert.Equal(0, legacy.SampleIndex);
+    }
+
+    [Fact]
     public void Tolerates_wrong_kinds_and_defaults_sanely()
     {
         // sequence_num as string, success absent, dns wrong kind — must not throw.

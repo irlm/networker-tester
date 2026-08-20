@@ -410,10 +410,14 @@ pub fn log_attempt(a: &RequestAttempt) {
     use crate::metrics::Protocol::*;
     emit_attempt_event(a);
     let status = if a.success { "✓" } else { "✗" };
-    let retry_suffix = if a.retry_count > 0 {
-        format!(" (retry #{})", a.retry_count)
-    } else {
-        String::new()
+    // One suffix, two orthogonal facts (#782 P2): which burst sample this is
+    // (0-based `sample_index`, shown 1-based) and how many retries it took.
+    // A non-burst attempt keeps the historical "" / " (retry #N)" wording.
+    let retry_suffix = match (a.sample_index, a.retry_count) {
+        (0, 0) => String::new(),
+        (0, r) => format!(" (retry #{r})"),
+        (s, 0) => format!(" (sample #{})", s + 1),
+        (s, r) => format!(" (sample #{}, retry #{r})", s + 1),
     };
 
     match &a.protocol {
@@ -999,8 +1003,37 @@ pub fn log_attempt(a: &RequestAttempt) {
     }
 }
 
+/// Reduce one logical attempt's RAW attempt vector to the attempts that get
+/// published (persisted / streamed / summarised).
+///
+/// Two kinds of repeat live in that vector and they are NOT the same thing
+/// (issue #782 P2):
+///
+/// * a **retry** (`--retries`, `retry_count`) REPLACES a failed try of the
+///   same sample — only its final outcome is published, so a mode that
+///   succeeded on the second try counts once, as a success. That is what this
+///   function has always done and what keeps "success" meaning the same thing
+///   for a logical attempt.
+/// * a **sample** (`--samples`, `sample_index`) is an intentional repeat of
+///   the measurement — every sample is published, so a point has a real
+///   median and spread instead of one noisy value.
+///
+/// So: collapse within a `sample_index`, keep across `sample_index`. Input is
+/// the burst in execution order (sample 0's tries, then sample 1's, …); the
+/// output preserves that order, one attempt per sample that ran. A failed
+/// sample stays in the output as a failed sample — it is never dropped, and
+/// nothing is ever synthesised for a sample that did not run.
 pub fn published_logical_attempts(attempts: Vec<RequestAttempt>) -> Vec<RequestAttempt> {
-    attempts.into_iter().last().into_iter().collect()
+    let mut published: Vec<RequestAttempt> = Vec::new();
+    for attempt in attempts {
+        match published.last_mut() {
+            // Same sample as the previous attempt → this is its retry, and the
+            // retry replaces what it retried.
+            Some(prev) if prev.sample_index == attempt.sample_index => *prev = attempt,
+            _ => published.push(attempt),
+        }
+    }
+    published
 }
 
 #[cfg(test)]
@@ -1042,6 +1075,40 @@ mod attempt_stream_tests {
         let v: serde_json::Value =
             serde_json::from_str(&format_attempt_event(&a).expect("serializes")).expect("valid");
         assert_eq!(v["attempt"]["target_url"], "https://compare.example/health");
+    }
+
+    /// Burst sampling (#782 P2): `sample_index` rides the SAME stream as
+    /// `retry_count` — the control plane needs both to tell "the 3rd of 5
+    /// samples" from "the 3rd try of one sample". Serialized always (a plain
+    /// u32 like retry_count, `#[serde(default)]` for pre-#782 artifacts).
+    #[test]
+    fn event_line_carries_sample_index() {
+        let mut a = bare_attempt(Uuid::nil());
+        let v: serde_json::Value =
+            serde_json::from_str(&format_attempt_event(&a).expect("serializes")).expect("valid");
+        assert_eq!(v["attempt"]["sample_index"], 0, "default sample is 0");
+
+        a.sample_index = 4;
+        a.retry_count = 1;
+        let v: serde_json::Value =
+            serde_json::from_str(&format_attempt_event(&a).expect("serializes")).expect("valid");
+        assert_eq!(v["attempt"]["sample_index"], 4);
+        assert_eq!(v["attempt"]["retry_count"], 1);
+    }
+
+    /// Older artifacts have no `sample_index` key at all; deserializing must
+    /// default it to 0 rather than failing (every pre-burst attempt IS the
+    /// only sample of its logical attempt).
+    #[test]
+    fn attempt_json_without_sample_index_defaults_to_zero() {
+        let a = bare_attempt(Uuid::nil());
+        let mut v = serde_json::to_value(&a).expect("serializes");
+        v.as_object_mut()
+            .expect("attempt is an object")
+            .remove("sample_index");
+        let back: crate::metrics::RequestAttempt =
+            serde_json::from_value(v).expect("pre-#782 attempt JSON still parses");
+        assert_eq!(back.sample_index, 0);
     }
 }
 

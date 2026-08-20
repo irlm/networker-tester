@@ -41,8 +41,17 @@ import { dominantFailureReason, groupByProtocol, groupByTargetUrl } from '../fea
 import {
   buildUrlComparison,
   formatComparisonValue,
+  shortUrlLabel,
   type UrlComparison,
 } from '../features/runs/urlComparison';
+import {
+  buildSamplePoints,
+  hasRepeatedSamples,
+  jitterRatio,
+  usedBurstSampling,
+  MIN_SAMPLES_FOR_MEDIAN,
+  type SamplePoint,
+} from '../features/runs/burstStats';
 import {
   computeProtocolStats,
   computeTimingBreakdown,
@@ -141,6 +150,11 @@ export function RunDetailPage() {
   // Fair per-phase comparison across the URLs of a set run (#782): same run,
   // same runner, same tick — null for single-URL runs.
   const urlComparison = useMemo(() => buildUrlComparison(groupByTargetUrl(attempts)), [attempts]);
+
+  // Median + spread per measurement point (#782 P2). Empty section unless the
+  // run actually measured some point more than once — a run of single-shot
+  // points has no median to report and must not pretend otherwise.
+  const samplePoints = useMemo(() => buildSamplePoints(attempts), [attempts]);
 
   const ttfbDistribution = useMemo(() => {
     const values = attempts
@@ -604,6 +618,9 @@ export function RunDetailPage() {
           </Button>
         </div>
       )}
+      {/* ── Burst sampling (#782 P2): median + spread per measurement point ── */}
+      {hasRepeatedSamples(samplePoints) && <BurstSamplingTable points={samplePoints} />}
+
       {/* ── URL set comparison (#782): side-by-side per-phase medians ── */}
       {urlComparison && <UrlComparisonTable comparison={urlComparison} />}
 
@@ -712,6 +729,124 @@ export function RunDetailPage() {
 // are over successful attempts of the modes shared by every URL — modes that
 // only succeed on some URLs are excluded so protocol support can't pose as
 // latency (#820 review), and the footnote says so.
+/**
+ * Median + spread per measurement point (#782 P2). The median is the headline
+ * — one cold DNS cache or one retransmit must not decide what a point
+ * "measured" — with p95/min/max beside it and the sample count in front of it,
+ * so the reader can see what the median rests on. A point with fewer than
+ * MIN_SAMPLES_FOR_MEDIAN usable samples is labelled as a reading, not dressed
+ * up as a median; failed samples are counted and shown, never dropped.
+ */
+function BurstSamplingTable({ points }: { points: SamplePoint[] }) {
+  const multiUrl = new Set(points.map((p) => p.targetUrl)).size > 1;
+  const burst = usedBurstSampling(points);
+  const underSampled = points.filter((p) => p.underSampled).length;
+
+  return (
+    <div className="table-container mb-4">
+      <h3 className="px-4 py-2.5 text-xs text-gray-400 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
+        {burst ? 'burst sampling' : 'repeat sampling'} {'\u2014'} median &amp; spread per point
+      </h3>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs tabular-nums">
+          <thead>
+            <tr className="text-faint uppercase tracking-wider">
+              {multiUrl && (
+                <th className="text-left py-2 px-4 font-medium border-b border-gray-800/50">URL</th>
+              )}
+              <th className="text-left py-2 px-4 font-medium border-b border-gray-800/50">Mode</th>
+              <th className="text-left py-2 px-4 font-medium border-b border-gray-800/50">Metric</th>
+              <th className="text-right py-2 px-4 font-medium border-b border-gray-800/50">Samples</th>
+              <th className="text-right py-2 px-4 font-medium border-b border-gray-800/50">Median</th>
+              <th className="text-right py-2 px-4 font-medium border-b border-gray-800/50">p95</th>
+              <th className="text-right py-2 px-4 font-medium border-b border-gray-800/50">Min</th>
+              <th className="text-right py-2 px-4 font-medium border-b border-gray-800/50">Max</th>
+              <th className="text-right py-2 px-4 font-medium border-b border-gray-800/50">p95/p50</th>
+            </tr>
+          </thead>
+          <tbody>
+            {points.map((point) => {
+              const ratio = jitterRatio(point);
+              return (
+                <tr key={point.key} className="border-b border-white/[0.02] last:border-b-0">
+                  {multiUrl && (
+                    <td className="py-1.5 px-4 text-cyan-400 font-mono">
+                      {point.targetUrl ? shortUrlLabel(point.targetUrl) : 'unattributed'}
+                    </td>
+                  )}
+                  <td className="py-1.5 px-4 text-gray-200">
+                    {point.protocol.toUpperCase()}
+                    {point.payloadBytes != null && (
+                      <span className="text-faint"> {'\u00B7'} {formatBytes(point.payloadBytes)}</span>
+                    )}
+                  </td>
+                  <td className="py-1.5 px-4 text-gray-400">{point.metricLabel}</td>
+                  <td className="py-1.5 px-4 text-right">
+                    <span className={point.underSampled ? 'text-yellow-400' : 'text-gray-200'}>
+                      {point.usableCount}
+                    </span>
+                    <span className="text-faint">/{point.sampleCount}</span>
+                    {point.failedCount > 0 && (
+                      <span className="text-red-400"> {'\u00B7'} {point.failedCount} failed</span>
+                    )}
+                  </td>
+                  {point.stats ? (
+                    <>
+                      <td className="py-1.5 px-4 text-right text-gray-100 font-medium">
+                        {formatMetricValue(point.protocol, point.stats.p50)}
+                        {point.underSampled && (
+                          <span
+                            className="text-yellow-400 font-normal"
+                            title={`Only ${point.usableCount} usable sample${point.usableCount === 1 ? '' : 's'} \u2014 a median needs at least ${MIN_SAMPLES_FOR_MEDIAN}. This is the reading itself, not a median.`}
+                          >
+                            {' '}
+                            {point.usableCount === 1 ? '(1 sample)' : `(${point.usableCount} samples)`}
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-1.5 px-4 text-right text-gray-300">
+                        {point.underSampled ? '-' : formatMetricValue(point.protocol, point.stats.p95)}
+                      </td>
+                      <td className="py-1.5 px-4 text-right text-gray-400">
+                        {formatMetricValue(point.protocol, point.stats.min)}
+                      </td>
+                      <td className="py-1.5 px-4 text-right text-gray-400">
+                        {formatMetricValue(point.protocol, point.stats.max)}
+                      </td>
+                      <td className="py-1.5 px-4 text-right text-gray-300">
+                        {ratio == null ? '-' : `${ratio.toFixed(2)}\u00D7`}
+                      </td>
+                    </>
+                  ) : (
+                    <td className="py-1.5 px-4 text-right text-red-400" colSpan={5}>
+                      no usable sample {'\u2014'} every sample failed
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="px-4 py-2 text-xs text-faint border-t border-gray-800/50 leading-relaxed">
+        median over the successful samples of each point; p95/min/max are its spread and p95/p50 its
+        jitter ratio (1.00{'\u00D7'} = perfectly consistent). failed samples are counted, never dropped
+        {underSampled > 0 && (
+          <>
+            {'. '}
+            <span className="text-yellow-400">
+              {underSampled} point{underSampled === 1 ? '' : 's'} had fewer than {MIN_SAMPLES_FOR_MEDIAN}{' '}
+              usable samples
+            </span>
+            {' \u2014 those numbers are readings, not medians'}
+          </>
+        )}
+        .
+      </p>
+    </div>
+  );
+}
+
 function UrlComparisonTable({ comparison }: { comparison: UrlComparison }) {
   return (
     <div className="table-container mb-4">

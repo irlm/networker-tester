@@ -241,7 +241,11 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             var timeoutSecs = Math.Max(1u, (config.TimeoutMs + 999) / 1000);
             var runs = Math.Max(1u, config.Runs);
             var modes = (uint)Math.Max(1, config.Modes.Count);
-            totalSecs = (double)timeoutSecs * runs * modes + DeadlineSlackSecs;
+            // Every run probes every mode `samples` times (#782 P2) — leaving
+            // the burst out of the worst case would kill a x5 workload
+            // mid-flight on the fallback path.
+            var samples = Math.Max(1u, config.Samples);
+            totalSecs = (double)timeoutSecs * runs * modes * samples + DeadlineSlackSecs;
         }
 
         var deadline = TimeSpan.FromSeconds(totalSecs);
@@ -781,6 +785,18 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
             "--timeout", timeoutSecs.ToString(),
             "--json-stdout",
         });
+
+        // Burst sampling (#782 P2): N back-to-back samples of every logical
+        // attempt, each published with its own sample_index, so one point has
+        // a median and a spread. Added ONLY when the workload asks for it —
+        // a default workload must keep spawning the pre-#782 command line
+        // (an older tester binary on a not-yet-refreshed runner would reject
+        // an unknown flag and fail the whole run).
+        if (config.Samples > 1)
+        {
+            args.Add("--samples");
+            args.Add(config.Samples.ToString());
+        }
 
         if (config.Insecure)
             args.Add("--insecure");
