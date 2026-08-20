@@ -166,6 +166,13 @@ if (-not (Test-Path "$RunnerDir\run.cmd") -or $installed -ne $RunnerVersion) {
     'CARGO_HOME=C:\rust\cargo'
 ) | Set-Content -Path (Join-Path $RunnerDir '.env')
 
+# A JOB's PATH comes from <RunnerDir>\.path, not from .env and not from the
+# loop's environment: the runner writes .path at configure time and reuses it,
+# so a step calling a toolchain directly (no setup-* action) fails with
+# "not recognized". The Linux hosts hit exactly that with cargo.
+[Environment]::GetEnvironmentVariable('Path', 'Machine') |
+    Set-Content -Path (Join-Path $RunnerDir '.path') -Encoding ASCII
+
 # -- 7. registration -------------------------------------------------------
 function Get-RegistrationToken {
     $pat = (Get-Content $TokenFile -Raw).Trim()

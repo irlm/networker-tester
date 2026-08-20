@@ -38,6 +38,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gap; `setup-ci-hosts.sh` asks (`MAC_BOOT_DAEMON`, default yes) and never
   leaves both a daemon and an agent registered under the same runner name.
 
+### Fixed
+
+- **Self-hosted jobs get the toolchain PATH — for real this time.** The PATH a
+  *job step* runs with comes from `<runner>/.path`, not from `.env` and not
+  from the Listener's own environment: the runner writes `.path` at configure
+  time and reuses the file. v0.28.268 fixed the Listener's environment, which
+  was not enough — jobs using `setup-*`/`dtolnay/rust-toolchain` masked it
+  (those prepend via `GITHUB_PATH`), while a step calling the toolchain
+  directly still got `cargo: command not found` (validate-bench-apis'
+  canonical Rust baseline, on every Linux host). All three installers now
+  write `.path` explicitly and the loops restore it after each registration,
+  because `config.sh` rewrites it from its own environment.
+
 ### Changed
 
 - **36 routed jobs got a `timeout-minutes`.** They inherited GitHub's 6-hour

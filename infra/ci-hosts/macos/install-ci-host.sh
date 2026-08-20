@@ -200,6 +200,12 @@ RUSTUP_HOME=$HOME/.rustup
 CARGO_HOME=$HOME/.cargo
 ENV
 
+# A JOB's PATH comes from RUNNER_DIR/.path, not from .env and not from the
+# loop's environment: the runner writes .path at configure time and reuses it.
+# Steps that call a toolchain directly (no setup-* action) otherwise fail with
+# "command not found" — the Linux hosts hit exactly that.
+printf '%s\n' "$HOST_PATH" > "$RUNNER_DIR/.path"
+
 # ── 9. ephemeral loop + LaunchAgent ──────────────────────────────────────────
 # Mint a registration token from the PAT, register --ephemeral, run ONE job
 # under caffeinate (no idle/system sleep mid-job), repeat. The PAT stays in
@@ -222,6 +228,7 @@ while :; do
         --name "$NAME" --labels "$LABELS" --work _work ${GROUP:+--runnergroup "$GROUP"} >/dev/null; then
     echo "config.sh failed — retrying in 30s" >&2; sleep 30; continue
   fi
+  printf '%s\n' "$PATH" > "$RUNNER_DIR/.path"   # config.sh rewrites it each time
   caffeinate -is "$RUNNER_DIR/run.sh"
   rm -f "$RUNNER_DIR/.runner" "$RUNNER_DIR/.credentials" "$RUNNER_DIR/.credentials_rsaparams"
   sleep 3
