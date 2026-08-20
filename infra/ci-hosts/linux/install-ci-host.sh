@@ -156,7 +156,7 @@ if [ "$SKIP_TOOLCHAINS" = 0 ]; then
   fi
   runuser -u "$CI_USER" -- bash -c '
     export PATH="$HOME/.cargo/bin:$PATH"
-    rustup toolchain install stable --profile minimal --component rustfmt clippy llvm-tools-preview
+    rustup toolchain install stable --profile minimal --component rustfmt,clippy,llvm-tools-preview
     rustup target add x86_64-unknown-linux-musl
     rustup default stable
     rustc --version'

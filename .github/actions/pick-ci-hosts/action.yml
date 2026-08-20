@@ -131,16 +131,20 @@ runs:
         jq -r '.runners[] | "  \(.name)\tstatus=\(.status)\tbusy=\(.busy)\tlabels=\([.labels[].name] | join(","))"' "$body"
 
         for os in linux windows macos; do
-          # Online AND carrying all three labels. Busy hosts still count:
+          # Online AND carrying all three labels, compared case-insensitively:
+          # GitHub registers its own "Linux"/"X64"/"macOS"/"Windows" labels and
+          # folds a lowercase "linux" into them, so the listing shows "Linux"
+          # while runs-on matching stays case-insensitive (seen on the first
+          # real registration). Busy hosts still count:
           # the job queues behind them, which is cheaper than hosted minutes.
           # Ephemeral hosts drop off after each job and re-register from the
           # systemd/launchd loop, so "online" is the right liveness signal.
           online="$(jq -r --arg os "$os" '
             [ .runners[]
               | select(.status == "online")
-              | select(any(.labels[].name; . == "self-hosted"))
-              | select(any(.labels[].name; . == $os))
-              | select(any(.labels[].name; . == "networker-ci"))
+              | select(any(.labels[].name | ascii_downcase; . == "self-hosted"))
+              | select(any(.labels[].name | ascii_downcase; . == $os))
+              | select(any(.labels[].name | ascii_downcase; . == "networker-ci"))
             ] | length' "$body")"
           if [ "${online}" -gt 0 ]; then
             choose "$os" self "auto: ${online} online CI host(s) with labels self-hosted,${os},networker-ci"
