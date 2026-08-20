@@ -52,11 +52,13 @@ ok()   { printf '%s✓%s %s\n' "$G" "$N" "$*"; }
 warn() { printf '%s!%s %s\n' "$Y" "$N" "$*"; }
 die()  { printf '%sERROR:%s %s\n' "$R" "$N" "$*" >&2; exit 1; }
 
-ask() { # ask VAR "prompt" "default"  — keeps an existing value as the default
-  local var="$1" prompt="$2" def="${3:-}" cur val
+ask() { # ask VAR "prompt" "default" [optional] — keeps an existing value as the default
+  # "optional": an empty answer is valid (runner group, VLAN tag, …), so
+  # --non-interactive accepts it instead of dying.
+  local var="$1" prompt="$2" def="${3:-}" opt="${4:-}" cur val
   cur="${!var:-}"; [ -n "$cur" ] && def="$cur"
   if [ "$NON_INTERACTIVE" = 1 ]; then
-    [ -n "$def" ] || die "--non-interactive: $var is not set in $ENV_FILE"
+    [ -n "$def" ] || [ "$opt" = optional ] || die "--non-interactive: $var is not set in $ENV_FILE"
     printf -v "$var" '%s' "$def"; return
   fi
   if [ -n "$def" ]; then read -r -p "$prompt [$def]: " val; else read -r -p "$prompt: " val; fi
@@ -149,7 +151,7 @@ step_github() {
   def_repo="$(git -C "$HERE" remote get-url origin 2>/dev/null | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##' || true)"
   ask GH_REPO "Repository (OWNER/REPO)" "$def_repo"
   [[ "$GH_REPO" =~ ^[^/]+/[^/]+$ ]] || die "GH_REPO must be OWNER/REPO"
-  ask RUNNER_GROUP "GitHub runner group (empty = Default; create one restricted to this repo if you can)" "$RUNNER_GROUP"
+  ask RUNNER_GROUP "GitHub runner group (empty = Default; create one restricted to this repo if you can)" "$RUNNER_GROUP" optional
 
   if [ -z "$CI_HOSTS_PAT" ] && command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
     CI_HOSTS_PAT="$(gh auth token 2>/dev/null || true)"
@@ -267,7 +269,7 @@ step_proxmox() {
   ask PVE_STORAGE "VM disk storage" "$PVE_STORAGE"
   ask PVE_SNIPPET_STORAGE "Snippet storage (must have 'Snippets' content enabled)" "$PVE_SNIPPET_STORAGE"
   ask PVE_BRIDGE "Bridge" "$PVE_BRIDGE"
-  ask PVE_VLAN "VLAN tag for the CI VLAN (empty = untagged)" "$PVE_VLAN"
+  ask PVE_VLAN "VLAN tag for the CI VLAN (empty = untagged)" "$PVE_VLAN" optional
   ask PVE_TEMPLATE_ID "Ubuntu 24.04 cloud-init template VMID (created if missing; 9000 is the old 22.04 one — don't reuse it)" "$PVE_TEMPLATE_ID"
   ask LINUX_VMID_BASE "First Linux VMID (ci-linux-1; the next ones follow)" "$LINUX_VMID_BASE"
   ask LINUX_COUNT "Number of Linux CI hosts" "$LINUX_COUNT"
@@ -348,7 +350,7 @@ step_windows() {
   if host_online ci-windows-1; then ok "ci-windows-1 already online"; return 0; fi
   ask PVE_HOST "Proxmox node (ssh alias or user@host)" "$PVE_HOST"; pve true || die "cannot ssh to $PVE_HOST"
   pve_sync_scripts
-  ask WINDOWS_EXISTING_VMID "Reuse an EXISTING Windows VM? (VMID, e.g. 101 'WindowsDesktop'; empty = create a new one)" "$WINDOWS_EXISTING_VMID"
+  ask WINDOWS_EXISTING_VMID "Reuse an EXISTING Windows VM? (VMID, e.g. 101 'WindowsDesktop'; empty = create a new one)" "$WINDOWS_EXISTING_VMID" optional
   if [ -n "$WINDOWS_EXISTING_VMID" ]; then
     pve "$PVE_DIR/create-ci-host-vm.sh start --vmid $WINDOWS_EXISTING_VMID"
     say "   using existing VM $WINDOWS_EXISTING_VMID — skip to the in-guest install below"
@@ -356,8 +358,8 @@ step_windows() {
     ask WINDOWS_VMID "New Windows VMID" "$WINDOWS_VMID"
     if ! pve "qm status $WINDOWS_VMID" >/dev/null 2>&1; then
       ask WINDOWS_ISO "Windows Server 2025 Evaluation ISO (storage:iso/file)" "$WINDOWS_ISO"
-      ask WINDOWS_VIRTIO_ISO "virtio-win ISO (storage:iso/file, empty to skip)" "$WINDOWS_VIRTIO_ISO"
-      ask WINDOWS_ANSWER_ISO "autounattend answer ISO (storage:iso/file, empty = interactive install)" "$WINDOWS_ANSWER_ISO"
+      ask WINDOWS_VIRTIO_ISO "virtio-win ISO (storage:iso/file, empty to skip)" "$WINDOWS_VIRTIO_ISO" optional
+      ask WINDOWS_ANSWER_ISO "autounattend answer ISO (storage:iso/file, empty = interactive install)" "$WINDOWS_ANSWER_ISO" optional
       if [ -n "$WINDOWS_ANSWER_ISO" ] && ! pve "pvesm list ${WINDOWS_ANSWER_ISO%%:*} --content iso" 2>/dev/null | grep -q "${WINDOWS_ANSWER_ISO}"; then
         warn "$WINDOWS_ANSWER_ISO not found on $PVE_HOST — continuing without an answer ISO"; WINDOWS_ANSWER_ISO=""
       fi
@@ -370,7 +372,7 @@ step_windows() {
       say "   with the answer ISO the rest of the OS install is unattended."
     fi
   fi
-  ask WINDOWS_SSH "Windows ssh target once OpenSSH Server is enabled (empty = print manual steps)" "$WINDOWS_SSH"
+  ask WINDOWS_SSH "Windows ssh target once OpenSSH Server is enabled (empty = print manual steps)" "$WINDOWS_SSH" optional
   if [ -z "$WINDOWS_SSH" ] || ! ssh "${SSH_OPTS[@]}" "$WINDOWS_SSH" 'powershell -NoProfile -Command "echo ok"' 2>/dev/null | grep -q ok; then
     [ -n "$WINDOWS_SSH" ] && warn "cannot reach $WINDOWS_SSH over ssh"
     windows_manual_steps; return 0
