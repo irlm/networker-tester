@@ -4,8 +4,16 @@ import { useNow } from '../hooks/useNow';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { runsApi } from '../features/runs/api';
 import { testersApi, type TesterRow } from '../api/testers';
-import type { TestConfig, TestConfigListItem, TestRun } from '../api/types';
-import { buildDiagRequest, extractHost, type DiagPreset } from '../lib/diag-request';
+import type { TestConfig, TestConfigListItem, TestRun, TestSchedule } from '../api/types';
+import {
+  buildDiagRequest,
+  decodeHostQueryParam,
+  extractHost,
+  hostsToQueryParam,
+  DIAG_SAMPLE_CHOICES,
+  type DiagPreset,
+  type DiagSamples,
+} from '../lib/diag-request';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { RunResult } from '../components/common/RunResult';
 import { runDisplayStatus } from '../lib/runStatus';
@@ -14,14 +22,23 @@ import { useProject } from '../hooks/useProject';
 import { useToast } from '../hooks/useToast';
 import { timeAgo } from '../lib/format';
 import { stripAnsi } from '../lib/ansi';
-import { isWatchlistConfigName } from '../lib/watchlist';
+import {
+  hostsForDiagConfig,
+  hostsFromDiagConfigName,
+  isDiagSetConfigName,
+  isWatchlistConfigName,
+  probeRunVerdict,
+} from '../lib/watchlist';
 import { Button } from '../components/common/Button';
 import { isOnlineTester } from '../lib/tester-readiness';
 import {
   runKeys,
+  useRunsAttemptsQueries,
+  useSchedulesQuery,
   useTestConfigDetailsQueries,
   useTestConfigsQuery,
   useTestRunsQuery,
+  useUpdateScheduleMutation,
 } from '../features/runs/queries';
 
 // ── Types ───────────────────────────────────────────────────────────────
@@ -61,23 +78,9 @@ const PHASE_CSS_COLORS: Record<string, string> = {
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-function getHostFromConfig(config: TestConfigListItem | TestConfig): string | null {
-  // The endpoint is stored as JSON on TestConfigListItem, but we need to check
-  // if endpoint info is available. For list items, we may need to parse from the name.
-  if ('endpoint' in config) {
-    const ep = (config as TestConfig).endpoint;
-    if (ep.kind === 'network') return ep.host;
-  }
-  return null;
-}
-
-function getHostFromConfigName(name: string): string | null {
-  // Parse "Probe: hostname (Preset)" or "Diag: hostname (Preset)" or just use as-is
-  const probeMatch = name.match(/^(?:Probe|Diag):\s+(.+?)\s+\(/);
-  if (probeMatch) return probeMatch[1];
-  // Also match config names like "Cloudflare connectivity" — fallback
-  return null;
-}
+// Host resolution lives in lib/watchlist.ts (hostsForDiagConfig /
+// hostsFromDiagConfigName) — shared with tests. A set config (#782/#820)
+// resolves to EVERY member hostname so its runs land on each member's row.
 
 function getDayLabel(dateStr: string): string {
   const date = new Date(dateStr);
@@ -216,6 +219,9 @@ function UrlCard({
   onRunAgain,
   onRemove,
   projectId,
+  schedule,
+  onMonitorHourly,
+  onToggleMonitor,
 }: {
   projectId: string;
   group: UrlGroup;
@@ -223,6 +229,10 @@ function UrlCard({
   onToggle: () => void;
   onRunAgain: (host: string) => void;
   onRemove: (host: string, configIds: Set<string>) => void;
+  /** Hourly-monitoring schedule attached to one of this row's configs (#782). */
+  schedule: TestSchedule | null;
+  onMonitorHourly: () => void;
+  onToggleMonitor: (schedule: TestSchedule) => void;
 }) {
   const navigate = useNavigate();
   const { host, runs, lastRun, lastStatus, configIds } = group;
@@ -327,6 +337,14 @@ function UrlCard({
         </div>
 
         <div className="flex items-center gap-3 flex-shrink-0">
+          {schedule?.enabled && (
+            <span
+              className="text-xs px-1.5 py-0.5 rounded border border-cyan-500/30 text-cyan-400/90 tracking-wider"
+              title="Re-probed automatically every hour"
+            >
+              hourly
+            </span>
+          )}
           {sparklineValues.length >= 2 && <Sparkline values={sparklineValues} />}
           <span className="text-xs px-1.5 py-0.5 rounded bg-white/5 text-gray-400 font-medium tabular-nums">
             {runs.length}
@@ -441,6 +459,29 @@ function UrlCard({
             >
               {'\u25B6'} Run again
             </button>
+            {schedule ? (
+              <button
+                onClick={() => onToggleMonitor(schedule)}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs border rounded transition-colors ${
+                  schedule.enabled
+                    ? 'border-cyan-500/30 text-cyan-400 hover:border-cyan-500/60'
+                    : 'border-gray-800 text-gray-400 hover:text-gray-200 hover:border-gray-600'
+                }`}
+                title={schedule.enabled
+                  ? 'Hourly monitoring is on \u2014 click to pause'
+                  : 'Hourly monitoring is paused \u2014 click to resume'}
+              >
+                {schedule.enabled ? 'Monitoring hourly \u2713' : 'Resume hourly monitoring'}
+              </button>
+            ) : (
+              <button
+                onClick={onMonitorHourly}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-800 rounded text-gray-400 hover:text-gray-200 hover:border-gray-600 transition-colors"
+                title="Re-probe this URL automatically every hour (the last-used preset/set)"
+              >
+                Monitor hourly
+              </button>
+            )}
             <button
               onClick={() => onRemove(host, configIds)}
               className="ml-auto text-xs text-faint hover:text-red-400 transition-colors"
@@ -464,11 +505,18 @@ export function DiagnosticsPage() {
   usePageTitle('URL Probe');
 
   const inputRef = useRef<HTMLInputElement>(null);
-  const [url, setUrl] = useState(searchParams.get('host') || '');
+  // decodeHostQueryParam (#820): tolerate the double-encoded ?host= values the
+  // old sync produced (`%2C%2520`), and normalize multi-host params to ", ".
+  const [url, setUrl] = useState(() => decodeHostQueryParam(searchParams.get('host')));
   // Prefill the preset from ?preset= (scenario launcher); fall back to 'quick'.
   const [preset, setPreset] = useState<DiagPreset>(() => {
     const p = searchParams.get('preset');
     return p === 'standard' || p === 'full' || p === 'route' ? p : 'quick';
+  });
+  // Burst sampling (#782 P2): N samples per mode per URL within one run.
+  const [samples, setSamples] = useState<DiagSamples>(() => {
+    const s = Number(searchParams.get('samples'));
+    return (DIAG_SAMPLE_CHOICES as readonly number[]).includes(s) ? (s as DiagSamples) : 1;
   });
   const [submitting, setSubmitting] = useState(false);
 
@@ -484,9 +532,12 @@ export function DiagnosticsPage() {
   const [page, setPage] = useState(1);
   const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
 
-  // Sync URL to query string
+  // Sync URL to query string. hostsToQueryParam (#820): hostnames only,
+  // comma-joined without spaces — the raw multi-entry input ("a.com, b.com")
+  // used to be stored verbatim and its space percent-encoded (then DOUBLE-
+  // encoded to %2520 in links built from already-encoded values).
   useEffect(() => {
-    const host = extractHost(url);
+    const host = hostsToQueryParam(url);
     setSearchParams(prev => {
       const next = new URLSearchParams(prev);
       if (host) next.set('host', host);
@@ -548,39 +599,50 @@ export function DiagnosticsPage() {
   // a memo dependency so staleness verdicts advance with it.
   const now = useNow();
 
-  const urlGroups = useMemo(() => {
+  // A run belongs to a set config when its config detail carries several
+  // member URLs, or (before the detail loads) its name says "Diag set:".
+  const isSetRun = useMemo(() => {
+    return (run: TestRun): boolean => {
+      const detail = configDetails.get(run.test_config_id);
+      if (detail && detail.endpoint.kind === 'network' && (detail.endpoint.hosts?.length ?? 0) > 1) {
+        return true;
+      }
+      const name = run.config_name
+        ?? configs.find(c => c.id === run.test_config_id)?.name
+        ?? '';
+      return isDiagSetConfigName(name);
+    };
+  }, [configDetails, configs]);
+
+  const baseUrlGroups = useMemo(() => {
     const hostMap = new Map<string, { runs: TestRun[]; configIds: Set<string> }>();
 
     for (const run of allRuns) {
-      let host: string | null = null;
+      // Hosts this run covers: a single-URL config yields one; a set config
+      // (#820) yields EVERY member, so the run lands on each member's row.
+      let hosts: string[] = [];
 
-      // Try to get host from config details
       const detail = configDetails.get(run.test_config_id);
-      if (detail) {
-        host = getHostFromConfig(detail);
-      }
+      if (detail) hosts = hostsForDiagConfig(detail);
 
-      // Fallback: parse from config_name
-      if (!host && run.config_name) {
-        host = getHostFromConfigName(run.config_name);
+      // Fallbacks while the detail is loading: config_name, then the config
+      // list item's name (a set name only carries its first member).
+      if (hosts.length === 0 && run.config_name) {
+        hosts = hostsFromDiagConfigName(run.config_name);
       }
-
-      // Fallback: try config list item name
-      if (!host) {
+      if (hosts.length === 0) {
         const cfg = configs.find(c => c.id === run.test_config_id);
-        if (cfg) {
-          host = getHostFromConfigName(cfg.name);
+        if (cfg) hosts = hostsForDiagConfig(cfg);
+      }
+
+      for (const host of hosts) {
+        if (!hostMap.has(host)) {
+          hostMap.set(host, { runs: [], configIds: new Set() });
         }
+        const entry = hostMap.get(host)!;
+        entry.runs.push(run);
+        entry.configIds.add(run.test_config_id);
       }
-
-      if (!host) continue;
-
-      if (!hostMap.has(host)) {
-        hostMap.set(host, { runs: [], configIds: new Set() });
-      }
-      const entry = hostMap.get(host)!;
-      entry.runs.push(run);
-      entry.configIds.add(run.test_config_id);
     }
 
     const groups: UrlGroup[] = [];
@@ -589,47 +651,66 @@ export function DiagnosticsPage() {
       runs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
       const lastRun = runs[0];
 
-      // Determine status. A run is "healthy" only when it has completed and
-      // recorded at least one successful attempt — never before a dispatcher
-      // has claimed and finished it. Staleness ("no check in 24h") is
-      // evaluated before healthy so an old green check surfaces as stale,
-      // matching the summary strip's label.
-      const timeSinceLastRun = now - new Date(lastRun.created_at).getTime();
-      let lastStatus: UrlGroup['lastStatus'];
-      // Verdict rule shared with the Runs pages (runDisplayStatus, audit F9):
-      // completed-with-some-failures reads "partial", not "failed" — the same
-      // run must never be green on /runs and red here.
-      if (
-        lastRun.status === 'failed' ||
-        lastRun.status === 'cancelled' ||
-        (lastRun.failure_count > 0 && lastRun.success_count === 0)
-      ) {
-        lastStatus = 'failed';
-      } else if (lastRun.status === 'completed' && lastRun.failure_count > 0) {
-        lastStatus = 'partial';
-      } else if (lastRun.status === 'queued' || lastRun.status === 'provisioning' || lastRun.status === 'running') {
-        lastStatus = 'pending';
-      } else if (timeSinceLastRun > STALE_THRESHOLD_MS) {
-        lastStatus = 'stale';
-      } else if (lastRun.status === 'completed' && lastRun.success_count > 0) {
-        lastStatus = 'healthy';
-      } else {
-        // completed-with-no-attempts or unknown — neither healthy nor failed.
-        lastStatus = 'pending';
-      }
-
       groups.push({
         host,
         runs,
         configIds,
         lastRun,
-        lastStatus,
+        // Run-level verdict (probeRunVerdict, lib/watchlist.ts). For set runs
+        // this is provisional — refined below with per-URL attempt tallies.
+        lastStatus: probeRunVerdict(lastRun, now, STALE_THRESHOLD_MS),
         totalDurationMs: getDurationMs(lastRun),
       });
     }
 
     return groups;
   }, [allRuns, configs, configDetails, now]);
+
+  // ── Per-URL health for set runs (#820) ────────────────────────────────
+  // A set run's run-level counts aggregate every member URL — one flaky
+  // member must not paint the others red. For each row whose LATEST run is a
+  // finished set run, fetch that run's attempts (cached/shared with the run
+  // detail page) and re-verdict the row from the attempts attributed to its
+  // host via target_url.
+  const setRunIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const g of baseUrlGroups) {
+      const status = g.lastRun.status;
+      if (status !== 'completed' && status !== 'failed') continue;
+      if (isSetRun(g.lastRun)) ids.add(g.lastRun.id);
+    }
+    return [...ids].sort();
+  }, [baseUrlGroups, isSetRun]);
+
+  const setRunAttemptQueries = useRunsAttemptsQueries(setRunIds);
+  const setRunAttempts = useMemo(() => {
+    const map = new Map<string, NonNullable<(typeof setRunAttemptQueries)[number]['data']>>();
+    setRunIds.forEach((runId, i) => {
+      const data = setRunAttemptQueries[i]?.data;
+      if (data) map.set(runId, data);
+    });
+    return map;
+  }, [setRunIds, setRunAttemptQueries]);
+
+  const urlGroups = useMemo(() => {
+    return baseUrlGroups.map(group => {
+      const attempts = setRunAttempts.get(group.lastRun.id);
+      if (!attempts) return group;
+      const mine = attempts.filter(
+        a => a.target_url && extractHost(a.target_url) === group.host,
+      );
+      // Pre-#782 testers persisted no target_url — keep the run-level verdict.
+      if (mine.length === 0) return group;
+      const ok = mine.filter(a => a.success).length;
+      return {
+        ...group,
+        lastStatus: probeRunVerdict(group.lastRun, now, STALE_THRESHOLD_MS, {
+          ok,
+          fail: mine.length - ok,
+        }),
+      };
+    });
+  }, [baseUrlGroups, setRunAttempts, now]);
 
   // ── Summary counts ────────────────────────────────────────────────
 
@@ -690,8 +771,9 @@ export function DiagnosticsPage() {
   const handleRun = async (targetHost?: string) => {
     // Multi-URL set (#782): the input accepts several URLs separated by
     // whitespace, commas, or newlines — they are probed TOGETHER in one run
-    // (same tick, comparable conditions) via endpoint.hosts[].
-    const diag = buildDiagRequest(targetHost || url, preset);
+    // (same tick, comparable conditions) via endpoint.hosts[]. `samples` > 1
+    // bursts every mode N times per URL within that run (#782 P2).
+    const diag = buildDiagRequest(targetHost || url, preset, samples);
     if (!diag) {
       addToast('error', 'Enter a URL or hostname to test');
       return;
@@ -753,21 +835,91 @@ export function DiagnosticsPage() {
   };
 
   const handleRemove = async (host: string, configIds: Set<string>) => {
+    // Set configs (#820) are SHARED between their member URLs — deleting one
+    // to remove a single host would erase the other members' history too.
+    // Only this host's single-URL configs are deleted; shared sets are kept.
+    const removable: string[] = [];
+    let sharedSets = 0;
+    for (const id of configIds) {
+      const detail = configDetails.get(id);
+      const name = detail?.name ?? configs.find(c => c.id === id)?.name ?? '';
+      const isSet =
+        (detail?.endpoint.kind === 'network' && (detail.endpoint.hosts?.length ?? 0) > 1) ||
+        isDiagSetConfigName(name);
+      if (isSet) sharedSets += 1;
+      else removable.push(id);
+    }
     try {
-      await Promise.all(Array.from(configIds).map(id => runsApi.deleteConfig(id)));
-      addToast('success', `Removed ${host} from watchlist`);
+      await Promise.all(removable.map(id => runsApi.deleteConfig(id)));
+      if (removable.length === 0 && sharedSets > 0) {
+        addToast('info', `${host} only has history from multi-URL set runs — shared set configs were kept`);
+        return;
+      }
+      addToast(
+        'success',
+        sharedSets > 0
+          ? `Removed ${host} from watchlist (${sharedSets} shared set config${sharedSets !== 1 ? 's' : ''} kept)`
+          : `Removed ${host} from watchlist`,
+      );
+      const removed = new Set(removable);
       queryClient.setQueryData<TestRun[]>(runKeys.list(projectId, DIAGNOSTIC_RUN_PARAMS), (previous = []) =>
-        previous.filter((run) => !configIds.has(run.test_config_id)),
+        previous.filter((run) => !removed.has(run.test_config_id)),
       );
       queryClient.setQueryData<TestConfigListItem[]>(runKeys.configs(projectId), (previous = []) =>
-        previous.filter((config) => !configIds.has(config.id)),
+        previous.filter((config) => !removed.has(config.id)),
       );
-      for (const configId of configIds) {
+      for (const configId of removed) {
         queryClient.removeQueries({ queryKey: runKeys.config(configId) });
       }
     } catch (e) {
       addToast('error', `Failed to remove: ${e instanceof Error ? e.message : String(e)}`);
     }
+  };
+
+  // ── Hourly monitoring (#782): standing re-probe of a watched URL/set ──
+  // Rides the existing test_schedule machinery (SchedulerService fires cron
+  // schedules every ~30s tick) — the probe page only creates/toggles rows.
+  const schedulesQuery = useSchedulesQuery(projectId);
+  const schedules = useMemo(() => schedulesQuery.data ?? [], [schedulesQuery.data]);
+  const updateSchedule = useUpdateScheduleMutation(projectId);
+
+  const scheduleForGroup = (group: UrlGroup): TestSchedule | null =>
+    // Prefer the schedule on the config that produced the latest run; fall
+    // back to any schedule on one of the row's configs.
+    schedules.find(s => s.test_config_id === group.lastRun.test_config_id)
+      ?? schedules.find(s => group.configIds.has(s.test_config_id))
+      ?? null;
+
+  const handleMonitorHourly = async (group: UrlGroup) => {
+    try {
+      await runsApi.createSchedule(projectId, {
+        test_config_id: group.lastRun.test_config_id,
+        cron_expr: '0 * * * *',
+        timezone: 'UTC',
+        enabled: true,
+      });
+      addToast('success', `Monitoring ${group.host} hourly`);
+      queryClient.invalidateQueries({ queryKey: runKeys.schedules(projectId) });
+    } catch (e) {
+      addToast('error', `Failed to schedule: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  const handleToggleMonitor = (group: UrlGroup, schedule: TestSchedule) => {
+    updateSchedule.mutate(
+      { scheduleId: schedule.id, enabled: !schedule.enabled },
+      {
+        onSuccess: () =>
+          addToast(
+            'success',
+            schedule.enabled
+              ? `Paused hourly monitoring for ${group.host}`
+              : `Resumed hourly monitoring for ${group.host}`,
+          ),
+        onError: (e) =>
+          addToast('error', `Failed to update schedule: ${e instanceof Error ? e.message : String(e)}`),
+      },
+    );
   };
 
   const handleHostClick = (host: string) => {
@@ -862,6 +1014,25 @@ export function DiagnosticsPage() {
             {(['quick', 'standard', 'full', 'route'] as DiagPreset[]).map(p => (
               <option key={p} value={p}>
                 {p.charAt(0).toUpperCase() + p.slice(1)} ({DIAG_PRESET_LABELS[p].time})
+              </option>
+            ))}
+          </select>
+          <label htmlFor="diag-samples" className="text-xs text-gray-400">Samples</label>
+          <select
+            id="diag-samples"
+            value={samples}
+            onChange={e => setSamples(Number(e.target.value) as DiagSamples)}
+            className="bg-[var(--bg-raised)] border border-gray-800 rounded px-3 py-2 text-xs text-gray-400 focus:outline-none appearance-none pr-7 cursor-pointer"
+            style={{
+              backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23475569' stroke-width='1.5'/%3E%3C/svg%3E")`,
+              backgroundRepeat: 'no-repeat',
+              backgroundPosition: 'right 10px center',
+            }}
+            title="Burst sampling: probe every mode N times per URL in one run — median/p95 become meaningful within a single point"
+          >
+            {DIAG_SAMPLE_CHOICES.map(n => (
+              <option key={n} value={n}>
+                {n === 1 ? '1 (single)' : `${n} (burst)`}
               </option>
             ))}
           </select>
@@ -1038,6 +1209,9 @@ export function DiagnosticsPage() {
               onToggle={() => toggleCard(group.host)}
               onRunAgain={host => handleRun(host)}
               onRemove={handleRemove}
+              schedule={scheduleForGroup(group)}
+              onMonitorHourly={() => handleMonitorHourly(group)}
+              onToggleMonitor={schedule => handleToggleMonitor(group, schedule)}
             />
           ))}
         </div>
