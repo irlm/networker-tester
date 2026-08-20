@@ -147,60 +147,11 @@ internal sealed class GcpInstallerCredentials : IDisposable
         }
 
         var db = scope.ServiceProvider.GetRequiredService<NetworkerDbContext>();
-        var row = await db.Deployments
-            .AsNoTracking()
-            .Where(d => d.DeploymentId == deploymentId)
-            .Select(d => new { d.CloudAccountId, d.ProjectId })
-            .FirstOrDefaultAsync(ct)
+        var (jsonKey, why) = await ResolveGcpKeyForDeploymentAsync(db, cipher, deploymentId, logger, ct)
             .ConfigureAwait(false);
-        if (row is null)
+        if (jsonKey is null)
         {
-            return Skipped("deployment row not found");
-        }
-
-        var query = row.CloudAccountId is { } accountId
-            ? db.CloudAccounts.AsNoTracking().Where(a => a.AccountId == accountId && a.Provider == "gcp")
-            : db.CloudAccounts.AsNoTracking()
-                .Where(a => a.ProjectId == row.ProjectId && a.Provider == "gcp" && a.Status == "active");
-        var accounts = await query
-            .OrderBy(a => a.CreatedAt)
-            .Select(a => new { a.AccountId, a.Name, a.CredentialsEnc, a.CredentialsNonce })
-            .Take(2)
-            .ToListAsync(ct)
-            .ConfigureAwait(false);
-
-        if (accounts.Count == 0)
-        {
-            return Skipped(row.CloudAccountId is null
-                ? "the project has no active GCP cloud account"
-                : $"cloud account {row.CloudAccountId} is not a GCP account");
-        }
-        if (accounts.Count > 1)
-        {
-            // Wizard deploy in a project with several GCP accounts: there is no
-            // signal which one the user meant — don't guess with someone's key.
-            return Skipped("the project has more than one active GCP cloud account and the deployment names none");
-        }
-
-        var acct = accounts[0];
-        string? jsonKey;
-        try
-        {
-            jsonKey = CredentialJson.ToMap(cipher.Decrypt(acct.CredentialsEnc, acct.CredentialsNonce))
-                .GetValueOrDefault("json_key");
-        }
-        catch (Exception ex)
-        {
-            // Undecryptable account (key rotation, corrupt nonce) — same
-            // soft-fail posture as the reaper and the zone resolver.
-            logger.LogWarning(
-                "Deployment {DeploymentId}: cloud account {Account} credentials failed to decrypt ({Error})",
-                deploymentId, acct.Name, ex.Message);
-            return Skipped($"cloud account '{acct.Name}' credentials failed to decrypt");
-        }
-        if (string.IsNullOrEmpty(jsonKey))
-        {
-            return Skipped($"cloud account '{acct.Name}' has no json_key");
+            return Skipped(why ?? "no GCP service-account key");
         }
 
         var projectId = CliComputeProvisioner.ParseGcpProjectId(jsonKey);
@@ -224,11 +175,81 @@ internal sealed class GcpInstallerCredentials : IDisposable
         var env = CliComputeProvisioner.BuildGcloudEnv(keyFile, projectId);
         env[ConfigDirVar] = configDir;
 
-        var who = serviceAccount ?? $"cloud account '{acct.Name}'";
+        var who = serviceAccount ?? "the deployment's GCP service-account key";
         var project = projectId is null ? "" : $", project {projectId}";
         return new Outcome(
             new GcpInstallerCredentials(configDir, env, serviceAccount, projectId),
             $"GCP credentials: {who}{project} handed to install.sh via CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE (isolated CLOUDSDK_CONFIG)");
+    }
+
+    /// <summary>
+    /// The GCP service-account key a deployment acts under: its
+    /// <c>cloud_account_id</c>'s account (auto-provisioned comparison cells),
+    /// or — wizard deploys carry no account id — the deployment's project having
+    /// exactly one active GCP account. Shared by the install.sh credential
+    /// staging (#833) and the endpoint VM teardown (#838), so both resolve the
+    /// same account. Returns <c>(null, reason)</c> when no key can be produced;
+    /// never throws for data problems (an undecryptable account is a reason).
+    /// </summary>
+    internal static async Task<(string? JsonKey, string? Reason)> ResolveGcpKeyForDeploymentAsync(
+        NetworkerDbContext db, CredentialCipher cipher, Guid deploymentId, ILogger logger, CancellationToken ct)
+    {
+        var row = await db.Deployments
+            .AsNoTracking()
+            .Where(d => d.DeploymentId == deploymentId)
+            .Select(d => new { d.CloudAccountId, d.ProjectId })
+            .FirstOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+        if (row is null)
+        {
+            return (null, "deployment row not found");
+        }
+
+        var query = row.CloudAccountId is { } accountId
+            ? db.CloudAccounts.AsNoTracking().Where(a => a.AccountId == accountId && a.Provider == "gcp")
+            : db.CloudAccounts.AsNoTracking()
+                .Where(a => a.ProjectId == row.ProjectId && a.Provider == "gcp" && a.Status == "active");
+        var accounts = await query
+            .OrderBy(a => a.CreatedAt)
+            .Select(a => new { a.AccountId, a.Name, a.CredentialsEnc, a.CredentialsNonce })
+            .Take(2)
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        if (accounts.Count == 0)
+        {
+            return (null, row.CloudAccountId is null
+                ? "the project has no active GCP cloud account"
+                : $"cloud account {row.CloudAccountId} is not a GCP account");
+        }
+        if (accounts.Count > 1)
+        {
+            // Wizard deploy in a project with several GCP accounts: there is no
+            // signal which one the user meant — don't guess with someone's key.
+            return (null, "the project has more than one active GCP cloud account and the deployment names none");
+        }
+
+        var acct = accounts[0];
+        string? jsonKey;
+        try
+        {
+            jsonKey = CredentialJson.ToMap(cipher.Decrypt(acct.CredentialsEnc, acct.CredentialsNonce))
+                .GetValueOrDefault("json_key");
+        }
+        catch (Exception ex)
+        {
+            // Undecryptable account (key rotation, corrupt nonce) — same
+            // soft-fail posture as the reaper and the zone resolver.
+            logger.LogWarning(
+                "Deployment {DeploymentId}: cloud account {Account} credentials failed to decrypt ({Error})",
+                deploymentId, acct.Name, ex.Message);
+            return (null, $"cloud account '{acct.Name}' credentials failed to decrypt");
+        }
+        if (string.IsNullOrEmpty(jsonKey))
+        {
+            return (null, $"cloud account '{acct.Name}' has no json_key");
+        }
+        return (jsonKey, null);
     }
 
     private static Outcome Skipped(string reason) => new(

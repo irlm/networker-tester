@@ -148,6 +148,11 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
             return null;
         }
 
+        if (string.Equals(cloud, "gcp", StringComparison.OrdinalIgnoreCase))
+        {
+            return await ResolveGcpByEndpointAsync(creds, endpoint, ct).ConfigureAwait(false);
+        }
+
         if (!string.Equals(cloud, "azure", StringComparison.OrdinalIgnoreCase))
         {
             logger.LogInformation(
@@ -190,6 +195,158 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
                 endpoint);
         }
         return match;
+    }
+
+    /// <summary>
+    /// GCP reverse-lookup (#838): comparison-cell endpoint VMs are created by
+    /// install.sh, so the deployment row never stored a resource id — the only
+    /// handle is the public IP install.sh reported. List the project's
+    /// instances filtered on that NAT IP and return the owner's selfLink (the
+    /// resource id the gcp lifecycle ops parse zone+name from) and name.
+    ///
+    /// <para>gcloud authenticates only from its config store or the
+    /// per-invocation credential override (#827), so the caller threads the
+    /// account's <c>json_key</c> through <c>creds.Extra</c>; without one the
+    /// listing runs on the host's ambient gcloud auth (the historical
+    /// behaviour — it never worked on prod, which is why this was the 6th site).
+    /// Never throws: any failure logs and returns null ("leave for the
+    /// reaper").</para>
+    /// </summary>
+    private async Task<ResolvedVm?> ResolveGcpByEndpointAsync(
+        ProviderCredentials? creds, string endpoint, CancellationToken ct)
+    {
+        var jsonKey = ExtraValue(creds, "json_key");
+        string? keyFile = null;
+        Dictionary<string, string>? env = null;
+        try
+        {
+            if (jsonKey is not null)
+            {
+                keyFile = Path.Combine(Path.GetTempPath(), $"gcp-key-{Guid.NewGuid():N}.json");
+                await SecretFile.WriteAsync(keyFile, jsonKey, ct).ConfigureAwait(false);
+                env = BuildGcloudEnv(keyFile, ParseGcpProjectId(jsonKey));
+            }
+            else
+            {
+                logger.LogInformation(
+                    "GCP endpoint reverse-lookup for {Endpoint} has no account key — relying on the host's ambient gcloud auth",
+                    endpoint);
+            }
+
+            var args = new List<string>
+            {
+                "compute", "instances", "list",
+                "--filter", GcpNatIpFilter(endpoint),
+                "--format", "json",
+            };
+            var res = await RunAsync(CloudCli.GcloudBin(), args, env, ct).ConfigureAwait(false);
+            if (!res.Success)
+            {
+                logger.LogInformation(
+                    "GCP endpoint reverse-lookup for {Endpoint} could not list instances ({Err}); skipping teardown",
+                    endpoint, res.Error ?? res.StdErr);
+                return null;
+            }
+
+            var match = MatchGcpInstanceByEndpoint(res.StdOut, endpoint);
+            if (match is null)
+            {
+                logger.LogInformation(
+                    "GCP endpoint reverse-lookup found no instance owning {Endpoint}; nothing to tear down (already deleted?)",
+                    endpoint);
+            }
+            return match;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "GCP endpoint reverse-lookup for {Endpoint} threw; skipping teardown", endpoint);
+            return null;
+        }
+        finally
+        {
+            if (keyFile is not null)
+            {
+                TryDeleteFile(keyFile);
+            }
+        }
+    }
+
+    /// <summary>gcloud list filter selecting the instance whose first NIC's
+    /// external (NAT) IP is <paramref name="endpoint"/>. The match is re-done
+    /// exactly on the client (<see cref="MatchGcpInstanceByEndpoint"/>); the
+    /// server filter just keeps the listing small.</summary>
+    internal static string GcpNatIpFilter(string endpoint) =>
+        $"networkInterfaces[0].accessConfigs[0].natIP={endpoint}";
+
+    /// <summary>Pick the instance whose NAT IP equals <paramref name="endpoint"/>
+    /// exactly (an IP is never a prefix of another instance's IP here, but the
+    /// exact compare keeps "20.1.2.3" from matching "20.1.2.30" all the same)
+    /// out of a <c>gcloud compute instances list --format=json</c> document.
+    /// Returns the selfLink as the resource id. Null when nothing matches or
+    /// the document is not the expected shape.</summary>
+    internal static ResolvedVm? MatchGcpInstanceByEndpoint(string listJson, string endpoint)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint) || string.IsNullOrWhiteSpace(listJson))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(listJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+            foreach (var inst in doc.RootElement.EnumerateArray())
+            {
+                if (!inst.TryGetProperty("networkInterfaces", out var nics) || nics.ValueKind != JsonValueKind.Array)
+                {
+                    continue;
+                }
+                var owns = false;
+                foreach (var nic in nics.EnumerateArray())
+                {
+                    if (!nic.TryGetProperty("accessConfigs", out var acs) || acs.ValueKind != JsonValueKind.Array)
+                    {
+                        continue;
+                    }
+                    foreach (var ac in acs.EnumerateArray())
+                    {
+                        if (ac.TryGetProperty("natIP", out var nat)
+                            && nat.ValueKind == JsonValueKind.String
+                            && string.Equals(nat.GetString(), endpoint, StringComparison.OrdinalIgnoreCase))
+                        {
+                            owns = true;
+                        }
+                    }
+                }
+                if (!owns)
+                {
+                    continue;
+                }
+
+                var name = inst.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String
+                    ? n.GetString()
+                    : null;
+                var selfLink = inst.TryGetProperty("selfLink", out var sl) && sl.ValueKind == JsonValueKind.String
+                    ? sl.GetString()
+                    : null;
+                if (!string.IsNullOrEmpty(name) && !string.IsNullOrEmpty(selfLink))
+                {
+                    return new ResolvedVm(selfLink, name);
+                }
+            }
+            return null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     /// <summary>
