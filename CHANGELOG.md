@@ -61,6 +61,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hand-written statements. Each still degrades independently on a legacy
   schema via the savepoint retry.
 
+### Notes
+
+- The two new integration tests that SPAWN the tester binary are
+  `#[cfg(not(windows))]`: on Windows a debug-profile `networker-tester.exe`
+  dies with `STATUS_STACK_OVERFLOW` before probing anything — including on an
+  invocation with no `--samples` at all, so it is a property of the debug build
+  and not of burst sampling. Tracked as #853; release builds are unaffected.
+
 ---
 
 ## [0.28.274] - 2026-08-20

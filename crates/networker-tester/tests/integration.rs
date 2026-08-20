@@ -2522,6 +2522,21 @@ async fn sdkprobe_bad_token_is_config_error() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Burst sampling (#782 P2) — end to end through the real CLI
 // ─────────────────────────────────────────────────────────────────────────────
+//
+// Not on Windows. These are the first tests in the tree to SPAWN the tester
+// binary rather than call a runner function, and on windows-latest the spawned
+// **debug-profile** binary dies with STATUS_STACK_OVERFLOW (0xC00000FD,
+// "thread 'main' has overflowed its stack") before it probes anything. That is
+// a property of the debug build, not of burst sampling: the invocation WITHOUT
+// `--samples` — byte-identical to the pre-#782 command line — overflows too.
+// `#[tokio::main]` puts the whole async main state machine on the main thread,
+// whose stack on MSVC is the 1 MB linker default, and an unoptimised build of
+// that state machine does not fit. Release builds (what ships, what the native
+// Windows lab and the installer CI job run) are unaffected.
+//
+// Gating rather than deleting: the burst logic itself IS covered on Windows by
+// the `published_logical_attempts_*` unit tests, and these two keep guarding
+// the real CLI everywhere else. Tracked as #853.
 
 /// `--samples N` must actually produce N published attempts per mode per
 /// target in ONE run, each carrying its own `sample_index` — not one attempt
@@ -2532,6 +2547,7 @@ async fn sdkprobe_bad_token_is_config_error() {
 /// of the change is what comes out of `--json-stdout`, which is exactly what
 /// the agent relays and the control plane persists.
 #[tokio::test]
+#[cfg(not(windows))]
 async fn cli_samples_flag_publishes_every_sample() {
     let ep = Endpoint::start().await;
     let target = ep.http_url("/health").to_string();
@@ -2619,6 +2635,7 @@ async fn cli_samples_flag_publishes_every_sample() {
 /// the tester is also the benchmark / endpoint-deploy / lab engine and a
 /// silent 5× would change every one of those workloads' cost and semantics.
 #[tokio::test]
+#[cfg(not(windows))]
 async fn cli_without_samples_flag_keeps_one_attempt_per_mode() {
     let ep = Endpoint::start().await;
     let target = ep.http_url("/health").to_string();
