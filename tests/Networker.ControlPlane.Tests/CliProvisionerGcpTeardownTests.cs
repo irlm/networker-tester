@@ -180,9 +180,14 @@ public sealed class CliProvisionerGcpTeardownTests : IDisposable
             "  \"compute instances delete\"*) exit 0 ;;\n" +
             "  *) printf '%s\\n' 'unexpected gcloud invocation' >&2; exit 1 ;;\n" +
             "esac\n");
-        File.SetUnixFileMode(
-            path,
-            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        // The fake CLI is a /bin/sh script, so every caller already skips on Windows;
+        // guarding here too keeps the helper safe to call and satisfies CA1416.
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(
+                path,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
 
         Environment.SetEnvironmentVariable("GCLOUD_CMD", path);
     }
