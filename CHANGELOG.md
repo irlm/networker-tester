@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removes the hidden `.runner`/`.credentials` files before every
   `config.cmd` (otherwise "already configured" forever after a restart, as on
   Linux) and writes a transcript to `C:\ProgramData\ci-host\ci-host-loop.log`.
+- **Tester h3 unit tests wait up to 30 s (was 5 s) for their in-process QUIC
+  server.** `wait_for_quic` is a positive-signal gate — it returns the moment
+  Quinn is bound — so the cap only matters under load, where 5 s produced
+  "QUIC server did not start" on a busy self-hosted Linux host and once on the
+  Mac (`pageload_h3_empty_assets`,
+  `h3_download_carries_quic_stats_without_resumption_stats`).
 - **Linux CI-host loop removes stray `/usr/local/bin/networker-*` binaries
   between jobs.** A tester an integration job had `sudo install`ed turned
   the stubbed bats test `_offer_quick_test … release download` into a real
