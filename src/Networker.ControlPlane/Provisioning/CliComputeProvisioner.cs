@@ -269,7 +269,35 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
             return ProvisionResult.Unsupported(tester.Cloud ?? "(null)");
         }
 
-        var result = await RunAsync(file, args, env, ct).ConfigureAwait(false);
+        // gcloud authenticates ONLY from its own config store or the per-invocation
+        // CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE — it does not read ambient env
+        // credentials, so on a host whose gcloud was never interactively
+        // authenticated (prod) every un-credentialed call fails "You do not
+        // currently have an active account selected" (#827). Authenticate each
+        // lifecycle call statelessly via the override pointing at a 0600 tempfile
+        // copy of the connection's service-account key (same hygiene as the create
+        // path; deleted in finally). No json_key (ambient-auth connection) keeps
+        // the previous host-config behaviour.
+        string? gcpKeyFile = null;
+        ProvisionResult result;
+        try
+        {
+            if (cloud == "gcp" && ExtraValue(credentials, "json_key") is { } gcpJsonKey)
+            {
+                gcpKeyFile = Path.Combine(Path.GetTempPath(), $"gcp-key-{Guid.NewGuid():N}.json");
+                await SecretFile.WriteAsync(gcpKeyFile, gcpJsonKey, ct).ConfigureAwait(false);
+                env = BuildGcloudEnv(gcpKeyFile, ParseGcpProjectId(gcpJsonKey));
+            }
+
+            result = await RunAsync(file, args, env, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (gcpKeyFile is not null)
+            {
+                TryDeleteFile(gcpKeyFile);
+            }
+        }
 
         // Idempotent delete: "already gone" is the desired end-state. Mirrors the
         // Rust delete_vm paths that swallow ResourceNotFound / NotFound / 404.
@@ -676,6 +704,53 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
             }
         }
         return (name, zone);
+    }
+
+    /// <summary>
+    /// Env for a gcloud invocation authenticated by a service-account key file.
+    ///
+    /// <para><c>CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE</c> is what the gcloud CLI
+    /// actually reads — stateless and per-invocation, so concurrent calls against
+    /// different accounts can't race (unlike <c>gcloud auth
+    /// activate-service-account</c>, which mutates the shared global config and is
+    /// deliberately NOT used here). <c>GOOGLE_APPLICATION_CREDENTIALS</c> is the
+    /// Application Default Credentials variable for Google <b>client libraries</b>
+    /// — the gcloud CLI ignores it, which is why setting only that var failed
+    /// every prod provisioning call with "no active account selected" (#827). It
+    /// is kept for any ADC consumer a gcloud component may spawn.</para>
+    /// </summary>
+    internal static Dictionary<string, string> BuildGcloudEnv(string keyFile, string? projectId)
+    {
+        var env = new Dictionary<string, string>
+        {
+            ["CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE"] = keyFile,
+            ["GOOGLE_APPLICATION_CREDENTIALS"] = keyFile,
+        };
+        if (!string.IsNullOrEmpty(projectId))
+        {
+            env["CLOUDSDK_CORE_PROJECT"] = projectId;
+        }
+        return env;
+    }
+
+    /// <summary>Best-effort <c>project_id</c> extraction from a GCP
+    /// service-account key JSON; null when absent or not valid JSON. (The create
+    /// path parses inline instead so it can return distinct hard errors.)</summary>
+    internal static string? ParseGcpProjectId(string jsonKey)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(jsonKey);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                   && doc.RootElement.TryGetProperty("project_id", out var pid)
+                   && pid.ValueKind == JsonValueKind.String
+                ? pid.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     // ── VM create (Rust CloudProvider::create_vm) ────────────────────────────
@@ -1406,11 +1481,11 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         // world-readable in /tmp (quality audit F11).
         await SecretFile.WriteAsync(keyFile, jsonKey, ct).ConfigureAwait(false);
 
-        var env = new Dictionary<string, string>
-        {
-            ["GOOGLE_APPLICATION_CREDENTIALS"] = keyFile,
-            ["CLOUDSDK_CORE_PROJECT"] = projectId,
-        };
+        // CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE is the var the gcloud CLI reads;
+        // GOOGLE_APPLICATION_CREDENTIALS alone (ADC, client-libraries-only) left
+        // gcloud unauthenticated on prod — every create failed "no active account
+        // selected" (#827). See BuildGcloudEnv.
+        var env = BuildGcloudEnv(keyFile, projectId);
 
         // GCP needs a zone, not just a region — first zone in the region.
         var zone = $"{request.Region}-a";
