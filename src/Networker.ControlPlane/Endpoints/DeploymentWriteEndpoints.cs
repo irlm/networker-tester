@@ -366,12 +366,9 @@ public static class DeploymentWriteEndpoints
             {
                 using var scope = scopeFactory.CreateScope();
                 var provisioner = scope.ServiceProvider.GetRequiredService<Provisioning.IComputeProvisioner>();
-                // No stored per-connection credentials for a deploy row; the
-                // control plane manages the endpoint RG via ambient auth (managed
-                // identity), the same way install.sh created the VM. The delete's
-                // NSG/IP cascade derives subscription+RG from the resolved VM's
-                // resource id, so ambient creds (region only) are sufficient.
-                var creds = new Provisioning.ProviderCredentials(provider, Region: region);
+                var creds = await TeardownCredentialsAsync(
+                        scope.ServiceProvider, provider, region, deploymentId, logger, CancellationToken.None)
+                    .ConfigureAwait(false);
 
                 foreach (var endpoint in endpoints)
                 {
@@ -414,6 +411,66 @@ public static class DeploymentWriteEndpoints
                 logger.LogError(ex, "Deployment {DeploymentId} VM teardown threw", deploymentId);
             }
         });
+    }
+
+    /// <summary>
+    /// Credentials for tearing down a deployment's VM. Azure (and AWS) keep the
+    /// historical posture: no stored per-connection credentials — the control
+    /// plane manages the endpoint RG via ambient auth (managed identity), the
+    /// same way install.sh created the VM, and the delete's NSG/IP cascade
+    /// derives subscription+RG from the resolved VM's resource id. GCP cannot
+    /// work that way: gcloud authenticates only from its config store or the
+    /// per-invocation credential override (#827), so the teardown threads the
+    /// deployment's account <c>json_key</c> (same resolution as the install.sh
+    /// staging, #833) — without it every comparison-cell GCE VM leaked (#838).
+    /// Soft-fails to credential-less (ambient) with a log line.
+    /// </summary>
+    internal static async Task<Provisioning.ProviderCredentials> TeardownCredentialsAsync(
+        IServiceProvider services, string provider, string? region, Guid deploymentId, ILogger logger, CancellationToken ct)
+    {
+        var ambient = new Provisioning.ProviderCredentials(provider, Region: region);
+        if (!string.Equals(provider, "gcp", StringComparison.OrdinalIgnoreCase))
+        {
+            return ambient;
+        }
+
+        try
+        {
+            var cipher = services.GetService<Networker.Security.CredentialCipher>();
+            if (cipher is null)
+            {
+                logger.LogWarning(
+                    "Deployment {DeploymentId}: no credential cipher — GCP teardown will rely on the host's ambient gcloud auth",
+                    deploymentId);
+                return ambient;
+            }
+            var db = services.GetRequiredService<NetworkerDbContext>();
+            var (jsonKey, why) = await Provisioning.GcpInstallerCredentials
+                .ResolveGcpKeyForDeploymentAsync(db, cipher, deploymentId, logger, ct)
+                .ConfigureAwait(false);
+            if (jsonKey is null)
+            {
+                logger.LogWarning(
+                    "Deployment {DeploymentId}: {Why} — GCP teardown will rely on the host's ambient gcloud auth",
+                    deploymentId, why);
+                return ambient;
+            }
+            return ambient with
+            {
+                Extra = new Dictionary<string, string>(StringComparer.Ordinal) { ["json_key"] = jsonKey },
+            };
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Deployment {DeploymentId}: resolving GCP teardown credentials failed — relying on the host's ambient gcloud auth",
+                deploymentId);
+            return ambient;
+        }
     }
 
     private static Task<bool> DeploymentExistsAsync(

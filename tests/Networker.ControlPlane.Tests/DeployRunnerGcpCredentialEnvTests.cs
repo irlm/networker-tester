@@ -268,6 +268,56 @@ public sealed class DeployRunnerGcpCredentialEnvTests : IDisposable
         Assert.Contains("no credential cipher", row.Log);
     }
 
+    // ── Teardown credentials (#838) share the same account resolution ─────────
+
+    [Fact]
+    public async Task Teardown_credentials_for_a_gcp_deployment_carry_the_accounts_json_key()
+    {
+        var (sp, conn) = BuildHost(withCipher: true);
+        using var _ = conn;
+        Guid deploymentId;
+        using (var db = Db(sp))
+        {
+            var accountId = SeedProjectAndAccount(db, sp.GetRequiredService<CredentialCipher>(), JsonKey);
+            deploymentId = SeedDeployment(db, GcpDeployJson, accountId);
+        }
+
+        using var scope = sp.CreateScope();
+        var creds = await Endpoints.DeploymentWriteEndpoints.TeardownCredentialsAsync(
+            scope.ServiceProvider, "gcp", "us-east1", deploymentId,
+            sp.GetRequiredService<ILogger<DeployRunner>>(), CancellationToken.None);
+
+        Assert.Equal("gcp", creds.Provider);
+        Assert.Equal("us-east1", creds.Region);
+        Assert.NotNull(creds.Extra);
+        Assert.Equal(JsonKey, creds.Extra!["json_key"]);
+    }
+
+    [Fact]
+    public async Task Teardown_credentials_stay_ambient_for_azure_and_for_a_gcp_deployment_without_a_key()
+    {
+        var (sp, conn) = BuildHost(withCipher: true);
+        using var _ = conn;
+        Guid gcpNoKey;
+        using (var db = Db(sp))
+        {
+            var accountId = SeedProjectAndAccount(db, sp.GetRequiredService<CredentialCipher>(), jsonKey: null, credentialJson: "{}");
+            gcpNoKey = SeedDeployment(db, GcpDeployJson, accountId);
+        }
+        using var scope = sp.CreateScope();
+        var logger = sp.GetRequiredService<ILogger<DeployRunner>>();
+
+        var azure = await Endpoints.DeploymentWriteEndpoints.TeardownCredentialsAsync(
+            scope.ServiceProvider, "azure", "eastus", Guid.NewGuid(), logger, CancellationToken.None);
+        Assert.Null(azure.Extra);
+        Assert.Equal("eastus", azure.Region);
+
+        var gcp = await Endpoints.DeploymentWriteEndpoints.TeardownCredentialsAsync(
+            scope.ServiceProvider, "gcp", "us-east1", gcpNoKey, logger, CancellationToken.None);
+        Assert.Null(gcp.Extra); // soft-fail: ambient, never a throw
+        Assert.Equal("gcp", gcp.Provider);
+    }
+
     // ── Pure shape checks (no process spawn) ──────────────────────────────────
 
     [Theory]

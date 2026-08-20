@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.265] - 2026-08-20
+
+### Fixed
+
+- **GCP endpoint VMs are torn down when their run finishes** (#838 — the 6th
+  site of the GCP chain). The deployment teardown reverse-looks the VM up by
+  the public IP install.sh reported, and that lookup was Azure-only: for GCP
+  it logged "not implemented … skipping VM teardown", flipped the row to
+  `torn_down` anyway, and the orphan reaper (also Azure-only) never came —
+  every comparison cell leaked its GCE instance until the 04:00 shutdown
+  cron stopped (not deleted) it. `ResolveByEndpointAsync` now lists the
+  project's instances by NAT IP and returns the selfLink the gcp lifecycle
+  delete parses zone+name from; the teardown threads the deployment's account
+  key (same resolution as the install.sh staging from #833) because gcloud
+  authenticates only from the per-invocation override (#827). Azure/AWS
+  teardown is unchanged (ambient). A GCP sweep for the orphan reaper remains
+  open in #838.
+
 ## [0.28.264] - 2026-08-20
 
 ### Fixed
