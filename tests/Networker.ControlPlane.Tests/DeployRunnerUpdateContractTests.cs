@@ -21,7 +21,12 @@ namespace Networker.ControlPlane.Tests;
 /// (the old behaviour) made the target silently vanish from the deployed-
 /// targets/system-versions panels and destroyed the reverse-lookup inputs the
 /// DELETE VM teardown depends on (orphaning the VM to the reaper).</para>
+///
+/// <para>Joins the <c>cloud-cli-fake-bins</c> collection: every class that
+/// points the process-wide <c>INSTALL_SH_PATH</c> at its own stub must run
+/// serialized with the others (see <c>DeployDiagnosticsTests</c>).</para>
 /// </summary>
+[Collection("cloud-cli-fake-bins")]
 public class DeployRunnerUpdateContractTests
 {
     private const string ProjectId = "p-upd";

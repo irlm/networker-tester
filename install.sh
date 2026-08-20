@@ -332,7 +332,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.261"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.262"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -421,6 +421,7 @@ AWS_SHUTDOWN_ASKED=0
 # ── GCP state ────────────────────────────────────────────────────────────────
 GCP_CLI_AVAILABLE=0
 GCP_LOGGED_IN=0
+GCP_ACCOUNT=""                  # identity gcloud acts as (set via _gcp_auth_identity)
 GCP_PROJECT=""
 GCP_REGION="us-central1"
 GCP_ZONE="us-central1-a"
@@ -802,6 +803,10 @@ discover_system() {
     if command -v gcloud &>/dev/null; then
         GCP_CLI_AVAILABLE=1
     fi
+    # A service-account key named only by GOOGLE_APPLICATION_CREDENTIALS is
+    # invisible to gcloud (#827) — promote it to the variable gcloud reads once,
+    # here, so every later gcloud call in this shell authenticates with it.
+    _gcp_promote_credential_env
 }
 
 display_system_info() {
@@ -1843,12 +1848,103 @@ _gcp_project_from_sa_email() {
     esac
 }
 
+# Path of the service-account key gcloud should authenticate with, or empty.
+# CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE is the variable the gcloud CLI reads
+# (the control plane sets it for every GCP endpoint deploy, #833);
+# GOOGLE_APPLICATION_CREDENTIALS is the client-library ADC convention that
+# gcloud itself ignores (#827) — accepted here so the documented "point it at a
+# key" path works, and promoted to the override by _gcp_auth_identity.
+# Always returns 0 (safe under set -e inside assignments).
+_gcp_credential_file() {
+    local f="${CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE:-}"
+    if [[ -z "$f" && -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]]; then
+        f="$GOOGLE_APPLICATION_CREDENTIALS"
+    fi
+    if [[ -n "$f" && -r "$f" ]]; then
+        printf '%s\n' "$f"
+    else
+        printf '\n'
+    fi
+    return 0
+}
+
+# Promote GOOGLE_APPLICATION_CREDENTIALS to CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE
+# in the CURRENT shell, so every later gcloud call (not just the probe, which
+# runs in a command substitution) authenticates with the supplied key. No-op
+# when the override is already set or no readable key is named.
+_gcp_promote_credential_env() {
+    local cred_file
+    cred_file="$(_gcp_credential_file)"
+    if [[ -n "$cred_file" && -z "${CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE:-}" ]]; then
+        export CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE="$cred_file"
+    fi
+    return 0
+}
+
+# Print the identity gcloud will act as and return 0 when authenticated;
+# print nothing and return 1 otherwise.
+#
+# Credential-file auth (#833): `gcloud auth list` only enumerates the config
+# store, so under CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE it reports "no
+# accounts" even though every gcloud call authenticates fine through the
+# override — that single check failed every GCP endpoint deploy launched from
+# the control plane. With a key file, prove auth with a real token exchange
+# (the token is discarded) and name the key's client_email; without one, fall
+# back to the active account in the config store (ambient `gcloud auth login`).
+# A supplied key that does not authenticate is a hard "no" — never silently
+# fall back to whatever ambient session the host happens to have.
+_gcp_auth_identity() {
+    command -v gcloud &>/dev/null || return 1
+    local cred_file
+    cred_file="$(_gcp_credential_file)"
+    if [[ -n "$cred_file" ]]; then
+        export CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE="$cred_file"
+        if gcloud auth print-access-token >/dev/null 2>&1 </dev/null; then
+            local who=""
+            if command -v jq &>/dev/null; then
+                who="$(jq -r '.client_email // empty' "$cred_file" 2>/dev/null || echo "")"
+            fi
+            printf '%s\n' "${who:-service-account key $cred_file}"
+            return 0
+        fi
+        return 1
+    fi
+    local acct
+    acct="$(gcloud auth list --filter='status:ACTIVE' --format='value(account)' 2>/dev/null </dev/null | head -1 || true)"
+    if [[ -n "$acct" ]]; then
+        printf '%s\n' "$acct"
+        return 0
+    fi
+    return 1
+}
+
 # Try to populate GCP_PROJECT when empty by inspecting:
+#   0. CLOUDSDK_CORE_PROJECT / the service-account key's project_id (#833).
 #   1. Active gcloud account if it is a service-account email.
 #   2. gcloud config get-value project (host-wide setting).
 # Safe to call even if gcloud is not installed (silently no-ops).
 _gcp_autodetect_project() {
     [[ -n "$GCP_PROJECT" ]] && return 0
+
+    # 0. Explicit project from the environment (the control plane sets
+    #    CLOUDSDK_CORE_PROJECT beside the key override) or from the key itself.
+    if [[ -n "${CLOUDSDK_CORE_PROJECT:-}" ]]; then
+        GCP_PROJECT="$CLOUDSDK_CORE_PROJECT"
+        print_dim "Resolved GCP project from CLOUDSDK_CORE_PROJECT: $GCP_PROJECT"
+        return 0
+    fi
+    local cred_file
+    cred_file="$(_gcp_credential_file)"
+    if [[ -n "$cred_file" ]] && command -v jq &>/dev/null; then
+        local key_proj
+        key_proj="$(jq -r '.project_id // empty' "$cred_file" 2>/dev/null || echo "")"
+        if [[ -n "$key_proj" ]]; then
+            GCP_PROJECT="$key_proj"
+            print_dim "Resolved GCP project from the service-account key: $GCP_PROJECT"
+            return 0
+        fi
+    fi
+
     command -v gcloud &>/dev/null || return 0
 
     # 1. Service-account email embeds project ID
@@ -2423,25 +2519,21 @@ ensure_gcp_cli() {
     fi
 
     # discover_system defers gcloud execution, so check login status now.
+    # Credential-file auth (#833) is honoured by _gcp_auth_identity; a key
+    # that does not authenticate is a hard failure, not a prompt to log in
+    # interactively as someone else.
     if [[ $GCP_LOGGED_IN -eq 0 ]]; then
-        local gcp_account
-        gcp_account="$(gcloud config get-value account 2>/dev/null < /dev/null || echo "")"
-        if [[ -n "$gcp_account" && "$gcp_account" != "(unset)" ]]; then
+        if GCP_ACCOUNT="$(_gcp_auth_identity)"; then
             GCP_LOGGED_IN=1
-        fi
-    fi
-
-    # Check GOOGLE_APPLICATION_CREDENTIALS (service account key file)
-    if [[ $GCP_LOGGED_IN -eq 0 && -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" && -f "${GOOGLE_APPLICATION_CREDENTIALS}" ]]; then
-        if gcloud auth list --filter="status:ACTIVE" --format="value(account)" 2>/dev/null </dev/null | grep -q .; then
-            GCP_LOGGED_IN=1
+        elif [[ -n "$(_gcp_credential_file)" ]]; then
+            print_err "The service-account key in CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE / GOOGLE_APPLICATION_CREDENTIALS did not authenticate."
+            echo "  Check:  gcloud auth print-access-token"
+            exit 1
         fi
     fi
 
     if [[ $GCP_LOGGED_IN -eq 1 ]]; then
-        local gcp_account
-        gcp_account="$(gcloud config get-value account 2>/dev/null < /dev/null || echo 'unknown')"
-        print_ok "GCP credentials found  ($gcp_account)"
+        print_ok "GCP credentials found  (${GCP_ACCOUNT:-unknown})"
     else
         echo ""
         print_warn "Not logged in to GCP."
@@ -2454,6 +2546,7 @@ ensure_gcp_cli() {
             gcp_account="$(gcloud config get-value account 2>/dev/null || echo "")"
             if [[ -n "$gcp_account" && "$gcp_account" != "(unset)" ]]; then
                 GCP_LOGGED_IN=1
+                GCP_ACCOUNT="$gcp_account"
                 print_ok "Logged in: $gcp_account"
             else
                 print_err "GCP login failed — fix manually then re-run the installer."
@@ -8211,26 +8304,24 @@ step_check_gcp_prereqs() {
     fi
     print_ok "gcloud CLI found"
 
-    if [[ $GCP_LOGGED_IN -eq 0 ]]; then
-        # Re-check in case gcloud was just added to PATH
-        local gcp_account
-        gcp_account="$(gcloud config get-value account 2>/dev/null || echo "")"
-        if [[ -n "$gcp_account" && "$gcp_account" != "(unset)" ]]; then
+    # Re-check in case gcloud was just added to PATH. Credential-file auth
+    # (#833 — the control plane hands every GCP endpoint deploy a
+    # service-account key through CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE) is
+    # honoured by _gcp_auth_identity; a supplied key that does not
+    # authenticate is a hard failure — there is no tty to log in on, and
+    # logging in as someone else would be the wrong fix anyway.
+    if [[ $GCP_LOGGED_IN -eq 0 || -z "$GCP_ACCOUNT" ]]; then
+        if GCP_ACCOUNT="$(_gcp_auth_identity)"; then
             GCP_LOGGED_IN=1
-        fi
-    fi
-
-    # Check GOOGLE_APPLICATION_CREDENTIALS (service account key file)
-    if [[ $GCP_LOGGED_IN -eq 0 && -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" && -f "${GOOGLE_APPLICATION_CREDENTIALS}" ]]; then
-        if gcloud auth list --filter="status:ACTIVE" --format="value(account)" 2>/dev/null </dev/null | grep -q .; then
-            GCP_LOGGED_IN=1
+        elif [[ -n "$(_gcp_credential_file)" ]]; then
+            print_err "The service-account key in CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE / GOOGLE_APPLICATION_CREDENTIALS did not authenticate."
+            echo "  Check:  gcloud auth print-access-token"
+            exit 1
         fi
     fi
 
     if [[ $GCP_LOGGED_IN -eq 1 ]]; then
-        local gcp_account
-        gcp_account="$(gcloud config get-value account 2>/dev/null </dev/null || echo 'unknown')"
-        print_ok "GCP credentials found  ($gcp_account)"
+        print_ok "GCP credentials found  (${GCP_ACCOUNT:-unknown})"
     else
         echo ""
         print_warn "Not logged in to GCP."
@@ -8240,6 +8331,7 @@ step_check_gcp_prereqs() {
         gcp_account="$(gcloud config get-value account 2>/dev/null || echo "")"
         if [[ -n "$gcp_account" && "$gcp_account" != "(unset)" ]]; then
             GCP_LOGGED_IN=1
+            GCP_ACCOUNT="$gcp_account"
         else
             print_err "GCP login failed."
             echo "  Run:  gcloud auth login"
@@ -8268,9 +8360,7 @@ step_check_gcp_prereqs() {
     # this keeps any helper SSH/SCP shorthand consistent.
     gcloud config set project "$GCP_PROJECT" 2>/dev/null </dev/null || true
 
-    local gcp_account
-    gcp_account="$(gcloud config get-value account 2>/dev/null </dev/null || echo "")"
-    print_ok "Account: ${gcp_account}  (project: ${GCP_PROJECT})"
+    print_ok "Account: ${GCP_ACCOUNT:-unknown}  (project: ${GCP_PROJECT})"
 
     # Ensure Compute Engine API is enabled (required for VM creation, firewall rules, etc.)
     print_info "Checking Compute Engine API…"
@@ -10225,15 +10315,21 @@ _deploy_preflight() {
                     print_err "gcloud CLI not found — install from https://cloud.google.com/sdk/docs/install"
                     errors=$((errors + 1))
                 fi
-                # Live check: discover_system defers gcloud execution, so check auth now
+                # Live check: discover_system defers gcloud execution, so check
+                # auth now. _gcp_auth_identity honours credential-file auth —
+                # `gcloud auth list` alone reported "no accounts" for every GCP
+                # endpoint deploy the control plane launched, because the key it
+                # supplies via CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE never
+                # enters the config store (#833).
                 if [[ $GCP_CLI_AVAILABLE -eq 1 ]]; then
-                    local gcp_account
-                    gcp_account="$(gcloud auth list --filter='status:ACTIVE' --format='value(account)' 2>/dev/null </dev/null)"
-                    if [[ -n "$gcp_account" ]]; then
+                    if GCP_ACCOUNT="$(_gcp_auth_identity)"; then
                         GCP_LOGGED_IN=1
-                        print_ok "GCP credentials found ($gcp_account)"
+                        print_ok "GCP credentials found ($GCP_ACCOUNT)"
+                    elif [[ -n "$(_gcp_credential_file)" ]]; then
+                        print_err "Not authenticated to GCP: the service-account key in CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE / GOOGLE_APPLICATION_CREDENTIALS did not authenticate (check: gcloud auth print-access-token)"
+                        errors=$((errors + 1))
                     else
-                        print_err "Not authenticated to GCP (run: gcloud auth login)"
+                        print_err "Not authenticated to GCP (run: gcloud auth login, or set CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE to a service-account key)"
                         errors=$((errors + 1))
                     fi
                 elif [[ $GCP_LOGGED_IN -eq 1 ]]; then

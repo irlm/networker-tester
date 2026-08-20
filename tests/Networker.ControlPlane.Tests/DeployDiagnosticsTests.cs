@@ -24,7 +24,13 @@ namespace Networker.ControlPlane.Tests;
 ///     error_message carrying the actionable detail — the orchestrator copies
 ///     that message onto the run row verbatim.</item>
 /// </list>
+///
+/// <para>Joins the <c>cloud-cli-fake-bins</c> collection: every class that
+/// points the process-wide <c>INSTALL_SH_PATH</c> at its own stub must run
+/// serialized, or a parallel class's stub (and its exit code) answers this
+/// class's spawn (#833 follow-up; seen as "expected exit 1, got 7").</para>
 /// </summary>
+[Collection("cloud-cli-fake-bins")]
 public class DeployDiagnosticsTests
 {
     private const string ProjectId = "p-diag";

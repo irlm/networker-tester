@@ -94,6 +94,7 @@ reset_state() {
     # GCP
     GCP_CLI_AVAILABLE=0
     GCP_LOGGED_IN=0
+    GCP_ACCOUNT=""
     GCP_PROJECT=""
     GCP_REGION="us-central1"
     GCP_ZONE="us-central1-a"

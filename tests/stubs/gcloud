@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Stub for gcloud (Google Cloud CLI).
+#
+# Models the two auth sources the real CLI has (#827/#833):
+#   - the config store (`gcloud auth list`, `config get-value account`), fed
+#     here by STUB_GCLOUD_ACTIVE;
+#   - the per-process CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE, which every
+#     authenticated call honours but `auth list` does NOT enumerate.
+# Like the real CLI it ignores GOOGLE_APPLICATION_CREDENTIALS.
+#
+# STUB_GCLOUD_LOG          Append each argv line to this file
+# STUB_GCLOUD_ACTIVE       Account in the config store (empty = none)
+# STUB_GCLOUD_TOKEN_FAIL   "1" → `auth print-access-token` fails even with a key
+# STUB_GCLOUD_FAIL         "1" → every invocation exits 1
+
+if [[ -n "${STUB_GCLOUD_LOG:-}" ]]; then
+    printf '%s\n' "$*" >> "$STUB_GCLOUD_LOG"
+fi
+if [[ "${STUB_GCLOUD_FAIL:-}" == "1" ]]; then
+    exit 1
+fi
+
+case "${1:-} ${2:-}" in
+    "auth list")
+        [[ -n "${STUB_GCLOUD_ACTIVE:-}" ]] && echo "$STUB_GCLOUD_ACTIVE"
+        exit 0
+        ;;
+    "auth print-access-token")
+        if [[ "${STUB_GCLOUD_TOKEN_FAIL:-}" == "1" ]]; then
+            echo "ERROR: (gcloud.auth.print-access-token) invalid_grant: Invalid JWT Signature." >&2
+            exit 1
+        fi
+        if [[ -n "${CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE:-}" || -n "${STUB_GCLOUD_ACTIVE:-}" ]]; then
+            echo "ya29.stub-token"
+            exit 0
+        fi
+        echo "ERROR: (gcloud.auth.print-access-token) You do not currently have an active account selected." >&2
+        exit 1
+        ;;
+    "config get-value")
+        case "${3:-}" in
+            account) echo "${STUB_GCLOUD_ACTIVE:-(unset)}" ;;
+            project) echo "${CLOUDSDK_CORE_PROJECT:-(unset)}" ;;
+            *)       echo "(unset)" ;;
+        esac
+        exit 0
+        ;;
+    "config set")
+        exit 0
+        ;;
+esac
+
+echo "{}"
+exit 0

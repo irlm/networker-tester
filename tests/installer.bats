@@ -31,7 +31,10 @@ teardown() {
     rm -rf "$TEST_TMPDIR"
     unset STUB_SSH_FAIL STUB_SSH_UNAME STUB_SSH_VERSION STUB_SSH_FAIL_UNAME \
           STUB_SSH_FAIL_VERSION STUB_CURL_FAIL STUB_CARGO_FAIL STUB_SCP_FAIL \
-          STUB_GH_FAIL STUB_TESTER_FAIL STUB_UNAME_RESULT 2>/dev/null || true
+          STUB_GH_FAIL STUB_TESTER_FAIL STUB_UNAME_RESULT \
+          STUB_GCLOUD_LOG STUB_GCLOUD_ACTIVE STUB_GCLOUD_TOKEN_FAIL STUB_GCLOUD_FAIL \
+          CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE CLOUDSDK_CONFIG CLOUDSDK_CORE_PROJECT \
+          GOOGLE_APPLICATION_CREDENTIALS 2>/dev/null || true
 }
 
 
@@ -1956,6 +1959,150 @@ JSON
     _gcp_autodetect_project
     [ "$GCP_PROJECT" = "host-fallback-proj" ]
     unset -f gcloud
+}
+
+# ===========================================================================
+# GCP credential-file auth (#833 — every GCP endpoint deploy launched from the
+# control plane failed pre-flight: install.sh checked `gcloud auth list`, which
+# never sees the service-account key the control plane supplies through
+# CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE). Uses tests/stubs/gcloud, which models
+# the real CLI's two auth sources (config store vs. per-process override).
+# ===========================================================================
+
+@test "_gcp_auth_identity: credential-file override proves auth with a token exchange, not 'auth list'" {
+    printf '%s' '{"type":"service_account","project_id":"key-proj-42","client_email":"deployer@key-proj-42.iam.gserviceaccount.com"}' > "$TEST_TMPDIR/key.json"
+    export CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE="$TEST_TMPDIR/key.json"
+    export STUB_GCLOUD_LOG="$TEST_TMPDIR/gcloud.log"
+    unset STUB_GCLOUD_ACTIVE
+    run _gcp_auth_identity
+    [ "$status" -eq 0 ] || { echo "status=$status output=$output" >&2; exit 1; }
+    [ "$output" = "deployer@key-proj-42.iam.gserviceaccount.com" ] || { echo "output=$output" >&2; exit 1; }
+    grep -q '^auth print-access-token' "$STUB_GCLOUD_LOG"
+    ! grep -q '^auth list' "$STUB_GCLOUD_LOG"
+}
+
+@test "_gcp_auth_identity: a supplied key that does not authenticate fails — no silent fallback to ambient auth" {
+    printf '%s' '{"client_email":"deployer@p.iam.gserviceaccount.com"}' > "$TEST_TMPDIR/key.json"
+    export CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE="$TEST_TMPDIR/key.json"
+    export STUB_GCLOUD_TOKEN_FAIL=1 STUB_GCLOUD_ACTIVE="ambient@example.com"
+    run _gcp_auth_identity
+    [ "$status" -eq 1 ] || { echo "status=$status output=$output" >&2; exit 1; }
+    [ -z "$output" ]
+}
+
+@test "_gcp_auth_identity: GOOGLE_APPLICATION_CREDENTIALS alone is promoted to the override gcloud actually reads" {
+    printf '%s' '{"client_email":"adc@p.iam.gserviceaccount.com"}' > "$TEST_TMPDIR/adc.json"
+    unset CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE STUB_GCLOUD_ACTIVE
+    export GOOGLE_APPLICATION_CREDENTIALS="$TEST_TMPDIR/adc.json"
+    # The stub, like real gcloud, ignores GOOGLE_APPLICATION_CREDENTIALS (#827):
+    # the token exchange only succeeds because the helper exported the override.
+    run _gcp_auth_identity
+    [ "$status" -eq 0 ] || { echo "status=$status output=$output" >&2; exit 1; }
+    [ "$output" = "adc@p.iam.gserviceaccount.com" ]
+}
+
+@test "_gcp_promote_credential_env: exports the override in the calling shell, and never overrides an explicit one" {
+    printf '%s' '{"client_email":"adc@p.iam.gserviceaccount.com"}' > "$TEST_TMPDIR/adc.json"
+    unset CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE
+    export GOOGLE_APPLICATION_CREDENTIALS="$TEST_TMPDIR/adc.json"
+    _gcp_promote_credential_env
+    [ "$CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE" = "$TEST_TMPDIR/adc.json" ]
+    # An explicit override (what the control plane sets) wins over ADC.
+    export CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE="$TEST_TMPDIR/explicit.json"
+    printf '%s' '{}' > "$TEST_TMPDIR/explicit.json"
+    _gcp_promote_credential_env
+    [ "$CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE" = "$TEST_TMPDIR/explicit.json" ]
+}
+
+@test "_gcp_auth_identity: without a key file the config store's active account is the identity" {
+    unset CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE GOOGLE_APPLICATION_CREDENTIALS
+    export STUB_GCLOUD_ACTIVE="alice@example.com" STUB_GCLOUD_LOG="$TEST_TMPDIR/gcloud.log"
+    run _gcp_auth_identity
+    [ "$status" -eq 0 ] || { echo "status=$status output=$output" >&2; exit 1; }
+    [ "$output" = "alice@example.com" ]
+    ! grep -q 'print-access-token' "$STUB_GCLOUD_LOG"
+}
+
+@test "_gcp_auth_identity: no key and no active account is not authenticated" {
+    unset CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE GOOGLE_APPLICATION_CREDENTIALS STUB_GCLOUD_ACTIVE
+    run _gcp_auth_identity
+    [ "$status" -eq 1 ]
+    [ -z "$output" ]
+}
+
+_write_gcp_preflight_cfg() {
+    cat > "$1" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [
+    { "provider": "gcp", "gcp": { "region": "us-east1", "zone": "us-east1-c", "machine_type": "e2-small", "os": "linux", "instance_name": "nwk-a-1" } }
+  ]
+}
+JSON
+}
+
+@test "_deploy_preflight: a GCP endpoint passes on credential-file auth with an empty gcloud config store (#833)" {
+    local cfg="$TEST_TMPDIR/preflight-gcp.json"
+    _write_gcp_preflight_cfg "$cfg"
+    printf '%s' '{"type":"service_account","project_id":"key-proj-42","client_email":"deployer@key-proj-42.iam.gserviceaccount.com"}' > "$TEST_TMPDIR/key.json"
+    export CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE="$TEST_TMPDIR/key.json"
+    export CLOUDSDK_CONFIG="$TEST_TMPDIR/gcloud-config"
+    unset STUB_GCLOUD_ACTIVE
+    GCP_CLI_AVAILABLE=1
+    DEPLOY_ENDPOINT_COUNT=1
+    DEPLOY_EP_PROVIDERS=(gcp)
+    run _deploy_preflight "$cfg"
+    [ "$status" -eq 0 ] || { echo "$output" >&2; exit 1; }
+    [[ "$output" == *"GCP credentials found (deployer@key-proj-42.iam.gserviceaccount.com)"* ]] || { echo "$output" >&2; exit 1; }
+    [[ "$output" == *"All pre-flight checks passed"* ]]
+}
+
+@test "_deploy_preflight: a GCP endpoint with neither a key nor an active account fails with the documented hint" {
+    local cfg="$TEST_TMPDIR/preflight-gcp.json"
+    _write_gcp_preflight_cfg "$cfg"
+    unset CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE GOOGLE_APPLICATION_CREDENTIALS STUB_GCLOUD_ACTIVE
+    GCP_CLI_AVAILABLE=1
+    DEPLOY_ENDPOINT_COUNT=1
+    DEPLOY_EP_PROVIDERS=(gcp)
+    run _deploy_preflight "$cfg"
+    [ "$status" -eq 1 ] || { echo "$output" >&2; exit 1; }
+    [[ "$output" == *"Not authenticated to GCP"* ]]
+    [[ "$output" == *"CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE"* ]]
+    [[ "$output" == *"Pre-flight failed: 1 issue(s)"* ]]
+}
+
+@test "_deploy_preflight: a rejected service-account key is reported as the cause, not as 'run gcloud auth login'" {
+    local cfg="$TEST_TMPDIR/preflight-gcp.json"
+    _write_gcp_preflight_cfg "$cfg"
+    printf '%s' '{"client_email":"deployer@p.iam.gserviceaccount.com"}' > "$TEST_TMPDIR/key.json"
+    export CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE="$TEST_TMPDIR/key.json"
+    export STUB_GCLOUD_TOKEN_FAIL=1
+    unset STUB_GCLOUD_ACTIVE
+    GCP_CLI_AVAILABLE=1
+    DEPLOY_ENDPOINT_COUNT=1
+    DEPLOY_EP_PROVIDERS=(gcp)
+    run _deploy_preflight "$cfg"
+    [ "$status" -eq 1 ] || { echo "$output" >&2; exit 1; }
+    [[ "$output" == *"did not authenticate"* ]]
+    [[ "$output" != *"run: gcloud auth login"* ]]
+}
+
+@test "_gcp_autodetect_project: CLOUDSDK_CORE_PROJECT wins without a gcloud roundtrip" {
+    GCP_PROJECT=""
+    export CLOUDSDK_CORE_PROJECT="env-proj" STUB_GCLOUD_LOG="$TEST_TMPDIR/gcloud.log"
+    _gcp_autodetect_project
+    [ "$GCP_PROJECT" = "env-proj" ]
+    [ ! -f "$STUB_GCLOUD_LOG" ]
+}
+
+@test "_gcp_autodetect_project: falls back to the service-account key's project_id" {
+    GCP_PROJECT=""
+    unset CLOUDSDK_CORE_PROJECT
+    printf '%s' '{"project_id":"key-proj-42"}' > "$TEST_TMPDIR/key.json"
+    export CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE="$TEST_TMPDIR/key.json"
+    _gcp_autodetect_project
+    [ "$GCP_PROJECT" = "key-proj-42" ]
 }
 
 @test "_deploy_parse_config: reads tester.gcp.project_id (canonical key)" {
