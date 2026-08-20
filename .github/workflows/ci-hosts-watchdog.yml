@@ -60,6 +60,8 @@ jobs:
           STUCK_MINUTES: ${{ inputs.stuck_minutes || '12' }}
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
         run: |
+          # shellcheck disable=SC2016 # the $now/$limit/$want inside the jq
+          # filters are jq variables bound with --argjson, not shell expansions.
           set -euo pipefail
 
           if [ -z "${HOSTS_TOKEN}" ]; then
