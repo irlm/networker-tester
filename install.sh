@@ -332,7 +332,7 @@ INSTALL_METHOD="source"   # "release" | "source"
 RELEASE_AVAILABLE=0
 RELEASE_TARGET=""
 NETWORKER_VERSION=""      # populated in discover_system (gh query or fallback below)
-INSTALLER_VERSION="v0.28.263"  # fallback when gh is unavailable
+INSTALLER_VERSION="v0.28.264"  # fallback when gh is unavailable
 
 DO_RUST_INSTALL=0
 DO_INSTALL_TESTER=1
@@ -6071,25 +6071,43 @@ NGINX_SSH
 # installs cannot drift. Returns non-zero on failure — the deploy path treats
 # that as fatal: a matrix cell whose proxy is missing would otherwise sit
 # unreachable until the readiness gate times out (2026-08-01 failure class).
+# Resolve a readable copy of THIS installer to pipe over SSH (`bash -s --
+# --setup-stack …` / `--benchmark-server …` on the VM): the on-disk file when
+# invoked via --deploy (the dashboard path), else the pinned raw installer
+# fetched into a temp file. Sets INSTALLER_SELF_PATH, and INSTALLER_SELF_TMP to
+# the temp path (empty otherwise) so the caller can `rm -f` it afterwards.
+# Returns 1 when nothing readable could be obtained. Sets globals rather than
+# printing so it works outside a command substitution (the temp marker must
+# reach the caller).
+INSTALLER_SELF_PATH=""
+INSTALLER_SELF_TMP=""
+_installer_self_for_ssh() {
+    INSTALLER_SELF_PATH="${BASH_SOURCE[0]:-}"
+    INSTALLER_SELF_TMP=""
+    [[ -r "$INSTALLER_SELF_PATH" ]] && return 0
+    local tmp
+    tmp="$(mktemp)"
+    if curl -fsSL "https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh" \
+            -o "$tmp" < /dev/null; then
+        INSTALLER_SELF_PATH="$tmp"
+        INSTALLER_SELF_TMP="$tmp"
+        return 0
+    fi
+    rm -f "$tmp"
+    INSTALLER_SELF_PATH=""
+    return 1
+}
+
 _remote_setup_stack() {
     local ip="$1" ssh_user="$2" stack="$3"
 
     next_step "Set up $stack on remote VM (${ip})"
 
-    # Resolve a script to pipe remotely: the on-disk file when invoked via
-    # --deploy (the dashboard path), else the pinned raw installer.
-    local self="${BASH_SOURCE[0]:-}"
-    local tmp_self=""
-    if [[ ! -r "$self" ]]; then
-        tmp_self="$(mktemp)"
-        if ! curl -fsSL "https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh" \
-                -o "$tmp_self" < /dev/null; then
-            rm -f "$tmp_self"
-            print_err "Could not fetch installer for remote $stack setup"
-            return 1
-        fi
-        self="$tmp_self"
+    if ! _installer_self_for_ssh; then
+        print_err "Could not fetch installer for remote $stack setup"
+        return 1
     fi
+    local self="$INSTALLER_SELF_PATH" tmp_self="$INSTALLER_SELF_TMP"
 
     local rc=0
     # shellcheck disable=SC2029
@@ -6118,20 +6136,11 @@ _remote_setup_languages() {
     local ip="$1" ssh_user="$2" langs_csv="$3"
     [[ -z "$langs_csv" ]] && return 0
 
-    # Resolve a script to pipe remotely: the on-disk file when invoked via
-    # --deploy (the dashboard path), else the pinned raw installer.
-    local self="${BASH_SOURCE[0]:-}"
-    local tmp_self=""
-    if [[ ! -r "$self" ]]; then
-        tmp_self="$(mktemp)"
-        if ! curl -fsSL "https://gist.githubusercontent.com/irlm/37a1af64b70ef6e58ea117839407f4f9/raw/install.sh" \
-                -o "$tmp_self" < /dev/null; then
-            rm -f "$tmp_self"
-            print_warn "Could not fetch installer for remote language setup — skipping languages: $langs_csv"
-            return 1
-        fi
-        self="$tmp_self"
+    if ! _installer_self_for_ssh; then
+        print_warn "Could not fetch installer for remote language setup — skipping languages: $langs_csv"
+        return 1
     fi
+    local self="$INSTALLER_SELF_PATH" tmp_self="$INSTALLER_SELF_TMP"
 
     local lang installed_any=0
     IFS=',' read -ra _rl_langs <<< "$langs_csv"
@@ -6581,7 +6590,8 @@ _gcp_setup_nginx() {
     else
         print_info "Installing and configuring nginx via gcloud SSH…"
     fi
-    _gcp_ssh_run "$name" "bash -s" <<'NGINX_GCP'
+    local ssh_rc=0
+    _gcp_ssh_script "$name" "bash -s" <<'NGINX_GCP' || ssh_rc=$?
 set -e
 export DEBIAN_FRONTEND=noninteractive
 
@@ -6683,6 +6693,9 @@ else
     exit 1
 fi
 NGINX_GCP
+    if [[ $ssh_rc -ne 0 ]]; then
+        print_warn "nginx setup script exited $ssh_rc on $name (see the SSH output above)"
+    fi
 
     sleep 2
     if [[ -n "$ip" ]] && curl -sf --max-time 5 "http://${ip}:8081/health" &>/dev/null; then
@@ -6690,6 +6703,34 @@ NGINX_GCP
     else
         print_warn "nginx may not be responding yet on port 8081 — check manually"
     fi
+}
+
+# Set up a comparison HTTP stack on a GCE instance by piping THIS installer over
+# gcloud compute ssh and running its own --setup-stack — the same code path
+# Azure/AWS/LAN endpoints use (_remote_setup_stack) and the one lab/validate.sh
+# proves for nginx/caddy/apache/haproxy/traefik, instead of a GCP-only port of
+# each stack. Fatal on failure: a matrix cell without its proxy only times out
+# the readiness gate later, with a far less useful message.
+_gcp_setup_stack() {
+    local name="$1" ip="$2" stack="$3"
+
+    next_step "Set up $stack on GCE instance ($name)"
+
+    if ! _installer_self_for_ssh; then
+        print_err "Could not fetch installer for remote $stack setup"
+        return 1
+    fi
+    local rc=0
+    print_info "Installing $stack via gcloud SSH (installer --setup-stack $stack)…"
+    if _gcp_ssh_script "$name" "export DEBIAN_FRONTEND=noninteractive && sudo -E bash -s -- --setup-stack $stack" \
+            < "$INSTALLER_SELF_PATH"; then
+        print_ok "$stack set up on ${name} (${ip})"
+    else
+        rc=1
+        print_err "$stack setup failed on ${name} (${ip})"
+    fi
+    [[ -n "$INSTALLER_SELF_TMP" ]] && rm -f "$INSTALLER_SELF_TMP"
+    return $rc
 }
 
 # Poll /health until the endpoint responds.
@@ -8606,12 +8647,32 @@ _gcp_wait_for_ssh() {
 _gcp_ssh_run() {
     local name="$1"
     shift
+    # stdin is nulled on purpose: in curl|bash mode the script itself is on
+    # stdin and gcloud/ssh would eat it. Anything that must SEND a script to
+    # the VM goes through _gcp_ssh_script below.
     gcloud compute ssh "$name" \
         --project "$GCP_PROJECT" \
         --zone "$GCP_ZONE" \
         --quiet \
         --ssh-flag="-o StrictHostKeyChecking=accept-new" \
         --command "$*" < /dev/null
+}
+
+# Same as _gcp_ssh_run but FORWARDS the caller's stdin (a heredoc or `< file`)
+# to the remote command — for `bash -s` payloads. Every caller must supply
+# stdin explicitly; never call this with the installer's own stdin.
+# (#836: the nginx heredoc used to go through _gcp_ssh_run, whose
+# `< /dev/null` replaced it — bash -s read EOF, did nothing, exited 0, and
+# every GCP cell died at the proxy readiness gate with nothing in the log.)
+_gcp_ssh_script() {
+    local name="$1"
+    shift
+    gcloud compute ssh "$name" \
+        --project "$GCP_PROJECT" \
+        --zone "$GCP_ZONE" \
+        --quiet \
+        --ssh-flag="-o StrictHostKeyChecking=accept-new" \
+        --command "$*"
 }
 
 # Install a binary on a GCE instance using the bootstrap installer.
@@ -11186,7 +11247,16 @@ deploy_from_config() {
                                 fi
                                 ;;
                             caddy|apache|haproxy|traefik)
-                                print_warn "Remote $_ls setup on GCP endpoints is not yet supported (planned follow-up). Deployment continues but this stack will not be installed."
+                                if [[ "$GCP_ENDPOINT_OS" != "windows" ]]; then
+                                    # Fatal on failure: a matrix cell without its
+                                    # proxy just times out the readiness gate.
+                                    _gcp_setup_stack "$GCP_ENDPOINT_NAME" "$GCP_ENDPOINT_IP" "$_ls" || {
+                                        print_err "Deploy failed: could not set up $_ls on GCP endpoint"
+                                        exit 1
+                                    }
+                                else
+                                    print_warn "Skipping $_ls setup on GCP Windows"
+                                fi
                                 ;;
                             iis)
                                 if [[ "$GCP_ENDPOINT_OS" == "windows" ]]; then

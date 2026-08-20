@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.264] - 2026-08-20
+
+### Fixed
+
+- **GCP endpoint deploys now actually get their HTTP stack** (#836 — the 5th
+  site of the GCP chain). With #833 fixed, both GCP cells passed pre-flight
+  and their VMs came up healthy, then died at the readiness gate ("never
+  became reachable within 6m"): `_gcp_ssh_run` nulls stdin (curl|bash
+  protection), which silently replaced the heredoc carrying the nginx
+  configuration to the GCE VM — `bash -s` read EOF, did nothing, exited 0,
+  nginx never listened. Heredoc callers now use `_gcp_ssh_script` (stdin
+  forwarded) and a failing remote script is reported with its exit status.
+  Caddy/Apache/HAProxy/Traefik on GCP Linux no longer print "not yet
+  supported" and let the cell time out: they run the installer's own
+  `--setup-stack` over `gcloud compute ssh` — the same lab-validated path
+  Azure/AWS/LAN use — and a failed stack setup fails the deploy immediately.
+  The two inline "resolve the installer to pipe over SSH" copies became one
+  `_installer_self_for_ssh` helper.
+
 ## [0.28.263] - 2026-08-20
 
 ### Added
