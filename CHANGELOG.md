@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.268] - 2026-08-20
+
+### Fixed
+
+- **Windows CI host: first logon installs the VirtIO serial driver before
+  the QEMU guest agent.** The `qemu-ga` MSI does not carry `vioserial`, so
+  the service ran but `qm guest cmd ping` never answered and
+  `setup-ci-hosts.sh` could not discover the guest's IP. `pnputil` now
+  installs `vioserial\2k25` from the virtio-win ISO first. Found on the first
+  successful unattended Server 2025 install (VM 310), which itself needed
+  every answer-file `<component>` to carry `publicKeyToken`/`versionScope`
+  (#842) — WinPE tolerates their absence, the specialize pass does not.
+- **`setup-ci-hosts.sh` ships the PAT to the Windows guest without nested
+  PowerShell quoting.** The guest's ssh shell is already PowerShell; wrapping
+  the token write in `powershell -Command "..."` failed with "The string is
+  missing the terminator". A failing `install-ci-host.ps1` now warns and
+  returns instead of aborting the whole run.
+- **Linux CI-host loop removes stray `/usr/local/bin/networker-*` binaries
+  between jobs.** A tester an integration job had `sudo install`ed turned
+  the stubbed bats test `_offer_quick_test … release download` into a real
+  5-run, 7-mode probe against `1.2.3.4` — 18 minutes on `ci-linux-1`, the
+  only outlier in an otherwise 13-minute run.
+
+---
 ## [0.28.267] - 2026-08-20
 
 ### Added
