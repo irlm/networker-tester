@@ -13,6 +13,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [0.28.256] - 2026-08-20
+
+### Fixed
+
+- **Install diagnostics persist for post-mortem, and Windows caddy cells stop
+  failing TLS-less** (#816). The deployment-events SSE route existed only in the
+  retired Rust dashboard — the C# control plane now serves it (persisted-log
+  replay for finished deployments, live ring+tail for active ones). The
+  deployment row records exit_code and failed_step (V054), the persisted log is
+  ANSI-scrubbed and tail-bounded, and failure messages carry the last fatal line
+  and dying step. On Windows, the caddy stack declared a hostless TLS site under
+  auto_https off and started certificate-less — every handshake failed while TCP
+  checks stayed green; the Caddyfile now issues a real internal cert
+  (default_sni localhost) and the in-guest verify asserts an actual TLS
+  handshake.
+
 ## [0.28.255] - 2026-08-20
 
 ### Fixed
