@@ -195,7 +195,14 @@ jobs:
   # both its HTTP and HTTPS listeners.
   stack-exec:
     name: Linux stack execution (setup-stack + proxy round-trip)
-    runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    # Pinned to GitHub-hosted on purpose: this job runs the REAL install.sh as
+    # root, which installs system services (nginx/caddy/apache/haproxy/
+    # traefik, networker-*.service, the bench servers under /opt/bench). A
+    # hosted VM is thrown away afterwards; a self-hosted CI host persists, and
+    # those leftovers broke later jobs (networker-endpoint's PRNG-fallback
+    # tests found /opt/bench/bench-data.json; ports 8085-8094 stayed bound).
+    # docs/self-hosted-ci.md § "What stays on GitHub-hosted".
+    runs-on: ubuntu-latest
     needs: [changes]
     if: needs.changes.outputs.installer == 'true'
     timeout-minutes: 25
@@ -218,7 +225,7 @@ jobs:
             --http-port 8080 --https-port 8443 \
             --udp-port 9999 --udp-throughput-port 9998 \
             > /tmp/endpoint.log 2>&1 &
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             curl -sf http://127.0.0.1:8080/health && break
             sleep 1
           done
@@ -268,7 +275,8 @@ jobs:
   # (csharp-net9-aot — exercises the clang/zlib prerequisites + ILCompiler).
   linux-bench-exec:
     name: Linux reference-API execution (net9 + net9-aot)
-    runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    # Pinned to GitHub-hosted: real install.sh --benchmark-server run (see stack-exec).
+    runs-on: ubuntu-latest
     needs: [changes]
     if: needs.changes.outputs.installer == 'true'
     timeout-minutes: 25
@@ -298,7 +306,10 @@ jobs:
   # can run on a GitHub runner, asserting each serves.
   windows-exec:
     name: Windows installer execution (unit script + stack setup)
-    runs-on: ${{ fromJSON(needs.changes.outputs.windows_host) }}
+    # Pinned to GitHub-hosted for the same reason as stack-exec: a real
+    # install.ps1 run mutates the machine, and a self-hosted Windows host
+    # persists between jobs. docs/self-hosted-ci.md § "What stays on GitHub-hosted".
+    runs-on: windows-latest
     needs: [changes]
     if: needs.changes.outputs.installer == 'true'
     timeout-minutes: 30

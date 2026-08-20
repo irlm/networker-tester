@@ -235,7 +235,24 @@ while :; do
   # measurement-accuracy.json). Keep _tool (setup-* tool cache) and _actions
   # (downloaded action code); everything else under _work is per-job.
   find "$RUNNER_DIR/_work" -mindepth 1 -maxdepth 1 ! -name _tool ! -name _actions -exec rm -rf {} + 2>/dev/null || true
-  sleep 3
+  # The rest of what a job can leave behind on a persistent machine. Jobs that
+  # install system services (the installer exec jobs) are pinned to
+  # GitHub-hosted runners instead — see docs/self-hosted-ci.md — so this is
+  # only the per-job residue: containers (a `docker run --name bench-srv
+  # -p 8443` from the previous job makes the next one fail "name in use"),
+  # staged datasets under /tmp (validate-bench-apis copies bench-data.json to
+  # /tmp/bench; networker-endpoint's tests must NOT find a dataset), and
+  # processes the job left running as the CI user (sccache servers, stray
+  # endpoints holding ports). The runner itself has exited at this point.
+  if command -v docker >/dev/null 2>&1; then
+    docker ps -aq 2>/dev/null | xargs -r docker rm -f >/dev/null 2>&1 || true
+    docker network prune -f >/dev/null 2>&1 || true
+  fi
+  rm -rf /tmp/bench /tmp/networker-* 2>/dev/null || true
+  pkill -TERM -u "$CI_USER" 2>/dev/null || true
+  sleep 2
+  pkill -KILL -u "$CI_USER" 2>/dev/null || true
+  sleep 1
 done
 LOOP
 chmod 0755 /usr/local/bin/ci-host-loop.sh

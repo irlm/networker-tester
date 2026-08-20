@@ -230,7 +230,15 @@ describe("streaming memory bound", () => {
         };
         child.stdout.on("data", onData);
         child.once("error", reject);
-        child.once("exit", (code) => reject(new Error(`memprobe exited early (${code})`)));
+        // 'close', not 'exit': the child writes its RESULT line and then lets
+        // the process end, and Node may emit 'exit' before the final stdout
+        // chunk has been delivered to this process (seen on a self-hosted CI
+        // host as "memprobe exited early (0)" with a correct result in
+        // flight). 'close' fires only after every stdio stream has drained,
+        // so a line the child already wrote is always scanned first.
+        child.once("close", (code) => {
+          if (!scan()) reject(new Error(`memprobe exited early (${code})`));
+        });
       });
 
     try {

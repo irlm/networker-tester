@@ -135,6 +135,35 @@ the prod **`deploy` job is deliberately not routed** (see the security model).
 `verdict` in `validate-bench-apis.yml` runs with `if: always()`, so its
 `runs-on` falls back to `ubuntu-latest` if the picker job itself failed.
 
+### What stays on GitHub-hosted
+
+Three jobs carry a literal `runs-on` on purpose and are never routed:
+
+| job | why |
+|---|---|
+| `test-installer.yml` → `stack-exec` | runs the real `install.sh --setup-stack` as root: installs nginx/caddy/apache/haproxy/traefik plus `networker-*.service` units and leaves them running |
+| `test-installer.yml` → `linux-bench-exec` | real `install.sh --benchmark-server`: bench servers under `/opt/bench` bound to :8085/:8086, and `/opt/bench/bench-data.json` |
+| `test-installer.yml` → `windows-exec` | real `install.ps1` run on Windows |
+| `release.yml` → `deploy` | prod credentials (security model below) |
+
+Ephemeral registration resets the *runner*, not the *disk*: a hosted VM is
+thrown away after the job, a CI host persists. The first full run on the
+hosts showed what that costs — `networker-endpoint`'s PRNG-fallback unit
+tests failed on `ci-linux-1` because `load_bench_data()` found the
+`/opt/bench/bench-data.json` a previous `linux-bench-exec` had installed, and
+`ci-linux-2` had five proxies and two bench servers holding ports 80-8457
+between jobs. Anything that installs packages or services system-wide belongs
+on a hosted runner (or, later, on a VM the hypervisor rolls back to a snapshot
+after every job — `qm rollback`, not yet built).
+
+Per-job residue that does not need a fresh disk is wiped by the Linux loop
+between jobs (`ci-host-loop.sh`): the `_work` checkout (root-owned files from
+sudo/docker steps otherwise break the next `actions/checkout`), every Docker
+container and unused network, `/tmp/bench`, and any process still running as
+the CI user (sccache servers, stray endpoints). To reset a host that has
+drifted anyway: `setup-ci-hosts.sh destroy` + `setup` rebuilds the Linux VMs
+from the template in ~15 minutes while `auto` routes to hosted.
+
 ## Security model
 
 - **Network.** CI host VMs sit on their own VLAN with no route to prod or to
@@ -149,12 +178,11 @@ the prod **`deploy` job is deliberately not routed** (see the security model).
   root (Linux) or SYSTEM/Administrators (Windows) or the login user (Mac) can
   read, and is never exported into the job's environment.
 - **VM state is not reset between jobs.** Ephemeral covers the *registration*,
-  not the disk: jobs that mutate the OS (`stack-exec`, `linux-bench-exec`,
-  `reinstall-exec`, `windows-exec` install proxies and units with sudo)
-  accumulate state on a long-lived VM. Rebuild the Linux hosts from the
-  template periodically (`destroy` + `setup` takes ~15 minutes and is safe
-  because `auto` routes to hosted meanwhile), or pin those jobs to hosted by
-  giving them a literal `runs-on` if drift ever bites.
+  not the disk. The jobs that install services system-wide (`stack-exec`,
+  `linux-bench-exec`, `windows-exec`) are therefore pinned to hosted runners
+  (§ "What stays on GitHub-hosted"); the loop wipes per-job residue; rebuild
+  the Linux hosts from the template when they drift anyway (`destroy` +
+  `setup`, ~15 minutes, safe because `auto` routes to hosted meanwhile).
 - **Prod secrets stay hosted.** `release.yml`'s `deploy` job (the only job
   with `AZURE_CREDENTIALS`, via the `production` environment) keeps
   `runs-on: ubuntu-latest`. Any future job that touches prod credentials does

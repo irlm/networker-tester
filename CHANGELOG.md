@@ -61,6 +61,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-green required check prints exactly what was not green and refuses to
   tag. The main-branch matrix still runs (coverage, soak record) — the tag
   just does not wait for it.
+- **The installer exec jobs are pinned to GitHub-hosted runners.**
+  `test-installer.yml`'s `stack-exec`, `linux-bench-exec` and `windows-exec`
+  run the real `install.sh`/`install.ps1` as root and install system services
+  (five proxies, `networker-*.service` units, bench servers under
+  `/opt/bench`). The first full run on the CI hosts showed why that cannot
+  share a persistent machine with the rest of CI: `networker-endpoint`'s
+  PRNG-fallback unit tests failed on `ci-linux-1` because `load_bench_data()`
+  found the `/opt/bench/bench-data.json` a previous `linux-bench-exec` had
+  left, and `ci-linux-2` held ports 80-8457 between jobs. `dotnet.yml`'s
+  `reinstall-exec` now removes its stub `networker-agent.service` when it is
+  done, and the Linux loop wipes per-job residue (Docker containers,
+  `/tmp/bench`, processes still running as the CI user) between jobs.
+  `docs/self-hosted-ci.md` § "What stays on GitHub-hosted".
+
+### Fixed
+
+- **JS SDK conformance `streaming memory bound` raced the probe's exit.** The
+  test rejected on the child's `exit` event, which Node can emit before the
+  final stdout chunk (the `RESULT` line) reaches the parent — "memprobe exited
+  early (0)" with a correct result in flight, first seen on a self-hosted CI
+  host. It now waits for `close` (every stdio stream drained) and scans the
+  buffered lines once more before giving up.
 
 ---
 ## [0.28.266] - 2026-08-20

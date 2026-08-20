@@ -180,6 +180,15 @@ jobs:
             --filter "FullyQualifiedName~ReinstallScriptExecution" \
             --verbosity normal
 
+      # A self-hosted CI host persists between jobs (docs/self-hosted-ci.md);
+      # leave no stub unit behind for the next job — or for the stack tests,
+      # which look for a REAL networker-agent.service.
+      - name: Remove the stub networker-agent unit
+        if: always()
+        run: |
+          sudo systemctl stop networker-agent 2>/dev/null || true
+          sudo rm -f /etc/systemd/system/networker-agent.service
+          sudo systemctl daemon-reload
       - name: Show what landed
         if: always()
         run: |
