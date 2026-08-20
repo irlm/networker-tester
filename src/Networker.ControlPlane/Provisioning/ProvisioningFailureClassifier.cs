@@ -50,6 +50,33 @@ public static class ProvisioningFailureClassifier
                && errorMessage.StartsWith(InterruptedErrorPrefix, StringComparison.Ordinal);
     }
 
+    /// <summary>Prefix of the error message the watchdog's stale-deploy sweep
+    /// writes when it reaps a deployment whose install NEVER started (row still
+    /// <c>pending</c> — <see cref="DeployRunner"/> flips to <c>running</c>
+    /// immediately before spawning install.sh, so a budget-aged pending row
+    /// means the deploy driver died before any install ran). Nothing was
+    /// attempted, so nothing can have failed permanently — the linked run is
+    /// retry-eligible (issue #817).</summary>
+    public const string NeverStartedReapPrefix = "Deployment reaped before its install ever started";
+
+    /// <summary>True when the failure is the watchdog's never-started reap
+    /// marker (<see cref="NeverStartedReapPrefix"/>).</summary>
+    public static bool IsNeverStartedReap(string? errorMessage)
+    {
+        return errorMessage is not null
+               && errorMessage.StartsWith(NeverStartedReapPrefix, StringComparison.Ordinal);
+    }
+
+    /// <summary>True for any infrastructure-kill failure the orchestrator should
+    /// retry instead of failing the run terminally: an install interrupted by a
+    /// control-plane restart/shutdown (#764), or a watchdog reap of an install
+    /// that never started (#817). Real install failures — credentials, bad
+    /// config, a genuine in-budget timeout — never match and stay terminal.</summary>
+    public static bool IsRetryableInfrastructureKill(string? errorMessage)
+    {
+        return IsInterruptedFailure(errorMessage) || IsNeverStartedReap(errorMessage);
+    }
+
     private static bool ContainsSignature(string? text)
     {
         if (string.IsNullOrEmpty(text))

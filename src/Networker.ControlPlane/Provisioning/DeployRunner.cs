@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Realtime;
@@ -102,12 +103,37 @@ public sealed class DeployRunner
     /// reference-API language across all endpoints, capped at 2h. The single
     /// source of truth for the deploy budget — the watchdog's stale-deploy
     /// sweep derives its (later) reap threshold from this same function, so
-    /// the runner's own timeout always fires first with its richer message.</summary>
+    /// the runner's own timeout always fires first with its richer message.
+    ///
+    /// <para>Issue #817 — how the budget AGES: install.sh spends a long,
+    /// quota-contended stretch on cloud provisioning (resource group + VM
+    /// create + boot + SSH wait) BEFORE any reference-API install runs, and in
+    /// a saturated matrix that stretch alone ate most of the budget — slow but
+    /// healthy installs (AOT publishes on a B2s) were then tree-killed
+    /// mid-publish and surfaced as terminal "exited with code -1". The budget
+    /// is therefore RE-ANCHORED when the install phase actually starts (the
+    /// first <see cref="InstallPhaseMarkerRe"/> line install.sh prints):
+    /// <see cref="ShellInstallAsync"/> re-arms its timer with the full scaled
+    /// budget from that moment, and <see cref="StampInstallStartAsync"/>
+    /// re-stamps <c>deployment.started_at</c> so the watchdog's reap threshold
+    /// ages from the same anchor. Provisioning/queue time is bounded by this
+    /// budget from spawn as before; it just no longer counts against the
+    /// install itself.</para></summary>
     internal static TimeSpan DeployTimeoutFor(string deployJson)
     {
         var total = BaseDeployTimeout + LanguageCountFor(deployJson) * PerLanguageBudget;
         return total > MaxDeployTimeout ? MaxDeployTimeout : total;
     }
+
+    /// <summary>The install.sh line that marks the actual start of the install
+    /// phase: <c>next_step "Install $lang reference API …"</c> renders as
+    /// <c>Step N: Install &lt;lang&gt; reference API on &lt;ip&gt; …</c> (remote),
+    /// <c>… locally …</c> (local provider) or <c>… (Azure Windows)</c> — always
+    /// AFTER the VM exists and SSH answers. Piped output carries no ANSI codes
+    /// (install.sh gates colors on <c>-t 1</c>), so the line is matched bare.</summary>
+    internal static readonly Regex InstallPhaseMarkerRe = new(
+        @"^Step \d+: Install \S+ reference API",
+        RegexOptions.Compiled);
 
     // Matches "hostname.eastus.cloudapp.azure.com (20.127.36.61)" — FQDN + IP in
     // parens. Ported verbatim from Rust DeployOutput::fqdn_re.
@@ -137,15 +163,22 @@ public sealed class DeployRunner
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly EventBus _bus;
     private readonly ILogger<DeployRunner> _logger;
+    private readonly IHostApplicationLifetime? _lifetime;
 
     public DeployRunner(
         IServiceScopeFactory scopeFactory,
         EventBus bus,
-        ILogger<DeployRunner> logger)
+        ILogger<DeployRunner> logger,
+        IHostApplicationLifetime? lifetime = null)
     {
         _scopeFactory = scopeFactory;
         _bus = bus;
         _logger = logger;
+        // Optional (bare test hosts have no host lifetime): lets the exit
+        // classifier recognize kills that happen inside a control-plane
+        // shutdown window even when install.sh laundered the signal into a
+        // plain exit 1/-1 (issue #817; evidence via #804's machinery).
+        _lifetime = lifetime;
     }
 
     /// <summary>
@@ -248,23 +281,9 @@ public sealed class DeployRunner
         output.RunFallbackIpScan();
 
         var success = exitCode == 0;
-        // 143 = SIGTERM: install.sh is a CHILD of this process, so a control-plane
-        // restart (every deploy) kills any in-flight deployment — prod produced a
-        // bare "install.sh exited with code 143" plus an orphan Azure VM, with no
-        // hint that the cause was a restart rather than the customer's config
-        // (prod sweep, v0.28.213). Say so, and point at the retry.
-        var interrupted = exitCode is 143 or 137;
-        var error = success
-            ? null
-            : interrupted
-                // Built on the classifier's shared prefix: the startup recovery
-                // pass and the orchestrator's interrupted-retry arm key on this
-                // exact marker to auto-re-run the deployment (issue #764).
-                ? ProvisioningFailureClassifier.InterruptedErrorPrefix
-                  + $"{(exitCode == 137 ? "KILL" : "TERM")}, exit {exitCode}) — "
-                  + "the control plane restarted or was shut down while deploying. Any VM it had already created is "
-                  + "reaped by the orphan sweep; retry the deployment."
-                : $"install.sh exited with code {exitCode ?? -1}";
+        var error = ClassifyExit(
+            exitCode,
+            shuttingDown: _lifetime?.ApplicationStopping.IsCancellationRequested == true);
         await FinishAsync(deploymentId, success, output.EndpointIps, output.FullLog, error, ct, output.EndpointHosts)
             .ConfigureAwait(false);
 
@@ -276,6 +295,54 @@ public sealed class DeployRunner
             string.Join(",", output.EndpointHosts.Select(h => h ?? "-")));
 
         return output.EndpointIps;
+    }
+
+    /// <summary>
+    /// Classify install.sh's exit into the terminal error message (null on
+    /// success). Static + argument-driven so the shapes are unit-testable.
+    ///
+    /// <list type="bullet">
+    ///   <item><b>143/137</b> — SIGTERM/SIGKILL: install.sh is a CHILD of this
+    ///     process, so a control-plane restart (every deploy) kills any
+    ///     in-flight deployment — prod produced a bare "install.sh exited with
+    ///     code 143" plus an orphan Azure VM, with no hint that the cause was a
+    ///     restart rather than the customer's config (prod sweep, v0.28.213).
+    ///     Say so, and point at the retry.</item>
+    ///   <item><b>Any non-zero exit during a control-plane shutdown window</b> —
+    ///     the SIGTERM often lands on install.sh's CHILD (ssh/az) first;
+    ///     install.sh observes the child failure and exits 1 (or the tree-kill
+    ///     surfaces as -1) BEFORE its own signal disposition runs, so the kill
+    ///     arrived without the 143/137 code and was misclassified as a terminal
+    ///     install failure (issue #817, evidence via #804). If the host is
+    ///     stopping, the failure is the shutdown, not the config.</item>
+    /// </list>
+    ///
+    /// Both interruption shapes are built on the classifier's shared prefix:
+    /// the startup recovery pass and the orchestrator's interrupted-retry arm
+    /// key on that exact marker to auto-re-run the deployment (issue #764).
+    /// Everything else keeps the plain terminal message.
+    /// </summary>
+    internal static string? ClassifyExit(int? exitCode, bool shuttingDown)
+    {
+        if (exitCode == 0)
+        {
+            return null;
+        }
+        if (exitCode is 143 or 137)
+        {
+            return ProvisioningFailureClassifier.InterruptedErrorPrefix
+                + $"{(exitCode == 137 ? "KILL" : "TERM")}, exit {exitCode}) — "
+                + "the control plane restarted or was shut down while deploying. Any VM it had already created is "
+                + "reaped by the orphan sweep; retry the deployment.";
+        }
+        if (shuttingDown)
+        {
+            return ProvisioningFailureClassifier.InterruptedErrorPrefix
+                + $"TERM during control-plane shutdown, exit {exitCode ?? -1}) — "
+                + "the shutdown killed part of the install tree before install.sh could report the signal itself. "
+                + "Any VM it had already created is reaped by the orphan sweep; retry the deployment.";
+        }
+        return $"install.sh exited with code {exitCode ?? -1}";
     }
 
     // ── Docker (local) provider ──────────────────────────────────────────────
@@ -440,6 +507,32 @@ public sealed class DeployRunner
         timeoutCts.CancelAfter(deployTimeout);
         var runCt = timeoutCts.Token;
 
+        // Budget re-anchor (issue #817): when install.sh reports the install
+        // phase actually starting (first reference-API install step — i.e. the
+        // VM exists and SSH answers), re-arm the timer with the FULL scaled
+        // budget from that moment, so quota/provisioning contention ahead of
+        // the install can't eat the install's own budget. Also re-stamp
+        // deployment.started_at (best-effort) so the watchdog's stale-deploy
+        // sweep ages from the same anchor and can never undercut this timer.
+        var spawnedAt = DateTime.UtcNow;
+        output.OnInstallPhaseStarted = () =>
+        {
+            try
+            {
+                timeoutCts.CancelAfter(deployTimeout);
+            }
+            catch (ObjectDisposedException)
+            {
+                // The deploy already finished/timed out — the late marker line
+                // was drained after the fact; nothing to re-arm.
+                return;
+            }
+            _logger.LogInformation(
+                "Deployment {DeploymentId}: install phase started — {Budget:0}m budget re-anchored (provisioning took {Elapsed:0}m)",
+                deploymentId, deployTimeout.TotalMinutes, (DateTime.UtcNow - spawnedAt).TotalMinutes);
+            _ = StampInstallStartAsync(deploymentId);
+        };
+
         using var process = new Process { StartInfo = psi };
         process.Start();
         process.StandardInput.Close(); // stdin protection (curl|bash-safe, like Rust's Stdio::null)
@@ -469,7 +562,7 @@ public sealed class DeployRunner
                                                  && !ct.IsCancellationRequested)
         {
             KillTree(process);
-            var msg = $"install.sh timed out after {deployTimeout.TotalMinutes:0}m and was killed";
+            var msg = TimeoutMessageFor(deployTimeout, output.InstallPhaseStartedUtc is not null);
             _logger.LogWarning("{Message} (deployment {DeploymentId})", msg, deploymentId);
             output.AppendRaw(msg);
             return -1;
@@ -493,6 +586,46 @@ public sealed class DeployRunner
         }
 
         return process.ExitCode;
+    }
+
+    /// <summary>Timeout-kill notice, honest about which anchor the budget aged
+    /// from (#817): pre-install ("never started") means provisioning/queueing
+    /// consumed the whole window; post-anchor means the install itself did.</summary>
+    internal static string TimeoutMessageFor(TimeSpan deployTimeout, bool installPhaseStarted)
+    {
+        return installPhaseStarted
+            ? string.Format(
+                CultureInfo.InvariantCulture,
+                "install.sh timed out {0:0}m after its install phase started and was killed",
+                deployTimeout.TotalMinutes)
+            : string.Format(
+                CultureInfo.InvariantCulture,
+                "install.sh timed out after {0:0}m (install phase never started — provisioning/queue time used the whole budget) and was killed",
+                deployTimeout.TotalMinutes);
+    }
+
+    /// <summary>Best-effort re-stamp of <c>deployment.started_at</c> at the
+    /// moment the install phase begins, so the watchdog's stale-deploy sweep
+    /// (<c>started_at ?? created_at</c> basis) ages the SAME re-anchored budget
+    /// the runner's timer enforces (#817). Guarded on status <c>running</c> —
+    /// a deployment another writer already finished/reaped keeps its stamps.</summary>
+    internal async Task StampInstallStartAsync(Guid deploymentId)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<NetworkerDbContext>();
+            await db.Deployments
+                .Where(d => d.DeploymentId == deploymentId && d.Status == "running")
+                .ExecuteUpdateAsync(s => s.SetProperty(d => d.StartedAt, DateTime.UtcNow))
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Aging just stays anchored at the running-flip — strictly the old
+            // behaviour, never worse.
+            _logger.LogDebug(ex, "install-start stamp failed for deployment {DeploymentId}", deploymentId);
+        }
     }
 
     /// <summary>Persist the accumulated log every few seconds while install.sh
@@ -720,6 +853,27 @@ public sealed class DeployRunner
         private readonly List<string> _endpointIps = [];
         // Parallel to _endpointIps: the recorded DNS name for that entry, or null.
         private readonly List<string?> _endpointHosts = [];
+        // First InstallPhaseMarkerRe sighting (issue #817's budget anchor).
+        private DateTime? _installPhaseStartedUtc;
+
+        /// <summary>Invoked ONCE (outside the lock), when the first
+        /// <see cref="InstallPhaseMarkerRe"/> line is observed — i.e. the
+        /// install phase actually started. The shell path re-arms its deploy
+        /// budget and re-stamps <c>deployment.started_at</c> from it (#817).</summary>
+        public Action? OnInstallPhaseStarted { get; set; }
+
+        /// <summary>When the install phase started (first marker line), or null
+        /// while still provisioning / for stack-only deploys.</summary>
+        public DateTime? InstallPhaseStartedUtc
+        {
+            get
+            {
+                lock (_sync)
+                {
+                    return _installPhaseStartedUtc;
+                }
+            }
+        }
 
         public string FullLog
         {
@@ -767,10 +921,23 @@ public sealed class DeployRunner
         /// duplicate). Mirrors Rust <c>process_line</c>.</summary>
         public bool ProcessLine(string text, string stream)
         {
+            bool broadcast;
+            Action? installPhaseCallback = null;
             lock (_sync)
             {
-                return ProcessLineLocked(text, stream);
+                broadcast = ProcessLineLocked(text, stream);
+                if (_installPhaseStartedUtc is null && InstallPhaseMarkerRe.IsMatch(text))
+                {
+                    _installPhaseStartedUtc = DateTime.UtcNow;
+                    // Grab-and-clear under the lock so the callback fires exactly
+                    // once even with stdout/stderr pumping concurrently; invoke
+                    // OUTSIDE the lock (it re-arms a CTS and touches the DB).
+                    installPhaseCallback = OnInstallPhaseStarted;
+                    OnInstallPhaseStarted = null;
+                }
             }
+            installPhaseCallback?.Invoke();
+            return broadcast;
         }
 
         private bool ProcessLineLocked(string text, string stream)
