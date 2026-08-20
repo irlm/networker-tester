@@ -831,7 +831,12 @@ export interface LiveAttempt {
    *  mirroring the Rust struct — multiply by 8 for Mbps. The infrastructure
    *  envelope's EMPIRICAL ceiling source. */
   mthroughput?: { capacity_down_mbps?: number; capacity_up_mbps?: number; conns_down: number; conns_up?: number; fair_share_spread_down_pct?: number; fair_share_spread_up_pct?: number };
+  /** Structured failure — live attempt stream only (the tester's raw JSON). */
   error?: { category: string; message: string; detail?: string };
+  /** Flat failure reason — GET /test-runs/{id}/attempts (RequestAttempt.ErrorMessage;
+   *  the tester schema stores no per-attempt category, so this is the whole
+   *  reason for REST-loaded rows, #824). May carry raw ANSI on old rows. */
+  error_message?: string | null;
   page_load?: { total_ms: number; ttfb_ms?: number; asset_count: number; assets_fetched: number; total_bytes?: number; connections_opened?: number; tls_setup_ms?: number; tls_overhead_ratio?: number; cpu_time_ms?: number; connection_reused?: boolean };
   browser?: { load_ms: number; dom_content_loaded_ms?: number; ttfb_ms?: number; resource_count?: number; transferred_bytes?: number; protocol?: string };
   // ── Measurement-depth result types (v0.28.78, live stream only — the REST

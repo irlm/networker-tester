@@ -360,6 +360,63 @@ describe('AttemptRow — widened phase detail', () => {
     expect(screen.getByText(/19\/20 echoes · p95 8\.20ms/)).toBeInTheDocument();
   });
 
+  it('renders a failed REST row’s flat error_message next to the FAIL chip, ANSI-stripped (#824)', () => {
+    render(
+      <AttemptRow
+        a={attempt({
+          success: false,
+          error_message: '\u001b[31mQUIC handshake timeout\u001b[0m',
+        })}
+      />
+    );
+
+    expect(screen.getByText('FAIL')).toBeInTheDocument();
+    const reason = screen.getByText('QUIC handshake timeout');
+    expect(reason).toBeInTheDocument();
+    // Full (clean) text rides on the tooltip for when CSS truncates it.
+    expect(reason).toHaveAttribute('title', 'QUIC handshake timeout');
+    // The raw SGR bytes must not survive into the DOM.
+    expect(reason.textContent).not.toContain('\u001b');
+  });
+
+  it('prefixes the live stream’s error_category when present (#824)', () => {
+    render(
+      <AttemptRow
+        a={attempt({
+          success: false,
+          error: { category: 'tls_error', message: 'handshake alert', detail: 'received fatal alert' },
+        })}
+      />
+    );
+
+    // Inline label next to the chip AND the existing Error card both carry it.
+    expect(screen.getAllByText('tls_error: handshake alert').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('FAIL')).toBeInTheDocument();
+    expect(screen.getByText('received fatal alert')).toBeInTheDocument();
+  });
+
+  it('renders a bare FAIL chip without a reason span when no message was recorded (#824)', () => {
+    render(<AttemptRow a={attempt({ success: false })} />);
+
+    expect(screen.getByText('FAIL')).toBeInTheDocument();
+    expect(screen.queryByText(/:/)).not.toBeInTheDocument();
+  });
+
+  it('never renders a failure reason on a successful row (#824)', () => {
+    render(
+      <AttemptRow
+        a={attempt({
+          success: true,
+          error_message: 'stale message from a retried attempt',
+          http: { status_code: 200, negotiated_version: 'HTTP/2.0', ttfb_ms: 2.0, total_duration_ms: 3.0 },
+        })}
+      />
+    );
+
+    expect(screen.getByText('OK')).toBeInTheDocument();
+    expect(screen.queryByText(/stale message/)).not.toBeInTheDocument();
+  });
+
   it('renders an old minimal attempt without any of the widened rows', () => {
     render(
       <AttemptRow

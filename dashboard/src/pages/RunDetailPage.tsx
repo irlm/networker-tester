@@ -37,7 +37,7 @@ import {
   TimingRow,
 } from '../features/runs/components/RunDetailSections';
 import { RunErrorBanner } from '../features/runs/components/RunErrorBanner';
-import { groupByProtocol, groupByTargetUrl } from '../features/runs/grouping';
+import { dominantFailureReason, groupByProtocol, groupByTargetUrl } from '../features/runs/grouping';
 import {
   buildUrlComparison,
   formatComparisonValue,
@@ -623,6 +623,10 @@ export function RunDetailPage() {
         const isExpanded = expandedProtocols.has(sectionKey);
         const protoSuccess = group.filter((a) => a.success).length;
         const protoFail = group.length - protoSuccess;
+        // Collapsed header stays diagnostic (#824): when one reason accounts
+        // for most of the block's failures, say it — "5 FAIL — QUIC handshake
+        // timeout" answers the question without expanding a row.
+        const failReason = protoFail > 0 ? dominantFailureReason(group) : null;
         const values = group.filter((a) => a.success).map(primaryMetricValue).filter((v): v is number => v != null);
         const stats = computeStats(values);
 
@@ -643,9 +647,17 @@ export function RunDetailPage() {
                   </span>
                 )}
               </div>
-              <div className="flex items-center gap-3 text-xs">
-                <span className="text-green-400">{protoSuccess} OK</span>
-                {protoFail > 0 && <span className="text-red-400">{protoFail} FAIL</span>}
+              <div className="flex items-center gap-3 text-xs min-w-0">
+                <span className="text-green-400 shrink-0">{protoSuccess} OK</span>
+                {protoFail > 0 && (
+                  <span
+                    className="text-red-400 min-w-0 truncate"
+                    title={failReason ? `${protoFail} FAIL — ${failReason}` : undefined}
+                  >
+                    {protoFail} FAIL
+                    {failReason && <span className="text-red-300/70"> — {failReason}</span>}
+                  </span>
+                )}
               </div>
             </button>
 

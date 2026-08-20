@@ -13,6 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [0.28.257] - 2026-08-20
+
+### Fixed
+
+- **Failed probe attempts show their reason** (#824). Each failed attempt row on
+  the run detail page renders its recorded error message (ANSI-stripped,
+  category-prefixed) next to the FAIL chip, and a protocol block whose failures
+  share a dominant reason says so in the collapsed header ("5 FAIL — QUIC
+  handshake timeout") instead of a bare count.
+
 ## [0.28.256] - 2026-08-20
 
 ### Fixed
