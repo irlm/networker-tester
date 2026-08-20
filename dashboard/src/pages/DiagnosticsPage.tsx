@@ -32,6 +32,15 @@ import {
   probeRunVerdict,
 } from '../lib/watchlist';
 import {
+  MAX_SET_URLS,
+  formatUrlSetInput,
+  hostsForSelection,
+  launchInputFor,
+  parseUrlSetInput,
+  setSelectionKey,
+  splitUrlSetInput,
+} from '../lib/probe-set';
+import {
   NO_RUNNER,
   UNKNOWN_RUNNER,
   capacityOptions,
@@ -119,6 +128,20 @@ const PHASE_CSS_COLORS: Record<string, string> = {
 // Host resolution lives in lib/watchlist.ts (hostsForDiagConfig /
 // hostsFromDiagConfigName) — shared with tests. A set config (#782/#820)
 // resolves to EVERY member hostname so its runs land on each member's row.
+
+/**
+ * Entry-box state from the `?host=` param. decodeHostQueryParam (#820)
+ * tolerates the double-encoded values the old sync produced (`%2C%2520`); a
+ * param carrying SEVERAL hosts is a shared set link, so it opens in the
+ * multi-URL box already laid out one per line (#782 P1).
+ */
+function initialEntryState(hostParam: string | null): { text: string; multi: boolean } {
+  const decoded = decodeHostQueryParam(hostParam);
+  const entries = splitUrlSetInput(decoded);
+  return entries.length > 1
+    ? { text: formatUrlSetInput(entries), multi: true }
+    : { text: decoded, multi: false };
+}
 
 function getDayLabel(dateStr: string): string {
   const date = new Date(dateStr);
@@ -261,6 +284,8 @@ function UrlCard({
   onMonitorHourly,
   monitorPending,
   onToggleMonitor,
+  selected,
+  onSelectedChange,
 }: {
   projectId: string;
   group: UrlGroup;
@@ -268,6 +293,9 @@ function UrlCard({
   onToggle: () => void;
   onRunAgain: (host: string) => void;
   onRemove: (host: string, configIds: Set<string>) => void;
+  /** Ticked into the current URL set (#782 P1 multi-select). */
+  selected: boolean;
+  onSelectedChange: (selected: boolean) => void;
   /** Hourly-monitoring schedule attached to one of this row's configs (#782). */
   schedule: TestSchedule | null;
   onMonitorHourly: () => void;
@@ -352,99 +380,115 @@ function UrlCard({
 
   return (
     <div
-      className={`border border-gray-800 rounded mb-1.5 transition-colors ${borderClass} ${
-        expanded ? 'bg-[var(--bg-surface)]' : ''
-      }`}
+      className={`border rounded mb-1.5 transition-colors ${borderClass} ${
+        selected ? 'border-cyan-500/40' : 'border-gray-800'
+      } ${expanded ? 'bg-[var(--bg-surface)]' : ''}`}
     >
-      {/* Collapsed header */}
-      <button
-        onClick={onToggle}
-        className="flex items-center w-full px-4 py-3 gap-3 text-left hover:bg-white/[0.015] transition-colors cursor-pointer"
-        aria-expanded={expanded}
-        aria-controls={`card-body-${group.key}`}
-      >
-        <span
-          className={`text-faint text-xs flex-shrink-0 transition-transform duration-200 ${
-            expanded ? 'rotate-90' : ''
-          }`}
-          aria-hidden="true"
+      {/* Collapsed header. The set checkbox is a SIBLING of the expand button,
+          not a child: an interactive control inside a <button> is invalid HTML
+          and swallows its own clicks. */}
+      <div className="flex items-center">
+        <label
+          className="flex items-center pl-4 pr-0.5 py-3 cursor-pointer flex-shrink-0"
+          title={`Add ${host} to a URL set`}
         >
-          {'\u25B8'}
-        </span>
-
-        <div className="flex items-center gap-3 flex-1 min-w-0">
-          <span className={`text-sm font-medium truncate ${urlColor}`}>
-            {host}
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={e => onSelectedChange(e.target.checked)}
+            className="w-3.5 h-3.5 accent-cyan-500 cursor-pointer"
+            aria-label={`Select ${host} for a URL set`}
+          />
+        </label>
+        <button
+          onClick={onToggle}
+          className="flex items-center flex-1 min-w-0 pl-2.5 pr-4 py-3 gap-3 text-left hover:bg-white/[0.015] transition-colors cursor-pointer"
+          aria-expanded={expanded}
+          aria-controls={`card-body-${group.key}`}
+        >
+          <span
+            className={`text-faint text-xs flex-shrink-0 transition-transform duration-200 ${
+              expanded ? 'rotate-90' : ''
+            }`}
+            aria-hidden="true"
+          >
+            {'\u25B8'}
           </span>
 
-          {/* Runner axis (provider / capacity grouping only) */}
-          {bucket.groupBy !== 'host' && (
-            <span className="flex items-center gap-2 text-xs whitespace-nowrap">
-              {bucket.unknownRunner ? (
-                <span
-                  className="px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-400"
-                  title="No runner identity for these runs: no tester bound, or the tester row was deleted"
-                >
-                  unknown runner
-                </span>
-              ) : (
-                <>
-                  {bucket.cloud !== null ? (
-                    <span className={`px-1.5 py-0.5 rounded ${cloudProviderBadge(bucket.cloud)}`}>
-                      {bucket.cloud}
-                    </span>
-                  ) : (
-                    <span className="px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-400">unknown provider</span>
-                  )}
-                  {bucket.groupBy === 'capacity' && (
-                    <span className="text-gray-300">{bucket.vmSize ?? 'unknown size'}</span>
-                  )}
-                  {regionLabel && <span className="text-faint">{regionLabel}</span>}
-                  {bucket.groupBy === 'capacity' && (
-                    runner.vcpus !== null && runner.memoryGb !== null ? (
-                      <span className="text-faint">{runner.vcpus} vCPU / {runner.memoryGb} GB</span>
-                    ) : bucket.vmSize !== null ? (
-                      <span className="text-gray-600">no spec in catalog</span>
-                    ) : null
-                  )}
-                </>
-              )}
+          <div className="flex items-center gap-3 flex-1 min-w-0">
+            <span className={`text-sm font-medium truncate ${urlColor}`}>
+              {host}
             </span>
-          )}
 
-          {/* Inline phase timings - show total duration if no phase breakdown */}
-          {totalDuration != null && (
-            <div className="hidden xl:flex items-center gap-3 text-xs tabular-nums whitespace-nowrap">
-              <span className="text-gray-200 font-medium" title="Wall-clock duration of the last full run">
-                <span className="text-gray-400 mr-1 font-normal">run</span>
-                {fmtMs(totalDuration)}
+            {/* Runner axis (provider / capacity grouping only) */}
+            {bucket.groupBy !== 'host' && (
+              <span className="flex items-center gap-2 text-xs whitespace-nowrap">
+                {bucket.unknownRunner ? (
+                  <span
+                    className="px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-400"
+                    title="No runner identity for these runs: no tester bound, or the tester row was deleted"
+                  >
+                    unknown runner
+                  </span>
+                ) : (
+                  <>
+                    {bucket.cloud !== null ? (
+                      <span className={`px-1.5 py-0.5 rounded ${cloudProviderBadge(bucket.cloud)}`}>
+                        {bucket.cloud}
+                      </span>
+                    ) : (
+                      <span className="px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-400">unknown provider</span>
+                    )}
+                    {bucket.groupBy === 'capacity' && (
+                      <span className="text-gray-300">{bucket.vmSize ?? 'unknown size'}</span>
+                    )}
+                    {regionLabel && <span className="text-faint">{regionLabel}</span>}
+                    {bucket.groupBy === 'capacity' && (
+                      runner.vcpus !== null && runner.memoryGb !== null ? (
+                        <span className="text-faint">{runner.vcpus} vCPU / {runner.memoryGb} GB</span>
+                      ) : bucket.vmSize !== null ? (
+                        <span className="text-gray-600">no spec in catalog</span>
+                      ) : null
+                    )}
+                  </>
+                )}
               </span>
-            </div>
-          )}
-        </div>
+            )}
 
-        <div className="flex items-center gap-3 flex-shrink-0">
-          {schedule?.enabled && (
-            <span
-              className="text-xs px-1.5 py-0.5 rounded border border-cyan-500/30 text-cyan-400/90 tracking-wider"
-              title="Re-probed automatically every hour"
-            >
-              hourly
+            {/* Inline phase timings - show total duration if no phase breakdown */}
+            {totalDuration != null && (
+              <div className="hidden xl:flex items-center gap-3 text-xs tabular-nums whitespace-nowrap">
+                <span className="text-gray-200 font-medium" title="Wall-clock duration of the last full run">
+                  <span className="text-gray-400 mr-1 font-normal">run</span>
+                  {fmtMs(totalDuration)}
+                </span>
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center gap-3 flex-shrink-0">
+            {schedule?.enabled && (
+              <span
+                className="text-xs px-1.5 py-0.5 rounded border border-cyan-500/30 text-cyan-400/90 tracking-wider"
+                title="Re-probed automatically every hour"
+              >
+                hourly
+              </span>
+            )}
+            {sparklineValues.length >= 2 && <Sparkline values={sparklineValues} />}
+            <span className="text-xs px-1.5 py-0.5 rounded bg-white/5 text-gray-400 font-medium tabular-nums">
+              {runs.length}
             </span>
-          )}
-          {sparklineValues.length >= 2 && <Sparkline values={sparklineValues} />}
-          <span className="text-xs px-1.5 py-0.5 rounded bg-white/5 text-gray-400 font-medium tabular-nums">
-            {runs.length}
-          </span>
-          <span className="text-xs text-faint whitespace-nowrap">
-            {timeAgo(lastRun.created_at)}
-          </span>
-          <span className={`w-[7px] h-[7px] rounded-full flex-shrink-0 ${dotColor}`} />
-          {isActive && (
-            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 motion-safe:animate-pulse flex-shrink-0" />
-          )}
-        </div>
-      </button>
+            <span className="text-xs text-faint whitespace-nowrap">
+              {timeAgo(lastRun.created_at)}
+            </span>
+            <span className={`w-[7px] h-[7px] rounded-full flex-shrink-0 ${dotColor}`} />
+            {isActive && (
+              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 motion-safe:animate-pulse flex-shrink-0" />
+            )}
+          </div>
+        </button>
+      </div>
 
       {/* Expanded body */}
       {expanded && (
@@ -593,9 +637,14 @@ export function DiagnosticsPage() {
   usePageTitle('URL Probe');
 
   const inputRef = useRef<HTMLInputElement>(null);
-  // decodeHostQueryParam (#820): tolerate the double-encoded ?host= values the
-  // old sync produced (`%2C%2520`), and normalize multi-host params to ", ".
-  const [url, setUrl] = useState(() => decodeHostQueryParam(searchParams.get('host')));
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Entry box + which control renders it, both decided once from ?host=.
+  // Multi-URL entry (#782 P1) is a textarea, one URL per line, paste-friendly;
+  // it REPLACES the single-line field rather than sitting next to it, so there
+  // is never a question about which box the probe reads.
+  const [initialEntry] = useState(() => initialEntryState(searchParams.get('host')));
+  const [url, setUrl] = useState(initialEntry.text);
+  const [multiMode, setMultiMode] = useState(initialEntry.multi);
   // Prefill the preset from ?preset= (scenario launcher); fall back to 'quick'.
   const [preset, setPreset] = useState<DiagPreset>(() => {
     const p = searchParams.get('preset');
@@ -626,6 +675,12 @@ export function DiagnosticsPage() {
   const [sizeFilter, setSizeFilter] = useState<string>(() => searchParams.get('size') ?? '');
   const [page, setPage] = useState(1);
   const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
+  // Watchlist multi-select (#782 P1) — row keys, not hosts: under the
+  // provider / capacity grouping one host owns several rows. Resolution back
+  // to hosts (with de-duplication) is hostsForSelection, and it only ever sees
+  // the rows currently on screen, so a stale key can never smuggle a URL into
+  // a set the user cannot see.
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
 
   // Sync URL to query string. hostsToQueryParam (#820): hostnames only,
   // comma-joined without spaces — the raw multi-entry input ("a.com, b.com")
@@ -656,9 +711,16 @@ export function DiagnosticsPage() {
     }, { replace: true });
   }, [groupBy, providerFilter, sizeFilter, setSearchParams]);
 
+  // Whichever entry control is mounted (single-line input or the multi-URL
+  // textarea) — only one of the two exists at a time.
   useEffect(() => {
-    inputRef.current?.focus();
+    (inputRef.current ?? textareaRef.current)?.focus();
   }, []);
+
+  // What the entry box actually resolves to, and what it cannot probe. Feeds
+  // the counter, the rejected-line callout, and the run button's enabled state
+  // — the page must never look ready to probe an input with nothing in it.
+  const parsedEntry = useMemo(() => parseUrlSetInput(url), [url]);
 
   // ── Data loading ────────────────────────────────────────────────────
 
@@ -974,6 +1036,17 @@ export function DiagnosticsPage() {
   const safePage = Math.min(page, totalPages);
   const paginatedGroups = filteredGroups.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
+  // ── URL-set selection (#782 P1) ───────────────────────────────────────
+  // Resolved against the FILTERED rows only: the set is what the user can see
+  // ticked. Keys for rows the current filter hides simply do not resolve, and
+  // come back if the filter does — nothing is probed off-screen either way.
+  const selectedHosts = useMemo(
+    () => hostsForSelection(filteredGroups, selectedKeys),
+    [filteredGroups, selectedKeys],
+  );
+  const pageAllSelected =
+    paginatedGroups.length > 0 && paginatedGroups.every(g => selectedKeys.has(g.key));
+
   // ── Recent hosts ──────────────────────────────────────────────────
 
   const recentHosts = useMemo(() => {
@@ -993,7 +1066,29 @@ export function DiagnosticsPage() {
     // whitespace, commas, or newlines — they are probed TOGETHER in one run
     // (same tick, comparable conditions) via endpoint.hosts[]. `samples` > 1
     // bursts every mode N times per URL within that run (#782 P2).
-    const diag = buildDiagRequest(targetHost || url, preset, samples);
+    //
+    // Parse FIRST so the launch is honest about what it dropped: an unusable
+    // line would otherwise become a `--target` that fails on the runner, and
+    // an over-cap set would become a run the watchdog kills halfway. Both are
+    // reported before the run starts, never after.
+    const parsed = parseUrlSetInput(targetHost || url);
+    const launchInput = launchInputFor(parsed);
+    if (!launchInput) {
+      const firstReject = parsed.invalid[0];
+      addToast('error', firstReject
+        ? `Nothing to probe — "${firstReject.raw}" is ${firstReject.reason}`
+        : 'Enter a URL or hostname to test');
+      return;
+    }
+    if (parsed.invalid.length > 0) {
+      const shown = parsed.invalid.slice(0, 2).map(r => `"${r.raw}" (${r.reason})`).join('; ');
+      const more = parsed.invalid.length - Math.min(2, parsed.invalid.length);
+      addToast('info', `Skipped ${parsed.invalid.length} unusable entr${parsed.invalid.length === 1 ? 'y' : 'ies'}: ${shown}${more > 0 ? ` and ${more} more` : ''}`);
+    }
+    if (parsed.overflow.length > 0) {
+      addToast('info', `A set is capped at ${MAX_SET_URLS} URLs — ${parsed.overflow.length} entr${parsed.overflow.length === 1 ? 'y was' : 'ies were'} not included`);
+    }
+    const diag = buildDiagRequest(launchInput, preset, samples);
     if (!diag) {
       addToast('error', 'Enter a URL or hostname to test');
       return;
@@ -1219,9 +1314,44 @@ export function DiagnosticsPage() {
     );
   };
 
+  const focusEntry = () => {
+    (multiMode ? textareaRef.current : inputRef.current)?.focus();
+  };
+
+  /** Switch entry mode, re-laying out the SAME text (one per line vs inline). */
+  const handleEntryModeChange = (next: boolean) => {
+    setMultiMode(next);
+    setUrl(prev => (next ? formatUrlSetInput(splitUrlSetInput(prev)) : splitUrlSetInput(prev).join(' ')));
+  };
+
+  /** Load the ticked rows into the multi-URL box so they can be edited first. */
+  const handleEditSelectionAsList = () => {
+    if (selectedHosts.length === 0) return;
+    setMultiMode(true);
+    setUrl(formatUrlSetInput(selectedHosts));
+    // The textarea mounts on this render; focus after it exists.
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+
+  /** Probe every ticked row TOGETHER — one config, one run, N `--target`s. */
+  const handleProbeSet = () => {
+    if (selectedHosts.length === 0) {
+      addToast('error', 'Tick at least one watched URL first');
+      return;
+    }
+    void handleRun(selectedHosts.join(' '));
+  };
+
   const handleHostClick = (host: string) => {
-    setUrl(host);
-    inputRef.current?.focus();
+    // Single mode replaces the field (unchanged). Multi mode APPENDS — the
+    // chips are how you assemble a set from history, and clobbering four
+    // pasted URLs because you clicked a fifth would be the wrong answer.
+    setUrl(prev => {
+      if (!multiMode) return host;
+      const entries = splitUrlSetInput(prev);
+      return formatUrlSetInput(entries.includes(host) ? entries : [...entries, host]);
+    });
+    focusEntry();
     // Scroll to the host's first card if it exists (grouped views have one
     // per runner bucket; the first in display order is the nearest match).
     const target = filteredGroups.find(g => g.host === host);
@@ -1279,25 +1409,103 @@ export function DiagnosticsPage() {
 
       {/* Probe input bar */}
       <div className="border border-gray-800 rounded p-4 mb-7">
-        <div className="text-xs tracking-wider text-faint mb-2.5">Probe a URL</div>
-        <div className="flex items-center gap-2.5">
-          <div className="flex-1 flex items-center gap-2">
-            <label htmlFor="diag-url" className="text-xs text-gray-400 flex-shrink-0">URL:</label>
-            {/* Ligatures off (#765): coding fonts render `//` as a slashed
-                ligature that reads as ` /` in a URL field. The stored value
-                was always correct — display only. */}
-            <input
-              ref={inputRef}
-              id="diag-url"
-              type="text"
+        <div className="flex items-center justify-between gap-3 mb-2.5">
+          <div className="text-xs tracking-wider text-faint">
+            {multiMode ? 'Probe a URL set' : 'Probe a URL'}
+          </div>
+          <div className="flex border border-gray-800 rounded overflow-hidden text-xs">
+            {([false, true] as const).map(mode => (
+              <button
+                key={String(mode)}
+                onClick={() => handleEntryModeChange(mode)}
+                className={`px-2.5 py-1 border-r border-gray-800 last:border-r-0 transition-colors ${
+                  multiMode === mode ? 'bg-white/5 text-gray-200' : 'text-faint hover:text-gray-400'
+                }`}
+                aria-pressed={multiMode === mode}
+                title={mode
+                  ? 'Paste a list of URLs — one per line, all probed together in ONE run'
+                  : 'Probe a single URL'}
+              >
+                {mode ? 'URL set' : 'Single URL'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Multi-URL entry (#782 P1): one URL per line. The set is probed in a
+            SINGLE tester invocation (repeated --target), so every member sees
+            the same network conditions and the run list gains one row, not N. */}
+        {multiMode && (
+          <div className="mb-2.5">
+            <label htmlFor="diag-url-set" className="text-xs text-gray-400 block mb-1.5">
+              URLs (one per line):
+            </label>
+            <textarea
+              ref={textareaRef}
+              id="diag-url-set"
+              rows={5}
               value={url}
               onChange={e => setUrl(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && url.trim()) handleRun(); }}
-              placeholder="Enter URL(s) to test — several at once, separated by spaces or commas..."
-              className="flex-1 bg-[var(--bg-raised)] border border-gray-800 rounded px-3 py-2 text-sm text-cyan-400 focus:outline-none focus:border-cyan-500/50 placeholder:text-gray-600 transition-colors [font-variant-ligatures:none]"
-              aria-label="URL or hostname to test"
+              onKeyDown={e => {
+                // Enter inserts a newline here (it is a list); Ctrl/Cmd+Enter
+                // launches, the usual multi-line-field submit gesture.
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && parsedEntry.entries.length > 0) {
+                  e.preventDefault();
+                  void handleRun();
+                }
+              }}
+              placeholder={'example.com\nhttps://www.cloudflare.com/\napi.example.com/health'}
+              className="w-full bg-[var(--bg-raised)] border border-gray-800 rounded px-3 py-2 text-sm text-cyan-400 focus:outline-none focus:border-cyan-500/50 placeholder:text-gray-600 transition-colors [font-variant-ligatures:none] font-mono resize-y"
+              aria-label="URLs to probe together, one per line"
+              aria-describedby="diag-url-set-summary"
             />
+            <div id="diag-url-set-summary" className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+              <span className={parsedEntry.entries.length > 0 ? 'text-gray-400' : 'text-faint'}>
+                {parsedEntry.entries.length} URL{parsedEntry.entries.length === 1 ? '' : 's'}
+                {parsedEntry.entries.length > 1 ? ' — probed together in one run' : ''}
+              </span>
+              {parsedEntry.duplicates.length > 0 && (
+                <span className="text-faint">
+                  {parsedEntry.duplicates.length} duplicate{parsedEntry.duplicates.length === 1 ? '' : 's'} collapsed
+                </span>
+              )}
+              {parsedEntry.overflow.length > 0 && (
+                <span className="text-yellow-400" title={parsedEntry.overflow.map(r => r.raw).join('\n')}>
+                  {parsedEntry.overflow.length} over the {MAX_SET_URLS}-URL cap — not probed
+                </span>
+              )}
+              {parsedEntry.invalid.length > 0 && (
+                <span className="text-red-400" title={parsedEntry.invalid.map(r => `${r.raw} — ${r.reason}`).join('\n')}>
+                  {parsedEntry.invalid.length} unusable: {parsedEntry.invalid.slice(0, 2).map(r => r.raw).join(', ')}
+                  {parsedEntry.invalid.length > 2 ? ` +${parsedEntry.invalid.length - 2}` : ''}
+                </span>
+              )}
+            </div>
           </div>
+        )}
+
+        <div className="flex items-center gap-2.5">
+          {multiMode ? (
+            <div className="flex-1" />
+          ) : (
+            <div className="flex-1 flex items-center gap-2">
+              <label htmlFor="diag-url" className="text-xs text-gray-400 flex-shrink-0">URL:</label>
+              {/* Ligatures off (#765): coding fonts render `//` as a slashed
+                  ligature that reads as ` /` in a URL field. The stored value
+                  was always correct — display only. */}
+              <input
+                ref={inputRef}
+                id="diag-url"
+                type="text"
+                value={url}
+                onChange={e => setUrl(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && url.trim()) handleRun(); }}
+                placeholder="Enter URL(s) to test — several at once, separated by spaces or commas..."
+                className="flex-1 bg-[var(--bg-raised)] border border-gray-800 rounded px-3 py-2 text-sm text-cyan-400 focus:outline-none focus:border-cyan-500/50 placeholder:text-gray-600 transition-colors [font-variant-ligatures:none]"
+                aria-label="URL or hostname to test"
+              />
+            </div>
+          )}
           <label htmlFor="diag-preset" className="text-xs text-gray-400">Preset</label>
           <select
             id="diag-preset"
@@ -1363,10 +1571,16 @@ export function DiagnosticsPage() {
           <Button
             variant="primary"
             onClick={() => handleRun()}
-            disabled={submitting || !url.trim()}
+            // Enabled by what is actually PROBEABLE, not by "the box has text":
+            // a box holding only unusable lines must not look ready to run.
+            disabled={submitting || parsedEntry.entries.length === 0}
             className="w-9 h-9 !p-0 text-base flex-shrink-0"
-            aria-label="Run diagnostic"
-            title="Run diagnostic"
+            aria-label={parsedEntry.entries.length > 1
+              ? `Probe ${parsedEntry.entries.length} URLs together`
+              : 'Run diagnostic'}
+            title={parsedEntry.entries.length > 1
+              ? `Probe ${parsedEntry.entries.length} URLs together in one run`
+              : 'Run diagnostic'}
           >
             {submitting ? (
               <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full motion-safe:animate-spin" />
@@ -1524,6 +1738,53 @@ export function DiagnosticsPage() {
         </div>
       </div>
 
+      {/* ── URL-set action bar (#782 P1) ──────────────────────────────────
+          Only rendered with a live selection: the watchlist is a reading
+          surface first, and an always-on bar would claim vertical space for
+          an action nobody asked for. */}
+      {selectedHosts.length > 0 && (
+        <div
+          className="flex flex-wrap items-center gap-2 mb-3 border border-cyan-500/30 bg-cyan-500/[0.04] rounded px-3 py-2"
+          role="region"
+          aria-label="URL set actions"
+        >
+          <span className="text-xs text-cyan-300 font-medium tabular-nums">
+            {selectedHosts.length} URL{selectedHosts.length === 1 ? '' : 's'} selected
+          </span>
+          <span className="text-xs text-faint">
+            {selectedHosts.length > 1
+              ? '— probed together in one run, same conditions'
+              : '— one URL, a plain single probe'}
+          </span>
+          {selectedHosts.length > MAX_SET_URLS && (
+            <span className="text-xs text-yellow-400">
+              only the first {MAX_SET_URLS} will be probed
+            </span>
+          )}
+          <span className="flex-1" />
+          <Button
+            variant="primary"
+            size="xs"
+            onClick={handleProbeSet}
+            disabled={submitting}
+            title={`Probe ${Math.min(selectedHosts.length, MAX_SET_URLS)} URL(s) in one run`}
+          >
+            Probe set now
+          </Button>
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={handleEditSelectionAsList}
+            title="Load the selection into the multi-URL box to edit before probing"
+          >
+            Edit as list
+          </Button>
+          <Button variant="ghost" size="xs" onClick={() => setSelectedKeys(new Set())}>
+            Clear
+          </Button>
+        </div>
+      )}
+
       {/* URL cards */}
       {loading ? (
         <div className="space-y-2">
@@ -1547,6 +1808,24 @@ export function DiagnosticsPage() {
         </div>
       ) : (
         <div>
+          {/* Select-all covers THIS PAGE of rows, and says so — a control that
+              silently reached the other 180 watched URLs would be a trap. */}
+          <label className="flex items-center gap-2 px-4 py-1.5 mb-0.5 text-xs text-faint cursor-pointer w-fit">
+            <input
+              type="checkbox"
+              checked={pageAllSelected}
+              onChange={e => {
+                const checked = e.target.checked;
+                setSelectedKeys(prev => {
+                  let next = prev;
+                  for (const g of paginatedGroups) next = setSelectionKey(next, g.key, checked);
+                  return next;
+                });
+              }}
+              className="w-3.5 h-3.5 accent-cyan-500 cursor-pointer"
+            />
+            Select all {paginatedGroups.length} on this page
+          </label>
           {paginatedGroups.map(group => (
             <UrlCard
               key={group.key}
@@ -1560,6 +1839,9 @@ export function DiagnosticsPage() {
               onMonitorHourly={() => handleMonitorHourly(group)}
               monitorPending={monitorPending.has(group.key)}
               onToggleMonitor={schedule => handleToggleMonitor(group, schedule)}
+              selected={selectedKeys.has(group.key)}
+              onSelectedChange={checked =>
+                setSelectedKeys(prev => setSelectionKey(prev, group.key, checked))}
             />
           ))}
         </div>

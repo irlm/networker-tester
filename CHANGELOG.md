@@ -11,6 +11,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.277] - 2026-08-20
+
+### Added
+
+- **URL sets, phase 1 of #782 — assemble a set, probe it in ONE run.** The
+  set config shape (`endpoint.hosts[]`), its one-run dispatch and the
+  per-URL run detail already shipped with #820/#821/#826; what was missing was
+  a way to *build* a set from the watchlist and a run list that admits a set
+  row covers several targets.
+  - **Watchlist multi-select** (`dashboard/src/pages/DiagnosticsPage.tsx`): a
+    checkbox per watched-URL row, a select-all scoped to the visible page, and
+    an action bar with **Probe set now** / **Edit as list** / **Clear**. One
+    host owning several runner rows (under the provider / capacity grouping)
+    contributes ONE member, not one per row.
+  - **Multi-URL entry**: a `URL set` / `Single URL` toggle swaps the
+    single-line field for a paste-friendly textarea (one URL per line;
+    Ctrl/Cmd+Enter launches). It reports what it will not probe — unusable
+    lines, duplicates that collapse, entries past the 25-URL cap — before the
+    run rather than as failed attempts after it, and the run button is
+    disabled when nothing in the box is probeable.
+  - **Runs list** (`dashboard/src/pages/RunsPage.tsx`): a set run reads
+    `set (4 URLs) · example.com (Quick)` instead of the raw
+    `Diag set: example.com +3 [a1b2c3] (Quick)`, which showed a single host
+    plus an internal reuse hash and was indistinguishable from an ordinary
+    single-URL probe.
+  - New pure module `dashboard/src/lib/probe-set.ts` (set parsing, validation,
+    de-duplication, selection → hosts) with `probe-set.test.ts`.
+
+### Fixed
+
+- **URL-set members are de-duplicated by resolved probe URL, not raw text**
+  (`dashboard/src/lib/diag-request.ts`). `example.com` and
+  `https://example.com/` are one probe; both used to survive into
+  `endpoint.hosts[]`, so the run carried two `--target` flags for one URL, the
+  config name's `+N` overstated the membership, and the run's per-URL grouping
+  reported one URL with double the attempts.
+- **The control plane now canonicalizes `endpoint.hosts[]` on create and
+  PATCH** (`TestConfigEndpointNormalizer`): blanks dropped, duplicates
+  collapsed, `host` realigned to `hosts[0]` (a `host` absent from the list is
+  prepended, never discarded), non-string members and empty sets rejected with
+  a 400, and a 25-member cap so a set cannot become a run the watchdog kills
+  halfway. Classic single-host configs and every non-network endpoint round-trip
+  byte-identically.
+- **The agent de-duplicates targets after resolution** (`RunExecutor`):
+  `bare.example` and `https://bare.example/health` resolve to one URL and now
+  yield one `--target`.
+- **A `Diag set:` run without `test_kind` is classified as a URL probe.** The
+  runs-list fallback tested for a literal `Diag: ` prefix, which no set name
+  ever matches, so old set runs fell through to `network` and vanished from the
+  URL-probes tab.
 ## [0.28.276] - 2026-08-20
 
 ### Added

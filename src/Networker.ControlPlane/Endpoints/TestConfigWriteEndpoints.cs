@@ -69,6 +69,14 @@ public static class TestConfigWriteEndpoints
                 return ApiError.BadRequest("endpoint.kind is required");
             }
 
+            // URL sets (#782): canonicalize endpoint.hosts[] BEFORE anything
+            // reads or stores the block, so the stored row, the reuse
+            // comparison below and the agent all see the same member list.
+            if (!TestConfigEndpointNormalizer.TryNormalize(req.Endpoint, out var endpointJson, out var endpointError))
+            {
+                return ApiError.BadRequest(endpointError!);
+            }
+
             if (!TestConfigKindClassifier.TryResolve(req.TestKind, req.Workload, req.Methodology, out var testKind, req.Name))
             {
                 return ApiError.BadRequest("test_kind must be one of: network, url_probe, sdk_probe, benchmark");
@@ -127,7 +135,7 @@ public static class TestConfigWriteEndpoints
                     .FirstOrDefaultAsync(c => c.ProjectId == projectId && c.Name == req.Name, ct);
                 if (existing is not null)
                 {
-                    if (ReconcileWithRequest(existing, req, endpointKind))
+                    if (ReconcileWithRequest(existing, req, endpointKind, endpointJson))
                     {
                         await db.SaveChangesAsync(ct);
                     }
@@ -144,7 +152,7 @@ public static class TestConfigWriteEndpoints
                 Description = req.Description,
                 EndpointKind = endpointKind,
                 TestKind = testKind,
-                EndpointRef = req.Endpoint.GetRawText(),
+                EndpointRef = endpointJson,
                 Workload = req.Workload.GetRawText(),
                 Methodology = req.Methodology is { ValueKind: not JsonValueKind.Null } m
                     ? m.GetRawText()
@@ -173,7 +181,7 @@ public static class TestConfigWriteEndpoints
                         .FirstOrDefaultAsync(c => c.ProjectId == projectId && c.Name == req.Name, ct);
                     if (existing is not null)
                     {
-                        if (ReconcileWithRequest(existing, req, endpointKind))
+                        if (ReconcileWithRequest(existing, req, endpointKind, endpointJson))
                         {
                             await db.SaveChangesAsync(ct);
                         }
@@ -235,7 +243,13 @@ public static class TestConfigWriteEndpoints
                 {
                     return ApiError.BadRequest("endpoint.kind is required");
                 }
-                cfg.EndpointRef = ep.GetRawText();
+                // Same URL-set canonicalization as create (#782) — a PATCH is
+                // the other way a set's membership reaches the row.
+                if (!TestConfigEndpointNormalizer.TryNormalize(ep, out var patchedEndpoint, out var patchError))
+                {
+                    return ApiError.BadRequest(patchError!);
+                }
+                cfg.EndpointRef = patchedEndpoint;
                 cfg.EndpointKind = kind;
             }
             if (req.Workload is { ValueKind: JsonValueKind.Object } wl)
@@ -611,13 +625,18 @@ public static class TestConfigWriteEndpoints
     /// <c>max_duration_secs</c> follows the request only when the request
     /// carries it (absent keeps the stored value — same as PATCH). Returns
     /// true when the row was mutated; the caller owns the save.
+    /// <para><paramref name="reqEndpoint"/> is the CANONICALIZED endpoint
+    /// (<see cref="TestConfigEndpointNormalizer"/>), not <c>req.Endpoint</c>:
+    /// comparing the raw request against a normalized stored row would report a
+    /// difference on every re-probe of the same URL set and rewrite the row for
+    /// nothing.</para>
     /// </summary>
     private static bool ReconcileWithRequest(
-        Data.Entities.TestConfig existing, CreateTestConfigRequest req, string endpointKind)
+        Data.Entities.TestConfig existing, CreateTestConfigRequest req, string endpointKind,
+        string reqEndpoint)
     {
         var changed = false;
 
-        var reqEndpoint = req.Endpoint.GetRawText();
         if (!JsonNode.DeepEquals(JsonNode.Parse(existing.EndpointRef), JsonNode.Parse(reqEndpoint)))
         {
             existing.EndpointRef = reqEndpoint;

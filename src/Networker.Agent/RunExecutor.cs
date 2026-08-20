@@ -677,7 +677,13 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
 
     /// <summary>All resolved target URLs for a network endpoint — one entry per
     /// URL of a multi-URL set (#782), a single entry for the classic shape.
-    /// Empty for non-network endpoints (unsupported in the standalone agent).</summary>
+    /// Empty for non-network endpoints (unsupported in the standalone agent).
+    ///
+    /// De-duplicated AFTER resolution, not before: members are de-duplicated as
+    /// written when the config is stored, but two different spellings can still
+    /// resolve to one URL ("bare.example" and "https://bare.example/health").
+    /// Emitting that twice makes the tester probe one URL twice while the run's
+    /// per-URL grouping reports a single target with double the attempts.</summary>
     internal static IReadOnlyList<string> EndpointToTargets(TestConfigView config)
     {
         if (config.EndpointKind != "network" || config.Network is null)
@@ -686,17 +692,21 @@ public sealed class RunExecutor(ILogger<RunExecutor> logger, AgentOptions option
         var resolved = new List<string>();
         foreach (var host in config.Network.Hosts)
         {
+            string target;
             if (host.StartsWith("http://", StringComparison.Ordinal) ||
                 host.StartsWith("https://", StringComparison.Ordinal))
             {
-                resolved.Add(host);
-                continue;
+                target = host;
+            }
+            else
+            {
+                const string scheme = "https";
+                target = config.Network.Port is { } p
+                    ? $"{scheme}://{host}:{p}/health"
+                    : $"{scheme}://{host}/health";
             }
 
-            const string scheme = "https";
-            resolved.Add(config.Network.Port is { } p
-                ? $"{scheme}://{host}:{p}/health"
-                : $"{scheme}://{host}/health");
+            if (!resolved.Contains(target, StringComparer.Ordinal)) resolved.Add(target);
         }
         return resolved;
     }

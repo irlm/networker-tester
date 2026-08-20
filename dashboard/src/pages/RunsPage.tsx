@@ -22,6 +22,7 @@ import {
   type RunListRow,
 } from '../features/runs/list-grouping';
 import { computeCellStats, stripCellNameSuffix } from '../features/runs/compare';
+import { diagSetRunLabel, isWatchlistConfigName } from '../lib/watchlist';
 import { queryClient } from '../app/queryClient';
 import { formatMs } from '../lib/analysis';
 import type { LiveAttempt } from '../api/types';
@@ -251,9 +252,13 @@ export function RunsPage() {
     return runs.map((r) => {
       return {
         ...r,
+        // isWatchlistConfigName, not a `Diag: ` prefix test: the literal prefix
+        // missed every multi-URL set run ("Diag set: …", #782), which then fell
+        // through to 'network' and hid from the URL-probe purpose tab.
         test_kind: r.test_kind
           || (r.modes?.some(mode => mode.toLowerCase() === 'sdkprobe') ? 'sdk_probe'
-            : r.artifact_id ? 'benchmark' : r.config_name?.startsWith('Diag: ') ? 'url_probe' : 'network'),
+            : r.artifact_id ? 'benchmark'
+              : r.config_name && isWatchlistConfigName(r.config_name) ? 'url_probe' : 'network'),
       };
     });
   }, [runs]);
@@ -637,7 +642,13 @@ export function RunsPage() {
                   </Link>
                 </span>
               ) : (
-                row.run.config_name || row.run.test_config_id.slice(0, 8)
+                // A URL-set run (#782) is ONE row covering N targets — label it
+                // "set (4 URLs) · example.com (Quick)" rather than the raw
+                // config name, which showed a single host plus the internal
+                // membership hash. `title` keeps the exact name reachable.
+                diagSetRunLabel(row.run.config_name ?? '')
+                  || row.run.config_name
+                  || row.run.test_config_id.slice(0, 8)
               ),
           },
           {
