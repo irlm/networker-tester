@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Auth;
+using Networker.ControlPlane.Realtime;
 using Networker.Data;
 
 namespace Networker.ControlPlane.Endpoints;
@@ -48,6 +49,121 @@ public static class DeploymentsEndpoints
                 .FirstOrDefaultAsync(x => x.ProjectId == projectId && x.DeploymentId == deploymentId);
 
             return d is null ? Results.NotFound() : Results.Ok(ShapeDeployment(d));
+        })
+        .RequireAuthorization(AuthPolicies.ProjectMember);
+
+        // GET /api/projects/{projectId}/deployments/{deploymentId}/events — the
+        // per-deployment SSE stream the deploy-detail page's useDeployEvents
+        // hook has connected to since the Rust dashboard (v0.27.16). The C#
+        // control plane never implemented it, so the hook 404'd and — worse —
+        // a FINISHED deployment had no replay at all (issue #816). Frames are
+        // the flat SeqEvent shape ({"seq":N,"type":"deploy_log",...}) the hook
+        // parses.
+        //
+        //   * terminal deployment: replay the persisted log (deploy_log per
+        //     line, synthetic ascending seq) then deploy_complete — the
+        //     durable post-mortem path;
+        //   * active deployment: replay the EventBus ring for this deployment,
+        //     then tail it by polling (the bus has no per-consumer
+        //     subscription API; 1s polls against a 2048-event ring cannot
+        //     miss). Bus seqs are globally monotonic, satisfying the client's
+        //     seq-dedup contract.
+        //
+        // After deploy_complete the connection is held with keep-alives (the
+        // hook treats stream-end as a drop and reconnect-loops otherwise).
+        app.MapGet("/api/projects/{projectId}/deployments/{deploymentId:guid}/events", async (
+            string projectId, Guid deploymentId, HttpContext ctx, NetworkerDbContext db, EventBus bus) =>
+        {
+            var d = await db.Deployments
+                .AsNoTracking()
+                .Where(x => x.ProjectId == projectId && x.DeploymentId == deploymentId)
+                .Select(x => new { x.Status, x.Log, x.EndpointIps })
+                .FirstOrDefaultAsync();
+            if (d is null)
+            {
+                return Results.NotFound();
+            }
+
+            var response = ctx.Response;
+            response.Headers.ContentType = "text/event-stream";
+            response.Headers.CacheControl = "no-cache";
+            // Disable proxy buffering so events flush immediately (nginx et al).
+            response.Headers["X-Accel-Buffering"] = "no";
+
+            var ct = ctx.RequestAborted;
+            try
+            {
+                var terminal = d.Status is "completed" or "failed" or "cancelled" or "torn_down";
+                if (terminal)
+                {
+                    // Post-mortem replay straight from the deployment row.
+                    long seq = 0;
+                    foreach (var line in (d.Log ?? string.Empty).Split('\n'))
+                    {
+                        if (line.Length == 0)
+                        {
+                            continue;
+                        }
+                        await WriteEventAsync(response,
+                            new SeqEvent(++seq, new DeployLog(deploymentId, line, "stdout")), ct);
+                    }
+                    var ips = ParseIpList(d.EndpointIps);
+                    await WriteEventAsync(response,
+                        new SeqEvent(++seq, new DeployComplete(deploymentId, d.Status, ips)), ct);
+                    await response.Body.FlushAsync(ct);
+                }
+                else
+                {
+                    // Live tail: replay the ring, then poll it. `since` tracks
+                    // the last GLOBAL seq scanned (not just matching events) so
+                    // each poll is incremental.
+                    long since = 0;
+                    var complete = false;
+                    while (!ct.IsCancellationRequested && !complete)
+                    {
+                        var batch = bus.Replay(since);
+                        var wrote = false;
+                        foreach (var e in batch)
+                        {
+                            since = e.Seq;
+                            switch (e.Event)
+                            {
+                                case DeployLog dl when dl.DeploymentId == deploymentId:
+                                    await WriteEventAsync(response, e, ct);
+                                    wrote = true;
+                                    break;
+                                case DeployComplete dc when dc.DeploymentId == deploymentId:
+                                    await WriteEventAsync(response, e, ct);
+                                    wrote = true;
+                                    complete = true;
+                                    break;
+                            }
+                        }
+                        if (wrote)
+                        {
+                            await response.Body.FlushAsync(ct);
+                        }
+                        if (!complete)
+                        {
+                            await Task.Delay(TimeSpan.FromSeconds(1), ct);
+                        }
+                    }
+                }
+
+                // Hold the stream open — the hook reconnect-loops on close.
+                while (!ct.IsCancellationRequested)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(15), ct);
+                    await response.WriteAsync(ServerSentEvents.FormatComment("keep-alive"), ct);
+                    await response.Body.FlushAsync(ct);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Client went away — normal SSE termination.
+            }
+
+            return Results.Empty;
         })
         .RequireAuthorization(AuthPolicies.ProjectMember);
 
@@ -212,6 +328,28 @@ public static class DeploymentsEndpoints
     private static object Unavailable() =>
         new { available = false, authenticated = false, account = (string?)null };
 
+    /// <summary>One SSE frame carrying a <see cref="SeqEvent"/> in the flat
+    /// {"seq":N,"type":"...",...} shape the deploy hook parses.</summary>
+    private static Task WriteEventAsync(HttpResponse response, SeqEvent evt, CancellationToken ct) =>
+        response.WriteAsync(ServerSentEvents.FormatEvent(null, JsonSerializer.Serialize(evt)), ct);
+
+    /// <summary>Decode the deployment's endpoint_ips JSON array (null/invalid ⇒ empty).</summary>
+    private static IReadOnlyList<string> ParseIpList(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return [];
+        }
+        try
+        {
+            return JsonSerializer.Deserialize<List<string>>(raw) ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
     /// <summary>One deployment-config endpoint resolved for costing/identity.
     /// The VM size field name is provider-specific in the config JSON:
     /// azure <c>vm_size</c>, aws <c>instance_type</c>, gcp <c>machine_type</c> —
@@ -306,6 +444,10 @@ public static class DeploymentsEndpoints
         agent_id = d.AgentId,
         error_message = d.ErrorMessage,
         log = d.Log,
+        // V054 (issue #816): install.sh's raw exit code and the last "Step N: …"
+        // header before a failure — post-mortem triage without reading the log.
+        exit_code = d.ExitCode,
+        failed_step = d.FailedStep,
     };
 
     private static JsonNode? ParseJson(string? raw)

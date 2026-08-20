@@ -2091,6 +2091,62 @@ function Invoke-EnsureFirewallRule ($name, $protocol, $ports) {
         -LocalPort $ports -Action Allow -ErrorAction SilentlyContinue | Out-Null
 }
 
+function Invoke-EnsureTlsProbeType {
+    # Compiled TLS handshake probe. A PowerShell scriptblock cast to
+    # RemoteCertificateValidationCallback runs on a TLS-handshake thread with
+    # no runspace under pwsh 7 (the #806 CI failure), so the callback lives in
+    # compiled C# instead -- edition-proof on 5.1 and 7+. Returns $true when
+    # the type is available (Add-Type can fail on exotic hosts; callers fall
+    # back to the TCP-only probe then).
+    if ("NetworkerTlsProbe" -as [type]) { return $true }
+    try {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Net.Security;
+using System.Net.Sockets;
+
+public static class NetworkerTlsProbe
+{
+    // Full TLS handshake against host:port, trusting ANY certificate (the
+    // stacks serve self-signed/internal certs by design). Returns null on
+    // success, or the failure message. This asserts exactly what the
+    // orchestrating install.sh asserts externally with `curl -k`.
+    public static string Handshake(string host, int port, int timeoutMs)
+    {
+        try
+        {
+            using (TcpClient client = new TcpClient())
+            {
+                IAsyncResult iar = client.BeginConnect(host, port, null, null);
+                if (!iar.AsyncWaitHandle.WaitOne(timeoutMs) || !client.Connected)
+                {
+                    return "TCP connect timed out";
+                }
+                client.EndConnect(iar);
+                client.ReceiveTimeout = timeoutMs;
+                client.SendTimeout = timeoutMs;
+                using (SslStream ssl = new SslStream(
+                    client.GetStream(), false, (s, cert, chain, errors) => true))
+                {
+                    ssl.AuthenticateAsClient("localhost");
+                    return null;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            return ex.GetBaseException().Message;
+        }
+    }
+}
+'@ -ErrorAction Stop
+        return $true
+    } catch {
+        Write-Warn "TLS probe helper unavailable ($($_.Exception.Message)) -- HTTPS verify falls back to a TCP-only probe."
+        return $false
+    }
+}
+
 function Invoke-VerifyStackServing ($stack, $httpPort, $httpsPort) {
     # Port-serving check -- a registered or "started" service is NOT success
     # (nssm reports started for a process that exits immediately; v0.28.150
@@ -2108,44 +2164,48 @@ function Invoke-VerifyStackServing ($stack, $httpPort, $httpsPort) {
         if ($svc) { Write-Err "  service status: $($svc.Status)" }
         throw "$stack install failed: HTTP port $httpPort not serving after start"
     }
-    # HTTPS leg: the control plane's readiness gate is a PLAIN TCP probe of
-    # this port (ProvisioningOrchestrator.ProxyHttpsPort), so a TCP accept is
-    # the faithful — and PS-edition-proof — assertion. (An HttpWebRequest with
-    # ServerCertificateValidationCallback was tried first and failed a WORKING
-    # caddy/traefik on the pwsh 7 runner image — scriptblock delegates for
-    # that callback are unreliable there; CI 2026-08-19.) A best-effort
-    # SslStream handshake runs after the accept purely for the log.
+    # HTTPS leg: a REAL TLS handshake, not just a TCP accept. Issue #816
+    # (residual #801 pattern B) proved TCP-accept is a false positive here:
+    # caddy with a certless config accepts TCP on 8454 -- this probe and the
+    # readiness gate both passed -- while every handshake died with "alert
+    # internal error", and install.sh's external `curl -k` verify then failed
+    # the whole cell. The handshake runs in COMPILED C# (NetworkerTlsProbe)
+    # because a scriptblock RemoteCertificateValidationCallback is unreliable
+    # under pwsh 7 (no runspace on the handshake thread; CI 2026-08-19).
+    # If the helper can't compile, fall back to the previous TCP-only assert.
+    $probeAvailable = Invoke-EnsureTlsProbeType
     $httpsOk = $false
+    $lastErr = "no attempt"
     foreach ($i in 1..5) {
-        $client = New-Object System.Net.Sockets.TcpClient
-        try {
-            $iar = $client.BeginConnect("127.0.0.1", $httpsPort, $null, $null)
-            if ($iar.AsyncWaitHandle.WaitOne(5000) -and $client.Connected) {
-                $client.EndConnect($iar)
+        if ($probeAvailable) {
+            $lastErr = [NetworkerTlsProbe]::Handshake("127.0.0.1", [int]$httpsPort, 5000)
+            if ($null -eq $lastErr) {
+                Write-Info "$stack TLS handshake on ${httpsPort}: OK"
                 $httpsOk = $true
-                try {
-                    $ssl = New-Object System.Net.Security.SslStream(
-                        $client.GetStream(), $false,
-                        [System.Net.Security.RemoteCertificateValidationCallback]{ $true })
-                    $ssl.AuthenticateAsClient("localhost")
-                    Write-Info "$stack TLS handshake on ${httpsPort}: $($ssl.SslProtocol)"
-                    $ssl.Dispose()
-                } catch {
-                    Write-Info "$stack TCP ${httpsPort} accepts (TLS handshake probe inconclusive: $($_.Exception.Message))"
-                }
                 break
             }
-        } catch {
-            # PSAvoidUsingEmptyCatchBlock: refused/reset means the listener
-            # is not up yet -- fall through to the retry sleep below.
-            $httpsOk = $false
+        } else {
+            $client = New-Object System.Net.Sockets.TcpClient
+            try {
+                $iar = $client.BeginConnect("127.0.0.1", $httpsPort, $null, $null)
+                if ($iar.AsyncWaitHandle.WaitOne(5000) -and $client.Connected) {
+                    $client.EndConnect($iar)
+                    $httpsOk = $true
+                    break
+                }
+                $lastErr = "TCP connect timed out"
+            } catch {
+                # Refused/reset means the listener is not up yet -- fall
+                # through to the retry sleep below.
+                $lastErr = $_.Exception.Message
+            }
+            finally { $client.Dispose() }
         }
-        finally { $client.Dispose() }
         Start-Sleep -Seconds 3
     }
     if (-not $httpsOk) {
-        Write-Err "$stack HTTPS port $httpsPort is not listening -- the readiness gate TCP-probes exactly this port."
-        throw "$stack install failed: HTTPS port $httpsPort not serving after start"
+        Write-Err "$stack HTTPS port $httpsPort failed the TLS probe ($lastErr) -- install.sh's external verify curls exactly this port with -k."
+        throw "$stack install failed: HTTPS port $httpsPort not serving TLS after start ($lastErr)"
     }
 }
 
@@ -2254,10 +2314,27 @@ function Invoke-SetupCaddy {
 
     $siteRoot = $script:NetworkerSiteRoot -replace '\\','/'
     $caddyfile = Join-Path $stackDir "Caddyfile"
+    # TLS shape (issue #816, the residual #801-pattern-B cause): a HOSTLESS
+    # `:8454 { tls internal }` site gets NO certificate -- `auto_https off`
+    # disables cert automation entirely, and a bare `:8454` address gives the
+    # internal issuer no subject names anyway. The listener still ACCEPTS TCP
+    # (so the in-guest TCP probe and the readiness gate passed) but every TLS
+    # handshake died with "alert internal error", so install.sh's external
+    # `curl -k https://ip:8454/` verify failed EVERY Windows caddy cell.
+    # Reproduced + fixed against caddy 2.8.4 (docker, 2026-08-19):
+    #   * `auto_https disable_redirects` keeps cert automation alive (only
+    #     the :80 redirect server is suppressed),
+    #   * `https://localhost:8454` names a subject the internal CA can issue
+    #     for at startup; the extra `https://:8454` keeps the server catch-all
+    #     so IP-literal requests (the tester's normal shape) still route,
+    #   * `default_sni localhost` serves that cert to SNI-less clients --
+    #     curl/tester connections by IP send no SNI.
+    # (The Linux arm never hit this: its Caddyfile loads an explicit PEM pair.)
     $cfg = @"
 {
-    auto_https off
+    auto_https disable_redirects
     local_certs
+    default_sni localhost
     servers {
         protocols h1 h2 h3
     }
@@ -2278,7 +2355,7 @@ function Invoke-SetupCaddy {
     }
 }
 
-:8454 {
+https://localhost:8454, https://:8454 {
     tls internal
     root * $siteRoot
     file_server

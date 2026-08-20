@@ -45,4 +45,14 @@ public partial class Deployment
     /// its in-flight <c>install.sh</c> (V052, issue #764). Caps the automatic
     /// loop; the UI Retry button remains the manual path past the cap.</summary>
     public short RecoveryAttempts { get; set; }
+
+    /// <summary>install.sh's raw exit code, persisted at terminal state (V054,
+    /// issue #816). Null while running, for docker-provider deployments (no
+    /// shell-out), and for pre-V054 history.</summary>
+    public int? ExitCode { get; set; }
+
+    /// <summary>The last <c>Step N: …</c> header install.sh printed before the
+    /// deployment finished (V054, issue #816) — on failure, the failing phase
+    /// without reading the log. Null when no step marker was seen.</summary>
+    public string? FailedStep { get; set; }
 }

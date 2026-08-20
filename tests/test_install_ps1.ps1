@@ -1512,6 +1512,36 @@ $script:NetworkerVersion = ""
 $bannerOut = & { Write-Banner } 6>&1 | Out-String
 Assert-Contains $bannerOut "Installer" "Write-Banner shows 'Installer' when version not set"
 
+# ══════════════════════════════════════════════════════════════════════════════
+Write-TestSection "Windows Caddy TLS contract (issue #816)"
+# ══════════════════════════════════════════════════════════════════════════════
+# The residual #801-pattern-B cause: a hostless `:8454 { tls internal }` under
+# `auto_https off` gets NO certificate -- TCP accepts (the readiness gate and
+# the old in-guest probe both passed) while every TLS handshake failed, so
+# install.sh's external `curl -k` verify killed EVERY Windows caddy cell.
+# These pins freeze the three config properties the fix depends on (verified
+# against caddy 2.8.4: handshake completes by IP with no SNI) plus the verify
+# helper actually asserting a handshake, so a refactor can't silently
+# reintroduce the certless shape.
+
+$caddyDef = (Get-Command Invoke-SetupCaddy).Definition
+Assert-Contains $caddyDef "auto_https disable_redirects" "Caddyfile keeps cert automation alive (disable_redirects, not off)"
+Assert-False ($caddyDef -match "(?m)^\s*auto_https off") "Caddyfile must not disable cert automation entirely (auto_https off issues no certs)"
+Assert-Contains $caddyDef "default_sni localhost" "Caddyfile serves the localhost cert to SNI-less (IP-literal) clients"
+Assert-Contains $caddyDef "https://localhost:8454, https://:8454" "HTTPS site names a subject for the internal CA AND stays catch-all"
+Assert-Contains $caddyDef "tls internal" "HTTPS site uses the internal issuer"
+Assert-False ($caddyDef -match "(?m)^\s*:8454\s*\{") "hostless :8454 site block (certless under any auto_https mode) must not return"
+
+$verifyDef = (Get-Command Invoke-VerifyStackServing).Definition
+Assert-Contains $verifyDef "NetworkerTlsProbe" "HTTPS verify performs a real TLS handshake (compiled probe)"
+Assert-Contains $verifyDef "Invoke-EnsureTlsProbeType" "HTTPS verify compiles the probe helper (TCP-only fallback otherwise)"
+
+# The compiled probe must be loadable on this PowerShell edition (Add-Type
+# uses csc/C#5 on 5.1 and Roslyn on 7+ -- the source must satisfy both).
+Assert-True (Invoke-EnsureTlsProbeType) "NetworkerTlsProbe compiles via Add-Type on this edition"
+$probeErr = [NetworkerTlsProbe]::Handshake("127.0.0.1", 1, 1500)
+Assert-True ($null -ne $probeErr) "probe reports a failure message for a dead port (never throws)"
+
 
 # ##############################################################################
 #  CLEANUP AND RESULTS

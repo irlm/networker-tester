@@ -284,7 +284,17 @@ public sealed class DeployRunner
         var error = ClassifyExit(
             exitCode,
             shuttingDown: _lifetime?.ApplicationStopping.IsCancellationRequested == true);
-        await FinishAsync(deploymentId, success, output.EndpointIps, output.FullLog, error, ct, output.EndpointHosts)
+        // Terminal (non-interrupted) failures carry the enriched #816 message —
+        // the last fatal "✗ …" line and the step that died — instead of the bare
+        // exit code. Interruption markers (#764/#817) stay verbatim: the startup
+        // recovery pass and the orchestrator's retry arm key on the prefix.
+        if (error is not null
+            && !error.StartsWith(ProvisioningFailureClassifier.InterruptedErrorPrefix, StringComparison.Ordinal))
+        {
+            error = BuildFailureMessage(exitCode, output);
+        }
+        await FinishAsync(deploymentId, success, output.EndpointIps, output.FullLog, error, ct, output.EndpointHosts,
+                exitCode, success ? null : output.CurrentStep)
             .ConfigureAwait(false);
 
         TryDelete(deployFile);
@@ -345,6 +355,26 @@ public sealed class DeployRunner
         return $"install.sh exited with code {exitCode ?? -1}";
     }
 
+    /// <summary>Failure message for a non-signal install.sh exit: the exit code
+    /// plus the FIRST ACTIONABLE detail from the output — the last fatal
+    /// "✗ …" line install.sh printed, and the step it died in. Issue #816: an
+    /// unattended matrix cell's run row used to carry only "install.sh exited
+    /// with code 1", which diagnoses nothing; the orchestrator's
+    /// DeploymentFailed arm copies this message onto the run verbatim.</summary>
+    internal static string BuildFailureMessage(int? exitCode, DeployOutput output)
+    {
+        var msg = $"install.sh exited with code {exitCode ?? -1}";
+        if (output.LastErrorLine is { Length: > 0 } detail)
+        {
+            msg += $" — {detail}";
+        }
+        if (output.CurrentStep is { Length: > 0 } step)
+        {
+            msg += $" (during \"{step}\")";
+        }
+        return msg;
+    }
+
     // ── Docker (local) provider ──────────────────────────────────────────────
 
     /// <summary>
@@ -361,9 +391,9 @@ public sealed class DeployRunner
         var output = new DeployOutput();
         void Log(string line, string stream = "stdout")
         {
-            if (output.ProcessLine(line, stream))
+            if (output.ProcessLine(line, stream, out var clean))
             {
-                _bus.Publish(new DeployLog(deploymentId, line, stream));
+                _bus.Publish(new DeployLog(deploymentId, clean, stream));
             }
         }
 
@@ -670,9 +700,11 @@ public sealed class DeployRunner
     private void PumpLine(Guid deploymentId, DeployOutput output, string line, string stream)
     {
         // process_line: accumulate for the full log + IP parse, then dedup-broadcast.
-        if (output.ProcessLine(line, stream))
+        // The broadcast carries the ANSI-scrubbed form — same content the log
+        // persists, so live viewers and post-mortem readers see identical text.
+        if (output.ProcessLine(line, stream, out var clean))
         {
-            _bus.Publish(new DeployLog(deploymentId, line, stream));
+            _bus.Publish(new DeployLog(deploymentId, clean, stream));
         }
     }
 
@@ -715,7 +747,7 @@ public sealed class DeployRunner
     /// <c>running</c> forever (quality audit F3(c)).</para></summary>
     private async Task FinishAsync(
         Guid deploymentId, bool success, IReadOnlyList<string> ips, string? log, string? error, CancellationToken ct,
-        IReadOnlyList<string?>? hosts = null)
+        IReadOnlyList<string?>? hosts = null, int? exitCode = null, string? failedStep = null)
     {
         _ = ct; // terminal cleanup is intentionally not cancellable — see summary.
         var status = success ? "completed" : "failed";
@@ -743,6 +775,8 @@ public sealed class DeployRunner
                         .SetProperty(d => d.EndpointIps, ipsJson)
                         .SetProperty(d => d.EndpointHosts, hostsJson)
                         .SetProperty(d => d.ErrorMessage, error)
+                        .SetProperty(d => d.ExitCode, exitCode)
+                        .SetProperty(d => d.FailedStep, (string?)null)
                         .SetProperty(d => d.FinishedAt, now), CancellationToken.None)
                     .ConfigureAwait(false);
             }
@@ -761,6 +795,8 @@ public sealed class DeployRunner
                         .SetProperty(d => d.Status, status)
                         .SetProperty(d => d.Log, log)
                         .SetProperty(d => d.ErrorMessage, error)
+                        .SetProperty(d => d.ExitCode, exitCode)
+                        .SetProperty(d => d.FailedStep, failedStep)
                         .SetProperty(d => d.FinishedAt, now), CancellationToken.None)
                     .ConfigureAwait(false);
             }
@@ -843,6 +879,18 @@ public sealed class DeployRunner
     /// index-parallel to <see cref="EndpointIps"/>.</summary>
     internal sealed class DeployOutput
     {
+        // Bound on the ACCUMULATED log (chars ≈ bytes for this mostly-ASCII
+        // output). The log is flushed to the deployment row every few seconds
+        // and returned by the list/detail endpoints, so it must stay bounded —
+        // an 8-language Windows deploy's SDK-download chatter is megabytes.
+        // When the cap is hit the OLDEST lines are dropped: the diagnosis of a
+        // failure lives in the tail (issue #816). Endpoint-IP parsing happens
+        // per-line on arrival, so trimming the front never loses parsed hosts.
+        internal const int MaxLogChars = 256 * 1024;
+
+        // install.sh step header (print_step_header): "Step 3: Deploy endpoints".
+        private static readonly Regex StepRe = new(@"^Step \d+: ", RegexOptions.Compiled);
+
         // One lock for all mutable state: the stdout and stderr pumps append
         // CONCURRENTLY (a latent race before the incremental flusher made it
         // load-bearing — StringBuilder is not thread-safe), and the flusher
@@ -875,13 +923,46 @@ public sealed class DeployRunner
             }
         }
 
+        private bool _truncated;
+        private string? _currentStep;
+        private string? _lastErrorLine;
+
         public string FullLog
         {
             get
             {
                 lock (_sync)
                 {
-                    return _log.ToString();
+                    return _truncated
+                        ? $"[log truncated — older output dropped, showing the most recent {MaxLogChars / 1024} KB]\n" + _log
+                        : _log.ToString();
+                }
+            }
+        }
+
+        /// <summary>The last <c>Step N: …</c> header install.sh printed — on a
+        /// failed deploy, the step it died in. Null before the first step.</summary>
+        public string? CurrentStep
+        {
+            get
+            {
+                lock (_sync)
+                {
+                    return _currentStep;
+                }
+            }
+        }
+
+        /// <summary>The last fatal-looking line seen (install.sh's
+        /// <c>print_err</c> "✗ …" or the docker path's "ERROR: …"), without the
+        /// marker — the first actionable detail for error messages.</summary>
+        public string? LastErrorLine
+        {
+            get
+            {
+                lock (_sync)
+                {
+                    return _lastErrorLine;
                 }
             }
         }
@@ -919,14 +1000,20 @@ public sealed class DeployRunner
         /// <summary>Process one output line: append to the full log, parse for a
         /// host, and report whether it should be broadcast (true = not a
         /// duplicate). Mirrors Rust <c>process_line</c>.</summary>
-        public bool ProcessLine(string text, string stream)
+        public bool ProcessLine(string text, string stream) => ProcessLine(text, stream, out _);
+
+        /// <summary>Same as <see cref="ProcessLine(string,string)"/>, additionally
+        /// returning the ANSI-scrubbed form of the line — what was actually
+        /// logged, and what broadcasters should publish.</summary>
+        public bool ProcessLine(string text, string stream, out string clean)
         {
             bool broadcast;
             Action? installPhaseCallback = null;
             lock (_sync)
             {
-                broadcast = ProcessLineLocked(text, stream);
-                if (_installPhaseStartedUtc is null && InstallPhaseMarkerRe.IsMatch(text))
+                clean = AnsiText.Strip(text) ?? string.Empty;
+                broadcast = ProcessLineLocked(clean, stream);
+                if (_installPhaseStartedUtc is null && InstallPhaseMarkerRe.IsMatch(clean))
                 {
                     _installPhaseStartedUtc = DateTime.UtcNow;
                     // Grab-and-clear under the lock so the callback fires exactly
@@ -940,9 +1027,29 @@ public sealed class DeployRunner
             return broadcast;
         }
 
+        // `text` arrives ANSI-scrubbed (see ProcessLine): the installer's own
+        // colors are TTY-gated off, but nested tools (az, cargo, apt, choco)
+        // still emit escape codes, which used to land verbatim in
+        // deployment.log (issue #816 ask 1).
         private bool ProcessLineLocked(string text, string stream)
         {
-            _log.Append(text).Append('\n');
+            AppendBounded(text);
+
+            var stripped = text.Trim();
+            if (StepRe.IsMatch(stripped))
+            {
+                _currentStep = stripped;
+            }
+            else if (stripped.StartsWith('✗'))
+            {
+                // install.sh print_err: "✗ <message>" (two-space indent trimmed).
+                _lastErrorLine = stripped.TrimStart('✗').Trim();
+            }
+            else if (stripped.StartsWith("ERROR: ", StringComparison.Ordinal))
+            {
+                // The docker provider path's failure lines.
+                _lastErrorLine = stripped["ERROR: ".Length..].Trim();
+            }
 
             // Explicit per-endpoint hostname report: bind the DNS name to the
             // ip's entry (create it if this is the first mention). Does not
@@ -1059,8 +1166,29 @@ public sealed class DeployRunner
         {
             lock (_sync)
             {
-                _log.Append(text).Append('\n');
+                AppendBounded(AnsiText.Strip(text) ?? string.Empty);
             }
+        }
+
+        /// <summary>Append one line, then enforce <see cref="MaxLogChars"/> by
+        /// dropping WHOLE lines from the front (the failure diagnosis lives in
+        /// the tail). Callers hold <c>_sync</c>.</summary>
+        private void AppendBounded(string text)
+        {
+            _log.Append(text).Append('\n');
+            if (_log.Length <= MaxLogChars)
+            {
+                return;
+            }
+            var cut = _log.Length - MaxLogChars;
+            // Advance to the end of the line straddling the cut so the kept
+            // region starts on a line boundary.
+            while (cut < _log.Length && _log[cut - 1] != '\n')
+            {
+                cut++;
+            }
+            _log.Remove(0, cut);
+            _truncated = true;
         }
     }
 }
