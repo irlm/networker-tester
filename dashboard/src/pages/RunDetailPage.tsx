@@ -39,6 +39,11 @@ import {
 import { RunErrorBanner } from '../features/runs/components/RunErrorBanner';
 import { groupByProtocol, groupByTargetUrl } from '../features/runs/grouping';
 import {
+  buildUrlComparison,
+  formatComparisonValue,
+  type UrlComparison,
+} from '../features/runs/urlComparison';
+import {
   computeProtocolStats,
   computeTimingBreakdown,
   computeStats,
@@ -130,6 +135,10 @@ export function RunDetailPage() {
   // ── Analysis (shared with HTML report logic) ──
   const protocolStats = useMemo(() => computeProtocolStats(attempts), [attempts]);
   const timingBreakdown = useMemo(() => computeTimingBreakdown(attempts), [attempts]);
+
+  // Fair per-phase comparison across the URLs of a set run (#782): same run,
+  // same runner, same tick — null for single-URL runs.
+  const urlComparison = useMemo(() => buildUrlComparison(groupByTargetUrl(attempts)), [attempts]);
 
   const ttfbDistribution = useMemo(() => {
     const values = attempts
@@ -593,6 +602,9 @@ export function RunDetailPage() {
           </Button>
         </div>
       )}
+      {/* ── URL set comparison (#782): side-by-side per-phase medians ── */}
+      {urlComparison && <UrlComparisonTable comparison={urlComparison} />}
+
       {Object.entries(groupByTargetUrl(attempts))
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([targetUrl, urlAttempts], _idx, urlEntries) => {
@@ -679,3 +691,50 @@ export function RunDetailPage() {
 }
 
 // ─── Artifact Section (merged from BenchmarkDetailPage) ─────────────────────
+
+// ─── URL set comparison (#782) ───────────────────────────────────────────────
+// Side-by-side per-phase medians for a multi-URL set run. The green cell is
+// the row's unique winner; ties and single-value rows crown nobody. Medians
+// are over successful attempts only (buildUrlComparison).
+function UrlComparisonTable({ comparison }: { comparison: UrlComparison }) {
+  return (
+    <div className="table-container mb-4">
+      <h3 className="px-4 py-2.5 text-xs text-gray-400 tracking-wider bg-[var(--bg-surface)] border-b border-gray-800/50 font-medium">
+        url comparison — same run, same tick · medians over successful attempts
+      </h3>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs tabular-nums">
+          <thead>
+            <tr className="text-faint uppercase tracking-wider">
+              <th className="text-left py-2 px-4 font-medium border-b border-gray-800/50">Phase</th>
+              {comparison.columns.map(col => (
+                <th key={col.url} className="text-right py-2 px-4 font-medium border-b border-gray-800/50">
+                  <span className="text-cyan-400 font-mono normal-case">{col.label}</span>
+                  <span className="block text-faint font-normal">{col.attempts} attempts</span>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {comparison.rows.map(row => (
+              <tr key={row.key} className="border-b border-white/[0.02] last:border-b-0">
+                <td className="py-1.5 px-4 text-gray-400">{row.label}</td>
+                {row.values.map((value, i) => (
+                  <td
+                    key={comparison.columns[i].url}
+                    className={`py-1.5 px-4 text-right ${
+                      i === row.bestIndex ? 'text-green-400 font-medium' : 'text-gray-200'
+                    }`}
+                  >
+                    {formatComparisonValue(value, row.unit)}
+                    {i === row.bestIndex && <span aria-hidden="true"> {'\u2713'}</span>}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
