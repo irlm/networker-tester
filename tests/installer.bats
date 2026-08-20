@@ -33,6 +33,7 @@ teardown() {
           STUB_SSH_FAIL_VERSION STUB_CURL_FAIL STUB_CARGO_FAIL STUB_SCP_FAIL \
           STUB_GH_FAIL STUB_TESTER_FAIL STUB_UNAME_RESULT \
           STUB_GCLOUD_LOG STUB_GCLOUD_ACTIVE STUB_GCLOUD_TOKEN_FAIL STUB_GCLOUD_FAIL \
+          STUB_GCLOUD_SSH_LOG STUB_GCLOUD_SSH_RC \
           CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE CLOUDSDK_CONFIG CLOUDSDK_CORE_PROJECT \
           GOOGLE_APPLICATION_CREDENTIALS 2>/dev/null || true
 }
@@ -1670,7 +1671,7 @@ JSON
     local violations
     violations="$(awk '
         # Opening line: an ssh/_gcp_ssh_run command with a quoted heredoc delimiter.
-        !inblock && /(^|[[:space:]])(ssh|_gcp_ssh_run)([[:space:]]|$)/ && match($0, /<<[[:space:]]*.?[A-Z_][A-Z0-9_]*.?[[:space:]]*$/) {
+        !inblock && /(^|[[:space:]])(ssh|_gcp_ssh_run|_gcp_ssh_script)([[:space:]]|$)/ && match($0, /<<[[:space:]]*.?[A-Z_][A-Z0-9_]*.?[[:space:]]*/) {
             delim = $0
             sub(/^.*<<[[:space:]]*/, "", delim)
             gsub(/[^A-Za-z0-9_]/, "", delim)
@@ -1686,7 +1687,7 @@ JSON
     # Guard the guard FIRST: if the awk extraction silently stopped matching
     # heredocs it would report zero violations forever.
     local heredoc_starts
-    heredoc_starts="$(grep -cE '(^|[[:space:]])(ssh|_gcp_ssh_run).*<<' "$script" || true)"
+    heredoc_starts="$(grep -cE '(^|[[:space:]])(ssh|_gcp_ssh_run|_gcp_ssh_script).*<<' "$script" || true)"
     [ "$heredoc_starts" -ge 4 ] || { echo "awk saw $heredoc_starts ssh heredocs — extraction is broken"; exit 1; }
 
     # FD-redirected starts genuinely exist (the original assertion).
@@ -2105,6 +2106,78 @@ JSON
     [ "$GCP_PROJECT" = "key-proj-42" ]
 }
 
+# ===========================================================================
+# GCP stack setup over gcloud ssh (#836): _gcp_ssh_run nulls stdin (curl|bash
+# protection), which silently swallowed the heredoc that configures nginx on
+# the GCE VM — no output, exit 0, nginx never listening, and the run died at
+# the readiness gate. Heredoc/pipe callers use _gcp_ssh_script; non-nginx
+# stacks run the installer's own --setup-stack over gcloud ssh like Azure/AWS.
+# ===========================================================================
+
+@test "_gcp_ssh_run: stdin is nulled (curl|bash protection) — the remote command gets no stdin" {
+    export STUB_GCLOUD_SSH_LOG="$TEST_TMPDIR/ssh.log"
+    GCP_PROJECT=p; GCP_ZONE=z
+    echo "should-not-arrive" | _gcp_ssh_run inst-1 "true"
+    grep -q '^CMD: compute ssh inst-1 ' "$STUB_GCLOUD_SSH_LOG"
+    ! grep -q 'should-not-arrive' "$STUB_GCLOUD_SSH_LOG"
+}
+
+@test "_gcp_ssh_script: forwards the caller's stdin (heredoc) to the remote bash -s" {
+    export STUB_GCLOUD_SSH_LOG="$TEST_TMPDIR/ssh.log"
+    GCP_PROJECT=p; GCP_ZONE=z
+    _gcp_ssh_script inst-1 "bash -s" <<'EOF'
+echo remote-payload-line
+EOF
+    grep -q 'CMD: compute ssh inst-1 .*--command bash -s' "$STUB_GCLOUD_SSH_LOG"
+    grep -q '^echo remote-payload-line$' "$STUB_GCLOUD_SSH_LOG"
+}
+
+@test "_gcp_ssh_script: propagates the remote exit status" {
+    export STUB_GCLOUD_SSH_RC=7
+    GCP_PROJECT=p; GCP_ZONE=z
+    run _gcp_ssh_script inst-1 "bash -s" <<< "exit 7"
+    [ "$status" -eq 7 ]
+}
+
+@test "_gcp_setup_nginx: the nginx configuration script actually reaches the VM" {
+    export STUB_GCLOUD_SSH_LOG="$TEST_TMPDIR/ssh.log"
+    export STUB_CURL_FAIL=1   # nothing on :8081 yet → install path; the post-check only warns
+    GCP_PROJECT=p; GCP_ZONE=z
+    run _gcp_setup_nginx inst-1 203.0.113.5
+    [ "$status" -eq 0 ] || { echo "$output" >&2; exit 1; }
+    grep -q 'listen 8081' "$STUB_GCLOUD_SSH_LOG"
+    grep -q 'listen 8444 quic reuseport' "$STUB_GCLOUD_SSH_LOG"
+    grep -q 'nginx -t' "$STUB_GCLOUD_SSH_LOG"
+}
+
+@test "_gcp_setup_nginx: a failing remote script is reported with its exit status" {
+    export STUB_GCLOUD_SSH_RC=1 STUB_CURL_FAIL=1
+    GCP_PROJECT=p; GCP_ZONE=z
+    run _gcp_setup_nginx inst-1 203.0.113.5
+    [[ "$output" == *"nginx setup script exited 1 on inst-1"* ]] || { echo "$output" >&2; exit 1; }
+}
+
+@test "_gcp_setup_stack: pipes this installer over gcloud ssh with --setup-stack <stack>, fatal on failure" {
+    export STUB_GCLOUD_SSH_LOG="$TEST_TMPDIR/ssh.log"
+    GCP_PROJECT=p; GCP_ZONE=z
+    run _gcp_setup_stack inst-1 203.0.113.5 caddy
+    [ "$status" -eq 0 ] || { echo "$output" >&2; exit 1; }
+    grep -q 'CMD: compute ssh inst-1 .*sudo -E bash -s -- --setup-stack caddy' "$STUB_GCLOUD_SSH_LOG"
+    grep -q '^INSTALLER_VERSION=' "$STUB_GCLOUD_SSH_LOG"    # the installer itself travelled on stdin
+    [[ "$output" == *"caddy set up on inst-1"* ]]
+
+    export STUB_GCLOUD_SSH_RC=1
+    run _gcp_setup_stack inst-1 203.0.113.5 caddy
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"caddy setup failed on inst-1"* ]]
+}
+
+@test "_installer_self_for_ssh: uses the on-disk installer and leaves no temp file" {
+    _installer_self_for_ssh
+    [ "$INSTALLER_SELF_PATH" = "$SCRIPT" ]
+    [ -z "$INSTALLER_SELF_TMP" ]
+}
+
 @test "_deploy_parse_config: reads tester.gcp.project_id (canonical key)" {
     local cfg="$TEST_TMPDIR/parse-gcp-pid.json"
     cat > "$cfg" <<'JSON'
@@ -2226,6 +2299,9 @@ JSON
     grep -q '_remote_setup_stack "\$AZURE_ENDPOINT_IP" "azureuser" "\$_ls"' "$SCRIPT"
     grep -q '_remote_setup_stack "\$AWS_ENDPOINT_IP" "ubuntu" "\$_ls"' "$SCRIPT"
     grep -q '_remote_setup_stack "\$LAN_ENDPOINT_IP" "\$ssh_user" "\$_ls"' "$SCRIPT"
+    # …and GCP, which goes through gcloud compute ssh instead of raw ssh.
+    ! grep -q 'Remote \$_ls setup on GCP endpoints is not yet supported' "$SCRIPT"
+    grep -q '_gcp_setup_stack "\$GCP_ENDPOINT_NAME" "\$GCP_ENDPOINT_IP" "\$_ls"' "$SCRIPT"
 }
 
 @test "setup-stack: remote helper pipes the installer with --setup-stack" {

@@ -12,6 +12,8 @@
 # STUB_GCLOUD_ACTIVE       Account in the config store (empty = none)
 # STUB_GCLOUD_TOKEN_FAIL   "1" → `auth print-access-token` fails even with a key
 # STUB_GCLOUD_FAIL         "1" → every invocation exits 1
+# STUB_GCLOUD_SSH_LOG      `compute ssh`: append "CMD: <argv>" + the stdin it received
+# STUB_GCLOUD_SSH_RC       `compute ssh`: exit status (default 0)
 
 if [[ -n "${STUB_GCLOUD_LOG:-}" ]]; then
     printf '%s\n' "$*" >> "$STUB_GCLOUD_LOG"
@@ -36,6 +38,16 @@ case "${1:-} ${2:-}" in
         fi
         echo "ERROR: (gcloud.auth.print-access-token) You do not currently have an active account selected." >&2
         exit 1
+        ;;
+    "compute ssh")
+        # Record the remote command and EXACTLY what arrived on stdin — the
+        # heredoc-vs-/dev/null distinction _gcp_ssh_script exists for.
+        if [[ -n "${STUB_GCLOUD_SSH_LOG:-}" ]]; then
+            { echo "CMD: $*"; echo "STDIN-BEGIN"; cat; echo "STDIN-END"; } >> "$STUB_GCLOUD_SSH_LOG"
+        else
+            cat > /dev/null
+        fi
+        exit "${STUB_GCLOUD_SSH_RC:-0}"
         ;;
     "config get-value")
         case "${3:-}" in
