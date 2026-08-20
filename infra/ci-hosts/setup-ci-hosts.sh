@@ -357,7 +357,9 @@ windows_make_answer_iso() { # render + burn local:iso/ci-win-answer.iso on the n
     if [ -s "$pwfile" ]; then
       WINDOWS_ADMIN_PASSWORD="$(head -n1 "$pwfile")"
     else
-      WINDOWS_ADMIN_PASSWORD="$(LC_ALL=C tr -dc 'A-Za-z0-9@#%^*_+=-' < /dev/urandom | head -c 20)A1!"
+      # Finite producers only: `tr < /dev/urandom | head` dies of SIGPIPE under
+      # pipefail and took the whole run with it (exit 141 on the first try).
+      WINDOWS_ADMIN_PASSWORD="$( { openssl rand -base64 45 2>/dev/null || head -c 60 /dev/urandom | base64; } | tr -dc 'A-Za-z0-9' | cut -c1-20)A1!"
       ( umask 077; printf '%s\n' "$WINDOWS_ADMIN_PASSWORD" > "$pwfile" )
       say "   generated the Windows Administrator password → $pwfile (0600 — keep it; it is on the answer ISO too)"
     fi
