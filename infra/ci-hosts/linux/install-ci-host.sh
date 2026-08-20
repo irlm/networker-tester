@@ -229,6 +229,12 @@ while :; do
   # An ephemeral registration removes itself after the job; clear the local
   # credentials so the next config.sh starts clean.
   rm -f "$RUNNER_DIR/.runner" "$RUNNER_DIR/.credentials" "$RUNNER_DIR/.credentials_rsaparams"
+  # Fresh workspace for the next job, like a hosted runner's fresh VM: jobs that
+  # use sudo/docker leave root-owned files in the checkout and the next job's
+  # actions/checkout then dies with EACCES (seen: benchmarks/baselines/
+  # measurement-accuracy.json). Keep _tool (setup-* tool cache) and _actions
+  # (downloaded action code); everything else under _work is per-job.
+  find "$RUNNER_DIR/_work" -mindepth 1 -maxdepth 1 ! -name _tool ! -name _actions -exec rm -rf {} + 2>/dev/null || true
   sleep 3
 done
 LOOP

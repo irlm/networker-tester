@@ -1,5 +1,13 @@
 name: Installer Tests
 
+# A newer push to the same PR cancels that PR's previous run: the self-hosted
+# CI hosts are a small pool and a superseded run must not hold them (the
+# first real day stacked eight workflows per push). Pushes to main and
+# dispatches never cancel — auto-tag/release depend on them finishing.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # Run on every push/PR that touches the installer or its tests.
 #
 # REQUIRED-CHECK COMPATIBLE: the pull_request trigger deliberately has NO
