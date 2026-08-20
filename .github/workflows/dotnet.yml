@@ -34,10 +34,22 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       csharp: ${{ steps.detect.outputs.csharp }}
+      # Where the rest of this workflow runs (docs/self-hosted-ci.md).
+      # This job itself stays on ubuntu-latest: it is the hop that decides.
+      linux_host: ${{ steps.ci_hosts.outputs.linux }}
+      windows_host: ${{ steps.ci_hosts.outputs.windows }}
+      macos_host: ${{ steps.ci_hosts.outputs.macos }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
         with:
           fetch-depth: 0
+
+      - name: Pick CI hosts (self-hosted when online, else GitHub-hosted)
+        id: ci_hosts
+        uses: ./.github/actions/pick-ci-hosts
+        with:
+          token: ${{ secrets.CI_HOSTS_STATUS_TOKEN }}
+          mode: ${{ vars.CI_HOSTS_MODE }}
 
       - name: Detect
         id: detect
@@ -67,9 +79,9 @@ jobs:
 
   build:
     name: Build & audit (C#)
-    needs: changes
+    needs: [changes]
     if: needs.changes.outputs.csharp == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
 
@@ -122,9 +134,9 @@ jobs:
   # This runs the real generated script against real release assets.
   reinstall-exec:
     name: Reinstall script execution
-    needs: changes
+    needs: [changes]
     if: needs.changes.outputs.csharp == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5

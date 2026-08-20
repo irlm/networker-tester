@@ -11,6 +11,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.267] - 2026-08-20
+
+### Added
+
+- **Self-hosted CI hosts with automatic failover to GitHub-hosted.** (A *CI
+  host* is the machine GitHub calls a "self-hosted runner"; "runner" in this
+  repo already means a tester VM.) A new composite action
+  `.github/actions/pick-ci-hosts` decides, per OS, whether a workflow run's
+  jobs land on the repo's own CI hosts (labels
+  `self-hosted,<linux|windows|macos>,networker-ci`) or on `ubuntu-latest` /
+  `windows-latest` / `macos-latest`. In `auto` mode it lists the repo's
+  self-hosted runners with the `CI_HOSTS_STATUS_TOKEN` PAT and picks
+  self-hosted only when a host with the right labels is **online right now**;
+  a missing token (fork PRs never see secrets), an API error, an unknown
+  `CI_HOSTS_MODE`, or no online host all fall back to hosted, so a powered-off
+  VM can never stall CI. `CI_HOSTS_MODE=hosted|self-hosted` forces either
+  side; a pull request from a fork is always hosted regardless. Routed through
+  it: `ci.yml`, `dotnet.yml`, `test-installer.yml`, `rust-audit.yml`,
+  `sdk-conformance.yml`, `validate-bench-apis.yml`, `test-endpoint.yml` and
+  `release.yml` (every job except the prod `deploy`, which stays hosted by
+  design). The deciding hop itself stays on `ubuntu-latest` (~10 hosted
+  seconds per run).
+- **`docs/self-hosted-ci.md` + `infra/ci-hosts/`.** `setup-ci-hosts.sh` is
+  the one interactive, idempotent entry point (Proxmox Linux VMs from a
+  cloud-init template, the Mac mini over ssh, the optional Windows VM,
+  verification, plus `status` / `add-linux N` / `destroy` and a
+  `--non-interactive` mode driven by `ci-hosts.env`); the per-OS building
+  blocks it calls are `linux/install-ci-host.sh` (Ubuntu 24.04 toolchain +
+  ephemeral systemd loop), `proxmox/create-ci-host-vm.sh`,
+  `macos/install-ci-host.sh` (launchd loop) and `windows/install-ci-host.ps1`
+  (IIS for the installer stack tests). The doc covers the failover semantics,
+  the security model (own VLAN, `--ephemeral` registration, repo-restricted
+  runner group, prod secrets stay hosted), the private-repo minute math (the
+  scheduled workflows that must be routed or disabled first —
+  `uptime-monitor` alone is ~4,400 hosted minutes/month), the Windows Server
+  2025 Evaluation licensing note, and the rollout order.
+
+### Changed
+
+- **`auto-tag` no longer queues behind the main-branch test matrix.** It
+  needed `[lint, test-ubuntu, frontend]` — ~8 minutes re-running what branch
+  protection had already required green on the PR, sitting squarely on the
+  green-PR→prod path (25-30 min measured). It now needs only `changes` and,
+  before tagging, re-proves the merge: resolves the PR from the squash
+  subject's `(#N)`, checks that the PR is MERGED **as this commit**, and
+  requires every branch-protection-required check on the PR head to have
+  conclusion `success` or `skipped`. A direct push to main (no `(#N)`) or any
+  non-green required check prints exactly what was not green and refuses to
+  tag. The main-branch matrix still runs (coverage, soak record) — the tag
+  just does not wait for it.
+
+---
 ## [0.28.266] - 2026-08-20
 
 ### Fixed

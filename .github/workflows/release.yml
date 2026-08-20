@@ -47,10 +47,32 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  # ── CI host selection (docs/self-hosted-ci.md) ────────────────────────
+  # Stays on ubuntu-latest (~10 hosted seconds): it is the hop that decides
+  # whether every other job below lands on the repo's self-hosted CI hosts
+  # (when one is online) or on GitHub-hosted ones. No `if:` — a skipped
+  # picker would skip everything that needs it.
+  ci_hosts:
+    name: Pick CI hosts
+    runs-on: ubuntu-latest
+    outputs:
+      linux_host: ${{ steps.ci_hosts.outputs.linux }}
+      windows_host: ${{ steps.ci_hosts.outputs.windows }}
+      macos_host: ${{ steps.ci_hosts.outputs.macos }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - name: Pick CI hosts (self-hosted when online, else GitHub-hosted)
+        id: ci_hosts
+        uses: ./.github/actions/pick-ci-hosts
+        with:
+          token: ${{ secrets.CI_HOSTS_STATUS_TOKEN }}
+          mode: ${{ vars.CI_HOSTS_MODE }}
+
   # ── Deploy-critical build: linux (what prod + the bootstrap consume) ───────
   build-linux:
     name: Build x86_64-unknown-linux-musl
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.ci_hosts.outputs.linux_host) }}
+    needs: [ci_hosts]
     env:
       TARGET: x86_64-unknown-linux-musl
       # sccache: per-compilation-unit cache that survives the Cargo.lock bump
@@ -163,7 +185,8 @@ jobs:
   # chromiumoxide floor) is the release/deploy latency floor.
   build-native:
     name: Build ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ fromJSON(needs.ci_hosts.outputs[format('{0}_host', matrix.host)]) }}
+    needs: [ci_hosts]
     env:
       CARGO_INCREMENTAL: "0"
       RUSTC_WRAPPER: sccache
@@ -172,18 +195,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # `host` picks the OS slot from the ci_hosts job: macos-latest /
+          # windows-latest, or the self-hosted twin when one is online.
           - target:  x86_64-apple-darwin
-            os:      macos-latest      # cross-compile Intel from ARM64 runner
+            host:    macos             # cross-compile Intel from the ARM64 runner
             ext:     ""
             archive: tar.gz
 
           - target:  aarch64-apple-darwin
-            os:      macos-latest      # Apple Silicon (arm64)
+            host:    macos             # Apple Silicon (arm64)
             ext:     ""
             archive: tar.gz
 
           - target:  x86_64-pc-windows-msvc
-            os:      windows-latest
+            host:    windows
             ext:     ".exe"
             archive: zip
 
@@ -291,7 +316,8 @@ jobs:
   # migration is that the control plane no longer rides the slow native matrix.
   build-csharp:
     name: Build C# control plane
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.ci_hosts.outputs.linux_host) }}
+    needs: [ci_hosts]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
         with:
@@ -349,8 +375,8 @@ jobs:
   # ── Create GitHub release and attach all archives ────────────────────────
   release:
     name: Create GitHub Release
-    needs: [build-linux, build-csharp, build-native]
-    runs-on: ubuntu-latest
+    needs: [ci_hosts, build-linux, build-csharp, build-native]
+    runs-on: ${{ fromJSON(needs.ci_hosts.outputs.linux_host) }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
@@ -400,6 +426,10 @@ jobs:
   # networker-dashboard (retired; restarting it would double-fire the background
   # loops the C# control plane now owns). nginx already proxies /api + /ws to the
   # C# control plane on :5030 and serves the SPA static from disk.
+  # Deliberately NOT routed through the ci_hosts job: this is the only job
+  # holding prod credentials (AZURE_CREDENTIALS via the production
+  # environment), and the security model in docs/self-hosted-ci.md keeps
+  # every job that touches prod secrets on GitHub-hosted infrastructure.
   deploy:
     name: Deploy to laghound.com
     needs: release

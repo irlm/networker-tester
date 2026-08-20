@@ -28,9 +28,31 @@ permissions:
   contents: read
 
 jobs:
+  # ── CI host selection (docs/self-hosted-ci.md) ────────────────────────
+  # Stays on ubuntu-latest (~10 hosted seconds): it is the hop that decides
+  # whether every other job below lands on the repo's self-hosted CI hosts
+  # (when one is online) or on GitHub-hosted ones. No `if:` — a skipped
+  # picker would skip everything that needs it.
+  ci_hosts:
+    name: Pick CI hosts
+    runs-on: ubuntu-latest
+    outputs:
+      linux_host: ${{ steps.ci_hosts.outputs.linux }}
+      windows_host: ${{ steps.ci_hosts.outputs.windows }}
+      macos_host: ${{ steps.ci_hosts.outputs.macos }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - name: Pick CI hosts (self-hosted when online, else GitHub-hosted)
+        id: ci_hosts
+        uses: ./.github/actions/pick-ci-hosts
+        with:
+          token: ${{ secrets.CI_HOSTS_STATUS_TOKEN }}
+          mode: ${{ vars.CI_HOSTS_MODE }}
+
   go:
     name: Go SDK conformance
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.ci_hosts.outputs.linux_host) }}
+    needs: [ci_hosts]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
 
@@ -54,7 +76,8 @@ jobs:
 
   js:
     name: JS SDK conformance
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.ci_hosts.outputs.linux_host) }}
+    needs: [ci_hosts]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
 
@@ -81,7 +104,8 @@ jobs:
 
   python:
     name: Python SDK conformance
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.ci_hosts.outputs.linux_host) }}
+    needs: [ci_hosts]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
 
@@ -103,7 +127,8 @@ jobs:
 
   rust:
     name: Rust SDK conformance
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.ci_hosts.outputs.linux_host) }}
+    needs: [ci_hosts]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
 

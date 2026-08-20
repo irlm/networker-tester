@@ -65,3 +65,6 @@ test-results/
 # Prod UI smoke harness (scripts/prod-smoke.sh) — local token + run artifacts
 /.prod-smoke.env
 /dashboard/e2e/prod/artifacts/
+
+# self-hosted CI host answers (infra/ci-hosts/setup-ci-hosts.sh) — never the PAT, but keep host names/IPs local
+infra/ci-hosts/ci-hosts.env

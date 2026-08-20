@@ -21,10 +21,17 @@ jobs:
   # matrix (job-level skips still satisfy branch-protection required checks,
   # unlike workflow-level `paths:` filters which leave them missing).
   #
-  # PUSH EVENTS ALWAYS RUN EVERYTHING — auto-tag needs lint/test-ubuntu/
-  # frontend on main, and a C#-only version bump must still release. Only
-  # pull_request events skip. Detection is conservative: Rust runs unless
-  # EVERY changed file matches a known non-Rust pattern.
+  # PUSH EVENTS ALWAYS RUN EVERYTHING — the main-branch matrix feeds coverage
+  # and the soak record. auto-tag no longer WAITS for it (branch protection
+  # already proved the PR green; auto-tag re-verifies that on the merged PR's
+  # head instead of re-running ~8 min of tests), but a C#-only version bump
+  # must still release. Only pull_request events skip. Detection is
+  # conservative: Rust runs unless EVERY changed file matches a known
+  # non-Rust pattern.
+  #
+  # This job also picks where every other job runs (a self-hosted CI host
+  # when one is online, GitHub-hosted otherwise — docs/self-hosted-ci.md); it stays
+  # on ubuntu-latest itself because it is the hop that decides.
   # ──────────────────────────────────────────────────────────────────────────
   changes:
     name: Detect changed areas
@@ -33,10 +40,22 @@ jobs:
       rust: ${{ steps.detect.outputs.rust }}
       frontend: ${{ steps.detect.outputs.frontend }}
       orchestrator: ${{ steps.detect.outputs.orchestrator }}
+      # Where the rest of this workflow runs (docs/self-hosted-ci.md).
+      # This job itself stays on ubuntu-latest: it is the hop that decides.
+      linux_host: ${{ steps.ci_hosts.outputs.linux }}
+      windows_host: ${{ steps.ci_hosts.outputs.windows }}
+      macos_host: ${{ steps.ci_hosts.outputs.macos }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
         with:
           fetch-depth: 0
+
+      - name: Pick CI hosts (self-hosted when online, else GitHub-hosted)
+        id: ci_hosts
+        uses: ./.github/actions/pick-ci-hosts
+        with:
+          token: ${{ secrets.CI_HOSTS_STATUS_TOKEN }}
+          mode: ${{ vars.CI_HOSTS_MODE }}
 
       - name: Detect
         id: detect
@@ -97,7 +116,8 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   version-check:
     name: Version bump check
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    needs: [changes]
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
@@ -212,7 +232,8 @@ jobs:
   # workflow-only change must not be able to skip this.
   action-pins:
     name: Action pins (SHA-pinned)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    needs: [changes]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
 
@@ -231,7 +252,8 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   lint-all:
     name: lint-all (cross-cutting)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    needs: [changes]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
 
@@ -242,11 +264,11 @@ jobs:
 
   lint:
     name: Lint
-    runs-on: ubuntu-latest
-    needs: changes
+    runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    needs: [changes]
     # C#-only / frontend-only / docs-only PRs skip the Rust matrix entirely;
     # every job that `needs: lint` (tests, coverage, sql/pg) cascades the skip.
-    # Push events always run (auto-tag depends on this chain).
+    # Push events always run (coverage + the main-branch soak record).
     if: needs.changes.outputs.rust == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
@@ -286,8 +308,8 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   musl-check:
     name: musl check (release target types)
-    runs-on: ubuntu-latest
-    needs: changes
+    runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    needs: [changes]
     if: needs.changes.outputs.rust == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
@@ -335,8 +357,8 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   cargo-vet:
     name: cargo-vet (supply-chain provenance)
-    runs-on: ubuntu-latest
-    needs: changes
+    runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    needs: [changes]
     if: needs.changes.outputs.rust == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
@@ -360,8 +382,8 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   orchestrator:
     name: Orchestrator lint & test
-    runs-on: ubuntu-latest
-    needs: changes
+    runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    needs: [changes]
     if: needs.changes.outputs.orchestrator == 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
@@ -387,8 +409,8 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   test-ubuntu:
     name: Test (ubuntu-latest)
-    runs-on: ubuntu-latest
-    needs: lint  # skip if lint fails
+    runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    needs: [changes, lint]  # skip if lint fails
 
     env:
       CARGO_INCREMENTAL: "0"
@@ -448,8 +470,8 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   test-windows:
     name: Test (windows-latest)
-    runs-on: windows-latest
-    needs: lint  # skip if lint fails
+    runs-on: ${{ fromJSON(needs.changes.outputs.windows_host) }}
+    needs: [changes, lint]  # skip if lint fails
 
     # Windows is the CI long-pole. Three knobs cut it hard:
     #  - CARGO_INCREMENTAL=0: incremental compilation is dead weight in CI
@@ -512,8 +534,8 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   test-macos:
     name: Test (macos-latest)
-    runs-on: macos-latest
-    needs: lint
+    runs-on: ${{ fromJSON(needs.changes.outputs.macos_host) }}
+    needs: [changes, lint]
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
@@ -536,7 +558,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   frontend:
     name: Dashboard frontend
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
     needs: [lint, changes]
     # Runs iff dashboard/ changed (push events set frontend=true). `!cancelled()`
     # + explicit lint-result check keeps it runnable when lint is SKIPPED
@@ -645,8 +667,8 @@ jobs:
   # product's core claim.
   measurement-accuracy:
     name: Measurement accuracy (netem ground truth)
-    runs-on: ubuntu-latest
-    needs: changes
+    runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    needs: [changes]
     if: needs.changes.outputs.rust == 'true'
     timeout-minutes: 25
     steps:
@@ -680,8 +702,8 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   coverage:
     name: Coverage
-    runs-on: ubuntu-latest
-    needs: test-ubuntu  # only run if tests pass
+    runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    needs: [changes, test-ubuntu]  # only run if tests pass
 
     services:
       mssql:
@@ -768,8 +790,8 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   sql-integration:
     name: SQL Server integration
-    runs-on: ubuntu-latest
-    needs: lint
+    runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    needs: [changes, lint]
     timeout-minutes: 30
 
     services:
@@ -804,8 +826,8 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   postgres-integration:
     name: PostgreSQL integration
-    runs-on: ubuntu-latest
-    needs: lint
+    runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    needs: [changes, lint]
     timeout-minutes: 20
 
     services:
@@ -840,17 +862,98 @@ jobs:
 
   # ──────────────────────────────────────────────────────────────────────────
   # Auto-tag: create version tag on merge → triggers Release + Deploy
+  #
+  # `needs: [changes]` ONLY. Until v0.28.267 this waited on lint/test-ubuntu/
+  # frontend — a ~8 min duplicate of the matrix branch protection had already
+  # required green on the PR, sitting squarely on the green-PR→prod path. The
+  # main-branch matrix still runs (coverage, soak record); the tag just does
+  # not queue behind it. In exchange the first step re-proves the merged PR
+  # was green: it resolves the PR from the squash subject's `(#N)`, checks
+  # that PR's head commit carries every branch-protection-required check
+  # with conclusion success (or skipped — path-gated jobs skip legitimately),
+  # and refuses to tag otherwise. A direct push to main (no `(#N)`) never
+  # tags.
   # ──────────────────────────────────────────────────────────────────────────
   auto-tag:
     name: Auto-tag & deploy
-    needs: [lint, test-ubuntu, frontend]
-    runs-on: ubuntu-latest
+    needs: [changes]
+    runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
         with:
           fetch-depth: 0
+
+      - name: Verify the merged PR's required checks were green
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Keep in lock-step with branch protection (CLAUDE.md § Git Workflow).
+          REQUIRED_CHECKS: |
+            Test (ubuntu-latest)
+            Test (windows-latest)
+            Detect changed areas
+            Build & audit (C#)
+            bats (installer unit tests)
+            shellcheck
+            cargo audit (RUSTSEC advisories)
+            Orchestrator lint & test
+        run: |
+          set -euo pipefail
+          subject="$(git log -1 --format=%s "${GITHUB_SHA}")"
+          echo "commit ${GITHUB_SHA}: ${subject}"
+          pr="$(printf '%s\n' "${subject}" | sed -nE 's/.*\(#([0-9]+)\)$/\1/p')"
+          if [ -z "${pr}" ]; then
+            echo "::error::Commit ${GITHUB_SHA} is not a squash-merged PR (subject does not end with '(#N)') — refusing to tag a direct push to main. Open a PR instead."
+            exit 1
+          fi
+
+          info="$(gh pr view "${pr}" --repo "${GITHUB_REPOSITORY}" --json headRefOid,mergedAt,state,mergeCommit)"
+          state="$(jq -r '.state' <<<"${info}")"
+          merged_at="$(jq -r '.mergedAt // empty' <<<"${info}")"
+          head="$(jq -r '.headRefOid' <<<"${info}")"
+          merge_sha="$(jq -r '.mergeCommit.oid // empty' <<<"${info}")"
+          echo "PR #${pr}: state=${state} mergedAt=${merged_at:-<none>} head=${head} mergeCommit=${merge_sha:-<none>}"
+          if [ "${state}" != "MERGED" ] || [ -z "${merged_at}" ]; then
+            echo "::error::PR #${pr} (from the commit subject) is ${state}, not MERGED — refusing to tag."
+            exit 1
+          fi
+          # The subject is free text; make sure #N really is THIS commit's PR
+          # and not a number someone typed into a direct push.
+          if [ -n "${merge_sha}" ] && [ "${merge_sha}" != "${GITHUB_SHA}" ]; then
+            echo "::error::PR #${pr} merged as ${merge_sha}, but this push is ${GITHUB_SHA} — the subject's (#${pr}) does not belong to this commit. Refusing to tag."
+            exit 1
+          fi
+
+          # Latest check-run per name on the PR head (re-runs create several
+          # with the same name; the newest one is what branch protection saw).
+          runs="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${head}/check-runs?per_page=100" --paginate \
+            --jq '.check_runs[] | {name, status, conclusion, started_at, html_url}' \
+            | jq -s 'group_by(.name) | map(max_by(.started_at // ""))')"
+          echo "check-runs on ${head}:"
+          jq -r '.[] | "  \(.name)\t\(.status)\t\(.conclusion // "-")"' <<<"${runs}"
+
+          failed=0
+          while IFS= read -r name; do
+            [ -n "${name}" ] || continue
+            entry="$(jq -c --arg n "${name}" '.[] | select(.name == $n)' <<<"${runs}")"
+            if [ -z "${entry}" ]; then
+              echo "::error::Required check '${name}' never ran on PR #${pr} head ${head}."
+              failed=1; continue
+            fi
+            status="$(jq -r '.status' <<<"${entry}")"
+            conclusion="$(jq -r '.conclusion // "pending"' <<<"${entry}")"
+            url="$(jq -r '.html_url // ""' <<<"${entry}")"
+            case "${status}:${conclusion}" in
+              completed:success|completed:skipped) echo "  ok   ${name} (${conclusion})" ;;
+              *) echo "::error::Required check '${name}' on PR #${pr} head ${head} is ${status}/${conclusion}, not success/skipped — ${url}"; failed=1 ;;
+            esac
+          done <<<"${REQUIRED_CHECKS}"
+          if [ "${failed}" != 0 ]; then
+            echo "::error::Not tagging: PR #${pr} did not have every required check green on ${head}. Fix the PR's CI (or re-run the failed check) and push a new merge."
+            exit 1
+          fi
+          echo "PR #${pr} head ${head}: every required check is green — proceeding to tag."
 
       - name: Check version and deploy
         env:

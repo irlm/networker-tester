@@ -47,6 +47,26 @@ from `Cargo.toml`. If the tag `vX.Y.Z` does not exist yet, the job creates and
 pushes it. The job then dispatches `release.yml` with that tag. A tag that the
 Actions token pushes does not trigger a workflow on its own.
 
+The job needs only the `changes` job, **not** the main-branch test matrix
+(since v0.28.267; before that it waited ~8 minutes for `lint`, `test-ubuntu`
+and `frontend` to re-run what branch protection had already required green on
+the PR). Instead, its first step re-proves the merge before tagging:
+
+1. the squash commit's subject must end with `(#N)` — a direct push to `main`
+   never tags;
+2. `gh pr view N` must report the PR as `MERGED`, and its merge commit must be
+   **this** commit (a `(#N)` typed into a direct push does not count);
+3. every branch-protection-required check (the list in §2, kept in the step's
+   `REQUIRED_CHECKS` env — update both together) must exist on the PR's head
+   commit with conclusion `success` or `skipped` (path-gated jobs skip
+   legitimately).
+
+Anything else prints a `::error::` naming the missing or non-green check and
+exits without a tag; fix the PR's CI and merge again. The main-branch matrix
+still runs on the push (coverage, soak record) — the tag simply does not queue
+behind it. Where the job runs (a self-hosted CI host or GitHub-hosted) is decided by the
+`changes` job; see `docs/self-hosted-ci.md`.
+
 The job keys on whether the **release** exists, not the tag, because tagging and
 dispatching are two API calls that can half-succeed. On 2026-08-17 the tag
 `v0.28.214` pushed and `gh workflow run` then died on a GitHub 503, and the old
