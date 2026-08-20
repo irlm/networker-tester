@@ -40,6 +40,18 @@ if (Test-Path $keys) {
 }
 
 Write-Host '=== QEMU guest agent (virtio-win ISO) ===' -ForegroundColor Cyan
+# The agent MSI does not carry the VirtIO serial driver its channel rides on
+# (only the virtio-win-guest-tools bundle does); without vioserial the
+# service runs but `qm guest cmd ping` never answers — and the orchestrator's
+# `create-ci-host-vm.sh ip` needs the agent to find this host.
+$vioserial = Get-ChildItem -Path (Get-PSDrive -PSProvider FileSystem | ForEach-Object { "$($_.Root)vioserial\2k25\amd64" }) `
+    -Filter '*.inf' -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($vioserial) {
+    pnputil /add-driver $vioserial.FullName /install | Out-Null
+    Write-Host "  vioserial driver installed from $($vioserial.DirectoryName)"
+} else {
+    Write-Host '  WARNING: vioserial\2k25\amd64 not found on any CD — guest agent will not connect' -ForegroundColor Yellow
+}
 $msi = Get-ChildItem -Path (Get-PSDrive -PSProvider FileSystem | ForEach-Object { "$($_.Root)guest-agent" }) `
     -Filter 'qemu-ga-x86_64.msi' -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($msi) {

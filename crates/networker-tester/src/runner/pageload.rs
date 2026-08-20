@@ -3275,7 +3275,11 @@ mod tests {
 
         #[cfg(feature = "http3")]
         async fn wait_for_quic(&self) {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            // Positive-signal gate: returns the moment Quinn is bound, so a
+            // generous cap costs nothing on success. 5 s was not enough on a
+            // loaded self-hosted CI host (and once on the Mac) — "QUIC server
+            // did not start" while the test binary competed for CPU.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
             loop {
                 let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
                 sock.connect(format!("127.0.0.1:{}", self.https_port))

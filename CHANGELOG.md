@@ -11,6 +11,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.268] - 2026-08-20
+
+### Fixed
+
+- **Windows CI host: first logon installs the VirtIO serial driver before
+  the QEMU guest agent.** The `qemu-ga` MSI does not carry `vioserial`, so
+  the service ran but `qm guest cmd ping` never answered and
+  `setup-ci-hosts.sh` could not discover the guest's IP. `pnputil` now
+  installs `vioserial\2k25` from the virtio-win ISO first. Found on the first
+  successful unattended Server 2025 install (VM 310), which itself needed
+  every answer-file `<component>` to carry `publicKeyToken`/`versionScope`
+  (#842) — WinPE tolerates their absence, the specialize pass does not.
+- **`setup-ci-hosts.sh` ships the PAT to the Windows guest without nested
+  PowerShell quoting.** The guest's ssh shell is already PowerShell; wrapping
+  the token write in `powershell -Command "..."` failed with "The string is
+  missing the terminator". A failing `install-ci-host.ps1` now warns and
+  returns instead of aborting the whole run.
+- **Windows CI host: `bash` on the machine PATH, and the loop survives a
+  killed Listener.** The first self-hosted Windows job failed in 22 s because
+  `dtolnay/rust-toolchain` (like every `shell: bash` step) needs `bash.exe`
+  from `Git\bin` — choco only adds `Git\cmd`, GitHub-hosted images have both.
+  `install-ci-host.ps1` now adds `Git\bin` and `Git\usr\bin`; its loop
+  removes the hidden `.runner`/`.credentials` files before every
+  `config.cmd` (otherwise "already configured" forever after a restart, as on
+  Linux) and writes a transcript to `C:\ProgramData\ci-host\ci-host-loop.log`.
+- **Tester h3 unit tests wait up to 30 s (was 5 s) for their in-process QUIC
+  server.** `wait_for_quic` is a positive-signal gate — it returns the moment
+  Quinn is bound — so the cap only matters under load, where 5 s produced
+  "QUIC server did not start" on a busy self-hosted Linux host and once on the
+  Mac (`pageload_h3_empty_assets`,
+  `h3_download_carries_quic_stats_without_resumption_stats`).
+- **Linux CI-host loop removes stray `/usr/local/bin/networker-*` binaries
+  between jobs.** A tester an integration job had `sudo install`ed turned
+  the stubbed bats test `_offer_quick_test … release download` into a real
+  5-run, 7-mode probe against `1.2.3.4` — 18 minutes on `ci-linux-1`, the
+  only outlier in an otherwise 13-minute run.
+
+---
 ## [0.28.267] - 2026-08-20
 
 ### Added

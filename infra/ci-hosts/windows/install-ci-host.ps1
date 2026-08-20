@@ -113,10 +113,16 @@ if (-not $SkipToolchains) {
     }
     & "$cargoHome\bin\rustup.exe" toolchain install stable-x86_64-pc-windows-msvc --profile minimal --component rustfmt,clippy
     & "$cargoHome\bin\rustup.exe" default stable-x86_64-pc-windows-msvc
+    # Machine PATH additions. Git for Windows' `cmd` dir is what choco adds;
+    # actions that declare `shell: bash` (dtolnay/rust-toolchain, Swatinem/
+    # rust-cache, most composite actions) need bash.exe from Git\bin and the
+    # coreutils from Git\usr\bin — both are on GitHub-hosted Windows images,
+    # and their absence failed the first self-hosted Windows job in 22 s.
     $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-    if ($machinePath -notlike "*$cargoHome\bin*") {
-        [Environment]::SetEnvironmentVariable('Path', "$machinePath;$cargoHome\bin", 'Machine')
+    foreach ($dir in @("$cargoHome\bin", 'C:\Program Files\Git\bin', 'C:\Program Files\Git\usr\bin')) {
+        if (($machinePath -split ';') -notcontains $dir) { $machinePath = "$machinePath;$dir" }
     }
+    [Environment]::SetEnvironmentVariable('Path', $machinePath, 'Machine')
 
     # -- 4. IIS (installer stack tests) ----------------------------------------
     Write-Step 'enabling IIS'
@@ -180,8 +186,14 @@ if ($AsService) {
     Write-Step 'installing the ephemeral loop as a Scheduled Task (SYSTEM, at startup)'
     $loop = @"
 `$ErrorActionPreference = 'Continue'
+Start-Transcript -Path '$StateDir\ci-host-loop.log' -Append | Out-Null
 `$env:RUSTUP_HOME = 'C:\rust\rustup'; `$env:CARGO_HOME = 'C:\rust\cargo'
 while (`$true) {
+  # A Listener killed mid-flight (reboot, operator restart) leaves its hidden
+  # registration files behind and config.cmd then refuses with "already
+  # configured" forever; the registration is ephemeral and --replace covers
+  # the server side, so start every cycle clean.
+  Remove-Item '$RunnerDir\.runner', '$RunnerDir\.credentials', '$RunnerDir\.credentials_rsaparams' -Force -ErrorAction SilentlyContinue
   try {
     `$pat = (Get-Content '$TokenFile' -Raw).Trim()
     `$reg = (Invoke-RestMethod -Method Post -Uri 'https://api.github.com/repos/$Repo/actions/runners/registration-token' -Headers @{ Authorization = "Bearer `$pat"; Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28'; 'User-Agent' = 'ci-host' }).token
