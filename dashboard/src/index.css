@@ -204,6 +204,25 @@ body {
 .page-shell { padding: 1rem; }
 @media (min-width: 768px) { .page-shell { padding: 1.5rem; } }
 
+/* Landscape phones commonly cross the width-only `md` breakpoint while
+   retaining too little height for the persistent rail. Keep the touch layout
+   drawer-based so navigation scrolls independently and page content keeps the
+   full landscape width. */
+@media (max-height: 500px) and (pointer: coarse) {
+  .mobile-nav-toggle { display: block; }
+  .app-sidebar {
+    display: none;
+    position: fixed;
+    width: 12rem;
+    height: 100dvh;
+    min-height: 0;
+    max-height: 100dvh;
+  }
+  .app-sidebar[data-mobile-open="true"] { display: flex; }
+  .mobile-nav-overlay { display: block; }
+  .app-main { padding-top: 3rem; }
+}
+
 .alert { border: 1px solid; border-radius: var(--radius-panel); padding: 1rem; }
 .alert-error {
   background: color-mix(in srgb, var(--status-failure) 10%, transparent);
@@ -241,10 +260,22 @@ button:not(:disabled):active {
    only, extend every button's HIT AREA (not its visuals) via an invisible
    pseudo-element so each reaches the 24px CSS-px minimum. -4px inset keeps
    adjacent 8px-gapped controls from overlapping targets; layout is untouched. */
-@media (pointer: coarse) {
-  button {
-    position: relative;
+@layer base {
+  /* In @layer base on purpose. Unlayered, this rule outranks EVERY Tailwind
+     positioning utility (layer order beats specificity), which is how it once
+     forced `position: relative` onto fixed controls on touch devices and
+     displaced the hamburger, drawers and fixed tools. Layered, any `fixed` /
+     `absolute` / `sticky` utility wins by construction — including on buttons
+     positioned by a component class or an inline style, which a
+     `:not(.fixed)`-style guard would still have clobbered. */
+  @media (pointer: coarse) {
+    button {
+      position: relative;
+    }
   }
+}
+
+@media (pointer: coarse) {
   button::after {
     content: '';
     position: absolute;

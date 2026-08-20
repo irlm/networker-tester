@@ -110,7 +110,7 @@ export function Modal({
   const isSlideOver = variant === 'slide-over';
   return (
     <div
-      className={`fixed inset-0 z-50 flex ${isSlideOver ? 'justify-end slide-over-backdrop' : 'items-center justify-center'} bg-black/60 ${rootClassName}`}
+      className={`fixed inset-0 z-50 flex min-w-0 overflow-hidden ${isSlideOver ? 'justify-end slide-over-backdrop' : 'items-center justify-center'} bg-black/60 ${rootClassName}`}
       onClick={() => { if (!closeDisabled) onClose(); }}
       data-testid={testId}
     >
@@ -118,8 +118,8 @@ export function Modal({
         ref={panelRef}
         className={
           isSlideOver
-            ? `slide-over-panel w-full md:w-[520px] h-full bg-[var(--bg-base)] md:border-l border-gray-800 overflow-y-auto ${panelClassName}`
-            : `bg-[var(--bg-surface)] border border-gray-800 rounded-lg w-full ${maxWidth} p-6 max-h-[85vh] overflow-y-auto ${panelClassName}`
+            ? `slide-over-panel min-w-0 max-w-full w-full md:w-[520px] h-full bg-[var(--bg-base)] md:border-l border-gray-800 overflow-y-auto ${panelClassName}`
+            : `min-w-0 max-w-full bg-[var(--bg-surface)] border border-gray-800 rounded-lg w-full ${maxWidth} p-6 max-h-[85dvh] overflow-y-auto ${panelClassName}`
         }
         onClick={e => e.stopPropagation()}
         role={role}

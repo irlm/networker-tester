@@ -1,6 +1,8 @@
 import { expect, type Page } from '@playwright/test';
 
 export const PID = 'proj-e2e-001';
+/** The stubbed comparison group behind the runs list's group row (#803). */
+export const GROUP_E2E_ID = 'e2e0e2e0-0000-4000-8000-000000000000';
 
 export const authenticatedRoutes = [
   ['projects', '/projects'],
@@ -29,6 +31,7 @@ export const authenticatedRoutes = [
   ['command approvals', `/projects/${PID}/approvals`],
   ['benchmark catalog', `/projects/${PID}/benchmark-catalog`],
   ['benchmark results', `/projects/${PID}/benchmark-configs/config-e2e/results`],
+  ['comparison results', `/projects/${PID}/benchmarks/compare/${GROUP_E2E_ID}`],
   ['benchmark regressions', `/projects/${PID}/benchmark-regressions`],
   ['value report', `/projects/${PID}/reports/value`],
   ['SDK endpoints', `/projects/${PID}/sdk-endpoints`],
@@ -49,6 +52,7 @@ export const publicRoutes = [
   ['reset password', '/reset-password?token=e2e-token'],
   ['share view', '/share/e2e-token'],
   ['invite acceptance', '/invite/e2e-token'],
+  ['SSO completion error', '/sso-complete'],
 ] as const;
 
 function project() {
@@ -62,9 +66,6 @@ function project() {
     role: 'admin',
   };
 }
-
-/** The stubbed comparison group behind the runs list's group row (#803). */
-export const GROUP_E2E_ID = 'e2e0e2e0-0000-4000-8000-000000000000';
 
 /** Shared deterministic browser backend for route, responsive, and a11y suites. */
 export async function stubRuntime(page: Page) {
@@ -355,6 +356,7 @@ export async function expectRouteToRender(page: Page, path: string, failures: ()
   const response = await page.goto(path, { waitUntil: 'domcontentloaded' });
   expect(response?.status(), `${path} did not return a document`).toBeLessThan(400);
   await expect(page.locator('#root')).not.toBeEmpty({ timeout: 15_000 });
+  await expect(page.getByText('Loading page...', { exact: true })).toHaveCount(0, { timeout: 15_000 });
   await page.waitForTimeout(150);
   await expect(page.getByText(/Something (?:went wrong|broke)/i)).toHaveCount(0);
   expect(failures(), `${path} reported ${failures().join('\n')}`).toEqual([]);

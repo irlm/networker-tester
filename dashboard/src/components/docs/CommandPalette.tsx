@@ -296,8 +296,11 @@ export default function CommandPalette() {
 
       {/* Modal */}
       <div
-        className="docs-panel-enter relative w-full max-w-xl mx-4 flex flex-col bg-[var(--bg-surface)] border border-[var(--border-default)] overflow-hidden"
+        className="docs-panel-enter relative min-w-0 max-w-[calc(100%_-_2rem)] w-full sm:max-w-xl mx-4 flex flex-col bg-[var(--bg-surface)] border border-[var(--border-default)] overflow-hidden"
         style={{ maxHeight: '60vh' }}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
       >
         {/* Input row */}
         <div className="flex items-center border-b border-[var(--border-default)] px-3">
@@ -317,7 +320,7 @@ export default function CommandPalette() {
             onFocus={() => setIsInsertMode(true)}
             onBlur={() => setIsInsertMode(false)}
             placeholder={isInsertMode ? 'Jump to a page or search docs... (runs, p95, man man)' : ''}
-            className="flex-1 bg-transparent py-2.5 text-sm text-gray-200 placeholder-gray-600 outline-none"
+            className="min-w-0 flex-1 bg-transparent py-2.5 text-sm text-gray-200 placeholder-gray-600 outline-none"
             style={{ caretColor: '#22d3ee' }}
             spellCheck={false}
             autoComplete="off"
