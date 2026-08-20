@@ -81,7 +81,22 @@ jobs:
           restore-keys: release-linux-registry-
 
       - name: Install musl tools (static linking)
-        run: sudo apt-get update -qq && sudo apt-get install -y musl-tools
+        timeout-minutes: 10
+        run: |
+          # Unbounded apt hung a runner for 110 minutes on 2026-08-19 (same
+          # failure shape as the Playwright CDN stall fixed the same day):
+          # bound each attempt and retry so a stall fails fast instead of
+          # eating the job's 6h budget.
+          for attempt in 1 2 3; do
+            if timeout 180 sudo apt-get update -qq \
+               && timeout 180 sudo apt-get install -y musl-tools; then
+              exit 0
+            fi
+            echo "::warning::apt musl-tools attempt ${attempt} failed or stalled; retrying"
+            sleep 5
+          done
+          echo "::error::apt musl-tools failed after 3 bounded attempts"
+          exit 1
 
       - name: Sync lockfiles
         run: |
@@ -117,6 +132,19 @@ jobs:
           node-version: 22
 
       - name: Build dashboard frontend
+        # The SDK Endpoints page's reference-app cards (SdkExamplesPanel) light
+        # up — "Live on Azure" + Open live app + one-click Use example — only
+        # when these VITE_ values are baked into the bundle at build time.
+        # They are repo *variables* (Settings → Secrets and variables →
+        # Actions → Variables), not secrets: the URLs and demo token are
+        # public by design (see dashboard/.env.example). Unset variables
+        # resolve to empty strings and the cards stay in the "Deploy ready"
+        # state, so this is a no-op until examples/azure/deploy.sh has stood
+        # the demos up and the variables are filled in.
+        env:
+          VITE_LAGHOUND_CSHARP_DEMO_URL: ${{ vars.LAGHOUND_CSHARP_DEMO_URL }}
+          VITE_LAGHOUND_RUST_DEMO_URL: ${{ vars.LAGHOUND_RUST_DEMO_URL }}
+          VITE_LAGHOUND_PUBLIC_DEMO_TOKEN: ${{ vars.LAGHOUND_PUBLIC_DEMO_TOKEN }}
         run: |
           cd dashboard && npm ci --ignore-scripts && npm run build
           tar czf "../dist/dashboard-frontend.tar.gz" -C dist .
