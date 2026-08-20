@@ -92,6 +92,28 @@ public static class DeployConfigPreflight
                         : $"endpoints[{i}]: unknown language '{name}'");
                 }
             }
+
+            if (ep["sdk_samples"] is JsonArray samples && samples.Count > 0)
+            {
+                // SDK sample apps (sdk/<lang>/example) — Linux only: install.sh
+                // builds them from source with the language's own toolchain and
+                // there is no install.ps1 twin. Mirrors install.sh's
+                // validate_deploy_config sdk_samples block.
+                if (os == "windows")
+                {
+                    errors.Add($"endpoints[{i}]: SDK samples require Linux but os is 'windows'");
+                }
+                foreach (var s in samples)
+                {
+                    var name = s?.GetValue<string>();
+                    if (name is not null && SdkSampleCatalog.Find(name) is null)
+                    {
+                        errors.Add(
+                            $"endpoints[{i}]: unknown SDK sample '{name}' "
+                            + $"(valid: {string.Join(", ", SdkSampleCatalog.Samples.Select(x => x.Id))})");
+                    }
+                }
+            }
         }
 
         return errors;

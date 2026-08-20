@@ -27,6 +27,9 @@ namespace Networker.ControlPlane.Provisioning;
 ///     prefix + stack + <c>:</c> + <c>DASHBOARD_DOCKER_TARGET_IMAGE_TAG</c>
 ///     (<c>rust</c> for the bare endpoint); defaults <c>nwk-lab/target-</c> /
 ///     <c>local</c> → <c>nwk-lab/target-nginx:local</c>.</item>
+///   <item><c>DASHBOARD_DOCKER_SAMPLE_IMAGE_PREFIX</c> — LagHound SDK sample
+///     image = prefix + sample id + <c>:</c> + <c>DASHBOARD_DOCKER_TARGET_IMAGE_TAG</c>;
+///     default <c>nwk-lab/sdk-</c> → <c>nwk-lab/sdk-go:local</c>.</item>
 ///   <item><c>DASHBOARD_DOCKER_AGENT_URL</c> — WS url baked into runner
 ///     containers; default derived from <c>DASHBOARD_PUBLIC_URL</c> via
 ///     <see cref="CloudInitScripts.AgentWsUrl"/>. When the control plane runs on
@@ -44,6 +47,7 @@ public sealed class DockerProviderOptions
     public const string TargetImagePrefixVar = "DASHBOARD_DOCKER_TARGET_IMAGE_PREFIX";
     public const string AgentUrlVar = "DASHBOARD_DOCKER_AGENT_URL";
     public const string TargetImageTagVar = "DASHBOARD_DOCKER_TARGET_IMAGE_TAG";
+    public const string SampleImagePrefixVar = "DASHBOARD_DOCKER_SAMPLE_IMAGE_PREFIX";
 
     /// <summary>The cloud identifier used on tester rows / deploy configs.</summary>
     public const string CloudName = "docker";
@@ -60,6 +64,11 @@ public sealed class DockerProviderOptions
     public const string DefaultRunnerImage = "nwk-lab/runner:local";
     public const string DefaultTargetImagePrefix = "nwk-lab/target-";
     public const string DefaultTargetImageTag = "local";
+
+    /// <summary>Image prefix for LagHound SDK sample containers — prefix +
+    /// sample id + the shared tag (<c>nwk-lab/sdk-go:local</c>). Built by
+    /// <c>lab/lab.sh build</c> from <c>examples/&lt;lang&gt;.Dockerfile</c>.</summary>
+    public const string DefaultSampleImagePrefix = "nwk-lab/sdk-";
     public const string LabNetwork = "nwk-lab_labnet";
 
     public bool Enabled { get; init; }
@@ -70,6 +79,7 @@ public sealed class DockerProviderOptions
 
     public string RunnerImage { get; init; } = DefaultRunnerImage;
     public string TargetImagePrefix { get; init; } = DefaultTargetImagePrefix;
+    public string SampleImagePrefix { get; init; } = DefaultSampleImagePrefix;
 
     /// <summary>Tag appended to <c>prefix + stack</c> (default <c>local</c>, the
     /// tag <c>lab/lab.sh build</c> uses); empty → no tag (docker's <c>latest</c>).</summary>
@@ -97,6 +107,7 @@ public sealed class DockerProviderOptions
             Network = NonEmpty(getEnv(NetworkVar)),
             RunnerImage = NonEmpty(getEnv(RunnerImageVar)) ?? DefaultRunnerImage,
             TargetImagePrefix = NonEmpty(getEnv(TargetImagePrefixVar)) ?? DefaultTargetImagePrefix,
+            SampleImagePrefix = NonEmpty(getEnv(SampleImagePrefixVar)) ?? DefaultSampleImagePrefix,
             TargetImageTag = getEnv(TargetImageTagVar) is { } tag ? tag.Trim() : DefaultTargetImageTag,
             AgentUrl = NonEmpty(getEnv(AgentUrlVar)),
         };
@@ -116,6 +127,13 @@ public sealed class DockerProviderOptions
     public string TargetImageFor(string? stack) =>
         TargetImagePrefix
         + (string.IsNullOrWhiteSpace(stack) || stack is "none" or "rust" ? "rust" : stack.Trim().ToLowerInvariant())
+        + (TargetImageTag.Length == 0 ? string.Empty : ":" + TargetImageTag);
+
+    /// <summary>Image for a LagHound SDK sample container: prefix + sample id
+    /// (<c>nwk-lab/sdk-go:local</c>).</summary>
+    public string SampleImageFor(string sample) =>
+        SampleImagePrefix
+        + sample.Trim().ToLowerInvariant()
         + (TargetImageTag.Length == 0 ? string.Empty : ":" + TargetImageTag);
 
     /// <summary>The agent WS url runner containers connect to: the explicit

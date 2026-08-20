@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using Networker.Data.Entities;
 
@@ -48,6 +49,10 @@ public sealed class DockerComputeProvisioner(
     public const string TesterIdLabel = "networker.tester_id";
     public const string DeploymentIdLabel = "networker.deployment_id";
     public const string StackLabel = "networker.stack";
+
+    /// <summary>Which LagHound SDK sample a target container serves, when it is
+    /// a sample container rather than an endpoint/proxy target.</summary>
+    public const string SampleLabel = "networker.sdk_sample";
     public const string RoleRunner = "runner";
     public const string RoleTarget = "target";
 
@@ -156,6 +161,42 @@ public sealed class DockerComputeProvisioner(
         }
         args.Add("-e");
         args.Add($"TARGET_STACK={TargetStackEnv(stack)}");
+        args.Add(image);
+        return args;
+    }
+
+    /// <summary>
+    /// <c>docker run</c> argv for a LagHound SDK sample container: the sample
+    /// image with <c>PORT</c> (every sample honours it — see
+    /// <c>examples/*.Dockerfile</c>) and <c>LAGHOUND_TOKEN</c>. No published
+    /// host port: the control plane and the runners reach the container by its
+    /// ip/name on the shared network, exactly like a target container.
+    /// </summary>
+    public static List<string> BuildSampleRunArgs(
+        string containerName,
+        string network,
+        IReadOnlyDictionary<string, string> labels,
+        string image,
+        int port,
+        string token)
+    {
+        var args = new List<string>
+        {
+            "run", "-d",
+            "--name", containerName,
+            "--hostname", containerName,
+            "--network", network,
+            "--restart", "unless-stopped",
+        };
+        foreach (var (k, v) in labels.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+        {
+            args.Add("--label");
+            args.Add($"{k}={v}");
+        }
+        args.Add("-e");
+        args.Add($"PORT={port.ToString(CultureInfo.InvariantCulture)}");
+        args.Add("-e");
+        args.Add($"LAGHOUND_TOKEN={token}");
         args.Add(image);
         return args;
     }
@@ -467,6 +508,185 @@ public sealed class DockerComputeProvisioner(
         }
     }
 
+    /// <summary>Inputs for <see cref="CreateSampleAsync"/>.</summary>
+    public sealed record SampleContainerRequest(
+        string ProjectId,
+        Guid DeploymentId,
+        string Label,
+        string Sample,
+        int Port,
+        string Token);
+
+    /// <summary>
+    /// Start a LagHound SDK sample container for a deployment. Same contract as
+    /// <see cref="CreateTargetAsync"/> — container name is the resource id, its
+    /// network ip is the endpoint ip — so the deploy runner treats both roles
+    /// identically. Readiness is gated by <see cref="WaitSampleHealthyAsync"/>,
+    /// not the target's /health probe: a sample serves the contract prefix, not
+    /// networker-endpoint's routes.
+    /// </summary>
+    public async Task<VmCreateResult> CreateSampleAsync(SampleContainerRequest req, CancellationToken ct = default)
+    {
+        if (!options.Enabled)
+        {
+            return VmCreateResult.Fail($"docker provider is disabled (set {DockerProviderOptions.EnableVar}=1)");
+        }
+        try
+        {
+            var suffix = Guid.NewGuid().ToString("N")[..5];
+            var vmName = SanitizeNamePart($"sdk-{req.Sample}-{suffix}");
+            var name = ContainerName(req.ProjectId, vmName);
+            var labels = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [RoleLabel] = RoleTarget,
+                [ProjectLabel] = req.ProjectId,
+                [DeploymentIdLabel] = req.DeploymentId.ToString(),
+                [SampleLabel] = req.Sample,
+            };
+            var network = await ResolveNetworkAsync(ct).ConfigureAwait(false);
+            var image = options.SampleImageFor(req.Sample);
+            var run = await RunAsync(
+                    BuildSampleRunArgs(name, network, labels, image, req.Port, req.Token),
+                    ct, timeout: TimeSpan.FromMinutes(10), sensitiveArgs: true)
+                .ConfigureAwait(false);
+            if (!run.Success)
+            {
+                return VmCreateResult.Fail(
+                    $"docker run failed for {name} ({image}): {run.Error ?? run.StdErr}. "
+                    + "Build the sample images first (lab/lab.sh build --samples).");
+            }
+            var ip = await ContainerIpAsync(name, ct).ConfigureAwait(false);
+            if (string.IsNullOrEmpty(ip))
+            {
+                return VmCreateResult.Fail($"container {name} started but has no ip on network '{network}'", name);
+            }
+            return VmCreateResult.Created(name, ip, vmName);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "docker CreateSampleAsync for deployment {DeploymentId} threw", req.DeploymentId);
+            return VmCreateResult.Fail(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Force-remove every container this deployment already owns.
+    ///
+    /// <para>The docker path is re-entrant: an <b>update</b> re-runs the stored
+    /// config, and a recovery pass re-runs an interrupted deploy. On a VM that
+    /// is idempotent (install.sh re-installs in place); with containers it is
+    /// not — a second run would leave the previous container running on the old
+    /// ip while the row points at the new one, so the deployment would pay for
+    /// (and leak) a container nothing addresses. Sweeping first makes the
+    /// docker update mean the same thing as the VM update: same deployment,
+    /// refreshed workload.</para>
+    ///
+    /// <para>Best-effort: a removal that fails is logged and left to the orphan
+    /// reaper rather than failing the deploy.</para>
+    /// </summary>
+    public async Task<int> RemoveDeploymentContainersAsync(
+        Guid deploymentId, Action<string>? progress, CancellationToken ct = default)
+    {
+        var wanted = deploymentId.ToString();
+        var removed = 0;
+        List<ContainerInfo> managed;
+        try
+        {
+            managed = await ListManagedContainersAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "docker: could not list containers before re-running deployment {DeploymentId}", deploymentId);
+            return 0;
+        }
+        foreach (var c in managed)
+        {
+            if (!string.Equals(c.DeploymentId, wanted, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            var res = await RemoveContainerAsync(c.Name, ct).ConfigureAwait(false);
+            if (res.Success)
+            {
+                removed++;
+                progress?.Invoke($"removed previous container {c.Name} (re-running this deployment)");
+            }
+            else
+            {
+                logger.LogWarning(
+                    "docker: could not remove {Container} for deployment {DeploymentId}: {Error}",
+                    c.Name, deploymentId, res.Error ?? res.StdErr);
+            }
+        }
+        return removed;
+    }
+
+    /// <summary>
+    /// Wait until an SDK sample container serves its own <c>GET /</c> — the one
+    /// route the contract leaves ungated (<c>/laghound/*</c> answers a bare 404
+    /// without the token, which would be indistinguishable from "not up yet").
+    /// Probed from THIS process over the shared docker network rather than by
+    /// <c>docker exec</c>, because the sample images are deliberately minimal
+    /// and several ship no curl/wget. Returns null on success, else the reason.
+    /// </summary>
+    public async Task<string?> WaitSampleHealthyAsync(
+        string containerName, string ip, int port, Action<string>? progress, CancellationToken ct = default)
+    {
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+        var url = $"http://{ip}:{port.ToString(CultureInfo.InvariantCulture)}/";
+        var sw = Stopwatch.StartNew();
+        while (sw.Elapsed < HealthyTimeout)
+        {
+            var show = await RunAsync(BuildLifecycleArgs(LifecycleOp.Show, containerName), ct).ConfigureAwait(false);
+            if (!show.Success)
+            {
+                return $"container {containerName} disappeared: {show.Error ?? show.StdErr}";
+            }
+            ContainerInfo? info;
+            try
+            {
+                info = ParseInspect(show.StdOut, null).FirstOrDefault();
+            }
+            catch (JsonException)
+            {
+                info = null;
+            }
+            if (info is null)
+            {
+                return $"container {containerName}: inspect returned nothing";
+            }
+            if (!info.Running)
+            {
+                var logs = await RunAsync(["logs", "--tail", "30", containerName], ct).ConfigureAwait(false);
+                return $"container {containerName} is {info.Status} (exited before serving). Last log lines: "
+                       + (logs.StdOut + "\n" + logs.StdErr).Trim().Replace("\r", string.Empty);
+            }
+            try
+            {
+                using var resp = await client.GetAsync(url, ct).ConfigureAwait(false);
+                if (resp.IsSuccessStatusCode)
+                {
+                    progress?.Invoke($"{containerName}: serving on :{port} ({sw.Elapsed.TotalSeconds:0}s)");
+                    return null;
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                // Not up yet — keep waiting until the budget runs out.
+            }
+            await Task.Delay(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false);
+        }
+        return $"container {containerName} did not serve :{port} within {HealthyTimeout.TotalSeconds:0}s";
+    }
+
     /// <summary>
     /// Wait until the container reports <c>healthy</c> (image HEALTHCHECK) or,
     /// when the image has no healthcheck, until <c>curl http://127.0.0.1:8080/health</c>
@@ -762,7 +982,8 @@ public sealed class DockerComputeProvisioner(
             : ProvisionResult.Failed(process.ExitCode, stdout, stderr);
     }
 
-    /// <summary>Log-safe rendering of a run argv: <c>-e AGENT_API_KEY=…</c> is masked.</summary>
+    /// <summary>Log-safe rendering of a run argv: <c>-e AGENT_API_KEY=…</c> and
+    /// <c>-e LAGHOUND_TOKEN=…</c> are masked.</summary>
     internal static string RedactSensitive(IReadOnlyList<string> args)
     {
         var parts = new List<string>(args.Count);
@@ -772,6 +993,10 @@ public sealed class DockerComputeProvisioner(
             if (i > 0 && args[i - 1] == "-e" && a.StartsWith("AGENT_API_KEY=", StringComparison.Ordinal))
             {
                 parts.Add("AGENT_API_KEY=***");
+            }
+            else if (i > 0 && args[i - 1] == "-e" && a.StartsWith("LAGHOUND_TOKEN=", StringComparison.Ordinal))
+            {
+                parts.Add("LAGHOUND_TOKEN=***");
             }
             else
             {

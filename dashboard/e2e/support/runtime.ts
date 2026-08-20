@@ -91,6 +91,31 @@ export async function stubRuntime(page: Page) {
       });
     }
     if (path.endsWith('/api/auth/sso/providers')) return json({ providers: [] });
+    // SDK sample catalog + status. The catch-all at the bottom answers `[]`,
+    // which is NOT this endpoint's shape ({ samples: [...] }) — serving a
+    // realistic payload here is what makes the SDK Endpoints route test
+    // exercise the real UI instead of its empty state.
+    if (path.endsWith(`/api/projects/${PID}/sdk-endpoints/samples`)) {
+      return json({
+        samples: [
+          {
+            id: 'js', language: 'JavaScript', runtime: 'Node 22 · node:http',
+            description: 'Bare node:http service mounting the SDK handler.',
+            port: 8102, sdk_version: '0.1.0', state: 'none',
+            deployment_id: null, endpoint_id: null, url: null,
+            deployed_version: null, host: null, message: null,
+          },
+          {
+            id: 'python', language: 'Python', runtime: 'Python 3.12',
+            description: 'ASGI service mounting the SDK middleware.',
+            port: 8103, sdk_version: '0.1.0', state: 'current',
+            deployment_id: 'dep-e2e-1', endpoint_id: 'ep-e2e-1',
+            url: 'https://sample.e2e.invalid:8103/laghound',
+            deployed_version: '0.1.0', host: 'sample.e2e.invalid', message: null,
+          },
+        ],
+      });
+    }
     if (path.endsWith('/api/projects')) return json({ projects: [project()] });
     if (path.endsWith(`/api/v2/projects/${PID}/test-runs`)) {
       const common = {

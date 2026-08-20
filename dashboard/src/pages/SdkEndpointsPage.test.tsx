@@ -34,12 +34,22 @@ const endpoint: SdkEndpoint = {
 
 const listSdkEndpoints = vi.fn(() => Promise.resolve([endpoint]));
 const deleteSdkEndpoint = vi.fn(() => Promise.resolve(undefined));
+// The sample panel's read. Empty by default so these RBAC/masking cases keep
+// exercising the endpoint list alone; SdkSamplesPanel.test.tsx covers the panel.
+const getSdkSamples = vi.fn(() =>
+  Promise.resolve({
+    catalog: { prefix_default: '/laghound', route_default: '/laghound/echo', samples: [] },
+    samples: [],
+    cost_preview: null,
+  }),
+);
 
 vi.mock('../api/client', () => ({
   errorMessage: (e: unknown) => (e instanceof Error ? e.message : String(e)),
   api: {
     listSdkEndpoints: (...a: unknown[]) => listSdkEndpoints(...(a as [])),
     deleteSdkEndpoint: (...a: unknown[]) => deleteSdkEndpoint(...(a as [])),
+    getSdkSamples: (...a: unknown[]) => getSdkSamples(...(a as [])),
   },
 }));
 
@@ -110,7 +120,7 @@ describe('SdkEndpointsPage', () => {
       </MemoryRouter>,
     );
     await waitFor(() => expect(screen.getByText('No SDK endpoints yet')).toBeInTheDocument());
-    expect(screen.getByRole('button', { name: /Register your first SDK endpoint/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Register your own service/i })).toBeInTheDocument();
   });
 
   it('viewer sees the empty state without a create CTA', async () => {
@@ -122,7 +132,7 @@ describe('SdkEndpointsPage', () => {
       </MemoryRouter>,
     );
     await waitFor(() => expect(screen.getByText('No SDK endpoints yet')).toBeInTheDocument());
-    expect(screen.queryByRole('button', { name: /Register your first SDK endpoint/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Register your own service/i })).not.toBeInTheDocument();
   });
 
   // ── Reachability chip (#765) ──────────────────────────────────────────

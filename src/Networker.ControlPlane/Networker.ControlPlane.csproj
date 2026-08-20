@@ -30,6 +30,16 @@
                       Link="shared\http-stacks.json"
                       LogicalName="Networker.ControlPlane.shared.http-stacks.json" />
 
+    <!-- Canonical SDK sample catalog (Endpoints/SdkSampleCatalog.cs): the
+         reference apps under sdk/<lang>/example, the port LagHound deploys
+         each on, and the SDK version each reports on /laghound/health — the
+         "current" half of the outdated comparison. Served by
+         GET /api/projects/{id}/sdk-endpoints/samples; the same ids ride the
+         deploy config's endpoints[].sdk_samples into install.sh. -->
+    <EmbeddedResource Include="..\..\shared\sdk-samples.json"
+                      Link="shared\sdk-samples.json"
+                      LogicalName="Networker.ControlPlane.shared.sdk-samples.json" />
+
     <!-- The networker-tester probe-result schema (V001–V005, PostgreSQL),
          mirrored from crates/networker-tester/src/output/db/postgres.rs (a Rust
          unit test guards the copy). AttemptPersister applies it lazily on the

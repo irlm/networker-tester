@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
+using Networker.ControlPlane.Endpoints;
 using Networker.ControlPlane.Realtime;
 using Networker.Data;
 
@@ -70,9 +71,14 @@ public sealed class DeployRunner
     private static readonly TimeSpan PerLanguageBudget = TimeSpan.FromMinutes(8);
     private static readonly TimeSpan MaxDeployTimeout = TimeSpan.FromMinutes(120);
 
-    /// <summary>How many reference-API languages the deploy config requests,
-    /// summed across all endpoints. 0 for stack-only or unparseable configs
-    /// (the latter fail validation inside install.sh anyway).</summary>
+    /// <summary>How many per-language installs the deploy config requests,
+    /// summed across all endpoints: reference-API <c>languages</c> AND SDK
+    /// <c>sdk_samples</c>. Both are serial toolchain-sized installs on the
+    /// target (an SDK sample compiles the sample app from source — the Rust one
+    /// is a full cargo release build), so both must scale the budget; a sample
+    /// deploy that is only counted as "0 languages" gets the flat 30m base and
+    /// is tree-killed mid-build. 0 for stack-only or unparseable configs (the
+    /// latter fail validation inside install.sh anyway).</summary>
     internal static int LanguageCountFor(string deployJson)
     {
         var languages = 0;
@@ -88,6 +94,11 @@ public sealed class DeployRunner
                         && langs.ValueKind == System.Text.Json.JsonValueKind.Array)
                     {
                         languages += langs.GetArrayLength();
+                    }
+                    if (ep.TryGetProperty("sdk_samples", out var samples)
+                        && samples.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    {
+                        languages += samples.GetArrayLength();
                     }
                 }
             }
@@ -130,9 +141,12 @@ public sealed class DeployRunner
     /// <c>Step N: Install &lt;lang&gt; reference API on &lt;ip&gt; …</c> (remote),
     /// <c>… locally …</c> (local provider) or <c>… (Azure Windows)</c> — always
     /// AFTER the VM exists and SSH answers. Piped output carries no ANSI codes
-    /// (install.sh gates colors on <c>-t 1</c>), so the line is matched bare.</summary>
+    /// (install.sh gates colors on <c>-t 1</c>), so the line is matched bare.
+    /// <c>Step N: Install &lt;lang&gt; SDK sample …</c> is the same marker for the
+    /// SDK sample installs (<c>endpoints[].sdk_samples</c>), which are equally
+    /// toolchain-sized and equally post-provisioning.</summary>
     internal static readonly Regex InstallPhaseMarkerRe = new(
-        @"^Step \d+: Install \S+ reference API",
+        @"^Step \d+: Install \S+ (reference API|SDK sample)",
         RegexOptions.Compiled);
 
     // Matches "hostname.eastus.cloudapp.azure.com (20.127.36.61)" — FQDN + IP in
@@ -206,7 +220,7 @@ public sealed class DeployRunner
         }
         if (dockerPlan is not null)
         {
-            return await RunDockerDeploymentAsync(deploymentId, dockerPlan, ct).ConfigureAwait(false);
+            return await RunDockerDeploymentAsync(deploymentId, dockerPlan, deployJson, ct).ConfigureAwait(false);
         }
 
         var deployFile = Path.Combine(Path.GetTempPath(), $"deploy-{deploymentId}.json");
@@ -264,10 +278,21 @@ public sealed class DeployRunner
             PumpLine(deploymentId, output, gcp.Note, "stdout");
         }
 
+        // SDK sample endpoints: the token the samples will require rides the
+        // config as ciphertext (it is readable by every project member there);
+        // hand the plaintext to install.sh through the environment only, so it
+        // never reaches the log or the stored config.
+        var sampleToken = SdkSampleInstallerToken.Resolve(_scopeFactory, deployJson, _logger);
+        if (sampleToken.Note is not null)
+        {
+            PumpLine(deploymentId, output, sampleToken.Note, "stdout");
+        }
+        var installerEnv = SdkSampleInstallerToken.Merge(gcpCredentials?.Env, sampleToken.Env);
+
         int? exitCode;
         try
         {
-            exitCode = await ShellInstallAsync(deploymentId, installSh, deployFile, output, gcpCredentials?.Env, ct)
+            exitCode = await ShellInstallAsync(deploymentId, installSh, deployFile, output, installerEnv, ct)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -394,15 +419,17 @@ public sealed class DeployRunner
     // ── Docker (local) provider ──────────────────────────────────────────────
 
     /// <summary>
-    /// Start one target container per docker endpoint, gate each on its
-    /// healthcheck, and finish the deployment exactly like the shell path
-    /// (<c>completed</c> + <c>endpoint_ips</c> = container ips, log streamed via
+    /// Start one container per docker endpoint — a target container, or a
+    /// LagHound SDK sample container when the endpoint declares
+    /// <c>sdk_samples</c> — gate each on its readiness probe, and finish the
+    /// deployment exactly like the shell path (<c>completed</c> +
+    /// <c>endpoint_ips</c> = container ips, log streamed via
     /// <see cref="DeployLog"/>). Any failure force-removes the containers this
     /// deployment already started (nothing to bill, but nothing to leak either)
     /// and records <c>failed</c>.
     /// </summary>
     private async Task<IReadOnlyList<string>> RunDockerDeploymentAsync(
-        Guid deploymentId, DockerDeployPlan plan, CancellationToken ct)
+        Guid deploymentId, DockerDeployPlan plan, string deployJson, CancellationToken ct)
     {
         var output = new DeployOutput();
         void Log(string line, string stream = "stdout")
@@ -436,6 +463,16 @@ public sealed class DeployRunner
 
         await SetStatusAsync(deploymentId, "running", ct).ConfigureAwait(false);
         Log("Deployment started...");
+        // Re-run (update / recovery): drop the containers this deployment
+        // already owns first. install.sh re-installs in place on a VM; a second
+        // `docker run` would instead leave the old container serving the old ip
+        // that nothing points at any more.
+        var swept = await docker.RemoveDeploymentContainersAsync(deploymentId, line => Log(line), ct)
+            .ConfigureAwait(false);
+        if (swept > 0)
+        {
+            Log($"re-running deployment: removed {swept} previous container(s)");
+        }
         var network = await docker.ResolveNetworkAsync(ct).ConfigureAwait(false);
         Log($"provider: docker (local) — starting {plan.Endpoints.Count} target container(s) on network '{network}'");
 
@@ -451,11 +488,68 @@ public sealed class DeployRunner
         string? error = null;
         try
         {
+            // SDK sample containers need the token their /laghound routes will
+            // require; it rides the config as ciphertext (see
+            // SdkSampleInstallerToken) and is resolved once for the deployment.
+            var sampleToken = plan.Endpoints.Any(e => e.Sample is not null)
+                ? SdkSampleInstallerToken.Resolve(_scopeFactory, deployJson, _logger)
+                : SdkSampleInstallerToken.Outcome.None;
+
             foreach (var ep in plan.Endpoints)
             {
+                VmCreateResult res;
+                if (ep.Sample is { } sampleId)
+                {
+                    var sample = SdkSampleCatalog.Find(sampleId);
+                    if (sample is null)
+                    {
+                        error = $"endpoints[{ep.Index}]: unknown SDK sample '{sampleId}'";
+                        Log($"ERROR: {error}", "stderr");
+                        break;
+                    }
+                    if (!sampleToken.Env.TryGetValue(SdkSampleInstallerToken.EnvVar, out var token))
+                    {
+                        error = $"endpoints[{ep.Index}]: no LagHound sample token staged on this deployment — "
+                                + "recreate it from the SDK Endpoints page";
+                        Log($"ERROR: {error}", "stderr");
+                        break;
+                    }
+                    var sampleImage = docker.Options.SampleImageFor(sample.Id);
+                    Log($"endpoints[{ep.Index}] {ep.Label}: docker run {sampleImage} (PORT={sample.Port}, LagHound {sample.Language} sample {sample.SdkVersion})");
+                    res = await docker.CreateSampleAsync(
+                        new DockerComputeProvisioner.SampleContainerRequest(
+                            projectId ?? string.Empty, deploymentId, ep.Label, sample.Id, sample.Port, token), ct)
+                        .ConfigureAwait(false);
+                    if (!string.IsNullOrEmpty(res.ResourceId))
+                    {
+                        created.Add(res.ResourceId);
+                    }
+                    if (!res.Success)
+                    {
+                        error = res.Error ?? "docker run failed";
+                        Log($"ERROR: {error}", "stderr");
+                        break;
+                    }
+                    Log($"container {res.ResourceId} started at {res.PublicIp} — waiting for :{sample.Port}");
+                    var sampleErr = await docker
+                        .WaitSampleHealthyAsync(res.ResourceId!, res.PublicIp!, sample.Port, line => Log(line), ct)
+                        .ConfigureAwait(false);
+                    if (sampleErr is not null)
+                    {
+                        error = sampleErr;
+                        Log($"ERROR: {sampleErr}", "stderr");
+                        break;
+                    }
+                    Log($"endpoint_ip: {res.PublicIp} ({ep.Label}, {sample.Language} sample on :{sample.Port})");
+                    Log($"endpoint_host: {res.ResourceId} ({res.PublicIp}) — container name, docker-network DNS");
+                    ips.Add(res.PublicIp!);
+                    hosts.Add(res.ResourceId);
+                    continue;
+                }
+
                 var image = docker.Options.TargetImageFor(ep.Stack);
                 Log($"endpoints[{ep.Index}] {ep.Label}: docker run {image} (TARGET_STACK={DockerComputeProvisioner.TargetStackEnv(ep.Stack)})");
-                var res = await docker.CreateTargetAsync(
+                res = await docker.CreateTargetAsync(
                     new DockerComputeProvisioner.TargetContainerRequest(projectId ?? string.Empty, deploymentId, ep.Label, ep.Stack), ct)
                     .ConfigureAwait(false);
                 if (!string.IsNullOrEmpty(res.ResourceId))
