@@ -10,12 +10,24 @@
 // so its detail was never fetched and its runs attributed to nobody. These
 // tests also pin the host attribution (every set member gets the run) and the
 // per-URL verdict override.
+//
+// Review follow-ups on #820:
+// - Membership is now STRUCTURAL first (test_kind='url_probe'): the name
+//   regex alone meant a rename erased a probe's watchlist history and any
+//   config named "Diag set: …" got injected. The name prefix survives only as
+//   the fallback for pre-test_kind rows.
+// - Per-member `counts` now override run-level failed/cancelled too: a
+//   watchdog-killed set run painted every member red even when that member's
+//   own attempts all succeeded.
+// - Set names carry an optional `[hex]` membership hash (diag-request.ts);
+//   hostsFromDiagConfigName must parse both old and hashed names.
 
 import { describe, expect, it } from 'vitest';
 import {
   hostsForDiagConfig,
   hostsFromDiagConfigName,
   isDiagSetConfigName,
+  isWatchlistConfig,
   isWatchlistConfigName,
   probeRunVerdict,
 } from '../lib/watchlist';
@@ -48,6 +60,25 @@ describe('isWatchlistConfigName', () => {
   });
 });
 
+describe('isWatchlistConfig', () => {
+  it('the structural kind wins over the name — renames keep their history', () => {
+    // Renamed probe config: still a watch entry.
+    expect(isWatchlistConfig({ name: 'My checkout probe', test_kind: 'url_probe' })).toBe(true);
+    // Benchmark config that HAPPENS to wear the Diag prefix: not injected.
+    expect(isWatchlistConfig({ name: 'Diag set: x (Full)', test_kind: 'network' })).toBe(false);
+    expect(isWatchlistConfig({ name: 'Diag: example.com (Quick)', test_kind: 'benchmark' })).toBe(
+      false,
+    );
+  });
+
+  it('falls back to the name prefix for pre-test_kind rows only', () => {
+    expect(isWatchlistConfig({ name: 'Diag: example.com (Quick)' })).toBe(true);
+    expect(isWatchlistConfig({ name: 'Diag: example.com (Quick)', test_kind: null })).toBe(true);
+    expect(isWatchlistConfig({ name: 'Diag: example.com (Quick)', test_kind: '' })).toBe(true);
+    expect(isWatchlistConfig({ name: 'Checkout API' })).toBe(false);
+  });
+});
+
 describe('hostsFromDiagConfigName', () => {
   it('parses single-URL names (current, pre-rename, and burst-suffixed)', () => {
     expect(hostsFromDiagConfigName('Diag: example.com (Quick)')).toEqual(['example.com']);
@@ -58,6 +89,15 @@ describe('hostsFromDiagConfigName', () => {
   it('parses set names to their first member (the name carries no more)', () => {
     expect(hostsFromDiagConfigName('Diag set: example.com +1 (Quick)')).toEqual(['example.com']);
     expect(hostsFromDiagConfigName('Diag set: example.com +3 (Full x5)')).toEqual(['example.com']);
+  });
+
+  it('parses hashed set names too (the [hex] membership segment is skipped)', () => {
+    expect(hostsFromDiagConfigName('Diag set: example.com +1 [a3f01c] (Quick)')).toEqual([
+      'example.com',
+    ]);
+    expect(hostsFromDiagConfigName('Diag set: example.com +7 [00beef] (Full x5)')).toEqual([
+      'example.com',
+    ]);
   });
 
   it('returns [] for non-probe names', () => {
@@ -130,5 +170,37 @@ describe('probeRunVerdict', () => {
   it('staleness still wins over healthy with per-URL counts', () => {
     const old = run({ created_at: '2026-08-10T11:00:00Z' });
     expect(probeRunVerdict(old, NOW, STALE, { ok: 4, fail: 0 })).toBe('stale');
+  });
+
+  it('counts override run-level failed/cancelled (watchdog-killed set runs)', () => {
+    // The set run breached max_duration and reports status 'failed' — but THIS
+    // member's own attempts all succeeded, so its row must not go red.
+    const killed = run({ status: 'failed', success_count: 4, failure_count: 0 });
+    expect(probeRunVerdict(killed, NOW, STALE, { ok: 4, fail: 0 })).toBe('healthy');
+    expect(
+      probeRunVerdict(killed, NOW, STALE, { ok: 2, fail: 1 }),
+    ).toBe('partial');
+    // …and staleness still applies to the green outcome.
+    const killedOld = run({
+      status: 'failed',
+      success_count: 4,
+      failure_count: 0,
+      created_at: '2026-08-10T11:00:00Z',
+    });
+    expect(probeRunVerdict(killedOld, NOW, STALE, { ok: 4, fail: 0 })).toBe('stale');
+  });
+
+  it('counts {ok:0, fail:0} means no attributed evidence — pending, not red/green', () => {
+    // The caller passes zeros when the run has attributed attempts but none
+    // for this member.
+    expect(probeRunVerdict(run(), NOW, STALE, { ok: 0, fail: 0 })).toBe('pending');
+    expect(
+      probeRunVerdict(run({ status: 'failed' }), NOW, STALE, { ok: 0, fail: 0 }),
+    ).toBe('pending');
+  });
+
+  it('WITHOUT counts, run-level failed/cancelled still reads failed', () => {
+    expect(probeRunVerdict(run({ status: 'failed' }), NOW, STALE)).toBe('failed');
+    expect(probeRunVerdict(run({ status: 'cancelled' }), NOW, STALE)).toBe('failed');
   });
 });

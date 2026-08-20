@@ -11,6 +11,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.261] - 2026-08-20
+
+### Fixed
+
+Review follow-ups to the #820/#782 diag-set work — ten findings, the two worst
+first:
+
+- **Removing a URL from the watchlist can no longer hard-delete a shared set
+  config it failed to classify.** A set config evicted from the 200-newest
+  config window had no detail and no list name, was guessed "single-URL", and
+  its deletion CASCADE-erased every member's probe history. Classification now
+  also reads the run-borne `config_name`, and — the fail-safe inversion — a
+  config that cannot be positively classified is KEPT, never deleted.
+- **Two different URL sets no longer silently collide into one config.** The
+  set config name (the find_or_create reuse key) encoded only the first host
+  and member count, so "a.com b.com" and "a.com c.com" reused each other's
+  configs and probed the wrong URLs. Set names now carry a membership hash
+  over the sorted probe URLs, and the server's `find_or_create` reconciles a
+  reused row's endpoint/workload/max-duration toward the request (validated by
+  the capability gate like a fresh create).
+- Per-member verdicts now truly override run-level status: a watchdog-killed
+  set run no longer paints a member red when that member's own attempts all
+  succeeded, and a member with no attributed attempts in an attributed run
+  renders 'pending' (no evidence), not green.
+- Watchlist membership is structural (`test_kind='url_probe'`) with the name
+  prefix as legacy fallback — renaming a probe config no longer erases its
+  history, and a benchmark config named "Diag: …" is no longer injected.
+- Set-host attribution reads `endpoint.hosts` straight off the config LIST
+  items (the wire always carried it), killing the ~76-request per-config
+  detail fan-out; details are fetched only for configs evicted from the
+  200-newest window, which previously attributed to their first member only.
+- Hourly monitoring: schedule create is idempotent server-side (an identical
+  config+cron+timezone row is returned, not duplicated), the button has an
+  in-flight guard and re-enables a paused schedule instead of duplicating it,
+  only the hourly cron renders the "Monitoring hourly" badge, and
+  pausing a shared set's schedule says it affects every member URL.
+- URL-comparison timing medians only pool modes successful on EVERY compared
+  URL — protocol support no longer masquerades as latency; excluded modes are
+  footnoted, and no winner is crowned when the URLs share no successful mode.
+- Watchdog headroom scales with the workload (preset estimate × samples ×
+  URLs, floored at 900s, capped at 7200s) — a Full x5 over 8+ URLs no longer
+  breaches the flat 1800s cap and dies mid-flight.
+
+---
+
 
 
 ## [0.28.260] - 2026-08-20

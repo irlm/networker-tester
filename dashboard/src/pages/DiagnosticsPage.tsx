@@ -26,6 +26,7 @@ import {
   hostsForDiagConfig,
   hostsFromDiagConfigName,
   isDiagSetConfigName,
+  isWatchlistConfig,
   isWatchlistConfigName,
   probeRunVerdict,
 } from '../lib/watchlist';
@@ -67,6 +68,10 @@ const DIAG_PRESET_LABELS: Record<DiagPreset, { time: string; desc: string }> = {
 const PAGE_SIZE = 20;
 const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
 const DIAGNOSTIC_RUN_PARAMS = { endpoint_kind: 'network', limit: 200 } as const;
+// The one cron this page creates (#782). Only schedules matching it render the
+// "hourly" badge/button state — an API-created daily schedule on the same
+// config must not read as "Monitoring hourly".
+const HOURLY_CRON = '0 * * * *';
 
 const PHASE_CSS_COLORS: Record<string, string> = {
   dns: '#a78bfa',
@@ -221,6 +226,7 @@ function UrlCard({
   projectId,
   schedule,
   onMonitorHourly,
+  monitorPending,
   onToggleMonitor,
 }: {
   projectId: string;
@@ -232,6 +238,9 @@ function UrlCard({
   /** Hourly-monitoring schedule attached to one of this row's configs (#782). */
   schedule: TestSchedule | null;
   onMonitorHourly: () => void;
+  /** True while a "Monitor hourly" request for this host is in flight —
+   *  disables the button so a double click cannot create duplicate rows. */
+  monitorPending: boolean;
   onToggleMonitor: (schedule: TestSchedule) => void;
 }) {
   const navigate = useNavigate();
@@ -476,10 +485,11 @@ function UrlCard({
             ) : (
               <button
                 onClick={onMonitorHourly}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-800 rounded text-gray-400 hover:text-gray-200 hover:border-gray-600 transition-colors"
+                disabled={monitorPending}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-800 rounded text-gray-400 hover:text-gray-200 hover:border-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 title="Re-probe this URL automatically every hour (the last-used preset/set)"
               >
-                Monitor hourly
+                {monitorPending ? 'Scheduling…' : 'Monitor hourly'}
               </button>
             )}
             <button
@@ -556,23 +566,19 @@ export function DiagnosticsPage() {
   const configs = useMemo(
     () => ((configsQuery.data ?? []) as Array<TestConfigListItem | TestConfig>).filter((config) => {
       const kind = 'endpoint_kind' in config ? config.endpoint_kind : config.endpoint.kind;
-      // Only this page's own probe configs are watch entries — see
-      // isWatchlistConfigName. Runs from other network-kind configs
+      // Only this page's own probe configs are watch entries — structural
+      // test_kind wins ('url_probe' survives a rename), name prefix covers
+      // legacy rows (isWatchlistConfig). Runs from other network-kind configs
       // (benchmark cells, canary, SDK endpoints) are excluded downstream too:
       // their config detail is never fetched and their names don't parse.
-      return kind === 'network' && isWatchlistConfigName(config.name);
+      return kind === 'network' && isWatchlistConfig(config);
     }),
     [configsQuery.data],
   );
-  const configIds = useMemo(() => configs.map((config) => config.id), [configs]);
-  const configDetailQueries = useTestConfigDetailsQueries(configIds);
-  const configDetails = useMemo(() => {
-    const details = new Map<string, TestConfig>();
-    for (const query of configDetailQueries) {
-      if (query.data) details.set(query.data.id, query.data);
-    }
-    return details;
-  }, [configDetailQueries]);
+  const configById = useMemo(
+    () => new Map(configs.map((config) => [config.id, config])),
+    [configs],
+  );
 
   const runsQuery = useTestRunsQuery(projectId, DIAGNOSTIC_RUN_PARAMS, {
     intervalMs: 15_000,
@@ -580,6 +586,38 @@ export function DiagnosticsPage() {
   });
   const allRuns = useMemo(() => runsQuery.data ?? [], [runsQuery.data]);
   const loading = configsQuery.isPending || runsQuery.isPending;
+
+  // List items carry the full endpoint object, so configs IN the 200-newest
+  // list window need no detail fetch (the ~76-request fan-out this replaces).
+  // Details are fetched ONLY for probe configs that runs reference but the
+  // list window evicted — without them an evicted set run would attribute to
+  // its first member only (name parse), or to nobody (#820 follow-up).
+  const missingDetailConfigIds = useMemo(() => {
+    // Until the list has loaded we can't tell what's missing — fetching
+    // everything would recreate the fan-out this replaces.
+    if (!configsQuery.data) return [];
+    const listed = new Set(
+      (configsQuery.data as Array<TestConfigListItem | TestConfig>).map((config) => config.id),
+    );
+    const ids = new Set<string>();
+    for (const run of allRuns) {
+      if (listed.has(run.test_config_id)) continue;
+      // "Looks like a probe run": structural test_kind, or a legacy run whose
+      // denormalized config_name carries the probe-page prefix.
+      if (run.test_kind === 'url_probe' || (run.config_name && isWatchlistConfigName(run.config_name))) {
+        ids.add(run.test_config_id);
+      }
+    }
+    return [...ids].sort();
+  }, [configsQuery.data, allRuns]);
+  const configDetailQueries = useTestConfigDetailsQueries(missingDetailConfigIds);
+  const configDetails = useMemo(() => {
+    const details = new Map<string, TestConfig>();
+    for (const query of configDetailQueries) {
+      if (query.data) details.set(query.data.id, query.data);
+    }
+    return details;
+  }, [configDetailQueries]);
 
   // Load testers once so the runner-picker can show the list of runners the
   // user can pin their probe to. Auto-pick stays the default — this lets them
@@ -599,20 +637,24 @@ export function DiagnosticsPage() {
   // a memo dependency so staleness verdicts advance with it.
   const now = useNow();
 
-  // A run belongs to a set config when its config detail carries several
-  // member URLs, or (before the detail loads) its name says "Diag set:".
+  // A run belongs to a set config when its config carries several member
+  // URLs — list item first (the list wire sends the full endpoint), then the
+  // fetched detail (evicted configs), then the "Diag set:" name as a last
+  // resort while a detail loads.
   const isSetRun = useMemo(() => {
     return (run: TestRun): boolean => {
+      const cfg = configById.get(run.test_config_id);
+      if (cfg?.endpoint?.kind === 'network' && (cfg.endpoint.hosts?.length ?? 0) > 1) {
+        return true;
+      }
       const detail = configDetails.get(run.test_config_id);
       if (detail && detail.endpoint.kind === 'network' && (detail.endpoint.hosts?.length ?? 0) > 1) {
         return true;
       }
-      const name = run.config_name
-        ?? configs.find(c => c.id === run.test_config_id)?.name
-        ?? '';
+      const name = run.config_name ?? cfg?.name ?? '';
       return isDiagSetConfigName(name);
     };
-  }, [configDetails, configs]);
+  }, [configById, configDetails]);
 
   const baseUrlGroups = useMemo(() => {
     const hostMap = new Map<string, { runs: TestRun[]; configIds: Set<string> }>();
@@ -620,19 +662,21 @@ export function DiagnosticsPage() {
     for (const run of allRuns) {
       // Hosts this run covers: a single-URL config yields one; a set config
       // (#820) yields EVERY member, so the run lands on each member's row.
+      // Resolution order: list item (endpoint-aware, no fetch needed) →
+      // fetched detail (configs evicted from the list window) → the run's
+      // denormalized config_name (last resort while a detail loads — a set
+      // name only carries its first member).
       let hosts: string[] = [];
 
-      const detail = configDetails.get(run.test_config_id);
-      if (detail) hosts = hostsForDiagConfig(detail);
+      const cfg = configById.get(run.test_config_id);
+      if (cfg) hosts = hostsForDiagConfig(cfg);
 
-      // Fallbacks while the detail is loading: config_name, then the config
-      // list item's name (a set name only carries its first member).
+      if (hosts.length === 0) {
+        const detail = configDetails.get(run.test_config_id);
+        if (detail) hosts = hostsForDiagConfig(detail);
+      }
       if (hosts.length === 0 && run.config_name) {
         hosts = hostsFromDiagConfigName(run.config_name);
-      }
-      if (hosts.length === 0) {
-        const cfg = configs.find(c => c.id === run.test_config_id);
-        if (cfg) hosts = hostsForDiagConfig(cfg);
       }
 
       for (const host of hosts) {
@@ -664,14 +708,17 @@ export function DiagnosticsPage() {
     }
 
     return groups;
-  }, [allRuns, configs, configDetails, now]);
+  }, [allRuns, configById, configDetails, now]);
 
   // ── Per-URL health for set runs (#820) ────────────────────────────────
   // A set run's run-level counts aggregate every member URL — one flaky
   // member must not paint the others red. For each row whose LATEST run is a
   // finished set run, fetch that run's attempts (cached/shared with the run
   // detail page) and re-verdict the row from the attempts attributed to its
-  // host via target_url.
+  // host via target_url. The per-URL override applies to status==='failed'
+  // runs too — that is WHY they are included here: a watchdog-killed set run
+  // whose attempts show a member went {ok:4, fail:0} renders that member
+  // healthy/stale, not red (probeRunVerdict counts override run status).
   const setRunIds = useMemo(() => {
     const ids = new Set<string>();
     for (const g of baseUrlGroups) {
@@ -699,8 +746,18 @@ export function DiagnosticsPage() {
       const mine = attempts.filter(
         a => a.target_url && extractHost(a.target_url) === group.host,
       );
-      // Pre-#782 testers persisted no target_url — keep the run-level verdict.
-      if (mine.length === 0) return group;
+      if (mine.length === 0) {
+        // Two different absences (#820 follow-up): a pre-#782 tester persisted
+        // no target_url on ANY attempt — the run-level verdict is the best
+        // signal we have. But when the run DID attribute attempts and this
+        // member just has none, its evidence was lost — no evidence must not
+        // render green: {ok:0, fail:0} yields 'pending' via probeRunVerdict.
+        if (!attempts.some(a => a.target_url)) return group;
+        return {
+          ...group,
+          lastStatus: probeRunVerdict(group.lastRun, now, STALE_THRESHOLD_MS, { ok: 0, fail: 0 }),
+        };
+      }
       const ok = mine.filter(a => a.success).length;
       return {
         ...group,
@@ -806,6 +863,10 @@ export function DiagnosticsPage() {
             project_id: created.project_id,
             name: created.name,
             test_kind: created.test_kind,
+            // Full endpoint, matching the list wire DTO — the structural
+            // set-membership paths (hostsForDiagConfig / isSetRun) must see
+            // every member host immediately, not after the next list refetch.
+            endpoint: created.endpoint,
             endpoint_kind: created.endpoint.kind,
             modes: created.workload.modes,
             has_methodology: created.methodology !== null,
@@ -836,29 +897,53 @@ export function DiagnosticsPage() {
 
   const handleRemove = async (host: string, configIds: Set<string>) => {
     // Set configs (#820) are SHARED between their member URLs — deleting one
-    // to remove a single host would erase the other members' history too.
-    // Only this host's single-URL configs are deleted; shared sets are kept.
+    // to remove a single host would erase the other members' history too
+    // (test_run rows go with the config, ON DELETE CASCADE). Only configs
+    // POSITIVELY classified single-URL are deleted; shared sets are kept, and
+    // — the fail-safe inversion — a config we cannot classify at all (evicted
+    // from the list window, detail not loaded, no run-borne name) is ALSO
+    // kept: guessing "single" on an evicted set config would destroy every
+    // member's history.
     const removable: string[] = [];
     let sharedSets = 0;
+    let keptUnknown = 0;
     for (const id of configIds) {
+      const cfg = configById.get(id);
       const detail = configDetails.get(id);
-      const name = detail?.name ?? configs.find(c => c.id === id)?.name ?? '';
-      const isSet =
-        (detail?.endpoint.kind === 'network' && (detail.endpoint.hosts?.length ?? 0) > 1) ||
-        isDiagSetConfigName(name);
-      if (isSet) sharedSets += 1;
-      else removable.push(id);
+      // Same name fallback chain the host/set classifiers use: list item →
+      // detail → the denormalized config_name any of this row's runs carry.
+      const name =
+        detail?.name
+        ?? cfg?.name
+        ?? allRuns.find(r => r.test_config_id === id && r.config_name)?.config_name
+        ?? null;
+      const structuralSet =
+        (cfg?.endpoint?.kind === 'network' && (cfg.endpoint.hosts?.length ?? 0) > 1) ||
+        (detail?.endpoint.kind === 'network' && (detail.endpoint.hosts?.length ?? 0) > 1);
+      if (structuralSet || (name !== null && isDiagSetConfigName(name))) {
+        sharedSets += 1;
+      } else if (name === null) {
+        keptUnknown += 1;
+      } else {
+        removable.push(id);
+      }
     }
+    const kept = sharedSets + keptUnknown;
+    const keptNote = keptUnknown > 0
+      ? `${kept} config${kept !== 1 ? 's' : ''} kept: shared sets or unidentifiable`
+      : `${sharedSets} shared set config${sharedSets !== 1 ? 's' : ''} kept`;
     try {
       await Promise.all(removable.map(id => runsApi.deleteConfig(id)));
-      if (removable.length === 0 && sharedSets > 0) {
-        addToast('info', `${host} only has history from multi-URL set runs — shared set configs were kept`);
+      if (removable.length === 0 && kept > 0) {
+        addToast('info', keptUnknown > 0
+          ? `Nothing deleted for ${host} — ${keptNote} (removal only deletes configs it can prove are single-URL)`
+          : `${host} only has history from multi-URL set runs — shared set configs were kept`);
         return;
       }
       addToast(
         'success',
-        sharedSets > 0
-          ? `Removed ${host} from watchlist (${sharedSets} shared set config${sharedSets !== 1 ? 's' : ''} kept)`
+        kept > 0
+          ? `Removed ${host} from watchlist (${keptNote})`
           : `Removed ${host} from watchlist`,
       );
       const removed = new Set(removable);
@@ -883,29 +968,78 @@ export function DiagnosticsPage() {
   const schedules = useMemo(() => schedulesQuery.data ?? [], [schedulesQuery.data]);
   const updateSchedule = useUpdateScheduleMutation(projectId);
 
+  // In-flight guard for "Monitor hourly" (keyed by group.host): a double
+  // click, or two clicks before the schedules query refreshes, must not
+  // create duplicate schedule rows.
+  const [monitorPending, setMonitorPending] = useState<Set<string>>(new Set());
+
   const scheduleForGroup = (group: UrlGroup): TestSchedule | null =>
-    // Prefer the schedule on the config that produced the latest run; fall
-    // back to any schedule on one of the row's configs.
-    schedules.find(s => s.test_config_id === group.lastRun.test_config_id)
-      ?? schedules.find(s => group.configIds.has(s.test_config_id))
+    // Only THIS page's hourly cron qualifies — an API-created daily schedule
+    // on the same config must not render "Monitoring hourly ✓". Prefer the
+    // schedule on the config that produced the latest run; fall back to any
+    // hourly schedule on one of the row's configs.
+    schedules.find(s => s.cron_expr === HOURLY_CRON && s.test_config_id === group.lastRun.test_config_id)
+      ?? schedules.find(s => s.cron_expr === HOURLY_CRON && group.configIds.has(s.test_config_id))
       ?? null;
 
+  /** Member URLs of a schedule's config — >1 means pausing it silences a
+   *  whole set, not just the card it was clicked from (#820 follow-up). */
+  const scheduleMemberCount = (configId: string): number => {
+    const cfg = configById.get(configId);
+    const detail = configDetails.get(configId);
+    const ep = cfg?.endpoint?.kind === 'network'
+      ? cfg.endpoint
+      : detail?.endpoint.kind === 'network'
+        ? detail.endpoint
+        : undefined;
+    return Math.max(ep?.hosts?.length ?? 1, 1);
+  };
+
   const handleMonitorHourly = async (group: UrlGroup) => {
+    if (monitorPending.has(group.host)) return;
+    setMonitorPending(prev => new Set(prev).add(group.host));
     try {
-      await runsApi.createSchedule(projectId, {
-        test_config_id: group.lastRun.test_config_id,
-        cron_expr: '0 * * * *',
-        timezone: 'UTC',
-        enabled: true,
-      });
-      addToast('success', `Monitoring ${group.host} hourly`);
+      // Re-check against the FRESHEST schedule data before POSTing — the
+      // schedule may exist already (created from another member's card, or a
+      // click that raced the 10s poll): re-enable a paused one, no-op an
+      // active one, create only when truly absent.
+      const fresh = (await schedulesQuery.refetch()).data ?? schedules;
+      const existing = fresh.find(s =>
+        s.cron_expr === HOURLY_CRON
+        && (s.test_config_id === group.lastRun.test_config_id || group.configIds.has(s.test_config_id)));
+      if (existing && existing.enabled) {
+        addToast('info', `${group.host} is already monitored hourly`);
+      } else if (existing) {
+        await runsApi.updateSchedule(existing.id, { enabled: true });
+        addToast('success', `Resumed hourly monitoring for ${group.host}`);
+      } else {
+        await runsApi.createSchedule(projectId, {
+          test_config_id: group.lastRun.test_config_id,
+          cron_expr: HOURLY_CRON,
+          timezone: 'UTC',
+          enabled: true,
+        });
+        addToast('success', `Monitoring ${group.host} hourly`);
+      }
       queryClient.invalidateQueries({ queryKey: runKeys.schedules(projectId) });
     } catch (e) {
       addToast('error', `Failed to schedule: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setMonitorPending(prev => {
+        const next = new Set(prev);
+        next.delete(group.host);
+        return next;
+      });
     }
   };
 
   const handleToggleMonitor = (group: UrlGroup, schedule: TestSchedule) => {
+    // A shared set's schedule covers EVERY member URL — pausing it from one
+    // member's card silences them all, so the toast must say so (#820).
+    const others = scheduleMemberCount(schedule.test_config_id) - 1;
+    const scope = others > 0
+      ? `${group.host} and ${others} more URL${others !== 1 ? 's' : ''} in its set`
+      : group.host;
     updateSchedule.mutate(
       { scheduleId: schedule.id, enabled: !schedule.enabled },
       {
@@ -913,8 +1047,8 @@ export function DiagnosticsPage() {
           addToast(
             'success',
             schedule.enabled
-              ? `Paused hourly monitoring for ${group.host}`
-              : `Resumed hourly monitoring for ${group.host}`,
+              ? `Paused hourly monitoring for ${scope}`
+              : `Resumed hourly monitoring for ${scope}`,
           ),
         onError: (e) =>
           addToast('error', `Failed to update schedule: ${e instanceof Error ? e.message : String(e)}`),
@@ -1211,6 +1345,7 @@ export function DiagnosticsPage() {
               onRemove={handleRemove}
               schedule={scheduleForGroup(group)}
               onMonitorHourly={() => handleMonitorHourly(group)}
+              monitorPending={monitorPending.has(group.host)}
               onToggleMonitor={schedule => handleToggleMonitor(group, schedule)}
             />
           ))}

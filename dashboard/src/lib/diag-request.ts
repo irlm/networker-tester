@@ -97,6 +97,32 @@ function toProbeUrl(input: string): string {
   }
 }
 
+/**
+ * Rough wall-clock seconds one URL costs per sample, by preset — aligned with
+ * the page's own DIAG_PRESET_LABELS estimates (~3s/~12s/~45s/~45s), padded.
+ * Feeds the watchdog headroom calculation in {@link buildDiagRequest}.
+ */
+export const PRESET_EST_SECS: Record<DiagPreset, number> = {
+  quick: 5,
+  standard: 15,
+  full: 45,
+  route: 45,
+};
+
+/**
+ * FNV-1a 32-bit over a string. Used to fingerprint a set's full membership in
+ * the config name (the find_or_create reuse key) — first-host+count alone let
+ * "a.com b.com" and "a.com c.com" collide, silently probing the wrong URLs.
+ */
+function fnv1a(input: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
 /** Burst-sampling choices offered by the probe page (#782 P2). */
 export const DIAG_SAMPLE_CHOICES = [1, 3, 5] as const;
 export type DiagSamples = (typeof DIAG_SAMPLE_CHOICES)[number];
@@ -147,15 +173,24 @@ export function buildDiagRequest(
   // the server would return the existing runs:1 row and silently drop the burst.
   const presetLabel = preset.charAt(0).toUpperCase() + preset.slice(1)
     + (samples > 1 ? ` x${samples}` : '');
-  const configName = isSet
-    ? `Diag set: ${host} +${entries.length - 1} (${presetLabel})`
-    : `Diag: ${host} (${presetLabel})`;
   // Probe the URL as entered (root by default) — a bare host would get
   // `/health` appended by the agent (E2E P1-4). `host` stays bare for the
   // display name / watchlist grouping.
+  const probeUrls = entries.map(toProbeUrl);
+  // Set names carry a membership hash: first-host+count is NOT a sufficient
+  // reuse key ("a.com b.com" vs "a.com c.com" collided, and find_or_create
+  // silently probed the first set's URLs). Hash the SORTED full probe URLs —
+  // order-insensitive, but same hosts with different paths ARE different sets.
+  const setHash = fnv1a([...probeUrls].sort().join('\n'))
+    .toString(16)
+    .padStart(8, '0')
+    .slice(0, 6);
+  const configName = isSet
+    ? `Diag set: ${host} +${entries.length - 1} [${setHash}] (${presetLabel})`
+    : `Diag: ${host} (${presetLabel})`;
   const endpoint: EndpointRef = isSet
-    ? { kind: 'network', host: toProbeUrl(entries[0]), hosts: entries.map(toProbeUrl) }
-    : { kind: 'network', host: toProbeUrl(entries[0]) };
+    ? { kind: 'network', host: probeUrls[0], hosts: probeUrls }
+    : { kind: 'network', host: probeUrls[0] };
   // Each iteration re-probes every mode — the tester's `--runs N` loop already
   // publishes ALL logical attempts (retry collapsing is per logical attempt),
   // so a burst yields N samples per mode per URL, and the run-detail p50/p95
@@ -168,16 +203,22 @@ export function buildDiagRequest(
     payload_sizes: [],
     capture_mode: 'headers-only',
   };
+  // Watchdog headroom scales with the workload: wall clock is roughly
+  // samples × URLs × per-preset cost, so a flat cap keyed on samples alone
+  // let a Full x5 over 8+ URLs breach 1800s and get killed mid-flight, while
+  // a single-sample multi-URL Full set got no headroom at all (900s default).
+  // 2× the estimate, floored at the 900s default; ceiling 7200s is a runaway
+  // guard — a set large enough to breach it should be split. The server
+  // watchdog grants max_duration + grace.
+  const estSecs = PRESET_EST_SECS[preset] * samples * entries.length;
+  const maxDurationSecs = Math.max(900, Math.min(7200, estSecs * 2));
   const config: TestConfigCreate = {
     name: configName,
     test_kind: 'url_probe',
     endpoint,
     workload,
     find_or_create: true,
-    // A x5 Full burst across a set can brush the 900s default watchdog cap
-    // (~45s x 5 x N URLs) — give bursts honest headroom instead of a
-    // mid-flight kill.
-    ...(samples > 1 ? { max_duration_secs: 1800 } : {}),
+    max_duration_secs: maxDurationSecs,
   };
   return { host, entries, isSet, configName, config };
 }

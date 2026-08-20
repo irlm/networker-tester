@@ -189,6 +189,88 @@ public sealed class WriteEndpointCoverageTests : IClassFixture<ControlPlaneFixtu
     }
 
     [Fact]
+    public async Task Post_test_config_find_or_create_reconciles_stale_row_to_the_request()
+    {
+        // #820 review: find_or_create is an UPSERT toward the request — a
+        // reused name must never keep stale content (old member URLs, old
+        // max_duration_secs) or the run probes the wrong targets. Endpoint,
+        // workload and max_duration_secs all follow the request when they
+        // differ; the id (and thus run history) is preserved.
+        var client = _fixture.CreateAdminClient();
+        var name = Uniq("cfg-foc-upsert");
+        var firstId = await CreateTestConfigAsync(client, name); // example.com / runs 3 / 60s
+
+        var body = new
+        {
+            name,
+            endpoint = new { kind = "network", host = "https://changed.example.com" },
+            workload = new { modes = new[] { "http11", "http2" }, runs = 7 },
+            max_duration_secs = 120,
+            find_or_create = true,
+        };
+        var resp = await client.PostAsJsonAsync($"/api/v2/projects/{Pid}/test-configs", body);
+
+        Assert.True(resp.StatusCode == HttpStatusCode.OK,
+            $"POST find_or_create (changed content) → {(int)resp.StatusCode} (want 200); body: {await Body(resp)}");
+        using var doc = JsonDocument.Parse(await Body(resp));
+        Assert.Equal(firstId, doc.RootElement.GetProperty("id").GetGuid());
+        Assert.Equal("https://changed.example.com",
+            doc.RootElement.GetProperty("endpoint").GetProperty("host").GetString());
+        Assert.Equal(7, doc.RootElement.GetProperty("workload").GetProperty("runs").GetInt32());
+        Assert.Equal(120, doc.RootElement.GetProperty("max_duration_secs").GetInt32());
+
+        await using var ctx = _fixture.NewDbContext();
+        var row = await ctx.TestConfigs.SingleAsync(c => c.ProjectId == Pid && c.Name == name);
+        Assert.Equal(firstId, row.Id);
+        using var storedEndpoint = JsonDocument.Parse(row.EndpointRef);
+        Assert.Equal("https://changed.example.com",
+            storedEndpoint.RootElement.GetProperty("host").GetString());
+        using var storedWorkload = JsonDocument.Parse(row.Workload);
+        Assert.Equal(7, storedWorkload.RootElement.GetProperty("runs").GetInt32());
+        Assert.Equal(120, row.MaxDurationSecs);
+        Assert.True(row.UpdatedAt > row.CreatedAt, "UpdatedAt not bumped by the reconcile");
+    }
+
+    [Fact]
+    public async Task Post_test_config_find_or_create_identical_request_leaves_row_untouched()
+    {
+        // #820 review: reconciliation compares STRUCTURALLY (JsonNode.DeepEquals)
+        // — key order / whitespace differences are not changes, so an identical
+        // re-post is a pure read (UpdatedAt stays put, no duplicate row).
+        var client = _fixture.CreateAdminClient();
+        var name = Uniq("cfg-foc-same");
+        var firstId = await CreateTestConfigAsync(client, name);
+
+        DateTime updatedBefore;
+        await using (var before = _fixture.NewDbContext())
+        {
+            updatedBefore = (await before.TestConfigs.SingleAsync(c => c.Id == firstId)).UpdatedAt;
+        }
+
+        // Same content as the helper's create, with the JSON keys deliberately
+        // reordered — string equality would call this a change; DeepEquals must not.
+        var body = new
+        {
+            name,
+            workload = new { runs = 3, modes = new[] { "http11" } },
+            endpoint = new { host = "https://example.com", kind = "network" },
+            max_duration_secs = 60,
+            find_or_create = true,
+        };
+        var resp = await client.PostAsJsonAsync($"/api/v2/projects/{Pid}/test-configs", body);
+
+        Assert.True(resp.StatusCode == HttpStatusCode.OK,
+            $"POST find_or_create (identical content) → {(int)resp.StatusCode} (want 200); body: {await Body(resp)}");
+        using var doc = JsonDocument.Parse(await Body(resp));
+        Assert.Equal(firstId, doc.RootElement.GetProperty("id").GetGuid());
+
+        await using var ctx = _fixture.NewDbContext();
+        var row = await ctx.TestConfigs.SingleAsync(c => c.ProjectId == Pid && c.Name == name);
+        Assert.Equal(updatedBefore, row.UpdatedAt);
+        Assert.Equal(60, row.MaxDurationSecs);
+    }
+
+    [Fact]
     public async Task List_test_configs_name_filter_finds_configs_beyond_the_200_cap()
     {
         // #812 root cause reproduced: an OLD config pushed out of the 200-newest
@@ -328,6 +410,71 @@ public sealed class WriteEndpointCoverageTests : IClassFixture<ControlPlaneFixtu
         await using var ctx = _fixture.NewDbContext();
         Assert.True(await ctx.TestSchedules.AnyAsync(s => s.Id == id),
             "schedule row not persisted");
+    }
+
+    [Fact]
+    public async Task Post_schedule_duplicate_returns_existing_row_and_does_not_insert()
+    {
+        // #820 review: a double-click / pre-hydration re-click must not mint a
+        // duplicate schedule (ix_test_schedule_config is non-unique, and the
+        // UI's pause only disables the first row it finds). Same config + cron
+        // + timezone → the existing row comes back untouched, `enabled`
+        // included (the client PATCHes that separately).
+        var client = _fixture.CreateAdminClient();
+        const string cron = "13 7 * * *";
+        var first = await client.PostAsJsonAsync(
+            $"/api/v2/projects/{Pid}/schedules",
+            new
+            {
+                test_config_id = ControlPlaneFixture.SeededConfigId.ToString(),
+                cron_expr = cron,
+                timezone = "UTC",
+                enabled = true,
+            });
+        Assert.True(first.StatusCode == HttpStatusCode.OK,
+            $"POST schedule (setup) → {(int)first.StatusCode}; body: {await Body(first)}");
+        using var firstDoc = JsonDocument.Parse(await Body(first));
+        var firstId = firstDoc.RootElement.GetProperty("id").GetGuid();
+
+        // Re-click: timezone omitted (the "UTC" default must normalize before
+        // the dedup lookup) and enabled flipped (must NOT be applied).
+        var second = await client.PostAsJsonAsync(
+            $"/api/v2/projects/{Pid}/schedules",
+            new
+            {
+                test_config_id = ControlPlaneFixture.SeededConfigId.ToString(),
+                cron_expr = cron,
+                enabled = false,
+            });
+        Assert.True(second.StatusCode == HttpStatusCode.OK,
+            $"POST schedule (duplicate) → {(int)second.StatusCode} (want 200); body: {await Body(second)}");
+        using var secondDoc = JsonDocument.Parse(await Body(second));
+        Assert.Equal(firstId, secondDoc.RootElement.GetProperty("id").GetGuid());
+        Assert.True(secondDoc.RootElement.GetProperty("enabled").GetBoolean(),
+            "duplicate create mutated `enabled` — that's the PATCH endpoint's job");
+
+        await using (var ctx = _fixture.NewDbContext())
+        {
+            Assert.Equal(1, await ctx.TestSchedules.CountAsync(s =>
+                s.ProjectId == Pid
+                && s.TestConfigId == ControlPlaneFixture.SeededConfigId
+                && s.CronExpr == cron
+                && s.Timezone == "UTC"));
+        }
+
+        // A different cron_expr is a genuinely new schedule, not a duplicate.
+        var third = await client.PostAsJsonAsync(
+            $"/api/v2/projects/{Pid}/schedules",
+            new
+            {
+                test_config_id = ControlPlaneFixture.SeededConfigId.ToString(),
+                cron_expr = "14 7 * * *",
+                timezone = "UTC",
+            });
+        Assert.True(third.StatusCode == HttpStatusCode.OK,
+            $"POST schedule (different cron) → {(int)third.StatusCode}; body: {await Body(third)}");
+        using var thirdDoc = JsonDocument.Parse(await Body(third));
+        Assert.NotEqual(firstId, thirdDoc.RootElement.GetProperty("id").GetGuid());
     }
 
     [Fact]
