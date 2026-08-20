@@ -78,7 +78,22 @@ vm_exists() { qm status "$1" >/dev/null 2>&1; }
 
 # `pvesm config <storage>` prints "key value" (or "key: value" on older
 # releases) lines; match both.
-storage_field() { pvesm config "$SNIPPET_STORAGE" 2>/dev/null | awk -v k="$1" '$1 == k || $1 == k":" {print $2; exit}'; }
+# storage_field content|path → that field of $SNIPPET_STORAGE. `pvesm config`
+# does not exist on PVE 9 ("unknown command", exit 255 — found on the first
+# real run); `pvesh get /storage/<name>` is stable across PVE 7/8/9 and emits
+# flat JSON, so a sed on "key":"value" is enough (no jq on a stock node). The
+# config file is the fallback when the API socket is unavailable.
+storage_field() {
+  local v
+  v="$(pvesh get "/storage/${SNIPPET_STORAGE}" --output-format json 2>/dev/null \
+        | sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p" | head -1)"
+  if [ -z "$v" ]; then
+    v="$(awk -v s="$SNIPPET_STORAGE" -v k="$1" \
+          '$1 ~ /:$/ { insec = ($2 == s); next } insec && $1 == k { print $2; exit }' \
+          /etc/pve/storage.cfg 2>/dev/null)"
+  fi
+  printf '%s' "$v"
+}
 snippet_dir() { local p; p="$(storage_field path)"; printf '%s/snippets' "${p:-/var/lib/vz}"; }
 
 cmd_ensure_snippets() {
