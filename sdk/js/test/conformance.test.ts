@@ -5,7 +5,7 @@
 // Run: `npm test` (node --test, type-stripping — zero devDeps beyond tsc).
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
-import { auth, contract, rawRequest, startServer, TOKEN, type TestServer } from "./helpers.ts";
+import { auth, contract, rawRequest, startServer, TOKEN, type TestServer, jsonBody } from "./helpers.ts";
 
 const ABS_MAX = 33554432;
 const DEFAULT_CAP = 4194304;
@@ -64,7 +64,7 @@ describe("GET /health", () => {
     const s = await startServer({ appName: "checkout-api" });
     try {
       const r = await fetch(s.url + "/laghound/health", { headers: auth() });
-      assert.equal((await r.json()).app, "checkout-api");
+      assert.equal((await jsonBody(r)).app, "checkout-api");
     } finally {
       await s.close();
     }
@@ -163,7 +163,7 @@ describe("POST /upload", () => {
   test("counts drained bytes, reports via header + JSON", async () => {
     const payload = Buffer.alloc(50000, 0x41);
     const r = await fetch(srv.url + "/laghound/upload", { method: "POST", headers: auth(), body: payload });
-    const j = await r.json();
+    const j = await jsonBody(r);
     assert.equal(r.status, 200);
     assert.equal(j.contract, "v1");
     assert.equal(j.received_bytes, 50000);
@@ -283,12 +283,12 @@ describe("method + envelopes", () => {
   test("wrong method on a known route -> 405 method_not_allowed", async () => {
     const r = await fetch(srv.url + "/laghound/echo", { method: "POST", headers: auth() });
     assert.equal(r.status, 405);
-    assert.equal((await r.json()).error.code, "method_not_allowed");
+    assert.equal((await jsonBody(r)).error.code, "method_not_allowed");
   });
 
   test("error envelope shape matches the contract", async () => {
     const r = await fetch(srv.url + "/laghound/download?bytes=xyz", { headers: auth() });
-    const j = await r.json();
+    const j = await jsonBody(r);
     assert.equal(j.contract, "v1");
     assert.equal(typeof j.error.code, "string");
     assert.equal(typeof j.error.message, "string");
@@ -300,7 +300,7 @@ describe("route toggles", () => {
   test("disabled route reported false in /health and 404s", async () => {
     const s = await startServer({ routes: { upload: false } });
     try {
-      const h = await (await fetch(s.url + "/laghound/health", { headers: auth() })).json();
+      const h = await jsonBody(await fetch(s.url + "/laghound/health", { headers: auth() }));
       assert.equal(h.routes.upload, false);
       const u = await fetch(s.url + "/laghound/upload", { method: "POST", headers: auth(), body: "x" });
       assert.equal(u.status, 404);

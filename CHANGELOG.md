@@ -40,6 +40,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`sdk-js` was a `block` lint section that CI never ran — and it was
+  failing.** The `frontend` job only invokes `frontend-eslint` and is gated on
+  `dashboard/` changes; `sdk-conformance` builds and tests `sdk/js` without
+  type-checking it. So 12 `TS18046`/`TS2571` errors sat on pristine `main`
+  with nobody to see them. `lint-all` now runs `sdk-js` unconditionally,
+  alongside json/version/workflows — a baseline that only runs on some paths
+  is not a baseline. The errors themselves were real: undici types
+  `Response.json()` as `Promise<unknown>`, so every contract assertion on a
+  wire field needed a cast; `test/helpers.ts` now exports a documented
+  `jsonBody()` and the three suites go through it. (Reported by a parallel
+  session working in the same tree.)
 - **Self-hosted jobs get the toolchain PATH — for real this time.** The PATH a
   *job step* runs with comes from `<runner>/.path`, not from `.env` and not
   from the Listener's own environment: the runner writes `.path` at configure

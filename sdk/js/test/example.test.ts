@@ -6,6 +6,7 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { jsonBody } from "./helpers.ts";
 
 const script = fileURLToPath(new URL("../example/server.mjs", import.meta.url));
 const TOKEN = "demo-token-laghound";
@@ -55,7 +56,7 @@ describe("sample app", () => {
   test("LagHound mounted at /laghound behind the demo token", async () => {
     const r = await fetch(`${BASE}/laghound/health`, { headers: { "x-laghound-token": TOKEN } });
     assert.equal(r.status, 200);
-    const j = await r.json();
+    const j = await jsonBody(r);
     assert.equal(j.contract, "v1");
     assert.equal(j.app, "js-sample");
   });

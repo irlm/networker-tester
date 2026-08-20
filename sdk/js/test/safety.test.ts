@@ -4,7 +4,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { auth, rawRequest, startServer, TOKEN } from "./helpers.ts";
+import { auth, rawRequest, startServer, TOKEN, jsonBody } from "./helpers.ts";
 import { laghound } from "../src/index.ts";
 
 // --- 5 fail-closed init ---------------------------------------------------
@@ -83,7 +83,7 @@ describe("rate limits", () => {
         if (r.status === 429) {
           sawLimited = true;
           assert.ok(r.headers.get("retry-after"));
-          const j = await r.json();
+          const j = await jsonBody(r);
           assert.equal(j.error.code, "rate_limited");
           assert.equal(typeof j.error.retry_after_ms, "number");
           break;
