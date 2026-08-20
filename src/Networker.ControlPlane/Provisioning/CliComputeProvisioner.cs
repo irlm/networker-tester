@@ -1543,6 +1543,45 @@ public sealed class CliComputeProvisioner(ILogger<CliComputeProvisioner> logger)
         }
     }
 
+    /// <summary>
+    /// <see cref="ResolveGcpZoneAsync"/> for callers that hold only a raw
+    /// service-account <c>json_key</c> (the <see cref="ProvisioningOrchestrator"/>
+    /// building <c>deploy.json</c> for a GCP endpoint deployment, #831): parses
+    /// the project id, materialises the key file + gcloud env the same way the
+    /// create path does, resolves, and cleans the key file up. Cache hits skip
+    /// the key-file write entirely, so the shared per-(project, region) cache
+    /// keeps this to one gcloud roundtrip per topology.
+    /// </summary>
+    internal async Task<(string Zone, string? ListingError)> ResolveGcpZoneFromKeyAsync(
+        string jsonKey, string region, CancellationToken ct)
+    {
+        var projectId = ParseGcpProjectId(jsonKey);
+        if (string.IsNullOrEmpty(projectId))
+        {
+            return ($"{region}-a", "gcp json_key: missing or unparseable project_id");
+        }
+
+        if (_gcpZoneCache.TryGetValue((projectId, region), out var cached))
+        {
+            return (cached, null);
+        }
+
+        // Same handling as CreateGcpVmAsync: 0600 tempfile (long-lived
+        // credential, F11), CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE env (#827),
+        // deleted as soon as the listing returns.
+        var keyFile = Path.Combine(Path.GetTempPath(), $"gcp-key-{Guid.NewGuid():N}.json");
+        try
+        {
+            await SecretFile.WriteAsync(keyFile, jsonKey, ct).ConfigureAwait(false);
+            var env = BuildGcloudEnv(keyFile, projectId);
+            return await ResolveGcpZoneAsync(env, projectId, region, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            TryDeleteFile(keyFile);
+        }
+    }
+
     private async Task<VmCreateResult> CreateGcpVmAsync(
         VmCreateRequest request, ProviderCredentials? creds, CancellationToken ct)
     {
