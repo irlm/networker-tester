@@ -13,6 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [0.28.259] - 2026-08-20
+
+### Fixed
+
+- **GCP zone is resolved, not assumed** (#829). Tester creation listed the
+  region's zones through the authenticated gcloud env and picks the first UP
+  zone (cached per project+region), instead of hardcoding "<region>-a" — which
+  does not exist in us-east1, the only GCP region in the cost table. Listing
+  failures fall back to the old behavior and say so in the error.
+
 ## [0.28.258] - 2026-08-20
 
 ### Fixed
