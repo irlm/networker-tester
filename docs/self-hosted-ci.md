@@ -159,8 +159,10 @@ after every job — `qm rollback`, not yet built).
 Per-job residue that does not need a fresh disk is wiped by the Linux loop
 between jobs (`ci-host-loop.sh`): the `_work` checkout (root-owned files from
 sudo/docker steps otherwise break the next `actions/checkout`), every Docker
-container and unused network, `/tmp/bench`, any process still running as
-the CI user (sccache servers, stray endpoints), and foreign-owned entries in
+container and unused network, `/tmp/bench`, any `/usr/local/bin/networker-*`
+binary an integration job `sudo install`ed (a leftover tester turned a stubbed
+installer unit test into an 18-minute real probe), any process still running
+as the CI user (sccache servers, stray endpoints), and foreign-owned entries in
 the shared caches under `/var/cache/ci-host` (a `sudo -E dotnet` leaves
 root-owned NuGet packages and the next restore dies with EACCES). The loop
 also starts the runner with the toolchain `PATH` (`JOB_PATH` in

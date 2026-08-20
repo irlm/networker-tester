@@ -432,9 +432,15 @@ step_windows() {
     windows_manual_steps; return 0
   fi
   ok "ssh to $WINDOWS_SSH works — installing the CI host over ssh"
-  ssh "${SSH_OPTS[@]}" -i "$WINDOWS_SSH_KEY" "$WINDOWS_SSH" 'powershell -NoProfile -Command "New-Item -ItemType Directory -Force C:\ProgramData\ci-host | Out-Null; [IO.File]::WriteAllText(\"C:\ProgramData\ci-host\token\", [Console]::In.ReadToEnd().Trim())"' <<<"$CI_HOSTS_PAT"
+  # The guest's ssh default shell is PowerShell (first-logon.ps1 sets it; a
+  # reused VM must do the same), so send PowerShell directly — wrapping it in
+  # `powershell -Command "..."` makes the outer PowerShell parse the inner
+  # quotes first ("The string is missing the terminator"). The PAT travels on
+  # stdin, never on a command line.
+  ssh "${SSH_OPTS[@]}" -i "$WINDOWS_SSH_KEY" "$WINDOWS_SSH" 'New-Item -ItemType Directory -Force C:\ProgramData\ci-host | Out-Null; [IO.File]::WriteAllText("C:\ProgramData\ci-host\token", [Console]::In.ReadToEnd().Trim())' <<<"$CI_HOSTS_PAT"
   scp -q "${SSH_OPTS[@]}" -i "$WINDOWS_SSH_KEY" "$HERE/windows/install-ci-host.ps1" "$WINDOWS_SSH:C:/ProgramData/ci-host/install-ci-host.ps1"
-  ssh "${SSH_OPTS[@]}" -i "$WINDOWS_SSH_KEY" "$WINDOWS_SSH" "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\ProgramData\\ci-host\\install-ci-host.ps1 -Repo $GH_REPO -Name ci-windows-1${RUNNER_GROUP:+ -RunnerGroup $RUNNER_GROUP}"
+  ssh "${SSH_OPTS[@]}" -i "$WINDOWS_SSH_KEY" "$WINDOWS_SSH" "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\ProgramData\\ci-host\\install-ci-host.ps1 -Repo $GH_REPO -Name ci-windows-1${RUNNER_GROUP:+ -RunnerGroup $RUNNER_GROUP}" \
+    || { warn "install-ci-host.ps1 failed over ssh — see the output above; re-run this step after fixing"; return 0; }
   wait_online ci-windows-1 20 || true
 }
 

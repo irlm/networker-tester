@@ -257,6 +257,11 @@ while :; do
     docker network prune -f >/dev/null 2>&1 || true
   fi
   rm -rf /tmp/bench /tmp/networker-* 2>/dev/null || true
+  # Integration jobs `sudo install` the freshly built tester/endpoint/agent
+  # into /usr/local/bin; a CI host never legitimately carries them, and a
+  # leftover tester turned a stubbed installer unit test into an 18-minute
+  # real probe against 1.2.3.4 (bats "_offer_quick_test … release download").
+  rm -f /usr/local/bin/networker-tester /usr/local/bin/networker-endpoint /usr/local/bin/networker-agent 2>/dev/null || true
   # A step that ran a build under `sudo -E` leaves root-owned entries in the
   # shared NuGet/npm caches and the next restore dies with EACCES (seen:
   # 1,139 root-owned files under nuget/ after the installer exec jobs).
