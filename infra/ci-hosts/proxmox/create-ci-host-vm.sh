@@ -212,7 +212,7 @@ cmd_windows() {
     --tpmstate0 "${STORAGE}:1,version=v2.0" \
     --scsi0 "${STORAGE}:${DISK%G},discard=on,ssd=1" \
     --ide2 "${ISO},media=cdrom" --boot order=ide2 \
-    --vga virtio --audio0 none >/dev/null
+    --vga std >/dev/null
   [ -n "$VIRTIO_ISO" ] && qm set "$VMID" --ide0 "${VIRTIO_ISO},media=cdrom" >/dev/null
   [ -n "$ANSWER_ISO" ] && qm set "$VMID" --ide1 "${ANSWER_ISO},media=cdrom" >/dev/null
   qm set "$VMID" --description "networker CI host (Windows). After the OS install: enable OpenSSH Server → infra/ci-hosts/windows/install-ci-host.ps1 (or setup-ci-hosts.sh does it over ssh)" >/dev/null
