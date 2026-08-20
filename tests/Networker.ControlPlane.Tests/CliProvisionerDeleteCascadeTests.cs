@@ -18,7 +18,12 @@ namespace Networker.ControlPlane.Tests;
 /// <para>The fake CLI is a POSIX-sh script, so these assertions run on Unix/macOS
 /// CI. On Windows the test returns early (no <c>/bin/sh</c>); the pure argv
 /// builders in <see cref="CliProvisionerCreateArgsTests"/> still cover Windows.</para>
+///
+/// <para>Shares the <c>cloud-cli-fake-bins</c> collection with
+/// <see cref="CliProvisionerGcloudEnvTests"/> so the two classes never race on
+/// the process-global <c>GCLOUD_CMD</c>/<c>AZ_CMD</c>/<c>AWS_CMD</c> overrides.</para>
 /// </summary>
+[Collection("cloud-cli-fake-bins")]
 public sealed class CliProvisionerDeleteCascadeTests : IDisposable
 {
     private readonly string _workDir;
