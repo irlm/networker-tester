@@ -204,6 +204,25 @@ body {
 .page-shell { padding: 1rem; }
 @media (min-width: 768px) { .page-shell { padding: 1.5rem; } }
 
+/* Landscape phones commonly cross the width-only `md` breakpoint while
+   retaining too little height for the persistent rail. Keep the touch layout
+   drawer-based so navigation scrolls independently and page content keeps the
+   full landscape width. */
+@media (max-height: 500px) and (pointer: coarse) {
+  .mobile-nav-toggle { display: block; }
+  .app-sidebar {
+    display: none;
+    position: fixed;
+    width: 12rem;
+    height: 100dvh;
+    min-height: 0;
+    max-height: 100dvh;
+  }
+  .app-sidebar[data-mobile-open="true"] { display: flex; }
+  .mobile-nav-overlay { display: block; }
+  .app-main { padding-top: 3rem; }
+}
+
 .alert { border: 1px solid; border-radius: var(--radius-panel); padding: 1rem; }
 .alert-error {
   background: color-mix(in srgb, var(--status-failure) 10%, transparent);
@@ -242,7 +261,10 @@ button:not(:disabled):active {
    pseudo-element so each reaches the 24px CSS-px minimum. -4px inset keeps
    adjacent 8px-gapped controls from overlapping targets; layout is untouched. */
 @media (pointer: coarse) {
-  button {
+  /* Positioned controls already establish the containing block needed by the
+     pseudo-element. Do not override their fixed/absolute/sticky positioning:
+     this rule is unlayered and therefore outranks Tailwind utilities. */
+  button:not(.fixed):not(.absolute):not(.sticky) {
     position: relative;
   }
   button::after {

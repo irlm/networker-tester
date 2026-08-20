@@ -171,10 +171,15 @@ export default function HelpPanel() {
       />
 
       {/* Panel — no border-radius per zero-chrome principle */}
-      <div className="docs-panel-enter relative mx-auto my-8 flex w-full max-w-4xl flex-col overflow-hidden border border-[var(--border-default)] bg-[var(--bg-surface)]">
+      <div
+        className="docs-panel-enter relative mx-auto my-2 sm:my-8 flex min-w-0 max-w-full w-full max-w-4xl flex-col overflow-hidden border border-[var(--border-default)] bg-[var(--bg-surface)]"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Help"
+      >
         {/* Header */}
-        <div className="flex items-center gap-3 border-b border-[var(--border-default)] px-4 py-2.5">
-          <span className="text-cyan-400 text-sm font-medium">? docs</span>
+        <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border-default)] px-3 py-2.5 sm:flex-nowrap sm:gap-3 sm:px-4">
+          <span className="shrink-0 text-cyan-400 text-sm font-medium">? docs</span>
           <input
             ref={inputRef}
             type="text"
@@ -184,16 +189,16 @@ export default function HelpPanel() {
             onFocus={() => setIsInsertMode(true)}
             onBlur={() => setIsInsertMode(false)}
             placeholder="Search... (p95, throughput, benchmark phases)"
-            className="flex-1 bg-[var(--bg-base)] border border-[var(--border-default)] px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-cyan-500/50"
+            className="order-3 min-w-0 w-full bg-[var(--bg-base)] border border-[var(--border-default)] px-3 py-1.5 text-sm text-gray-200 placeholder-gray-600 outline-none focus:border-cyan-500/50 sm:order-none sm:w-auto sm:flex-1"
           />
-          <span className={`text-xs font-medium whitespace-nowrap transition-colors duration-100 ${
+          <span className={`ml-auto text-xs font-medium whitespace-nowrap transition-colors duration-100 ${
             isInsertMode ? 'text-cyan-500/50' : 'text-faint'
           }`}>
             -- {isInsertMode ? 'INSERT' : 'NORMAL'} --
           </span>
         </div>
 
-        <div className="flex flex-1 overflow-hidden">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row">
           {/* Category sidebar */}
           <div className="hidden md:flex w-40 flex-col border-r border-[var(--border-default)] p-2 overflow-y-auto">
             <button
@@ -248,7 +253,7 @@ export default function HelpPanel() {
           </div>
 
           {/* Mobile category tabs */}
-          <div className="md:hidden flex gap-1 px-2 py-2 border-b border-[var(--border-default)] overflow-x-auto flex-shrink-0">
+          <div className="flex w-full flex-shrink-0 gap-1 overflow-x-auto border-b border-[var(--border-default)] px-2 py-2 md:hidden">
             <button
               onClick={() => setCategory(null)}
               className={`px-2 py-1 text-xs whitespace-nowrap ${
@@ -271,7 +276,7 @@ export default function HelpPanel() {
           </div>
 
           {/* Entry list */}
-          <div ref={listRef} className="flex-1 overflow-y-auto p-3">
+          <div ref={listRef} className="min-w-0 flex-1 overflow-y-auto p-3">
             {filtered.length === 0 ? (
               <div className="py-8 px-4 text-center">
                 <div className="text-faint text-sm">

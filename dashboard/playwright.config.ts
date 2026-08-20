@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
 const externalBaseUrl = process.env.PLAYWRIGHT_BASE_URL;
+const browserChannel = process.env.PLAYWRIGHT_BROWSER_CHANNEL;
 
 /**
  * Audit P2: browser E2E.
@@ -40,7 +41,13 @@ export default defineConfig({
   },
 
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    {
+      name: browserChannel ?? 'chromium',
+      use: {
+        ...devices['Desktop Chrome'],
+        ...(browserChannel ? { channel: browserChannel } : {}),
+      },
+    },
   ],
 
   webServer: externalBaseUrl ? undefined : {

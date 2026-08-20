@@ -31,6 +31,9 @@ export function Sidebar({ connectionDot }: SidebarProps) {
   const [pendingCount, setPendingCount] = useState(0);
   const [showPasswordDialog, setShowPasswordDialog] = useState(false);
   const [adminOpen, setAdminOpen] = useState(() => localStorage.getItem('sidebar-admin-open') === '1');
+  // A persisted desktop preference must not turn the mobile drawer into an
+  // icon-only strip. Opening the drawer always exposes its labels and actions.
+  const navCollapsed = collapsed && !mobileOpen;
 
   const pid = projectId;
   const isAdmin = role === 'admin' || isPlatformAdmin;
@@ -101,6 +104,15 @@ export function Sidebar({ connectionDot }: SidebarProps) {
     return () => document.removeEventListener('keydown', handler);
   }, [mobileOpen]);
 
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [mobileOpen]);
+
   // ── Render helpers ──────────────────────────────────────────────────
 
   const renderItem = (item: NavItem) => {
@@ -116,8 +128,8 @@ export function Sidebar({ connectionDot }: SidebarProps) {
         to={item.path}
         onClick={() => setMobileOpen(false)}
         aria-current={active ? 'page' : undefined}
-        title={collapsed ? item.label : undefined}
-        className={`flex items-center overflow-hidden whitespace-nowrap ${collapsed ? 'justify-center' : 'gap-3 px-3'} py-2 rounded text-sm mb-0.5 transition-all duration-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-cyan-500/50 ${
+        title={navCollapsed ? item.label : undefined}
+        className={`flex items-center overflow-hidden whitespace-nowrap ${navCollapsed ? 'justify-center' : 'gap-3 px-3'} py-2 rounded text-sm mb-0.5 transition-all duration-200 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-cyan-500/50 ${
           active
             ? 'bg-gray-800/40 text-gray-100'
             : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/30'
@@ -125,13 +137,13 @@ export function Sidebar({ connectionDot }: SidebarProps) {
       >
         <span className="text-base relative" aria-hidden="true">
           {item.icon}
-          {isUsersWithPending && collapsed && (
+          {isUsersWithPending && navCollapsed && (
             <span className="absolute -top-1.5 -right-2.5 bg-yellow-500 text-xs text-black font-bold rounded-full min-w-4 h-4 px-0.5 flex items-center justify-center leading-none">
               {pendingCount > 9 ? '9+' : pendingCount}
             </span>
           )}
         </span>
-        {!collapsed && (
+        {!navCollapsed && (
           <span className="flex items-center gap-2">
             {item.label}
             {isUsersWithPending && (
@@ -157,7 +169,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
       {/* Mobile toggle button */}
       <button
         onClick={() => setMobileOpen(!mobileOpen)}
-        className="fixed top-3 left-3 z-50 md:hidden bg-[var(--bg-sidebar)] border border-gray-800 rounded p-2 text-gray-400"
+        className="mobile-nav-toggle fixed top-3 left-3 z-[45] md:hidden bg-[var(--bg-sidebar)] border border-gray-800 rounded p-2 text-gray-400"
         aria-label="Toggle navigation"
       >
         {mobileOpen ? '\u2715' : '\u2630'}
@@ -165,22 +177,23 @@ export function Sidebar({ connectionDot }: SidebarProps) {
 
       {/* Sidebar */}
       <aside
+        data-mobile-open={mobileOpen ? 'true' : 'false'}
         className={`${
           mobileOpen ? 'flex' : 'hidden'
-        } md:flex ${collapsed ? 'w-14' : 'w-48'} bg-[var(--bg-sidebar)] border-r border-gray-800 flex-col min-h-screen fixed md:static z-40 transition-[width] duration-200`}
+        } app-sidebar md:flex ${navCollapsed ? 'w-14' : 'w-48'} h-dvh min-h-0 max-h-dvh md:h-auto md:min-h-screen md:max-h-none bg-[var(--bg-sidebar)] border-r border-gray-800 flex-col fixed md:static z-40 transition-[width] duration-200`}
       >
-        <div className={`${collapsed ? 'px-2 py-3' : 'p-4'} border-b border-gray-800`}>
-          <ProjectSwitcher collapsed={collapsed} connectionDot={connectionDot} />
+        <div className={`${navCollapsed ? 'px-2 py-3' : 'px-4 pb-4 pt-14 md:p-4'} border-b border-gray-800`}>
+          <ProjectSwitcher collapsed={navCollapsed} connectionDot={connectionDot} />
         </div>
 
-        <nav className="flex-1 p-1.5 overflow-y-auto" aria-label="Main navigation">
+        <nav className="min-h-0 flex-1 p-1.5 overflow-y-auto" aria-label="Main navigation">
           {/* Main working loop */}
           {mainItems.map(renderItem)}
 
           {/* ── REPORTS ── derived/analysis views over finished runs */}
           {reportItems.length > 0 && (
             <div className="mt-4 pt-3 border-t border-gray-800/50">
-              {!collapsed && (
+              {!navCollapsed && (
                 <div className="px-3 mb-1 text-xs uppercase tracking-wider text-faint">
                   reports
                 </div>
@@ -199,7 +212,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
           {/* Admin section — platform scope, collapsible */}
           {adminItems.length > 0 && (
             <div className="mt-4 pt-3 border-t border-gray-800/50">
-              {!collapsed && (
+              {!navCollapsed && (
                 <button
                   onClick={toggleAdmin}
                   className="flex items-center justify-between w-full px-3 mb-1.5 text-xs uppercase tracking-wider text-faint hover:text-gray-400 transition-colors"
@@ -208,17 +221,17 @@ export function Sidebar({ connectionDot }: SidebarProps) {
                   <span className="text-xs" aria-hidden="true">{adminOpen ? '\u25B2' : '\u25BC'}</span>
                 </button>
               )}
-              {(collapsed || adminOpen) && adminItems.map(renderItem)}
+              {(navCollapsed || adminOpen) && adminItems.map(renderItem)}
             </div>
           )}
         </nav>
 
         {/* Help hint + Collapse toggle + user */}
         <div className="border-t border-gray-800">
-          <HelpHint collapsed={collapsed} />
+          <HelpHint collapsed={navCollapsed} />
         </div>
         <div className="border-t border-gray-800">
-          {!collapsed ? (
+          {!navCollapsed ? (
             <div className="px-3 py-2.5">
               <div className="flex items-center gap-2.5">
                 {/* Avatar */}
@@ -242,7 +255,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
                 </div>
                 {/* Actions */}
                 <button
-                  onClick={() => setShowPasswordDialog(true)}
+                  onClick={() => { setMobileOpen(false); setShowPasswordDialog(true); }}
                   className="text-faint hover:text-cyan-400 transition-colors p-1 rounded hover:bg-gray-800/50"
                   title="Change password"
                   aria-label="Change password"
@@ -272,7 +285,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
                 {email?.[0]?.toUpperCase() ?? '?'}
               </div>
               <button
-                onClick={() => setShowPasswordDialog(true)}
+                onClick={() => { setMobileOpen(false); setShowPasswordDialog(true); }}
                 className="text-faint hover:text-cyan-400 text-xs p-0.5"
                 title="Change password"
                 aria-label="Change password"
@@ -302,7 +315,7 @@ export function Sidebar({ connectionDot }: SidebarProps) {
       {/* Mobile overlay */}
       {mobileOpen && (
         <div
-          className="fixed inset-0 bg-black/50 z-30 md:hidden"
+          className="mobile-nav-overlay fixed inset-0 bg-black/50 z-30 md:hidden"
           onClick={() => setMobileOpen(false)}
           aria-hidden="true"
         />

@@ -87,49 +87,57 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
     return (
       <button
         onClick={() => setOpen(true)}
-        // z-30 (below dialogs/sidebar overlays at z-40/50) + the pb-16 the app
-        // shell adds under <main> keep this pill from ever covering page CTAs
-        // (audit F11/F15: it blocked wizard Next/Launch and Settings Update).
-        className="fixed bottom-4 right-4 z-30 bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5 text-xs text-gray-400 hover:text-cyan-400 hover:border-cyan-500/30 transition-colors flex items-center gap-2"
+        // z-30 keeps this below dialogs and navigation. The compact phone
+        // trigger preserves a 44px touch target without masking a full row of
+        // page content; the shell's pb-16 keeps final actions scrollable above it.
+        className="fixed top-3 right-3 sm:top-auto sm:bottom-4 sm:right-4 z-30 min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 bg-gray-900 border border-gray-700 rounded-lg px-2 sm:px-3 py-1.5 text-xs text-gray-400 hover:text-cyan-400 hover:border-cyan-500/30 transition-colors flex items-center justify-center gap-2"
         title="Performance Log"
+        aria-label="Open performance log"
       >
-        <span>{entries.filter(e => e.source === 'user').length}</span>
-        <span>user</span>
-        <span className="text-faint">+{entries.filter(e => e.source === 'poll').length}</span>
-        <span className="text-faint">poll</span>
-        {entries.length > 0 && (
-          <>
-            <span className="text-faint">|</span>
-            <span className={speedIndicator(avgTotal)}>{formatMs(avgTotal)} avg</span>
-          </>
-        )}
-        {renderEntries.length > 0 && (
-          <>
-            <span className="text-faint">|</span>
-            <span className={renderSpeedColor(avgRender)}>{formatMs(avgRender)} render</span>
-          </>
-        )}
-        {slowRenders > 0 && (
-          <>
-            <span className="text-faint">|</span>
-            <span className="text-orange-400">{slowRenders} slow</span>
-          </>
-        )}
-        {errorCount > 0 && (
-          <>
-            <span className="text-faint">|</span>
-            <span className="text-red-400">{errorCount} err</span>
-          </>
-        )}
+        <span className="sm:hidden" aria-hidden="true">perf</span>
+        <span className="hidden sm:contents" aria-hidden="true">
+          <span>{entries.filter(e => e.source === 'user').length}</span>
+          <span>user</span>
+          <span className="text-faint">+{entries.filter(e => e.source === 'poll').length}</span>
+          <span className="text-faint">poll</span>
+          {entries.length > 0 && (
+            <>
+              <span className="text-faint">|</span>
+              <span className={speedIndicator(avgTotal)}>{formatMs(avgTotal)} avg</span>
+            </>
+          )}
+          {renderEntries.length > 0 && (
+            <>
+              <span className="text-faint">|</span>
+              <span className={renderSpeedColor(avgRender)}>{formatMs(avgRender)} render</span>
+            </>
+          )}
+          {slowRenders > 0 && (
+            <>
+              <span className="text-faint">|</span>
+              <span className="text-orange-400">{slowRenders} slow</span>
+            </>
+          )}
+          {errorCount > 0 && (
+            <>
+              <span className="text-faint">|</span>
+              <span className="text-red-400">{errorCount} err</span>
+            </>
+          )}
+        </span>
       </button>
     );
   }
 
   return (
-    <div className="fixed bottom-0 right-0 z-30 w-full md:w-[640px] lg:w-[760px] max-h-[60vh] bg-[var(--bg-surface)] border-t border-l border-gray-700 rounded-tl-lg flex flex-col">
+    <div
+      className="fixed bottom-0 right-0 z-30 min-w-0 max-w-full w-full md:w-[640px] lg:w-[760px] max-h-[80dvh] md:max-h-[60vh] bg-[var(--bg-surface)] border-t border-l border-gray-700 rounded-tl-lg flex flex-col"
+      role="region"
+      aria-label="Performance log"
+    >
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-gray-800 flex-shrink-0">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-start justify-between gap-2 px-3 py-2 border-b border-gray-800 flex-shrink-0">
+        <div className="min-w-0 flex flex-wrap items-center gap-2">
           {/* Tabs */}
           <button
             onClick={() => setTab('api')}
@@ -182,13 +190,13 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
       </div>
 
       {/* Filters */}
-      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-800/50 flex-shrink-0">
+      <div className="flex flex-wrap items-center gap-2 px-3 py-1.5 border-b border-gray-800/50 flex-shrink-0">
         <input
           type="search"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           placeholder={tab === 'api' ? 'Filter by path...' : 'Filter by component...'}
-          className="bg-transparent border border-gray-800 rounded px-2 py-0.5 text-xs text-gray-300 w-40 focus:outline-none focus:border-cyan-500 placeholder:text-gray-700"
+          className="min-w-0 bg-transparent border border-gray-800 rounded px-2 py-0.5 text-xs text-gray-300 w-full sm:w-40 focus:outline-none focus:border-cyan-500 placeholder:text-gray-700"
         />
         <button
           onClick={() => setShowSlow(!showSlow)}

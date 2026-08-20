@@ -194,7 +194,7 @@ function AuthenticatedApp() {
       <Sidebar connectionDot={<ConnectionDot status={status} />} />
       {/* pb-16 when the perf pill is visible so its fixed bottom-right pill
           never sits on top of page CTAs / form footers (audit F11/F15). */}
-      <main className={`flex-1 overflow-auto pt-12 md:pt-0 ${isPlatformAdmin ? 'pb-16' : ''}`}>
+      <main className={`app-main min-w-0 flex-1 overflow-auto pt-12 md:pt-0 ${isPlatformAdmin ? 'pb-16' : ''}`}>
         <ConnectionBanner status={status} />
         <ToastContainer />
         {isPlatformAdmin && <ApiLogPanel />}
