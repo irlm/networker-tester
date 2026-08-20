@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.266] - 2026-08-20
+
+### Fixed
+
+- **GCP endpoint firewall rule is reconciled, not "reused"** (#840 — the 7th
+  site of the GCP chain). With #836 fixed the stacks finally installed on the
+  GCE VMs (`nginx configured on ports 8081/8444`, `caddy set up`), yet every
+  proxy port still timed out from outside: `_gcp_create_firewall_rule`
+  matched the rule `networker-endpoint-allow` by name and returned "already
+  exists — reusing", so a rule created back in v0.12.83 never gained the
+  proxy-stack ports the installer has added six times since. An existing rule
+  is now updated to the single canonical port list the create path uses;
+  bats pins both branches and checks the list covers every port in
+  `shared/http-stacks.json`.
+
 ## [0.28.265] - 2026-08-20
 
 ### Fixed

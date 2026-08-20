@@ -14,6 +14,7 @@
 # STUB_GCLOUD_FAIL         "1" → every invocation exits 1
 # STUB_GCLOUD_SSH_LOG      `compute ssh`: append "CMD: <argv>" + the stdin it received
 # STUB_GCLOUD_SSH_RC       `compute ssh`: exit status (default 0)
+# STUB_GCLOUD_FW_MISSING   "1" → `compute firewall-rules describe` reports not found
 
 if [[ -n "${STUB_GCLOUD_LOG:-}" ]]; then
     printf '%s\n' "$*" >> "$STUB_GCLOUD_LOG"
@@ -48,6 +49,16 @@ case "${1:-} ${2:-}" in
             cat > /dev/null
         fi
         exit "${STUB_GCLOUD_SSH_RC:-0}"
+        ;;
+    "compute firewall-rules")
+        # describe → exists unless STUB_GCLOUD_FW_MISSING=1; create/update → ok.
+        # argv is already in STUB_GCLOUD_LOG for the assertions.
+        if [[ "${3:-}" == "describe" && "${STUB_GCLOUD_FW_MISSING:-}" == "1" ]]; then
+            echo "ERROR: (gcloud.compute.firewall-rules.describe) Could not fetch resource: not found" >&2
+            exit 1
+        fi
+        echo "{}"
+        exit 0
         ;;
     "config get-value")
         case "${3:-}" in
