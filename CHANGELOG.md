@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.271] - 2026-08-20
+
+### Added
+
+- **Every dashboard page now stays fresh** (freshness audit of all 45 pages).
+  Two cross-cutting triggers: react-query refetches on window focus (bounded
+  by the 10s staleTime), and `usePolling` pages fire an immediate tick when
+  the tab becomes visible again. Thirteen stale pages got real refresh:
+  Canary (dispatch outcomes now appear, Refresh includes status), Network
+  Test (a run launched from the page shows up immediately; deployments and
+  runner state poll), Comparison Results (group status and attempts track
+  running cells at 5s), Leaderboard and Benchmark Config Results (silent 30s
+  polls; a spurious double-fetch on first testbed selection fixed), VM
+  History (silent, pagination-safe 30s), Settings, Cloud Accounts, Project
+  Members, Endpoint hero, Scenarios recent-runs, Run Detail group siblings,
+  and the URL-probe runner picker. Command Approvals gains a 30s polling
+  safety net under its SSE trigger, and the System Logs pause button now
+  actually pauses the poll.
+
+---
+
 ## [0.28.269] - 2026-08-20
 
 ### Added

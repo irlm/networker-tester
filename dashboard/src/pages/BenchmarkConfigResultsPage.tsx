@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useMemo, useState, useCallback } from 'react';
 import { Link, useParams } from 'react-router';
 import { api, errorMessage } from '../api/client';
 import type {
@@ -15,6 +15,7 @@ import {
 import { PhaseBreakdown, type PhaseData } from '../components/benchmark/PhaseBreakdown';
 import { useProject } from '../hooks/useProject';
 import { usePageTitle } from '../hooks/usePageTitle';
+import { usePolling } from '../hooks/usePolling';
 import {
   formatBenchmarkMetric,
   formatBenchmarkDelta,
@@ -219,23 +220,34 @@ export function BenchmarkConfigResultsPage() {
 
   usePageTitle(data ? `Results: ${data.config.name}` : 'Benchmark Results');
 
-  useEffect(() => {
+  // 30s poll keyed ONLY on (projectId, configId) — new benchmark runs for this
+  // config land server-side while the page is open. Silent after first load: a
+  // tick updates in place, never flips back to the loading screen. (The old
+  // one-shot effect also depended on activeTestbed, so the first testbed
+  // auto-selecting triggered a spurious second fetch.) The api call is issued
+  // synchronously per usePolling's request-source tagging constraint.
+  usePolling(() => {
     if (!projectId || !configId) return;
+    const firstLoad = data === null;
     api
       .getBenchmarkConfigResults(projectId, configId)
       .then((res) => {
         setData(res);
         setError(null);
         setLoading(false);
-        if (res.testbeds.length > 0 && !activeTestbed) {
-          setActiveTestbed(res.testbeds[0].testbed_id);
+        // Auto-select the first testbed via functional update: a poll tick
+        // must never clobber the user's testbed choice, and selecting must not
+        // re-key the fetch.
+        if (res.testbeds.length > 0) {
+          setActiveTestbed((cur) => cur ?? res.testbeds[0].testbed_id);
         }
       })
       .catch((e) => {
-        setError(errorMessage(e));
+        // Surface errors only before data lands; later ticks keep the stale page.
+        if (firstLoad) setError(errorMessage(e));
         setLoading(false);
       });
-  }, [projectId, configId, activeTestbed]);
+  }, 30_000, Boolean(projectId && configId), `${projectId}/${configId}`);
 
   const testbedMap = useMemo(() => {
     if (!data) return new Map<string, BenchmarkTestbedRow>();

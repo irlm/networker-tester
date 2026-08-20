@@ -110,14 +110,18 @@ export function useRunArtifactQuery(runId: string, artifactId?: string | null) {
 }
 
 /** One attempts query per run — the comparison page's per-cell stat source.
- *  Shares runKeys.attempts(runId) with the run-detail page cache. */
-export function useRunsAttemptsQueries(runIds: string[]) {
+ *  Shares runKeys.attempts(runId) with the run-detail page cache.
+ *  `polling` (freshness audit): attempts grow while a cell runs, so the
+ *  comparison page turns it on while any run is active — 15s matches the
+ *  run-detail attempts cadence. Default off to keep other callers static. */
+export function useRunsAttemptsQueries(runIds: string[], polling = false) {
   return useQueries({
     queries: runIds.map((runId) => ({
       queryKey: runKeys.attempts(runId),
       queryFn: ({ signal }: { signal?: AbortSignal }) => runsApi.getAttempts(runId, signal),
       enabled: !!runId,
       staleTime: 60_000,
+      refetchInterval: polling ? 15_000 : (false as const),
     })),
   });
 }
@@ -134,12 +138,16 @@ export function useRunsArtifactsQueries(runs: { id: string; artifact_id: string 
   });
 }
 
-export function useComparisonGroupQuery(groupId: string) {
+/** `polling` (freshness audit): the group row's status/counts advance while
+ *  cells complete — the comparison page polls at 15s; other callers (run
+ *  detail breadcrumb) stay static by default. */
+export function useComparisonGroupQuery(groupId: string, polling = false) {
   return useQuery({
     queryKey: runKeys.comparisonGroup(groupId),
     queryFn: ({ signal }) => runsApi.getComparisonGroup(groupId, signal),
     enabled: !!groupId,
     staleTime: 60_000,
+    refetchInterval: polling ? 15_000 : false,
     // The group row may 404 for older runs whose group was deleted (ON DELETE
     // SET NULL keeps the runs) — the page degrades to name parsing.
     retry: false,

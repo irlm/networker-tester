@@ -18,6 +18,7 @@ import { StatusBadge } from '../components/common/StatusBadge';
 import { RunResult } from '../components/common/RunResult';
 import { runDisplayStatus } from '../lib/runStatus';
 import { usePageTitle } from '../hooks/usePageTitle';
+import { usePolling } from '../hooks/usePolling';
 import { useProject } from '../hooks/useProject';
 import { useToast } from '../hooks/useToast';
 import { timeAgo } from '../lib/format';
@@ -718,17 +719,25 @@ export function DiagnosticsPage() {
     return details;
   }, [configDetailQueries]);
 
-  // Load testers once so the runner-picker can show the list of runners the
-  // user can pin their probe to. Auto-pick stays the default — this lets them
-  // override it when e.g. debugging a specific region or version.
+  // Testers feed the runner-picker and the wake CTA, so online state must
+  // track reality — poll at 30s (freshness audit; runner heartbeats are
+  // coarser than run state, no need for the 15s run cadence). The api call is
+  // issued synchronously in the callback so the perf-log 'poll' source tag
+  // holds (see usePolling doc); projectId as resetKey restarts the loop with
+  // an immediate tick on project switch. Auto-pick stays the default — the
+  // picker only lets users override e.g. a specific region or version.
+  const testersMountedRef = useRef(true);
   useEffect(() => {
-    if (!projectId) return;
-    let cancelled = false;
+    testersMountedRef.current = true;
+    return () => { testersMountedRef.current = false; };
+  }, []);
+  usePolling(() => {
     testersApi.listTesters(projectId).then((rows) => {
-      if (!cancelled) setTesters(rows);
+      // Guard the late resolve after unmount (what the old effect's
+      // cancelled flag prevented).
+      if (testersMountedRef.current) setTesters(rows);
     }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [projectId]);
+  }, 30_000, !!projectId, projectId);
 
   // ── Build URL groups ──────────────────────────────────────────────
 

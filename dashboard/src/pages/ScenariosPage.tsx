@@ -63,7 +63,10 @@ export function ScenariosPage() {
   const [keyboardEnabled, setKeyboardEnabled] = useState(initialKeyboardSetting);
 
   const readinessQuery = useScenarioReadinessQuery(projectId);
-  const recentRunsQuery = useTestRunsQuery(projectId, { limit: 10 }, { polling: false });
+  // Polls at the hook's default 15s (freshness audit): the "resume recent
+  // work" card must pick up runs launched from other tabs/teammates. The
+  // scenario grid below is what must NOT move — see scenarioIds.
+  const recentRunsQuery = useTestRunsQuery(projectId, { limit: 10 });
   // Intentionally frozen between explicit user actions: the 15s readiness
   // poll may update labels, but it must never move the Configure target under
   // the pointer or silently change a keyboard selection.

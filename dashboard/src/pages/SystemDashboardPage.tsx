@@ -321,7 +321,11 @@ function LogsTab() {
     }
   }, [level, service, search]);
 
-  usePolling(fetchLogs, 5000);
+  // Pause stops the fetch itself, not just auto-scroll — a paused view that
+  // keeps re-fetching would still churn the list under the reader (matches
+  // InfrastructurePage/PerfLogPage pause semantics). Resume re-ticks
+  // immediately via usePolling's enabled restart.
+  usePolling(fetchLogs, 5000, !paused);
 
   // Auto-scroll to bottom when logs update (unless paused)
   useEffect(() => {

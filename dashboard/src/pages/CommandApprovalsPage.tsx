@@ -5,6 +5,7 @@ import { useAsyncEffect } from '../hooks/useAsyncEffect';
 import { useProject } from '../hooks/useProject';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { useApprovalSSE } from '../hooks/useSSE';
+import { usePolling } from '../hooks/usePolling';
 import { useToast } from '../hooks/useToast';
 import { api, type CommandApproval } from '../api/client';
 import { SettingsTabs } from '../components/common/SettingsTabs';
@@ -83,10 +84,16 @@ export function CommandApprovalsPage() {
 
   useAsyncEffect(() => fetchPending(), [fetchPending]);
 
-  // Refresh on SSE events
+  // Refresh on SSE events — the primary, low-latency trigger.
   useApprovalSSE(() => {
     fetchPending();
   });
+
+  // Safety-net poll: if the SSE stream dies past its reconnect backoff, this
+  // latency-sensitive page would otherwise freeze silently. 30s is a
+  // worst-case staleness bound, not the update path. Silent by construction —
+  // fetchPending never re-raises the loading flag after the first load.
+  usePolling(() => void fetchPending(), 30_000, !!projectId);
 
   const handleApprove = async (approvalId: string) => {
     setDeciding(approvalId);
@@ -232,21 +239,25 @@ function HistoryTab({ projectId }: { projectId: string }) {
   const [approvals, setApprovals] = useState<CommandApproval[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  // For history we re-use the pending endpoint — the backend only returns pending.
+  // A full history endpoint can be added later; for now show pending as the list.
+  const fetchHistory = useCallback(() => {
     if (!projectId) return;
-    // For history we re-use the pending endpoint — the backend only returns pending.
-    // A full history endpoint can be added later; for now show pending as the list.
     api.getPendingApprovals(projectId)
       .then(setApprovals)
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [projectId]);
 
-  // Refresh on SSE events
-  useApprovalSSE(() => {
-    if (!projectId) return;
-    api.getPendingApprovals(projectId).then(setApprovals).catch(() => {});
-  });
+  useEffect(fetchHistory, [fetchHistory]);
+
+  // Refresh on SSE events — the primary trigger.
+  useApprovalSSE(fetchHistory);
+
+  // Safety-net poll for a dead SSE stream. Tab-gated for free: this component
+  // only mounts while the History tab is active. Silent — the loading flag is
+  // never re-raised after the first load.
+  usePolling(fetchHistory, 30_000, !!projectId);
 
   if (loading) return <div className="text-gray-400 text-sm py-8 text-center">Loading...</div>;
 

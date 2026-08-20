@@ -88,10 +88,12 @@ export function RunDetailPage() {
   // ── Comparison-group context (#803): breadcrumb + prev/next cell nav ──
   const groupId = run?.comparison_group_id ?? '';
   const groupQuery = useComparisonGroupQuery(groupId);
+  // Polls (freshness audit) so prev/next tracks a still-running matrix:
+  // 5s while any sibling cell is active, 15s once the group has settled.
   const siblingsQuery = useTestRunsQuery(
     projectId,
     { comparison_group_id: groupId },
-    { enabled: !!groupId, polling: false },
+    { enabled: !!groupId, intervalMs: 15_000, activeIntervalMs: 5_000 },
   );
   const groupNav = useMemo(() => {
     if (!groupId) return null;

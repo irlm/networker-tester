@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { DataTable } from '../components/common/DataTable';
 import { useAsyncEffect } from '../hooks/useAsyncEffect';
+import { usePolling } from '../hooks/usePolling';
 import { PageHeader } from '../components/common/PageHeader';
 import { useProject } from '../hooks/useProject';
 import { usePageTitle } from '../hooks/usePageTitle';
@@ -69,9 +70,12 @@ export function VmHistoryPage() {
   const [hasMore, setHasMore] = useState(false);
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('');
 
-  const refresh = useCallback(async () => {
+  // silent=true skips the loading flag so the 30s auto-refresh doesn't flash
+  // the table back to "Loading…"; the manual Refresh button keeps the full
+  // (loading) reset it always had.
+  const fetchFirstPage = useCallback(async (silent: boolean) => {
     if (!projectId) return;
-    setLoading(true);
+    if (!silent) setLoading(true);
     setError(null);
     try {
       const resp = await listVmHistory(projectId, {
@@ -87,7 +91,20 @@ export function VmHistoryPage() {
     }
   }, [projectId, typeFilter]);
 
+  const refresh = useCallback(() => fetchFirstPage(false), [fetchFirstPage]);
+
   useAsyncEffect(() => refresh(), [refresh]);
+
+  // Events append server-side continuously, so auto-refresh the first window
+  // every 30s. Gated on rows.length <= PAGE_SIZE: once "Load more" has
+  // extended the list past the first window, a refresh would clobber the
+  // user's pagination — the poll stays off until a manual Refresh (or filter
+  // change) resets back to page one.
+  usePolling(
+    () => void fetchFirstPage(true),
+    30_000,
+    !!projectId && rows.length <= PAGE_SIZE,
+  );
 
   const loadMore = useCallback(async () => {
     if (!projectId || rows.length === 0) return;

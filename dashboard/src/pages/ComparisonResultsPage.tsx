@@ -413,14 +413,25 @@ export function ComparisonResultsPage() {
   const addToast = useToast();
   const deleteGroup = useDeleteComparisonGroupMutation();
 
-  const groupQuery = useComparisonGroupQuery(gid);
+  // The highest-motion page (freshness audit): cells complete while the user
+  // watches, so everything status-bearing polls. The run list ticks at 5s
+  // while any cell is queued/provisioning/running, 15s otherwise; group row
+  // and attempts follow at 15s, attempts only while a cell is still active
+  // (they are append-only and freeze once every run settles).
+  const groupQuery = useComparisonGroupQuery(gid, true);
   const group = groupQuery.data ?? null;
   usePageTitle(group ? `Compare: ${group.name}` : `Compare ${shortId}`);
 
-  const runsQuery = useTestRunsQuery(projectId, { comparison_group_id: gid });
+  const runsQuery = useTestRunsQuery(
+    projectId,
+    { comparison_group_id: gid },
+    { intervalMs: 15_000, activeIntervalMs: 5_000 },
+  );
   const runs = useMemo(() => runsQuery.data ?? [], [runsQuery.data]);
   const runIds = useMemo(() => runs.map((r) => r.id), [runs]);
-  const attemptsQueries = useRunsAttemptsQueries(runIds);
+  const hasActiveRun = runs.some(
+    (r) => r.status === 'queued' || r.status === 'provisioning' || r.status === 'running');
+  const attemptsQueries = useRunsAttemptsQueries(runIds, hasActiveRun);
   const artifactQueries = useRunsArtifactsQueries(runs);
 
   const attemptsLoading = attemptsQueries.some((q) => q.isLoading);

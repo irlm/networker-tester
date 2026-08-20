@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useAsyncEffect } from '../hooks/useAsyncEffect';
+import { usePolling } from '../hooks/usePolling';
 import { useSearchParams } from 'react-router';
 import { api } from '../api/client';
 import type { Workload, Methodology, ComparisonCell, LanguageCapability, CloudAccountSummary } from '../api/types';
@@ -69,12 +70,17 @@ export function AppBenchmarkPage() {
   // step's provisioning notice — this wizard has the largest VM fan-out
   // (languages × testbeds × proxies) and had no cost/runner notice (#793 P2-2).
   const [onlineRunners, setOnlineRunners] = useState(0);
-  useEffect(() => {
+  // Account health + the runner count gate Launch on the Review step, so a
+  // mount-time snapshot goes stale while the user walks the wizard — 30s poll
+  // (freshness audit). Silent: no loading flag exists here, ticks swap state
+  // in place. Both calls issued synchronously (usePolling's request-source
+  // contract); resetKey=projectId reloads immediately on a project switch.
+  usePolling(() => {
     api.getCloudAccounts(projectId).then(setCloudAccounts).catch(() => {});
     testersApi.listTesters(projectId)
       .then(rows => setOnlineRunners(rows.filter(isOnlineTester).length))
       .catch(() => {});
-  }, [projectId]);
+  }, 30_000, !!projectId, projectId);
 
   // Language capability matrix (GET /api/modes → language_capabilities).
   // undefined = not loaded / unsupported control plane → no gating.

@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useAsyncEffect } from '../hooks/useAsyncEffect';
+import { usePolling } from '../hooks/usePolling';
 import { useSearchParams } from 'react-router';
 import { api } from '../api/client';
 import type { Workload, ModeGroup } from '../api/types';
@@ -120,8 +121,17 @@ export function FullStackPage() {
 
   // ── Data loading ────────────────────────────────────────────────────
 
+  // Mode catalog is a static build-time table — one-shot is correct.
   useEffect(() => {
     api.getModes().then(r => setModeGroups(r.groups)).catch(() => {});
+  }, []);
+
+  // Account health + runner counts gate Launch on the Review step, so a
+  // mount-time snapshot goes stale while the user walks the wizard — 30s poll
+  // (freshness audit). Silent: no loading flag exists here, ticks swap state
+  // in place. Both calls issued synchronously (usePolling's request-source
+  // contract); resetKey=projectId reloads immediately on a project switch.
+  usePolling(() => {
     api.getCloudAccounts(projectId).then(setCloudAccounts).catch(() => {});
     testersApi.listTesters(projectId)
       .then(rows => {
@@ -129,7 +139,7 @@ export function FullStackPage() {
         setOnlineRunners(rows.filter(isOnlineTester).length);
       })
       .catch(() => {});
-  }, [projectId]);
+  }, 30_000, !!projectId, projectId);
 
   // Auto-provisioning scenario (?autoprovision=1): pre-fill a default testbed
   // from the project's first HEALTHY cloud account (+ scenario ?proxies / ?os)

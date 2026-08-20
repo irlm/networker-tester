@@ -8,7 +8,9 @@ describe('shared query client policy', () => {
 
     expect(options.queries?.staleTime).toBe(10_000);
     expect(options.queries?.gcTime).toBe(5 * 60_000);
-    expect(options.queries?.refetchOnWindowFocus).toBe(false);
+    // Focus refetch is ON (freshness audit): returning to the tab refreshes
+    // whatever is on screen; staleTime bounds the burst.
+    expect(options.queries?.refetchOnWindowFocus).toBe(true);
     expect(options.mutations?.retry).toBe(false);
   });
 
