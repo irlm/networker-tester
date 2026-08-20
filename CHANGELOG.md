@@ -11,6 +11,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.263] - 2026-08-20
+
+### Added
+
+- **`scripts/lint-all.sh` — one lint entry point for every language.** Rust
+  (fmt, clippy, no-default-features build, rustdoc lint, orchestrator/SDK
+  crates), C# (`dotnet build`, `dotnet format`), dashboard (tsc, ESLint),
+  sdk/js, Go, Python, bash (shellcheck), bats, PowerShell (PSScriptAnalyzer +
+  the PowerShell 5.1 parse), GitHub workflows (SHA pins, actionlint),
+  Dockerfiles (hadolint), JSON, the C# benchmark template drift check, and
+  the five-file version sync. Sections are `block` (CI-enforced) or `info`
+  (known baseline, reported; `--strict` to enforce); `--fix`, `--only`,
+  `--skip`, `--no-build`, `--list`; a missing tool prints its install command
+  (`LINT_DOCKER=1` runs shellcheck/actionlint/hadolint from pinned images).
+  CI's Rust `Lint` steps, the installer `shellcheck` job and the `Action pins`
+  job now call the script, so local and CI run one definition of each
+  command; **ESLint is now enforced in CI** (it was local-only), and a new
+  ungated `lint-all (cross-cutting)` job runs actionlint, JSON syntax and
+  version-sync on every PR.
+- **`AGENTS.md`** — the rules every coding agent follows here (lint as
+  strictly as the tree allows before reporting done, no unjustified
+  suppressions, promote cleaned `info` sections to `block`, scope
+  discipline), imported by `CLAUDE.md` so Claude Code and the other agents
+  share one source.
+
+### Changed
+
+- `scripts/dev-setup.sh` offers `actionlint` alongside shellcheck/bats; the
+  PR template points at `scripts/lint-all.sh` and no longer claims the Gist
+  sync is broken (it has auto-run on every `main` push since 2026-07-13).
 ## [0.28.262] - 2026-08-20
 
 ### Fixed

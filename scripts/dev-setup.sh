@@ -16,7 +16,7 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$REPO_ROOT"
+cd "$REPO_ROOT" || exit 1
 DEV_ENV="$REPO_ROOT/.dev.env"
 
 AUTO_YES=0; CHECK_ONLY=0
@@ -153,15 +153,15 @@ else
 fi
 
 # Optional
-note "optional (installer tests / linting)"
-for t in shellcheck bats; do
+note "optional (installer tests / linting — scripts/lint-all.sh prints the install hint for anything else it skips)"
+for t in shellcheck bats actionlint; do
   if command -v $t >/dev/null 2>&1; then ok "$t"; else
-    warn "$t not installed (only needed for installer tests: shellcheck install.sh / bats tests/installer.bats)"
+    warn "$t not installed (installer tests / scripts/lint-all.sh; shellcheck+actionlint also run via LINT_DOCKER=1)"
     case "$PKG" in
-      brew) [ $t = bats ] && ask "brew install bats-core?" && pkg_install bats-core; [ $t = shellcheck ] && ask "brew install shellcheck?" && pkg_install shellcheck ;;
-      apt-get) ask "apt install $t?" && pkg_install $t ;;
-      pacman) [ $t = bats ] && ask "pacman -S bash-bats?" && pkg_install bash-bats; [ $t = shellcheck ] && ask "pacman -S shellcheck?" && pkg_install shellcheck ;;
-      dnf) ask "dnf install $t?" && pkg_install $t ;;
+      brew) [ $t = bats ] && ask "brew install bats-core?" && pkg_install bats-core; [ $t = shellcheck ] && ask "brew install shellcheck?" && pkg_install shellcheck; [ $t = actionlint ] && ask "brew install actionlint?" && pkg_install actionlint ;;
+      apt-get) [ $t = actionlint ] || { ask "apt install $t?" && pkg_install $t; } ;;
+      pacman) [ $t = bats ] && ask "pacman -S bash-bats?" && pkg_install bash-bats; [ $t = shellcheck ] && ask "pacman -S shellcheck?" && pkg_install shellcheck; [ $t = actionlint ] && ask "pacman -S actionlint?" && pkg_install actionlint ;;
+      dnf) [ $t = actionlint ] || { ask "dnf install $t?" && pkg_install $t; } ;;
     esac
   fi
 done
