@@ -398,7 +398,8 @@ pub async fn run_tls_resumption_probe(
 
     let first = match run_one_tls_http_request(addr, &host, target, cfg, tls_config.clone()).await {
         Ok(v) => v,
-        Err((category, message, detail, tcp_result)) => {
+        Err(failure) => {
+            let (category, message, detail, tcp_result) = *failure;
             return make_failed_resume(
                 run_id,
                 attempt_id,
@@ -416,7 +417,8 @@ pub async fn run_tls_resumption_probe(
     let second = match run_one_tls_http_request(addr, &host, target, cfg, tls_config.clone()).await
     {
         Ok(v) => v,
-        Err((category, message, detail, tcp_result)) => {
+        Err(failure) => {
+            let (category, message, detail, tcp_result) = *failure;
             return make_failed_resume(
                 run_id,
                 attempt_id,
@@ -504,21 +506,27 @@ struct TlsHttpRequestResult {
     http_status_code: Option<u16>,
 }
 
+/// Why a single TLS request attempt failed: category, message, optional
+/// detail, and the TCP phase result if the connection got that far.
+///
+/// Boxed because the tuple is ~288 bytes and every `Result` from this
+/// function would otherwise carry that on the success path too
+/// (`clippy::result_large_err`, tightened in Rust 1.98). The failure path is
+/// cold — one allocation there costs nothing measurable.
+type TlsRequestFailure = Box<(
+    ErrorCategory,
+    String,
+    Option<String>,
+    Option<crate::metrics::TcpResult>,
+)>;
+
 async fn run_one_tls_http_request(
     addr: SocketAddr,
     host: &str,
     target: &url::Url,
     cfg: &RunConfig,
     tls_config: Arc<rustls::ClientConfig>,
-) -> Result<
-    TlsHttpRequestResult,
-    (
-        ErrorCategory,
-        String,
-        Option<String>,
-        Option<crate::metrics::TcpResult>,
-    ),
-> {
+) -> Result<TlsHttpRequestResult, TlsRequestFailure> {
     let tcp_started_at = Utc::now();
     let t_tcp = Instant::now();
     let tcp_stream = match tokio::time::timeout(
@@ -529,20 +537,20 @@ async fn run_one_tls_http_request(
     {
         Ok(Ok(s)) => s,
         Ok(Err(e)) => {
-            return Err((
+            return Err(Box::new((
                 ErrorCategory::Tcp,
                 e.to_string(),
                 Some(format!("connect to {addr}")),
                 None,
-            ))
+            )))
         }
         Err(_) => {
-            return Err((
+            return Err(Box::new((
                 ErrorCategory::Timeout,
                 format!("TCP connect to {addr} timed out after {}ms", cfg.timeout_ms),
                 None,
                 None,
-            ))
+            )))
         }
     };
     let tcp_duration_ms = t_tcp.elapsed().as_secs_f64() * 1000.0;
@@ -589,20 +597,20 @@ async fn run_one_tls_http_request(
     {
         Ok(Ok(s)) => s,
         Ok(Err(e)) => {
-            return Err((
+            return Err(Box::new((
                 ErrorCategory::Tls,
                 e.to_string(),
                 Some("TLS handshake".into()),
                 Some(tcp_result),
-            ))
+            )))
         }
         Err(_) => {
-            return Err((
+            return Err(Box::new((
                 ErrorCategory::Timeout,
                 format!("TLS handshake timed out after {}ms", cfg.timeout_ms),
                 None,
                 Some(tcp_result),
-            ))
+            )))
         }
     };
     let tls_duration_ms = t_tls.elapsed().as_secs_f64() * 1000.0;
@@ -616,12 +624,12 @@ async fn run_one_tls_http_request(
         request_path.push_str(q);
     }
     if request_path.contains(['\r', '\n']) || host.contains(['\r', '\n']) {
-        return Err((
+        return Err(Box::new((
             ErrorCategory::Config,
             "Target URL contains invalid characters (CR/LF) in path or host".into(),
             None,
             Some(tcp_result.clone()),
-        ));
+        )));
     }
     let request = format!(
         "GET {request_path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: networker-tester/tlsresume\r\nAccept: */*\r\nConnection: close\r\n\r\n"

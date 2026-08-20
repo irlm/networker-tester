@@ -880,7 +880,7 @@ fn upload_payload_chunk() -> &'static Bytes {
     UPLOAD_PAYLOAD.get_or_init(|| {
         let mut buf = vec![0u8; UPLOAD_CHUNK];
         let mut state = UPLOAD_PAYLOAD_SEED;
-        for word in buf.chunks_exact_mut(8) {
+        for word in buf.as_chunks_mut::<8>().0 {
             word.copy_from_slice(&splitmix64(&mut state).to_le_bytes());
         }
         Bytes::from(buf)
@@ -1895,7 +1895,7 @@ mod tests {
         let a = upload_payload_chunk();
         let mut buf = vec![0u8; UPLOAD_CHUNK];
         let mut state = UPLOAD_PAYLOAD_SEED;
-        for word in buf.chunks_exact_mut(8) {
+        for word in buf.as_chunks_mut::<8>().0 {
             word.copy_from_slice(&splitmix64(&mut state).to_le_bytes());
         }
         assert_eq!(a.as_ref(), buf.as_slice());

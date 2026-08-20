@@ -564,11 +564,11 @@ pub(crate) mod icmp {
 
         fn icmp_checksum(data: &[u8]) -> u16 {
             let mut sum: u32 = 0;
-            let mut chunks = data.chunks_exact(2);
-            for c in &mut chunks {
-                sum += u32::from(u16::from_be_bytes([c[0], c[1]]));
+            let (pairs, remainder) = data.as_chunks::<2>();
+            for c in pairs {
+                sum += u32::from(u16::from_be_bytes(*c));
             }
-            if let [last] = chunks.remainder() {
+            if let [last] = remainder {
                 sum += u32::from(u16::from_be_bytes([*last, 0]));
             }
             while sum >> 16 != 0 {

@@ -40,6 +40,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Rust 1.98 clippy broke `main` for every PR.** `dtolnay/rust-toolchain@stable`
+  started resolving to 1.98.0 (released 2026-08-18) mid-afternoon, and two lint
+  families fired repo-wide: `chunks_exact_to_as_chunks` (new) at
+  `runner/ping.rs` and two sites in `runner/http.rs`, and a tightened
+  `result_large_err` on `run_one_tls_http_request`, whose ~288-byte error tuple
+  every `Result` carried on the success path too. The slice sites now use
+  `as_chunks::<N>()`/`as_chunks_mut::<N>()`; the TLS failure tuple is boxed
+  behind a documented `TlsRequestFailure` alias (the failure path is cold, so
+  the allocation costs nothing measurable). Verified against a locally pinned
+  1.98.0 toolchain, not just the current stable.
 - **`sdk-js` was a `block` lint section that CI never ran — and it was
   failing.** The `frontend` job only invokes `frontend-eslint` and is gated on
   `dashboard/` changes; `sdk-conformance` builds and tests `sdk/js` without
