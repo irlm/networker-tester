@@ -213,6 +213,38 @@ What phase 8 proves, and nothing else in the lab does: the probe reaches a real
 `sdkprobe`), a wrong token fails with the token/mount diagnosis instead of a
 false pass, and the mode gate refuses `sdkprobe` against a plain proxy target.
 
+## SDK sample provisioning (the SDK Endpoints page's create flow)
+
+Different from the `sdk` target above: that one is a *pre-wired* customer app
+the lab registers for you, this is the product path where the **user** asks for
+a sample and the control plane provisions it.
+
+```bash
+./lab/lab.sh build --samples csharp,js,python,rust,go   # or --only-samples to skip the rest
+```
+
+builds `nwk-lab/sdk-<lang>:local` from the SAME `examples/<lang>.Dockerfile`
+the docker-compose demo harness uses, so the lab exercises the real sample, not
+a lab copy. (Note the repo names: `nwk-lab/sdk:local` is the `sdk` *target*
+image; `nwk-lab/sdk-go:local` is the Go *sample*.) With them present, a
+deployment whose config carries `endpoints[].sdk_samples` — which is what
+`POST /api/projects/{id}/sdk-endpoints/samples` emits with
+`provider: "docker"` — starts one sample container per endpoint through the
+normal deploy runner, and the whole create → reuse → update → redeploy loop
+runs for free.
+
+**What legitimately differs from a cloud sample host.** On a VM,
+`install.sh --setup-sdk-sample <lang>` builds the sample from source and runs
+it as a `laghound-sample-<lang>` systemd unit, so one host can serve *several*
+languages on ports 8101-8105 ("consolidated"). A sample image runs exactly one
+sample, so on docker a consolidated create is one deployment with one container
+per language rather than one container serving all of them. The cost is the
+same either way (containers are free), the discovery/state/reuse/update
+machinery is identical, and `DockerDeployPlan` rejects more than one
+`sdk_samples` entry per endpoint rather than pretending otherwise. The
+toolchain half of the installer path (dotnet/node/python/cargo/go installs on a
+real VM) is **not** covered by the lab.
+
 ## Windows runners
 
 `--windows-runners M` adds M **Windows Server VM runners** — the tester side

@@ -113,6 +113,8 @@ usage() {
 
 Commands:
   build [--no-cache] [--stacks a,b] [--ui]   Build images (rustbin, controlplane, runner, target-<stack>[, ui])
+     [--samples csharp,js,python,rust,go]    + LagHound SDK sample images (nwk-lab/sdk-<lang>) for the
+     [--only-samples]                          SDK Endpoints create flow; --only-samples skips the rest
   up [--runners N] [--targets SPEC] [--ui]   Start everything, register runners, wait until online
      [--windows-runners M]                   + M Windows Server VM runners (runner-(N+1)..runner-(N+M);
                                              Linux + /dev/kvm only, first boot ~15 min each)
@@ -757,6 +759,24 @@ build_images() { # build_images STACKS(csv) UI(0|1)
   fi
   ok "images built"
 }
+
+# LagHound SDK sample images (nwk-lab/sdk-<lang>:<tag>) — what the docker
+# provider `docker run`s for a deploy config carrying endpoints[].sdk_samples,
+# i.e. the SDK Endpoints page's create flow. Built from the SAME
+# examples/<lang>.Dockerfile the docker-compose demo harness uses (repo root as
+# context), so the lab exercises the real sample, not a lab-only copy. Note the
+# repo names differ from the SDK *target* image: nwk-lab/sdk:<tag> is the
+# customer-app target, nwk-lab/sdk-go:<tag> is the Go sample.
+build_sdk_samples() { # build_sdk_samples SAMPLES(csv)
+  local samples="$1" s
+  for s in $(echo "$samples" | tr ',' ' ' | tr ' ' '\n' | sort -u); do
+    [ -n "$s" ] || continue
+    [ -f "$REPO_ROOT/examples/$s.Dockerfile" ] || die "build: no examples/$s.Dockerfile (valid samples: csharp js python rust go)"
+    note "building LagHound $s SDK sample image"
+    docker build ${BUILD_FLAGS[@]+"${BUILD_FLAGS[@]}"} -f "$REPO_ROOT/examples/$s.Dockerfile" -t "nwk-lab/sdk-$s:${LAB_IMAGE_TAG}" "$REPO_ROOT"
+    ok "nwk-lab/sdk-$s:${LAB_IMAGE_TAG}"
+  done
+}
 image_exists() { docker image inspect "$1" >/dev/null 2>&1; }
 
 # ── Waiters ──────────────────────────────────────────────────────────────────
@@ -939,19 +959,28 @@ target_services() { local n=1 out="" t; t="$(target_count)"; while [ "$n" -le "$
 
 # ── Commands ─────────────────────────────────────────────────────────────────
 cmd_build() {
-  local stacks="rust,nginx" ui=0
+  local stacks="rust,nginx" ui=0 samples="" only_samples=0
   BUILD_FLAGS=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --no-cache) BUILD_FLAGS+=(--no-cache) ;;
       --stacks) shift; stacks="$1" ;;
+      --samples) shift; samples="$1" ;;
+      --only-samples) only_samples=1 ;;
       --ui) ui=1 ;;
       *) die "build: unknown flag $1" ;;
     esac; shift
   done
+  if [ "$only_samples" = "1" ]; then
+    [ -n "$samples" ] || die "build --only-samples needs --samples <csv>"
+    build_sdk_samples "$samples"
+    return 0
+  fi
   # rustbin is required by runner/target; controlplane independent.
   validate_stacks "$stacks"
   build_images "$stacks" "$ui"
+  [ -n "$samples" ] && build_sdk_samples "$samples"
+  return 0
 }
 
 cmd_up() {

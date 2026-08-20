@@ -717,6 +717,109 @@ JSON
     [ "$DEPLOY_VALIDATE_ERRORS" -eq 0 ] || { echo "AOT variants must validate clean on linux (got $DEPLOY_VALIDATE_ERRORS errors)" >&2; exit 1; }
 }
 
+# ── LagHound SDK samples (endpoints[].sdk_samples) ─────────────────────────
+
+@test "sdk samples: the port table matches shared/sdk-samples.json" {
+    # install.sh cannot read the manifest on a target (bash 3.2, no jq
+    # guarantee), so _sdk_sample_port mirrors it. SdkSampleManifestTests guards
+    # the mirror from the C# side; this is the bash side.
+    [ "$(_sdk_sample_port csharp)" = "8101" ]
+    [ "$(_sdk_sample_port js)"     = "8102" ]
+    [ "$(_sdk_sample_port python)" = "8103" ]
+    [ "$(_sdk_sample_port rust)"   = "8104" ]
+    [ "$(_sdk_sample_port go)"     = "8105" ]
+    [ -z "$(_sdk_sample_port cobol)" ]
+}
+
+@test "sdk samples: ports avoid the endpoint, the language server and every proxy stack" {
+    # 8080/8443 = networker-endpoint, 8085 = the reference-API language server,
+    # 8081-8082/8091-8094/8444-8445/8454-8457 = the proxy stacks. A collision
+    # would look like a healthy deploy whose sample silently failed to bind.
+    local taken="8080 8081 8082 8085 8091 8092 8093 8094 8443 8444 8445 8454 8455 8456 8457"
+    local lang port t
+    for lang in $SDK_SAMPLE_LANGS; do
+        port="$(_sdk_sample_port "$lang")"
+        for t in $taken; do
+            [ "$port" != "$t" ] || { echo "sample $lang port $port collides with $t" >&2; exit 1; }
+        done
+    done
+}
+
+@test "parse_args: --setup-sdk-sample selects the sample mode and auto-yes" {
+    parse_args --setup-sdk-sample go
+    [ "$SETUP_SDK_SAMPLE" = "go" ] || { echo "got '$SETUP_SDK_SAMPLE'" >&2; exit 1; }
+    [ "$AUTO_YES" -eq 1 ]
+}
+
+@test "parse_args: --sdk-sample-port overrides the catalog port" {
+    parse_args --setup-sdk-sample go --sdk-sample-port 9105
+    [ "$SDK_SAMPLE_PORT_OVERRIDE" = "9105" ]
+}
+
+@test "deploy_sdk_sample: an unknown sample fails before touching the machine" {
+    run deploy_sdk_sample cobol
+    [ "$status" -ne 0 ]
+    echo "$output" | grep -q "unknown SDK sample" || { echo "got: $output" >&2; exit 1; }
+}
+
+@test "_deploy_parse_config: sdk_samples land in the per-endpoint array" {
+    local cfg="$TEST_TMPDIR/sdk-parse.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [
+    { "provider": "azure", "sdk_samples": ["go", "rust"], "azure": { "region": "eastus", "os": "linux" } },
+    { "provider": "azure", "azure": { "region": "eastus", "os": "linux" } }
+  ]
+}
+JSON
+    _deploy_parse_config "$cfg"
+    [ "${DEPLOY_EP_SDK_SAMPLES[0]}" = "go,rust" ] || { echo "got '${DEPLOY_EP_SDK_SAMPLES[0]}'" >&2; exit 1; }
+    [ -z "${DEPLOY_EP_SDK_SAMPLES[1]}" ]
+}
+
+@test "_deploy_validate_config: accepts every catalog sample on a linux endpoint" {
+    local cfg="$TEST_TMPDIR/sdk-linux.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "azure", "sdk_samples": ["csharp", "js", "python", "rust", "go"], "azure": { "region": "eastus", "os": "linux" } }]
+}
+JSON
+    _deploy_validate_config "$cfg"
+    [ "$DEPLOY_VALIDATE_ERRORS" -eq 0 ] || { echo "catalog samples must validate clean (got $DEPLOY_VALIDATE_ERRORS)" >&2; exit 1; }
+}
+
+@test "_deploy_validate_config: rejects an unknown sdk sample" {
+    local cfg="$TEST_TMPDIR/sdk-unknown.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "azure", "sdk_samples": ["cobol"], "azure": { "region": "eastus", "os": "linux" } }]
+}
+JSON
+    run _deploy_validate_config "$cfg"
+    echo "$output" | grep -q "unknown SDK sample 'cobol'" || { echo "got: $output" >&2; exit 1; }
+}
+
+@test "_deploy_validate_config: rejects sdk samples on a windows endpoint" {
+    # Each sample is built from source with its own toolchain; there is no
+    # install.ps1 twin, so a Windows sample host would deploy and serve nothing.
+    local cfg="$TEST_TMPDIR/sdk-win.json"
+    cat > "$cfg" <<'JSON'
+{
+  "version": 1,
+  "tester": { "provider": "local" },
+  "endpoints": [{ "provider": "azure", "sdk_samples": ["go"], "azure": { "region": "eastus", "os": "windows" } }]
+}
+JSON
+    run _deploy_validate_config "$cfg"
+    echo "$output" | grep -q "SDK samples require a Linux endpoint" || { echo "got: $output" >&2; exit 1; }
+}
+
 @test "_deploy_validate_config: still rejects .NET AOT variants on a windows endpoint (#801 pattern A)" {
     # Native AOT publish needs the VS C++ toolchain on Windows — not in the
     # install.ps1 payload. The wizard + launch gate exclude these cells; the

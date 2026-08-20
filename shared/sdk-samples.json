@@ -1,0 +1,63 @@
+{
+  "$comment": "Canonical catalog of the LagHound SDK SAMPLE services — the reference apps under sdk/<lang>/example that mount endpoint contract v1 (shared/sdk-contract-v1.json) and that the SDK Endpoints page can provision on demand. One row per language: the port the sample listens on when LagHound deploys it, the Dockerfile that builds it, and the SDK package version it reports as `sdk.version` on GET {prefix}/health. Guarded on every side: C# (SdkSampleCatalog — embedded, served by GET /api/projects/{id}/sdk-endpoints/samples; SdkSampleManifestTests re-derives every `sdk_version` from the language's real package manifest and asserts no `port` collides with shared/http-stacks.json or the endpoint's own 8080/8443/8085) and install.sh (--setup-sdk-samples reads the same ports through the deploy config's endpoints[].sdk_samples). `sdk_version` is the ONLY definition of 'the current sample' — outdated is decided by comparing it against the `sdk.version` a running sample reports, never against the repo release version (each SDK versions independently of the five-file sync).",
+  "prefix_default": "/laghound",
+  "route_default": "/laghound/echo",
+  "$ports": "8101-8105 deliberately avoids every port the installers already own on a deployed host: networker-endpoint 8080/8443, the reference-API language server 8085, and the proxy stacks in shared/http-stacks.json (nginx 8081/8444, iis 8082/8445, caddy 8091/8454, traefik 8092/8455, haproxy 8093/8456, apache 8094/8457). examples/docker-compose.yml keeps its own 8081-8085 map: that harness runs the samples ALONE on a dev box, where nothing else is listening.",
+  "samples": [
+    {
+      "id": "csharp",
+      "language": "C#",
+      "runtime": ".NET 10 · ASP.NET Core",
+      "description": "Minimal service using the LagHound.Endpoint middleware.",
+      "sdk_version": "0.1.0",
+      "version_source": "sdk/csharp/LagHound.Endpoint/LagHound.Endpoint.csproj <Version>",
+      "port": 8101,
+      "dockerfile": "examples/csharp.Dockerfile",
+      "source_dir": "sdk/csharp/Example"
+    },
+    {
+      "id": "js",
+      "language": "JavaScript",
+      "runtime": "Node 22 · node:http",
+      "description": "Bare node:http service mounting the SDK handler, zero runtime deps.",
+      "sdk_version": "0.1.0",
+      "version_source": "sdk/js/package.json version",
+      "port": 8102,
+      "dockerfile": "examples/js.Dockerfile",
+      "source_dir": "sdk/js/example"
+    },
+    {
+      "id": "python",
+      "language": "Python",
+      "runtime": "Python 3.12 · wsgiref",
+      "description": "Stdlib WSGI service wrapped by the laghound middleware.",
+      "sdk_version": "0.1.0",
+      "version_source": "sdk/python/src/laghound/_version.py __version__",
+      "port": 8103,
+      "dockerfile": "examples/python.Dockerfile",
+      "source_dir": "sdk/python/example"
+    },
+    {
+      "id": "rust",
+      "language": "Rust",
+      "runtime": "axum · tower",
+      "description": "Minimal axum service nesting the laghound router.",
+      "sdk_version": "1.0.0",
+      "version_source": "sdk/rust/Cargo.toml [package] version",
+      "port": 8104,
+      "dockerfile": "examples/rust.Dockerfile",
+      "source_dir": "sdk/rust/example"
+    },
+    {
+      "id": "go",
+      "language": "Go",
+      "runtime": "Go 1.26 · net/http",
+      "description": "net/http service mounting the LagHound endpoint handler.",
+      "sdk_version": "1.0.0",
+      "version_source": "sdk/go/laghound.go const Version",
+      "port": 8105,
+      "dockerfile": "examples/go.Dockerfile",
+      "source_dir": "sdk/go/example"
+    }
+  ]
+}

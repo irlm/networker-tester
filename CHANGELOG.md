@@ -11,6 +11,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.275] - 2026-08-20
+
+### Added
+
+- **The SDK Endpoints page can create the samples it advertises.** The page
+  listed the LagHound reference apps and linked their source, but the only way
+  to get one was to deploy it yourself and paste the URL back in — "we can see
+  the samples but we cannot create". It now provisions them:
+  - **Two shapes.** *Consolidated* puts every selected language on one server
+    (each sample on its own port, one VM, one bill) — the default, because it
+    is the cheap one. *Separated* gives one server per language for isolation
+    and per-language infrastructure numbers, at N× the cost. The dialog prices
+    both from the same table the deployment cost endpoint uses.
+  - **Reuse first.** Before provisioning anything, every language is checked
+    against what the project already runs; anything usable is registered
+    against the existing server instead of buying a second one. The summary
+    names what that avoids in $/mo. Reuse can be turned off explicitly, never
+    silently.
+  - **Update, not silent redeploy.** A sample whose deployed SDK version is
+    behind the catalog is reported as outdated with *both* versions shown and
+    an in-place update action that re-runs its existing deployment.
+  - **Honest states.** `current`, `outdated`, `unknown_version` (alive but the
+    version could not be read), `unhealthy`, `failed`, `deploying`, `none`. A
+    stale or unreachable sample is never presented as usable.
+- `GET/POST /api/projects/{id}/sdk-endpoints/samples` and
+  `POST …/samples/{language}/update` — the catalog joined to the project's
+  deployments, the reuse-first create, and the in-place update.
+- `shared/sdk-samples.json` — the canonical sample catalog (id, port,
+  Dockerfile, and the SDK version each sample reports on `/laghound/health`).
+  Drift-guarded: every `sdk_version` is re-derived in CI from the language's
+  real package manifest, and no sample port may collide with
+  `shared/http-stacks.json`, the endpoint's 8080/8443, or the reference-API
+  language server's 8085.
+- `install.sh --setup-sdk-sample <lang>` and the deploy-config key
+  `endpoints[].sdk_samples` — build a sample from source on a Linux endpoint
+  (Azure/AWS/GCP/LAN/local) and run it as a `laghound-sample-<lang>` systemd
+  unit on its catalog port (8101-8105, now opened on all three cloud
+  firewalls). The token travels in `LAGHOUND_SAMPLE_TOKEN`, never in the
+  deploy config or the log.
+- Docker (local) provider: `sdk_samples` endpoints become sample containers
+  (`nwk-lab/sdk-<lang>`), built by `lab/lab.sh build --samples <csv>`, so the
+  whole create/reuse/update path runs in the lab for free.
+
+### Fixed
+
+- AWS endpoint security groups: the STAMP UDP 9997 rule was authorized against
+  `$sg_id`, which the caller only assigns *after* `_aws_create_security_group`
+  returns — so on a freshly created group the rule went out with an empty
+  `--group-id` and aborted the deploy under `set -e`. It now uses
+  `$_sg_created` like every sibling call.
+- `install.sh`: `DEPLOY_EP_HTTP_STACKS` is declared alongside its four sibling
+  per-endpoint arrays instead of being conjured by its first `+=`.
+- The deploy budget scales for `sdk_samples` as it already did for
+  reference-API `languages` — an SDK sample compiles from source (the Rust one
+  is a full cargo release build), so a sample-only deploy no longer gets the
+  flat 30-minute base and a tree-kill mid-build.
+
+---
 ## [0.28.274] - 2026-08-20
 
 ### Added

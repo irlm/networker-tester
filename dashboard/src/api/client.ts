@@ -746,6 +746,35 @@ export const api = {
   deleteSdkEndpoint: (projectId: string, id: string) =>
     request<void>(projectUrl(projectId, `sdk-endpoints/${id}`), { method: 'DELETE' }),
 
+  // ── SDK samples (provisioning the reference apps) ─────────────────────
+  // member-read. provider/region/vm_size are optional and only add the
+  // per-server cost preview to the response.
+  getSdkSamples: (
+    projectId: string,
+    priceFor?: { provider?: string; region?: string; vmSize?: string },
+  ) => {
+    const params = new URLSearchParams();
+    if (priceFor?.provider) params.set('provider', priceFor.provider);
+    if (priceFor?.region) params.set('region', priceFor.region);
+    if (priceFor?.vmSize) params.set('vm_size', priceFor.vmSize);
+    const qs = params.toString();
+    return request<import('./types').SdkSamplesResponse>(
+      projectUrl(projectId, `sdk-endpoints/samples${qs ? `?${qs}` : ''}`),
+    );
+  },
+
+  createSdkSamples: (projectId: string, body: import('./types').SdkSampleCreateBody) =>
+    request<import('./types').SdkSampleCreateResult>(projectUrl(projectId, 'sdk-endpoints/samples'), {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  updateSdkSample: (projectId: string, language: string) =>
+    request<import('./types').SdkSampleUpdateResult>(
+      projectUrl(projectId, `sdk-endpoints/samples/${encodeURIComponent(language)}/update`),
+      { method: 'POST' },
+    ),
+
   // ── Application Network Performance report (app-network) ─────────────
   // member-read. Optional config_id narrows to one SDK endpoint.
   getAppNetworkReport: (projectId: string, configId?: string) => {

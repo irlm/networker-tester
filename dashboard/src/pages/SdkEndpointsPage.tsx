@@ -1,9 +1,12 @@
 import { useCallback, useState } from 'react';
 import { Link } from 'react-router';
 import { api, errorMessage, type SdkEndpoint } from '../api/client';
-import type { SdkEndpointCreate } from '../api/types';
+import type { SdkEndpointCreate, SdkSampleStatus } from '../api/types';
 import { CreateSdkEndpointDialog } from '../components/CreateSdkEndpointDialog';
+import { CreateSdkSamplesDialog } from '../components/CreateSdkSamplesDialog';
 import { SdkExamplesPanel } from '../components/SdkExamplesPanel';
+import { SdkSamplesPanel } from '../components/SdkSamplesPanel';
+import { SDK_EXAMPLES } from '../lib/sdkExamples';
 import { EmptyState } from '../components/common/EmptyState';
 import { DataTable, type DataTableColumn } from '../components/common/DataTable';
 import { PageShell } from '../components/common/PageShell';
@@ -34,8 +37,11 @@ const REACHABILITY_CHIP: Record<SdkReachability, { label: string; className: str
 export function SdkEndpointsPage() {
   const { projectId, isOperator } = useProject();
   const [endpoints, setEndpoints] = useState<SdkEndpoint[]>([]);
+  const [samples, setSamples] = useState<SdkSampleStatus[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [createDefaults, setCreateDefaults] = useState<Partial<SdkEndpointCreate>>();
+  const [showSamples, setShowSamples] = useState(false);
+  const [sampleBusy, setSampleBusy] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<SdkEndpoint | null>(null);
@@ -57,9 +63,62 @@ export function SdkEndpointsPage() {
         setError(errorMessage(e));
         setLoading(false);
       });
+    // Sample state is a separate, best-effort read: it probes live hosts, so a
+    // slow/dead sample must never block the endpoint list from rendering.
+    api
+      .getSdkSamples(projectId)
+      .then((res) => setSamples(res.samples))
+      .catch(() => setSamples([]));
   }, [projectId]);
 
   usePolling(load, 20000);
+
+  /**
+   * Register an already-serving sample as an SDK endpoint — the reuse path, and
+   * the one that costs nothing. Deliberately routed through the same create
+   * endpoint the dialog uses (reuse-first, idempotent), so "reuse one" and
+   * "create with reuse" can never drift apart.
+   */
+  const reuseSample = async (language: string) => {
+    if (!projectId) return;
+    setSampleBusy(language);
+    try {
+      const res = await api.createSdkSamples(projectId, {
+        shape: 'consolidated',
+        languages: [language],
+        reuse_existing: true,
+      });
+      addToast(
+        'success',
+        res.reused.length > 0
+          ? `${language} sample registered as an SDK endpoint`
+          : `${language} sample had nothing to reuse`,
+      );
+      load();
+    } catch (e) {
+      addToast('error', errorMessage(e));
+    } finally {
+      setSampleBusy(null);
+    }
+  };
+
+  /** Re-run the sample's deployment in place so it picks up the current SDK. */
+  const updateSample = async (language: string) => {
+    if (!projectId) return;
+    setSampleBusy(language);
+    try {
+      const res = await api.updateSdkSample(projectId, language);
+      addToast(
+        'success',
+        `${language} sample updating${res.from_version ? ` from ${res.from_version}` : ''} to ${res.to_version}`,
+      );
+      load();
+    } catch (e) {
+      addToast('error', errorMessage(e));
+    } finally {
+      setSampleBusy(null);
+    }
+  };
 
   const openCreate = (defaults?: Partial<SdkEndpointCreate>) => {
     setCreateDefaults(defaults);
@@ -112,12 +171,14 @@ export function SdkEndpointsPage() {
       subtitle="Split request time into network and application work."
       action={
         isOperator ? (
-          <Button
-            variant="primary"
-            onClick={() => openCreate()}
-          >
-            + SDK endpoint
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="primary" onClick={() => setShowSamples(true)}>
+              Deploy SDK samples
+            </Button>
+            <Button onClick={() => openCreate()}>
+              + SDK endpoint
+            </Button>
+          </div>
         ) : undefined
       }
     >
@@ -131,7 +192,34 @@ export function SdkEndpointsPage() {
         />
       )}
 
-      <SdkExamplesPanel isOperator={isOperator} onUseExample={openCreate} />
+      {showSamples && projectId && samples.length > 0 && (
+        <CreateSdkSamplesDialog
+          projectId={projectId}
+          samples={samples}
+          onClose={() => setShowSamples(false)}
+          onCreated={load}
+        />
+      )}
+
+      {projectId && samples.length > 0 && (
+        <SdkSamplesPanel
+          projectId={projectId}
+          samples={samples}
+          isOperator={isOperator}
+          onDeploy={() => setShowSamples(true)}
+          onReuse={(lang) => void reuseSample(lang)}
+          onUpdate={(lang) => void updateSample(lang)}
+          busy={sampleBusy}
+        />
+      )}
+
+      {/* The public Azure reference apps: registering one of those costs
+          nothing at all, so keep the shortcut — but only when a deployment URL
+          is actually configured. Without one the panel was pure brochure (the
+          "we can see the samples but we cannot create" complaint). */}
+      {SDK_EXAMPLES.some((e) => e.liveUrl) && (
+        <SdkExamplesPanel isOperator={isOperator} onUseExample={openCreate} />
+      )}
 
       {error && endpoints.length > 0 && (
         <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-4 text-yellow-400 text-sm">
@@ -157,14 +245,17 @@ export function SdkEndpointsPage() {
         {endpoints.length === 0 ? (
           <EmptyState
             message="No SDK endpoints yet"
-            detail="Use a live reference app above or register a service that mounts the LagHound SDK routes."
+            detail="Deploy the SDK samples above, or register a service of your own that mounts the LagHound SDK routes."
             action={
               isOperator ? (
-                <Button
-                  onClick={() => openCreate()}
-                >
-                  Register your first SDK endpoint
-                </Button>
+                <div className="flex flex-wrap justify-center gap-2">
+                  <Button variant="primary" onClick={() => setShowSamples(true)}>
+                    Deploy SDK samples
+                  </Button>
+                  <Button onClick={() => openCreate()}>
+                    Register your own service
+                  </Button>
+                </div>
               ) : undefined
             }
           />
