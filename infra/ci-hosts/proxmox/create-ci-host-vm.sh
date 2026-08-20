@@ -3,6 +3,10 @@
 # the CI hosts (docs/self-hosted-ci.md). Runs as root ON the Proxmox node
 # (setup-ci-hosts.sh copies it there and drives it over ssh).
 #
+#   ensure-snippets  make sure the snippet storage serves the "snippets" content
+#                    type (pve's `dir: local` ships with iso,vztmpl,backup,import
+#                    only — `--cicustom` fails without it) and its dir exists
+#   snippet-dir      print the directory behind <snippet-storage>:snippets/ (quiet)
 #   ensure-template  create the Ubuntu 24.04 (noble) cloud-init template if missing
 #                    (downloads noble-server-cloudimg-amd64.img, verifies it against
 #                    Ubuntu's SHA256SUMS — the existing 22.04 template is NOT reused)
@@ -72,6 +76,25 @@ net_arg() { # --net0 value with optional VLAN tag
 
 vm_exists() { qm status "$1" >/dev/null 2>&1; }
 
+# `pvesm config <storage>` prints "key value" (or "key: value" on older
+# releases) lines; match both.
+storage_field() { pvesm config "$SNIPPET_STORAGE" 2>/dev/null | awk -v k="$1" '$1 == k || $1 == k":" {print $2; exit}'; }
+snippet_dir() { local p; p="$(storage_field path)"; printf '%s/snippets' "${p:-/var/lib/vz}"; }
+
+cmd_ensure_snippets() {
+  local current
+  current="$(storage_field content)"
+  [ -n "$current" ] || die "pvesm config ${SNIPPET_STORAGE}: no content list — does storage '${SNIPPET_STORAGE}' exist?"
+  case ",${current}," in
+    *,snippets,*) log "storage ${SNIPPET_STORAGE} already serves snippets (content: ${current})" ;;
+    *)
+      log "storage ${SNIPPET_STORAGE} content '${current}' lacks snippets — enabling (every existing type kept)"
+      pvesm set "$SNIPPET_STORAGE" --content "${current},snippets"
+      log "storage ${SNIPPET_STORAGE} content is now: $(storage_field content)" ;;
+  esac
+  install -d -m 0700 "$(snippet_dir)"
+}
+
 cmd_ensure_template() {
   if vm_exists "$TEMPLATE_ID"; then
     log "template $TEMPLATE_ID already exists — keeping it"
@@ -96,6 +119,7 @@ cmd_ensure_template() {
     mv "$img.part" "$img"
   fi
   log "SHA256 verified: $expected"
+  cmd_ensure_snippets
   log "creating template $TEMPLATE_ID (ubuntu-2404-template) from $img"
   qm create "$TEMPLATE_ID" --name ubuntu-2404-template --memory 2048 --cores 2 \
     --net0 "$(net_arg)" --scsihw virtio-scsi-single --agent enabled=1 \
@@ -121,15 +145,15 @@ cmd_create() {
     fi
   fi
   # Snippets are referenced as <storage>:snippets/<file>; the file must live
-  # in that storage's snippets dir (default /var/lib/vz/snippets for "local").
-  local snippet_dir snippet_name
-  snippet_dir="$(pvesm path "${SNIPPET_STORAGE}:snippets/x" 2>/dev/null | xargs dirname 2>/dev/null || echo /var/lib/vz/snippets)"
+  # in that storage's snippets dir and the storage must serve that content type.
+  cmd_ensure_snippets
+  local sdir snippet_name
+  sdir="$(snippet_dir)"
   snippet_name="$(basename "$USER_DATA")"
-  if [ "$(readlink -f "$USER_DATA")" != "$(readlink -f "$snippet_dir/$snippet_name")" ]; then
-    install -d -m 0700 "$snippet_dir"
-    install -m 0600 "$USER_DATA" "$snippet_dir/$snippet_name"
+  if [ "$(readlink -f "$USER_DATA")" != "$(readlink -f "$sdir/$snippet_name")" ]; then
+    install -m 0600 "$USER_DATA" "$sdir/$snippet_name"
   fi
-  chmod 0600 "$snippet_dir/$snippet_name"
+  chmod 0600 "$sdir/$snippet_name"
 
   log "cloning template $TEMPLATE_ID → $VMID ($NAME): ${CORES} vCPU, ${MEMORY} MB, ${DISK}"
   qm clone "$TEMPLATE_ID" "$VMID" --name "$NAME" --full 1 --storage "$STORAGE" >/dev/null
@@ -192,7 +216,7 @@ cmd_destroy() {
   log "stopping + destroying VM $VMID"
   qm stop "$VMID" --timeout 60 >/dev/null 2>&1 || true
   qm destroy "$VMID" --purge --destroy-unreferenced-disks 1 >/dev/null
-  [ -n "$snip" ] && rm -f "/var/lib/vz/snippets/${snip}"
+  [ -n "$snip" ] && rm -f "$(snippet_dir)/${snip}"
   log "VM $VMID destroyed"
 }
 
@@ -212,6 +236,8 @@ for i in json.load(sys.stdin):
 }
 
 case "$CMD" in
+  ensure-snippets) cmd_ensure_snippets ;;
+  snippet-dir) snippet_dir; echo ;;
   ensure-template) cmd_ensure_template ;;
   create) cmd_create ;;
   windows) cmd_windows ;;

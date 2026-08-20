@@ -90,7 +90,15 @@ PVE_BRIDGE="${PVE_BRIDGE:-vmbr0}"; PVE_VLAN="${PVE_VLAN:-}"; PVE_TEMPLATE_ID="${
 LINUX_COUNT="${LINUX_COUNT:-3}"; LINUX_VMID_BASE="${LINUX_VMID_BASE:-301}"
 LINUX_CORES="${LINUX_CORES:-4}"; LINUX_MEMORY_MB="${LINUX_MEMORY_MB:-8192}"; LINUX_DISK="${LINUX_DISK:-60G}"
 LINUX_IP="${LINUX_IP:-dhcp}"; LINUX_GW="${LINUX_GW:-}"
-SSH_PUBKEY_FILE="${SSH_PUBKEY_FILE:-$HOME/.ssh/id_ed25519.pub}"; WAIT_ONLINE_MINUTES="${WAIT_ONLINE_MINUTES:-25}"
+default_pubkey() { # first key that exists; the plain ed25519 name if none does
+  local k
+  for k in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_ed25519_cihosts.pub" "$HOME/.ssh/id_rsa.pub"; do
+    [ -s "$k" ] && { printf '%s' "$k"; return; }
+  done
+  printf '%s' "$HOME/.ssh/id_ed25519.pub"
+}
+SSH_PUBKEY_FILE="${SSH_PUBKEY_FILE:-$(default_pubkey)}"; WAIT_ONLINE_MINUTES="${WAIT_ONLINE_MINUTES:-25}"
+SNIP_DIR=/var/lib/vz/snippets              # refreshed from the node by pve_snippets (storage-dependent)
 WINDOWS_ENABLE="${WINDOWS_ENABLE:-no}"; WINDOWS_VMID="${WINDOWS_VMID:-310}"; WINDOWS_EXISTING_VMID="${WINDOWS_EXISTING_VMID:-}"
 WINDOWS_ISO="${WINDOWS_ISO:-local:iso/26100.32230.260111-0550.lt_release_svc_refresh_SERVER_EVAL_x64FRE_en-us.iso}"
 WINDOWS_VIRTIO_ISO="${WINDOWS_VIRTIO_ISO:-local:iso/virtio-win.iso}"; WINDOWS_ANSWER_ISO="${WINDOWS_ANSWER_ISO:-local:iso/win-answer.iso}"
@@ -169,6 +177,12 @@ pve_sync_scripts() {
   scp -q "${SSH_OPTS[@]}" "$HERE/proxmox/create-ci-host-vm.sh" "$HERE/linux/install-ci-host.sh" "$PVE_HOST:$PVE_DIR/"
   pve "chmod 0755 $PVE_DIR/*.sh"
 }
+pve_snippets() { # the snippet storage must serve "snippets" BEFORE any user-data is shipped
+  pve "$PVE_DIR/create-ci-host-vm.sh ensure-snippets --snippet-storage $PVE_SNIPPET_STORAGE"
+  SNIP_DIR="$(pve "$PVE_DIR/create-ci-host-vm.sh snippet-dir --snippet-storage $PVE_SNIPPET_STORAGE" | tail -1)"
+  [ -n "$SNIP_DIR" ] || die "could not determine the snippet directory for storage $PVE_SNIPPET_STORAGE"
+  say "   snippets: ${PVE_SNIPPET_STORAGE} → ${SNIP_DIR}"
+}
 linux_name() { printf 'ci-linux-%s' "$1"; }
 linux_vmid() { printf '%s' $(( LINUX_VMID_BASE + $1 - 1 )); }
 linux_ipcfg() { # index → ip arg for create-ci-host-vm.sh
@@ -228,17 +242,17 @@ create_linux_host() { # create_linux_host INDEX
   scp -q "${SSH_OPTS[@]}" "$ud" "$PVE_HOST:/tmp/${name}.yaml"; rm -f "$ud"
   local gw_arg=""; [ "$LINUX_IP" != dhcp ] && gw_arg="--gw $LINUX_GW"
   # shellcheck disable=SC2086 # gw_arg/PVE_VLAN are intentionally word-split flags
-  pve "install -m 0600 /tmp/${name}.yaml /var/lib/vz/snippets/${name}.yaml && rm -f /tmp/${name}.yaml && \
+  pve "install -m 0600 /tmp/${name}.yaml ${SNIP_DIR}/${name}.yaml && rm -f /tmp/${name}.yaml && \
        $PVE_DIR/create-ci-host-vm.sh create --template-id $PVE_TEMPLATE_ID --vmid $vmid --name $name \
          --cores $LINUX_CORES --memory $LINUX_MEMORY_MB --disk $LINUX_DISK --storage $PVE_STORAGE \
          --bridge $PVE_BRIDGE ${PVE_VLAN:+--vlan $PVE_VLAN} --snippet-storage $PVE_SNIPPET_STORAGE \
-         --user-data /var/lib/vz/snippets/${name}.yaml --ip $(linux_ipcfg "$i") $gw_arg"
+         --user-data ${SNIP_DIR}/${name}.yaml --ip $(linux_ipcfg "$i") $gw_arg"
 }
 scrub_linux_token() { # after first boot the PAT leaves the Proxmox node
   local name="$1" ud
   ud="$(mktemp)"; render_user_data "$name" 0 > "$ud"
   scp -q "${SSH_OPTS[@]}" "$ud" "$PVE_HOST:/tmp/${name}.yaml"; rm -f "$ud"
-  pve "install -m 0600 /tmp/${name}.yaml /var/lib/vz/snippets/${name}.yaml && rm -f /tmp/${name}.yaml"
+  pve "install -m 0600 /tmp/${name}.yaml ${SNIP_DIR}/${name}.yaml && rm -f /tmp/${name}.yaml"
   say "   scrubbed the PAT from ${name}'s cloud-init snippet on $PVE_HOST"
 }
 step_proxmox() {
@@ -267,6 +281,7 @@ step_proxmox() {
   [ -s "$SSH_PUBKEY_FILE" ] || die "$SSH_PUBKEY_FILE not found"
 
   pve_sync_scripts
+  pve_snippets
   say "   ensuring template $PVE_TEMPLATE_ID"
   pve "$PVE_DIR/create-ci-host-vm.sh ensure-template --template-id $PVE_TEMPLATE_ID --storage $PVE_STORAGE --bridge $PVE_BRIDGE ${PVE_VLAN:+--vlan $PVE_VLAN}"
 
@@ -431,6 +446,7 @@ cmd_add_linux() {
   ask PVE_HOST "Proxmox node (ssh alias or user@host)" "$PVE_HOST"; pve true || die "cannot ssh to $PVE_HOST"
   ask SSH_PUBKEY_FILE "ssh public key to inject" "$SSH_PUBKEY_FILE"; SSH_PUBKEY_FILE="${SSH_PUBKEY_FILE/#\~/$HOME}"
   pve_sync_scripts
+  pve_snippets
   existing="$(pve "$PVE_DIR/create-ci-host-vm.sh list --prefix ci-linux-" | awk 'NR>1 {print $2}' | sed 's/ci-linux-//')"
   for i in $existing; do [ "$i" -gt "$max" ] 2>/dev/null && max="$i"; done
   for i in $(seq $((max + 1)) $((max + n))); do create_linux_host "$i"; done

@@ -40,7 +40,10 @@ The flow, each step skipping work that is already done:
    untagged, VMIDs 301+). Creates the Ubuntu **24.04** cloud-init template at
    VMID 9001 if missing (downloads the noble cloud image and verifies it
    against Ubuntu's `SHA256SUMS`; the old 22.04 template at 9000 is never
-   reused), clones each VM with cloud-init user-data that carries
+   reused), enables the `snippets` content type on the snippet storage if
+   it is missing (pve's `dir: local` ships with `iso,vztmpl,backup,import`
+   only — every existing type is kept), clones each VM with cloud-init
+   user-data that carries
    `linux/install-ci-host.sh` and the PAT, starts it, waits until it shows
    `online` in `GET /repos/{repo}/actions/runners`, then scrubs the PAT out of
    the cloud-init snippet on the Proxmox node.
@@ -67,7 +70,7 @@ Per-OS building blocks it calls (usable on their own):
 | script | runs where | what |
 |---|---|---|
 | `linux/install-ci-host.sh` | as root on an Ubuntu 24.04 VM | toolchains (rustup stable + rustfmt/clippy + musl target, .NET 10, Node 22, Docker, shellcheck, bats, jq, gh, pwsh, Chromium libs), persistent caches under `/var/cache/ci-host`, `actions-runner` under `/opt/actions-runner`, the `ci-host.service` ephemeral loop |
-| `proxmox/create-ci-host-vm.sh` | as root on the Proxmox node | `ensure-template`, `create`, `windows`, `start`, `destroy`, `list`, `ip` |
+| `proxmox/create-ci-host-vm.sh` | as root on the Proxmox node | `ensure-snippets`, `snippet-dir`, `ensure-template`, `create`, `windows`, `start`, `destroy`, `list`, `ip` |
 | `macos/install-ci-host.sh` | as the login user on the Mac | Homebrew: rustup (both darwin targets), dotnet-sdk, node@22, jq, gh, powershell; `~/ci-host/actions-runner`; a user LaunchAgent running the loop under `caffeinate -s`; `pmset` no-sleep |
 | `windows/install-ci-host.ps1` | elevated PowerShell / ssh as admin | Chocolatey: git, 7zip, jq, gh, nodejs 22, dotnet-sdk 10, pwsh, VS 2022 Build Tools + C++; rustup msvc; IIS; PSScriptAnalyzer; `C:\actions-runner`; ephemeral loop as a SYSTEM Scheduled Task (or `-AsService`) |
 
