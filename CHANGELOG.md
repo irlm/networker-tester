@@ -72,7 +72,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   left, and `ci-linux-2` held ports 80-8457 between jobs. `dotnet.yml`'s
   `reinstall-exec` now removes its stub `networker-agent.service` when it is
   done, and the Linux loop wipes per-job residue (Docker containers,
-  `/tmp/bench`, processes still running as the CI user) between jobs.
+  `/tmp/bench`, processes still running as the CI user, root-owned entries a
+  `sudo -E` build left in the shared NuGet/npm caches) between jobs. The
+  loop also launches the runner with the toolchain `PATH` explicitly — the
+  actions-runner rewrites `.path` from its own process PATH at every start
+  and ignores a `PATH` line in `.env`, which surfaced as `cargo: command not
+  found` in the one job without a toolchain action — and clears a stale
+  `.runner`/`.credentials` pair before every registration (a Listener killed
+  mid-flight otherwise wedges `config.sh` on "already configured").
   `docs/self-hosted-ci.md` § "What stays on GitHub-hosted".
 
 ### Fixed

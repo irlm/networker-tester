@@ -159,8 +159,14 @@ after every job — `qm rollback`, not yet built).
 Per-job residue that does not need a fresh disk is wiped by the Linux loop
 between jobs (`ci-host-loop.sh`): the `_work` checkout (root-owned files from
 sudo/docker steps otherwise break the next `actions/checkout`), every Docker
-container and unused network, `/tmp/bench`, and any process still running as
-the CI user (sccache servers, stray endpoints). To reset a host that has
+container and unused network, `/tmp/bench`, any process still running as
+the CI user (sccache servers, stray endpoints), and foreign-owned entries in
+the shared caches under `/var/cache/ci-host` (a `sudo -E dotnet` leaves
+root-owned NuGet packages and the next restore dies with EACCES). The loop
+also starts the runner with the toolchain `PATH` (`JOB_PATH` in
+`/etc/ci-host/env`): the actions-runner regenerates `.path` from its own
+process PATH on every start and ignores `PATH=` in `.env`, so a job with no
+toolchain action would otherwise not find `cargo`. To reset a host that has
 drifted anyway: `setup-ci-hosts.sh destroy` + `setup` rebuilds the Linux VMs
 from the template in ~15 minutes while `auto` routes to hosted.
 

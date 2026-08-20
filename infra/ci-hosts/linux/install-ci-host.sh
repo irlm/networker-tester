@@ -185,8 +185,11 @@ fi
 chown -R "$CI_USER:$CI_USER" "$RUNNER_DIR"
 
 # Environment every job inherits (the actions-runner reads RUNNER_DIR/.env).
+# PATH is NOT set here: the runner rewrites RUNNER_DIR/.path from its own
+# process PATH at every start and uses that for jobs, ignoring a PATH line in
+# .env — so the loop below launches run.sh with JOB_PATH instead (seen as
+# `cargo: command not found` in a job without a toolchain action).
 cat > "$RUNNER_DIR/.env" <<ENV
-PATH=$CI_HOME/.cargo/bin:/usr/share/dotnet:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 DOTNET_ROOT=/usr/share/dotnet
 DOTNET_CLI_TELEMETRY_OPTOUT=1
 DOTNET_CLI_HOME=$CACHE_DIR/dotnet-cli
@@ -205,7 +208,7 @@ cat > /usr/local/bin/ci-host-loop.sh <<'LOOP'
 # ONE job, repeat. The PAT never leaves this process; the job only ever sees
 # the effects of the short-lived registration token (a configured runner).
 set -uo pipefail
-: "${REPO:?}" "${RUNNER_DIR:?}" "${CI_USER:?}" "${TOKEN_FILE:?}" "${LABELS:?}" "${NAME:?}"
+: "${REPO:?}" "${RUNNER_DIR:?}" "${CI_USER:?}" "${TOKEN_FILE:?}" "${LABELS:?}" "${NAME:?}" "${JOB_PATH:?}" "${CACHE_DIR:?}"
 GROUP_ARGS=()
 [ -n "${GROUP:-}" ] && GROUP_ARGS=(--runnergroup "$GROUP")
 while :; do
@@ -219,13 +222,18 @@ while :; do
     echo "registration token mint failed — retrying in 60s" >&2
     sleep 60; continue
   fi
+  # A Listener killed mid-flight (host reboot, operator restart) leaves its
+  # registration files behind and config.sh then refuses with "already
+  # configured" forever; the registration itself is ephemeral and --replace
+  # takes care of the server side, so start every cycle clean.
+  rm -f "$RUNNER_DIR/.runner" "$RUNNER_DIR/.credentials" "$RUNNER_DIR/.credentials_rsaparams"
   if ! runuser -u "$CI_USER" -- "$RUNNER_DIR/config.sh" --unattended --ephemeral --replace \
         --url "https://github.com/${REPO}" --token "$reg" \
         --name "$NAME" --labels "$LABELS" --work _work "${GROUP_ARGS[@]}" >/dev/null; then
     echo "config.sh failed — retrying in 30s" >&2
     sleep 30; continue
   fi
-  runuser -u "$CI_USER" -- "$RUNNER_DIR/run.sh"
+  runuser -u "$CI_USER" -- env PATH="$JOB_PATH" "$RUNNER_DIR/run.sh"
   # An ephemeral registration removes itself after the job; clear the local
   # credentials so the next config.sh starts clean.
   rm -f "$RUNNER_DIR/.runner" "$RUNNER_DIR/.credentials" "$RUNNER_DIR/.credentials_rsaparams"
@@ -249,6 +257,10 @@ while :; do
     docker network prune -f >/dev/null 2>&1 || true
   fi
   rm -rf /tmp/bench /tmp/networker-* 2>/dev/null || true
+  # A step that ran a build under `sudo -E` leaves root-owned entries in the
+  # shared NuGet/npm caches and the next restore dies with EACCES (seen:
+  # 1,139 root-owned files under nuget/ after the installer exec jobs).
+  find "$CACHE_DIR" ! -user "$CI_USER" -exec chown "$CI_USER:$CI_USER" {} + 2>/dev/null || true
   pkill -TERM -u "$CI_USER" 2>/dev/null || true
   sleep 2
   pkill -KILL -u "$CI_USER" 2>/dev/null || true
@@ -266,6 +278,8 @@ TOKEN_FILE=$TOKEN_FILE
 LABELS=$LABELS
 NAME=$NAME
 GROUP=$GROUP
+CACHE_DIR=$CACHE_DIR
+JOB_PATH=$CI_HOME/.cargo/bin:/usr/share/dotnet:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ENV
 chmod 0600 /etc/ci-host/env
 
