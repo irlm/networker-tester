@@ -75,6 +75,7 @@ pub(crate) fn bare_attempt(run_id: Uuid) -> RequestAttempt {
         udp: None,
         error: None,
         retry_count: 0,
+        sample_index: 0,
         server_timing: None,
         udp_throughput: None,
         page_load: None,
@@ -216,6 +217,7 @@ pub(crate) fn full_attempt(run_id: Uuid) -> RequestAttempt {
             occurred_at: Utc::now(),
         }),
         retry_count: 2,
+        sample_index: 0,
         server_timing: Some(ServerTimingResult {
             request_id: Some("req-abc-123".into()),
             server_timestamp: Some(Utc::now()),

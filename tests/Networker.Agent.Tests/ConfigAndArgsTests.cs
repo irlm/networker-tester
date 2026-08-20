@@ -150,6 +150,59 @@ public class ConfigAndArgsTests
         }, args);
     }
 
+    [Fact]
+    public void BuildArgs_omits_samples_when_the_workload_asks_for_no_burst()
+    {
+        // #782 P2: a default workload must spawn the pre-burst command line
+        // byte for byte — an older tester binary on a not-yet-refreshed runner
+        // rejects an unknown flag and fails the whole run.
+        var view = TestConfigView.From(Config(NetworkDnsHttp2));
+        Assert.Equal(1u, view.Samples);
+        Assert.DoesNotContain("--samples", RunExecutor.BuildArgs(view, "https://x/health"));
+
+        // samples: 1 is explicitly "no burst", not "pass 1".
+        var one = TestConfigView.From(Config(NetworkDnsHttp2.Replace(
+            "\"runs\": 10,", "\"runs\": 10, \"samples\": 1,")));
+        Assert.DoesNotContain("--samples", RunExecutor.BuildArgs(one, "https://x/health"));
+
+        // 0 is nonsense on the wire and must not publish nothing.
+        var zero = TestConfigView.From(Config(NetworkDnsHttp2.Replace(
+            "\"runs\": 10,", "\"runs\": 10, \"samples\": 0,")));
+        Assert.Equal(1u, zero.Samples);
+        Assert.DoesNotContain("--samples", RunExecutor.BuildArgs(zero, "https://x/health"));
+    }
+
+    [Fact]
+    public void BuildArgs_passes_samples_for_a_burst_workload()
+    {
+        var view = TestConfigView.From(Config(NetworkDnsHttp2.Replace(
+            "\"runs\": 10,", "\"runs\": 1, \"samples\": 5,")));
+        Assert.Equal(5u, view.Samples);
+
+        var args = RunExecutor.BuildArgs(view, "https://www.cloudflare.com/health");
+        Assert.Equal("5", args[args.IndexOf("--samples") + 1]);
+        // Appended after the fixed block, so the existing layout is untouched.
+        Assert.True(args.IndexOf("--samples") > args.IndexOf("--json-stdout"));
+    }
+
+    [Fact]
+    public void Invocation_deadline_scales_with_the_burst()
+    {
+        // The fallback (no max_duration_secs) worst case is
+        // timeout × runs × modes × samples: leaving samples out killed a x5
+        // workload mid-flight.
+        var single = TestConfigView.From(Config(NetworkDnsHttp2.Replace(
+            "\"runs\": 10,", "\"runs\": 1,")));
+        var burst = TestConfigView.From(Config(NetworkDnsHttp2.Replace(
+            "\"runs\": 10,", "\"runs\": 1, \"samples\": 5,")));
+
+        var singleSecs = RunExecutor.ComputeInvocationDeadline(single).TotalSeconds;
+        var burstSecs = RunExecutor.ComputeInvocationDeadline(burst).TotalSeconds;
+        // 4 modes × 5s timeout = 20s base; ×5 samples = 100s. Slack is constant.
+        Assert.Equal(20 + 60, singleSecs);
+        Assert.Equal(100 + 60, burstSecs);
+    }
+
     [Theory]
     [InlineData("pageload", "pageload1")]   // catalog H1 → explicit tester alias (not the all-3 shorthand)
     [InlineData("pageload2", "pageload2")]

@@ -191,13 +191,17 @@ export function buildDiagRequest(
   const endpoint: EndpointRef = isSet
     ? { kind: 'network', host: probeUrls[0], hosts: probeUrls }
     : { kind: 'network', host: probeUrls[0] };
-  // Each iteration re-probes every mode — the tester's `--runs N` loop already
-  // publishes ALL logical attempts (retry collapsing is per logical attempt),
-  // so a burst yields N samples per mode per URL, and the run-detail p50/p95
-  // stats become meaningful within a single point (#782 P2).
+  // Burst sampling (#782 P2) rides `workload.samples` → the tester's
+  // `--samples N`, NOT `runs`: a burst is N back-to-back samples of the same
+  // logical attempt (tightly time-correlated, each published with its own
+  // sample_index), whereas `runs` is N full passes over every mode. Both would
+  // give N rows per point; only the burst gives a median of five readings
+  // taken under the same conditions, which is the statistic the run-detail
+  // median/spread section reports.
   const workload: Workload = {
     modes: DIAG_PRESETS[preset],
-    runs: samples,
+    runs: 1,
+    samples,
     concurrency: 1,
     timeout_ms: 5000,
     payload_sizes: [],

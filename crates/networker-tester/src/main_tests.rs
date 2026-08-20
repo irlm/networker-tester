@@ -39,6 +39,7 @@ fn request_attempt(success: bool, retry_count: u32) -> RequestAttempt {
         udp: None,
         error: None,
         retry_count,
+        sample_index: 0,
         server_timing: None,
         udp_throughput: None,
         page_load: None,
@@ -104,6 +105,7 @@ fn measured_http_attempt(
         udp: None,
         error: None,
         retry_count: 0,
+        sample_index: 0,
         server_timing: None,
         udp_throughput: None,
         page_load: None,
@@ -145,6 +147,7 @@ fn failed_http_attempt(
         udp: None,
         error: None,
         retry_count: 0,
+        sample_index: 0,
         server_timing: None,
         udp_throughput: None,
         page_load: None,
@@ -483,6 +486,7 @@ fn sample_resolved_config(delay_ms: u64) -> ResolvedConfig {
         url_test_json: false,
         modes: vec![],
         runs: 1,
+        samples: 1,
         concurrency: 1,
         timeout: 1000,
         payload_size: 0,
@@ -1084,4 +1088,99 @@ fn published_logical_attempts_single_failure() {
     let result = published_logical_attempts(vec![request_attempt(false, 0)]);
     assert_eq!(result.len(), 1);
     assert!(!result[0].success);
+}
+
+// ─── published_logical_attempts — burst sampling (#782 P2) ───────────
+//
+// A burst is `samples` INTENTIONAL repeats of one logical attempt; a retry
+// REPLACES a failed try of one sample. So: collapse within a sample_index,
+// keep across sample_index. These pin both halves — and that the pre-burst
+// behaviour (everything at sample 0) is unchanged.
+
+fn burst_attempt(sample_index: u32, retry_count: u32, success: bool) -> RequestAttempt {
+    let mut a = request_attempt(success, retry_count);
+    a.sample_index = sample_index;
+    a.sequence_num = sample_index;
+    a
+}
+
+#[test]
+fn published_logical_attempts_publishes_every_burst_sample() {
+    // 5 samples, no retries — the whole point of #782 P2: five rows, not one.
+    let raw: Vec<RequestAttempt> = (0..5).map(|i| burst_attempt(i, 0, true)).collect();
+    let ids: Vec<_> = raw.iter().map(|a| a.attempt_id).collect();
+
+    let published = published_logical_attempts(raw);
+
+    assert_eq!(published.len(), 5, "every sample must be published");
+    assert_eq!(
+        published.iter().map(|a| a.sample_index).collect::<Vec<_>>(),
+        vec![0, 1, 2, 3, 4],
+        "sample indices must survive in execution order"
+    );
+    assert_eq!(
+        published.iter().map(|a| a.attempt_id).collect::<Vec<_>>(),
+        ids,
+        "no sample may be substituted for another"
+    );
+}
+
+#[test]
+fn published_logical_attempts_collapses_retries_within_each_sample() {
+    // Sample 0 fails then succeeds on retry #1; sample 1 succeeds first try;
+    // sample 2 fails twice. Published: one row per sample, each the sample's
+    // FINAL outcome — so a retried sample still counts once, as a success.
+    let published = published_logical_attempts(vec![
+        burst_attempt(0, 0, false),
+        burst_attempt(0, 1, true),
+        burst_attempt(1, 0, true),
+        burst_attempt(2, 0, false),
+        burst_attempt(2, 1, false),
+    ]);
+
+    assert_eq!(published.len(), 3);
+    assert_eq!(
+        published.iter().map(|a| a.sample_index).collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+    assert_eq!(
+        published
+            .iter()
+            .map(|a| (a.success, a.retry_count))
+            .collect::<Vec<_>>(),
+        vec![(true, 1), (true, 0), (false, 1)],
+        "each sample publishes its final outcome, retries collapsed"
+    );
+}
+
+#[test]
+fn published_logical_attempts_keeps_a_failed_sample_as_a_failed_sample() {
+    // A sample that failed is a FAILED sample, never a missing one — the
+    // median must be computed over what actually happened.
+    let published = published_logical_attempts(vec![
+        burst_attempt(0, 0, true),
+        burst_attempt(1, 0, false),
+        burst_attempt(2, 0, true),
+    ]);
+
+    assert_eq!(published.len(), 3);
+    assert_eq!(
+        published.iter().map(|a| a.success).collect::<Vec<_>>(),
+        vec![true, false, true]
+    );
+}
+
+#[test]
+fn published_logical_attempts_single_sample_burst_matches_legacy_shape() {
+    // --samples 1 (the default) must be byte-identical to the pre-#782 path.
+    let published = published_logical_attempts(vec![
+        burst_attempt(0, 0, false),
+        burst_attempt(0, 1, false),
+        burst_attempt(0, 2, true),
+    ]);
+
+    assert_eq!(published.len(), 1);
+    assert!(published[0].success);
+    assert_eq!(published[0].retry_count, 2);
+    assert_eq!(published[0].sample_index, 0);
 }

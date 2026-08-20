@@ -13,6 +13,7 @@ use crate::tls_profile::TlsEndpointProfile;
 use anyhow::Context;
 use async_trait::async_trait;
 use tokio_postgres::error::SqlState;
+use tokio_postgres::types::ToSql;
 use tokio_postgres::Client as PgClient;
 
 /// PostgreSQL database backend.
@@ -513,6 +514,24 @@ const V006_MIGRATION: &str = r#"
 ALTER TABLE RequestAttempt ADD COLUMN IF NOT EXISTS TargetUrl TEXT NULL;
 "#;
 
+const V007_MIGRATION: &str = r#"
+-- V007: Burst sampling — which SAMPLE of a logical attempt this row is
+-- (issue #782 P2). `--samples N` probes the same point N times back to back
+-- and publishes all N attempts; without an index the rows are
+-- indistinguishable from N retries, and a retry means the opposite thing (it
+-- REPLACES a failed try, so it must not count as a second measurement).
+--
+-- NOT NULL DEFAULT 0 rather than NULL: 0 is not a guess, it is the true
+-- value for every row already in the table. Burst sampling did not exist
+-- before this migration, so every historical attempt IS the first (and only)
+-- sample of its logical attempt. NULL would mean "unknown" about something we
+-- know, and would force every reader to handle a third state. PostgreSQL 11+
+-- stores the default in the catalog, so this is a metadata-only rewrite even
+-- on a large RequestAttempt table.
+
+ALTER TABLE RequestAttempt ADD COLUMN IF NOT EXISTS SampleIndex INT NOT NULL DEFAULT 0;
+"#;
+
 #[async_trait]
 impl DatabaseBackend for PostgresBackend {
     async fn migrate(&self) -> anyhow::Result<()> {
@@ -658,6 +677,26 @@ impl DatabaseBackend for PostgresBackend {
                     )
                     .await
                     .context("record V006")?;
+            }
+
+            let row = client
+                .query_opt("SELECT 1 FROM _schema_versions WHERE version = 'V007'", &[])
+                .await
+                .context("check V007")?;
+
+            if row.is_none() {
+                client
+                    .batch_execute(V007_MIGRATION)
+                    .await
+                    .context("apply V007 migration")?;
+
+                client
+                    .execute(
+                        "INSERT INTO _schema_versions (version) VALUES ('V007')",
+                        &[],
+                    )
+                    .await
+                    .context("record V007")?;
             }
 
             Ok(())
@@ -1406,105 +1445,54 @@ async fn insert_request_attempt(a: &RequestAttempt, c: &PgClient) -> anyhow::Res
     // Serialize the full attempt as JSON for rich data (browser, pageload, etc.)
     let extra_json: Option<serde_json::Value> = serde_json::to_value(a).ok();
 
-    // Column-availability ladder. The tester's own migrate() guarantees BOTH
-    // optional columns (extra_json since V004-era installs, TargetUrl since
-    // V006/#782), but the documented install.sh-seeded legacy schema is written
-    // to WITHOUT migrating — so each optional column degrades independently via
-    // a savepoint retry on UNDEFINED_COLUMN, exactly like the original
-    // extra_json fallback this generalizes.
-    let mut with_url = true;
-    let mut with_extra = true;
+    let sample_index = a.sample_index as i32;
+    let sequence_num = a.sequence_num as i32;
+    let retry_count = a.retry_count as i32;
+
+    // Column-availability ladder. The tester's own migrate() guarantees every
+    // optional column (extra_json since V004-era installs, TargetUrl since
+    // V006/#782, SampleIndex since V007/#782 P2), but the documented
+    // install.sh-seeded legacy schema is written to WITHOUT migrating — so each
+    // optional column degrades INDEPENDENTLY via a savepoint retry on
+    // UNDEFINED_COLUMN, exactly like the original extra_json fallback this
+    // generalizes. The column set is built as a list rather than a match over
+    // every on/off combination: three flags would be eight hand-written
+    // statements, and the next column sixteen.
+    let mut optional: Vec<(&str, &(dyn ToSql + Sync))> = vec![
+        ("TargetUrl", &a.target_url),
+        ("SampleIndex", &sample_index),
+        ("extra_json", &extra_json),
+    ];
     loop {
         c.batch_execute("SAVEPOINT requestattempt_optional_columns")
             .await
             .context("SAVEPOINT RequestAttempt optional columns")?;
 
-        let result = match (with_url, with_extra) {
-            (true, true) => {
-                c.execute(
-                    "INSERT INTO RequestAttempt (
-                    AttemptId, RunId, Protocol, SequenceNum,
-                    StartedAt, FinishedAt, Success, ErrorMessage, RetryCount, TargetUrl, extra_json
-                 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
-                    &[
-                        &a.attempt_id,
-                        &a.run_id,
-                        &protocol,
-                        &(a.sequence_num as i32),
-                        &a.started_at,
-                        &a.finished_at,
-                        &a.success,
-                        &err_msg,
-                        &(a.retry_count as i32),
-                        &a.target_url,
-                        &extra_json,
-                    ],
-                )
-                .await
-            }
-            (true, false) => {
-                c.execute(
-                    "INSERT INTO RequestAttempt (
-                    AttemptId, RunId, Protocol, SequenceNum,
-                    StartedAt, FinishedAt, Success, ErrorMessage, RetryCount, TargetUrl
-                 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
-                    &[
-                        &a.attempt_id,
-                        &a.run_id,
-                        &protocol,
-                        &(a.sequence_num as i32),
-                        &a.started_at,
-                        &a.finished_at,
-                        &a.success,
-                        &err_msg,
-                        &(a.retry_count as i32),
-                        &a.target_url,
-                    ],
-                )
-                .await
-            }
-            (false, true) => {
-                c.execute(
-                    "INSERT INTO RequestAttempt (
-                    AttemptId, RunId, Protocol, SequenceNum,
-                    StartedAt, FinishedAt, Success, ErrorMessage, RetryCount, extra_json
-                 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
-                    &[
-                        &a.attempt_id,
-                        &a.run_id,
-                        &protocol,
-                        &(a.sequence_num as i32),
-                        &a.started_at,
-                        &a.finished_at,
-                        &a.success,
-                        &err_msg,
-                        &(a.retry_count as i32),
-                        &extra_json,
-                    ],
-                )
-                .await
-            }
-            (false, false) => {
-                c.execute(
-                    "INSERT INTO RequestAttempt (
-                    AttemptId, RunId, Protocol, SequenceNum,
-                    StartedAt, FinishedAt, Success, ErrorMessage, RetryCount
-                 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
-                    &[
-                        &a.attempt_id,
-                        &a.run_id,
-                        &protocol,
-                        &(a.sequence_num as i32),
-                        &a.started_at,
-                        &a.finished_at,
-                        &a.success,
-                        &err_msg,
-                        &(a.retry_count as i32),
-                    ],
-                )
-                .await
-            }
-        };
+        let mut columns = String::from(
+            "AttemptId, RunId, Protocol, SequenceNum, \
+             StartedAt, FinishedAt, Success, ErrorMessage, RetryCount",
+        );
+        let mut placeholders = String::from("$1,$2,$3,$4,$5,$6,$7,$8,$9");
+        let mut params: Vec<&(dyn ToSql + Sync)> = vec![
+            &a.attempt_id,
+            &a.run_id,
+            &protocol,
+            &sequence_num,
+            &a.started_at,
+            &a.finished_at,
+            &a.success,
+            &err_msg,
+            &retry_count,
+        ];
+        for (name, value) in &optional {
+            columns.push_str(", ");
+            columns.push_str(name);
+            placeholders.push_str(&format!(",${}", params.len() + 1));
+            params.push(*value);
+        }
+        let sql = format!("INSERT INTO RequestAttempt ({columns}) VALUES ({placeholders})");
+
+        let result = c.execute(sql.as_str(), &params).await;
 
         match result {
             Ok(_) => {
@@ -1521,12 +1509,16 @@ async fn insert_request_attempt(a: &RequestAttempt, c: &PgClient) -> anyhow::Res
                 .await
                 .context("ROLLBACK SAVEPOINT RequestAttempt optional columns")?;
 
-                if with_url && is_missing_column_error(&err, "targeturl") {
-                    with_url = false; // legacy schema without V006
-                } else if with_extra && is_missing_column_error(&err, "extra_json") {
-                    with_extra = false; // legacy schema without extra_json
-                } else {
-                    return Err(err).context("INSERT RequestAttempt");
+                // Drop the one column the server says it does not have and
+                // retry; anything else is a real failure.
+                match optional
+                    .iter()
+                    .position(|(name, _)| is_missing_column_error(&err, name))
+                {
+                    Some(idx) => {
+                        optional.remove(idx);
+                    }
+                    None => return Err(err).context("INSERT RequestAttempt"),
                 }
             }
         }
@@ -1846,7 +1838,7 @@ mod tests {
 
     // ── Migration SQL content tests (no database required) ────────────────────
 
-    /// `shared/tester-schema.postgres.sql` is the copy of THIS crate's V001–V006
+    /// `shared/tester-schema.postgres.sql` is the copy of THIS crate's V001–V007
     /// migrations that the C# control plane embeds and applies lazily on first
     /// attempt ingest (AttemptPersister) — that is how a fresh control-plane
     /// database gets the RequestAttempt/… tables when no DB-backed tester ever
@@ -1865,6 +1857,7 @@ mod tests {
             V004_MIGRATION,
             V005_MIGRATION,
             V006_MIGRATION,
+            V007_MIGRATION,
         ]
         .concat();
         let idx = SHARED
@@ -1873,7 +1866,7 @@ mod tests {
         assert_eq!(
             &SHARED[idx..],
             body,
-            "shared/tester-schema.postgres.sql drifted from postgres.rs V001–V006 — regenerate it from the constants"
+            "shared/tester-schema.postgres.sql drifted from postgres.rs V001–V007 — regenerate it from the constants"
         );
     }
 
@@ -2548,6 +2541,50 @@ mod tests {
         // Run migrate twice — second call should be a no-op.
         backend.migrate().await.unwrap();
         backend.migrate().await.unwrap();
+    }
+
+    /// V007 (#782 P2): the burst's sample_index must survive the round trip,
+    /// distinct from retry_count. Without it five published samples are
+    /// indistinguishable from five retries — and a retry means the opposite
+    /// thing (it replaces a failed try rather than adding a measurement).
+    #[tokio::test]
+    #[ignore = "requires PostgreSQL"]
+    async fn db_postgres_persists_sample_index() {
+        let url = match pg_url() {
+            Some(u) => u,
+            None => return,
+        };
+        let backend = setup(&url).await;
+        let run_id = Uuid::new_v4();
+        let attempts: Vec<RequestAttempt> = (0..5)
+            .map(|i| {
+                let mut a = bare_attempt(run_id);
+                a.sample_index = i;
+                a.sequence_num = i;
+                // Sample 2 needed a retry; that must not shift its index.
+                a.retry_count = u32::from(i == 2);
+                a
+            })
+            .collect();
+        let mut run = make_run(run_id, attempts);
+        run.total_runs = 1;
+        backend.save(&run).await.unwrap();
+
+        let c = raw_client(&url).await;
+        let rows = c
+            .query(
+                "SELECT SampleIndex, RetryCount FROM RequestAttempt                  WHERE RunId = $1 ORDER BY SequenceNum",
+                &[&run_id],
+            )
+            .await
+            .unwrap();
+
+        let observed: Vec<(i32, i32)> = rows.iter().map(|r| (r.get(0), r.get(1))).collect();
+        assert_eq!(
+            observed,
+            vec![(0, 0), (1, 0), (2, 1), (3, 0), (4, 0)],
+            "every burst sample keeps its own index, and a retry does not move it"
+        );
     }
 
     #[tokio::test]

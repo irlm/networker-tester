@@ -56,16 +56,35 @@ public sealed class TestRunsContractTests
         var json = JsonSerializer.Serialize(SampleAttempt(), WebOptions);
         var item = JsonNode.Parse(json)!.AsObject();
 
+        // sample_index (#782 P2) joins retry_count as an always-emitted int:
+        // 0 on every non-burst attempt, which is the truthful value (a logical
+        // attempt without a burst has exactly one sample), so the frontend can
+        // read it unconditionally instead of handling a third "absent" state.
         var expected = new[]
         {
             "attempt_id", "protocol", "sequence_num", "started_at",
             "finished_at", "success", "error_message", "retry_count",
+            "sample_index",
         };
 
         Assert.Equal(expected, item.Select(p => p.Key).ToArray());
         Assert.Equal("http2", item["protocol"]!.GetValue<string>());
         Assert.Equal(3, item["sequence_num"]!.GetValue<int>());
         Assert.False(item["success"]!.GetValue<bool>());
+        Assert.Equal(1, item["retry_count"]!.GetValue<int>());
+        Assert.Equal(0, item["sample_index"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void Attempt_item_carries_the_burst_sample_index()
+    {
+        // A burst attempt (#782 P2) reports WHICH sample it is, separately
+        // from how many retries that sample needed — the two must never be
+        // conflated: a retry replaces a failed try, a sample is a repeat.
+        var burst = SampleAttempt() with { SampleIndex = 4, RetryCount = 1 };
+        var item = JsonNode.Parse(JsonSerializer.Serialize(burst, WebOptions))!.AsObject();
+
+        Assert.Equal(4, item["sample_index"]!.GetValue<int>());
         Assert.Equal(1, item["retry_count"]!.GetValue<int>());
     }
 

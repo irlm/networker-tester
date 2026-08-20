@@ -111,17 +111,21 @@ describe('buildDiagRequest', () => {
 
   // ── Burst sampling (#782 P2) ──────────────────────────────────────────
 
-  it('defaults to a single sample per mode (runs: 1, no name suffix)', () => {
+  it('defaults to a single sample per mode (samples: 1, no name suffix)', () => {
     const req = buildDiagRequest('example.com', 'quick');
     expect(req!.config.workload.runs).toBe(1);
+    expect(req!.config.workload.samples).toBe(1);
     expect(req!.configName).toBe('Diag: example.com (Quick)');
   });
 
-  it('burst: samples become workload.runs AND part of the reuse key', () => {
+  it('burst: samples become workload.samples (NOT runs) AND part of the reuse key', () => {
     const req = buildDiagRequest('example.com', 'quick', 5);
-    expect(req!.config.workload.runs).toBe(5);
-    // A x5 config must NOT find_or_create-collide with the runs:1 config —
-    // the server would return the existing row and silently drop the burst.
+    // The burst is `--samples 5` — five back-to-back samples of each logical
+    // attempt — not five full passes over every mode. `runs` stays 1.
+    expect(req!.config.workload.samples).toBe(5);
+    expect(req!.config.workload.runs).toBe(1);
+    // A x5 config must NOT find_or_create-collide with the single-sample
+    // config — the server would return the existing row and drop the burst.
     expect(req!.configName).toBe('Diag: example.com (Quick x5)');
   });
 
@@ -130,7 +134,8 @@ describe('buildDiagRequest', () => {
     expect(req!.configName).toMatch(
       /^Diag set: a\.example\.com \+1 \[[0-9a-f]{6}\] \(Standard x3\)$/,
     );
-    expect(req!.config.workload.runs).toBe(3);
+    expect(req!.config.workload.samples).toBe(3);
+    expect(req!.config.workload.runs).toBe(1);
   });
 
   // ── Watchdog headroom (review follow-up on #820) ────────────────────────
