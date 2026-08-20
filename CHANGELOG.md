@@ -13,6 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [0.28.258] - 2026-08-20
+
+### Fixed
+
+- **GCP provisioning works from a host that never ran \`gcloud auth\`** (#827).
+  The provisioner passed GOOGLE_APPLICATION_CREDENTIALS to the gcloud CLI, which
+  does not read it — every GCP create failed with "no active account selected"
+  while the account validated as active (the validator authenticates per-call).
+  All gcloud invocations (create AND the start/stop/delete/describe lifecycle,
+  which ran with no credentials at all) now pass the stored service-account key
+  via CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE, stateless per invocation.
+
 ## [0.28.257] - 2026-08-20
 
 ### Fixed
