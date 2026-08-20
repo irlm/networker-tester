@@ -1,8 +1,13 @@
 // Fair comparison across the URLs of a set run (#782 P2/P3 slice): the URLs
 // were probed in the SAME run on the SAME runner — every row is a controlled
 // same-tick experiment, so a side-by-side of per-phase medians is honest
-// without any shared-bucket machinery. Pure functions; rendered by
-// RunDetailPage's UrlComparisonTable.
+// PROVIDED the medians are drawn from the same mode population. Pooling all
+// modes would let protocol support masquerade as latency (#820 review): a URL
+// whose http3 attempts fail simply loses those samples, so its median is
+// computed over a different protocol mix than a URL where http3 succeeds.
+// Timing medians therefore only use attempts whose mode succeeded on EVERY
+// URL (comparedModes); the success-rate row deliberately keeps all attempts.
+// Pure functions; rendered by RunDetailPage's UrlComparisonTable.
 
 import type { LiveAttempt } from '../../api/types';
 
@@ -27,6 +32,18 @@ export interface UrlComparisonRow {
 export interface UrlComparison {
   columns: UrlComparisonColumn[];
   rows: UrlComparisonRow[];
+  /**
+   * Modes (tester protocol ids, e.g. 'http1'/'http3') with >= 1 successful
+   * attempt on EVERY URL — the population the timing medians draw from.
+   * Empty when the URLs share no successful mode; timing rows then pool all
+   * successful attempts but crown no winner (bestIndex null).
+   */
+  comparedModes: string[];
+  /**
+   * Modes successful on some but not all URLs — dropped from the timing
+   * comparison so protocol support can't masquerade as latency (#820 review).
+   */
+  excludedModes: string[];
 }
 
 function median(values: number[]): number | null {
@@ -48,7 +65,9 @@ interface MetricDef {
 
 // Per-phase timings, in connection order. Medians over SUCCESSFUL attempts
 // only — phase rows from failed attempts (e.g. a TLS handshake that timed
-// out at the cap) would skew a latency comparison.
+// out at the cap) would skew a latency comparison — and only over modes in
+// comparedModes (see buildUrlComparison), so every URL's median describes
+// the same protocol mix.
 const PHASE_METRICS: MetricDef[] = [
   { key: 'dns', label: 'dns lookup', pick: a => a.dns?.duration_ms },
   { key: 'tcp', label: 'tcp connect', pick: a => a.tcp?.connect_duration_ms },
@@ -88,8 +107,25 @@ export function buildUrlComparison(groups: Record<string, LiveAttempt[]>): UrlCo
     attempts: groups[url].length,
   }));
 
+  // Modes with >= 1 successful attempt, per URL; the timing comparison only
+  // uses the intersection so both medians describe the same protocol mix.
+  const successfulModeSets = urls.map(
+    url => new Set(groups[url].filter(a => a.success).map(a => a.protocol)),
+  );
+  const allSuccessfulModes = [...new Set(successfulModeSets.flatMap(s => [...s]))].sort();
+  const comparedModes = allSuccessfulModes.filter(m => successfulModeSets.every(s => s.has(m)));
+  const excludedModes = allSuccessfulModes.filter(m => !comparedModes.includes(m));
+  // No shared successful mode → the populations aren't comparable. Fall back
+  // to pooling all successful attempts so the values still render, but crown
+  // no winner on any timing row.
+  const noSharedMode = comparedModes.length === 0;
+  const comparedSet = new Set(comparedModes);
+
   const rows: UrlComparisonRow[] = [];
 
+  // Success rate stays over ALL attempts of ALL modes — protocol-support
+  // differences (e.g. http3 failing on one URL only) are exactly what this
+  // row should surface, so it must not be constrained to comparedModes.
   const successValues = urls.map(url => {
     const attempts = groups[url];
     if (attempts.length === 0) return null;
@@ -107,7 +143,7 @@ export function buildUrlComparison(groups: Record<string, LiveAttempt[]>): UrlCo
   for (const metric of PHASE_METRICS) {
     const values = urls.map(url => {
       const samples = groups[url]
-        .filter(a => a.success)
+        .filter(a => a.success && (noSharedMode || comparedSet.has(a.protocol)))
         .map(metric.pick)
         .filter((v): v is number => v != null);
       return median(samples);
@@ -119,11 +155,11 @@ export function buildUrlComparison(groups: Record<string, LiveAttempt[]>): UrlCo
       unit: 'ms',
       higherIsBetter: false,
       values,
-      bestIndex: bestIndexOf(values, false),
+      bestIndex: noSharedMode ? null : bestIndexOf(values, false),
     });
   }
 
-  return { columns, rows };
+  return { columns, rows, comparedModes, excludedModes };
 }
 
 export function formatComparisonValue(value: number | null, unit: 'ms' | '%'): string {

@@ -2,7 +2,10 @@
 // successful attempts, side by side. Same run, same runner, same tick, so no
 // shared-bucket machinery is needed; the honesty rules are (a) medians ignore
 // failed attempts, (b) a winner is crowned only when unique among >= 2
-// non-null values, (c) single-URL runs produce no comparison at all.
+// non-null values, (c) single-URL runs produce no comparison at all, and
+// (d) timing medians only pool modes successful on EVERY URL (#820 review) —
+// otherwise protocol support masquerades as latency; the success-rate row
+// alone keeps all attempts of all modes.
 
 import { describe, expect, it } from 'vitest';
 import type { LiveAttempt } from '../../api/types';
@@ -95,6 +98,75 @@ describe('buildUrlComparison', () => {
     const tls = oneSided.rows.find(r => r.key === 'tls')!;
     expect(tls.values).toEqual([42, null]);
     expect(tls.bestIndex).toBeNull();
+  });
+
+  // #820 review: the motivating scenario — A speaks http3, B's http3 attempts
+  // fail. B's timing median is over http1 only, so A's must be too; pooling
+  // A's fast h3 samples would compare different populations, and pre-fix the
+  // mode mix (not latency) could pick the winner.
+  it('timing medians only pool modes successful on every URL', () => {
+    const groups = {
+      [A]: [
+        attempt({ protocol: 'http1', http: { status_code: 200, ttfb_ms: 100, total_duration_ms: 200, negotiated_version: 'http/1.1' } }),
+        attempt({ protocol: 'http1', http: { status_code: 200, ttfb_ms: 120, total_duration_ms: 240, negotiated_version: 'http/1.1' } }),
+        attempt({ protocol: 'http3', http: { status_code: 200, ttfb_ms: 20, total_duration_ms: 40, negotiated_version: 'h3' } }),
+        attempt({ protocol: 'http3', http: { status_code: 200, ttfb_ms: 30, total_duration_ms: 60, negotiated_version: 'h3' } }),
+      ],
+      [B]: [
+        attempt({ protocol: 'http1', http: { status_code: 200, ttfb_ms: 150, total_duration_ms: 300, negotiated_version: 'http/1.1' } }),
+        attempt({ protocol: 'http3', success: false }),
+        attempt({ protocol: 'http3', success: false }),
+      ],
+    };
+    const cmp = buildUrlComparison(groups)!;
+    expect(cmp.comparedModes).toEqual(['http1']);
+    expect(cmp.excludedModes).toEqual(['http3']);
+
+    const byKey = Object.fromEntries(cmp.rows.map(r => [r.key, r]));
+    // A's median is over http1 only: 110, NOT the pooled [20,30,100,120] = 65.
+    expect(byKey.ttfb.values).toEqual([110, 150]);
+    expect(byKey.ttfb.bestIndex).toBe(0); // A wins on the shared mode
+    // Success rate keeps ALL attempts — B's failed http3 probes are the very
+    // protocol-support signal this row exists to surface.
+    expect(byKey.success.values).toEqual([100, (1 / 3) * 100]);
+    expect(byKey.success.bestIndex).toBe(0);
+  });
+
+  it('empty mode intersection: values pooled for reference, no timing winner crowned', () => {
+    const groups = {
+      [A]: [
+        attempt({ protocol: 'http3', http: { status_code: 200, ttfb_ms: 25, total_duration_ms: 50, negotiated_version: 'h3' } }),
+        attempt({ protocol: 'http1', success: false }),
+      ],
+      [B]: [
+        attempt({ protocol: 'http1', http: { status_code: 200, ttfb_ms: 90, total_duration_ms: 180, negotiated_version: 'http/1.1' } }),
+      ],
+    };
+    const cmp = buildUrlComparison(groups)!;
+    expect(cmp.comparedModes).toEqual([]);
+    expect(cmp.excludedModes).toEqual(['http1', 'http3']);
+
+    const byKey = Object.fromEntries(cmp.rows.map(r => [r.key, r]));
+    // Values are still shown (pooled over all successful attempts)…
+    expect(byKey.ttfb.values).toEqual([25, 90]);
+    expect(byKey.total.values).toEqual([50, 180]);
+    // …but no timing row crowns a winner — the populations aren't comparable.
+    for (const row of cmp.rows.filter(r => r.unit === 'ms')) {
+      expect(row.bestIndex).toBeNull();
+    }
+    // The success-rate row is exempt: all attempts, normal winner logic.
+    expect(byKey.success.values).toEqual([50, 100]);
+    expect(byKey.success.bestIndex).toBe(1);
+  });
+
+  it('all modes shared → nothing excluded', () => {
+    const cmp = buildUrlComparison({
+      [A]: [attempt({ protocol: 'http2', dns: { duration_ms: 10, query_name: 'a', resolved_ips: [] } })],
+      [B]: [attempt({ protocol: 'http2', dns: { duration_ms: 20, query_name: 'b', resolved_ips: [] } })],
+    })!;
+    expect(cmp.comparedModes).toEqual(['http2']);
+    expect(cmp.excludedModes).toEqual([]);
+    expect(cmp.rows.find(r => r.key === 'dns')!.bestIndex).toBe(0);
   });
 });
 

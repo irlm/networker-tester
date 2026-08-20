@@ -90,6 +90,13 @@ export interface TestConfigListItem {
   project_id: string;
   name: string;
   test_kind?: TestKind;
+  /**
+   * The list wire DTO carries the FULL endpoint object (TestConfigsEndpoints.cs
+   * ToDto returns the whole config) — declaring it lets set-host resolution
+   * read endpoint.hosts without a per-config detail fetch. Optional only for
+   * cached/legacy client-built entries that predate this field.
+   */
+  endpoint?: EndpointRef;
   endpoint_kind: EndpointKind;
   modes: string[];
   has_methodology: boolean;

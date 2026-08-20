@@ -45,6 +45,28 @@ public static class SchedulesEndpoints
             }
 
             var user = ctx.GetAuthUser();
+            var timezone = string.IsNullOrWhiteSpace(body.timezone) ? "UTC" : body.timezone;
+
+            // Idempotent create (#820 review): a double-click / pre-hydration
+            // re-click must not mint a duplicate schedule — ix_test_schedule_config
+            // is non-unique, so nothing at the DB layer stops it, and the UI's
+            // pause only disables the first row it finds while the duplicate
+            // keeps firing. An identical row (config + cron + timezone) is
+            // returned as-is; `enabled` is deliberately NOT touched — the
+            // client PATCHes it separately. The residual concurrent-POST race
+            // is accepted: closing it needs a unique index, which needs a data
+            // migration to dedupe prod rows first; the dashboard adds an
+            // in-flight guard client-side.
+            var existing = await db.TestSchedules
+                .AsNoTracking()
+                .FirstOrDefaultAsync(s => s.ProjectId == projectId
+                    && s.TestConfigId == testConfigId
+                    && s.CronExpr == body.cron_expr
+                    && s.Timezone == timezone);
+            if (existing is not null)
+            {
+                return Results.Ok(ToDto(existing));
+            }
 
             var row = new Data.Entities.TestSchedule
             {
@@ -54,7 +76,7 @@ public static class SchedulesEndpoints
                 // cron_expr / timezone are persisted verbatim; cron validation and
                 // next_fire_at computation are the scheduler's responsibility.
                 CronExpr = body.cron_expr,
-                Timezone = string.IsNullOrWhiteSpace(body.timezone) ? "UTC" : body.timezone,
+                Timezone = timezone,
                 Enabled = body.enabled ?? true,
                 CreatedBy = user?.UserId,
                 CreatedAt = DateTime.UtcNow,

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -73,25 +74,6 @@ public static class TestConfigWriteEndpoints
                 return ApiError.BadRequest("test_kind must be one of: network, url_probe, sdk_probe, benchmark");
             }
 
-            // Idempotent create, opt-in (#812): `find_or_create: true` makes a
-            // name collision return the EXISTING row (200, same DTO as a fresh
-            // create) instead of 409. Find-or-create by name over the capped
-            // LIST endpoint is unsound (the 200-newest window silently drops
-            // old names — the URL Probe 409 and the canary wedge before it);
-            // this is the race-free server-side replacement. The pre-check here
-            // handles the common case and mirrors the client's reuse fast path
-            // (no re-run of the capability gate for a config that already
-            // exists); the UNIQUE-violation catch below closes the TOCTOU race.
-            if (req.FindOrCreate == true)
-            {
-                var existing = await db.TestConfigs.AsNoTracking()
-                    .FirstOrDefaultAsync(c => c.ProjectId == projectId && c.Name == req.Name, ct);
-                if (existing is not null)
-                {
-                    return Results.Ok(ToDto(existing));
-                }
-            }
-
             // Phase 2 capability enforcement: reject (mode, target) combos that
             // can only ever fail — e.g. throughput / sdkprobe / apibench against a
             // raw URL (endpoint.kind "network"), or an HTTP/3 mode through a
@@ -126,6 +108,33 @@ public static class TestConfigWriteEndpoints
                     $"incompatible mode(s) for {target}: {detail}");
             }
 
+            // Idempotent create, opt-in (#812): `find_or_create: true` makes a
+            // name collision return the existing row (200, same DTO as a fresh
+            // create) instead of 409. Find-or-create by name over the capped
+            // LIST endpoint is unsound (the 200-newest window silently drops
+            // old names — the URL Probe 409 and the canary wedge before it);
+            // this is the race-free server-side replacement. Reuse is an UPSERT
+            // toward the request (#820 review): a stored row whose endpoint /
+            // workload / max_duration_secs contradict the request is updated to
+            // match, so a stale config never silently probes old targets.
+            // Because reuse can rewrite the stored endpoint/workload, this
+            // check must sit AFTER the capability gate above — updated
+            // modes/targets are validated exactly like a fresh create. The
+            // UNIQUE-violation catch below closes the TOCTOU race.
+            if (req.FindOrCreate == true)
+            {
+                var existing = await db.TestConfigs
+                    .FirstOrDefaultAsync(c => c.ProjectId == projectId && c.Name == req.Name, ct);
+                if (existing is not null)
+                {
+                    if (ReconcileWithRequest(existing, req, endpointKind))
+                    {
+                        await db.SaveChangesAsync(ct);
+                    }
+                    return Results.Ok(ToDto(existing));
+                }
+            }
+
             var now = DateTime.UtcNow;
             var cfg = new Data.Entities.TestConfig
             {
@@ -156,12 +165,18 @@ public static class TestConfigWriteEndpoints
                 if (req.FindOrCreate == true)
                 {
                     // Lost the race to a concurrent create — the row exists NOW
-                    // even though the pre-check missed it. Return it (#812).
+                    // even though the pre-check missed it. Same UPSERT-toward-
+                    // the-request semantics as the pre-check (#812, #820 review);
+                    // the read must be tracked so the reconcile can save.
                     db.Entry(cfg).State = EntityState.Detached;
-                    var existing = await db.TestConfigs.AsNoTracking()
+                    var existing = await db.TestConfigs
                         .FirstOrDefaultAsync(c => c.ProjectId == projectId && c.Name == req.Name, ct);
                     if (existing is not null)
                     {
+                        if (ReconcileWithRequest(existing, req, endpointKind))
+                        {
+                            await db.SaveChangesAsync(ct);
+                        }
                         return Results.Ok(ToDto(existing));
                     }
                     // Created-then-deleted between the violation and the re-read:
@@ -381,8 +396,10 @@ public static class TestConfigWriteEndpoints
 
     /// <summary>Mirrors Rust <c>CreateTestConfigRequest</c>, plus the C#-side
     /// <c>find_or_create</c> flag (#812): when true, a UNIQUE(project_id, name)
-    /// collision returns the existing config (200) instead of 409. Absent/false
-    /// keeps the loud conflict for intentional duplicate detection.</summary>
+    /// collision returns the existing config (200) instead of 409, reconciled
+    /// toward this request's endpoint / workload / max_duration_secs (#820
+    /// review). Absent/false keeps the loud conflict for intentional duplicate
+    /// detection.</summary>
     public sealed record CreateTestConfigRequest(
         [property: JsonPropertyName("name")] string Name,
         [property: JsonPropertyName("description")] string? Description,
@@ -583,6 +600,49 @@ public static class TestConfigWriteEndpoints
             return list;
         }
         return [];
+    }
+
+    /// <summary>
+    /// find_or_create reconciliation (#820 review): the stored row must match
+    /// the request's endpoint / workload / max_duration_secs — a reused name
+    /// must never carry stale targets or durations into the run. JSON blocks
+    /// are compared structurally (<see cref="JsonNode.DeepEquals"/>) so
+    /// whitespace / key-order differences don't count as changes.
+    /// <c>max_duration_secs</c> follows the request only when the request
+    /// carries it (absent keeps the stored value — same as PATCH). Returns
+    /// true when the row was mutated; the caller owns the save.
+    /// </summary>
+    private static bool ReconcileWithRequest(
+        Data.Entities.TestConfig existing, CreateTestConfigRequest req, string endpointKind)
+    {
+        var changed = false;
+
+        var reqEndpoint = req.Endpoint.GetRawText();
+        if (!JsonNode.DeepEquals(JsonNode.Parse(existing.EndpointRef), JsonNode.Parse(reqEndpoint)))
+        {
+            existing.EndpointRef = reqEndpoint;
+            existing.EndpointKind = endpointKind;
+            changed = true;
+        }
+
+        var reqWorkload = req.Workload.GetRawText();
+        if (!JsonNode.DeepEquals(JsonNode.Parse(existing.Workload), JsonNode.Parse(reqWorkload)))
+        {
+            existing.Workload = reqWorkload;
+            changed = true;
+        }
+
+        if (req.MaxDurationSecs is int md && existing.MaxDurationSecs != md)
+        {
+            existing.MaxDurationSecs = md;
+            changed = true;
+        }
+
+        if (changed)
+        {
+            existing.UpdatedAt = DateTime.UtcNow;
+        }
+        return changed;
     }
 
     private static bool IsUniqueViolation(DbUpdateException ex)

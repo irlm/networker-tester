@@ -6,6 +6,15 @@
 // returns the existing row (200, same shape as a fresh create) instead of
 // conflicting. These tests pin that flag — and the config shape — for BOTH the
 // single-URL path and the multi-URL set path (#788/#782 `Diag set:` naming).
+//
+// Review follow-ups on #820/#782:
+// - Set names now carry a 6-hex membership hash over the SORTED full probe
+//   URLs — first-host+count alone made "a.com b.com" and "a.com c.com" share a
+//   reuse key, and find_or_create silently probed the first set's URLs.
+// - max_duration_secs is always set and scales with samples × URLs × preset
+//   cost — the flat 1800s (bursts only) let a Full x5 over 8+ URLs get
+//   watchdog-killed mid-flight, and a single-sample multi-URL Full set got no
+//   headroom at all.
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -35,7 +44,7 @@ describe('buildDiagRequest', () => {
     expect(req!.config.find_or_create).toBe(true);
     expect(req!.isSet).toBe(true);
     expect(req!.host).toBe('a.example.com');
-    expect(req!.configName).toBe('Diag set: a.example.com +2 (Quick)');
+    expect(req!.configName).toMatch(/^Diag set: a\.example\.com \+2 \[[0-9a-f]{6}\] \(Quick\)$/);
     expect(req!.config.endpoint).toEqual({
       kind: 'network',
       host: 'https://a.example.com/',
@@ -46,8 +55,38 @@ describe('buildDiagRequest', () => {
   it('re-running the same host+preset builds the SAME config name (reuse key)', () => {
     const first = buildDiagRequest('https://example.com/pricing', 'standard');
     const again = buildDiagRequest('https://example.com/pricing', 'standard');
+    // Single-URL names stay hash-less — no membership to encode.
     expect(first!.configName).toBe('Diag: example.com (Standard)');
     expect(again!.configName).toBe(first!.configName);
+  });
+
+  // ── Set membership hash (review follow-up on #820) ─────────────────────
+
+  it('sets differing only in the SECOND member get different reuse keys', () => {
+    // The collision that motivated the hash: same first host, same count —
+    // the old "+N"-only name made "a.com c.com" reuse "a.com b.com"'s config
+    // and silently probe the wrong URLs.
+    const ab = buildDiagRequest('a.example.com b.example.com', 'quick');
+    const ac = buildDiagRequest('a.example.com c.example.com', 'quick');
+    expect(ab!.configName).not.toBe(ac!.configName);
+  });
+
+  it('the same set hashes deterministically and order-insensitively', () => {
+    const once = buildDiagRequest('a.example.com b.example.com', 'quick');
+    const again = buildDiagRequest('a.example.com b.example.com', 'quick');
+    expect(again!.configName).toBe(once!.configName);
+    // Hash input is SORTED — entry order must not fork the reuse key. The
+    // first host in the display prefix still differs by entry order, so
+    // compare the [hash] segment.
+    const hashOf = (name: string) => name.match(/\[([0-9a-f]{6})\]/)![1];
+    const reversed = buildDiagRequest('b.example.com a.example.com', 'quick');
+    expect(hashOf(reversed!.configName)).toBe(hashOf(once!.configName));
+  });
+
+  it('same hosts with different PATHS are different sets (probe URLs hashed)', () => {
+    const roots = buildDiagRequest('a.example.com b.example.com', 'quick');
+    const paths = buildDiagRequest('a.example.com b.example.com/health', 'quick');
+    expect(paths!.configName).not.toBe(roots!.configName);
   });
 
   it('preserves the full URL as entered (path included) in the probe endpoint', () => {
@@ -76,7 +115,6 @@ describe('buildDiagRequest', () => {
     const req = buildDiagRequest('example.com', 'quick');
     expect(req!.config.workload.runs).toBe(1);
     expect(req!.configName).toBe('Diag: example.com (Quick)');
-    expect(req!.config.max_duration_secs).toBeUndefined();
   });
 
   it('burst: samples become workload.runs AND part of the reuse key', () => {
@@ -85,14 +123,37 @@ describe('buildDiagRequest', () => {
     // A x5 config must NOT find_or_create-collide with the runs:1 config —
     // the server would return the existing row and silently drop the burst.
     expect(req!.configName).toBe('Diag: example.com (Quick x5)');
-    // Bursts get watchdog headroom (a Full x5 set brushes the 900s default).
-    expect(req!.config.max_duration_secs).toBe(1800);
   });
 
-  it('burst on a set keeps the set naming', () => {
+  it('burst on a set keeps the set naming (x-suffix inside the preset label)', () => {
     const req = buildDiagRequest('a.example.com b.example.com', 'standard', 3);
-    expect(req!.configName).toBe('Diag set: a.example.com +1 (Standard x3)');
+    expect(req!.configName).toMatch(
+      /^Diag set: a\.example\.com \+1 \[[0-9a-f]{6}\] \(Standard x3\)$/,
+    );
     expect(req!.config.workload.runs).toBe(3);
+  });
+
+  // ── Watchdog headroom (review follow-up on #820) ────────────────────────
+  // max_duration_secs = clamp(900, 2 × PRESET_EST_SECS × samples × URLs, 7200)
+  // — ALWAYS set. The flat 1800s (bursts only) killed a Full x5 over 8+ URLs
+  // mid-flight and gave a single-sample multi-URL Full set nothing at all.
+
+  it('single quick probe keeps the 900s default floor', () => {
+    expect(buildDiagRequest('example.com', 'quick')!.config.max_duration_secs).toBe(900);
+  });
+
+  it('full, 1 sample, 1 URL stays at the floor (2×45s < 900s)', () => {
+    expect(buildDiagRequest('example.com', 'full')!.config.max_duration_secs).toBe(900);
+  });
+
+  it('full x5 over 8 URLs scales up (2 × 45 × 5 × 8 = 3600s — breached the old 1800s)', () => {
+    const urls = Array.from({ length: 8 }, (_, i) => `h${i}.example.com`).join(' ');
+    expect(buildDiagRequest(urls, 'full', 5)!.config.max_duration_secs).toBe(3600);
+  });
+
+  it('runaway sets clamp at the 7200s ceiling (split the set instead)', () => {
+    const urls = Array.from({ length: 40 }, (_, i) => `h${i}.example.com`).join(' ');
+    expect(buildDiagRequest(urls, 'full', 5)!.config.max_duration_secs).toBe(7200);
   });
 });
 

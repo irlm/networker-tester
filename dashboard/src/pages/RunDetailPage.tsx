@@ -707,7 +707,9 @@ export function RunDetailPage() {
 // ─── URL set comparison (#782) ───────────────────────────────────────────────
 // Side-by-side per-phase medians for a multi-URL set run. The green cell is
 // the row's unique winner; ties and single-value rows crown nobody. Medians
-// are over successful attempts only (buildUrlComparison).
+// are over successful attempts of the modes shared by every URL — modes that
+// only succeed on some URLs are excluded so protocol support can't pose as
+// latency (#820 review), and the footnote says so.
 function UrlComparisonTable({ comparison }: { comparison: UrlComparison }) {
   return (
     <div className="table-container mb-4">
@@ -747,6 +749,13 @@ function UrlComparisonTable({ comparison }: { comparison: UrlComparison }) {
           </tbody>
         </table>
       </div>
+      {comparison.excludedModes.length > 0 && (
+        <p className="px-4 py-2 text-xs text-faint border-t border-gray-800/50">
+          {comparison.comparedModes.length > 0
+            ? `timings compared over shared modes: ${comparison.comparedModes.join(', ')} — excluded: ${comparison.excludedModes.join(', ')} (not successful on every URL)`
+            : 'URLs share no successful mode — timings shown for reference, no winners marked'}
+        </p>
+      )}
     </div>
   );
 }
