@@ -1,0 +1,157 @@
+name: CI hosts watchdog
+
+# Rescues runs wedged behind a CI host that died AFTER the run started.
+#
+# `pick-ci-hosts` decides once, when the run begins. If a self-hosted CI host
+# goes offline between that decision and the job being dispatched, the job
+# queues against labels nothing can satisfy — and `timeout-minutes` does NOT
+# help, because that clock only starts when a job STARTS running. GitHub's own
+# limit is 24 hours, so the run sits red-less and unfinished for a day.
+#
+# That is not hypothetical: on 2026-08-20 the Mac mini rebooted mid-release
+# and the `Build x86_64-apple-darwin` job queued indefinitely, wedging
+# v0.28.268 twice until it was cancelled by hand.
+#
+# This watchdog cancels such a run so the normal re-run path applies (and the
+# next `pick-ci-hosts` sees no online host, routing to GitHub-hosted). It only
+# ever touches a run that is BOTH:
+#   * queued on `self-hosted` labels for longer than STUCK_MINUTES, and
+#   * unsatisfiable — no runner carrying every one of those labels is online.
+# A job merely waiting behind a BUSY host is left alone: that is the fleet
+# working as intended.
+
+on:
+  schedule:
+    - cron: '*/13 * * * *'   # every 13 min — off-minute, clear of the other crons
+  workflow_dispatch:
+    inputs:
+      stuck_minutes:
+        description: Minutes a job must have been queued before it counts as stuck
+        required: false
+        default: "12"
+      dry_run:
+        description: Report only; do not cancel
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  actions: write     # cancel wedged runs
+  contents: read
+
+concurrency:
+  group: ci-hosts-watchdog
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    name: Sweep for unsatisfiable queued jobs
+    runs-on: ubuntu-latest       # never self-hosted: this is what rescues them
+    timeout-minutes: 10
+    steps:
+      - name: Cancel runs queued against offline CI hosts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Listing self-hosted runners needs a PAT (GITHUB_TOKEN cannot);
+          # same secret the picker uses. Without it the sweep no-ops loudly.
+          HOSTS_TOKEN: ${{ secrets.CI_HOSTS_STATUS_TOKEN }}
+          REPO: ${{ github.repository }}
+          API: ${{ github.api_url }}
+          STUCK_MINUTES: ${{ inputs.stuck_minutes || '12' }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${HOSTS_TOKEN}" ]; then
+            echo "::warning title=ci-hosts-watchdog::CI_HOSTS_STATUS_TOKEN is not set — cannot list self-hosted runners, nothing swept"
+            exit 0
+          fi
+
+          # ── which labels can actually be served right now? ────────────────
+          runners="$(mktemp)"
+          code="$(curl -sS --max-time 20 -o "$runners" -w '%{http_code}' \
+            -H "Authorization: Bearer ${HOSTS_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "${API}/repos/${REPO}/actions/runners?per_page=100" || echo 000)"
+          if [ "$code" != "200" ]; then
+            echo "::warning title=ci-hosts-watchdog::runners API returned HTTP ${code} — not sweeping (a false cancel is worse than a late one)"
+            exit 0
+          fi
+
+          # Online runners' label sets, one JSON array per line, lower-cased
+          # (GitHub folds `linux` to `Linux`, so compare case-insensitively).
+          jq -r '[ .runners[] | select(.status == "online")
+                   | [ .labels[].name | ascii_downcase ] ]' "$runners" > /tmp/online-labels.json
+          echo "online CI hosts: $(jq 'length' /tmp/online-labels.json)"
+          jq -r '.[] | "  " + join(",")' /tmp/online-labels.json
+
+          now="$(date -u +%s)"
+          stuck_secs=$(( STUCK_MINUTES * 60 ))
+          swept=0
+
+          {
+            echo "### CI hosts watchdog"
+            echo
+            echo "Threshold: queued > ${STUCK_MINUTES} min against labels no online host carries."
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # ── every run still in flight ─────────────────────────────────────
+          for run_id in $(gh api "repos/${REPO}/actions/runs?status=in_progress&per_page=50" \
+                            --jq '.workflow_runs[].id'; \
+                          gh api "repos/${REPO}/actions/runs?status=queued&per_page=50" \
+                            --jq '.workflow_runs[].id'); do
+            jobs_json="$(mktemp)"
+            gh api "repos/${REPO}/actions/runs/${run_id}/jobs?per_page=100" > "$jobs_json" 2>/dev/null || continue
+
+            # Queued jobs whose required labels include self-hosted. `labels`
+            # on a job is exactly what runs-on asked for.
+            stuck_job="$(jq -r --argjson now "$now" --argjson limit "$stuck_secs" '
+              .jobs[]
+              | select(.status == "queued")
+              | select(any(.labels[]; ascii_downcase == "self-hosted"))
+              | select(($now - (.created_at | fromdateiso8601)) > $limit)
+              | { name: .name, labels: [ .labels[] | ascii_downcase ],
+                  waited: (($now - (.created_at | fromdateiso8601)) / 60 | floor) }
+              | @json' "$jobs_json" | head -1)"
+            [ -n "$stuck_job" ] || continue
+
+            name="$(jq -r '.name' <<<"$stuck_job")"
+            waited="$(jq -r '.waited' <<<"$stuck_job")"
+            labels="$(jq -r '.labels | join(",")' <<<"$stuck_job")"
+
+            # Satisfiable = some online host carries EVERY requested label.
+            satisfiable="$(jq --argjson want "$(jq -c '.labels' <<<"$stuck_job")" '
+              [ .[] | select( ($want - .) | length == 0 ) ] | length' /tmp/online-labels.json)"
+
+            if [ "$satisfiable" -gt 0 ]; then
+              echo "run ${run_id}: '${name}' queued ${waited}m on [${labels}] — a matching host IS online (busy), leaving it"
+              continue
+            fi
+
+            wf="$(gh api "repos/${REPO}/actions/runs/${run_id}" --jq '.name + " / " + (.head_branch // "?")')"
+            echo "::warning title=ci-hosts-watchdog::run ${run_id} (${wf}) — '${name}' queued ${waited}m on [${labels}] with no online host; cancelling so it can be re-run onto GitHub-hosted"
+            printf -- '- run [%s](%s/%s/actions/runs/%s) — `%s` queued %sm on `%s`%s\n' \
+              "$run_id" "${GITHUB_SERVER_URL}" "${REPO}" "$run_id" "$name" "$waited" "$labels" \
+              "$( [ "$DRY_RUN" = "true" ] && echo ' — dry run, not cancelled' || echo ' — **cancelled**')" \
+              >> "$GITHUB_STEP_SUMMARY"
+
+            if [ "$DRY_RUN" != "true" ]; then
+              gh api --method POST "repos/${REPO}/actions/runs/${run_id}/cancel" --silent || \
+                echo "::warning title=ci-hosts-watchdog::could not cancel run ${run_id}"
+            fi
+            swept=$(( swept + 1 ))
+          done
+
+          if [ "$swept" -eq 0 ]; then
+            echo "nothing stuck"
+            echo "Nothing stuck." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "swept ${swept} wedged run(s)"
+            {
+              echo
+              echo "Re-run each cancelled run: \`gh run rerun <id>\`. The fresh"
+              echo "\`pick-ci-hosts\` will route to GitHub-hosted while the host is down."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

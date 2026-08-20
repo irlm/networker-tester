@@ -23,6 +23,13 @@
 #
 #   install-ci-host.sh --repo OWNER/REPO [--token-file ~/ci-host/token] [--name NAME]
 #                      [--runner-group GROUP] [--runner-version X.Y.Z] [--skip-toolchains]
+#                      [--daemon | --agent]
+#
+# --agent (default) installs a LaunchAgent and uses NO sudo, but the loop
+# only runs while the user is logged in: after a reboot the CI host stays
+# offline until someone logs in. --daemon installs a LaunchDaemon that
+# starts at boot as this user (one sudo, once) — the right choice for a
+# headless Mac mini.
 #
 # Runs on the stock /bin/bash 3.2 on purpose (no bash 4 on a fresh Mac).
 
@@ -38,6 +45,9 @@ RUNNER_VERSION="${CI_HOST_RUNNER_VERSION:-}"
 NODE_MAJOR="${CI_HOST_NODE_MAJOR:-22}"
 DOTNET_CHANNEL="${CI_HOST_DOTNET_CHANNEL:-10.0}"
 SKIP_TOOLCHAINS=0
+# agent (default, zero sudo, starts at user login) | daemon (one sudo,
+# starts at boot with no login — what a headless CI host wants).
+BOOT_MODE="${CI_HOST_BOOT_MODE:-agent}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -48,12 +58,19 @@ while [ $# -gt 0 ]; do
     --runner-group) GROUP="$2"; shift ;;
     --runner-version) RUNNER_VERSION="$2"; shift ;;
     --skip-toolchains) SKIP_TOOLCHAINS=1 ;;
+    --daemon) BOOT_MODE=daemon ;;
+    --agent) BOOT_MODE=agent ;;
     -h|--help) sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
   shift
 done
 
+boot_out() { # stop whichever loop is registered, in whichever domain
+  launchctl bootout "gui/$(id -u)/${PLIST_LABEL}" 2>/dev/null || true
+  [ "$BOOT_MODE" = daemon ] && sudo launchctl bootout "system/${PLIST_LABEL}" 2>/dev/null
+  return 0
+}
 log() { printf '\033[1;34m[install-ci-host]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[install-ci-host] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
@@ -149,10 +166,25 @@ if [ -z "$RUNNER_VERSION" ]; then
   [ -n "$RUNNER_VERSION" ] && [ "$RUNNER_VERSION" != null ] || die "could not resolve the latest actions/runner version (pass --runner-version)"
 fi
 PLIST_LABEL=com.networker.ci-host
-PLIST="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
+# Where the loop lives decides whether it survives a reboot:
+#   agent  (default, no sudo) — ~/Library/LaunchAgents, starts at USER LOGIN.
+#   daemon (--daemon, one sudo) — /Library/LaunchDaemons, starts at BOOT with
+#           UserName=$USER, so a power cut does not silently take the CI host
+#           offline. Seen for real on 2026-08-20: the Mac rebooted, nobody
+#           logged in, and ci-macos-1 stayed missing until it was started by
+#           hand over ssh.
+if [ "$BOOT_MODE" = daemon ]; then
+  PLIST="/Library/LaunchDaemons/${PLIST_LABEL}.plist"
+  PLIST_DOMAIN="system"
+  PLIST_TARGET="system/${PLIST_LABEL}"
+else
+  PLIST="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
+  PLIST_DOMAIN="gui/$(id -u)"
+  PLIST_TARGET="gui/$(id -u)/${PLIST_LABEL}"
+fi
 if [ ! -x "$RUNNER_DIR/run.sh" ] || ! grep -q "\"$RUNNER_VERSION\"" "$RUNNER_DIR/.runner-version" 2>/dev/null; then
   log "installing actions-runner ${RUNNER_VERSION} (${RUNNER_ARCH}) into $RUNNER_DIR"
-  launchctl bootout "gui/$(id -u)/${PLIST_LABEL}" 2>/dev/null || true
+  boot_out
   mkdir -p "$RUNNER_DIR"
   tmp="$(mktemp -d)"
   fetch "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-${RUNNER_ARCH}-${RUNNER_VERSION}.tar.gz" "$tmp/runner.tgz"
@@ -197,13 +229,26 @@ done
 LOOP
 chmod 0755 "$CI_DIR/ci-host-loop.sh"
 
-mkdir -p "$HOME/Library/LaunchAgents"
-cat > "$PLIST" <<PLIST
+# A daemon gets no HOME and no login session, so both are stated explicitly;
+# an agent inherits them. Everything else is identical between the two.
+if [ "$BOOT_MODE" = daemon ]; then
+  PLIST_IDENTITY="  <key>UserName</key><string>$(id -un)</string>
+  <key>GroupName</key><string>$(id -gn)</string>
+  <key>InitGroups</key><true/>"
+  PLIST_HOME="    <key>HOME</key><string>${HOME}</string>"
+else
+  PLIST_IDENTITY=""
+  PLIST_HOME=""
+fi
+
+PLIST_TMP="$(mktemp)"
+cat > "$PLIST_TMP" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key><string>${PLIST_LABEL}</string>
+${PLIST_IDENTITY}
   <key>ProgramArguments</key>
   <array><string>${CI_DIR}/ci-host-loop.sh</string></array>
   <key>EnvironmentVariables</key>
@@ -216,6 +261,7 @@ cat > "$PLIST" <<PLIST
     <key>GROUP</key><string>${GROUP}</string>
     <key>PATH</key><string>${HOST_PATH}</string>
     <key>DOTNET_ROOT</key><string>${HOME}/.dotnet</string>
+${PLIST_HOME}
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -225,9 +271,25 @@ cat > "$PLIST" <<PLIST
 </dict>
 </plist>
 PLIST
+
+# Never leave both a daemon and an agent registered: two loops would fight
+# over the same runner name, each --replace-ing the other's registration.
 launchctl bootout "gui/$(id -u)/${PLIST_LABEL}" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$PLIST"
-launchctl kickstart -k "gui/$(id -u)/${PLIST_LABEL}"
+if [ "$BOOT_MODE" = daemon ]; then
+  sudo launchctl bootout "system/${PLIST_LABEL}" 2>/dev/null || true
+  log "installing the boot-time LaunchDaemon (this is the one sudo this script needs)"
+  sudo install -o root -g wheel -m 0644 "$PLIST_TMP" "$PLIST"
+  rm -f "$PLIST_TMP"
+  sudo launchctl bootstrap system "$PLIST"
+  sudo launchctl kickstart -k "$PLIST_TARGET"
+  rm -f "$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
+else
+  mkdir -p "$HOME/Library/LaunchAgents"
+  install -m 0644 "$PLIST_TMP" "$PLIST"
+  rm -f "$PLIST_TMP"
+  launchctl bootstrap "$PLIST_DOMAIN" "$PLIST"
+  launchctl kickstart -k "$PLIST_TARGET"
+fi
 
 # ── 10. sleep: handled without sudo ──────────────────────────────────────────
 # The loop runs under `caffeinate -is`, which holds the Mac awake for as long
@@ -237,5 +299,10 @@ if pmset -g custom 2>/dev/null | grep -Eq '^ *(sleep|powernap) +[1-9]'; then
   log "note: pmset still allows sleep; caffeinate in the loop keeps the Mac awake. For belt-and-braces run once as an admin: sudo pmset -a sleep 0 disksleep 0 powernap 0 autorestart 1"
 fi
 
-log "done — CI host '$NAME' for $REPO with labels $LABELS (no sudo was used)"
-log "  loop: launchctl print gui/$(id -u)/${PLIST_LABEL}   logs: $CI_DIR/logs/"
+if [ "$BOOT_MODE" = daemon ]; then
+  log "done — CI host '$NAME' for $REPO with labels $LABELS (boot-time LaunchDaemon; starts without anyone logging in)"
+else
+  log "done — CI host '$NAME' for $REPO with labels $LABELS (no sudo was used)"
+  log "note: this LaunchAgent only runs while $(id -un) is logged in — after a reboot the CI host stays offline until then. Re-run with --daemon for a boot-time LaunchDaemon."
+fi
+log "  loop: launchctl print ${PLIST_TARGET}   logs: $CI_DIR/logs/"

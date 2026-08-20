@@ -44,6 +44,7 @@ jobs:
   changes:
     name: Detect changed areas
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       rust: ${{ steps.detect.outputs.rust }}
       frontend: ${{ steps.detect.outputs.frontend }}
@@ -125,6 +126,7 @@ jobs:
   version-check:
     name: Version bump check
     runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    timeout-minutes: 10
     needs: [changes]
     if: github.event_name == 'pull_request'
     steps:
@@ -241,6 +243,7 @@ jobs:
   action-pins:
     name: Action pins (SHA-pinned)
     runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    timeout-minutes: 10
     needs: [changes]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
@@ -261,6 +264,7 @@ jobs:
   lint-all:
     name: lint-all (cross-cutting)
     runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    timeout-minutes: 15
     needs: [changes]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
@@ -273,6 +277,7 @@ jobs:
   lint:
     name: Lint
     runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    timeout-minutes: 20
     needs: [changes]
     # C#-only / frontend-only / docs-only PRs skip the Rust matrix entirely;
     # every job that `needs: lint` (tests, coverage, sql/pg) cascades the skip.
@@ -366,6 +371,7 @@ jobs:
   cargo-vet:
     name: cargo-vet (supply-chain provenance)
     runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    timeout-minutes: 15
     needs: [changes]
     if: needs.changes.outputs.rust == 'true'
     steps:
@@ -391,6 +397,7 @@ jobs:
   orchestrator:
     name: Orchestrator lint & test
     runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    timeout-minutes: 20
     needs: [changes]
     if: needs.changes.outputs.orchestrator == 'true'
     steps:
@@ -418,6 +425,7 @@ jobs:
   test-ubuntu:
     name: Test (ubuntu-latest)
     runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    timeout-minutes: 30
     needs: [changes, lint]  # skip if lint fails
 
     env:
@@ -479,6 +487,7 @@ jobs:
   test-windows:
     name: Test (windows-latest)
     runs-on: ${{ fromJSON(needs.changes.outputs.windows_host) }}
+    timeout-minutes: 45
     needs: [changes, lint]  # skip if lint fails
 
     # Windows is the CI long-pole. Three knobs cut it hard:
@@ -543,6 +552,7 @@ jobs:
   test-macos:
     name: Test (macos-latest)
     runs-on: ${{ fromJSON(needs.changes.outputs.macos_host) }}
+    timeout-minutes: 30
     needs: [changes, lint]
     env:
       CARGO_INCREMENTAL: "0"
@@ -711,6 +721,7 @@ jobs:
   coverage:
     name: Coverage
     runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    timeout-minutes: 30
     needs: [changes, test-ubuntu]  # only run if tests pass
 
     services:
@@ -886,6 +897,7 @@ jobs:
     name: Auto-tag & deploy
     needs: [changes]
     runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    timeout-minutes: 15
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     steps:

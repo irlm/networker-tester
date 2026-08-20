@@ -54,6 +54,7 @@ jobs:
   ci_hosts:
     name: Pick CI hosts
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       linux_host: ${{ steps.ci_hosts.outputs.linux }}
       windows_host: ${{ steps.ci_hosts.outputs.windows }}
@@ -189,6 +190,7 @@ jobs:
   verdict:
     name: Verdict
     runs-on: ${{ fromJSON(needs.ci_hosts.outputs.linux_host || '["ubuntu-latest"]') }}
+    timeout-minutes: 10
     needs: [ci_hosts, template-drift, rust-baseline, language]
     if: always()
     steps:

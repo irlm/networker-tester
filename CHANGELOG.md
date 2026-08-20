@@ -11,6 +11,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.274] - 2026-08-20
+
+### Added
+
+- **CI hosts watchdog (`.github/workflows/ci-hosts-watchdog.yml`).**
+  `pick-ci-hosts` decides once, when a run starts; if a CI host goes offline
+  between that decision and the job being dispatched, the job queues against
+  labels nothing can satisfy and sits there for GitHub's 24-hour limit.
+  `timeout-minutes` does **not** cover this — that clock only starts when a job
+  starts *running*. Every 13 minutes the watchdog looks for jobs queued longer
+  than 12 minutes on `self-hosted` labels, checks whether any online host
+  carries every one of those labels, and cancels only the runs that are
+  genuinely unsatisfiable (a job waiting behind a *busy* host is left alone).
+  Re-running such a run routes it to GitHub-hosted, because the fresh picker
+  sees no online host. Found the hard way: on 2026-08-20 a power cut rebooted
+  the Mac mini mid-release and `Build x86_64-apple-darwin` wedged v0.28.268
+  twice until it was cancelled by hand.
+- **`macos/install-ci-host.sh --daemon` — a CI host that survives a reboot.**
+  The LaunchAgent the script installed until now only runs while the user is
+  logged in, so the same power cut left `ci-macos-1` offline with the Mac up
+  and reachable. `--daemon` installs `/Library/LaunchDaemons` instead, running
+  the loop at boot as the invoking user (`UserName`/`GroupName`/`HOME` set
+  explicitly, since a daemon inherits none of them), at the cost of one sudo.
+  `--agent` keeps the old zero-sudo behaviour and now warns about the reboot
+  gap; `setup-ci-hosts.sh` asks (`MAC_BOOT_DAEMON`, default yes) and never
+  leaves both a daemon and an agent registered under the same runner name.
+
+### Changed
+
+- **36 routed jobs got a `timeout-minutes`.** They inherited GitHub's 6-hour
+  default, so a CI host that dies mid-job held a slot for hours; the caps are
+  roughly 3x observed runtime (e.g. `Test (windows-latest)` 45, `Coverage` 30,
+  `bats` 30, `action-pins` 10). This bounds a hung job, not a queued one —
+  the watchdog above is what handles queueing.
+
+---
 ## [0.28.273] - 2026-08-20
 
 ### Fixed

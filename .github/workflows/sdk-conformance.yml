@@ -44,6 +44,7 @@ jobs:
   ci_hosts:
     name: Pick CI hosts
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       linux_host: ${{ steps.ci_hosts.outputs.linux }}
       windows_host: ${{ steps.ci_hosts.outputs.windows }}
@@ -60,6 +61,7 @@ jobs:
   go:
     name: Go SDK conformance
     runs-on: ${{ fromJSON(needs.ci_hosts.outputs.linux_host) }}
+    timeout-minutes: 20
     needs: [ci_hosts]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
@@ -85,6 +87,7 @@ jobs:
   js:
     name: JS SDK conformance
     runs-on: ${{ fromJSON(needs.ci_hosts.outputs.linux_host) }}
+    timeout-minutes: 20
     needs: [ci_hosts]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
@@ -113,6 +116,7 @@ jobs:
   python:
     name: Python SDK conformance
     runs-on: ${{ fromJSON(needs.ci_hosts.outputs.linux_host) }}
+    timeout-minutes: 20
     needs: [ci_hosts]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
@@ -136,6 +140,7 @@ jobs:
   rust:
     name: Rust SDK conformance
     runs-on: ${{ fromJSON(needs.ci_hosts.outputs.linux_host) }}
+    timeout-minutes: 25
     needs: [ci_hosts]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5

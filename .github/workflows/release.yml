@@ -55,6 +55,7 @@ jobs:
   ci_hosts:
     name: Pick CI hosts
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       linux_host: ${{ steps.ci_hosts.outputs.linux }}
       windows_host: ${{ steps.ci_hosts.outputs.windows }}
@@ -186,6 +187,7 @@ jobs:
   build-native:
     name: Build ${{ matrix.target }}
     runs-on: ${{ fromJSON(needs.ci_hosts.outputs[format('{0}_host', matrix.host)]) }}
+    timeout-minutes: 45
     needs: [ci_hosts]
     env:
       CARGO_INCREMENTAL: "0"
@@ -317,6 +319,7 @@ jobs:
   build-csharp:
     name: Build C# control plane
     runs-on: ${{ fromJSON(needs.ci_hosts.outputs.linux_host) }}
+    timeout-minutes: 30
     needs: [ci_hosts]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
@@ -377,6 +380,7 @@ jobs:
     name: Create GitHub Release
     needs: [ci_hosts, build-linux, build-csharp, build-native]
     runs-on: ${{ fromJSON(needs.ci_hosts.outputs.linux_host) }}
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
@@ -434,6 +438,7 @@ jobs:
     name: Deploy to laghound.com
     needs: release
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     if: success()
     environment: production
 

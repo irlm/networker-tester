@@ -107,6 +107,7 @@ WINDOWS_VIRTIO_ISO="${WINDOWS_VIRTIO_ISO:-local:iso/virtio-win.iso}"; WINDOWS_AN
 WINDOWS_CORES="${WINDOWS_CORES:-6}"; WINDOWS_MEMORY_MB="${WINDOWS_MEMORY_MB:-16384}"; WINDOWS_DISK="${WINDOWS_DISK:-120G}"; WINDOWS_SSH="${WINDOWS_SSH:-}"
 WINDOWS_ADMIN_PASSWORD="${WINDOWS_ADMIN_PASSWORD:-}"; WINDOWS_WAIT_MINUTES="${WINDOWS_WAIT_MINUTES:-40}"; WINDOWS_SSH_KEY="${WINDOWS_SSH_KEY:-}"
 MAC_ENABLE="${MAC_ENABLE:-yes}"; MAC_SSH="${MAC_SSH:-macmini}"; MAC_NAME="${MAC_NAME:-ci-macos-1}"
+MAC_BOOT_DAEMON="${MAC_BOOT_DAEMON:-yes}"
 DESTROY_CONFIRM="${DESTROY_CONFIRM:-no}"
 CI_HOSTS_PAT="${CI_HOSTS_PAT:-}"
 PVE_DIR=/root/ci-hosts                     # where the building blocks live on the Proxmox node
@@ -327,8 +328,16 @@ step_mac() {
   fi
   ssh "${SSH_OPTS[@]}" "$MAC_SSH" 'umask 077; mkdir -p ~/ci-host && cat > ~/ci-host/token' <<<"$CI_HOSTS_PAT"
   scp -q "${SSH_OPTS[@]}" "$HERE/macos/install-ci-host.sh" "$MAC_SSH:ci-host/install-ci-host.sh"
+  # A LaunchAgent dies with the login session, so a rebooted Mac silently
+  # leaves the fleet (2026-08-20: power cut → ci-macos-1 gone until it was
+  # started by hand). --daemon installs a boot-time LaunchDaemon instead, at
+  # the cost of one sudo prompt — which needs a TTY, so it is offered only in
+  # interactive runs unless MAC_BOOT_DAEMON says otherwise.
+  ask MAC_BOOT_DAEMON "Start the Mac's CI loop at BOOT (LaunchDaemon, asks for the Mac password once)? (yes/no)" "$MAC_BOOT_DAEMON"
   local cmd="bash ~/ci-host/install-ci-host.sh --repo '$GH_REPO' --name '$MAC_NAME'${RUNNER_GROUP:+ --runner-group '$RUNNER_GROUP'}"
+  [ "$MAC_BOOT_DAEMON" = yes ] && cmd="$cmd --daemon"
   if [ "$NON_INTERACTIVE" = 1 ]; then
+    [ "$MAC_BOOT_DAEMON" = yes ] && warn "--non-interactive: the LaunchDaemon's sudo prompt has no TTY; run this step interactively if it fails"
     ssh "${SSH_OPTS[@]}" "$MAC_SSH" "$cmd"
   else
     say "   running the installer over ssh -t (first run: Homebrew / casks / pmset will ask for the Mac password)"

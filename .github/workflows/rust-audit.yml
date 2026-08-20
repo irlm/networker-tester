@@ -40,6 +40,7 @@ jobs:
   changes:
     name: Detect Rust dependency changes
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       rust-deps: ${{ steps.detect.outputs.rust-deps }}
       # Where the rest of this workflow runs (docs/self-hosted-ci.md).
@@ -89,6 +90,7 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.rust-deps == 'true'
     runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    timeout-minutes: 20
     env:
       # Ignore list — every entry MUST have a justification here and MUST be
       # unfixable by a dependency upgrade (otherwise: upgrade, don't ignore).

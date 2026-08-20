@@ -185,6 +185,19 @@ from the template in ~15 minutes while `auto` routes to hosted.
   runner behind for the next one. The PAT that mints tokens is in a file only
   root (Linux) or SYSTEM/Administrators (Windows) or the login user (Mac) can
   read, and is never exported into the job's environment.
+- **A host that dies mid-run does not fail the run — it wedges it.** The
+  picker decides once, when the run starts. A host lost before a job is
+  dispatched leaves that job queued against labels nothing can satisfy, and
+  `timeout-minutes` does not help: that clock only starts when a job starts
+  *running*, so GitHub's 24-hour queue limit is the only backstop.
+  `ci-hosts-watchdog.yml` closes this — every 13 minutes it cancels runs whose
+  jobs have been queued past 12 minutes on labels no ONLINE host carries
+  (a job queued behind a merely *busy* host is left alone), so a re-run picks
+  GitHub-hosted. It runs on `ubuntu-latest` by design: a watchdog that can be
+  taken out by the outage it exists to detect is no watchdog. Jobs that are
+  already running when a host dies are failed by GitHub within ~10 minutes,
+  and every routed job now carries a `timeout-minutes` instead of the 6-hour
+  default.
 - **VM state is not reset between jobs.** Ephemeral covers the *registration*,
   not the disk. The jobs that install services system-wide (`stack-exec`,
   `linux-bench-exec`, `windows-exec`) are therefore pinned to hosted runners
@@ -267,3 +280,26 @@ hosted minutes.
    (failover + the deciding hop + `deploy`), not the rule.
 
 Back out at any time with `CI_HOSTS_MODE=hosted` — no workflow edit needed.
+
+## The Mac and reboots
+
+`macos/install-ci-host.sh` defaults to a **LaunchAgent**, which is what makes
+the whole macOS install sudo-free — but a LaunchAgent only runs inside a
+logged-in user session. After a reboot (a power cut, say) the Mac comes back
+up, answers ssh, and is *not* a CI host, because nobody logged in. Tailscale's
+menu-bar app has the same property, so the machine can also disappear from the
+tailnet at the same time and only be reachable by LAN address.
+
+Run the installer with `--daemon` (or answer yes to `MAC_BOOT_DAEMON`) to get
+`/Library/LaunchDaemons/com.networker.ci-host.plist` instead: it starts at
+boot, runs as the invoking user, and needs one sudo at install time. The
+installer refuses to leave both registered — two loops would fight over the
+same runner name, each `--replace`-ing the other.
+
+To convert a Mac that already has the agent:
+
+```bash
+ssh macmini 'bash ~/ci-host/install-ci-host.sh --repo irlm/networker-tester \
+  --name ci-macos-1 --skip-toolchains --daemon'      # needs a TTY for sudo: use ssh -t
+launchctl print system/com.networker.ci-host | head   # verify
+```
