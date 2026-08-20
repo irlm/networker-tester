@@ -216,26 +216,29 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
 
+      # The check lives in scripts/lint-all.sh (section action-pins) so the
+      # local pre-push pass and CI run the same grep + guard-the-guard floor.
       - name: Every `uses:` must reference a 40-char commit SHA
-        run: |
-          set -uo pipefail
-          BAD=$(grep -rnE '^\s*(-\s*)?uses:\s*[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@' .github/workflows/*.yml \
-                | grep -vE '@[0-9a-f]{40}' || true)
-          if [ -n "$BAD" ]; then
-            echo "::error::unpinned GitHub Action(s) — pin to a commit SHA (keep the version in a trailing comment):"
-            echo "$BAD" | sed 's/^/  /'
-            exit 1
-          fi
+        run: scripts/lint-all.sh --ci --only action-pins
 
-          # Guard the guard: if the grep stopped matching, an empty result would
-          # pass forever.
-          TOTAL=$(grep -rcE '^\s*(-\s*)?uses:\s*[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@' .github/workflows/*.yml \
-                  | awk -F: '{s+=$2} END{print s+0}')
-          if [ "$TOTAL" -lt 20 ]; then
-            echo "::error::only found ${TOTAL} action references — the scan is broken, not the workflows"
-            exit 1
-          fi
-          echo "all ${TOTAL} action references are SHA-pinned"
+  # ──────────────────────────────────────────────────────────────────────────
+  # Cross-cutting lints that no per-area job owns: workflow structure
+  # (actionlint), JSON syntax of the shared/config tables, and the five
+  # version files agreeing with each other. Cheap, toolchain-free (actionlint
+  # runs from its pinned image), ungated. Same script as the local
+  # `scripts/lint-all.sh`; promote an `info` section to `block` there and
+  # this job enforces it automatically.
+  # ──────────────────────────────────────────────────────────────────────────
+  lint-all:
+    name: lint-all (cross-cutting)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+
+      - name: json / version-sync / workflows
+        env:
+          LINT_DOCKER: "1"
+        run: scripts/lint-all.sh --ci --only json,version,workflows
 
   lint:
     name: Lint
@@ -257,24 +260,22 @@ jobs:
           key: lint
           cache-on-failure: "true"
 
+      # The four Rust lints (fmt --check, clippy -D warnings, the
+      # no-default-features stub build, and the rustdoc lint that fails on
+      # broken intra-doc links / bare URLs / malformed HTML in doc comments)
+      # are defined ONCE in scripts/lint-all.sh — the same sections a
+      # developer runs locally before pushing. Edit the commands there.
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: scripts/lint-all.sh --ci --only rust-fmt
 
       - name: Clippy (default features)
-        run: cargo clippy --all-targets -- -D warnings
+        run: scripts/lint-all.sh --ci --only rust-clippy
 
       - name: Build without default features (stub paths)
-        run: cargo build -p networker-tester --no-default-features
+        run: scripts/lint-all.sh --ci --only rust-nodefault
 
-      # Doc hygiene: fail on broken rustdoc intra-doc links, bare URLs, and
-      # malformed HTML in doc comments — the class of defect where `[k]` or
-      # `Option<f64>` outside backticks silently breaks the rendered docs.
-      # Scoped to the current crates (the retired networker-dashboard/agent/
-      # common are being deleted at the decommission — not worth gating).
       - name: Rustdoc lint (broken links / bare URLs / bad HTML)
-        env:
-          RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links -D rustdoc::bare_urls -D rustdoc::invalid_html_tags"
-        run: cargo doc -p networker-tester -p networker-endpoint -p networker-log --no-deps --document-private-items
+        run: scripts/lint-all.sh --ci --only rust-doc
 
   # ──────────────────────────────────────────────────────────────────────────
   # musl type-check: the RELEASE builds target x86_64-unknown-linux-musl, whose
@@ -556,6 +557,13 @@ jobs:
 
       - name: Install dependencies (no postinstall scripts)
         run: npm ci --ignore-scripts
+
+      # ESLint was local-only (test-all.sh) until lint-all landed — a lint
+      # regression in dashboard/ could merge with green CI. Same section a
+      # developer runs via `scripts/lint-all.sh --only frontend`.
+      - name: ESLint
+        working-directory: .
+        run: scripts/lint-all.sh --ci --only frontend-eslint
 
       # Blocking audit covers PRODUCTION dependencies only (--omit=dev): a
       # dev-tooling advisory (eslint/vitest transitives) cannot reach the

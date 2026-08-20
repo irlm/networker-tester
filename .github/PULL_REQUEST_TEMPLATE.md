@@ -8,9 +8,8 @@
 
 ### Required
 - [ ] CHANGELOG.md updated with new entry
-- [ ] Cargo.toml workspace version bumped
-- [ ] `cargo fmt --all` passes
-- [ ] `cargo clippy --all-targets -- -D warnings` passes
+- [ ] Version bumped in all five files (Cargo.toml, CHANGELOG.md, install.sh, install.ps1, Directory.Build.props)
+- [ ] `scripts/lint-all.sh --no-build` passes (covers `cargo fmt`, `cargo clippy -D warnings`, ESLint, shellcheck, action pins, version sync, …)
 - [ ] `cargo test --workspace --lib` passes locally
 
 ### If adding a new Protocol variant
@@ -35,9 +34,9 @@
 - [ ] stdin-safe (`< /dev/null` for non-interactive commands)
 - [ ] `INSTALLER_VERSION` bumped in BOTH install.sh and install.ps1
 - [ ] `bats tests/installer.bats` passes
-- [ ] shellcheck passes (see CI exclusions: SC2034, SC1091, SC2154)
+- [ ] shellcheck passes (`scripts/lint-all.sh --only shellcheck-installer` — CI flags/exclusions built in)
 - [ ] PSScriptAnalyzer passes for install.ps1 changes
-- [ ] Gist updated manually after merge (sync-gist.yml is broken)
+- [ ] After merge: confirm the `Sync install scripts to Gist` workflow ran (`gh run list --branch main`); update the Gist manually only if it failed (see CLAUDE.md)
 
 ### If changing endpoint routes
 - [ ] Integration test added/updated in tests/integration.rs

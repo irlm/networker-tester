@@ -2,6 +2,12 @@
 
 Project-specific instructions for Claude Code.
 
+@AGENTS.md
+
+The rules above (lint as strictly as the tree allows via `scripts/lint-all.sh`
+before calling anything done; no unjustified suppressions; scope discipline)
+are shared with every other coding agent through `AGENTS.md` — edit them there.
+
 ## Project Overview
 
 Hybrid Rust + C# repo: Rust owns measurement, C# owns the application layer.
@@ -40,7 +46,14 @@ the migration rationale is archived at `docs/archive/hybrid-migration-plan.md`.
 ## Build Commands
 
 ```bash
-# Format + lint (CI runs these — fix before committing)
+# Lint EVERYTHING (Rust, C#, TS, Go, Python, bash, PowerShell, workflows,
+# Dockerfiles, JSON, version sync) — CI's lint jobs call the same script, so
+# a green run here is a green run there. `--no-build` is the ~1-2 min
+# pre-push pass; `--list` shows sections; missing tools print install hints.
+scripts/lint-all.sh --no-build
+scripts/lint-all.sh --fix --only rust,frontend   # auto-fix where the tool can
+
+# The Rust pair on its own (CI runs these — fix before committing)
 cargo fmt --all
 cargo clippy --all-targets -- -D warnings
 

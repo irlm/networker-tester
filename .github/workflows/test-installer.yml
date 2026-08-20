@@ -75,15 +75,13 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get install -y shellcheck
 
+      # Flags live in scripts/lint-all.sh (section shellcheck-installer):
+      # SC2034 = unused vars (we use many globals as state); SC1091 = sourced
+      # file not found (expected in CI); SC2154 = referenced but not assigned
+      # (common with global state). Everything else is an error. The local
+      # pre-push pass runs the identical command.
       - name: Lint install.sh
-        # SC2034 = unused vars (we use many globals as state); SC1091 = sourced
-        # file not found (expected in CI); SC2154 = referenced but not assigned
-        # (common with global state). Elevate to errors everything else.
-        run: |
-          shellcheck \
-            --severity=warning \
-            --exclude=SC2034,SC1091,SC2154 \
-            install.sh
+        run: scripts/lint-all.sh --ci --only shellcheck-installer
 
   # ── bats: unit tests for install.sh ────────────────────────────────────────
   bats:
