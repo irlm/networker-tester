@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { BenchmarkArtifact, LiveAttempt } from '../../../api/types';
+import { attemptFailureReason } from '../grouping';
 import {
   formatBytes,
   formatMetricValue,
@@ -162,15 +163,29 @@ export function AttemptRow({ a }: { a: LiveAttempt }) {
   const st = a.server_timing;
   const hasSplit = st != null && (st.server_ms != null || st.network_ms != null || st.app_ms != null);
   const hasServerTimings = st != null && (hasSplit || st.processing_ms != null || st.total_server_ms != null);
+  // Failed attempts carry their reason right next to the chip (#824): a bare
+  // red FAIL answers nothing. Category prefix when the live stream gave one;
+  // REST rows have message only. Truncated by CSS, full text on hover.
+  const failReason = attemptFailureReason(a);
+  const failLabel = failReason == null
+    ? null
+    : a.error?.category
+      ? `${a.error.category}: ${failReason}`
+      : failReason;
   return (
     <div className="px-4 py-3 border-b border-gray-800/30 hover:bg-gray-800/10">
       <div className="flex items-center gap-4 mb-2">
-        <span className="text-gray-400 text-xs w-8">#{a.sequence_num}</span>
+        <span className="text-gray-400 text-xs w-8 shrink-0">#{a.sequence_num}</span>
         {a.success
           ? <span className="text-green-400 text-xs font-medium">OK</span>
-          : <span className="text-red-400 text-xs font-medium">FAIL</span>
+          : <span className="text-red-400 text-xs font-medium shrink-0">FAIL</span>
         }
-        {a.retry_count > 0 && <span className="text-faint text-xs">{a.retry_count} retries</span>}
+        {failLabel && (
+          <span className="text-red-300/80 text-xs min-w-0 truncate" title={failLabel}>
+            {failLabel}
+          </span>
+        )}
+        {a.retry_count > 0 && <span className="text-faint text-xs shrink-0">{a.retry_count} retries</span>}
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 text-xs">
         {a.dns && (
