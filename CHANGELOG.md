@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the token write in `powershell -Command "..."` failed with "The string is
   missing the terminator". A failing `install-ci-host.ps1` now warns and
   returns instead of aborting the whole run.
+- **Windows CI host: `bash` on the machine PATH, and the loop survives a
+  killed Listener.** The first self-hosted Windows job failed in 22 s because
+  `dtolnay/rust-toolchain` (like every `shell: bash` step) needs `bash.exe`
+  from `Git\bin` — choco only adds `Git\cmd`, GitHub-hosted images have both.
+  `install-ci-host.ps1` now adds `Git\bin` and `Git\usr\bin`; its loop
+  removes the hidden `.runner`/`.credentials` files before every
+  `config.cmd` (otherwise "already configured" forever after a restart, as on
+  Linux) and writes a transcript to `C:\ProgramData\ci-host\ci-host-loop.log`.
 - **Linux CI-host loop removes stray `/usr/local/bin/networker-*` binaries
   between jobs.** A tester an integration job had `sudo install`ed turned
   the stubbed bats test `_offer_quick_test … release download` into a real
