@@ -1793,6 +1793,133 @@ export interface SdkEndpointCreate {
   max_duration_secs?: number;
 }
 
+// ── SDK samples (provisioning the reference apps) ───────────────────────────
+
+/**
+ * Honest state of one language's sample. `current` and `unknown_version` are
+ * reusable; `outdated` is reusable AND updatable; `unhealthy`/`failed` are
+ * never presented as usable.
+ */
+export type SdkSampleState =
+  | 'none'
+  | 'deploying'
+  | 'current'
+  | 'outdated'
+  | 'unknown_version'
+  | 'unhealthy'
+  | 'failed';
+
+/** The one action the UI should default to for a language. */
+export type SdkSampleAction = 'create' | 'wait' | 'reuse' | 'update' | 'redeploy';
+
+/** One catalog language joined to what this project has for it. */
+export interface SdkSampleStatus {
+  language: string;
+  label: string;
+  runtime: string;
+  description: string;
+  port: number;
+  /** http://host:port of the running sample, when one exists. */
+  url: string | null;
+  route: string;
+  state: SdkSampleState;
+  recommended_action: SdkSampleAction;
+  /** One sentence, safe to render verbatim. */
+  reason: string;
+  reusable: boolean;
+  /** SDK version of the sample in this build's catalog. */
+  current_version: string;
+  /** SDK version the running sample reports; null when unreadable. */
+  deployed_version: string | null;
+  deployment_id: string | null;
+  deployment_name: string | null;
+  deployment_status: string | null;
+  host: string | null;
+  provider: string | null;
+  region: string | null;
+  vm_size: string | null;
+  consolidated: boolean | null;
+  samples_on_host: number | null;
+  /** The registered SDK endpoint pointing at this sample, when one exists. */
+  sdk_endpoint_id: string | null;
+}
+
+/** Price of ONE sample server, from the same table the deployment cost
+ * endpoint uses. Null when the caller named no provider/size to price. */
+export interface SdkSampleCostPreview {
+  provider: string;
+  region: string | null;
+  vm_size: string;
+  hourly_usd: number;
+  monthly_usd: number;
+  note: string;
+}
+
+export interface SdkSampleCatalogEntry {
+  id: string;
+  language: string;
+  runtime: string;
+  description: string;
+  sdk_version: string;
+  port: number;
+  dockerfile: string;
+  source_dir: string;
+}
+
+export interface SdkSamplesResponse {
+  catalog: {
+    prefix_default: string;
+    route_default: string;
+    samples: SdkSampleCatalogEntry[];
+  };
+  samples: SdkSampleStatus[];
+  cost_preview: SdkSampleCostPreview | null;
+}
+
+export interface SdkSampleCreateBody {
+  /** consolidated = one server for every selected language; separated = one each. */
+  shape: 'consolidated' | 'separated';
+  languages: string[];
+  /** Default true — reuse is the cheap path and the server's default. */
+  reuse_existing?: boolean;
+  provider?: string;
+  region?: string;
+  vm_size?: string;
+  cloud_account_id?: string;
+}
+
+export interface SdkSampleCreateResult {
+  shape: string;
+  reused: {
+    language: string;
+    sdk_endpoint_id: string;
+    url: string | null;
+    created: boolean;
+    deployment_id: string;
+  }[];
+  deployments: {
+    deployment_id: string;
+    name: string;
+    languages: string[];
+    provider: string;
+    region: string | null;
+    vm_size: string | null;
+  }[];
+  /** Languages whose servers are being provisioned — register them by
+   * re-POSTing once their deployment completes. */
+  pending_registration: string[];
+  servers_provisioned: number;
+  servers_avoided: number;
+}
+
+export interface SdkSampleUpdateResult {
+  status: string;
+  deployment_id: string;
+  language: string;
+  from_version: string | null;
+  to_version: string;
+}
+
 // ── Application Network Performance report (app-network) ────────────────────
 
 /** verdict ∈ server_bound | network_bound | balanced | no_data. */

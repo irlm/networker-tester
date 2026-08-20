@@ -269,3 +269,76 @@ describe('RunsPage comparison-group rows', () => {
     expect(screen.getByText('azure/eastus linux · caddy · cg-deadbeef·1·ab12')).toBeInTheDocument();
   });
 });
+
+// ── URL-set runs in the list (#782 P1) ───────────────────────────────────────
+// A set is ONE run row covering N targets — that is the point (the list caps at
+// 200 newest, so N rows per probe is not affordable). The row has to SAY that:
+// the raw config name shows a single host plus an internal reuse hash and reads
+// exactly like an ordinary single-URL probe.
+
+const setRuns: TestRun[] = [
+  {
+    ...baseRun,
+    id: '77777777-7777-4777-8777-777777777777',
+    test_config_id: 'config-set',
+    config_name: 'Diag set: a.example.com +3 [a1b2c3] (Quick)',
+    endpoint_kind: 'network',
+    test_kind: 'url_probe',
+    modes: ['dns', 'tcp', 'tls', 'http2'],
+  },
+  {
+    ...baseRun,
+    id: '88888888-8888-4888-8888-888888888888',
+    test_config_id: 'config-single',
+    config_name: 'Diag: solo.example.com (Quick)',
+    endpoint_kind: 'network',
+    test_kind: 'url_probe',
+    modes: ['http2'],
+  },
+];
+
+describe('RunsPage URL-set rows', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.useTestRunsQuery.mockReturnValue({
+      data: setRuns,
+      isPending: false,
+      isError: false,
+      dataUpdatedAt: Date.now(),
+      refetch: mocks.refetch,
+    });
+  });
+
+  it('labels a set run by its member count instead of one host plus a hash', () => {
+    renderPage();
+
+    expect(screen.getByText('set (4 URLs) · a.example.com (Quick)')).toBeInTheDocument();
+    expect(screen.queryByText('Diag set: a.example.com +3 [a1b2c3] (Quick)')).not.toBeInTheDocument();
+  });
+
+  it('leaves single-URL probe rows exactly as they were', () => {
+    renderPage();
+
+    expect(screen.getByText('Diag: solo.example.com (Quick)')).toBeInTheDocument();
+  });
+
+  it('classifies a set run as a URL probe when the row carries no test_kind', async () => {
+    // Old rows arrive without test_kind and are classified from the name. The
+    // literal `Diag: ` prefix test missed every `Diag set: ` run, which fell
+    // through to "network" and vanished from the URL-probes tab.
+    const user = userEvent.setup();
+    mocks.useTestRunsQuery.mockReturnValue({
+      data: setRuns.map(r => ({ ...r, test_kind: undefined })),
+      isPending: false,
+      isError: false,
+      dataUpdatedAt: Date.now(),
+      refetch: mocks.refetch,
+    });
+    renderPage();
+
+    await user.click(screen.getByRole('button', { name: 'URL probes' }));
+
+    expect(screen.getByText('set (4 URLs) · a.example.com (Quick)')).toBeInTheDocument();
+    expect(screen.getByText('Diag: solo.example.com (Quick)')).toBeInTheDocument();
+  });
+});

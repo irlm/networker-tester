@@ -19,12 +19,19 @@ namespace Networker.ControlPlane.Provisioning;
 ///     <c>endpoint_ips[0]</c> + stack port); none = the bare rust endpoint.</item>
 ///   <item><c>languages</c> (reference-API servers) are not provided by the
 ///     target images → rejected.</item>
+///   <item><c>sdk_samples</c> starts a LagHound SDK sample container
+///     (<c>nwk-lab/sdk-&lt;lang&gt;:local</c>) instead of a target container.
+///     Exactly one sample per endpoint — a sample image runs exactly one
+///     sample — and never combined with an <c>http_stacks</c> entry on the same
+///     endpoint (one container serves one thing).</item>
 /// </list>
 /// </summary>
 public sealed record DockerDeployPlan(IReadOnlyList<DockerDeployPlan.Endpoint> Endpoints)
 {
-    /// <summary>One target container to start.</summary>
-    public sealed record Endpoint(int Index, string Label, string? Stack);
+    /// <summary>One container to start: a target endpoint (<paramref name="Stack"/>)
+    /// or a LagHound SDK sample (<paramref name="Sample"/>). Exactly one of the
+    /// two roles applies; <c>Sample</c> non-null means the sample role.</summary>
+    public sealed record Endpoint(int Index, string Label, string? Stack, string? Sample = null);
 
     /// <summary>
     /// Parse <paramref name="deployJson"/>. Returns <c>null</c> plan when no
@@ -97,6 +104,30 @@ public sealed record DockerDeployPlan(IReadOnlyList<DockerDeployPlan.Endpoint> E
                     error = $"endpoints[{i}]: reference-API languages are not available on docker targets (the target images ship the endpoint + proxy stacks only)";
                     return null;
                 }
+
+                var samples = new List<string>();
+                if (ep.TryGetProperty("sdk_samples", out var sdk) && sdk.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var s in sdk.EnumerateArray())
+                    {
+                        if (s.ValueKind == JsonValueKind.String && s.GetString() is { Length: > 0 } name)
+                        {
+                            samples.Add(name.Trim().ToLowerInvariant());
+                        }
+                    }
+                }
+                if (samples.Count > 1)
+                {
+                    error = $"endpoints[{i}]: a docker endpoint runs exactly one SDK sample (got {string.Join(",", samples)}); "
+                            + "add one endpoint per sample";
+                    return null;
+                }
+                if (samples.Count == 1 && stacks.Count > 0)
+                {
+                    error = $"endpoints[{i}]: a docker endpoint serves either an SDK sample or a proxy stack, not both";
+                    return null;
+                }
+
                 var label = ep.TryGetProperty("label", out var l) && l.ValueKind == JsonValueKind.String && l.GetString() is { Length: > 0 } lb
                     ? lb
                     : $"target-{i + 1}";
@@ -105,7 +136,7 @@ public sealed record DockerDeployPlan(IReadOnlyList<DockerDeployPlan.Endpoint> E
                 {
                     stack = null;
                 }
-                docker.Add(new Endpoint(i, label, stack));
+                docker.Add(new Endpoint(i, label, stack, samples.Count == 1 ? samples[0] : null));
             }
 
             if (docker.Count == 0)

@@ -51,41 +51,13 @@ public static class DeploymentWriteEndpoints
                 return ApiError.BadRequest("name and config are required");
             }
 
-            // Pre-flight the OS↔stack/language contradictions install.sh's
-            // validator would reject anyway — but reject them HERE, before a
-            // doomed deployment row is created and the user watches it fail
-            // (user-caught 2026-08-12: an invisible nginx selection rode a
-            // Windows config through the wizard). Mirrors install.sh's
-            // validate_deploy_config rules; keep the two in lockstep.
-            var preflightErrors = DeployConfigPreflight.Validate(body.Config);
-            if (preflightErrors.Count > 0)
+            var (deploymentId, error) = await CreateAndSpawnAsync(
+                projectId, body.Name, body.Config, http.GetAuthUser()?.UserId,
+                db, runner, loggerFactory, ct);
+            if (deploymentId is null)
             {
-                return ApiError.Status(
-                    StatusCodes.Status422UnprocessableEntity,
-                    string.Join("; ", preflightErrors));
+                return ApiError.Status(StatusCodes.Status422UnprocessableEntity, error!);
             }
-
-            var configText = body.Config.ToJsonString();
-            var deploymentId = Guid.NewGuid();
-            var now = DateTime.UtcNow;
-
-            db.Deployments.Add(new Deployment
-            {
-                DeploymentId = deploymentId,
-                Name = body.Name,
-                Status = "pending",
-                Config = configText,
-                ProviderSummary = BuildProviderSummary(body.Config),
-                // Attribution was silently dropped here — every wizard-created
-                // deployment showed created_by: null (issue #764 observation).
-                CreatedBy = http.GetAuthUser()?.UserId,
-                CreatedAt = now,
-                ProjectId = projectId,
-            });
-            await db.SaveChangesAsync(ct);
-
-            // Background the deploy (soft-fails without install.sh — see class doc).
-            SpawnDeploy(runner, loggerFactory, deploymentId, configText);
 
             return Results.Created(
                 $"/api/projects/{projectId}/deployments/{deploymentId}",
@@ -288,6 +260,66 @@ public static class DeploymentWriteEndpoints
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Pre-flight, persist and spawn one deployment — the single create path,
+    /// shared by <c>POST /deployments</c> and by
+    /// <see cref="SdkSampleEndpoints"/> (which builds its own sample-server
+    /// configs but must not fork the create semantics: same 422 pre-flight,
+    /// same provider summary, same attribution, same detached runner).
+    /// Returns the new id, or null plus the pre-flight message.
+    /// </summary>
+    internal static async Task<(Guid? Id, string? Error)> CreateAndSpawnAsync(
+        string projectId,
+        string name,
+        JsonObject config,
+        Guid? createdBy,
+        NetworkerDbContext db,
+        DeployRunner runner,
+        ILoggerFactory loggerFactory,
+        CancellationToken ct)
+    {
+        // Pre-flight the OS↔stack/language contradictions install.sh's
+        // validator would reject anyway — but reject them HERE, before a
+        // doomed deployment row is created and the user watches it fail
+        // (user-caught 2026-08-12: an invisible nginx selection rode a
+        // Windows config through the wizard). Mirrors install.sh's
+        // validate_deploy_config rules; keep the two in lockstep.
+        var preflightErrors = DeployConfigPreflight.Validate(config);
+        if (preflightErrors.Count > 0)
+        {
+            return (null, string.Join("; ", preflightErrors));
+        }
+
+        var configText = config.ToJsonString();
+        var deploymentId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+
+        db.Deployments.Add(new Deployment
+        {
+            DeploymentId = deploymentId,
+            Name = name,
+            Status = "pending",
+            Config = configText,
+            ProviderSummary = BuildProviderSummary(config),
+            // Attribution was silently dropped here — every wizard-created
+            // deployment showed created_by: null (issue #764 observation).
+            CreatedBy = createdBy,
+            CreatedAt = now,
+            ProjectId = projectId,
+        });
+        await db.SaveChangesAsync(ct);
+
+        // Background the deploy (soft-fails without install.sh — see class doc).
+        SpawnDeploy(runner, loggerFactory, deploymentId, configText);
+        return (deploymentId, null);
+    }
+
+    /// <summary>Re-run an existing deployment's config on the detached runner —
+    /// the in-place update path, reused by the SDK sample update route.</summary>
+    internal static void SpawnDeployPublic(
+        DeployRunner runner, ILoggerFactory loggerFactory, Guid deploymentId, string configText) =>
+        SpawnDeploy(runner, loggerFactory, deploymentId, configText);
 
     /// <summary>Spawn the deploy runner on a detached task tied to the app
     /// lifetime (not the request), matching the Rust <c>tokio::spawn</c>. The

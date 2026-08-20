@@ -230,6 +230,12 @@ app.MapComparisonGroupsEndpoints();
 // test_config with mode 'sdkprobe' + encrypted X-LagHound-Token).
 app.MapSdkEndpointsEndpoints();
 
+// SDK sample provisioning — the create half of the SDK Endpoints page: what is
+// already deployed per language (current / outdated / unhealthy / nothing),
+// create consolidated (one server, many languages) or separated (one per
+// language), reuse what exists, update an outdated sample in place.
+app.MapSdkSampleEndpoints();
+
 // M4 provisioning + VM lifecycle — cloud credential management (encrypted) and
 // tester start/stop/upgrade/probe/postpone/schedule/force-stop/delete (202-async,
 // cloud calls behind IComputeProvisioner). Pending→provision (deploy-runner +

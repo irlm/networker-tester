@@ -452,6 +452,11 @@ BENCHMARK_PORT_OVERRIDE=""      # explicit bench port (--benchmark-port) — set
                                 # language server must coexist with networker-endpoint
                                 # (endpoint owns 8080/8443; language server takes 8085)
 
+# ── LagHound SDK sample mode ─────────────────────────────────────────────
+SETUP_SDK_SAMPLE=""             # SDK sample to build+run locally, then exit (--setup-sdk-sample)
+SDK_SAMPLE_PORT_OVERRIDE=""     # explicit sample port (--sdk-sample-port); default is the
+                                # catalog port from shared/sdk-samples.json (8101-8105)
+
 # ── Deploy-config state ──────────────────────────────────────────────────
 DEPLOY_CONFIG_PATH=""           # path to deploy.json (--deploy flag)
 DEPLOY_ENDPOINT_COUNT=0         # number of endpoints in config
@@ -486,9 +491,11 @@ DEPLOY_PACKET_CAPTURE_WRITE_SUMMARY_JSON=""
 # Arrays for multi-endpoint support (parallel arrays indexed 0..N-1)
 DEPLOY_EP_PROVIDERS=()
 DEPLOY_EP_LABELS=()
+DEPLOY_EP_HTTP_STACKS=()       # comma-joined proxy stacks per endpoint
 DEPLOY_EP_IPS=()               # populated after deploy (result IPs)
 DEPLOY_EP_FQDNS=()             # populated after deploy (cloud DNS hostnames)
 DEPLOY_EP_LANGUAGES=()         # comma-joined reference-API languages per endpoint
+DEPLOY_EP_SDK_SAMPLES=()       # comma-joined LagHound SDK samples per endpoint
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 parse_args() {
@@ -594,6 +601,12 @@ parse_args() {
             --setup-stack)
                 shift; SETUP_STACK="${1:-}"
                 AUTO_YES=1 ;;
+            # LagHound SDK sample mode (used by the deploy path over SSH)
+            --setup-sdk-sample)
+                shift; SETUP_SDK_SAMPLE="${1:-}"
+                AUTO_YES=1 ;;
+            --sdk-sample-port)
+                shift; SDK_SAMPLE_PORT_OVERRIDE="${1:-}" ;;
             # Deploy config
             --deploy)
                 shift; DEPLOY_CONFIG_PATH="${1:-}"
@@ -6227,6 +6240,68 @@ _local_setup_languages() {
     return 0
 }
 
+# ── LagHound SDK samples on a deployed endpoint ──────────────────────────────
+# The deploy config's per-endpoint `sdk_samples` array requests the reference
+# apps from sdk/<lang>/example (contract v1 at /laghound, ports 8101-8105 per
+# shared/sdk-samples.json). Same mechanism as _remote_setup_languages: pipe THIS
+# installer over SSH with --setup-sdk-sample <lang>.
+#
+# The token every sample requires is staged by the control plane in
+# LAGHOUND_SAMPLE_TOKEN (never in the deploy config, which project members can
+# read); it is forwarded to the remote shell through the ssh command line's
+# environment assignment rather than printed. A sample that fails to install is
+# FATAL for the deployment: an endpoint the SDK Endpoints page believes is
+# serving, but is not, is exactly the "dead endpoint rendered as live" class
+# issue #765 fixed on the read side.
+_remote_setup_sdk_samples() {
+    local ip="$1" ssh_user="$2" samples_csv="$3"
+    [[ -z "$samples_csv" ]] && return 0
+
+    if ! _installer_self_for_ssh; then
+        print_err "Could not fetch installer for remote SDK sample setup"
+        return 1
+    fi
+    local self="$INSTALLER_SELF_PATH" tmp_self="$INSTALLER_SELF_TMP"
+
+    local sample rc=0
+    IFS=',' read -ra _rs_samples <<< "$samples_csv"
+    for sample in "${_rs_samples[@]}"; do
+        [[ -z "$sample" ]] && continue
+        next_step "Install $sample SDK sample on ${ip}"
+        # shellcheck disable=SC2029 # the remote command is built here deliberately
+        if ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 "${ssh_user}@${ip}" \
+            "export DEBIAN_FRONTEND=noninteractive LAGHOUND_SAMPLE_TOKEN='${LAGHOUND_SAMPLE_TOKEN:-}' && sudo -E bash -s -- --setup-sdk-sample $sample" \
+            < "$self"; then
+            print_ok "$sample SDK sample running on ${ip}"
+        else
+            rc=1
+            print_err "$sample SDK sample install failed on ${ip}"
+        fi
+    done
+    [[ -n "$tmp_self" ]] && rm -f "$tmp_self"
+    return $rc
+}
+
+# Local-provider variant: run deploy_sdk_sample directly.
+_local_setup_sdk_samples() {
+    local samples_csv="$1"
+    [[ -z "$samples_csv" ]] && return 0
+
+    local sample rc=0
+    IFS=',' read -ra _ls_samples <<< "$samples_csv"
+    for sample in "${_ls_samples[@]}"; do
+        [[ -z "$sample" ]] && continue
+        next_step "Install $sample SDK sample locally"
+        if deploy_sdk_sample "$sample"; then
+            print_ok "$sample SDK sample running locally"
+        else
+            rc=1
+            print_err "$sample SDK sample install failed"
+        fi
+    done
+    return $rc
+}
+
 # Install a reference-API language server on an Azure Windows VM and retarget
 # the endpoint's /api at it (install.ps1 -BenchmarkServer → --api-upstream,
 # endpoint >= 0.28.203). The PowerShell twin of _remote_setup_languages; one
@@ -6729,6 +6804,38 @@ _gcp_setup_stack() {
         rc=1
         print_err "$stack setup failed on ${name} (${ip})"
     fi
+    [[ -n "$INSTALLER_SELF_TMP" ]] && rm -f "$INSTALLER_SELF_TMP"
+    return $rc
+}
+
+# LagHound SDK samples on a GCE instance — the gcloud-ssh twin of
+# _remote_setup_sdk_samples (GCP has no raw-ssh path; every remote step goes
+# through _gcp_ssh_script). Fatal on failure, for the same reason the proxy
+# stacks are: an endpoint the SDK Endpoints page believes is serving, but is
+# not, is worse than a failed deploy.
+_gcp_setup_sdk_samples() {
+    local name="$1" ip="$2" samples_csv="$3"
+    [[ -z "$samples_csv" ]] && return 0
+
+    if ! _installer_self_for_ssh; then
+        print_err "Could not fetch installer for remote SDK sample setup"
+        return 1
+    fi
+
+    local sample rc=0
+    IFS=',' read -ra _gs_samples <<< "$samples_csv"
+    for sample in "${_gs_samples[@]}"; do
+        [[ -z "$sample" ]] && continue
+        next_step "Install $sample SDK sample on GCE instance ($name)"
+        if _gcp_ssh_script "$name" \
+                "export DEBIAN_FRONTEND=noninteractive LAGHOUND_SAMPLE_TOKEN='${LAGHOUND_SAMPLE_TOKEN:-}' && sudo -E bash -s -- --setup-sdk-sample $sample" \
+                < "$INSTALLER_SELF_PATH"; then
+            print_ok "$sample SDK sample running on ${name} (${ip})"
+        else
+            rc=1
+            print_err "$sample SDK sample install failed on ${name} (${ip})"
+        fi
+    done
     [[ -n "$INSTALLER_SELF_TMP" ]] && rm -f "$INSTALLER_SELF_TMP"
     return $rc
 }
@@ -7348,7 +7455,10 @@ step_azure_open_endpoint_ports() {
     # haproxy/apache HTTP + HTTPS) — without them a matrix cell's proxy installs
     # fine but the readiness probe and the runner can never reach it (the whole
     # 2026-08-01 comparison-group failure class). UDP 8454 = Caddy's h3.
-    print_info "Opening TCP 80, 443, 8080-8082, 8091-8094, 8443-8445, 8454-8457…"
+    # 8101-8105 are the LagHound SDK sample ports (shared/sdk-samples.json):
+    # the control plane probes them directly for /laghound/health, so a closed
+    # range renders a perfectly healthy sample as "unhealthy" in the UI.
+    print_info "Opening TCP 80, 443, 8080-8082, 8091-8094, 8101-8105, 8443-8445, 8454-8457…"
     az network nsg rule create \
         --resource-group "$rg" \
         --nsg-name "$nsg_name" \
@@ -7356,10 +7466,10 @@ step_azure_open_endpoint_ports() {
         --protocol Tcp \
         --direction Inbound \
         --priority 1100 \
-        --destination-port-ranges 80 443 8080-8082 8091-8094 8443-8445 8454-8457 \
+        --destination-port-ranges 80 443 8080-8082 8091-8094 8101-8105 8443-8445 8454-8457 \
         --access Allow \
         --output none
-    print_ok "TCP 80, 443, 8080-8082, 8091-8094, 8443-8445, 8454-8457 open"
+    print_ok "TCP 80, 443, 8080-8082, 8091-8094, 8101-8105, 8443-8445, 8454-8457 open"
 
     print_info "Opening UDP 8443-8445, 8454, 9997 (STAMP), 9998, 9999…"
     az network nsg rule create \
@@ -8014,6 +8124,12 @@ _aws_create_security_group() {
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$_sg_created" \
             --protocol tcp --port 8454-8457 --cidr 0.0.0.0/0 --output text >/dev/null
+        # 8101-8105 = the LagHound SDK sample ports (shared/sdk-samples.json).
+        # The control plane probes them directly for /laghound/health, so a
+        # closed range renders a healthy sample as "unhealthy" in the UI.
+        aws ec2 authorize-security-group-ingress \
+            --region "$AWS_REGION" --group-id "$_sg_created" \
+            --protocol tcp --port 8101-8105 --cidr 0.0.0.0/0 --output text >/dev/null
         # UDP 8443-8445 (QUIC for endpoint + nginx + IIS), 8454 (Caddy h3), 9998, 9999
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$_sg_created" \
@@ -8023,7 +8139,7 @@ _aws_create_security_group() {
             --protocol udp --port 8454 --cidr 0.0.0.0/0 --output text >/dev/null || true
         # 9997 = STAMP Session-Reflector (see the Azure NSG note).
         aws ec2 authorize-security-group-ingress \
-            --region "$AWS_REGION" --group-id "$sg_id" \
+            --region "$AWS_REGION" --group-id "$_sg_created" \
             --protocol udp --port 9997 --cidr 0.0.0.0/0 --output text >/dev/null
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$_sg_created" \
@@ -8031,7 +8147,7 @@ _aws_create_security_group() {
         aws ec2 authorize-security-group-ingress \
             --region "$AWS_REGION" --group-id "$_sg_created" \
             --protocol udp --port 9999 --cidr 0.0.0.0/0 --output text >/dev/null
-        print_ok "Security group created: $_sg_created  (TCP 22/3389/80/443/8080-8082/8443-8445, UDP 8443-8445/8454/9997-9999)"
+        print_ok "Security group created: $_sg_created  (TCP 22/3389/80/443/8080-8082/8091-8094/8101-8105/8443-8445/8454-8457, UDP 8443-8445/8454/9997-9999)"
     else
         print_ok "Security group created: $_sg_created  (TCP 22/3389)"
     fi
@@ -8453,7 +8569,7 @@ step_check_gcp_prereqs() {
 # its original ports, so every proxy-stack port (8081/8444 nginx, 8091/8454
 # caddy, …) stayed closed on long-lived projects and each cell died at the
 # readiness gate while install.sh reported nginx "configured".
-GCP_ENDPOINT_FIREWALL_RULES="tcp:22,tcp:80,tcp:443,tcp:3389,tcp:8080-8082,tcp:8091-8094,tcp:8443-8445,tcp:8454-8457,udp:8443-8445,udp:8454,udp:9997,udp:9998,udp:9999"
+GCP_ENDPOINT_FIREWALL_RULES="tcp:22,tcp:80,tcp:443,tcp:3389,tcp:8080-8082,tcp:8091-8094,tcp:8101-8105,tcp:8443-8445,tcp:8454-8457,udp:8443-8445,udp:8454,udp:9997,udp:9998,udp:9999"
 
 # Create or reconcile the GCE firewall rule for the endpoint ports (idempotent:
 # an existing rule is UPDATED to the canonical list, never assumed current).
@@ -9931,6 +10047,28 @@ _deploy_validate_config() {
                         fi
                     done
                 fi
+
+                # Validate LagHound SDK samples per endpoint (the reference apps
+                # under sdk/<lang>/example that the dashboard's SDK Endpoints
+                # page provisions). Linux-only: each is built from source with
+                # its own toolchain and there is no install.ps1 twin. Keep in
+                # lockstep with SdkSampleCatalog / shared/sdk-samples.json (C#)
+                # and DeployConfigPreflight.cs.
+                local sdk_count; sdk_count="$(jq ".endpoints[$i].sdk_samples | length // 0" "$cfg" 2>/dev/null)"
+                if [[ "${sdk_count:-0}" -gt 0 ]]; then
+                    if [[ "$ep_os" == "windows" ]]; then
+                        print_err "endpoints[$i].sdk_samples: SDK samples require a Linux endpoint (os is 'windows')"
+                        errors=$((errors + 1))
+                    fi
+                    local s
+                    for s in $(seq 0 $((sdk_count - 1))); do
+                        local sname; sname="$(jq -r ".endpoints[$i].sdk_samples[$s]" "$cfg")"
+                        if ! echo "$SDK_SAMPLE_LANGS" | grep -qw "$sname"; then
+                            print_err "endpoints[$i].sdk_samples[$s]: unknown SDK sample '$sname' (valid: $SDK_SAMPLE_LANGS)"
+                            errors=$((errors + 1))
+                        fi
+                    done
+                fi
             fi
         done
     fi
@@ -10167,10 +10305,12 @@ _deploy_parse_config() {
         local ep_label; ep_label="$(jq -r ".endpoints[$i].label // \"endpoint-$((i+1))\"" "$cfg")"
         local ep_stacks; ep_stacks="$(jq -r '(.endpoints['"$i"'].http_stacks // []) | join(",")' "$cfg")"
         local ep_langs; ep_langs="$(jq -r '(.endpoints['"$i"'].languages // []) | join(",")' "$cfg")"
+        local ep_sdks; ep_sdks="$(jq -r '(.endpoints['"$i"'].sdk_samples // []) | join(",")' "$cfg")"
         DEPLOY_EP_PROVIDERS+=("$ep_prov")
         DEPLOY_EP_LABELS+=("$ep_label")
         DEPLOY_EP_HTTP_STACKS+=("$ep_stacks")
         DEPLOY_EP_LANGUAGES+=("$ep_langs")
+        DEPLOY_EP_SDK_SAMPLES+=("$ep_sdks")
         DEPLOY_EP_IPS+=("")  # placeholder, filled after deploy
     done
 
@@ -11052,6 +11192,16 @@ deploy_from_config() {
                         print_warn "Skipping language servers ($ep_langs): only supported on Linux (detected $SYS_OS)"
                     fi
                 fi
+                # LagHound SDK samples (the SDK Endpoints page provisions these)
+                local ep_sdks="${DEPLOY_EP_SDK_SAMPLES[$i]:-}"
+                if [[ -n "$ep_sdks" ]]; then
+                    if [[ "$SYS_OS" == "Linux" ]]; then
+                        _local_setup_sdk_samples "$ep_sdks" || return 1
+                    else
+                        print_err "SDK samples ($ep_sdks) are only supported on Linux (detected $SYS_OS)"
+                        return 1
+                    fi
+                fi
                 DEPLOY_EP_IPS[$i]="127.0.0.1"
                 ;;
             lan)
@@ -11110,6 +11260,16 @@ deploy_from_config() {
                         _remote_setup_languages "$LAN_ENDPOINT_IP" "${LAN_ENDPOINT_USER:-$(whoami)}" "$ep_langs"
                     else
                         print_warn "Skipping language servers ($ep_langs) on $label: only supported on Linux"
+                    fi
+                fi
+                # LagHound SDK samples (the SDK Endpoints page provisions these)
+                local ep_sdks="${DEPLOY_EP_SDK_SAMPLES[$i]:-}"
+                if [[ -n "$ep_sdks" ]]; then
+                    if [[ "$os" != "windows" ]]; then
+                        _remote_setup_sdk_samples "$LAN_ENDPOINT_IP" "${LAN_ENDPOINT_USER:-$(whoami)}" "$ep_sdks" || return 1
+                    else
+                        print_err "SDK samples ($ep_sdks) on $label are only supported on Linux"
+                        return 1
                     fi
                 fi
                 DEPLOY_EP_IPS[$i]="$LAN_ENDPOINT_IP"
@@ -11196,6 +11356,16 @@ deploy_from_config() {
                         done
                     fi
                 fi
+                # LagHound SDK samples (the SDK Endpoints page provisions these)
+                local ep_sdks="${DEPLOY_EP_SDK_SAMPLES[$i]:-}"
+                if [[ -n "$ep_sdks" ]]; then
+                    if [[ "$AZURE_ENDPOINT_OS" != "windows" ]]; then
+                        _remote_setup_sdk_samples "$AZURE_ENDPOINT_IP" "azureuser" "$ep_sdks" || return 1
+                    else
+                        print_err "SDK samples ($ep_sdks) are only supported on Linux endpoints"
+                        return 1
+                    fi
+                fi
                 ;;
             aws)
                 step_aws_deploy_endpoint
@@ -11244,6 +11414,16 @@ deploy_from_config() {
                         print_warn "Skipping language servers ($ep_langs) on AWS Windows: only supported on Linux"
                     fi
                 fi
+                # LagHound SDK samples (the SDK Endpoints page provisions these)
+                local ep_sdks="${DEPLOY_EP_SDK_SAMPLES[$i]:-}"
+                if [[ -n "$ep_sdks" ]]; then
+                    if [[ "${AWS_ENDPOINT_OS:-linux}" != "windows" ]]; then
+                        _remote_setup_sdk_samples "$AWS_ENDPOINT_IP" "ubuntu" "$ep_sdks" || return 1
+                    else
+                        print_err "SDK samples ($ep_sdks) are only supported on Linux endpoints"
+                        return 1
+                    fi
+                fi
                 ;;
             gcp)
                 step_gcp_deploy_endpoint
@@ -11290,6 +11470,16 @@ deploy_from_config() {
                 local ep_langs="${DEPLOY_EP_LANGUAGES[$i]:-}"
                 if [[ -n "$ep_langs" ]]; then
                     print_warn "Language servers ($ep_langs) on GCP endpoints are not yet supported — apibench will measure the built-in endpoint /api"
+                fi
+                # LagHound SDK samples (the SDK Endpoints page provisions these)
+                local ep_sdks="${DEPLOY_EP_SDK_SAMPLES[$i]:-}"
+                if [[ -n "$ep_sdks" ]]; then
+                    if [[ "$GCP_ENDPOINT_OS" != "windows" ]]; then
+                        _gcp_setup_sdk_samples "$GCP_ENDPOINT_NAME" "$GCP_ENDPOINT_IP" "$ep_sdks" || return 1
+                    else
+                        print_err "SDK samples ($ep_sdks) are only supported on Linux endpoints"
+                        return 1
+                    fi
                 fi
                 ;;
         esac
@@ -11680,6 +11870,242 @@ _deploy_proxy_iis() {
     echo ">> IIS proxy deployment requires Windows — skipping on Linux"
     echo ">> Use install.ps1 --benchmark-proxy iis on Windows Server"
     return 1
+}
+
+# ── LagHound SDK sample deployment ────────────────────────────────────────────
+# Deploys a reference app from sdk/<lang>/example — the samples the dashboard's
+# SDK Endpoints page provisions ("all languages on one server", or one server
+# per language). Each mounts endpoint contract v1 at /laghound behind a shared
+# token and reports its own SDK version on /laghound/health, which is how the
+# control plane decides "what is deployed" vs "what the sample is now".
+#
+# Used by the deploy path (endpoints[].sdk_samples) and directly over SSH:
+#   curl … | sudo bash -s -- --setup-sdk-sample go
+#
+# Ports mirror shared/sdk-samples.json (8101-8105) and are deliberately clear of
+# everything else the installers put on an endpoint VM: networker-endpoint
+# 8080/8443, the reference-API language server 8085, and every proxy stack in
+# shared/http-stacks.json. Change a port here AND in the manifest in one PR.
+SDK_SAMPLE_LANGS="csharp js python rust go"
+SDK_SAMPLE_DIR="/opt/laghound-samples"
+SDK_SAMPLE_REPO_DIR="/tmp/nwk-sdk-repo"
+SDK_SAMPLE_ROUTE="/laghound/echo"
+
+_sdk_sample_port() {
+    case "$1" in
+        csharp) echo 8101 ;;
+        js)     echo 8102 ;;
+        python) echo 8103 ;;
+        rust)   echo 8104 ;;
+        go)     echo 8105 ;;
+        *)      echo "" ;;
+    esac
+}
+
+# Fresh shallow clone of the repo the samples live in (same mechanism
+# deploy_benchmark_server uses for the reference APIs). Always fresh: a stale
+# working copy is exactly how an "update" silently redeploys the old sample.
+_sdk_sample_fetch_repo() {
+    command -v git >/dev/null 2>&1 || {
+        sudo apt-get update -qq < /dev/null
+        sudo apt-get install -y -qq git < /dev/null
+    }
+    echo ">> Fetching LagHound SDK samples"
+    rm -rf "$SDK_SAMPLE_REPO_DIR"
+    git clone --depth 1 "https://github.com/${REPO_GH}.git" "$SDK_SAMPLE_REPO_DIR" 2>/dev/null < /dev/null
+}
+
+# Write + start the systemd unit for one sample. The token lives in a 0600
+# EnvironmentFile, never in the unit (units are world-readable) and never in a
+# log line. Idempotent: re-running replaces the unit and restarts the service,
+# which is exactly what an in-place sample update needs.
+_sdk_sample_service() {
+    local lang="$1" port="$2" token="$3" workdir="$4" exec_line="$5" extra_env="${6:-}"
+    local unit="laghound-sample-${lang}"
+    local envfile="/etc/${unit}.env"
+
+    if ! command -v systemctl >/dev/null 2>&1; then
+        echo "ERROR: systemd is required to run the $lang SDK sample as a service"
+        return 1
+    fi
+
+    sudo tee "$envfile" > /dev/null <<ENVFILE
+PORT=${port}
+LAGHOUND_TOKEN=${token}
+${extra_env}
+ENVFILE
+    sudo chmod 600 "$envfile"
+
+    sudo tee "/etc/systemd/system/${unit}.service" > /dev/null <<UNIT
+[Unit]
+Description=LagHound ${lang} SDK sample
+After=network.target
+
+[Service]
+WorkingDirectory=${workdir}
+EnvironmentFile=${envfile}
+ExecStart=${exec_line}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable "$unit" >/dev/null 2>&1 || true
+    sudo systemctl restart "$unit"
+
+    # Positive-signal readiness gate on the sample's OWN route: /laghound/* is
+    # token-gated and answers a bare 404 without the header, which would be
+    # indistinguishable from "not up yet".
+    local waited=0
+    while [[ $waited -lt 60 ]]; do
+        if curl -fsS -m 2 "http://127.0.0.1:${port}/" >/dev/null 2>&1; then
+            print_ok "${lang} SDK sample serving on :${port}"
+            return 0
+        fi
+        sleep 2
+        waited=$((waited + 2))
+    done
+    echo "ERROR: ${lang} SDK sample did not answer on :${port} within 60s"
+    sudo journalctl -u "$unit" -n 30 --no-pager 2>/dev/null || true
+    return 1
+}
+
+# Deploy one SDK sample on THIS machine.
+deploy_sdk_sample() {
+    local lang="$1"
+    local port; port="$(_sdk_sample_port "$lang")"
+    if [[ -z "$port" ]]; then
+        echo "ERROR: unknown SDK sample '$lang' (valid: $SDK_SAMPLE_LANGS)"
+        return 1
+    fi
+    [[ -n "${SDK_SAMPLE_PORT_OVERRIDE:-}" ]] && port="$SDK_SAMPLE_PORT_OVERRIDE"
+
+    # The control plane stages the token in the environment (it never rides the
+    # deploy config in plaintext). Without one, mint a per-host token: the
+    # sample still runs, and the operator registers it with the value printed
+    # by --setup-sdk-sample rather than the deploy failing on a missing secret.
+    local token="${LAGHOUND_SAMPLE_TOKEN:-}"
+    local minted=0
+    if [[ -z "$token" ]]; then
+        token="$(openssl rand -hex 16 2>/dev/null || echo "laghound-$(date +%s)-$$")"
+        minted=1
+    fi
+
+    echo ">> Deploying LagHound $lang SDK sample on port $port"
+    sudo mkdir -p "$SDK_SAMPLE_DIR"
+    _sdk_sample_fetch_repo || { echo "ERROR: could not fetch the SDK samples"; return 1; }
+
+    local src="$SDK_SAMPLE_REPO_DIR"
+    local dest="$SDK_SAMPLE_DIR/$lang"
+    sudo rm -rf "$dest"
+    sudo mkdir -p "$dest"
+
+    case "$lang" in
+        csharp)
+            # net10 runtime + SDK from the Microsoft feed, same gate the
+            # reference-API csharp path uses (a box with only SDK 8 cannot
+            # publish a net10.0 project).
+            if ! command -v dotnet >/dev/null 2>&1 || ! dotnet --list-sdks 2>/dev/null | grep -q "^10\."; then
+                echo ">> Installing .NET 10 SDK"
+                curl -fsSL https://dot.net/v1/dotnet-install.sh < /dev/null | bash -s -- --channel 10.0
+                export PATH="$HOME/.dotnet:$PATH"
+            fi
+            local dotnet_bin; dotnet_bin="$(command -v dotnet)"
+            # Publish as THIS user into a scratch dir, then copy in with sudo:
+            # publishing under sudo would need the log redirect to be root's too
+            # (SC2024), and the SDK's per-user caches misbehave under sudo.
+            local publish_out="/tmp/laghound-csharp-publish"
+            local publish_log="/tmp/laghound-csharp-publish.log"
+            rm -rf "$publish_out"
+            if ! "$dotnet_bin" publish "$src/sdk/csharp/Example/Example.csproj" \
+                    -c Release -o "$publish_out" --nologo < /dev/null > "$publish_log" 2>&1; then
+                echo "ERROR: dotnet publish failed for the C# sample — last 30 lines:"
+                tail -n 30 "$publish_log" 2>/dev/null || true
+                return 1
+            fi
+            sudo cp -r "$publish_out/." "$dest/"
+            local dotnet_root; dotnet_root="$(dirname "$(readlink -f "$dotnet_bin")")"
+            _sdk_sample_service "$lang" "$port" "$token" "$dest" \
+                "${dotnet_bin} ${dest}/LagHound.Example.dll" "DOTNET_ROOT=${dotnet_root}"
+            ;;
+
+        js)
+            # Node >= 22.6 runs the SDK's TypeScript source directly (type
+            # stripping), which is why the sample needs no build step.
+            if ! command -v node >/dev/null 2>&1 || [[ "$(node -e 'process.stdout.write(String(process.versions.node.split(".")[0]))' 2>/dev/null || echo 0)" -lt 22 ]]; then
+                echo ">> Installing Node.js 24"
+                local ns_setup="/tmp/nodesource_setup.sh"
+                curl -fsSL https://deb.nodesource.com/setup_24.x -o "$ns_setup"
+                sudo -E bash "$ns_setup" < /dev/null 2>&1
+                rm -f "$ns_setup"
+                sudo apt-get install -y -qq nodejs < /dev/null
+            fi
+            sudo cp -r "$src/sdk/js/." "$dest/"
+            _sdk_sample_service "$lang" "$port" "$token" "$dest/example" \
+                "$(command -v node) ${dest}/example/server.mjs"
+            ;;
+
+        python)
+            command -v python3 >/dev/null 2>&1 || {
+                sudo apt-get update -qq < /dev/null
+                sudo apt-get install -y -qq python3 < /dev/null
+            }
+            sudo cp -r "$src/sdk/python/." "$dest/"
+            _sdk_sample_service "$lang" "$port" "$token" "$dest/example" \
+                "$(command -v python3) ${dest}/example/app.py" "PYTHONPATH=${dest}/src"
+            ;;
+
+        rust)
+            command -v cargo >/dev/null 2>&1 || {
+                echo ">> Installing the Rust toolchain"
+                curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs < /dev/null | sh -s -- -y
+                # shellcheck disable=SC1091 # generated by rustup at install time
+                source "$HOME/.cargo/env"
+            }
+            sudo apt-get install -y -qq build-essential pkg-config < /dev/null 2>/dev/null || true
+            ( cd "$src/sdk/rust/example" && cargo build --release < /dev/null ) || {
+                echo "ERROR: cargo build failed for the Rust sample"
+                return 1
+            }
+            sudo cp "$src/sdk/rust/example/target/release/laghound-sample" "$dest/laghound-sample"
+            sudo chmod +x "$dest/laghound-sample"
+            _sdk_sample_service "$lang" "$port" "$token" "$dest" "${dest}/laghound-sample"
+            ;;
+
+        go)
+            command -v go >/dev/null 2>&1 || {
+                echo ">> Installing the Go toolchain"
+                sudo snap install go --classic < /dev/null
+            }
+            ( cd "$src/sdk/go/example" && CGO_ENABLED=0 "$(command -v go)" build -o /tmp/laghound-sample-go . < /dev/null ) || {
+                echo "ERROR: go build failed for the Go sample"
+                return 1
+            }
+            sudo cp /tmp/laghound-sample-go "$dest/laghound-sample"
+            sudo chmod +x "$dest/laghound-sample"
+            _sdk_sample_service "$lang" "$port" "$token" "$dest" "${dest}/laghound-sample"
+            ;;
+
+        *)
+            echo "ERROR: unknown SDK sample '$lang' (valid: $SDK_SAMPLE_LANGS)"
+            return 1
+            ;;
+    esac
+    local rc=$?
+    if [[ $rc -ne 0 ]]; then
+        return $rc
+    fi
+
+    if [[ "$minted" -eq 1 ]]; then
+        # Printed ONLY when this host minted its own token — a control-plane
+        # deploy stages one and this branch never runs.
+        echo ">> laghound_sample_token: ${token}"
+    fi
+    echo ">> laghound_sample: ${lang} on :${port} (route ${SDK_SAMPLE_ROUTE})"
+    return 0
 }
 
 # ── Benchmark server deployment ────────────────────────────────────────────────
@@ -12086,6 +12512,13 @@ main() {
                 print_err "--setup-stack: unknown stack '$SETUP_STACK' (valid: nginx, caddy, apache, haproxy, traefik)"
                 return 1 ;;
         esac
+        return $?
+    fi
+
+    # LagHound SDK sample mode: build + run one sample locally, then exit.
+    # Piped over SSH by _remote_setup_sdk_samples / _gcp_setup_sdk_samples.
+    if [[ -n "$SETUP_SDK_SAMPLE" ]]; then
+        deploy_sdk_sample "$SETUP_SDK_SAMPLE"
         return $?
     fi
 

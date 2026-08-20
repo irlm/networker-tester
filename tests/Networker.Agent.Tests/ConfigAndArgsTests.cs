@@ -84,6 +84,28 @@ public class ConfigAndArgsTests
     }
 
     [Fact]
+    public void Set_members_that_resolve_to_the_same_url_produce_one_target()
+    {
+        // #782 P1: members are de-duplicated as WRITTEN when the config is
+        // stored (TestConfigEndpointNormalizer), but two distinct spellings can
+        // still resolve to one URL — a bare hostname and its own
+        // https://…/health form. Two --target flags for one URL would probe it
+        // twice while the run's per-URL grouping reports a single target
+        // carrying double the attempts.
+        var view = TestConfigView.From(Config("""
+            { "id":"00000000-0000-0000-0000-000000000000",
+              "endpoint": { "kind":"network", "host":"bare.example",
+                            "hosts":["bare.example","https://bare.example/health","https://other.example/"] },
+              "workload": { "modes":["dns"], "runs":1, "concurrency":1, "timeout_ms":3000,
+                            "payload_sizes":[], "capture_mode":"headers-only", "insecure":false } }
+            """));
+
+        Assert.Equal(
+            new[] { "https://bare.example/health", "https://other.example/" },
+            RunExecutor.EndpointToTargets(view));
+    }
+
+    [Fact]
     public void Single_host_config_still_yields_one_hosts_entry()
     {
         // Classic shape (no hosts key) must behave exactly as before — Hosts

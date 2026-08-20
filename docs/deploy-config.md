@@ -68,11 +68,53 @@ bash install.sh --deploy deploy.json
 
 ### `endpoints[]` items
 
-Each endpoint has the same structure as `tester`. It also adds this field:
+Each endpoint has the same structure as `tester`. It also adds these fields:
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `label` | string | no | `"endpoint-1"` | Human-readable name (used in plan/report) |
+| `http_stacks` | string[] | no | `[]` | Reverse proxies to install on this endpoint (`nginx`, `iis`, `caddy`, `apache`, `haproxy`, `traefik`) |
+| `languages` | string[] | no | `[]` | Reference-API servers for `apibench` (see the table in `BenchmarkLanguageCapabilities`) |
+| `sdk_samples` | string[] | no | `[]` | LagHound SDK sample apps to build and run on this endpoint — **Linux only** |
+
+#### `sdk_samples`
+
+The reference apps under `sdk/<lang>/example`: each mounts endpoint contract v1
+(`docs/sdk/contract-v1.md`) at `/laghound` behind a shared token, so LagHound
+can probe it with the `sdkprobe` mode and split latency into network versus
+application time. This is what the dashboard's **SDK Endpoints** page
+provisions — "all languages on one server" is one endpoint with several entries
+here; "one server per language" is one endpoint each.
+
+| Sample | Port | Source |
+|--------|------|--------|
+| `csharp` | 8101 | `sdk/csharp/Example` (.NET 10 · ASP.NET Core) |
+| `js` | 8102 | `sdk/js/example` (Node 22 · `node:http`) |
+| `python` | 8103 | `sdk/python/example` (Python 3.12 · `wsgiref`) |
+| `rust` | 8104 | `sdk/rust/example` (axum · tower) |
+| `go` | 8105 | `sdk/go/example` (Go 1.26 · `net/http`) |
+
+Ports come from [`shared/sdk-samples.json`](../shared/sdk-samples.json), the
+same manifest the control plane serves and drift-guards; they are deliberately
+clear of `networker-endpoint` (8080/8443), the reference-API language server
+(8085) and every proxy stack in `shared/http-stacks.json`. Each sample runs as
+a `laghound-sample-<lang>` systemd unit and is rebuilt from source on every
+deploy, so re-running a deployment updates the sample in place.
+
+**Token.** Every sample requires `X-LagHound-Token`. Supply it in the
+`LAGHOUND_SAMPLE_TOKEN` environment variable of the `install.sh` process — the
+control plane stages it there (it never writes the plaintext into the deploy
+config, which project members can read). Without it the installer mints a
+per-host token and prints it as `>> laghound_sample_token: …` for you to
+register manually.
+
+One sample can also be installed directly, which is exactly what the deploy
+path does over SSH:
+
+```bash
+LAGHOUND_SAMPLE_TOKEN=<32+ chars> \
+  bash install.sh --setup-sdk-sample go [--sdk-sample-port 8105]
+```
 
 ### LAN provider (`lan` object)
 

@@ -11,6 +11,7 @@ import { useProject } from '../hooks/useProject';
 import { SettingsTabs } from '../components/common/SettingsTabs';
 import SystemHealthPanel from '../components/SystemHealthPanel';
 import { hostLabel, timeAgo } from '../lib/format';
+import { inventoryEmptyState, inventoryScanSummary, type InventoryScanState } from '../lib/inventory-scan';
 
 interface VersionInfo {
   dashboard_version: string;
@@ -34,6 +35,9 @@ export function SettingsPage() {
   const [inventory, setInventory] = useState<{ provider: string; name: string; region: string; status: string; public_ip: string | null; fqdn: string | null; vm_size: string | null; os: string | null; resource_group: string | null; managed: boolean }[]>([]);
   const [inventoryErrors, setInventoryErrors] = useState<string[]>([]);
   const [inventoryLoading, setInventoryLoading] = useState(false);
+  // Whether a scan has HAPPENED (and what it covered) — never inferred from
+  // `inventory.length === 0`, which cannot tell "found nothing" from "never ran".
+  const [inventoryScan, setInventoryScan] = useState<InventoryScanState>({ status: 'never' });
   const [cloudConnections, setCloudConnections] = useState<CloudConnection[]>([]);
   const [showAddAccount, setShowAddAccount] = useState(false);
   const [newProvider, setNewProvider] = useState<'azure' | 'aws' | 'gcp'>('azure');
@@ -413,8 +417,16 @@ export function SettingsPage() {
                 const result = await api.getInventory(projectId);
                 setInventory(result.vms);
                 setInventoryErrors(result.errors);
+                setInventoryScan({
+                  status: 'done',
+                  // The server's own scan time when it reports one.
+                  at: result.scanned_at ? new Date(result.scanned_at) : new Date(),
+                  scanned: result.scanned ?? [],
+                  notConfigured: result.not_configured ?? [],
+                });
               } catch {
                 addToast('error', 'Failed to scan cloud inventory');
+                setInventoryScan({ status: 'failed', at: new Date() });
               } finally {
                 setInventoryLoading(false);
               }
@@ -435,9 +447,7 @@ export function SettingsPage() {
         )}
 
         {inventory.length === 0 && !inventoryLoading ? (
-          <p className="text-faint text-sm">
-            Click "scan all providers" to discover VMs across Azure, AWS, and GCP.
-          </p>
+          <p className="text-faint text-sm">{inventoryEmptyState(inventoryScan)}</p>
         ) : inventoryLoading ? (
           <p className="text-gray-400 text-sm motion-safe:animate-pulse">Scanning cloud providers...</p>
         ) : (
@@ -505,6 +515,9 @@ export function SettingsPage() {
               {inventory.filter(v => v.managed).length} tracked
               {' · '}
               {inventory.filter(v => v.status === 'running').length} running
+              {inventoryScanSummary(inventoryScan) && (
+                <>{' · '}{inventoryScanSummary(inventoryScan)}</>
+              )}
             </div>
           </div>
         )}

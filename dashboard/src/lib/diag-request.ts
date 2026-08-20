@@ -87,7 +87,7 @@ export function decodeHostQueryParam(value: string | null): string {
  * uses it verbatim (a bare host would get `/health` appended — the E2E P1-4
  * false-failure on arbitrary sites like example.com).
  */
-function toProbeUrl(input: string): string {
+export function toProbeUrl(input: string): string {
   const t = input.trim();
   try {
     const u = t.includes('://') ? new URL(t) : new URL(`https://${t}`);
@@ -95,6 +95,26 @@ function toProbeUrl(input: string): string {
   } catch {
     return t;
   }
+}
+
+/**
+ * De-duplicate probe entries by the URL they actually resolve to, keeping the
+ * first spelling of each. Raw-string de-duplication was not enough: "example.com"
+ * and "https://example.com/" are the same probe, and a set built from both sent
+ * the SAME url twice as two `--target` flags — a duplicated member that inflated
+ * the `+N` in the config name and made the run's per-URL grouping report one URL
+ * where the user asked for two distinct ones.
+ */
+export function dedupeProbeEntries(entries: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const entry of entries) {
+    const url = toProbeUrl(entry);
+    if (seen.has(url)) continue;
+    seen.add(url);
+    out.push(entry);
+  }
+  return out;
 }
 
 /**
@@ -160,7 +180,9 @@ export function buildDiagRequest(
     .split(/[\s,]+/)
     .map(e => e.trim())
     .filter(Boolean);
-  const entries = [...new Set(rawEntries)];
+  // De-duplicated by resolved probe URL, not by raw text: "example.com" and
+  // "https://example.com/" are one member, not two identical --target flags.
+  const entries = dedupeProbeEntries(rawEntries);
   if (entries.length === 0) return null;
   // entries[0], not rawInput: after de-duplication a repeated single entry
   // ("example.com example.com") must resolve like the single entry it is.

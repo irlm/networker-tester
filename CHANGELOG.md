@@ -71,6 +71,185 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.277] - 2026-08-20
+
+### Added
+
+- **URL sets, phase 1 of #782 — assemble a set, probe it in ONE run.** The
+  set config shape (`endpoint.hosts[]`), its one-run dispatch and the
+  per-URL run detail already shipped with #820/#821/#826; what was missing was
+  a way to *build* a set from the watchlist and a run list that admits a set
+  row covers several targets.
+  - **Watchlist multi-select** (`dashboard/src/pages/DiagnosticsPage.tsx`): a
+    checkbox per watched-URL row, a select-all scoped to the visible page, and
+    an action bar with **Probe set now** / **Edit as list** / **Clear**. One
+    host owning several runner rows (under the provider / capacity grouping)
+    contributes ONE member, not one per row.
+  - **Multi-URL entry**: a `URL set` / `Single URL` toggle swaps the
+    single-line field for a paste-friendly textarea (one URL per line;
+    Ctrl/Cmd+Enter launches). It reports what it will not probe — unusable
+    lines, duplicates that collapse, entries past the 25-URL cap — before the
+    run rather than as failed attempts after it, and the run button is
+    disabled when nothing in the box is probeable.
+  - **Runs list** (`dashboard/src/pages/RunsPage.tsx`): a set run reads
+    `set (4 URLs) · example.com (Quick)` instead of the raw
+    `Diag set: example.com +3 [a1b2c3] (Quick)`, which showed a single host
+    plus an internal reuse hash and was indistinguishable from an ordinary
+    single-URL probe.
+  - New pure module `dashboard/src/lib/probe-set.ts` (set parsing, validation,
+    de-duplication, selection → hosts) with `probe-set.test.ts`.
+
+### Fixed
+
+- **URL-set members are de-duplicated by resolved probe URL, not raw text**
+  (`dashboard/src/lib/diag-request.ts`). `example.com` and
+  `https://example.com/` are one probe; both used to survive into
+  `endpoint.hosts[]`, so the run carried two `--target` flags for one URL, the
+  config name's `+N` overstated the membership, and the run's per-URL grouping
+  reported one URL with double the attempts.
+- **The control plane now canonicalizes `endpoint.hosts[]` on create and
+  PATCH** (`TestConfigEndpointNormalizer`): blanks dropped, duplicates
+  collapsed, `host` realigned to `hosts[0]` (a `host` absent from the list is
+  prepended, never discarded), non-string members and empty sets rejected with
+  a 400, and a 25-member cap so a set cannot become a run the watchdog kills
+  halfway. Classic single-host configs and every non-network endpoint round-trip
+  byte-identically.
+- **The agent de-duplicates targets after resolution** (`RunExecutor`):
+  `bare.example` and `https://bare.example/health` resolve to one URL and now
+  yield one `--target`.
+- **A `Diag set:` run without `test_kind` is classified as a URL probe.** The
+  runs-list fallback tested for a literal `Diag: ` prefix, which no set name
+  ever matches, so old set runs fell through to `network` and vanished from the
+  URL-probes tab.
+## [0.28.276] - 2026-08-20
+
+### Added
+
+- **The cloud inventory scan is real** (`GET /api/projects/{id}/inventory`, the
+  Settings page's "scan all providers" button). It was a stub that always
+  answered `{vms: [], errors: []}` behind a `TODO(phase3)` whose reason — "the
+  `az`/`aws`/`gcloud` CLIs are not available in the C# ControlPlane" — stopped
+  being true a long time ago: the control plane provisions, reaps and validates
+  production VMs through those same CLIs. Clicking the button did nothing
+  visible, so it read as dead. (Closes the fidelity audit's F27.)
+
+  `Provisioning/CloudInventoryScanner.cs` now enumerates every **active** cloud
+  account on the project **in parallel**, each authenticated with its own stored
+  credentials the way the rest of the control plane does it — Azure signs the
+  service principal into an isolated `AZURE_CONFIG_DIR`, GCP goes through
+  `CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE` pointing at a 0600 key file in a 0700
+  throwaway `CLOUDSDK_CONFIG` (#827), AWS passes its keys through the process
+  environment across the account's default region plus the five common ones.
+  Every command is an enumeration: the endpoint is open to any project member
+  and can never create, start, stop or delete anything.
+
+- **Honest inventory errors.** Anything that stops a *configured* account from
+  being enumerated — inactive account, undecryptable credentials, missing CLI
+  (named with its `AZ_CMD`/`AWS_CMD`/`GCLOUD_CMD` override var), failed sign-in,
+  non-zero exit, per-call timeout, exhausted account budget, unreadable output —
+  is an `errors[]` line naming the provider and the account, never a silently
+  empty list. Repeated per-region AWS failures fold into one line. Vendor
+  boilerplate is stripped with the existing `ProviderCredentialValidator`
+  helpers, and any credential value that leaks into a CLI's stderr is redacted
+  before it reaches the response.
+
+  A provider the project has **no** account for is deliberately *not* an error —
+  nothing failed — so it is reported in the new `not_configured` field instead.
+  The response also gained `scanned` (providers actually queried) and
+  `scanned_at`; `vms[]` and `errors[]` are unchanged.
+
+### Fixed
+
+- **The inventory panel can no longer look dead.** After a scan that found
+  nothing, `SettingsPage` re-rendered `Click "scan all providers" to discover
+  VMs…` — byte-identical to never having clicked. It now tracks scan state and
+  says what happened: `no VMs found — scanned azure, aws at 16:14 · not scanned:
+  gcp (no cloud account configured)`, with the same provenance line under a
+  populated table and a distinct message when the request itself failed. The
+  wording lives in `dashboard/src/lib/inventory-scan.ts` and is unit-tested.
+
+- **Bounded cloud CLI calls.** Each inventory CLI invocation is capped at 45s
+  and each account's whole scan at 90s (the request at 150s); a hung CLI is
+  tree-killed and reported as a timeout instead of stalling the Settings page.
+
+### Changed
+
+- **One hardened cloud-CLI process runner.** `CloudCli.RunAsync` now owns the
+  spawn/drain/timeout/tree-kill semantics that `CliComputeProvisioner` and
+  `OrphanReaperService` each carried their own copy of; both delegate to it and
+  the inventory scan reuses it rather than adding a third copy. Behaviour is
+  unchanged — missing binary, timeout and non-zero exit stay distinguishable at
+  each call site.
+
+- **Inventory scan scope diverges from the retired Rust handler on purpose.**
+  The Rust scan filtered to resource groups / instance names containing
+  `networker-endpoint` / `networker-tester`; those names have not existed for
+  many releases (VMs are `nwk-a-*`, `nwk-ep-*`, `tester-*`, `ab-*`), so that
+  filter would have hidden every VM we create on AWS and GCP. The scan now
+  enumerates what the credential itself is scoped to and lets `managed` mark
+  which rows are ours, capped at 500 VMs per account with an explicit note when
+  the cap bites.
+
+---
+
+## [0.28.275] - 2026-08-20
+
+### Added
+
+- **The SDK Endpoints page can create the samples it advertises.** The page
+  listed the LagHound reference apps and linked their source, but the only way
+  to get one was to deploy it yourself and paste the URL back in — "we can see
+  the samples but we cannot create". It now provisions them:
+  - **Two shapes.** *Consolidated* puts every selected language on one server
+    (each sample on its own port, one VM, one bill) — the default, because it
+    is the cheap one. *Separated* gives one server per language for isolation
+    and per-language infrastructure numbers, at N× the cost. The dialog prices
+    both from the same table the deployment cost endpoint uses.
+  - **Reuse first.** Before provisioning anything, every language is checked
+    against what the project already runs; anything usable is registered
+    against the existing server instead of buying a second one. The summary
+    names what that avoids in $/mo. Reuse can be turned off explicitly, never
+    silently.
+  - **Update, not silent redeploy.** A sample whose deployed SDK version is
+    behind the catalog is reported as outdated with *both* versions shown and
+    an in-place update action that re-runs its existing deployment.
+  - **Honest states.** `current`, `outdated`, `unknown_version` (alive but the
+    version could not be read), `unhealthy`, `failed`, `deploying`, `none`. A
+    stale or unreachable sample is never presented as usable.
+- `GET/POST /api/projects/{id}/sdk-endpoints/samples` and
+  `POST …/samples/{language}/update` — the catalog joined to the project's
+  deployments, the reuse-first create, and the in-place update.
+- `shared/sdk-samples.json` — the canonical sample catalog (id, port,
+  Dockerfile, and the SDK version each sample reports on `/laghound/health`).
+  Drift-guarded: every `sdk_version` is re-derived in CI from the language's
+  real package manifest, and no sample port may collide with
+  `shared/http-stacks.json`, the endpoint's 8080/8443, or the reference-API
+  language server's 8085.
+- `install.sh --setup-sdk-sample <lang>` and the deploy-config key
+  `endpoints[].sdk_samples` — build a sample from source on a Linux endpoint
+  (Azure/AWS/GCP/LAN/local) and run it as a `laghound-sample-<lang>` systemd
+  unit on its catalog port (8101-8105, now opened on all three cloud
+  firewalls). The token travels in `LAGHOUND_SAMPLE_TOKEN`, never in the
+  deploy config or the log.
+- Docker (local) provider: `sdk_samples` endpoints become sample containers
+  (`nwk-lab/sdk-<lang>`), built by `lab/lab.sh build --samples <csv>`, so the
+  whole create/reuse/update path runs in the lab for free.
+
+### Fixed
+
+- AWS endpoint security groups: the STAMP UDP 9997 rule was authorized against
+  `$sg_id`, which the caller only assigns *after* `_aws_create_security_group`
+  returns — so on a freshly created group the rule went out with an empty
+  `--group-id` and aborted the deploy under `set -e`. It now uses
+  `$_sg_created` like every sibling call.
+- `install.sh`: `DEPLOY_EP_HTTP_STACKS` is declared alongside its four sibling
+  per-endpoint arrays instead of being conjured by its first `+=`.
+- The deploy budget scales for `sdk_samples` as it already did for
+  reference-API `languages` — an SDK sample compiles from source (the Rust one
+  is a full cargo release build), so a sample-only deploy no longer gets the
+  flat 30-minute base and a tree-kill mid-build.
+
+---
 ## [0.28.274] - 2026-08-20
 
 ### Added

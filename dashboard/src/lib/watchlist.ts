@@ -48,6 +48,54 @@ export function hostsFromDiagConfigName(name: string): string[] {
   return m ? [m[1]] : [];
 }
 
+/** What a "Diag set:" config name encodes, once the internals are stripped. */
+export interface DiagSetName {
+  /** First member host — the only one the name carries. */
+  host: string;
+  /** Members in the set, or null for pre-`+N` set names that never encoded it. */
+  urlCount: number | null;
+  /** Preset label, e.g. "Quick" or "Full x5". */
+  preset: string | null;
+}
+
+/**
+ * Parse a set config name into its display parts. Null for anything that isn't
+ * a set name. The `[hex]` membership hash is a reuse key, not information for
+ * the reader, so it is dropped here.
+ */
+export function parseDiagSetConfigName(name: string): DiagSetName | null {
+  const m = name.match(
+    /^(?:Probe|Diag) set:\s+(.+?)(?:\s+\+(\d+))?(?:\s+\[[0-9a-f]+\])?(?:\s+\(([^()]*)\))?$/,
+  );
+  if (!m) return null;
+  return {
+    host: m[1],
+    urlCount: m[2] ? Number(m[2]) + 1 : null,
+    preset: m[3] ?? null,
+  };
+}
+
+/**
+ * Runs-list label for a URL-probe run (#782): a set run reads as
+ * `set (4 URLs) · example.com (Quick)` instead of the raw
+ * `Diag set: example.com +3 [a1b2c3] (Quick)`, which showed ONE host and an
+ * internal hash for a run that probed four targets. Returns null for
+ * single-URL and non-probe configs, whose own name is already the best label.
+ *
+ * `memberCount` (from the config's `endpoint.hosts`, when the caller has it)
+ * is authoritative and overrides the name-encoded count; the run list has only
+ * the denormalized `config_name`, so the name is the usual source.
+ */
+export function diagSetRunLabel(configName: string, memberCount?: number): string | null {
+  const parsed = parseDiagSetConfigName(configName);
+  if (!parsed) return null;
+  const count = memberCount ?? parsed.urlCount;
+  // No count anywhere: say "set", never invent a number.
+  const badge = count === null || count === undefined ? 'set' : `set (${count} URLs)`;
+  const tail = parsed.preset ? `${parsed.host} (${parsed.preset})` : parsed.host;
+  return `${badge} · ${tail}`;
+}
+
 /** Minimal shape shared by TestConfig / TestConfigListItem for host lookup. */
 export interface DiagConfigLike {
   name: string;
