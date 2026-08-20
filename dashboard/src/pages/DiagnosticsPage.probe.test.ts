@@ -104,6 +104,36 @@ describe('buildDiagRequest', () => {
     expect(req!.configName).toBe('Diag: example.com (Quick)');
   });
 
+  it('dedupes by RESOLVED probe URL, not by raw text (#782 P1)', () => {
+    // "example.com" and "https://example.com/" are one probe. Raw-string
+    // de-duplication let both through, so the set carried the same URL twice:
+    // two --target flags for one target, a `+N` that overstated the
+    // membership, and a per-URL grouping that reported one URL with double
+    // the attempts.
+    const req = buildDiagRequest('example.com\nhttps://example.com/', 'quick');
+    expect(req!.isSet).toBe(false);
+    expect(req!.entries).toEqual(['example.com']);
+    expect(req!.config.endpoint).toEqual({ kind: 'network', host: 'https://example.com/' });
+
+    const set = buildDiagRequest('example.com https://example.com/ b.example.com', 'quick');
+    expect(set!.config.endpoint).toEqual({
+      kind: 'network',
+      host: 'https://example.com/',
+      hosts: ['https://example.com/', 'https://b.example.com/'],
+    });
+    expect(set!.configName).toMatch(/^Diag set: example\.com \+1 \[[0-9a-f]{6}\] \(Quick\)$/);
+  });
+
+  it('distinct paths on one host stay distinct members', () => {
+    // The de-duplication is by full URL, so /a and /b are two targets.
+    const req = buildDiagRequest('example.com/a\nexample.com/b', 'quick');
+    expect(req!.config.endpoint).toEqual({
+      kind: 'network',
+      host: 'https://example.com/a',
+      hosts: ['https://example.com/a', 'https://example.com/b'],
+    });
+  });
+
   it('returns null on empty input', () => {
     expect(buildDiagRequest('', 'quick')).toBeNull();
     expect(buildDiagRequest('  , \n ', 'quick')).toBeNull();

@@ -24,11 +24,13 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  diagSetRunLabel,
   hostsForDiagConfig,
   hostsFromDiagConfigName,
   isDiagSetConfigName,
   isWatchlistConfig,
   isWatchlistConfigName,
+  parseDiagSetConfigName,
   probeRunVerdict,
 } from '../lib/watchlist';
 
@@ -202,5 +204,73 @@ describe('probeRunVerdict', () => {
   it('WITHOUT counts, run-level failed/cancelled still reads failed', () => {
     expect(probeRunVerdict(run({ status: 'failed' }), NOW, STALE)).toBe('failed');
     expect(probeRunVerdict(run({ status: 'cancelled' }), NOW, STALE)).toBe('failed');
+  });
+});
+
+// ── Runs-list labelling of a set run (#782 P1) ────────────────────────────
+// A set is ONE run row covering N targets (the run list caps at 200 newest —
+// that is why sets are one row, not N). The raw config name shows a single
+// host plus the internal membership hash, which reads like an ordinary
+// single-URL probe. These pin the label that says what the row actually is.
+
+describe('parseDiagSetConfigName', () => {
+  it('splits a hashed set name into host, count and preset', () => {
+    expect(parseDiagSetConfigName('Diag set: example.com +3 [a1b2c3] (Quick)')).toEqual({
+      host: 'example.com',
+      urlCount: 4,
+      preset: 'Quick',
+    });
+  });
+
+  it('reads a burst preset label', () => {
+    expect(parseDiagSetConfigName('Diag set: example.com +1 [ff00aa] (Full x5)')).toEqual({
+      host: 'example.com',
+      urlCount: 2,
+      preset: 'Full x5',
+    });
+  });
+
+  it('reads the pre-hash and pre-rename set names', () => {
+    expect(parseDiagSetConfigName('Diag set: example.com +2 (Standard)')?.urlCount).toBe(3);
+    expect(parseDiagSetConfigName('Probe set: example.com +2 [abc123] (Standard)')?.urlCount).toBe(3);
+  });
+
+  it('reports an unknown count rather than inventing one', () => {
+    // A set name that never encoded +N carries no membership at all.
+    expect(parseDiagSetConfigName('Diag set: example.com (Quick)')).toEqual({
+      host: 'example.com',
+      urlCount: null,
+      preset: 'Quick',
+    });
+  });
+
+  it('is null for single-URL and non-probe configs', () => {
+    expect(parseDiagSetConfigName('Diag: example.com (Quick)')).toBeNull();
+    expect(parseDiagSetConfigName('Checkout connectivity')).toBeNull();
+    expect(parseDiagSetConfigName('go @ azure/eastus @ linux @ nginx')).toBeNull();
+  });
+});
+
+describe('diagSetRunLabel', () => {
+  it('says how many URLs the row covers, and drops the reuse hash', () => {
+    expect(diagSetRunLabel('Diag set: example.com +3 [a1b2c3] (Quick)'))
+      .toBe('set (4 URLs) · example.com (Quick)');
+  });
+
+  it('prefers a caller-supplied member count over the name', () => {
+    // endpoint.hosts is authoritative when the caller has the config; the name
+    // only carries what was encoded at creation time.
+    expect(diagSetRunLabel('Diag set: example.com +3 [a1b2c3] (Quick)', 7))
+      .toBe('set (7 URLs) · example.com (Quick)');
+  });
+
+  it('says "set" without a number when nothing carries the count', () => {
+    expect(diagSetRunLabel('Diag set: example.com (Quick)')).toBe('set · example.com (Quick)');
+  });
+
+  it('returns null for names the runs list should show verbatim', () => {
+    expect(diagSetRunLabel('Diag: example.com (Quick)')).toBeNull();
+    expect(diagSetRunLabel('Nightly canary')).toBeNull();
+    expect(diagSetRunLabel('')).toBeNull();
   });
 });
