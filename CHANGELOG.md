@@ -13,6 +13,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [0.28.254] - 2026-08-20
+
+### Fixed
+
+- **Multi-URL "Diag set" runs now update every member URL's watched row** (#820).
+  Set configs join the probe-page watchlist, per-URL health verdicts come from
+  the run's target_url-filtered attempts, and the `?host=` query param no longer
+  double-encodes.
+
+### Added
+
+- **URL Probe burst sampling, hourly monitoring, and set comparison** (#782 P2).
+  A Samples selector (1/3/5) runs each URL in a burst, watched rows can be
+  monitored hourly via the existing scheduler, and set runs get a side-by-side
+  per-phase median comparison table on the run detail page.
+
 ## [0.28.253] - 2026-08-19
 
 ### Fixed
