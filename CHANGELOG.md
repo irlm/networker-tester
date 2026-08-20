@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.273] - 2026-08-20
+
+### Fixed
+
+- **Dashboard layouts remain usable across touch, narrow, and short
+  viewports.** The coarse-pointer touch-target rule no longer overrides fixed
+  controls; mobile navigation is viewport-bounded, scrollable, and always
+  expanded; phone-landscape navigation adapts to limited height; and shared
+  dialogs, slide-overs, Help/Search overlays, and performance tools stay
+  within the available viewport. Browser regression coverage now exercises
+  every rendered route, the 320–1920px width matrix, intermediate resizing,
+  touch navigation, and representative overlay interactions.
+
 ## [0.28.271] - 2026-08-20
 
 ### Added
