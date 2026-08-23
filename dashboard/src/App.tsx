@@ -71,6 +71,7 @@ const AlertsPage = lazyPage(() => import('./pages/AlertsPage'), 'AlertsPage');
 const AppBenchmarkPage = lazyPage(() => import('./pages/AppBenchmarkPage'), 'AppBenchmarkPage');
 const SdkEndpointsPage = lazyPage(() => import('./pages/SdkEndpointsPage'), 'SdkEndpointsPage');
 const AppNetworkReportPage = lazyPage(() => import('./pages/AppNetworkReportPage'), 'AppNetworkReportPage');
+const ProbeComparePage = lazyPage(() => import('./pages/ProbeComparePage'), 'ProbeComparePage');
 const ComparisonResultsPage = lazyPage(() => import('./pages/ComparisonResultsPage'), 'ComparisonResultsPage');
 
 const statusColors: Record<ConnectionStatus, string> = {
@@ -226,6 +227,9 @@ function AuthenticatedApp() {
             <Route path="/projects/:projectId/benchmarks/compare/:groupId" element={<ComparisonResultsPage />} />
             {/* PROBE — canonical /probe; legacy /diagnostics redirected */}
             <Route path="/projects/:projectId/probe" element={<DiagnosticsPage />} />
+            {/* URL comparison report (#782 P3) — nested under /probe because it
+                reads the URL Probe's own history and nothing else. */}
+            <Route path="/projects/:projectId/probe/compare" element={<ProbeComparePage />} />
             <Route path="/projects/:projectId/diagnostics" element={<Navigate to="../probe" replace relative="path" />} />
             <Route path="/projects/:projectId/runs/new/probe" element={<Navigate to="../../../probe" replace relative="path" />} />
             {/* NETWORK — per-endpoint runs-list (preset cards + colored mode chips) */}

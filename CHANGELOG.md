@@ -11,6 +11,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.285] - 2026-08-23
+
+### Added
+
+- **The URL comparison report — #782 P3 of 4.** P1 made it possible to probe
+  several URLs in one run and P2 gave every point a real median and spread;
+  this is what that data was for. `GET
+  /api/projects/{id}/reports/probe-comparison` and a new page at
+  `/projects/{id}/probe/compare` answer "of the URLs I watch, which is fastest,
+  which flakes, which is steadiest" — and refuse to answer when the data cannot
+  support it.
+  - **Shared time buckets, never window-wide aggregates.** A URL probed only
+    overnight would win a raw aggregate by dodging peak hours. Every figure is
+    computed over the buckets in which *every* eligible URL was actually
+    measured. A URL covering under 30% of the window is excluded and shown
+    greyed with its real counts, so one barely-probed URL cannot shrink the
+    shared set for the others.
+  - **Ranked head-to-head**, not on whose average is lower: "in the 42 hours
+    both were probed, A was faster in 31". A bucket where either side had no
+    successful sample is not a race and counts in no column.
+  - **Coverage honesty.** Below ~30% shared coverage (or fewer than 5 shared
+    buckets) the scoreboard is greyed, the crowns disappear, and the report says
+    why and what to do — instead of ranking anyway.
+  - **Crowns**: Fastest, Most reliable, Most consistent (lowest p95/p50) and the
+    per-phase DNS / TCP / TLS / TTFB winners, which are often different URLs. A
+    tie awards no crown, and a phase nothing measured never wins one.
+  - **Modes are never pooled** — an http1 probe and an http3 probe of the same
+    URL are not the same race, so there is one scoreboard per mode.
+  - Overlaid p50 time series (lazy-loaded Recharts, so non-chart routes keep
+    their bundle), and PDF/HTML/DOCX/Markdown export that carries the coverage
+    block and the full methodology with the numbers.
+  - Reachable from the watchlist's new **Compare…** action, which normalises the
+    selection with the same `toProbeUrl()` the probe launch uses, so its URLs
+    match the `target_url` the tester stamps exactly.
+  - Bucketing is `floor(epoch / width)` rather than TimescaleDB's `time_bucket`:
+    identical results for these fixed epoch-aligned widths, and no extension
+    dependency, so the report also works against a plain-PostgreSQL lab or test
+    database. Attribution falls back to the tester `TestRun.TargetUrl` for
+    pre-v0.28.231 attempts, which is most of the existing single-URL history.
+  - Docs: `docs/reports-url-comparison.md`.
+
+---
+
 ## [0.28.284] - 2026-08-23
 
 ### Fixed

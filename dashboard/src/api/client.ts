@@ -3,6 +3,11 @@ import type { Agent, Job, JobConfig, Attempt, Deployment, DeploymentCostEstimate
 export type { Agent, Job, JobConfig, Attempt, Deployment, ModeGroup, PacketCaptureSummary, DashUser, CloudConnection, CloudAccountSummary, ProjectSummary, ProjectDetail, ProjectMember, ShareLink, CommandApproval, WorkspaceInvite, ResolvedInvite, SystemMetrics, DbMetrics, WorkspaceUsage, LogEntry, LogsResponse, BenchmarkRunSummary, BenchmarkArtifact, BenchmarkComparisonReport, TlsProfileSummary, TlsProfileDetail, BenchmarkConfigSummary, BenchmarkVmCatalogEntry, BenchTokenInfo, ImportResult, SendInviteResult, TestConfig, TestConfigListItem, TestConfigCreate, TestRun, TestSchedule, ComparisonReport, ComparisonGroup, ComparisonGroupCreate, AlertChannel, AlertChannelCreate, AlertRule, AlertRuleCreate, AlertEvent };
 export type { AlertMetric, AlertComparator, AlertChannelKind, AlertChannelConfig } from './types';
 export type { SdkEndpoint, SdkEndpointCreate, AppNetworkReport, AppNetworkGroup, AppNetworkFormulas, AppNetworkVerdict } from './types';
+export type {
+  ProbeComparisonReport, ProbeComparisonMode, ProbeComparisonScore, ProbeComparisonCrowns,
+  ProbeComparisonCoverage, ProbeComparisonHeadToHead, ProbeComparisonPoint,
+  ProbeComparisonAvailable, ProbeRankingVerdict, ProbeBucket, ProbeWindow,
+} from './types';
 export type { LiveAttempt, EndpointRef, EndpointKind, Workload, Methodology, RunStatus, CaptureMode, OutlierPolicy, QualityGates, PublicationGates, ComparisonCell } from './types';
 
 import { ApiError, request } from './http';
@@ -787,6 +792,26 @@ export const api = {
     const qs = configId ? `?config_id=${encodeURIComponent(configId)}` : '';
     return request<import('./types').AppNetworkReport>(
       projectUrl(projectId, `reports/app-network${qs}`),
+    );
+  },
+
+  /**
+   * URL comparison report (#782 P3). With fewer than two URLs the server
+   * answers a discovery call — `available` populated, `modes` empty — which is
+   * exactly what the picker needs on first load, so the same call serves both.
+   */
+  getProbeComparison: (
+    projectId: string,
+    opts: { urls?: string[]; window?: string; bucket?: string; minSamples?: number } = {},
+  ) => {
+    const qs = new URLSearchParams();
+    if (opts.urls?.length) qs.set('urls', opts.urls.join(','));
+    if (opts.window) qs.set('window', opts.window);
+    if (opts.bucket) qs.set('bucket', opts.bucket);
+    if (opts.minSamples !== undefined) qs.set('min_samples', String(opts.minSamples));
+    const q = qs.toString();
+    return request<import('./types').ProbeComparisonReport>(
+      projectUrl(projectId, `reports/probe-comparison${q ? `?${q}` : ''}`),
     );
   },
 };
