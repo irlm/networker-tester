@@ -268,10 +268,44 @@ Verified on turing at v0.28.285: the container sees an empty Docker world, and
 running the loop's full sweep inside it left the machine's own container and all
 six of its images untouched.
 
+### The two DinD traps, and why the compose file looks the way it does
+
+Both were found by a real `validate-bench-apis` job landing on `ci-turing-1`,
+not by reading. A CI job is written for a machine where the Docker daemon and
+the shell share a filesystem and a localhost. A sidecar breaks both assumptions,
+silently:
+
+1. **A bind mount is resolved by the DAEMON, not by the client asking for it.**
+   `docker run -v /tmp/bench:/opt/bench` writes `/tmp/bench` in the ci-host
+   container, and the daemon then looks for that path in *its own* filesystem —
+   finds nothing, helpfully creates an empty directory, and the container starts
+   and dies on missing data (`FATAL: failed to load
+   /opt/bench/bench-data.json`). Fixed by sharing `/tmp` and the runner's
+   `_work` between both containers **at identical paths**.
+2. **A published port lands in the DAEMON's network namespace.** With trap 1
+   fixed the container stayed up — and every `curl https://localhost:8443/health`
+   still timed out, because `-p 8443:8443` published onto `dind`'s localhost,
+   not the runner's. Fixed with `network_mode: "service:dind"`, so the pair
+   shares one namespace and behaves like the single machine the workflows
+   assume. `DOCKER_HOST` becomes `tcp://127.0.0.1:2375`, `networks:` cannot be
+   set on `ci-host` (compose rejects both), and no port may be published from
+   it — which was already the rule.
+
+Verified after both fixes, inside the container: the exact failing job boots
+`HEALTHY after ~4s` and `run-validation.sh` reports **25 passed, 0 failed** —
+while `docker ps -a` from the runner still shows **nothing** of the machine's
+own containers or images.
+
 **Fidelity gaps.** Jobs that install system services (`stack-exec`,
 `linux-bench-exec`) are pinned to hosted runners anyway, so nothing is lost
 there. Nested Docker is slower for image-heavy jobs than a native daemon, and
 the DinD storage volume is a second layer cache rather than a shared one.
+Bind mounts resolve only under the shared trees (`/tmp`, `_work`); a job that
+mounts some other absolute host path would hit trap 1 again.
+
+**Restarting the stack takes the runner offline for 2-5 minutes.** GitHub holds
+the previous session (`A session for this runner already exists`) and the loop
+retries until it clears — the same behaviour a VM host shows after a reboot.
 
 ## Private-repo minute math
 

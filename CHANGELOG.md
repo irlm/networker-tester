@@ -36,6 +36,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Verified on the machine itself: the container sees an empty Docker world,
     and running the loop's full sweep inside it left the machine's own
     container and all six of its images untouched.
+  - Two DinD traps found by a real job landing there, both fixed: a **bind
+    mount is resolved by the daemon**, so `/tmp` and the runner's `_work` are
+    now shared with the sidecar at identical paths (otherwise the daemon
+    invents an empty directory and the container dies on missing data); and a
+    **published port lands in the daemon's namespace**, so the pair now shares
+    one network namespace (`network_mode: service:dind`) and
+    `docker run -p X` + `curl localhost:X` works the way every workflow
+    assumes.
 
 ---
 

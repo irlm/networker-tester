@@ -24,6 +24,16 @@ services:
     networks: [ci]
     volumes:
       - dind-storage:/var/lib/docker
+      # A bind mount is resolved by the DAEMON, not by the client that asks for
+      # it. A job that does `docker run -v /tmp/bench:/opt/bench` writes
+      # /tmp/bench inside the ci-host container and the daemon then looks for
+      # that path in ITS OWN filesystem — finds nothing, and helpfully creates
+      # an empty directory, so the container starts and fails on missing data
+      # (`FATAL: failed to load /opt/bench/bench-data.json`, seen on the first
+      # validate-bench-apis job that landed here). Sharing these two trees at
+      # the SAME path on both sides makes such a mount resolve to one place.
+      - ci-tmp:/tmp
+      - ci-work:/opt/actions-runner/_work
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "docker", "info"]
@@ -44,14 +54,26 @@ services:
       CI_HOST_NAME: ${CI_HOST_NAME:-ci-container-1}
       CI_HOST_LABELS: ${CI_HOST_LABELS:-self-hosted,linux,networker-ci}
       CI_HOST_RUNNER_GROUP: ${CI_HOST_RUNNER_GROUP:-}
-      DOCKER_HOST: tcp://dind:2375
+      DOCKER_HOST: tcp://127.0.0.1:2375
     volumes:
       # The PAT: root-owned, 0600, read-only. Docker Engine (not Swarm) has no
       # real secrets, so this is a bind mount rather than a `secrets:` entry.
       - ${CI_HOST_TOKEN_FILE:?set CI_HOST_TOKEN_FILE to the PAT file}:/run/secrets/ci-host-token:ro
       - ci-cache:/var/cache/ci-host
+      # Shared with `dind` at the same paths — see the note on its volumes.
+      - ci-tmp:/tmp
       - ci-work:/opt/actions-runner/_work
-    networks: [ci]
+    # Share dind's network namespace instead of having one of our own. A job
+    # that does `docker run -p 8443:8443` then `curl https://localhost:8443` is
+    # written for a machine where the daemon publishes onto the same localhost
+    # the job curls. Under a sidecar those are two different namespaces — the
+    # container came up healthy and every readiness probe still timed out. With
+    # one namespace the pair behaves like the single machine the workflows
+    # assume, and DOCKER_HOST becomes 127.0.0.1.
+    #
+    # It also means `networks:` cannot be set here (compose rejects both) and
+    # that no port may be published from ci-host — which was already the rule.
+    network_mode: "service:dind"
     restart: unless-stopped
     # A job may build a large workspace; keep the container from being the
     # thing that runs the machine out of memory.
@@ -66,6 +88,7 @@ networks:
     driver: bridge
 
 volumes:
+  ci-tmp:         # /tmp, shared with dind so bind mounts under it resolve
   dind-storage:   # the jobs' image/layer cache — survives a restart
   ci-cache:       # sccache / nuget / npm / playwright, the point of a persistent host
   ci-work:        # _work: keeps _tool and _actions across jobs, like a VM host
