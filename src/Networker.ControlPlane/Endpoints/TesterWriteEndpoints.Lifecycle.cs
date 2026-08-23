@@ -309,7 +309,7 @@ public static partial class TesterWriteEndpoints
             return Conflict($"cannot probe tester with allocation={tester.Allocation}; retry once idle");
         }
 
-        var creds = await LoadCredentialsAsync(db, tester, ct);
+        var creds = await LoadCredentialsAsync(http.RequestServices, db, tester, logger, ct);
         var res = await provisioner.ShowAsync(tester, creds, ct);
 
         if (res.Success)

@@ -11,6 +11,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.280] - 2026-08-23
+
+### Fixed
+
+- **GCP testers actually shut themselves down again — an idle VM billed for
+  three days because every auto-shutdown tick ran `gcloud` with no credentials
+  (#857).** The tester-lifecycle credential resolution built
+  `ProviderCredentials` from the `cloud_connection` config alone and never
+  loaded or decrypted the cloud ACCOUNT's `json_key`. That is enough for Azure
+  (its scope lives in the connection config, and `az` has ambient auth), but
+  gcloud authenticates ONLY from its own config store or the per-invocation
+  `CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE` (#827) — so on prod every
+  `gcloud compute instances stop` failed with *"You do not currently have an
+  active account selected"*, `power_state` rolled back to `running`, and the
+  next tick failed identically. Forever. The same defect class as #833/#834
+  (install.sh spawned without GCP creds) and #838/#839 (Azure-only teardown);
+  those fixed the deployment paths, this one closes the tester lifecycle.
+  Credential resolution now lives in ONE place
+  (`Provisioning/TesterLifecycleCredentials`) shared by the auto-shutdown
+  deallocate, the auto-wake start, the manual start/stop/force-stop/delete/probe
+  endpoints and the agent auto-upgrade, and it resolves + decrypts the GCP
+  service-account key through the SAME `GcpInstallerCredentials` account lookup
+  the install.sh staging, the endpoint teardown and the inventory scan use.
+  Azure/AWS resolution is unchanged, a host with no resolvable key still
+  degrades to ambient auth with a warning naming the reason, a missing CLI
+  (`ExitCode == null`) remains a soft success so credential-less hosts converge
+  to `stopped`, and `status_message` keeps quoting the CLI's own error without
+  ever carrying key material.
+
+---
+
 ## [0.28.278] - 2026-08-20
 
 ### Added
