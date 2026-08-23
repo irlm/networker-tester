@@ -68,3 +68,4 @@ test-results/
 
 # self-hosted CI host answers (infra/ci-hosts/setup-ci-hosts.sh) — never the PAT, but keep host names/IPs local
 infra/ci-hosts/ci-hosts.env
+infra/ci-hosts/container/.env

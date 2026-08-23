@@ -11,6 +11,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.282] - 2026-08-23
+
+### Added
+
+- **A CI host can now run containerised, on a machine that is not dedicated
+  CI** (`infra/ci-hosts/container/`). The first is `ci-turing-1` on a box that
+  also serves nginx :8080, Samba, ollama, an openclaw gateway and
+  node_exporter. The ephemeral loop's between-jobs sweep — `docker ps -aq |
+  xargs docker rm -f`, `rm -rf /tmp/...`, `pkill -u` — is correct on a
+  dedicated VM and a live grenade on a shared machine; inside a container all
+  three are harmless, because `/tmp` and the process table are the container's
+  own and `docker` talks to a **DinD sidecar** instead of the machine's daemon.
+  The host's Docker socket is deliberately not mounted and the entrypoint
+  *refuses to start* without `DOCKER_HOST` rather than falling back to one.
+  Nothing is published: a runner is outbound-only, so it cannot collide with
+  what the machine already serves.
+  - The image runs the **real** `install-ci-host.sh --container`, so a
+    containerised host and a VM host get their toolchains from the same code.
+    `--container` skips only what assumes ownership of a machine: systemd, the
+    local `dockerd`, and qemu-guest-agent.
+  - The PAT is a mounted file — never a build arg, an environment variable or a
+    layer.
+  - Verified on the machine itself: the container sees an empty Docker world,
+    and running the loop's full sweep inside it left the machine's own
+    container and all six of its images untouched.
+
+---
+
 ## [0.28.281] - 2026-08-23
 
 ### Fixed

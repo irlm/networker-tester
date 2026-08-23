@@ -217,6 +217,62 @@ from the template in ~15 minutes while `auto` routes to hosted.
   pull request even under `CI_HOSTS_MODE=self-hosted`. Keep "Require approval
   for all outside collaborators" on while the repo is public.
 
+## Containerised hosts — for a machine that is not dedicated CI
+
+`infra/ci-hosts/container/` runs a CI host inside Docker, for a machine that is
+already doing something else. The first is `ci-turing-1` on `turing`
+(10.10.10.93, i7-8750H, 12 threads, 62 GB), which also runs nginx on :8080,
+Samba, ollama, an openclaw gateway and node_exporter.
+
+**Why containerised and not bare metal.** The ephemeral loop's between-jobs
+sweep is written for a machine it owns:
+
+```
+docker ps -aq | xargs -r docker rm -f     # every container on the box
+rm -rf /tmp/bench /tmp/networker-*        # anything at those paths
+pkill -TERM -u "$CI_USER"                 # every process of the CI user
+```
+
+On a dedicated VM those are correct and necessary. On a shared machine each is
+a live grenade: the `docker rm -f` alone would have deleted the owner's running
+container and, with a prune, six images. Inside a container all three are
+harmless — `/tmp` and the process table are the container's own, and `docker`
+talks to a **DinD sidecar** rather than the machine's daemon, so the sweep can
+only ever delete containers the CI jobs themselves created.
+
+**The host's Docker socket is deliberately not mounted.** The entrypoint
+*refuses to start* without `DOCKER_HOST`, rather than falling back to a socket:
+a silent fallback would hand both the jobs and that sweep the machine's real
+containers, which is the one thing this arrangement exists to prevent.
+
+**No published ports.** A runner only makes outbound connections, so the
+container collides with nothing the machine already serves.
+
+**Same installer.** The image runs the real
+`infra/ci-hosts/linux/install-ci-host.sh --container`, so a containerised host
+and a VM host get their toolchains from the same code. `--container` skips only
+what assumes ownership of a machine: systemd (the entrypoint runs the loop as
+PID 1's child and the container runtime does the restarting), the local
+`dockerd`, and qemu-guest-agent. A parallel Dockerfile with its own apt list
+would have drifted within a release.
+
+```bash
+cp infra/ci-hosts/container/.env.example infra/ci-hosts/container/.env   # edit
+docker compose -f infra/ci-hosts/container/compose.yml up -d --build
+```
+
+The PAT is a **mounted file**, never a build arg, an environment variable or a
+layer; the image is built with a placeholder that is deleted in the same layer.
+
+Verified on turing at v0.28.285: the container sees an empty Docker world, and
+running the loop's full sweep inside it left the machine's own container and all
+six of its images untouched.
+
+**Fidelity gaps.** Jobs that install system services (`stack-exec`,
+`linux-bench-exec`) are pinned to hosted runners anyway, so nothing is lost
+there. Nested Docker is slower for image-heavy jobs than a native daemon, and
+the DinD storage volume is a second layer cache rather than a shared one.
+
 ## Private-repo minute math
 
 Hosted minutes on a private repo are billed: Linux ×1, Windows ×2, macOS ×10
