@@ -92,28 +92,97 @@ export async function stubRuntime(page: Page) {
     }
     if (path.endsWith('/api/auth/sso/providers')) return json({ providers: [] });
     // SDK sample catalog + status. The catch-all at the bottom answers `[]`,
-    // which is NOT this endpoint's shape ({ samples: [...] }) — serving a
-    // realistic payload here is what makes the SDK Endpoints route test
-    // exercise the real UI instead of its empty state.
+    // which is NOT this endpoint's shape — serving a realistic payload here is
+    // what makes the SDK Endpoints route test exercise the real UI instead of
+    // its empty state. Two DIFFERENT shapes live in this one envelope and they
+    // are easy to mix up (#848 did): `catalog.samples[]` are catalog entries
+    // (`id`, `sdk_version`), while the top-level `samples[]` are per-language
+    // STATUS rows (`language`, `label`, `current_version`, `recommended_action`,
+    // `reason`, `reusable`, `route`). Keep both in step with SdkSampleCatalog.ToWire()
+    // and SampleView.ToWire() in src/Networker.ControlPlane/Endpoints/SdkSampleEndpoints.cs.
     if (path.endsWith(`/api/projects/${PID}/sdk-endpoints/samples`)) {
+      // Mirrors shared/sdk-samples.json, which is the server's embedded catalog.
+      const catalogSamples = [
+        { id: 'csharp', language: 'C#', runtime: '.NET 10 · ASP.NET Core',
+          description: 'Minimal service using the LagHound.Endpoint middleware.',
+          sdk_version: '0.1.0', port: 8101,
+          dockerfile: 'examples/csharp.Dockerfile', source_dir: 'sdk/csharp/Example' },
+        { id: 'js', language: 'JavaScript', runtime: 'Node 22 · node:http',
+          description: 'Bare node:http service mounting the SDK handler, zero runtime deps.',
+          sdk_version: '0.1.0', port: 8102,
+          dockerfile: 'examples/js.Dockerfile', source_dir: 'sdk/js/example' },
+        { id: 'python', language: 'Python', runtime: 'Python 3.12 · wsgiref',
+          description: 'Stdlib WSGI service wrapped by the laghound middleware.',
+          sdk_version: '0.1.0', port: 8103,
+          dockerfile: 'examples/python.Dockerfile', source_dir: 'sdk/python/example' },
+        { id: 'rust', language: 'Rust', runtime: 'axum · tower',
+          description: 'Minimal axum service nesting the laghound router.',
+          sdk_version: '1.0.0', port: 8104,
+          dockerfile: 'examples/rust.Dockerfile', source_dir: 'sdk/rust/example' },
+        { id: 'go', language: 'Go', runtime: 'Go 1.26 · net/http',
+          description: 'net/http service mounting the LagHound endpoint handler.',
+          sdk_version: '1.0.0', port: 8105,
+          dockerfile: 'examples/go.Dockerfile', source_dir: 'sdk/go/example' },
+      ];
+      // Status row for a language nothing is deployed for — prod's shape for
+      // all five on a fresh project (state `none` / action `create`).
+      const undeployed = (c: (typeof catalogSamples)[number]) => ({
+        language: c.id,
+        label: c.language,
+        runtime: c.runtime,
+        description: c.description,
+        port: c.port,
+        url: null,
+        route: '/laghound/echo',
+        state: 'none',
+        recommended_action: 'create',
+        reason: 'Nothing deployed for this language yet.',
+        reusable: false,
+        current_version: c.sdk_version,
+        deployed_version: null,
+        deployment_id: null,
+        deployment_name: null,
+        deployment_status: null,
+        host: null,
+        provider: null,
+        region: null,
+        vm_size: null,
+        consolidated: null,
+        samples_on_host: null,
+        sdk_endpoint_id: null,
+      });
       return json({
-        samples: [
-          {
-            id: 'js', language: 'JavaScript', runtime: 'Node 22 · node:http',
-            description: 'Bare node:http service mounting the SDK handler.',
-            port: 8102, sdk_version: '0.1.0', state: 'none',
-            deployment_id: null, endpoint_id: null, url: null,
-            deployed_version: null, host: null, message: null,
-          },
-          {
-            id: 'python', language: 'Python', runtime: 'Python 3.12',
-            description: 'ASGI service mounting the SDK middleware.',
-            port: 8103, sdk_version: '0.1.0', state: 'current',
-            deployment_id: 'dep-e2e-1', endpoint_id: 'ep-e2e-1',
-            url: 'https://sample.e2e.invalid:8103/laghound',
-            deployed_version: '0.1.0', host: 'sample.e2e.invalid', message: null,
-          },
-        ],
+        catalog: {
+          prefix_default: '/laghound',
+          route_default: '/laghound/echo',
+          samples: catalogSamples,
+        },
+        samples: catalogSamples.map((c) => {
+          const row = undeployed(c);
+          // One deployed row so the panel renders its populated branch too,
+          // not just five copies of the empty state.
+          if (c.id !== 'python') return row;
+          return {
+            ...row,
+            url: 'http://sample.e2e.invalid:8103/laghound',
+            state: 'current',
+            recommended_action: 'reuse',
+            reason: 'Deployed sample runs the current SDK.',
+            reusable: true,
+            deployed_version: c.sdk_version,
+            deployment_id: 'dep-e2e-1',
+            deployment_name: 'e2e-sdk-samples',
+            deployment_status: 'completed',
+            host: 'sample.e2e.invalid',
+            provider: 'azure',
+            region: 'eastus',
+            vm_size: 'Standard_B2s',
+            consolidated: true,
+            samples_on_host: 1,
+            sdk_endpoint_id: 'ep-e2e-1',
+          };
+        }),
+        cost_preview: null,
       });
     }
     if (path.endsWith('/api/projects')) return json({ projects: [project()] });

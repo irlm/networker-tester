@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.283] - 2026-08-23
+
+### Fixed
+
+- **The SDK Endpoints route test fed the page a wrong-shaped payload (#848
+  follow-up).** `GET /api/projects/{id}/sdk-endpoints/samples` returns two
+  different shapes in one envelope: `catalog.samples[]` are catalog entries
+  (`id`, `sdk_version`) and the top-level `samples[]` are per-language STATUS
+  rows (`language`, `label`, `current_version`, `recommended_action`, `reason`,
+  `reusable`, `route`). The e2e stub added in #848 used the catalog field names
+  for the status rows and omitted `catalog`/`cost_preview` entirely, so the
+  panel rendered with blank labels, blank versions and no row actions — and
+  nothing failed, because the route test only asserted that the page did not
+  crash. The stub now mirrors `SampleView.ToWire()` and
+  `SdkSampleCatalog.ToWire()` against `shared/sdk-samples.json`, and
+  `routes.spec.ts` asserts the values the panel puts on screen (five language
+  labels, the version line, `1 of 5 deployed`, one action per row) so the two
+  shapes have to keep agreeing. Verified by running the new test against the
+  old stub: it fails.
+
+---
+
 ## [0.28.282] - 2026-08-23
 
 ### Fixed
