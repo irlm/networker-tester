@@ -11,6 +11,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.284] - 2026-08-23
+
+### Fixed
+
+- **A debug-profile `networker-tester.exe` no longer overflows its stack on
+  Windows before it probes anything (#853).** `#[tokio::main]` `block_on`s the
+  whole async-main state machine **on the thread that calls it** — the process's
+  main thread — and on MSVC that thread's stack is the PE header's reserve, the
+  linker default of **1 MB**. An unoptimised build of `main` → `run_for_target`
+  (both very large async fns) does not fit, so every debug build died with
+  `STATUS_STACK_OVERFLOW` (`0xC00000FD`, exit `-1073741571`, "thread 'main' has
+  overflowed its stack") before running a single attempt — `--help` included.
+  `main` now runs that work on a thread it sizes itself (16 MiB), and the tokio
+  runtime is built with a matching `thread_stack_size` because
+  `target_runner.rs` spawns futures onto worker threads whose stacks are
+  tokio's 2 MiB default — the same trap one level down. A panic is re-raised
+  with `resume_unwind`, so the exit code and the message are unchanged.
+  16 MiB is a **reserve**, not an allocation (Rust passes
+  `STACK_SIZE_PARAM_IS_A_RESERVATION` on Windows; Unix stacks commit lazily), so
+  it costs address space rather than memory.
+  - The two burst-sampling CLI tests #852 gated off Windows now run there, and
+    they are the regression test: they spawn the **debug** binary, which is
+    exactly the build that overflowed.
+  - Release builds were unaffected and still are — but the margin had been
+    invisible, and an optimised build that grew past 1 MB would have failed the
+    same way in production with no warning.
+  - Verified on the real Windows CI host (`ci-windows-1`, Server 2025, rustc
+    1.98): the pre-fix binary reproduces `EXITCODE=-1073741571`; the fixed
+    binary runs the probe and returns a normal exit code.
+
+---
+
 ## [0.28.283] - 2026-08-23
 
 ### Fixed
