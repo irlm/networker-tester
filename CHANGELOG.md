@@ -11,6 +11,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.281] - 2026-08-23
+
+### Fixed
+
+- **`validate-bench-apis` could validate the wrong server and report it green.**
+  Every job in the 8-language matrix booted its reference API as
+  `docker run --name bench-srv -p 8443:8443` with certs staged in `/tmp/bench`.
+  On a self-hosted CI host — persistent, and running several of those languages
+  at once — that collided three ways: the second `docker run` failed on the
+  name, the second publish failed on the port, one job's
+  `docker rm -f bench-srv` cleanup killed **another** job's container, and two
+  jobs overwrote each other's TLS key while a container was reading it. The
+  worst outcome was not a crash: whoever bound `:8443` first answered
+  `/health`, so a job could validate a **different language's** server and pass.
+  Each job now uses a container name unique per run and language, a cert/data
+  directory beside it, and an **ephemeral** published port
+  (`-p 127.0.0.1:0:8443`, read back with `docker port`) — Docker allocates and
+  binds atomically, which no "find a free port, then bind it" helper can do
+  without a race. Cleanup removes only that job's own container and directory.
+- **The canonical Rust baseline collided with the same port.**
+  `run-validation.sh --rust-only` hardcoded `:8443`/`:8480` — exactly what the
+  language containers published. The ports are now overridable
+  (`BENCH_VALIDATE_RUST_HTTPS_PORT` / `BENCH_VALIDATE_RUST_HTTP_PORT`,
+  defaulting to today's values so nothing else changes), and the workflow takes
+  them from the ephemeral range so the baseline and a language job can share a
+  host.
+
+These are the prerequisite for giving a CI host a second runner slot: until
+now, two jobs on one host could silently produce a wrong green.
+
+---
+
 ## [0.28.280] - 2026-08-23
 
 ### Fixed
