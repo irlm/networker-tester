@@ -48,7 +48,7 @@ public static partial class TesterWriteEndpoints
                     return;
                 }
 
-                var creds = await LoadCredentialsAsync(db, tester, CancellationToken.None);
+                var creds = await LoadCredentialsAsync(sp, db, tester, logger, CancellationToken.None);
                 await work(provisioner, creds, tester, logger, CancellationToken.None);
             }
             catch (Exception ex)
@@ -102,57 +102,23 @@ public static partial class TesterWriteEndpoints
     }
 
     /// <summary>
-    /// Resolve per-connection credentials from the tester's <c>cloud_connection</c>
-    /// row's <c>config</c> JSON. Returns null when there is no connection (ambient
-    /// CLI auth) or the config can't be parsed — the provisioner then relies on
-    /// the host's ambient auth, matching the Rust managed-identity fallback.
+    /// Credentials for a tester lifecycle CLI call. Delegates to
+    /// <see cref="TesterLifecycleCredentials"/> — the ONE resolver shared with
+    /// the auto-shutdown/auto-wake sweep and the agent auto-upgrade, so a GCP
+    /// tester's service-account key is threaded in here too and a manual
+    /// stop/start/delete/probe does not hit "You do not currently have an
+    /// active account selected" (#857).
     /// </summary>
-    private static async Task<ProviderCredentials?> LoadCredentialsAsync(
-        NetworkerDbContext db, ProjectTester tester, CancellationToken ct)
-    {
-        if (tester.CloudConnectionId is not { } connId)
-        {
-            return null;
-        }
-
-        var conn = await db.CloudConnections.AsNoTracking()
-            .FirstOrDefaultAsync(c => c.ConnectionId == connId, ct);
-        if (conn is null)
-        {
-            return null;
-        }
-
-        var extra = new Dictionary<string, string>(StringComparer.Ordinal);
-        string? sub = null, rg = null, region = tester.Region;
-        try
-        {
-            using var doc = JsonDocument.Parse(conn.Config);
-            var root = doc.RootElement;
-            if (root.ValueKind == JsonValueKind.Object)
-            {
-                foreach (var prop in root.EnumerateObject())
-                {
-                    if (prop.Value.ValueKind == JsonValueKind.String)
-                    {
-                        extra[prop.Name] = prop.Value.GetString() ?? string.Empty;
-                    }
-                }
-            }
-            extra.TryGetValue("subscription_id", out sub);
-            extra.TryGetValue("resource_group", out rg);
-            if (extra.TryGetValue("region", out var r) && !string.IsNullOrEmpty(r))
-            {
-                region = r;
-            }
-        }
-        catch (JsonException)
-        {
-            // Non-JSON / encrypted config we can't read → ambient auth.
-            return new ProviderCredentials(conn.Provider, Region: region);
-        }
-
-        return new ProviderCredentials(conn.Provider, sub, rg, region, extra);
-    }
+    /// <param name="services">The scope the call runs in; the credential cipher
+    /// is optional (a host may register none), hence GetService.</param>
+    private static Task<ProviderCredentials?> LoadCredentialsAsync(
+        IServiceProvider services,
+        NetworkerDbContext db,
+        ProjectTester tester,
+        ILogger logger,
+        CancellationToken ct) =>
+        TesterLifecycleCredentials.LoadAsync(
+            db, services.GetService<CredentialCipher>(), tester, logger, ct);
 
     /// <summary>
     /// Map a provider's <c>show</c> JSON onto a coarse power state

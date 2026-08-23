@@ -1,8 +1,8 @@
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Provisioning;
 using Networker.Data;
 using Networker.Data.Entities;
+using Networker.Security;
 
 namespace Networker.ControlPlane.Background;
 
@@ -114,6 +114,11 @@ public sealed class AutoShutdownService : BackgroundService
         var sp = scope.ServiceProvider;
         var db = sp.GetRequiredService<NetworkerDbContext>();
         var provisioner = sp.GetRequiredService<IComputeProvisioner>();
+        // Optional: bare test/CI hosts register no cipher. Without it a GCP
+        // tester's account key can't be decrypted and the call degrades to
+        // ambient auth — the same posture the reaper and the deploy staging
+        // take (never a throw that kills the sweep).
+        var cipher = sp.GetService<CredentialCipher>();
 
         var now = DateTime.UtcNow;
 
@@ -134,7 +139,7 @@ public sealed class AutoShutdownService : BackgroundService
         foreach (var tester in toWake)
         {
             ct.ThrowIfCancellationRequested();
-            await TryWakeAsync(db, provisioner, tester, "pinned queued run(s)", ct).ConfigureAwait(false);
+            await TryWakeAsync(db, cipher, provisioner, tester, "pinned queued run(s)", ct).ConfigureAwait(false);
         }
 
         // ── Auto-wake, UNPINNED arm: auto-pick launches (URL probes, plain
@@ -177,7 +182,8 @@ public sealed class AutoShutdownService : BackgroundService
                     pid);
                 continue;
             }
-            await TryWakeAsync(db, provisioner, candidate, "unpinned queued run(s), no online agent", ct).ConfigureAwait(false);
+            await TryWakeAsync(db, cipher, provisioner, candidate, "unpinned queued run(s), no online agent", ct)
+                .ConfigureAwait(false);
         }
 
         // Shutdown condition — the LINQ equivalent of the Rust sweep SQL:
@@ -216,7 +222,7 @@ public sealed class AutoShutdownService : BackgroundService
             ct.ThrowIfCancellationRequested();
             try
             {
-                var outcome = await HandleDueTesterAsync(db, provisioner, tester.TesterId, ct)
+                var outcome = await HandleDueTesterAsync(db, cipher, provisioner, tester.TesterId, ct)
                     .ConfigureAwait(false);
                 switch (outcome)
                 {
@@ -248,7 +254,11 @@ public sealed class AutoShutdownService : BackgroundService
     private enum Outcome { Stopped, Deferred, Failed }
 
     private async Task<Outcome> HandleDueTesterAsync(
-        NetworkerDbContext db, IComputeProvisioner provisioner, Guid testerId, CancellationToken ct)
+        NetworkerDbContext db,
+        CredentialCipher? cipher,
+        IComputeProvisioner provisioner,
+        Guid testerId,
+        CancellationToken ct)
     {
         // Re-load fresh + tracked; the row may have changed between the sweep
         // query and now.
@@ -296,7 +306,9 @@ public sealed class AutoShutdownService : BackgroundService
 
         // Deallocate via the CLI provisioner (Azure vm deallocate / AWS stop /
         // GCP stop). Total: never throws — a missing CLI is a soft failure.
-        var creds = await LoadCredentialsAsync(db, tester, ct).ConfigureAwait(false);
+        var creds = await TesterLifecycleCredentials
+            .LoadAsync(db, cipher, tester, _logger, ct)
+            .ConfigureAwait(false);
         var res = await provisioner.DeallocateAsync(tester, creds, ct).ConfigureAwait(false);
 
         // A genuine non-zero CLI exit (ExitCode present) is the only "real"
@@ -414,67 +426,15 @@ public sealed class AutoShutdownService : BackgroundService
     }
 
     /// <summary>
-    /// Resolve per-connection credentials from the tester's <c>cloud_connection</c>
-    /// row's <c>config</c> JSON — the same logic as
-    /// <c>TesterWriteEndpoints.LoadCredentialsAsync</c>. Returns null when there
-    /// is no connection (ambient CLI auth) or the config can't be parsed, so the
-    /// provisioner falls back to the host's ambient auth.
-    /// </summary>
-    private static async Task<ProviderCredentials?> LoadCredentialsAsync(
-        NetworkerDbContext db, ProjectTester tester, CancellationToken ct)
-    {
-        if (tester.CloudConnectionId is not { } connId)
-        {
-            return null;
-        }
-
-        var conn = await db.CloudConnections.AsNoTracking()
-            .FirstOrDefaultAsync(c => c.ConnectionId == connId, ct)
-            .ConfigureAwait(false);
-        if (conn is null)
-        {
-            return null;
-        }
-
-        var extra = new Dictionary<string, string>(StringComparer.Ordinal);
-        string? sub = null, rg = null, region = tester.Region;
-        try
-        {
-            using var doc = JsonDocument.Parse(conn.Config);
-            var root = doc.RootElement;
-            if (root.ValueKind == JsonValueKind.Object)
-            {
-                foreach (var prop in root.EnumerateObject())
-                {
-                    if (prop.Value.ValueKind == JsonValueKind.String)
-                    {
-                        extra[prop.Name] = prop.Value.GetString() ?? string.Empty;
-                    }
-                }
-            }
-            extra.TryGetValue("subscription_id", out sub);
-            extra.TryGetValue("resource_group", out rg);
-            if (extra.TryGetValue("region", out var r) && !string.IsNullOrEmpty(r))
-            {
-                region = r;
-            }
-        }
-        catch (JsonException)
-        {
-            return new ProviderCredentials(conn.Provider, Region: region);
-        }
-
-        return new ProviderCredentials(conn.Provider, sub, rg, region, extra);
-    }
-    /// <summary>
     /// Guarded single-tester wake: CAS power_state → 'starting', call the
     /// provisioner, roll back on hard failure. Shared by the pinned and
     /// unpinned auto-wake arms.
     /// </summary>
     private async Task TryWakeAsync(
         NetworkerDbContext db,
+        CredentialCipher? cipher,
         IComputeProvisioner provisioner,
-        Networker.Data.Entities.ProjectTester tester,
+        ProjectTester tester,
         string reason,
         CancellationToken ct)
     {
@@ -488,7 +448,9 @@ public sealed class AutoShutdownService : BackgroundService
             return; // raced another actor
         }
 
-        var wakeCreds = await LoadCredentialsAsync(db, tester, ct).ConfigureAwait(false);
+        var wakeCreds = await TesterLifecycleCredentials
+            .LoadAsync(db, cipher, tester, _logger, ct)
+            .ConfigureAwait(false);
         var res = await provisioner.StartAsync(tester, wakeCreds, ct).ConfigureAwait(false);
         if (res is { Success: true } || res is { Success: false, ExitCode: null })
         {

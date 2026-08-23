@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Networker.ControlPlane.Security;
 using Networker.Data;
+using Networker.Data.Entities;
 using Networker.Security;
 
 namespace Networker.ControlPlane.Provisioning;
@@ -36,6 +37,13 @@ namespace Networker.ControlPlane.Provisioning;
 /// account, undecryptable credentials, no <c>json_key</c>) yields no env and a
 /// human-readable note for the deployment log, and install.sh runs against the
 /// host's ambient gcloud auth exactly as before.</para>
+///
+/// <para>This type is also where the ONE cloud-account → decrypted
+/// <c>json_key</c> resolution lives (<see cref="ResolveGcpAccountKeyAsync"/>).
+/// Besides install.sh staging and endpoint teardown it now serves the tester
+/// lifecycle (<see cref="TesterLifecycleCredentials"/>, #857), so all four GCP
+/// credential sites resolve the account the same way instead of growing a
+/// fourth private copy.</para>
 /// </summary>
 internal sealed class GcpInstallerCredentials : IDisposable
 {
@@ -183,6 +191,27 @@ internal sealed class GcpInstallerCredentials : IDisposable
     }
 
     /// <summary>
+    /// What <see cref="ResolveGcpAccountKeyAsync"/> does when the subject names
+    /// no <c>cloud_account_id</c> and its project holds several active GCP
+    /// accounts. The two callers genuinely differ, so the choice is explicit
+    /// rather than hidden in the query.
+    /// </summary>
+    internal enum UnboundAccountPolicy
+    {
+        /// <summary>Refuse. A wizard deployment carries no signal which key the
+        /// user meant, and acting with someone else's key is worse than an
+        /// honest soft-fail (#833/#838).</summary>
+        RefuseWhenAmbiguous,
+
+        /// <summary>Take the oldest active account — the exact rule tester
+        /// CREATE applies
+        /// (<c>TesterWriteEndpoints.ResolveProviderCredentialsAsync</c>), so the
+        /// lifecycle acts under the same key that made the VM. Not a guess: it
+        /// is a replay of the create-time selection (#857).</summary>
+        OldestActive,
+    }
+
+    /// <summary>
     /// The GCP service-account key a deployment acts under: its
     /// <c>cloud_account_id</c>'s account (auto-provisioned comparison cells),
     /// or — wizard deploys carry no account id — the deployment's project having
@@ -205,10 +234,61 @@ internal sealed class GcpInstallerCredentials : IDisposable
             return (null, "deployment row not found");
         }
 
-        var query = row.CloudAccountId is { } accountId
+        return await ResolveGcpAccountKeyAsync(
+                db, cipher, row.CloudAccountId, row.ProjectId,
+                UnboundAccountPolicy.RefuseWhenAmbiguous,
+                $"Deployment {deploymentId}", "the deployment", logger, ct)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The GCP service-account key a TESTER acts under, for every lifecycle
+    /// shell-out the control plane makes on its behalf (stop / start / delete /
+    /// show — #857). Same resolution and same soft-fail posture as the
+    /// deployment path above; the account is the tester's
+    /// <c>cloud_account_id</c>, falling back — exactly as tester create does —
+    /// to the project's oldest active GCP account, so the stop runs under the
+    /// key that created the VM.
+    ///
+    /// <para>A host with no registered <see cref="CredentialCipher"/> (bare
+    /// test/CI hosts) is a reason, not a throw: the caller degrades to ambient
+    /// gcloud auth exactly as before.</para>
+    /// </summary>
+    internal static Task<(string? JsonKey, string? Reason)> ResolveGcpKeyForTesterAsync(
+        NetworkerDbContext db,
+        CredentialCipher? cipher,
+        ProjectTester tester,
+        ILogger logger,
+        CancellationToken ct) =>
+        cipher is null
+            ? Task.FromResult<(string?, string?)>((null, "no credential cipher is registered on this host"))
+            : ResolveGcpAccountKeyAsync(
+                db, cipher, tester.CloudAccountId, tester.ProjectId,
+                UnboundAccountPolicy.OldestActive,
+                $"Tester {tester.TesterId}", "the tester", logger, ct);
+
+    /// <summary>
+    /// Load + decrypt one project's GCP account key. <paramref name="subject"/>
+    /// is the log prefix ("Deployment {id}" / "Tester {id}") and
+    /// <paramref name="subjectNoun"/> the phrase used inside a returned reason;
+    /// neither ever carries key material, and the returned reason names an
+    /// account only by its display name.
+    /// </summary>
+    private static async Task<(string? JsonKey, string? Reason)> ResolveGcpAccountKeyAsync(
+        NetworkerDbContext db,
+        CredentialCipher cipher,
+        Guid? boundAccountId,
+        string projectId,
+        UnboundAccountPolicy policy,
+        string subject,
+        string subjectNoun,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        var query = boundAccountId is { } accountId
             ? db.CloudAccounts.AsNoTracking().Where(a => a.AccountId == accountId && a.Provider == "gcp")
             : db.CloudAccounts.AsNoTracking()
-                .Where(a => a.ProjectId == row.ProjectId && a.Provider == "gcp" && a.Status == "active");
+                .Where(a => a.ProjectId == projectId && a.Provider == "gcp" && a.Status == "active");
         var accounts = await query
             .OrderBy(a => a.CreatedAt)
             .Select(a => new { a.AccountId, a.Name, a.CredentialsEnc, a.CredentialsNonce })
@@ -218,17 +298,19 @@ internal sealed class GcpInstallerCredentials : IDisposable
 
         if (accounts.Count == 0)
         {
-            return (null, row.CloudAccountId is null
+            return (null, boundAccountId is null
                 ? "the project has no active GCP cloud account"
-                : $"cloud account {row.CloudAccountId} is not a GCP account");
+                : $"cloud account {boundAccountId} is not a GCP account");
         }
-        if (accounts.Count > 1)
+        if (accounts.Count > 1 && policy == UnboundAccountPolicy.RefuseWhenAmbiguous)
         {
             // Wizard deploy in a project with several GCP accounts: there is no
             // signal which one the user meant — don't guess with someone's key.
-            return (null, "the project has more than one active GCP cloud account and the deployment names none");
+            return (null,
+                $"the project has more than one active GCP cloud account and {subjectNoun} names none");
         }
 
+        // OldestActive: the OrderBy(CreatedAt) above already put create's pick first.
         var acct = accounts[0];
         string? jsonKey;
         try
@@ -241,8 +323,8 @@ internal sealed class GcpInstallerCredentials : IDisposable
             // Undecryptable account (key rotation, corrupt nonce) — same
             // soft-fail posture as the reaper and the zone resolver.
             logger.LogWarning(
-                "Deployment {DeploymentId}: cloud account {Account} credentials failed to decrypt ({Error})",
-                deploymentId, acct.Name, ex.Message);
+                "{Subject}: cloud account {Account} credentials failed to decrypt ({Error})",
+                subject, acct.Name, ex.Message);
             return (null, $"cloud account '{acct.Name}' credentials failed to decrypt");
         }
         if (string.IsNullOrEmpty(jsonKey))

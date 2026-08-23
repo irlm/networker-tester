@@ -3,6 +3,7 @@ using Networker.ControlPlane.Endpoints;
 using Networker.ControlPlane.Provisioning;
 using Networker.Data;
 using Networker.Data.Entities;
+using Networker.Security;
 
 namespace Networker.ControlPlane.Background;
 
@@ -105,6 +106,9 @@ public sealed class AgentAutoUpgradeService : BackgroundService
         var sp = scope.ServiceProvider;
         var db = sp.GetRequiredService<NetworkerDbContext>();
         var provisioner = sp.GetRequiredService<IComputeProvisioner>();
+        // Optional on bare test hosts; TesterLifecycleCredentials degrades to
+        // ambient auth without it.
+        var cipher = sp.GetService<CredentialCipher>();
 
         if (!Version.TryParse(VersionEndpoints.DashboardVersion, out var floor))
         {
@@ -167,7 +171,7 @@ public sealed class AgentAutoUpgradeService : BackgroundService
 
             try
             {
-                if (await UpgradeOneAsync(db, provisioner, tester, ct).ConfigureAwait(false))
+                if (await UpgradeOneAsync(db, cipher, provisioner, tester, ct).ConfigureAwait(false))
                 {
                     upgraded++;
                     _failedAtUtc.Remove(tester.TesterId);
@@ -200,7 +204,11 @@ public sealed class AgentAutoUpgradeService : BackgroundService
     /// <summary>Reinstall one runner in place; returns true when the reinstall
     /// actually ran to success. The row always lands back on 'running'.</summary>
     private async Task<bool> UpgradeOneAsync(
-        NetworkerDbContext db, IComputeProvisioner provisioner, ProjectTester tester, CancellationToken ct)
+        NetworkerDbContext db,
+        CredentialCipher? cipher,
+        IComputeProvisioner provisioner,
+        ProjectTester tester,
+        CancellationToken ct)
     {
         var tag = TesterInstallScripts.PreferredReleaseTag(VersionEndpoints.DashboardVersion);
         var target = TesterInstallScripts.ReleaseTarget(tester.OsArch ?? "x86_64");
@@ -227,7 +235,9 @@ public sealed class AgentAutoUpgradeService : BackgroundService
             "Auto-upgrading {Name} ({TesterId}) to {Tag} — agent reported a stale version",
             tester.Name, tester.TesterId, tag);
 
-        var creds = await LoadCredentialsAsync(db, tester, ct).ConfigureAwait(false);
+        var creds = await TesterLifecycleCredentials
+            .LoadAsync(db, cipher, tester, _logger, ct)
+            .ConfigureAwait(false);
         var res = await provisioner.RunCommandAsync(tester, creds, script, ct).ConfigureAwait(false);
 
         // The VM stays powered on throughout — every outcome lands 'running'
@@ -285,55 +295,5 @@ public sealed class AgentAutoUpgradeService : BackgroundService
     {
         s ??= "";
         return s.Length <= max ? s : s[..max];
-    }
-
-    /// <summary>Same per-connection credential resolution as
-    /// <see cref="AutoShutdownService"/> / the write endpoints: null (ambient
-    /// CLI auth) when the tester has no cloud connection.</summary>
-    private static async Task<ProviderCredentials?> LoadCredentialsAsync(
-        NetworkerDbContext db, ProjectTester tester, CancellationToken ct)
-    {
-        if (tester.CloudConnectionId is not { } connId)
-        {
-            return null;
-        }
-
-        var conn = await db.CloudConnections.AsNoTracking()
-            .FirstOrDefaultAsync(c => c.ConnectionId == connId, ct)
-            .ConfigureAwait(false);
-        if (conn is null)
-        {
-            return null;
-        }
-
-        var extra = new Dictionary<string, string>(StringComparer.Ordinal);
-        string? sub = null, rg = null, region = tester.Region;
-        try
-        {
-            using var doc = System.Text.Json.JsonDocument.Parse(conn.Config);
-            var root = doc.RootElement;
-            if (root.ValueKind == System.Text.Json.JsonValueKind.Object)
-            {
-                foreach (var prop in root.EnumerateObject())
-                {
-                    if (prop.Value.ValueKind == System.Text.Json.JsonValueKind.String)
-                    {
-                        extra[prop.Name] = prop.Value.GetString() ?? string.Empty;
-                    }
-                }
-            }
-            extra.TryGetValue("subscription_id", out sub);
-            extra.TryGetValue("resource_group", out rg);
-            if (extra.TryGetValue("region", out var r) && !string.IsNullOrEmpty(r))
-            {
-                region = r;
-            }
-        }
-        catch (System.Text.Json.JsonException)
-        {
-            return new ProviderCredentials(conn.Provider, Region: region);
-        }
-
-        return new ProviderCredentials(conn.Provider, sub, rg, region, extra);
     }
 }
