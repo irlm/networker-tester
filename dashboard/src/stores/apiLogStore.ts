@@ -14,6 +14,25 @@ export interface ApiLogEntry {
   serverMs: number | null;
   /** Network time = total - server */
   networkMs: number | null;
+  /**
+   * Bytes actually received for this response, wire size — compressed if the
+   * transfer was compressed, and including response headers when the browser
+   * exposes them (PerformanceResourceTiming.transferSize). Null when the
+   * browser reports nothing usable; 0 legitimately means "served from cache".
+   *
+   * Without it a row's network time is unreadable: 40 ms for 2 kB is
+   * latency-bound (round trips, TLS, queueing) and 40 ms for 500 kB is
+   * throughput-bound, and those have opposite fixes.
+   */
+  bytes: number | null;
+  /**
+   * Milliseconds spent actually receiving the body — `responseEnd -
+   * responseStart` from Resource Timing, which is a MEASUREMENT, not bytes
+   * divided by the network leg. That distinction matters: the network leg is
+   * mostly round-trip latency, so dividing by it yields a number in bandwidth
+   * units that is not bandwidth. Null when the browser exposed no timing entry.
+   */
+  transferMs: number | null;
   error: string | null;
   /** Whether this was a user action or background polling */
   source: RequestSource;

@@ -6,13 +6,76 @@ import { formatMsCompact as formatMs } from '../lib/format';
 
 type Tab = 'api' | 'render';
 
+/** Wire bytes, in the units an operator reads at a glance. */
+function formatBytes(bytes: number | null): string {
+  if (bytes === null) return '—';
+  if (bytes === 0) return 'from cache';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+/**
+ * Time the body was actually arriving — `responseEnd - responseStart`.
+ *
+ * Deliberately NOT bytes ÷ network time. The network leg is dominated by
+ * round-trip latency, so that division yields a figure in bandwidth units that
+ * is not bandwidth: on this API a 234 B response spends ~0.09 ms transferring
+ * out of a ~40 ms leg, which would print as "48 kbps" and read as a slow link.
+ * This column is a measurement, so it cannot mislead that way.
+ */
+function formatTransfer(ms: number | null): string {
+  if (ms === null) return '—';
+  if (ms < 1) return `${ms.toFixed(2)}ms`;
+  if (ms < 100) return `${ms.toFixed(1)}ms`;
+  return `${Math.round(ms)}ms`;
+}
+
+/** Amber once transfer is a real share of the network leg — that is the moment
+ * payload size, rather than latency, is what there is to fix. */
+function transferClass(entry: ApiLogEntry): string {
+  if (entry.transferMs === null || entry.networkMs === null || entry.networkMs <= 0) {
+    return 'text-faint';
+  }
+  return entry.transferMs / entry.networkMs >= 0.25 ? 'text-yellow-400' : 'text-faint';
+}
+
+/**
+ * Hover detail: the split the columns cannot show, in two lines at most.
+ *
+ * States proportions rather than a classification — no size threshold is
+ * asserted, because any threshold would be arbitrary and would be wrong at the
+ * boundary. The reader is shown how much of the leg was transfer and can draw
+ * the only conclusion available from it.
+ */
+function requestDetail(entry: ApiLogEntry): string {
+  if (entry.bytes === null) {
+    return 'size unknown — no Content-Length and no resource-timing entry';
+  }
+  if (entry.bytes === 0) {
+    return 'served from cache — the network time is connection overhead, not transfer';
+  }
+
+  const size = formatBytes(entry.bytes);
+  if (entry.transferMs === null || entry.networkMs === null || entry.networkMs <= 0) {
+    return `${size} downloaded`;
+  }
+
+  const share = (entry.transferMs / entry.networkMs) * 100;
+  return `${size} — ${formatTransfer(entry.transferMs)} of the ${formatMs(entry.networkMs)} network leg was transfer`
+    + `\n${share < 1 ? '<1' : share.toFixed(0)}% transfer, the rest is round trips, TLS and queueing`;
+}
+
 function timingBar(entry: ApiLogEntry) {
   if (entry.serverMs === null) return null;
   const total = entry.totalMs || 1;
   const serverPct = Math.min(100, (entry.serverMs / total) * 100);
   const networkPct = 100 - serverPct;
   return (
-    <div className="flex h-1.5 rounded-full overflow-hidden bg-gray-800 w-20" title={`Server: ${formatMs(entry.serverMs)} | Network: ${formatMs(entry.networkMs)}`}>
+    <div
+      className="flex h-1.5 rounded-full overflow-hidden bg-gray-800 w-20"
+      title={`Server: ${formatMs(entry.serverMs)} | Network: ${formatMs(entry.networkMs)} | ${formatBytes(entry.bytes)} (${formatTransfer(entry.transferMs)} transfer)`}
+    >
       <div className="bg-cyan-500" style={{ width: `${serverPct}%` }} />
       <div className="bg-purple-500" style={{ width: `${networkPct}%` }} />
     </div>
@@ -131,7 +194,7 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
 
   return (
     <div
-      className="fixed bottom-0 right-0 z-30 min-w-0 max-w-full w-full md:w-[640px] lg:w-[760px] max-h-[80dvh] md:max-h-[60vh] bg-[var(--bg-surface)] border-t border-l border-gray-700 rounded-tl-lg flex flex-col"
+      className="fixed bottom-0 right-0 z-30 min-w-0 max-w-full w-full md:w-[720px] lg:w-[900px] max-h-[80dvh] md:max-h-[60vh] bg-[var(--bg-surface)] border-t border-l border-gray-700 rounded-tl-lg flex flex-col"
       role="region"
       aria-label="Performance log"
     >
@@ -244,13 +307,21 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
                   <th className="px-2 py-1 font-normal w-16 text-right">Total</th>
                   <th className="px-2 py-1 font-normal w-16 text-right">Server</th>
                   <th className="px-2 py-1 font-normal w-16 text-right">Network</th>
+                  <th className="px-2 py-1 font-normal w-16 text-right" title="Bytes received — wire size, compressed if the response was compressed. 'cache' means it never left the browser.">Size</th>
+                  <th className="px-2 py-1 font-normal w-16 text-right" title="Time the body was actually arriving (responseEnd − responseStart). This is measured, not bytes divided by the network leg — that leg is mostly round-trip latency.">Transfer</th>
                   <th className="px-2 py-1 font-normal w-20">Breakdown</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredApi.map((e) => (
-                  <tr key={e.id} className={`border-b border-gray-800/30 hover:bg-gray-800/20 ${e.error ? 'bg-red-500/5' : ''}`}>
-                    <td className="px-2 py-1 text-faint">{new Date(e.timestamp).toLocaleTimeString()}</td>
+                  <tr
+                    key={e.id}
+                    title={requestDetail(e)}
+                    className={`border-b border-gray-800/30 hover:bg-gray-800/20 ${e.error ? 'bg-red-500/5' : ''}`}
+                  >
+                    <td className="px-2 py-1 text-faint whitespace-nowrap">
+                      {new Date(e.timestamp).toLocaleTimeString([], { hour12: false })}
+                    </td>
                     <td className="px-2 py-1 text-gray-400">
                       <span>{e.method}</span>
                       {e.source === 'poll' && <span className="ml-1 text-xs text-faint" title="Background polling">&#x21BB;</span>}
@@ -260,6 +331,8 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
                     <td className={`px-2 py-1 text-right ${speedIndicator(e.totalMs)}`}>{formatMs(e.totalMs)}</td>
                     <td className="px-2 py-1 text-right text-cyan-400">{formatMs(e.serverMs)}</td>
                     <td className="px-2 py-1 text-right text-purple-400">{formatMs(e.networkMs)}</td>
+                    <td className="px-2 py-1 text-right text-gray-400">{formatBytes(e.bytes)}</td>
+                    <td className={`px-2 py-1 text-right ${transferClass(e)}`}>{formatTransfer(e.transferMs)}</td>
                     <td className="px-2 py-1">{timingBar(e)}</td>
                   </tr>
                 ))}

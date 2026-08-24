@@ -107,9 +107,16 @@ export function PerfLogPage() {
       existing.maxMs = Math.max(existing.maxMs, l.total_ms!);
       byPath.set(key, existing);
     }
+    // Sorted by TOTAL time contributed, not by average.
+    //
+    // Average ranks the one slow call above the endpoint polled three hundred
+    // times, and the second is almost always what there is to fix: a 42 ms
+    // /version polled every 5 s costs far more wall clock than a 300 ms report
+    // nobody opens. totalMs was already being accumulated here and simply was
+    // not shown or sorted on.
     return [...byPath.entries()]
       .map(([path, data]) => ({ path, ...data, avgMs: data.totalMs / data.count }))
-      .sort((a, b) => b.avgMs - a.avgMs)
+      .sort((a, b) => b.totalMs - a.totalMs)
       .slice(0, 10);
   }, [logs]);
 
@@ -416,35 +423,50 @@ export function PerfLogPage() {
           )}
           {stats && (
             <>
-          {/* Summary cards */}
+          {/* Summary cards.
+
+              p95 leads and the average is the footnote, not the other way
+              round. An average is the one statistic that cannot show a latency
+              problem — it is dragged down by the many fast polls and says
+              nothing about the tail, which is what anyone complaining is
+              actually experiencing. These numbers were already in the stats
+              response; only the emphasis changed. */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <KpiTile
               label="API Requests"
               value={String(stats.api_count)}
               health="info"
-              sub={`${stats.slow_api_count} slow (>200ms)`}
+              sub={stats.api_count > 0
+                ? `${stats.slow_api_count} slow >200ms (${((stats.slow_api_count / stats.api_count) * 100).toFixed(1)}%)`
+                : 'no requests in range'}
             />
             <KpiTile
-              label="Avg Total"
-              value={formatMs(stats.avg_total_ms)}
-              valueClass={speedColor(stats.avg_total_ms)}
-              sub={`P95: ${formatMs(stats.p95_total_ms)}`}
+              label="API p95"
+              value={formatMs(stats.p95_total_ms)}
+              valueClass={speedColor(stats.p95_total_ms)}
+              health={stats.slow_api_count > 0 ? 'warn' : 'ok'}
+              sub={`avg ${formatMs(stats.avg_total_ms)}`}
             />
             <KpiTile
               label="Renders"
               value={String(stats.render_count)}
               health={stats.janky_render_count > 0 ? 'warn' : 'ok'}
-              sub={`${stats.janky_render_count} janky (>16ms)`}
+              sub={stats.render_count > 0
+                ? `${stats.janky_render_count} janky >16ms (${((stats.janky_render_count / stats.render_count) * 100).toFixed(1)}%)`
+                : 'no renders in range'}
             />
             <KpiTile
-              label="Avg Render"
-              value={formatMs(stats.avg_render_ms)}
-              valueClass={renderSpeedColor(stats.avg_render_ms)}
-              sub={`P95: ${formatMs(stats.p95_render_ms)}`}
+              label="Render p95"
+              value={formatMs(stats.p95_render_ms)}
+              valueClass={renderSpeedColor(stats.p95_render_ms)}
+              health={stats.janky_render_count > 0 ? 'warn' : 'ok'}
+              sub={`avg ${formatMs(stats.avg_render_ms)}`}
             />
           </div>
 
-          {/* Breakdown */}
+          {/* Where the average time goes. Server vs network is only meaningful
+              as a split, so the share is the headline and the millisecond
+              figures support it. */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <KpiTile
               label="Avg Server Time"
@@ -454,18 +476,26 @@ export function PerfLogPage() {
             <KpiTile
               label="Avg Network Time"
               value={stats.avg_total_ms && stats.avg_server_ms ? formatMs(stats.avg_total_ms - stats.avg_server_ms) : '-'}
+              sub="round trips, TLS, queueing — and transfer"
             />
             <KpiTile
               label="Server % of Total"
               value={stats.avg_total_ms && stats.avg_server_ms ? `${((stats.avg_server_ms / stats.avg_total_ms) * 100).toFixed(0)}%` : '-'}
+              sub={stats.avg_total_ms && stats.avg_server_ms
+                ? `${(100 - (stats.avg_server_ms / stats.avg_total_ms) * 100).toFixed(0)}% is off-server`
+                : undefined}
             />
           </div>
 
           {/* Top slow paths */}
           {topSlowPaths.length > 0 && (
             <div>
-              <h3 className="text-xs text-gray-400 tracking-wider font-medium mb-1 uppercase">Slowest API Paths</h3>
-              <p className="mb-3 text-xs text-faint">Based on the latest loaded API rows in this time range.</p>
+              <h3 className="text-xs text-gray-400 tracking-wider font-medium mb-1 uppercase">Where the time goes</h3>
+              <p className="mb-3 text-xs text-faint">
+                Ranked by total time contributed, not by average — a cheap endpoint polled often
+                outweighs an expensive one called rarely. Based on the latest loaded API rows in
+                this time range.
+              </p>
               <div className="table-container">
                 <table className="w-full text-sm">
                   <thead>
@@ -474,6 +504,7 @@ export function PerfLogPage() {
                       <th className="px-3 py-2 text-right font-medium">Calls</th>
                       <th className="px-3 py-2 text-right font-medium">Avg</th>
                       <th className="px-3 py-2 text-right font-medium">Max</th>
+                      <th className="px-3 py-2 text-right font-medium">Total</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -485,6 +516,9 @@ export function PerfLogPage() {
                         <td className="px-3 py-2 text-right text-gray-400 text-xs">{p.count}</td>
                         <td className={`px-3 py-2 text-right text-xs ${speedColor(p.avgMs)}`}>{formatMs(p.avgMs)}</td>
                         <td className={`px-3 py-2 text-right text-xs ${speedColor(p.maxMs)}`}>{formatMs(p.maxMs)}</td>
+                        <td className="px-3 py-2 text-right text-xs text-gray-200 tabular-nums">
+                          {p.totalMs >= 1000 ? `${(p.totalMs / 1000).toFixed(1)}s` : formatMs(p.totalMs)}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

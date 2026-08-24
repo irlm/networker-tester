@@ -150,6 +150,7 @@ export async function request<T>(path: string, options?: RequestInit): Promise<T
   const start = performance.now();
   let status = 0;
   let serverMs: number | null = null;
+  let bytes: number | null = null;
   let errorMsg: string | null = null;
   // Aborted requests (a poll cancelled by navigation/unmount) never complete,
   // so their wall-clock is meaningless — the timer runs until teardown and logs
@@ -181,6 +182,17 @@ export async function request<T>(path: string, options?: RequestInit): Promise<T
     // Extract server processing time from response header
     const serverTime = res.headers.get('x-process-time-ms');
     if (serverTime) serverMs = parseFloat(serverTime);
+
+    // Response size, so a row's network time can be READ rather than guessed
+    // at: 40 ms for 2 kB is latency-bound, 40 ms for 500 kB is throughput-bound.
+    // Content-Length is the cheap answer and, for a compressed response, is
+    // already the wire size. It is absent on chunked responses — those fall
+    // back to resource timing below, after the body has been consumed.
+    const contentLength = res.headers.get('content-length');
+    if (contentLength) {
+      const parsed = Number(contentLength);
+      if (Number.isFinite(parsed) && parsed >= 0) bytes = parsed;
+    }
 
     if (res.status === 401 && !isAuth401Exempt(path)) {
       handleUnauthorized();
@@ -227,12 +239,69 @@ export async function request<T>(path: string, options?: RequestInit): Promise<T
         totalMs,
         serverMs,
         networkMs: serverMs !== null ? totalMs - serverMs : null,
+        ...(() => {
+          // One Resource Timing lookup fills both: Content-Length covers size
+          // when the server sent it, but transfer time has no header equivalent.
+          const timing = resourceTiming(`${API_BASE}${path}`, start);
+          return {
+            bytes: bytes ?? timing?.bytes ?? null,
+            transferMs: timing?.transferMs ?? null,
+          };
+        })(),
         error: errorMsg,
         source,
       });
     }
   }
 }
+/**
+ * Size and transfer time for the request that started at `startedAt`, read from
+ * the Resource Timing buffer.
+ *
+ * `transferMs` is `responseEnd - responseStart`: the time the body was actually
+ * arriving. It is the honest answer to "was the network time high because the
+ * response was big?", and it is NOT the same as bytes ÷ network time — the
+ * network leg is dominated by round-trip latency, so that division produces a
+ * number in bandwidth units that is not bandwidth (measured on this API: 234 B
+ * responses spend ~0.09 ms transferring out of a ~40 ms leg).
+ *
+ * `transferSize` includes response headers and is the COMPRESSED size, which is
+ * what transfer time actually depends on.
+ *
+ * Matched by start time, not just URL: the same endpoint is polled repeatedly,
+ * and taking the first match would keep reporting the oldest call. Returns null
+ * rather than a guess when the entry is missing (the buffer is capped and
+ * entries can be evicted) — a wrong number here is worse than none, because it
+ * would be used to rule payload size in or out.
+ */
+function resourceTiming(
+  url: string,
+  startedAt: number,
+): { bytes: number | null; transferMs: number | null } | null {
+  try {
+    const absolute = new URL(url, window.location.origin).href;
+    const entries = performance.getEntriesByType('resource') as PerformanceResourceTiming[];
+    let best: PerformanceResourceTiming | null = null;
+    for (const e of entries) {
+      if (e.name !== absolute || e.startTime < startedAt - 1) continue;
+      if (!best || e.startTime < best.startTime) best = e;
+    }
+    if (!best) return null;
+
+    // transferSize is 0 for a cache hit — a true answer, keep it. It is also 0
+    // when the browser withholds timing; encodedBodySize covers that case.
+    const bytes = best.transferSize || best.encodedBodySize || null;
+    // Both are 0 when timing is withheld — same-origin here, so normally set.
+    const transferMs =
+      best.responseEnd > 0 && best.responseStart > 0
+        ? Math.max(0, best.responseEnd - best.responseStart)
+        : null;
+    return { bytes, transferMs };
+  } catch {
+    return null;
+  }
+}
+
 /** Authenticated binary download using the same session/error policy as JSON requests. */
 export async function downloadExport(path: string, fallbackName: string): Promise<void> {
   const token = localStorage.getItem('token');
