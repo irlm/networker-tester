@@ -11,6 +11,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.290] - 2026-08-24
+
+### Added
+
+- **The control plane can persist its own logs again (`service_log`).** The Logs
+  tab reads a table the **Rust** `networker-log` crate creates and writes, and
+  only the tester and endpoint still depend on that crate. The Rust→C#
+  migration ported the READ half — `LogsEndpoints` is an explicit port of the
+  Rust `api/logs.rs` — and never the write half, so on a C#-only control plane
+  `/api/logs` always answered `log_sink: "unconfigured"` and the UI honestly
+  said log persistence was not configured. This is the writer.
+  - **Opt-in**: `DASHBOARD_LOG_SINK=1`. Turning it on makes every qualifying log
+    line a database write — a real cost and a real disk-growth decision for an
+    existing deployment — so it is never enabled implicitly. Level floor,
+    service name, queue/batch sizes and retention are all overridable.
+  - Creates the table with the **same DDL as the Rust crate** (and the same
+    optional TimescaleDB hypertable + retention), so a database the tester or
+    endpoint already provisioned is untouched and every writer agrees on the
+    schema and the `Error=1 … Trace=5` level encoding.
+  - **A log call never blocks and never throws**: a bounded queue producers
+    only ever `TryWrite` to, drained by one background loop that COPYs batches.
+    Overflow is dropped and counted rather than awaited — a control plane that
+    stalls request threads because the log database is slow has turned
+    observability into an outage. The writer never logs through `ILogger`
+    either, or a database failure would produce an error per failed flush,
+    forever.
+  - `/api/logs/pipeline-status` reports the **real** counters it had been
+    returning as hard-coded zeros with a `TODO(phase3)`, and distinguishes
+    `unconfigured` from `degraded` — an operator staring at an empty Logs tab
+    needs to know "nothing logged" from "writes failing".
+  - Failure to start is **not fatal**: a control plane that refuses to serve
+    traffic because it could not create a logging table would trade a real
+    outage for a cosmetic one.
+
+---
+
 ## [0.28.289] - 2026-08-24
 
 ### Added

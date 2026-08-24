@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Networker.ControlPlane.Auth;
+using Networker.ControlPlane.Observability;
 using Npgsql;
 using NpgsqlTypes;
 
@@ -145,13 +146,19 @@ public static class LogsEndpoints
             return Results.Ok(stats);
         }).RequireAuthorization();
 
-        // GET /api/logs/pipeline-status — pipeline metrics. There is no live
-        // in-process log pipeline in the C# control plane (the Rust dashboard
-        // batched service_log writes); reporting a hard-coded "healthy" while
-        // /api/logs itself was 500ing was actively misleading (prod sweep,
-        // v0.28.213). Probe the sink instead and say what is true.
+        // GET /api/logs/pipeline-status — pipeline metrics. These were
+        // hard-coded zeros with a TODO(phase3) for as long as the C# control
+        // plane had no writer: the Rust dashboard batched service_log writes and
+        // that half was never ported. It exists now (Observability/), so this
+        // reports the real counters — and still probes the table, because the
+        // sink being switched off is the common case and "healthy" while
+        // /api/logs 500s was actively misleading (prod sweep, v0.28.213).
         app.MapGet("/api/logs/pipeline-status", async (
-            HttpContext ctx, NpgsqlDataSource dataSource, CancellationToken ct) =>
+            HttpContext ctx,
+            NpgsqlDataSource dataSource,
+            ServiceLogMetrics metrics,
+            ServiceLogOptions sinkOptions,
+            CancellationToken ct) =>
         {
             var user = ctx.GetAuthUser();
             if (user is null)
@@ -161,17 +168,26 @@ public static class LogsEndpoints
             var configured = await LogSinkPresentAsync(dataSource, ct);
             return Results.Ok(new
             {
-                entries_written = 0,
-                entries_dropped = 0,
-                flush_count = 0,
-                flush_errors = 0,
-                last_flush_ms = 0,
-                queue_depth = 0,
+                entries_written = metrics.EntriesWritten,
+                entries_dropped = metrics.EntriesDropped,
+                flush_count = metrics.FlushCount,
+                flush_errors = metrics.FlushErrors,
+                last_flush_ms = metrics.LastFlushMs,
+                queue_depth = metrics.QueueDepth,
                 // "unconfigured": no `service_log` table in this deployment, so
                 // nothing can be queried (the UI shows the reason instead of an
-                // empty page that looks like "no logs yet").
-                status = configured ? "healthy" : "unconfigured",
+                // empty page that looks like "no logs yet"). "degraded": the
+                // table is there and this process is writing, but flushes are
+                // failing — an operator reading an empty Logs tab needs to know
+                // the difference between "nothing logged" and "writes broken".
+                status = !configured ? "unconfigured"
+                    : sinkOptions.Enabled && metrics.FlushErrors > 0 ? "degraded"
+                    : "healthy",
                 log_sink = configured ? "service_log" : "none",
+                // Whether THIS process is a writer. The table can exist because
+                // a tester or endpoint writes it while the control plane does
+                // not — reading rows and producing them are separate questions.
+                writer = sinkOptions.Enabled ? sinkOptions.Service : "none",
             });
         }).RequireAuthorization();
 
