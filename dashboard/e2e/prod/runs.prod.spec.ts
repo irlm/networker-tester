@@ -59,8 +59,16 @@ test.describe('runs surface', () => {
 
     await gotoApp(page, projectPath(`/runs/${run.id}`));
     await expect(page.getByRole('heading', { name: `Run ${shortId}` })).toBeVisible();
-    // Status chip next to the header.
-    await expect(page.getByText(run.status, { exact: true }).first()).toBeVisible();
+    // Status chip next to the header. The badge shows runDisplayStatus(), NOT
+    // the raw status: a `completed` run that had ANY failed attempt reads
+    // `partial` (or `failed` when nothing succeeded) — src/lib/runStatus.ts.
+    // Asserting the raw status made this spec fail on every healthy project
+    // whose newest run had a single flaky attempt, which is the normal case.
+    const displayStatus =
+      run.status === 'completed' && run.failure_count > 0
+        ? (run.success_count > 0 ? 'partial' : 'failed')
+        : run.status;
+    await expect(page.getByText(displayStatus, { exact: true }).first()).toBeVisible();
     // Attempts summary or the degraded/error surface — never a blank page.
     await expect(page.getByText(/attempts/).first()).toBeVisible();
     await expectNoErrorUI(page);
