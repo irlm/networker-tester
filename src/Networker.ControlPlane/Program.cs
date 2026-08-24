@@ -133,7 +133,22 @@ builder.Services.AddSingleton<IReportExporter, DocxReportExporter>();
 builder.Services.AddSingleton<IReportExporter, PdfReportExporter>();
 builder.Services.AddSingleton<ReportExporterResolver>();
 
+// Log persistence (service_log). The Rust->C# migration ported the READ half of
+// the Logs tab (LogsEndpoints is an explicit port of the Rust api/logs.rs) and
+// never the write half, so /api/logs has always answered "unconfigured" on a
+// C#-only control plane. This is the writer. Opt-in: DASHBOARD_LOG_SINK=1,
+// because turning it on makes every qualifying log line a database write.
+var serviceLogOptions = ServiceLogOptions.FromEnvironment(builder.Configuration);
+builder.Services.AddServiceLogSink(serviceLogOptions);
+
 var app = builder.Build();
+
+// Create service_log (same DDL as the Rust networker-log crate, so the tester
+// and endpoint keep writing the same table) and start the batching writer.
+// Never fatal: a control plane that refuses to serve traffic because it could
+// not create a logging table trades a real outage for a cosmetic one.
+var serviceLogStatus = await app.Services.StartServiceLogSinkAsync();
+app.Logger.LogInformation("Log sink (service_log): {Status}", serviceLogStatus);
 
 // Schema migrations at startup (docs/schema-ownership.md follow-up): with the
 // Rust dashboard retired, this process boots first, so it owns applying the
