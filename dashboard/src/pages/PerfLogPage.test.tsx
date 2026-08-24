@@ -143,3 +143,70 @@ describe('PerfLogPage time filters', () => {
     expect(logsTab).toHaveAttribute('aria-selected', 'true');
   });
 });
+
+describe('PerfLogPage statistics emphasis', () => {
+  /** One API row, as the list query returns them. */
+  const apiLog = (path: string, totalMs: number, i: number) => ({
+    id: `${path}-${i}`,
+    logged_at: new Date().toISOString(),
+    kind: 'api' as const,
+    method: 'GET',
+    path,
+    status: 200,
+    total_ms: totalMs,
+    server_ms: 5,
+    network_ms: totalMs - 5,
+    source: 'poll',
+    component: null,
+    trigger: null,
+    render_ms: null,
+    item_count: null,
+  });
+
+  it('leads with p95 and demotes the average to the sub-line', async () => {
+    renderPage();
+    await userEvent.click(screen.getByRole('tab', { name: 'Stats' }));
+
+    // p95 is the headline: an average cannot show a latency problem, because
+    // the many fast polls drag it away from the tail people actually feel.
+    expect(await screen.findByText('API p95')).toBeInTheDocument();
+    expect(screen.getByText('Render p95')).toBeInTheDocument();
+    expect(screen.getByText('avg 40.0ms')).toBeInTheDocument();
+    expect(screen.getByText('avg 10.0ms')).toBeInTheDocument();
+  });
+
+  it('reports the slow share, not just the slow count', async () => {
+    renderPage();
+    await userEvent.click(screen.getByRole('tab', { name: 'Stats' }));
+    // 1 of 12 API calls over 200 ms.
+    expect(await screen.findByText(/1 slow >200ms \(8\.3%\)/)).toBeInTheDocument();
+  });
+
+  it('ranks endpoints by total time contributed, not by average', async () => {
+    // /reports is slower per call but runs twice; /version is quick and polled
+    // ten times and therefore costs more wall clock. Ranking by average puts
+    // the wrong one first, which is the bug this ordering fixes.
+    queryMocks.logs.mockReturnValue({
+      data: [
+        ...Array.from({ length: 10 }, (_, i) => apiLog('/api/version', 40, i)),   // 400 ms total
+        ...Array.from({ length: 2 }, (_, i) => apiLog('/api/reports', 150, i)),   // 300 ms total
+      ],
+      error: null,
+      isPending: false,
+      isError: false,
+      dataUpdatedAt: Date.now(),
+      refetch: queryMocks.refetchLogs,
+    });
+
+    renderPage();
+    await userEvent.click(screen.getByRole('tab', { name: 'Stats' }));
+
+    const heading = await screen.findByText(/Where the time goes/i);
+    const table = heading.parentElement!.querySelector('table')!;
+    const firstPath = table.querySelectorAll('tbody tr td')[0];
+    expect(firstPath).toHaveTextContent('/api/version');
+
+    // And the total that justifies the ordering is on screen, not implied.
+    expect(table).toHaveTextContent('400.0ms');
+  });
+});

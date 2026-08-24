@@ -11,6 +11,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.289] - 2026-08-24
+
+### Added
+
+- **The perf log says whether the network time was the payload.** Every row read
+  the same before this — "~40 ms network" — with no way to tell a slow link from
+  a big response, and those have opposite fixes. The live API panel now carries
+  **Size** and **Transfer**: bytes received (wire size, compressed if the
+  transfer was), and `responseEnd - responseStart`, the time the body was
+  actually arriving. Hover a row for the split in words.
+  - **Transfer is measured, not derived.** The obvious column would have been a
+    rate — bytes over network time — and it would have been wrong: the network
+    leg is dominated by round-trip latency, so that division yields a figure in
+    bandwidth units that is not bandwidth. Measured against prod, a 234-byte
+    response spends **~0.09 ms** transferring out of a ~40 ms leg, which a rate
+    column would print as "48 kbps" and every reader would take for a slow link.
+  - No column was given up for this: Method and Status stay. The panel widens
+    (760 → 900 px at `lg`) and the clock drops to 24-hour so nothing wraps.
+
+### Changed
+
+- **The perf-log page leads with p95 instead of the average.** Both numbers were
+  already in the stats response, but the average was the headline and p95 the
+  footnote — which is backwards: an average is the one statistic that cannot
+  show a latency problem, because the many fast polls drag it away from the tail
+  anyone complaining is actually feeling. p95 is now the tile value, the average
+  its sub-line, and the slow/janky counts carry a percentage.
+- **"Slowest API Paths" is now "Where the time goes", ranked by total time
+  contributed** rather than by average. Ranking by average puts a rarely-called
+  report above an endpoint polled three hundred times, and the second is almost
+  always what there is to fix. The total was already being accumulated and
+  simply was not shown or sorted on; it now has a column.
+
+---
+
 ## [0.28.288] - 2026-08-23
 
 ### Changed
