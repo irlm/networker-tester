@@ -72,7 +72,9 @@ public sealed class ProvisioningOrchestrator : BackgroundService
     /// throttle.</summary>
     internal const string DeploymentTornDown = "torn_down";
 
-    private const int KickBatchLimit = 25;
+    // Internal so the teardown-ordering test asserts against the real batch
+    // size instead of a copy that could drift out of step with it.
+    internal const int KickBatchLimit = 25;
 
     /// <summary>Max provisioning kicks per run before a quota-class failure
     /// becomes terminal. Backoff grows 4m/8m/12m per retry, so with cells
@@ -290,7 +292,9 @@ public sealed class ProvisioningOrchestrator : BackgroundService
     /// hosts (the canary's phase-3 pattern; also a user re-running a promoted
     /// cell config).
     /// </summary>
-    private async Task<int> TeardownFinishedRunsAsync(NetworkerDbContext db, CancellationToken ct)
+    /// <remarks>Internal so the batch-ordering test can drive one sweep
+    /// directly; production callers stay inside the tick.</remarks>
+    internal async Task<int> TeardownFinishedRunsAsync(NetworkerDbContext db, CancellationToken ct)
     {
         var graceCutoff = DateTime.UtcNow - TeardownGrace;
         var candidates = await db.TestRuns
@@ -305,6 +309,21 @@ public sealed class ProvisioningOrchestrator : BackgroundService
             // leave nothing), and those IPs must release promptly for the
             // quota throttle to be truthful. Hostless rows just get marked.
             .Where(x => x.Dep.Status != DeploymentTornDown)
+            // Oldest finish first, and a total order (FinishedAt can tie at the
+            // clock's resolution when a matrix launch's cells land together).
+            // A bare Take here took an ARBITRARY 25: EF warns about it, and the
+            // consequence is worse than unpredictable paging. Several of the
+            // continues below (the FailedReleaseAllowance hold, the endpoint
+            // still referenced by an active run) consume a slot without tearing
+            // anything down, so a tick can spend its whole batch on deferrals.
+            // With the batch drawn in an order the planner picks — stable while
+            // the heap is unchanged — the same 25 deferrable rows can come back
+            // ahead of a tearable one every 5 s tick, and the VM+IP behind it
+            // bills indefinitely. That is the leak this method exists to stop.
+            // Ordering by finish time also puts the money first: the longest-idle
+            // deployment is the one that has been costing the most.
+            .OrderBy(x => x.RunFinishedAt)
+            .ThenBy(x => x.RunId)
             .Take(KickBatchLimit)
             .ToListAsync(ct)
             .ConfigureAwait(false);
