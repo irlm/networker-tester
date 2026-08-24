@@ -1,7 +1,7 @@
 # Runbook: Diagnose a slow page with `perf_log`
 
 The frontend and the control plane record per-call timing in the `perf_log`
-table (shipped v0.28.61) in the `alethedash_core` database. Each API response
+table (shipped v0.28.61) in the `networker_core` database. Each API response
 carries an `X-Process-Time-Ms` header (`ServerTiming.cs`). The frontend reads
 this header. It splits each call into server time and network time before it
 logs the call.

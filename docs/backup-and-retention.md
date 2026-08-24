@@ -40,14 +40,12 @@ Table coverage is compression-independent.
 
 Names are **role-based, never brand-based**, so a rebrand or a domain change
 never invalidates the layout. The brand prefix is *derived* from the primary
-database name (`alethedash_core` → prefix `alethedash`), so a product rename
+database name (`networker_core` → prefix `networker`), so a product rename
 keeps producing the same paths with no code edit. The real source database
 travels as blob metadata (`sourcedb`), not in the filename.
 
 ```
 db/daily/core-YYYY-MM-DD.dump        the live control-plane database
-db/daily/logs-YYYY-MM-DD.dump        legacy Rust log database
-db/daily/legacy-YYYY-MM-DD.dump      pre-cutover Rust dashboard database
 db/monthly/core-YYYY-MM.dump         written on the 1st of each month
 config/daily/host-YYYY-MM-DD.tar.gz  systemd unit + env file + nginx sites
 last_backup.json                     what a monitor should read
@@ -115,6 +113,11 @@ az storage blob download --account-name alethedashbackups --auth-mode login \
 
 `scripts/restore-dashboard.sh` automates the full VM rebuild path.
 
+> Local dumps under `/opt/backups` are owned `postgres:postgres` mode 0600 on
+> purpose: `pg_restore` runs as the postgres user, and root-owned copies fail
+> the drill above with "could not open input file: Permission denied". Verify a
+> restore, never assume one — a dump you have never read back is a hypothesis.
+
 ## Monitoring
 
 Read `last_backup.json` from the container. It carries the timestamp, the
@@ -133,3 +136,17 @@ the signal the five-month gap never produced.
   ZRS/GRS if the recovery objective covers losing a region.
 - The 69 legacy `backup-*.tar.gz` blobs at the container root are backups of
   the dead database and can be deleted once nobody wants them for forensics.
+
+## 2026-08-24 rename
+
+`alethedash_core` was renamed **`networker_core`**, and the two dead databases
+from the Rust era (`alethedash` 45 MB, `alethedash_logs` 105 MB) were dropped
+after their dumps were **restore-verified** (51/51 and 3/3 tables). Together
+with the temp verify copies that reclaimed 273 MB, and it removed the decoy that
+made the five-month backup gap invisible: a plausible-looking database sitting
+next to the real one.
+
+The backup needed **no edit** — it reads the name from the service config, so it
+picked up `networker_core` on the next run and kept writing the same
+`db/daily/core-<date>.dump` path, because the blob name is role-based. That is
+the whole design working as intended.

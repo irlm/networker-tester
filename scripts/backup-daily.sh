@@ -13,7 +13,7 @@
 # `alethedash` is the RETIRED Rust dashboard's database, abandoned at the C#
 # cutover on 2026-03-31. It still exists, so pg_dump exited 0 and the backup
 # looked healthy every single night — 69 blobs, "Backup complete" in the log —
-# while `alethedash_core`, the database production actually uses, was never
+# while the live database (alethedash_core, since renamed networker_core) was never
 # captured. A backup that reports success while protecting nothing is worse than
 # no backup, because it removes the pressure to notice.
 #
@@ -104,10 +104,12 @@ log "databases to back up: ${ALL_DBS[*]}"
 # layout stable across rebrands and database renames.
 #
 # The brand prefix is DERIVED, not hardcoded: the primary database is named
-# <brand>_<role> (alethedash_core), so everything before the first underscore is
-# this deployment's brand. Stripping it turns alethedash_logs into "logs" and the
-# bare alethedash into "legacy" — and if the product is renamed tomorrow, the
-# same code keeps producing the same brand-free blob names with no edit.
+# <brand>_<role> (networker_core), so everything before the first underscore is
+# this deployment's brand. Stripping it turns <brand>_logs into "logs" and a
+# bare <brand> into "legacy" — and when the product IS renamed, the same code
+# keeps producing the same brand-free blob names with no edit. Proven on
+# 2026-08-24: alethedash_core was renamed networker_core and this script picked
+# it up with zero changes, still writing db/daily/core-<date>.dump.
 BRAND_PREFIX="${PRIMARY_DB%%_*}"
 
 role_for() {
@@ -127,7 +129,16 @@ cleanup() { rm -rf "$WORK_DIR"; }
 trap cleanup EXIT
 
 mkdir -p "$LOCAL_DIR"
-chmod 700 "$LOCAL_DIR"
+# root:postgres 0750, NOT root:root 0700. pg_restore runs as the postgres user,
+# and a 0700 root-owned directory blocks it at TRAVERSAL — the files inside can
+# be owned by postgres and it still gets "Permission denied". 0750 with the
+# postgres group keeps the directory closed to everyone else.
+if [ "$(id -u)" -eq 0 ] && getent group postgres >/dev/null 2>&1; then
+    chown root:postgres "$LOCAL_DIR" 2>/dev/null || true
+    chmod 750 "$LOCAL_DIR"
+else
+    chmod 700 "$LOCAL_DIR"
+fi
 
 # ── 3. Dump + verify each database ────────────────────────────────────────────
 declare -a MANIFEST=()
@@ -276,6 +287,17 @@ fi
 # ── 6. Keep a local copy, prune old ones ──────────────────────────────────────
 cp -f "${WORK_DIR}"/*.dump "$LOCAL_DIR"/ 2>/dev/null || true
 [ -f "$CONFIG_TAR" ] && cp -f "$CONFIG_TAR" "$LOCAL_DIR"/ 2>/dev/null || true
+
+# The local dumps must be readable by the postgres user, because that is who
+# runs pg_restore. Copied as root they land root:root 0600, and every restore —
+# including the drill in docs/backup-and-retention.md — fails with
+# "could not open input file: Permission denied". Found while verifying the
+# legacy dumps before dropping those databases; the archives were fine, the
+# permissions were not. 0600 as postgres is just as private as 0600 as root.
+if [ "$(id -u)" -eq 0 ]; then
+    chown postgres:postgres "$LOCAL_DIR"/*.dump 2>/dev/null || true
+    chmod 600 "$LOCAL_DIR"/*.dump 2>/dev/null || true
+fi
 find "$LOCAL_DIR" -maxdepth 1 -name '*.dump'    -mtime "+${RETAIN_DAYS}" -delete
 find "$LOCAL_DIR" -maxdepth 1 -name 'host-*.tar.gz' -mtime "+${RETAIN_DAYS}" -delete
 

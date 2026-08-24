@@ -51,6 +51,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is how `time_bucket` nearly shipped into the comparison report: it would have
   worked on every developer machine and thrown in production.
 
+- **Local dumps are now readable by the `postgres` user.** They were written
+  root-owned into a `0700` root directory, so `pg_restore` — which runs as
+  postgres — failed every restore at directory traversal with "could not open
+  input file: Permission denied". The archives were fine; the permissions were
+  not. Found while restore-verifying the legacy databases before dropping them,
+  which is exactly why a dump you have never read back is only a hypothesis.
+
+### Changed
+
+- **The production database is renamed `alethedash_core` → `networker_core`**,
+  and the two dead Rust-era databases (`alethedash`, `alethedash_logs`) were
+  dropped after their dumps were restore-verified (51/51 and 3/3 tables),
+  reclaiming 273 MB. `alethedash` was the decoy that made the five-month backup
+  gap invisible — a plausible-looking database beside the real one. The name is
+  now tied to the codebase rather than a domain, so a URL or brand change no
+  longer strands it. `soak-check.yml` and two runbooks are updated; the backup
+  and prune scripts needed no change because they read the name from the live
+  service config.
+
 ### Added
 
 - `scripts/prune-retention.sh` — ages out probe attempts and logs
