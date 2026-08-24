@@ -1,6 +1,6 @@
 -- ─── networker-tester probe-result schema (PostgreSQL) ────────────────────────
 -- CANONICAL SOURCE: crates/networker-tester/src/output/db/postgres.rs
--- (V001_MIGRATION … V007_MIGRATION, concatenated verbatim). A unit test in that
+-- (V001_MIGRATION … V008_MIGRATION, concatenated verbatim). A unit test in that
 -- file fails if this copy drifts. Do not edit here — edit postgres.rs and
 -- regenerate: cargo test -p networker-tester --lib shared_tester_schema
 --
@@ -485,3 +485,21 @@ ALTER TABLE RequestAttempt ADD COLUMN IF NOT EXISTS TargetUrl TEXT NULL;
 -- on a large RequestAttempt table.
 
 ALTER TABLE RequestAttempt ADD COLUMN IF NOT EXISTS SampleIndex INT NOT NULL DEFAULT 0;
+
+-- V008: Time-range index on RequestAttempt.StartedAt.
+-- RequestAttempt is the largest table in a live deployment (159 MB / 89k rows
+-- in prod on 2026-08-24) and every time-scoped read filters on StartedAt —
+-- the URL comparison report (issue #782 P3) does
+-- `WHERE a.StartedAt >= $2 AND a.StartedAt < $3` — but the only indexes were
+-- (Protocol, Success) and (RunId, SequenceNum). EXPLAIN ANALYZE on prod
+-- confirmed a Parallel Seq Scan discarding 26,760 rows per worker to keep
+-- 2,872. Sibling tables already carry this index (IX_TestRun_StartedAt);
+-- RequestAttempt was simply missed.
+--
+-- DESC matches the IX_TestRun_StartedAt convention. A btree serves the range
+-- scan in either direction, and DESC additionally suits "most recent first"
+-- reads. Plain CREATE INDEX (not CONCURRENTLY): it runs inside the migration's
+-- batch, and at this table's size the ACCESS EXCLUSIVE window is sub-second.
+-- Revisit if RequestAttempt ever reaches tens of millions of rows.
+
+CREATE INDEX IF NOT EXISTS IX_Attempt_StartedAt ON RequestAttempt (StartedAt DESC);

@@ -85,9 +85,21 @@ public partial class NetworkerDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        modelBuilder
-            .HasPostgresExtension("timescaledb")
-            .HasPostgresExtension("timescaledb_toolkit");
+        // NOTE: this model used to declare HasPostgresExtension("timescaledb")
+        // and ("timescaledb_toolkit"). Neither is installed in production — nor
+        // even AVAILABLE there: prod runs a stock Ubuntu postgresql-16, whose
+        // pg_available_extensions lists neither (verified 2026-08-24). The
+        // declaration was inherited from the local dev compose file, which was
+        // the only environment that ever had them.
+        //
+        // Declaring an absent extension is not inert. EF writes it into the
+        // NEXT scaffolded migration as a CREATE EXTENSION, and `IF NOT EXISTS`
+        // does not save a CREATE for an extension whose files are not on the
+        // server — so the first migration generated after this point would have
+        // failed on deploy. Removed rather than installed because nothing in
+        // the codebase uses a Timescale feature: the one place that wanted
+        // time bucketing (the URL comparison report) deliberately uses
+        // floor(epoch/width) so it runs on plain PostgreSQL.
 
         modelBuilder.Entity<Agent>(entity =>
         {

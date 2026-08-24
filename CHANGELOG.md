@@ -11,6 +11,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.292]
+
+### Fixed
+
+- **Production had no usable backup for five months.** The prod VM's ad-hoc
+  `daily-backup.sh` ran `pg_dump alethedash` — the *retired Rust dashboard's*
+  database, abandoned at the C# cutover on 2026-03-31. That database still
+  exists, so `pg_dump` exited 0 and the job looked healthy every night (4.1 MB,
+  69 blobs, "Backup complete" in the log) while `alethedash_core`, the database
+  production actually uses, was never captured. A verified 40 MB dump of the
+  live database has been taken and uploaded, and `scripts/backup-daily.sh` was
+  rewritten so it cannot recur: the database name is read from the live service
+  config instead of hardcoded, every database on the server is captured, and a
+  dump is only accepted once `pg_restore -l` lists it and its TABLE DATA entries
+  cover every table the live database has. See `docs/backup-and-retention.md`.
+
+- **`requestattempt` had no index on `startedat`** (tester migration V008).
+  It is the largest table in a live deployment (159 MB / 89k rows in prod) and
+  every time-scoped read filters on that column — including the URL comparison
+  report — but the only indexes were `(Protocol, Success)` and
+  `(RunId, SequenceNum)`. `EXPLAIN ANALYZE` on production confirmed a Parallel
+  Seq Scan discarding 26,760 rows per worker to keep 2,872. Sibling tables
+  already carried the equivalent index; this one was simply missed.
+
+- **The EF model declared two PostgreSQL extensions that do not exist in
+  production.** `HasPostgresExtension("timescaledb")` and `timescaledb_toolkit`
+  were inherited from the local dev compose file — the only environment that
+  ever had them. Prod runs a stock Ubuntu `postgresql-16` where neither is
+  installed *or available*. Nothing was broken yet, but EF writes the
+  declaration into the next scaffolded migration as a `CREATE EXTENSION`, which
+  would have failed on deploy.
+
+### Changed
+
+- **Local control-plane dev now runs plain `postgres:16-alpine`**, matching
+  production, the lab, the SQL-test compose file and the C# Testcontainers
+  suites. It was the sole environment running `timescale/timescaledb-ha`, which
+  is how `time_bucket` nearly shipped into the comparison report: it would have
+  worked on every developer machine and thrown in production.
+
+### Added
+
+- `scripts/prune-retention.sh` — ages out probe attempts and logs
+  (`RETENTION_RAW_DAYS`/`RETENTION_LOG_DAYS`, default 90 days), **dry-run by
+  default**, designed to be chained after a successful backup. Deletes bottom-up
+  in one transaction because the live database has `NO ACTION` where the
+  canonical DDL says `CASCADE` — a naive parent delete fails with a foreign-key
+  violation.
+- `docs/backup-and-retention.md` — layout, retention, restore drill and the
+  monitoring signal (alert if `last_backup.json` is older than 48 hours).
+
+---
+
 ## [0.28.291]
 
 ### Fixed

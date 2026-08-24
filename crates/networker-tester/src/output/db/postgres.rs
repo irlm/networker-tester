@@ -532,6 +532,26 @@ const V007_MIGRATION: &str = r#"
 ALTER TABLE RequestAttempt ADD COLUMN IF NOT EXISTS SampleIndex INT NOT NULL DEFAULT 0;
 "#;
 
+const V008_MIGRATION: &str = r#"
+-- V008: Time-range index on RequestAttempt.StartedAt.
+-- RequestAttempt is the largest table in a live deployment (159 MB / 89k rows
+-- in prod on 2026-08-24) and every time-scoped read filters on StartedAt —
+-- the URL comparison report (issue #782 P3) does
+-- `WHERE a.StartedAt >= $2 AND a.StartedAt < $3` — but the only indexes were
+-- (Protocol, Success) and (RunId, SequenceNum). EXPLAIN ANALYZE on prod
+-- confirmed a Parallel Seq Scan discarding 26,760 rows per worker to keep
+-- 2,872. Sibling tables already carry this index (IX_TestRun_StartedAt);
+-- RequestAttempt was simply missed.
+--
+-- DESC matches the IX_TestRun_StartedAt convention. A btree serves the range
+-- scan in either direction, and DESC additionally suits "most recent first"
+-- reads. Plain CREATE INDEX (not CONCURRENTLY): it runs inside the migration's
+-- batch, and at this table's size the ACCESS EXCLUSIVE window is sub-second.
+-- Revisit if RequestAttempt ever reaches tens of millions of rows.
+
+CREATE INDEX IF NOT EXISTS IX_Attempt_StartedAt ON RequestAttempt (StartedAt DESC);
+"#;
+
 #[async_trait]
 impl DatabaseBackend for PostgresBackend {
     async fn migrate(&self) -> anyhow::Result<()> {
@@ -697,6 +717,26 @@ impl DatabaseBackend for PostgresBackend {
                     )
                     .await
                     .context("record V007")?;
+            }
+
+            let row = client
+                .query_opt("SELECT 1 FROM _schema_versions WHERE version = 'V008'", &[])
+                .await
+                .context("check V008")?;
+
+            if row.is_none() {
+                client
+                    .batch_execute(V008_MIGRATION)
+                    .await
+                    .context("apply V008 migration")?;
+
+                client
+                    .execute(
+                        "INSERT INTO _schema_versions (version) VALUES ('V008')",
+                        &[],
+                    )
+                    .await
+                    .context("record V008")?;
             }
 
             Ok(())
@@ -1838,7 +1878,7 @@ mod tests {
 
     // ── Migration SQL content tests (no database required) ────────────────────
 
-    /// `shared/tester-schema.postgres.sql` is the copy of THIS crate's V001–V007
+    /// `shared/tester-schema.postgres.sql` is the copy of THIS crate's V001–V008
     /// migrations that the C# control plane embeds and applies lazily on first
     /// attempt ingest (AttemptPersister) — that is how a fresh control-plane
     /// database gets the RequestAttempt/… tables when no DB-backed tester ever
@@ -1858,6 +1898,7 @@ mod tests {
             V005_MIGRATION,
             V006_MIGRATION,
             V007_MIGRATION,
+            V008_MIGRATION,
         ]
         .concat();
         let idx = SHARED
@@ -1866,7 +1907,7 @@ mod tests {
         assert_eq!(
             &SHARED[idx..],
             body,
-            "shared/tester-schema.postgres.sql drifted from postgres.rs V001–V007 — regenerate it from the constants"
+            "shared/tester-schema.postgres.sql drifted from postgres.rs V001–V008 — regenerate it from the constants"
         );
     }
 
