@@ -294,7 +294,7 @@ function ModeReport({
   report: ProbeComparisonReport;
   urls: string[];
 }) {
-  const notRanked = notRankedReason(mode, report.window_buckets);
+  const notRanked = notRankedReason(mode, report.window_buckets, report.min_coverage_ratio);
   const excluded = mode.coverage.filter((c) => !c.eligible);
 
   return (
@@ -320,7 +320,10 @@ function ModeReport({
             in which all {mode.scores.length} URLs were measured.
           </p>
         )}
-        {excluded.length > 0 && (
+        {/* Only when the mode DID rank: the withheld-ranking message above now
+            names the excluded URLs and their coverage in full, so repeating a
+            faint list under it would just be quieter duplication. */}
+        {mode.ranked && excluded.length > 0 && (
           <p className="mt-2 text-xs text-faint">
             Not compared — too little data in this window:{' '}
             {excluded.map((c) => `${shortLabel(c.url)} (${c.qualifying_buckets}/${report.window_buckets})`).join(', ')}
