@@ -3879,144 +3879,19 @@ step_install_postgresql() {
     DASHBOARD_DB_PASSWORD="$(head -c 64 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9' | head -c 24)"
     sudo -u postgres psql -c "ALTER USER networker WITH PASSWORD '${DASHBOARD_DB_PASSWORD}';" 2>/dev/null || true
 
-    # Create tester result tables (normally created by networker-tester on first run,
-    # but the dashboard's Runs page queries them and returns 500 if they don't exist)
-    sudo -u postgres psql -d networker_dashboard 2>/dev/null << 'TESTER_SCHEMA'
-CREATE TABLE IF NOT EXISTS _schema_versions (
-    version INTEGER PRIMARY KEY, applied_at TIMESTAMP WITH TIME ZONE DEFAULT NOW());
-INSERT INTO _schema_versions (version) VALUES (1) ON CONFLICT DO NOTHING;
--- Match the tester's V001 schema exactly so backend.save() works
-CREATE TABLE IF NOT EXISTS TestRun (
-    RunId          UUID            NOT NULL,
-    StartedAt      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-    FinishedAt     TIMESTAMPTZ     NULL,
-    TargetUrl      VARCHAR(2048)   NOT NULL DEFAULT '',
-    TargetHost     VARCHAR(255)    NOT NULL,
-    Modes          VARCHAR(200)    NOT NULL DEFAULT '',
-    TotalRuns      INT             NOT NULL DEFAULT 1,
-    Concurrency    INT             NOT NULL DEFAULT 1,
-    TimeoutMs      BIGINT          NOT NULL DEFAULT 30000,
-    ClientOs       VARCHAR(50)     NOT NULL DEFAULT '',
-    ClientVersion  VARCHAR(50)     NOT NULL DEFAULT '',
-    SuccessCount   INT             NOT NULL DEFAULT 0,
-    FailureCount   INT             NOT NULL DEFAULT 0,
-    CONSTRAINT PK_TestRun PRIMARY KEY (RunId)
-);
-CREATE TABLE IF NOT EXISTS RequestAttempt (
-    AttemptId     UUID            NOT NULL,
-    RunId         UUID            NOT NULL,
-    Protocol      VARCHAR(20)     NOT NULL,
-    SequenceNum   INT             NOT NULL,
-    StartedAt     TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-    FinishedAt    TIMESTAMPTZ     NULL,
-    Success       BOOLEAN         NOT NULL DEFAULT FALSE,
-    ErrorMessage  TEXT            NULL,
-    RetryCount    INT             NOT NULL DEFAULT 0,
-    extra_json    JSONB           NULL,
-    CONSTRAINT PK_RequestAttempt PRIMARY KEY (AttemptId),
-    CONSTRAINT FK_Attempt_Run    FOREIGN KEY (RunId)
-        REFERENCES TestRun (RunId) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS DnsResult (
-    DnsId         UUID            NOT NULL DEFAULT gen_random_uuid(),
-    AttemptId     UUID            NOT NULL,
-    QueryName     VARCHAR(255)    NOT NULL,
-    ResolvedIPs   VARCHAR(1024)   NOT NULL DEFAULT '',
-    DurationMs    DOUBLE PRECISION NOT NULL DEFAULT 0,
-    StartedAt     TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-    Success       BOOLEAN         NOT NULL DEFAULT TRUE,
-    CONSTRAINT PK_DnsResult   PRIMARY KEY (DnsId),
-    CONSTRAINT FK_Dns_Attempt FOREIGN KEY (AttemptId)
-        REFERENCES RequestAttempt (AttemptId) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS TcpResult (
-    TcpId         UUID            NOT NULL DEFAULT gen_random_uuid(),
-    AttemptId     UUID            NOT NULL,
-    LocalAddr     VARCHAR(64)     NULL,
-    RemoteAddr    VARCHAR(64)     NOT NULL DEFAULT '',
-    ConnectDurationMs DOUBLE PRECISION NOT NULL DEFAULT 0,
-    AttemptCount  INT             NOT NULL DEFAULT 1,
-    StartedAt     TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-    Success       BOOLEAN         NOT NULL DEFAULT TRUE,
-    MssBytesEstimate INT          NULL,
-    RttEstimateMs DOUBLE PRECISION NULL,
-    CONSTRAINT PK_TcpResult   PRIMARY KEY (TcpId),
-    CONSTRAINT FK_Tcp_Attempt FOREIGN KEY (AttemptId)
-        REFERENCES RequestAttempt (AttemptId) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS TlsResult (
-    TlsId         UUID            NOT NULL DEFAULT gen_random_uuid(),
-    AttemptId     UUID            NOT NULL,
-    ProtocolVersion VARCHAR(20)   NOT NULL DEFAULT '',
-    CipherSuite   VARCHAR(100)    NOT NULL DEFAULT '',
-    AlpnNegotiated VARCHAR(20)    NULL,
-    CertSubject   VARCHAR(512)    NULL,
-    CertIssuer    VARCHAR(512)    NULL,
-    CertExpiry    TIMESTAMPTZ     NULL,
-    HandshakeDurationMs DOUBLE PRECISION NOT NULL DEFAULT 0,
-    StartedAt     TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-    Success       BOOLEAN         NOT NULL DEFAULT TRUE,
-    CONSTRAINT PK_TlsResult   PRIMARY KEY (TlsId),
-    CONSTRAINT FK_Tls_Attempt FOREIGN KEY (AttemptId)
-        REFERENCES RequestAttempt (AttemptId) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS HttpResult (
-    HttpId        UUID            NOT NULL DEFAULT gen_random_uuid(),
-    AttemptId     UUID            NOT NULL,
-    NegotiatedVersion VARCHAR(20) NOT NULL DEFAULT '',
-    StatusCode    INT             NOT NULL DEFAULT 0,
-    HeadersSizeBytes INT          NOT NULL DEFAULT 0,
-    BodySizeBytes INT             NOT NULL DEFAULT 0,
-    TtfbMs        DOUBLE PRECISION NOT NULL DEFAULT 0,
-    TotalDurationMs DOUBLE PRECISION NOT NULL DEFAULT 0,
-    ThroughputMbps DOUBLE PRECISION NULL,
-    PayloadBytes  BIGINT          NULL,
-    RedirectCount INT             NOT NULL DEFAULT 0,
-    StartedAt     TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-    CONSTRAINT PK_HttpResult   PRIMARY KEY (HttpId),
-    CONSTRAINT FK_Http_Attempt FOREIGN KEY (AttemptId)
-        REFERENCES RequestAttempt (AttemptId) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS UdpResult (
-    UdpId         UUID            NOT NULL DEFAULT gen_random_uuid(),
-    AttemptId     UUID            NOT NULL,
-    ProbeCount    INT             NOT NULL DEFAULT 0,
-    SuccessCount  INT             NOT NULL DEFAULT 0,
-    LossPercent   DOUBLE PRECISION NOT NULL DEFAULT 0,
-    RttMinMs      DOUBLE PRECISION NOT NULL DEFAULT 0,
-    RttAvgMs      DOUBLE PRECISION NOT NULL DEFAULT 0,
-    RttMaxMs      DOUBLE PRECISION NOT NULL DEFAULT 0,
-    RttP95Ms      DOUBLE PRECISION NOT NULL DEFAULT 0,
-    JitterMs      DOUBLE PRECISION NOT NULL DEFAULT 0,
-    StartedAt     TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-    CONSTRAINT PK_UdpResult   PRIMARY KEY (UdpId),
-    CONSTRAINT FK_Udp_Attempt FOREIGN KEY (AttemptId)
-        REFERENCES RequestAttempt (AttemptId) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS ErrorRecord (
-    ErrorId       UUID            NOT NULL DEFAULT gen_random_uuid(),
-    AttemptId     UUID            NOT NULL,
-    ErrorCategory VARCHAR(50)     NOT NULL DEFAULT '',
-    ErrorMessage  TEXT            NOT NULL DEFAULT '',
-    ErrorDetail   TEXT            NULL,
-    OccurredAt    TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-    CONSTRAINT PK_ErrorRecord  PRIMARY KEY (ErrorId),
-    CONSTRAINT FK_Error_Attempt FOREIGN KEY (AttemptId)
-        REFERENCES RequestAttempt (AttemptId) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS ServerTimingResult (
-    TimingId      UUID            NOT NULL DEFAULT gen_random_uuid(),
-    AttemptId     UUID            NOT NULL,
-    ServerTimestamp TIMESTAMPTZ   NULL,
-    ClockSkewMs   DOUBLE PRECISION NULL,
-    ServerVersion VARCHAR(50)     NULL,
-    CONSTRAINT PK_ServerTiming PRIMARY KEY (TimingId),
-    CONSTRAINT FK_Timing_Attempt FOREIGN KEY (AttemptId)
-        REFERENCES RequestAttempt (AttemptId) ON DELETE CASCADE
-);
-GRANT ALL ON ALL TABLES IN SCHEMA public TO networker;
-GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO networker;
-TESTER_SCHEMA
+    # The tester probe tables (TestRun/RequestAttempt/DnsResult/...) are NOT
+    # created here any more. This used to inline a hand-maintained copy of the
+    # DDL — a fourth writer of a schema whose canonical source is the Rust
+    # crate (crates/networker-tester/src/output/db/postgres.rs, shipped as
+    # shared/tester-schema.postgres.sql). It had drifted two migrations behind
+    # (no SampleIndex, no IX_Attempt_StartedAt) and, worse, seeded
+    # `_schema_versions(version INTEGER)` while both real writers use VARCHAR
+    # with rows 'V001'.. — so the control plane's own bootstrap hit 22P02 and
+    # latched itself into "tester schema unavailable" for the whole process.
+    #
+    # The control plane now applies the canonical schema at startup
+    # (AttemptPersister.EnsureSchemaAtStartupAsync) and repairs that bookkeeping
+    # table where the old copy created it. One writer, one source of truth.
 
     print_ok "PostgreSQL configured — database: networker_dashboard, user: networker"
 }

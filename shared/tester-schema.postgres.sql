@@ -6,11 +6,17 @@
 --
 -- Who applies it:
 --   * networker-tester (DB-backed runs)         → PostgresBackend::migrate()
---   * Networker.ControlPlane (streamed attempts) → AttemptPersister ensures it
---     lazily on first ingest, so a FRESH control-plane database gets the
---     RequestAttempt/… tables without a DB-backed tester ever running (found by
+--   * Networker.ControlPlane                     → AttemptPersister applies THIS
+--     file at startup (EnsureSchemaAtStartupAsync) and again lazily on first
+--     ingest, so a FRESH control-plane database gets the RequestAttempt/…
+--     tables without a DB-backed tester ever running (found by
 --     lab/validate.sh: 0 attempts persisted on a fresh install).
---   * install.sh dashboard install               → inline psql copy (legacy)
+--
+-- install.sh USED to carry a fourth, hand-maintained copy of this DDL. It was
+-- removed in v0.28.292: it had drifted two migrations behind and seeded
+-- `_schema_versions(version INTEGER)` where both real writers use VARCHAR with
+-- rows 'V001'.., which made the control plane's own bootstrap throw 22P02 and
+-- latch into "tester schema unavailable". Two writers, one source of truth.
 -- Every statement is idempotent (IF NOT EXISTS / ADD COLUMN IF NOT EXISTS).
 
 -- V001: Create all tables + indexes for NetworkDiagnostics

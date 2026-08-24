@@ -23,7 +23,7 @@ namespace Networker.ControlPlane.Realtime.RawWs;
 public static class AttemptPersister
 {
     /// <summary>
-    /// The full tester probe schema (V001–V007, PostgreSQL) — embedded copy of
+    /// The full tester probe schema (V001–V008, PostgreSQL) — embedded copy of
     /// <c>shared/tester-schema.postgres.sql</c>, which mirrors the
     /// <c>networker-tester</c> crate's own migrations (guarded by a Rust unit
     /// test). Applied lazily by the INGEST because on the streamed-attempt path
@@ -73,6 +73,37 @@ public static class AttemptPersister
     /// later points at this database skips them. Returns whether the schema
     /// (incl. V005) is available for the writes.
     /// </summary>
+    /// <summary>
+    /// Drop a <c>_schema_versions</c> table whose <c>version</c> column is not a
+    /// text type, so the correct one can be recreated.
+    ///
+    /// <para>Until v0.28.292 install.sh seeded its own copy of the tester schema
+    /// with <c>_schema_versions(version INTEGER)</c> and the row <c>1</c>, while
+    /// both real writers — the tester's <c>postgres.rs</c> and this class — use
+    /// VARCHAR with rows <c>'V001'</c>.. . On such a host the bookkeeping INSERT
+    /// raised 22P02 ("invalid input syntax for type integer: V001"), which the
+    /// caller's catch turned into a latched "schema unavailable" for the entire
+    /// process — silently degrading every streamed attempt.</para>
+    ///
+    /// <para>Dropping is safe precisely BECAUSE the type is wrong: no real
+    /// writer can ever have recorded a version in an integer column, so the only
+    /// row it can hold is the placeholder. A correctly-typed table — including a
+    /// tester-created one carrying real V0NN rows — is left untouched.</para>
+    /// </summary>
+    internal static async Task RepairVersionBookkeepingAsync(
+        NpgsqlConnection conn, NpgsqlTransaction? tx, CancellationToken ct)
+    {
+        await using var cmd = new NpgsqlCommand(
+            "DO $$ DECLARE t text; BEGIN "
+            + "  SELECT data_type INTO t FROM information_schema.columns "
+            + "   WHERE table_name = '_schema_versions' AND column_name = 'version'; "
+            + "  IF t IS NOT NULL AND t NOT IN ('character varying','text','character') THEN "
+            + "    DROP TABLE _schema_versions; "
+            + "  END IF; END $$;",
+            conn, tx);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
     private static async Task<bool> EnsureTesterSchemaAsync(NpgsqlConnection conn, CancellationToken ct)
     {
         var s = Volatile.Read(ref _schemaState);
@@ -96,9 +127,25 @@ public static class AttemptPersister
                 }
                 // Bookkeeping for the tester-side migrator (same table + rows
                 // postgres.rs writes). Best-effort inside the same transaction.
+                //
+                // The DO block repairs an INCOMPATIBLE bookkeeping table before
+                // writing to it. Until v0.28.292 install.sh seeded its own copy
+                // of the tester schema with `_schema_versions(version INTEGER)`
+                // and the row `1`, while the tester (postgres.rs) and this
+                // method both use VARCHAR and rows 'V001'.. . On such a host the
+                // INSERT below raised 22P02 (invalid input syntax for integer:
+                // "V001"), which the catch turned into _schemaState = -1 —
+                // permanently disabling tester-schema ensure for the whole
+                // process, so streamed attempts silently degraded.
+                //
+                // Dropping it is safe precisely BECAUSE the type is wrong: the
+                // tester never wrote to an INTEGER table, so the only row it can
+                // hold is install.sh's placeholder. The correct table is
+                // recreated on the next statement and the DDL is all idempotent.
+                await RepairVersionBookkeepingAsync(conn, tx, ct);
                 await using (var rec = new NpgsqlCommand(
                     "CREATE TABLE IF NOT EXISTS _schema_versions (version VARCHAR(20) NOT NULL PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now()); "
-                    + "INSERT INTO _schema_versions (version) VALUES ('V001'),('V002'),('V003'),('V004'),('V005'),('V006'),('V007') ON CONFLICT DO NOTHING",
+                    + "INSERT INTO _schema_versions (version) VALUES ('V001'),('V002'),('V003'),('V004'),('V005'),('V006'),('V007'),('V008') ON CONFLICT DO NOTHING",
                     conn, tx))
                 {
                     await rec.ExecuteNonQueryAsync(ct);
@@ -115,6 +162,38 @@ public static class AttemptPersister
             // whatever exists; 42P01 is skipped in PersistAsync).
             Volatile.Write(ref _schemaState, -1);
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Ensure the tester probe schema at STARTUP, not merely on first ingest.
+    ///
+    /// <para>Before v0.28.292 install.sh seeded these tables itself with a
+    /// hand-maintained copy of the DDL — a fourth writer that had drifted two
+    /// migrations behind (no SampleIndex, no IX_Attempt_StartedAt) and whose
+    /// `_schema_versions` was type-incompatible with the tester's. Deleting
+    /// that copy is only safe if something else creates the tables before a
+    /// read path asks for them, which is what this does.</para>
+    ///
+    /// <para>Never throws: a database that denies DDL must not stop the control
+    /// plane booting. On failure the probe state is RESET rather than latched to
+    /// "unavailable", so the ingest path can still try again later.</para>
+    /// </summary>
+    public static async Task<string> EnsureSchemaAtStartupAsync(
+        string connectionString, CancellationToken ct = default)
+    {
+        try
+        {
+            await using var conn = new NpgsqlConnection(connectionString);
+            await conn.OpenAsync(ct);
+            return await EnsureTesterSchemaAsync(conn, ct)
+                ? "ensured (V001-V008)"
+                : "unavailable (DDL denied) — ingest will degrade, not fail";
+        }
+        catch (Exception ex)
+        {
+            Volatile.Write(ref _schemaState, 0); // let ingest retry
+            return $"not ensured at startup ({ex.GetType().Name}) — ingest will retry";
         }
     }
 
