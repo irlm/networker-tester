@@ -61,6 +61,10 @@ public static class ProbeComparisonEndpoints
     /// grid is O(n²) and a scoreboard nobody can read is not a report.</summary>
     public const int MaxUrls = 8;
 
+    /// <summary>What the report races against each other.</summary>
+    internal const string GroupByUrl = "url";
+    internal const string GroupByRunner = "runner";
+
     public static IEndpointRouteBuilder MapProbeComparisonEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapGet("/api/projects/{projectId}/reports/probe-comparison", async (
@@ -69,6 +73,7 @@ public static class ProbeComparisonEndpoints
             string? window,
             string? bucket,
             int? min_samples,
+            string? group_by,
             string? format,
             NpgsqlDataSource dataSource,
             ReportExporterResolver exporters,
@@ -108,12 +113,31 @@ public static class ProbeComparisonEndpoints
 
             var minSamples = Math.Clamp(min_samples ?? ProbeComparisonLogic.DefaultMinSamples, 1, 50);
 
+            // What the report RACES against each other. 'url' (default) keeps the
+            // existing behaviour; 'runner' compares vantage points instead.
+            var groupBy = (group_by ?? GroupByUrl).Trim().ToLowerInvariant();
+            if (groupBy != GroupByUrl && groupBy != GroupByRunner)
+            {
+                return Results.BadRequest(new { error = "group_by must be 'url' or 'runner'" });
+            }
+            // Runner mode with several URLs would pool DIFFERENT SITES into one
+            // per-runner series — the same blending this mode exists to fix,
+            // just rotated. Refuse it rather than quietly average across sites.
+            if (groupBy == GroupByRunner && selected.Count != 1)
+            {
+                return Results.BadRequest(new
+                {
+                    error = "group_by=runner compares runners for ONE url; select exactly one "
+                          + $"({selected.Count} selected)",
+                });
+            }
+
             var to = DateTime.UtcNow;
             var from = to.AddHours(-windowHours);
 
             var report = await BuildReportAsync(
                 dataSource, projectId, selected, from, to,
-                window ?? DefaultWindow, bucket ?? DefaultBucket, bucketSeconds, minSamples, ct);
+                window ?? DefaultWindow, bucket ?? DefaultBucket, bucketSeconds, minSamples, groupBy, ct);
 
             if (reportFormat == ReportFormat.Json)
             {
@@ -149,6 +173,7 @@ public static class ProbeComparisonEndpoints
         string bucketLabel,
         int bucketSeconds,
         int minSamples,
+        string groupBy,
         CancellationToken ct)
     {
         var available = await LoadAvailableAsync(dataSource, projectId, from, to, ct);
@@ -158,15 +183,29 @@ public static class ProbeComparisonEndpoints
         // would make a URL probed twice look like 100% coverage.
         var windowBuckets = (int)Math.Round((to - from).TotalSeconds / bucketSeconds);
 
+        var byRunner = groupBy == GroupByRunner;
+
+        // URL mode needs two URLs to have a race. Runner mode needs exactly ONE
+        // url — the runners are the contestants, and the handler already
+        // rejected anything else.
         var modes = new List<ProbeComparisonMode>();
-        if (selected.Count >= 2)
+        if (byRunner ? selected.Count == 1 : selected.Count >= 2)
         {
             var points = await LoadPointsAsync(
-                dataSource, projectId, selected, from, to, bucketSeconds, ct);
+                dataSource, projectId, selected, from, to, bucketSeconds, groupBy, ct);
+
+            // In URL mode the contestants are known up front (what the caller
+            // asked for), so a URL with NO data still shows as 0 % covered
+            // rather than vanishing. In runner mode they can only be discovered
+            // from the data — nobody declares "these runners should have probed".
+            var series = byRunner
+                ? points.Select(p => p.Point.Url).Distinct(StringComparer.Ordinal)
+                        .OrderBy(u => u, StringComparer.Ordinal).ToList()
+                : selected;
 
             foreach (var modeGroup in points.GroupBy(p => p.Mode).OrderBy(g => g.Key, StringComparer.Ordinal))
             {
-                modes.Add(BuildMode(modeGroup.Key, [.. modeGroup.Select(p => p.Point)], selected, windowBuckets, minSamples));
+                modes.Add(BuildMode(modeGroup.Key, [.. modeGroup.Select(p => p.Point)], series, windowBuckets, minSamples));
             }
         }
 
@@ -280,6 +319,14 @@ public static class ProbeComparisonEndpoints
     private const string PointsSql = """
         WITH sample AS (
             SELECT COALESCE(a.TargetUrl, tr.TargetUrl)              AS url,
+                   -- WHICH RUNNER produced this sample. Without it the report
+                   -- pooled every vantage point into one series: on prod
+                   -- 2026-08-24 www.microsoft.com's "median" was 349 attempts
+                   -- from two runners whose own medians were 35 ms and 76 ms,
+                   -- with 321 of the 349 from the slower one — so the number
+                   -- described the runner, not the URL. Same trap the bucket
+                   -- rule exists to avoid, one dimension over.
+                   COALESCE(pt.name, '(unpinned runner)')           AS runner,
                    LOWER(a.Protocol)                                AS mode,
                    TO_TIMESTAMP(FLOOR(EXTRACT(EPOCH FROM a.StartedAt) / $4) * $4) AS bucket,
                    a.Success                                        AS success,
@@ -299,6 +346,7 @@ public static class ProbeComparisonEndpoints
                               AND c.test_kind = 'url_probe'
             JOIN RequestAttempt a ON a.RunId = r.id
             LEFT JOIN TestRun tr    ON tr.RunId = r.id
+            LEFT JOIN project_tester pt ON pt.tester_id = r.tester_id
             LEFT JOIN HttpResult h  ON h.AttemptId = a.AttemptId
             LEFT JOIN DnsResult d   ON d.AttemptId = a.AttemptId
             LEFT JOIN TcpResult t   ON t.AttemptId = a.AttemptId
@@ -309,8 +357,16 @@ public static class ProbeComparisonEndpoints
         ),
         picked AS (
             SELECT * FROM sample WHERE url = ANY($5)
+        ),
+        keyed AS (
+            -- The compared entity. $6 = 'runner' races vantage points against
+            -- each other for one URL; anything else keeps URLs as the series.
+            -- Series stays column 0 either way so the reader's positional
+            -- indices are untouched.
+            SELECT *, CASE WHEN $6 = 'runner' THEN runner ELSE url END AS series
+            FROM picked
         )
-        SELECT url,
+        SELECT series,
                mode,
                bucket,
                COUNT(*)::int                                                        AS sample_count,
@@ -320,10 +376,14 @@ public static class ProbeComparisonEndpoints
                PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY dns_ms)   FILTER (WHERE dns_ms   IS NOT NULL) AS p50_dns_ms,
                PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY tcp_ms)   FILTER (WHERE tcp_ms   IS NOT NULL) AS p50_tcp_ms,
                PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY tls_ms)   FILTER (WHERE tls_ms   IS NOT NULL) AS p50_tls_ms,
-               PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY ttfb_ms)  FILTER (WHERE ttfb_ms  IS NOT NULL) AS p50_ttfb_ms
-        FROM picked
-        GROUP BY url, mode, bucket
-        ORDER BY mode, bucket, url
+               PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY ttfb_ms)  FILTER (WHERE ttfb_ms  IS NOT NULL) AS p50_ttfb_ms,
+               -- Appended, so every index above keeps its position. These are
+               -- what let the report SAY it blended rather than blend silently.
+               COUNT(DISTINCT runner)::int                                          AS runner_count,
+               ARRAY_AGG(DISTINCT runner)                                           AS runners
+        FROM keyed
+        GROUP BY series, mode, bucket
+        ORDER BY mode, bucket, series
         """;
 
     /// <summary>
@@ -334,6 +394,7 @@ public static class ProbeComparisonEndpoints
     private const string ErrorsSql = """
         WITH failed AS (
             SELECT COALESCE(a.TargetUrl, tr.TargetUrl)              AS url,
+                   COALESCE(pt.name, '(unpinned runner)')           AS runner,
                    LOWER(a.Protocol)                                AS mode,
                    TO_TIMESTAMP(FLOOR(EXTRACT(EPOCH FROM a.StartedAt) / $4) * $4) AS bucket,
                    e.ErrorCategory                                  AS category
@@ -344,19 +405,23 @@ public static class ProbeComparisonEndpoints
             JOIN RequestAttempt a ON a.RunId = r.id AND NOT a.Success
             JOIN ErrorRecord e    ON e.AttemptId = a.AttemptId
             LEFT JOIN TestRun tr  ON tr.RunId = r.id
+            LEFT JOIN project_tester pt ON pt.tester_id = r.tester_id
             WHERE r.project_id = $1
               AND a.StartedAt >= $2
               AND a.StartedAt <  $3
         ),
         counted AS (
-            SELECT url, mode, bucket, category, COUNT(*) AS n
+            -- Keyed the SAME way as the points query ($6), or the dominant-error
+            -- join would miss every row in runner mode.
+            SELECT CASE WHEN $6 = 'runner' THEN runner ELSE url END AS series,
+                   mode, bucket, category, COUNT(*) AS n
             FROM failed
             WHERE url = ANY($5)
-            GROUP BY url, mode, bucket, category
+            GROUP BY 1, mode, bucket, category
         )
-        SELECT DISTINCT ON (url, mode, bucket) url, mode, bucket, category
+        SELECT DISTINCT ON (series, mode, bucket) series, mode, bucket, category
         FROM counted
-        ORDER BY url, mode, bucket, n DESC, category
+        ORDER BY series, mode, bucket, n DESC, category
         """;
 
     /// <summary>Every URL with probe data in the window, newest-first by volume
@@ -418,6 +483,7 @@ public static class ProbeComparisonEndpoints
         DateTime from,
         DateTime to,
         int bucketSeconds,
+        string groupBy,
         CancellationToken ct)
     {
         var raw = new List<(string Mode, string Url, DateTime Bucket, int Samples, int Successes,
@@ -433,6 +499,7 @@ public static class ProbeComparisonEndpoints
                 cmd.Parameters.AddWithValue(to);
                 cmd.Parameters.AddWithValue((double)bucketSeconds);
                 cmd.Parameters.AddWithValue(urls.ToArray());
+                cmd.Parameters.AddWithValue(groupBy);
                 await using var reader = await cmd.ExecuteReaderAsync(ct);
                 while (await reader.ReadAsync(ct))
                 {
@@ -454,6 +521,7 @@ public static class ProbeComparisonEndpoints
                 cmd.Parameters.AddWithValue(to);
                 cmd.Parameters.AddWithValue((double)bucketSeconds);
                 cmd.Parameters.AddWithValue(urls.ToArray());
+                cmd.Parameters.AddWithValue(groupBy);
                 await using var reader = await cmd.ExecuteReaderAsync(ct);
                 while (await reader.ReadAsync(ct))
                 {
