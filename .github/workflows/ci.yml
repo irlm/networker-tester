@@ -52,6 +52,9 @@ jobs:
       # Where the rest of this workflow runs (docs/self-hosted-ci.md).
       # This job itself stays on ubuntu-latest: it is the hop that decides.
       linux_host: ${{ steps.ci_hosts.outputs.linux }}
+      # For jobs that need a real machine (systemd / tc netem) — a
+      # containerised CI host has neither. See pick-ci-hosts.
+      linux_bare_host: ${{ steps.ci_hosts.outputs.linux_bare }}
       windows_host: ${{ steps.ci_hosts.outputs.windows }}
       macos_host: ${{ steps.ci_hosts.outputs.macos }}
     steps:
@@ -788,7 +791,7 @@ jobs:
   # product's core claim.
   measurement-accuracy:
     name: Measurement accuracy (netem ground truth)
-    runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    runs-on: ${{ fromJSON(needs.changes.outputs.linux_bare_host) }}
     needs: [changes]
     if: needs.changes.outputs.rust == 'true'
     timeout-minutes: 25

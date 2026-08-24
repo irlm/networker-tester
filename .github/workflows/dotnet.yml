@@ -46,6 +46,8 @@ jobs:
       # Where the rest of this workflow runs (docs/self-hosted-ci.md).
       # This job itself stays on ubuntu-latest: it is the hop that decides.
       linux_host: ${{ steps.ci_hosts.outputs.linux }}
+      # Real machine only: this job installs and starts a systemd unit.
+      linux_bare_host: ${{ steps.ci_hosts.outputs.linux_bare }}
       windows_host: ${{ steps.ci_hosts.outputs.windows }}
       macos_host: ${{ steps.ci_hosts.outputs.macos }}
     steps:
@@ -146,7 +148,7 @@ jobs:
     name: Reinstall script execution
     needs: [changes]
     if: needs.changes.outputs.csharp == 'true'
-    runs-on: ${{ fromJSON(needs.changes.outputs.linux_host) }}
+    runs-on: ${{ fromJSON(needs.changes.outputs.linux_bare_host) }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5

@@ -26,6 +26,14 @@ outputs:
   linux:
     description: JSON array of runs-on labels for Linux jobs
     value: ${{ steps.pick.outputs.linux }}
+  linux_bare:
+    description: >-
+      JSON array of runs-on labels for Linux jobs that need a REAL MACHINE —
+      systemd units, or `tc netem` on the loopback. A containerised CI host
+      (infra/ci-hosts/container) has neither: no init system at all, and no
+      NET_ADMIN. Such a job routed there fails on the host, not on the change.
+      Falls back to GitHub-hosted when no bare-metal host is online.
+    value: ${{ steps.pick.outputs.linux_bare }}
   windows:
     description: JSON array of runs-on labels for Windows jobs
     value: ${{ steps.pick.outputs.windows }}
@@ -53,6 +61,9 @@ runs:
         hosted_windows='["windows-latest"]'
         hosted_macos='["macos-latest"]'
         self_linux='["self-hosted","linux","networker-ci"]'
+        # A strict subset of self_linux: every bare-metal host also answers the
+        # plain triple, so adding this label costs the general pool nothing.
+        self_linux_bare='["self-hosted","linux","networker-ci","bare-metal"]'
         self_windows='["self-hosted","windows","networker-ci"]'
         self_macos='["self-hosted","macos","networker-ci"]'
 
@@ -68,7 +79,9 @@ runs:
         choose() { # choose <os> <self|hosted> <reason>
           local os="$1" which="$2" reason="$3" labels
           case "${os}:${which}" in
-            linux:self)     labels="$self_linux" ;;
+            linux:self)      labels="$self_linux" ;;
+            linux_bare:self) labels="$self_linux_bare" ;;
+            linux_bare:hosted) labels="$hosted_linux" ;;
             windows:self)   labels="$self_windows" ;;
             macos:self)     labels="$self_macos" ;;
             linux:hosted)   labels="$hosted_linux" ;;
@@ -89,22 +102,22 @@ runs:
         } >> "$GITHUB_STEP_SUMMARY"
 
         if [ "${FORK_PR}" = "true" ]; then
-          for os in linux windows macos; do choose "$os" hosted "pull request from a fork — never routed to self-hosted"; done
+          for os in linux windows macos linux_bare; do choose "$os" hosted "pull request from a fork — never routed to self-hosted"; done
           exit 0
         fi
 
         case "$mode" in
           hosted)
-            for os in linux windows macos; do choose "$os" hosted "CI_HOSTS_MODE=hosted"; done
+            for os in linux windows macos linux_bare; do choose "$os" hosted "CI_HOSTS_MODE=hosted"; done
             exit 0 ;;
           self-hosted)
-            for os in linux windows macos; do choose "$os" self "CI_HOSTS_MODE=self-hosted (forced, no online check)"; done
+            for os in linux windows macos linux_bare; do choose "$os" self "CI_HOSTS_MODE=self-hosted (forced, no online check)"; done
             exit 0 ;;
         esac
 
         # ── auto: ask the API which CI hosts are online right now ───────────
         if [ -z "${TOKEN}" ]; then
-          for os in linux windows macos; do choose "$os" hosted "auto: no CI_HOSTS_STATUS_TOKEN available to this run"; done
+          for os in linux windows macos linux_bare; do choose "$os" hosted "auto: no CI_HOSTS_STATUS_TOKEN available to this run"; done
           exit 0
         fi
 
@@ -117,12 +130,12 @@ runs:
         if [ "$code" != "200" ]; then
           msg="$(jq -r '.message // empty' "$body" 2>/dev/null || true)"
           echo "::warning title=pick-ci-hosts::GET /repos/${REPO}/actions/runners returned HTTP ${code}${msg:+ (${msg})} — falling back to GitHub-hosted for every OS"
-          for os in linux windows macos; do choose "$os" hosted "auto: runners API HTTP ${code}"; done
+          for os in linux windows macos linux_bare; do choose "$os" hosted "auto: runners API HTTP ${code}"; done
           exit 0
         fi
         if ! jq -e '.runners | type == "array"' "$body" >/dev/null 2>&1; then
           echo "::warning title=pick-ci-hosts::runners API returned an unexpected body — falling back to GitHub-hosted"
-          for os in linux windows macos; do choose "$os" hosted "auto: unparseable runners listing"; done
+          for os in linux windows macos linux_bare; do choose "$os" hosted "auto: unparseable runners listing"; done
           exit 0
         fi
 
@@ -130,7 +143,7 @@ runs:
         echo "registered self-hosted runners (CI hosts): ${total}"
         jq -r '.runners[] | "  \(.name)\tstatus=\(.status)\tbusy=\(.busy)\tlabels=\([.labels[].name] | join(","))"' "$body"
 
-        for os in linux windows macos; do
+        for os in linux windows macos linux_bare; do
           # Online AND carrying all three labels, compared case-insensitively:
           # GitHub registers its own "Linux"/"X64"/"macOS"/"Windows" labels and
           # folds a lowercase "linux" into them, so the listing shows "Linux"
@@ -139,16 +152,23 @@ runs:
           # the job queues behind them, which is cheaper than hosted minutes.
           # Ephemeral hosts drop off after each job and re-register from the
           # systemd/launchd loop, so "online" is the right liveness signal.
-          online="$(jq -r --arg os "$os" '
+          # linux_bare is the linux pool narrowed to hosts that are a real
+          # machine, so it matches on the linux label PLUS bare-metal.
+          case "$os" in
+            linux_bare) oslabel=linux; extra=bare-metal ;;
+            *)          oslabel="$os"; extra="" ;;
+          esac
+          online="$(jq -r --arg os "$oslabel" --arg extra "$extra" '
             [ .runners[]
               | select(.status == "online")
               | select(any(.labels[].name | ascii_downcase; . == "self-hosted"))
               | select(any(.labels[].name | ascii_downcase; . == $os))
               | select(any(.labels[].name | ascii_downcase; . == "networker-ci"))
+              | select($extra == "" or any(.labels[].name | ascii_downcase; . == $extra))
             ] | length' "$body")"
           if [ "${online}" -gt 0 ]; then
-            choose "$os" self "auto: ${online} online CI host(s) with labels self-hosted,${os},networker-ci"
+            choose "$os" self "auto: ${online} online CI host(s) with labels self-hosted,${oslabel},networker-ci${extra:+,${extra}}"
           else
-            choose "$os" hosted "auto: no online CI host with labels self-hosted,${os},networker-ci"
+            choose "$os" hosted "auto: no online CI host with labels self-hosted,${oslabel},networker-ci${extra:+,${extra}}"
           fi
         done

@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.286] - 2026-08-24
+
+### Fixed
+
+- **A containerised CI host no longer fails the two jobs that need a real
+  machine.** `ci-turing-1` (added in .282) took every self-hosted Linux job,
+  including two it physically cannot run: `Measurement accuracy (netem ground
+  truth)` needs `tc netem` (NET_ADMIN) and `Reinstall script execution` installs
+  and starts a **systemd unit** — a container has no init system at all. Routed
+  there they fail on the *host*, not on the change, which is worse than not
+  having the host: it cost #862 two red runs before the cause was obvious.
+  GitHub has no negative label selector, so the split is additive — every
+  VM/bare-metal host now also carries **`bare-metal`**, `pick-ci-hosts` grew a
+  `linux_bare` output beside `linux`, and exactly those two jobs use it. The
+  containerised host keeps the plain triple and takes everything else;
+  `linux_bare` falls back to `ubuntu-latest` when no bare-metal host is online,
+  like every other routing decision. Adding the label needs no reinstall — edit
+  `LABELS=` in `/etc/ci-host/env` and restart the loop.
+
+---
+
 ## [0.28.285] - 2026-08-23
 
 ### Added
