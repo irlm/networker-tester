@@ -55,9 +55,9 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
     // ── Migration chain ─────────────────────────────────────────────────
 
     [Fact]
-    public void Fresh_database_applies_the_full_chain_v002_to_v054()
+    public void Fresh_database_applies_the_full_chain_v002_to_v055()
     {
-        Assert.Equal(Enumerable.Range(2, 53), _fx.FreshRun.Applied);
+        Assert.Equal(Enumerable.Range(2, 54), _fx.FreshRun.Applied);
         Assert.Empty(_fx.FreshRun.AlreadyApplied);
     }
 
@@ -70,7 +70,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
 
         Assert.True(second.WasUpToDate);
         Assert.Empty(second.Applied);
-        Assert.Equal(Enumerable.Range(2, 53), second.AlreadyApplied);
+        Assert.Equal(Enumerable.Range(2, 54), second.AlreadyApplied);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public sealed class SchemaMigrationTests : IClassFixture<SchemaMigrationFixture>
             }
         }
 
-        Assert.Equal(Enumerable.Range(2, 53), recorded);
+        Assert.Equal(Enumerable.Range(2, 54), recorded);
     }
 
     // ── EF-model equivalence ────────────────────────────────────────────
@@ -821,6 +821,7 @@ public sealed class MigrationScriptFreezeTests
         ["V051_canary_dispatch.sql"] = "9c1a5053fe3ca9218b959793fc8275c843d32a41a65e62200adf1f360f03cfad",
         ["V052_deployment_recovery.sql"] = "a679dd0d9d4a1d108cadbdbbf58f93bbb5d1f05c7286526dcc72e07191343724",
         ["V053_test_config_kind.sql"] = "efa47c3dd51365625528f74f91c05082dbf5881adac784bf2e3feebeca143267",
+        ["V055_secret_rotation.sql"] = "61d7e47e8b8be750c86dacf3a9ea7acfbad83bcd608d86ac0e8fda4de5b52a36",
         ["V054_deployment_diagnostics.sql"] = "423d4abe7446791c098fcdbdae39e5fa3de2f7466b5e9ef0f61c22b84ce90dd4",
     };
 
@@ -841,7 +842,7 @@ public sealed class MigrationScriptFreezeTests
             Assert.Contains(version, scripted);
         }
 
-        Assert.Equal(52, scripted.Count);
+        Assert.Equal(53, scripted.Count);
     }
 
     [Fact]

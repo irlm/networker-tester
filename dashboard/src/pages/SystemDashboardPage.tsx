@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useAsyncEffect } from '../hooks/useAsyncEffect';
-import { api, type SystemMetrics, type DbMetrics, type WorkspaceUsage, type LogEntry, type SsoProvider, type CreateSsoProvider } from '../api/client';
+import { api, type SystemMetrics, type DbMetrics, type WorkspaceUsage, type LogEntry, type SsoProvider, type CreateSsoProvider, type SecretAge } from '../api/client';
 
 // ── Log helpers ─────────────────────────────────────────────────────────
 
@@ -20,7 +20,7 @@ import { useToast } from '../hooks/useToast';
 import { timeAgo } from '../lib/format';
 import { StatusBadge } from '../components/common/StatusBadge';
 
-type Tab = 'overview' | 'usage' | 'logs' | 'auth';
+type Tab = 'overview' | 'usage' | 'logs' | 'auth' | 'secrets';
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -838,6 +838,109 @@ function AuthTab() {
 
 // ── Main Page ──────────────────────────────────────────────────────────
 
+
+// ── Secrets ──────────────────────────────────────────────────────────────────
+// Read-only by design. This panel answers "how old is each secret, and what is
+// overdue" — it never shows a value, and there is no rotate button: the control
+// plane is internet-facing, so an endpoint that could rotate would turn any
+// single compromise into total credential compromise. Rotation is an operator
+// action (scripts/rotate-secrets.sh), which is also what writes the dates shown
+// here. See docs/secret-rotation.md.
+
+const SECRET_STATUS: Record<SecretAge['status'], { label: string; cls: string }> = {
+  ok:      { label: 'OK',      cls: 'text-emerald-300 border-emerald-700/60 bg-emerald-950/30' },
+  due:     { label: 'Due soon', cls: 'text-amber-300  border-amber-700/60  bg-amber-950/30' },
+  overdue: { label: 'Overdue', cls: 'text-red-300    border-red-700/60    bg-red-950/30' },
+  never:   { label: 'Never rotated', cls: 'text-red-300 border-red-700/60 bg-red-950/30' },
+};
+
+function SecretsTab() {
+  const [rows, setRows] = useState<SecretAge[] | null>(null);
+  const [attention, setAttention] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await api.getSecretAges();
+      setRows(r.secrets);
+      setAttention(r.needs_attention);
+      setError(null);
+    } catch {
+      setError('Could not load secret status (platform admins only).');
+    }
+  }, []);
+
+  useAsyncEffect(load, [load]);
+
+  if (error) {
+    return <div className="text-sm text-red-300 border border-red-800/60 bg-red-950/20 rounded p-3">{error}</div>;
+  }
+  if (!rows) {
+    return <div className="text-sm text-gray-400">Loading…</div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-baseline justify-between gap-4 flex-wrap">
+        <p className="text-sm text-gray-400 max-w-2xl">
+          Age and rotation status only — values are never served by the API.
+          Rotate with <code className="text-gray-300">scripts/rotate-secrets.sh</code>,
+          which is what records the dates below.
+        </p>
+        {attention > 0 && (
+          <span className="text-sm font-medium text-red-300 whitespace-nowrap">
+            {attention} need{attention === 1 ? 's' : ''} attention
+          </span>
+        )}
+      </div>
+
+      <div className="overflow-x-auto border border-gray-800 rounded">
+        <table className="w-full text-sm whitespace-nowrap">
+          <thead className="bg-gray-900/60 text-gray-400">
+            <tr>
+              <th className="text-left  font-medium px-3 py-2">Secret</th>
+              <th className="text-right font-medium px-3 py-2">Age</th>
+              <th className="text-right font-medium px-3 py-2">Policy</th>
+              <th className="text-left  font-medium px-3 py-2">Last rotated</th>
+              <th className="text-left  font-medium px-3 py-2">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const st = SECRET_STATUS[r.status];
+              return (
+                <tr key={r.key} className="border-t border-gray-800/70 align-top">
+                  <td className="px-3 py-2 whitespace-normal">
+                    <div className="text-gray-200">{r.name}</div>
+                    <div className="text-xs text-gray-500 max-w-md">{r.description}</div>
+                    {r.risk && (
+                      <div className="text-xs text-amber-400/80 max-w-md mt-1">{r.risk}</div>
+                    )}
+                    {!r.automated && (
+                      <div className="text-xs text-gray-500 mt-1">Manual rotation only</div>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-gray-300">
+                    {r.age_days === null ? '—' : `${r.age_days}d`}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-gray-500">{r.max_age_days}d</td>
+                  <td className="px-3 py-2 text-gray-400">
+                    {r.rotated_at ? timeAgo(r.rotated_at) : 'no record'}
+                    {r.rotated_by && <div className="text-xs text-gray-600">{r.rotated_by}</div>}
+                  </td>
+                  <td className="px-3 py-2">
+                    <span className={`text-xs px-2 py-0.5 rounded border ${st.cls}`}>{st.label}</span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export function SystemDashboardPage() {
   usePageTitle('System');
   const [tab, setTab] = useState<Tab>('overview');
@@ -892,6 +995,7 @@ export function SystemDashboardPage() {
         <button onClick={() => setTab('usage')} className={tabCls('usage')}>Usage</button>
         <button onClick={() => setTab('logs')} className={tabCls('logs')}>Logs</button>
         <button onClick={() => setTab('auth')} className={tabCls('auth')}>Auth</button>
+        <button onClick={() => setTab('secrets')} className={tabCls('secrets')}>Secrets</button>
       </div>
 
       {tab === 'overview' && (
@@ -911,6 +1015,8 @@ export function SystemDashboardPage() {
       {tab === 'logs' && <LogsTab />}
 
       {tab === 'auth' && <AuthTab />}
+
+      {tab === 'secrets' && <SecretsTab />}
     </div>
   );
 }
