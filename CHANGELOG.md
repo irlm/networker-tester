@@ -11,6 +11,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.287] - 2026-08-24
+
+### Fixed
+
+- **The prod UI smoke harness was crying wolf: three stale assertions, no prod
+  defect.** A post-deploy run filed #867/#868/#869; all three were the specs
+  drifting behind the product, and each would have failed on a perfectly healthy
+  deployment.
+  - `runs`: asserted the raw `completed`, but the badge renders
+    `runDisplayStatus()` — a completed run with **any** failed attempt reads
+    `partial`. Prod's newest run is `ok=3 fail=1`, so it fails on the normal
+    case, not an edge case.
+  - `scenarios`: demanded `>= 4` action links on one view and matched them by
+    the text `Configure`. The page became a **tabbed, readiness-aware triage
+    console** in #799 — only the selected tab is in the DOM, and the label is
+    `availability.actionLabel` ("View runners →" when no runner is online).
+  - `scenarios`: assumed a URL scenario always configures on `/probe`. With no
+    online runner it deliberately routes to `/vms` instead, because there is
+    nothing to probe from. The spec now asserts **both** branches, which is
+    stronger than the original's single state.
+
+### Added
+
+- **A full production route sweep** (`e2e/prod/allroutes.prod.spec.ts`): all 35
+  authenticated routes must render their own shell — no error boundary, no blank
+  page, no exception during mount. The other prod specs assert deep content on a
+  handful of surfaces; "does every page still work after a release" is a
+  different question, and a route that 404s its lazy chunk or loses its router
+  entry fails here and nowhere else. Includes the new `/probe/compare` (#782 P3).
+  **35/35 green against laghound.com on v0.28.286.**
+
+---
+
 ## [0.28.286] - 2026-08-24
 
 ### Fixed
