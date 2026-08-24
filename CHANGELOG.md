@@ -58,6 +58,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not. Found while restore-verifying the legacy databases before dropping them,
   which is exactly why a dump you have never read back is only a hypothesis.
 
+- **`install.sh` no longer carries its own copy of the tester probe schema**,
+  and the control plane repairs the damage the old copy did. The probe tables
+  (`TestRun`/`RequestAttempt`/…) are generated from the Rust tester crate and
+  shipped as `shared/tester-schema.postgres.sql`; `install.sh` inlined a fourth,
+  hand-maintained copy that had drifted two migrations behind (no `SampleIndex`,
+  no `IX_Attempt_StartedAt`) and — the real damage — seeded
+  `_schema_versions(version INTEGER)` with the row `1`, where both genuine
+  writers use `VARCHAR` and rows `'V001'`.. .
+
+  On any host installed that way the control plane's bookkeeping INSERT raised
+  22P02 (`invalid input syntax for type integer: "V001"`), the catch latched
+  `_schemaState = -1`, and the process **silently stopped ensuring the tester
+  schema altogether** — degrading every streamed attempt for its lifetime. The
+  138-line copy is deleted, the control plane now applies the canonical schema
+  at startup (not only on first ingest, which is what made deleting it safe),
+  and `RepairVersionBookkeepingAsync` drops an incorrectly-typed bookkeeping
+  table so existing installs heal themselves. A correctly-typed table carrying
+  real migration history is explicitly left alone.
+
 ### Changed
 
 - **The production database is renamed `alethedash_core` → `networker_core`**,
