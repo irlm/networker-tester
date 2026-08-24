@@ -93,8 +93,21 @@ jobs:
       # The canonical implementation must pass EVERYTHING, including the §7
       # canonical-response checksums against the shared dataset
       # (--rust-only implies --require-conformance).
+      #
+      # --rust-only defaults to :8443/:8480, which is exactly what the `language`
+      # jobs' containers used to publish — on a persistent CI host running both
+      # at once, whichever bound first answered /health and the other validated
+      # someone else's server. Ports are taken from the ephemeral range here so
+      # the two jobs can share a host. The kernel picks; nothing is hardcoded.
       - name: Validate networker-endpoint against API-SPEC.md
         run: |
+          free_port() {
+            python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'
+          }
+          BENCH_VALIDATE_RUST_HTTPS_PORT="$(free_port)"
+          BENCH_VALIDATE_RUST_HTTP_PORT="$(free_port)"
+          export BENCH_VALIDATE_RUST_HTTPS_PORT BENCH_VALIDATE_RUST_HTTP_PORT
+          echo "baseline endpoint on :${BENCH_VALIDATE_RUST_HTTPS_PORT} (https) / :${BENCH_VALIDATE_RUST_HTTP_PORT} (http)"
           chmod +x benchmarks/validate/run-validation.sh
           ./benchmarks/validate/run-validation.sh --rust-only
 
@@ -146,30 +159,63 @@ jobs:
           echo "::error title=docker build::three attempts failed for ${{ matrix.lang }}"
           exit 1
 
+      # Nothing here may be shared between concurrently-running jobs. A
+      # self-hosted CI host runs several of this matrix's languages at once (and
+      # more once a host has two runner slots), and the old fixed
+      # `--name bench-srv` + `-p 8443:8443` + `/tmp/bench` collided three ways:
+      # the second `docker run` failed on the name, the second publish failed on
+      # the port, `docker rm -f bench-srv` in one job's cleanup killed ANOTHER
+      # job's container, and two jobs overwrote each other's TLS key while a
+      # container was reading it. The worst outcome was not a crash: whoever
+      # bound :8443 first answered /health, so a job could validate a DIFFERENT
+      # language's server and report it green.
+      #
+      # So: a name unique per run AND per language, a cert/data dir beside it,
+      # and an EPHEMERAL published port. `-p 127.0.0.1:0:8443` lets Docker
+      # allocate and bind atomically, which no "find a free port then bind it"
+      # helper can do without a race.
       - name: Boot container (certs + shared dataset mounted)
         run: |
-          mkdir -p /tmp/bench
+          SRV="bench-srv-${{ matrix.lang }}-${{ github.run_id }}-${{ github.run_attempt }}"
+          DIR="/tmp/bench-${SRV}"
+          echo "BENCH_SRV=${SRV}" >> "$GITHUB_ENV"
+          echo "BENCH_DIR=${DIR}" >> "$GITHUB_ENV"
+
+          mkdir -p "$DIR"
           openssl req -x509 -newkey rsa:2048 \
-            -keyout /tmp/bench/key.pem -out /tmp/bench/cert.pem \
+            -keyout "$DIR/key.pem" -out "$DIR/cert.pem" \
             -days 1 -nodes -subj '/CN=bench'
-          cp benchmarks/reference-apis/shared/bench-data.json /tmp/bench/
-          docker run -d --name bench-srv -p 8443:8443 \
+          cp benchmarks/reference-apis/shared/bench-data.json "$DIR/"
+
+          docker run -d --name "$SRV" -p 127.0.0.1:0:8443 \
             -e BENCH_CERT_DIR=/opt/bench \
             -e BENCH_PORT=8443 \
             -e BENCH_DATA_PATH=/opt/bench/bench-data.json \
-            -v /tmp/bench:/opt/bench:ro \
+            -v "$DIR":/opt/bench:ro \
             bench-${{ matrix.lang }}
+
+          # Read back what Docker actually bound, and pin the rest of the job to
+          # it — never to a port this job merely hoped for.
+          PORT="$(docker port "$SRV" 8443/tcp | head -1 | sed 's/.*://')"
+          if [ -z "$PORT" ]; then
+            echo "::error::could not read the published port for $SRV"
+            docker logs "$SRV" || true
+            exit 1
+          fi
+          echo "BENCH_URL=https://127.0.0.1:${PORT}" >> "$GITHUB_ENV"
+          echo "${{ matrix.lang }} published on 127.0.0.1:${PORT}"
+
           for i in $(seq 1 30); do
-            if curl -skf --max-time 3 https://localhost:8443/health > /dev/null; then
+            if curl -skf --max-time 3 "https://127.0.0.1:${PORT}/health" > /dev/null; then
               echo "healthy after ~$((i * 2))s"; exit 0
             fi
-            if [ -z "$(docker ps -q -f name=bench-srv)" ]; then
+            if [ -z "$(docker ps -q -f name="^${SRV}$")" ]; then
               echo "::error::container exited during startup"; break
             fi
             sleep 2
           done
           echo "::error::${{ matrix.lang }} never became healthy"
-          docker logs bench-srv || true
+          docker logs "$SRV" || true
           exit 1
 
       - name: Validate against API-SPEC.md
@@ -177,7 +223,7 @@ jobs:
           chmod +x benchmarks/validate/run-validation.sh
           set +e
           ./benchmarks/validate/run-validation.sh \
-            --url=https://localhost:8443 --name=${{ matrix.lang }}
+            --url="$BENCH_URL" --name=${{ matrix.lang }}
           code=$?
           set -e
           if [ "$code" -eq 0 ]; then
@@ -196,11 +242,16 @@ jobs:
 
       - name: Container logs (on failure)
         if: failure()
-        run: docker logs bench-srv || true
+        run: docker logs "$BENCH_SRV" || true
 
+      # Only ever this job's own container and directory: a self-hosted host is
+      # persistent, and a blanket `docker rm -f bench-srv` used to be able to
+      # take out a sibling job's server mid-validation.
       - name: Cleanup
         if: always()
-        run: docker rm -f bench-srv || true
+        run: |
+          if [ -n "${BENCH_SRV:-}" ]; then docker rm -f "$BENCH_SRV" || true; fi
+          if [ -n "${BENCH_DIR:-}" ]; then rm -rf "$BENCH_DIR"; fi
 
   verdict:
     name: Verdict

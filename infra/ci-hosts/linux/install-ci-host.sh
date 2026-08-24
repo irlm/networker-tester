@@ -261,12 +261,17 @@ while :; do
   # The rest of what a job can leave behind on a persistent machine. Jobs that
   # install system services (the installer exec jobs) are pinned to
   # GitHub-hosted runners instead — see docs/self-hosted-ci.md — so this is
-  # only the per-job residue: containers (a `docker run --name bench-srv
-  # -p 8443` from the previous job makes the next one fail "name in use"),
-  # staged datasets under /tmp (validate-bench-apis copies bench-data.json to
-  # /tmp/bench; networker-endpoint's tests must NOT find a dataset), and
-  # processes the job left running as the CI user (sccache servers, stray
-  # endpoints holding ports). The runner itself has exited at this point.
+  # only the per-job residue: containers a job leaked (validate-bench-apis now
+  # names its own uniquely and removes it, but a job killed mid-step cannot),
+  # staged datasets under /tmp (it copies bench-data.json next to its certs;
+  # networker-endpoint's tests must NOT find a dataset), and processes the job
+  # left running as the CI user (sccache servers, stray endpoints holding
+  # ports). The runner itself has exited at this point.
+  #
+  # NOTE: every sweep below is host-wide, which is only safe while this host
+  # runs ONE job at a time. Giving a host a second runner slot means making
+  # these per-slot or age-based first — a blanket `docker rm -f` would kill the
+  # sibling slot's container mid-job.
   if command -v docker >/dev/null 2>&1; then
     docker ps -aq 2>/dev/null | xargs -r docker rm -f >/dev/null 2>&1 || true
     docker network prune -f >/dev/null 2>&1 || true

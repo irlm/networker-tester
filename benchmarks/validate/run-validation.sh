@@ -570,13 +570,24 @@ if [[ "$MODE" == "rust" ]]; then
     echo "Building networker-endpoint..."
     cargo build -p networker-endpoint --quiet
 
-    echo "Starting endpoint on localhost:8443..."
-    "$PROJECT_DIR/target/debug/networker-endpoint" --http-port 8480 --https-port 8443 &
+    # Ports are overridable so two of these can share a machine. The defaults
+    # are what this has always used; CI overrides them because a self-hosted CI
+    # host runs several jobs at once and :8443 is also what the reference-API
+    # container publishes (audit V8 / the BENCH_VALIDATE_PORT_* convention
+    # above). A fixed port is a co-scheduling collision, and the failure mode is
+    # worse than a bind error: whoever binds first answers /health, so the wrong
+    # server can be validated and reported green.
+    RUST_HTTPS_PORT="${BENCH_VALIDATE_RUST_HTTPS_PORT:-8443}"
+    RUST_HTTP_PORT="${BENCH_VALIDATE_RUST_HTTP_PORT:-8480}"
+
+    echo "Starting endpoint on localhost:${RUST_HTTPS_PORT}..."
+    "$PROJECT_DIR/target/debug/networker-endpoint" \
+        --http-port "$RUST_HTTP_PORT" --https-port "$RUST_HTTPS_PORT" &
     ENDPOINT_PID=$!
     trap 'kill $ENDPOINT_PID 2>/dev/null; wait $ENDPOINT_PID 2>/dev/null || true' EXIT
 
     sleep 4
-    validate_server "Rust" "https://localhost:8443"
+    validate_server "Rust" "https://localhost:${RUST_HTTPS_PORT}"
 
 elif [[ "$MODE" == "single" ]]; then
     echo "Mode: Single server '$SINGLE_NAME' at $SINGLE_URL"
