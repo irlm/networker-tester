@@ -7,7 +7,7 @@ This runbook resets the production admin login for the C# control plane.
 - Admin user: `admin@laghound.com`.
 - The control plane stores the password as a **BCrypt** hash (`BCrypt.Net`,
   cost 11) in `dash_user.password_hash`.
-- Database: `alethedash_core` on the **alethedash-vm** (resource group
+- Database: `networker_core` on the **alethedash-vm** (resource group
   `ALETHEDASH-RG`). You reach it through `az vm run-command`.
 
 ## Critical gotcha — a bcrypt hash contains `$`
@@ -41,7 +41,7 @@ run-command script.
      --name alethedash-vm \
      --command-id RunShellScript \
      --scripts "echo '<BASE64_SQL>' | base64 -d > /tmp/reset.sql && \
-                sudo -u postgres psql -d alethedash_core -f /tmp/reset.sql && \
+                sudo -u postgres psql -d networker_core -f /tmp/reset.sql && \
                 rm -f /tmp/reset.sql"
    ```
 

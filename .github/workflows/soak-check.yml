@@ -78,7 +78,7 @@ jobs:
               echo \"\$HB\" | grep -q '\"all_healthy\":true' || { echo 'loops NOT all_healthy'; FAIL=1; }
 
               # 2. stuck-queued runs (must be 0)
-              STUCK=\$(sudo -u postgres psql alethedash_core -tAc \"SELECT count(*) FROM test_run WHERE status='queued' AND created_at < now() - interval '5 minutes';\")
+              STUCK=\$(sudo -u postgres psql networker_core -tAc \"SELECT count(*) FROM test_run WHERE status='queued' AND created_at < now() - interval '5 minutes';\")
               echo \"stuck_queued=\$STUCK\"
               [ \"\$STUCK\" = \"0\" ] || FAIL=1
 
@@ -99,13 +99,13 @@ jobs:
               done
 
               # 4. lingering advisory locks (transient 1 is fine mid-tick; >2 suspicious)
-              LOCKS=\$(sudo -u postgres psql alethedash_core -tAc \"SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND granted;\")
+              LOCKS=\$(sudo -u postgres psql networker_core -tAc \"SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND granted;\")
               echo \"advisory_locks=\$LOCKS\"
               [ \"\$LOCKS\" -le 2 ] || FAIL=1
 
               # 5. run outcomes (informational)
               echo 'run outcomes last 24h:'
-              sudo -u postgres psql alethedash_core -tAc \"SELECT status || '=' || count(*) FROM test_run WHERE created_at > now() - interval '24 hours' GROUP BY status;\" || true
+              sudo -u postgres psql networker_core -tAc \"SELECT status || '=' || count(*) FROM test_run WHERE created_at > now() - interval '24 hours' GROUP BY status;\" || true
 
               [ \"\$FAIL\" = \"0\" ] && echo 'SOAK_VM_PASS' || echo 'SOAK_VM_FAIL'
             " \

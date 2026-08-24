@@ -1,6 +1,14 @@
 services:
   postgres:
-    image: timescale/timescaledb-ha:pg16.6-ts2.17.2
+    # Plain PostgreSQL 16, matching production byte for byte.
+    # This was timescale/timescaledb-ha until 2026-08-24. Prod runs a stock
+    # Ubuntu postgresql-16 with NO timescaledb (not installed, not even
+    # available), and so do the lab, the SQL-test compose file and the C#
+    # Testcontainers suites — this dev database was the ONLY environment with
+    # the extension. Developing against a richer engine than you deploy to is
+    # how `time_bucket` nearly shipped into the URL comparison report: it would
+    # have worked on every developer machine and thrown in production.
+    image: postgres:16-alpine
     environment:
       POSTGRES_DB: networker_core
       POSTGRES_USER: networker
