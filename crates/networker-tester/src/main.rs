@@ -57,8 +57,56 @@ use target_runner::run_for_target;
 use tls_profile_cli::run_tls_profile_cli;
 use url_test_cli::run_url_test_cli;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+/// Stack the tester's async work runs on, every platform.
+///
+/// `#[tokio::main]` block_on's the whole async-main state machine **on the
+/// thread that calls it** — the process's main thread. On Windows/MSVC that
+/// thread's stack is whatever the PE header reserves, and the linker default is
+/// **1 MB**. An unoptimised build of `main` → `run_for_target` (both very large
+/// async fns) does not fit, so every debug `networker-tester.exe` died with
+/// STATUS_STACK_OVERFLOW before it ran a single probe (#853). Release builds
+/// are optimised and fit today, which is why nothing caught it — but the margin
+/// was invisible, and an optimised build that grew past 1 MB would have failed
+/// the same way in production with no warning.
+///
+/// 16 MiB is a **reserve, not an allocation**: Rust passes
+/// `STACK_SIZE_PARAM_IS_A_RESERVATION` to `CreateThread` on Windows and thread
+/// stacks are lazily committed on Unix, so this costs address space rather than
+/// memory. On a 64-bit process that is free.
+const ASYNC_STACK_BYTES: usize = 16 * 1024 * 1024;
+
+/// Runs the tester on a thread whose stack size we choose, instead of on the
+/// main thread whose stack size the linker chose for us.
+fn main() -> anyhow::Result<()> {
+    let worker = std::thread::Builder::new()
+        .name("tester-main".into())
+        .stack_size(ASYNC_STACK_BYTES)
+        .spawn(run)
+        .context("failed to spawn the tester's main thread")?;
+
+    match worker.join() {
+        Ok(result) => result,
+        // Surface a panic exactly as it would have surfaced straight from main:
+        // the default hook has already printed it, and resuming the unwind keeps
+        // the same exit code (101) instead of turning it into an Err(…) that
+        // would print a second, different message.
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+fn run() -> anyhow::Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        // The same trap one level down: target_runner.rs spawns futures onto the
+        // runtime's worker threads, whose stacks are tokio's 2 MiB default — not
+        // the 16 MiB we just gave the thread below.
+        .thread_stack_size(ASYNC_STACK_BYTES)
+        .build()
+        .context("failed to build the tokio runtime")?
+        .block_on(async_main())
+}
+
+async fn async_main() -> anyhow::Result<()> {
     // rustls 0.23 requires an explicit CryptoProvider.
     rustls::crypto::ring::default_provider()
         .install_default()
