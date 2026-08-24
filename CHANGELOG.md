@@ -11,6 +11,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.291]
+
+### Fixed
+
+- **The VM/IP teardown sweep no longer starves the oldest deployments.**
+  `TeardownFinishedRunsAsync` drew its per-tick batch of finished
+  auto-provisioned runs with a bare `Take(25)` and no `ORDER BY`, so which 25 of
+  the eligible candidates a tick saw was left to the query planner. EF Core warns
+  about exactly this ("The query uses a row limiting operator ('Skip'/'Take')
+  without an 'OrderBy' operator"), and the warning surfaced in production the
+  moment the `service_log` sink was enabled in v0.28.290.
+
+  The consequence was worse than unpredictable paging. The batch is the reaper's
+  entire budget for the tick and several of its branches skip a candidate without
+  tearing anything down (the `FailedReleaseAllowance` hold; an endpoint still
+  referenced by an active run), so a tick can spend all 25 slots on deferrals.
+  Because the planner's row order is stable while the heap is unchanged, the same
+  deferrable rows could come back ahead of a tearable one every 5-second tick —
+  leaving a cloud VM and its public IP billing indefinitely. That is the leak this
+  method exists to prevent (see its docstring: ten B2s VMs leaked per launch,
+  2026-08-01).
+
+  The batch is now ordered oldest-finish-first, with the run id as a tiebreak for
+  a total order. That is both deterministic and the correct priority: the
+  longest-idle deployment is the one that has been costing the most.
+
+---
+
 ## [0.28.290] - 2026-08-24
 
 ### Added
