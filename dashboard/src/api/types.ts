@@ -1966,3 +1966,129 @@ export interface AppNetworkReport {
   overall_server_ratio: number | null;
   groups: AppNetworkGroup[];
 }
+
+// ── URL comparison report (#782 P3) ─────────────────────────────────────────
+//
+// Mirrors ProbeComparisonEndpoints.cs. Every figure in a mode is computed over
+// that mode's SHARED buckets only — the hours in which every eligible URL was
+// actually measured — so the page must never re-aggregate the series itself.
+
+/** Why a mode carries (or does not carry) a ranking. */
+export type ProbeRankingVerdict =
+  | 'ranked'
+  | 'insufficient_overlap'
+  | 'too_few_urls'
+  | 'no_data';
+
+/** Bucket widths and window lengths the endpoint accepts. */
+export type ProbeBucket = '15m' | '1h' | '6h' | '1d';
+export type ProbeWindow = '24h' | '7d' | '30d';
+
+export interface ProbeComparisonMethodology {
+  buckets: string;
+  shared: string;
+  eligibility: string;
+  ranking: string;
+  crowns: string;
+  modes: string;
+}
+
+/** A URL with probe data in the window — the picker's source of truth. */
+export interface ProbeComparisonAvailable {
+  url: string;
+  sample_count: number;
+  mode_count: number;
+  last_seen: string;
+}
+
+export interface ProbeComparisonCoverage {
+  url: string;
+  qualifying_buckets: number;
+  total_samples: number;
+  eligible: boolean;
+  /** 'under_sampled' when the URL was too sparsely probed to be compared. */
+  excluded_reason: string | null;
+}
+
+export interface ProbeComparisonScore {
+  url: string;
+  shared_buckets: number;
+  samples: number;
+  median_p50_ms: number | null;
+  median_p95_ms: number | null;
+  success_rate: number | null;
+  /** p95 / p50 — 1.0 is perfectly consistent. */
+  jitter_ratio: number | null;
+  median_dns_ms: number | null;
+  median_tcp_ms: number | null;
+  median_tls_ms: number | null;
+  median_ttfb_ms: number | null;
+  dominant_error_category: string | null;
+}
+
+export interface ProbeComparisonHeadToHead {
+  a: string;
+  b: string;
+  /** Buckets in which BOTH sides had a successful sample — the races. */
+  buckets: number;
+  a_wins: number;
+  b_wins: number;
+  ties: number;
+}
+
+/** Null means nobody won the category — a tie, or nothing measured it. */
+export interface ProbeComparisonCrowns {
+  fastest: string | null;
+  most_reliable: string | null;
+  most_consistent: string | null;
+  best_dns: string | null;
+  best_tcp: string | null;
+  best_tls: string | null;
+  best_ttfb: string | null;
+}
+
+export interface ProbeComparisonPoint {
+  url: string;
+  bucket: string;
+  sample_count: number;
+  success_count: number;
+  /** False for a point outside the shared set — charted, but greyed. */
+  shared: boolean;
+  p50_total_ms: number | null;
+  p95_total_ms: number | null;
+  p50_dns_ms: number | null;
+  p50_tcp_ms: number | null;
+  p50_tls_ms: number | null;
+  p50_ttfb_ms: number | null;
+  dominant_error_category: string | null;
+}
+
+export interface ProbeComparisonMode {
+  /** Protocol, e.g. 'http1' / 'http2' / 'http3'. Never mixed with another. */
+  mode: string;
+  ranked: boolean;
+  ranking_verdict: ProbeRankingVerdict;
+  shared_buckets: number;
+  coverage_ratio: number;
+  coverage: ProbeComparisonCoverage[];
+  scores: ProbeComparisonScore[];
+  head_to_head: ProbeComparisonHeadToHead[];
+  crowns: ProbeComparisonCrowns;
+  series: ProbeComparisonPoint[];
+}
+
+export interface ProbeComparisonReport {
+  generated_at: string;
+  from: string;
+  to: string;
+  window: string;
+  bucket: string;
+  bucket_seconds: number;
+  /** Buckets the window COULD hold — the denominator for every coverage figure. */
+  window_buckets: number;
+  min_samples: number;
+  min_coverage_ratio: number;
+  methodology: ProbeComparisonMethodology;
+  available: ProbeComparisonAvailable[];
+  modes: ProbeComparisonMode[];
+}

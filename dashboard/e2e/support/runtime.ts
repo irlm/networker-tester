@@ -1,6 +1,12 @@
 import { expect, type Page } from '@playwright/test';
 
 export const PID = 'proj-e2e-001';
+// URLs the comparison report (#782 P3) compares. Full URLs, because that is
+// what the tester stamps on each attempt as target_url and what the report
+// keys on — a bare host would match nothing.
+export const CMP_A = 'https://a.e2e.invalid/health';
+export const CMP_B = 'https://b.e2e.invalid/health';
+export const CMP_C = 'https://c.e2e.invalid/health';
 /** The stubbed comparison group behind the runs list's group row (#803). */
 export const GROUP_E2E_ID = 'e2e0e2e0-0000-4000-8000-000000000000';
 
@@ -36,6 +42,9 @@ export const authenticatedRoutes = [
   ['value report', `/projects/${PID}/reports/value`],
   ['SDK endpoints', `/projects/${PID}/sdk-endpoints`],
   ['application network report', `/projects/${PID}/reports/app-network`],
+  // #782 P3 — with two URLs selected, so the route test renders the real
+  // scoreboard rather than the picker's empty state.
+  ['URL comparison', `/projects/${PID}/probe/compare?urls=${encodeURIComponent(`${CMP_A},${CMP_B}`)}`],
   ['leaderboard', '/leaderboard'],
   ['system dashboard', '/admin/system'],
   ['run-execution canary', '/admin/canary'],
@@ -183,6 +192,114 @@ export async function stubRuntime(page: Page) {
           };
         }),
         cost_preview: null,
+      });
+    }
+    // URL comparison report (#782 P3). Two URLs, one ranked mode and one whose
+    // overlap is deliberately too thin — the page must GREY the second rather
+    // than rank it, and the e2e run is what proves the greying path renders.
+    if (path.includes(`/api/projects/${PID}/reports/probe-comparison`)) {
+      const bucketAt = (h: number) =>
+        new Date(Date.UTC(2026, 7, 20, h)).toISOString().replace('.000Z', 'Z');
+      const point = (url: string, h: number, p50: number, shared = true) => ({
+        url, bucket: bucketAt(h), sample_count: 5, success_count: 5, shared,
+        p50_total_ms: p50, p95_total_ms: p50 * 1.5,
+        p50_dns_ms: 11, p50_tcp_ms: 21, p50_tls_ms: 31, p50_ttfb_ms: p50 * 0.8,
+        dominant_error_category: null,
+      });
+      return json({
+        generated_at: '2026-08-20T12:00:00Z',
+        from: '2026-08-13T12:00:00Z',
+        to: '2026-08-20T12:00:00Z',
+        window: '7d',
+        bucket: '1h',
+        bucket_seconds: 3600,
+        window_buckets: 168,
+        min_samples: 3,
+        min_coverage_ratio: 0.3,
+        methodology: {
+          buckets: 'attempts are grouped into fixed 1h buckets by start time',
+          shared: 'every headline number is computed only over buckets in which EVERY eligible URL has measurements',
+          eligibility: 'a URL covering less than 30% of the window is excluded and shown greyed',
+          ranking: 'URLs are ranked head-to-head over the shared buckets',
+          crowns: 'a tie awards no crown',
+          modes: 'modes are compared separately',
+        },
+        available: [
+          { url: CMP_A, sample_count: 450, mode_count: 2, last_seen: '2026-08-20T11:00:00Z' },
+          { url: CMP_B, sample_count: 400, mode_count: 2, last_seen: '2026-08-20T11:00:00Z' },
+          { url: CMP_C, sample_count: 20, mode_count: 1, last_seen: '2026-08-19T11:00:00Z' },
+        ],
+        modes: [
+          {
+            mode: 'http2',
+            ranked: true,
+            ranking_verdict: 'ranked',
+            shared_buckets: 60,
+            coverage_ratio: 0.3571,
+            coverage: [
+              { url: CMP_A, qualifying_buckets: 90, total_samples: 450, eligible: true, excluded_reason: null },
+              { url: CMP_B, qualifying_buckets: 80, total_samples: 400, eligible: true, excluded_reason: null },
+              { url: CMP_C, qualifying_buckets: 4, total_samples: 20, eligible: false, excluded_reason: 'under_sampled' },
+            ],
+            scores: [
+              {
+                url: CMP_A, shared_buckets: 60, samples: 300, median_p50_ms: 101.5,
+                median_p95_ms: 180, success_rate: 0.995, jitter_ratio: 1.7734,
+                median_dns_ms: 11, median_tcp_ms: 21, median_tls_ms: 31, median_ttfb_ms: 81,
+                dominant_error_category: null,
+              },
+              {
+                url: CMP_B, shared_buckets: 60, samples: 300, median_p50_ms: 210.0,
+                median_p95_ms: 240, success_rate: 0.93, jitter_ratio: 1.1429,
+                median_dns_ms: 14, median_tcp_ms: 25, median_tls_ms: 28, median_ttfb_ms: 170,
+                dominant_error_category: 'timeout',
+              },
+            ],
+            head_to_head: [
+              { a: CMP_A, b: CMP_B, buckets: 60, a_wins: 41, b_wins: 18, ties: 1 },
+            ],
+            crowns: {
+              fastest: CMP_A, most_reliable: CMP_A, most_consistent: CMP_B,
+              best_dns: CMP_A, best_tcp: CMP_A, best_tls: CMP_B, best_ttfb: CMP_A,
+            },
+            series: [
+              point(CMP_A, 0, 100), point(CMP_B, 0, 200),
+              point(CMP_A, 1, 110), point(CMP_B, 1, 190),
+              point(CMP_A, 2, 95), point(CMP_B, 2, 220),
+            ],
+          },
+          {
+            mode: 'http3',
+            ranked: false,
+            ranking_verdict: 'insufficient_overlap',
+            shared_buckets: 6,
+            coverage_ratio: 0.0357,
+            coverage: [
+              { url: CMP_A, qualifying_buckets: 60, total_samples: 300, eligible: true, excluded_reason: null },
+              { url: CMP_B, qualifying_buckets: 55, total_samples: 275, eligible: true, excluded_reason: null },
+            ],
+            scores: [
+              {
+                url: CMP_A, shared_buckets: 6, samples: 30, median_p50_ms: 90,
+                median_p95_ms: 130, success_rate: 1, jitter_ratio: 1.4444,
+                median_dns_ms: 10, median_tcp_ms: null, median_tls_ms: null, median_ttfb_ms: 70,
+                dominant_error_category: null,
+              },
+              {
+                url: CMP_B, shared_buckets: 6, samples: 30, median_p50_ms: 95,
+                median_p95_ms: 140, success_rate: 1, jitter_ratio: 1.4737,
+                median_dns_ms: 12, median_tcp_ms: null, median_tls_ms: null, median_ttfb_ms: 75,
+                dominant_error_category: null,
+              },
+            ],
+            head_to_head: [{ a: CMP_A, b: CMP_B, buckets: 6, a_wins: 4, b_wins: 2, ties: 0 }],
+            crowns: {
+              fastest: null, most_reliable: null, most_consistent: null,
+              best_dns: null, best_tcp: null, best_tls: null, best_ttfb: null,
+            },
+            series: [point(CMP_A, 0, 90), point(CMP_B, 0, 95)],
+          },
+        ],
       });
     }
     if (path.endsWith('/api/projects')) return json({ projects: [project()] });

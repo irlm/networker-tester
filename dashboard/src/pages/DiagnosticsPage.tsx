@@ -10,6 +10,7 @@ import {
   decodeHostQueryParam,
   extractHost,
   hostsToQueryParam,
+  toProbeUrl,
   DIAG_SAMPLE_CHOICES,
   type DiagPreset,
   type DiagSamples,
@@ -637,6 +638,7 @@ export function DiagnosticsPage() {
   const { projectId } = useProject();
   const queryClient = useQueryClient();
   const addToast = useToast();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   usePageTitle('URL Probe');
 
@@ -1337,6 +1339,23 @@ export function DiagnosticsPage() {
     requestAnimationFrame(() => textareaRef.current?.focus());
   };
 
+  /**
+   * Open the comparison report (#782 P3) for the ticked rows.
+   *
+   * The selection is normalised with the SAME `toProbeUrl` the launch payload
+   * uses, so the URLs handed to the report are byte-identical to the
+   * `target_url` the tester stamps on each attempt — the report keys on that,
+   * and a host-shaped string would silently match nothing.
+   */
+  const handleCompareSelection = () => {
+    if (selectedHosts.length < 2) {
+      addToast('error', 'Tick at least two watched URLs to compare them');
+      return;
+    }
+    const urls = selectedHosts.slice(0, MAX_SET_URLS).map(toProbeUrl);
+    navigate(`/projects/${projectId}/probe/compare?urls=${encodeURIComponent(urls.join(','))}`);
+  };
+
   /** Probe every ticked row TOGETHER — one config, one run, N `--target`s. */
   const handleProbeSet = () => {
     if (selectedHosts.length === 0) {
@@ -1782,6 +1801,26 @@ export function DiagnosticsPage() {
             title="Load the selection into the multi-URL box to edit before probing"
           >
             Edit as list
+          </Button>
+          {/* Compare (#782 P3). Disabled below two URLs because a comparison of
+              one is not a comparison — the report needs a shared-bucket
+              intersection to compute anything at all. The selection travels as
+              toProbeUrl() output, which is the SAME normalisation the launch
+              payload uses and therefore the exact string the tester stamps on
+              each attempt as target_url — so the compare page's picker and this
+              button agree on what a URL is called. */}
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={handleCompareSelection}
+            disabled={selectedHosts.length < 2}
+            title={
+              selectedHosts.length < 2
+                ? 'Select at least two URLs to compare them'
+                : `Compare ${Math.min(selectedHosts.length, MAX_SET_URLS)} URLs over the hours they were all probed`
+            }
+          >
+            Compare…
           </Button>
           <Button variant="ghost" size="xs" onClick={() => setSelectedKeys(new Set())}>
             Clear
