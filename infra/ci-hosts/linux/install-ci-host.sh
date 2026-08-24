@@ -40,6 +40,13 @@ CI_USER="${CI_HOST_USER:-ci}"
 RUNNER_DIR="${CI_HOST_RUNNER_DIR:-/opt/actions-runner}"
 CACHE_DIR="${CI_HOST_CACHE_DIR:-/var/cache/ci-host}"
 SKIP_TOOLCHAINS=0
+# Container mode: everything a CI host needs, minus everything that assumes it
+# owns a machine. No systemd (the image's entrypoint runs the loop directly),
+# no local dockerd (the daemon is a DinD sidecar reached through DOCKER_HOST),
+# no qemu-guest-agent. Used by infra/ci-hosts/container/ so a shared machine —
+# one already running other people's services — can host a CI runner without
+# the runner being able to touch them.
+CONTAINER=0
 DOTNET_CHANNEL="${DOTNET_CHANNEL:-10.0}"
 NODE_MAJOR="${NODE_MAJOR:-22}"
 
@@ -53,6 +60,7 @@ while [ $# -gt 0 ]; do
     --runner-version) RUNNER_VERSION="$2"; shift ;;
     --user) CI_USER="$2"; shift ;;
     --skip-toolchains) SKIP_TOOLCHAINS=1 ;;
+    --container) CONTAINER=1 ;;
     -h|--help) sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
@@ -109,8 +117,16 @@ if [ "$SKIP_TOOLCHAINS" = 0 ]; then
     log "installing docker (Ubuntu archive docker.io + compose v2 plugin)"
     apt-get install -y -qq docker.io docker-compose-v2 docker-buildx
   fi
-  systemctl enable --now docker
-  usermod -aG docker "$CI_USER"
+  if [ "$CONTAINER" = 1 ]; then
+    # The CLI is all that is wanted here: jobs talk to the DinD sidecar through
+    # DOCKER_HOST, so the daemon this package also ships stays stopped. Giving
+    # the container its own daemon (or the host's socket) is exactly what
+    # container mode exists to avoid.
+    log "container mode: docker CLI only, daemon comes from DOCKER_HOST"
+  else
+    systemctl enable --now docker
+    usermod -aG docker "$CI_USER"
+  fi
 
   # ── 4. Node ${NODE_MAJOR} (NodeSource) ──────────────────────────────────────
   if ! command -v node >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.split(".")[0]')" != "$NODE_MAJOR" ]; then
@@ -307,6 +323,14 @@ CACHE_DIR=$CACHE_DIR
 JOB_PATH=$CI_HOME/.cargo/bin:/usr/share/dotnet:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ENV
 chmod 0600 /etc/ci-host/env
+
+if [ "$CONTAINER" = 1 ]; then
+  # No systemd in a container: the image's entrypoint runs the loop in the
+  # foreground as PID 1's child, and the container runtime does the restarting
+  # that Restart=always would have done.
+  log "done — CI host '$NAME' for $REPO with labels $LABELS (container mode: run /usr/local/bin/ci-host-loop.sh with /etc/ci-host/env in the environment)"
+  exit 0
+fi
 
 cat > /etc/systemd/system/ci-host.service <<'UNIT'
 [Unit]
