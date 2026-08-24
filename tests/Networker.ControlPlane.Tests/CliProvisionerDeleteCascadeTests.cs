@@ -67,9 +67,14 @@ public sealed class CliProvisionerDeleteCascadeTests : IDisposable
             $"printf '%s\\n' \"$*\" >> '{_logPath}'\n" +
             stderrLine +
             $"exit {exitCode}\n");
-        File.SetUnixFileMode(
-            path,
-            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        // The fake CLI is a /bin/sh script, so every caller already skips on Windows;
+        // guarding here too keeps the helper safe to call and satisfies CA1416.
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(
+                path,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
 
         Environment.SetEnvironmentVariable(overrideVar, path);
     }
@@ -304,7 +309,14 @@ public sealed class CliProvisionerDeleteCascadeTests : IDisposable
             "    exit 0 ;;\n" +
             "  *) exit 0 ;;\n" +
             "esac\n");
-        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        // The fake CLI is a /bin/sh script, so every caller already skips on Windows;
+        // guarding here too keeps the helper safe to call and satisfies CA1416.
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(
+                path,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
         Environment.SetEnvironmentVariable("AZ_CMD", path);
     }
 

@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.288] - 2026-08-23
+
+### Changed
+
+- **CA1416 platform warnings cleared in the CLI-provisioner test fixtures.**
+  `File.SetUnixFileMode` is unsupported on Windows, and the fake-CLI helpers in
+  `CliProvisionerDeleteCascadeTests`, `CliProvisionerGcloudEnvTests`,
+  `CliProvisionerGcpZoneTests` and `CliProvisionerGcpTeardownTests` called it
+  unguarded. Every test reaching those helpers already returns early on Windows,
+  so nothing ever threw — but the analyzer cannot see a caller-side guard and
+  raised five CA1416 warnings in the `dotnet-format` lint baseline. The guard now
+  lives inside each helper (`if (!OperatingSystem.IsWindows())`), matching the
+  idiom already used in `DeployJsonGcpZoneTests` and
+  `CliComputeProvisioner.cs`. No behaviour change; the helpers are now safe to
+  call from a future test that forgets the caller-side skip.
+
+---
+
 ## [0.28.287] - 2026-08-24
 
 ### Fixed

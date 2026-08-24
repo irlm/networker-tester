@@ -230,9 +230,14 @@ public sealed class CliProvisionerGcloudEnvTests : IDisposable
             $"}} >> '{_envLogPath}'\n" +
             (stdout.Length > 0 ? $"printf '%s' '{stdout}'\n" : "") +
             "exit 0\n");
-        File.SetUnixFileMode(
-            path,
-            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        // The fake CLI is a /bin/sh script, so every caller already skips on Windows;
+        // guarding here too keeps the helper safe to call and satisfies CA1416.
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(
+                path,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
 
         Environment.SetEnvironmentVariable("GCLOUD_CMD", path);
     }
