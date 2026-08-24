@@ -140,7 +140,10 @@ export function CloudAccountsPage() {
 
   // Account `status` flips server-side (background credential validation),
   // so a one-shot list never shows the transition — re-pull every 30s.
-  usePolling(() => void loadAccounts(true), 30_000, !!projectId);
+  // immediate:false — useAsyncEffect above does the FIRST load, and it is the
+  // non-silent one that raises the loading flag. Letting the poll also fire on
+  // mount doubled the request and would have made the first paint spinner-less.
+  usePolling(() => void loadAccounts(true), 30_000, !!projectId, null, { immediate: false });
 
   const resetForm = () => {
     setShowForm(false);

@@ -12,6 +12,7 @@ import { SettingsTabs } from '../components/common/SettingsTabs';
 import SystemHealthPanel from '../components/SystemHealthPanel';
 import { hostLabel, timeAgo } from '../lib/format';
 import { inventoryEmptyState, inventoryScanSummary, type InventoryScanState } from '../lib/inventory-scan';
+import { Link } from 'react-router';
 
 interface VersionInfo {
   dashboard_version: string;
@@ -527,7 +528,14 @@ export function SettingsPage() {
       {isProjectAdmin && (
         <div className="section-divider">
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-xs text-gray-400 tracking-wider font-medium">cloud accounts</h3>
+            {/* "connections", not "accounts". These are the identity-federated
+                CloudConnection rows (/cloud-connections); the credential-based
+                CloudAccount rows live on the Cloud tab (/cloud-accounts) and are
+                a different API. Both were labelled "cloud accounts", so a
+                deployment with three working accounts read "No cloud accounts
+                configured" here while the Cloud tab listed all three — reported
+                from prod 2026-08-24. */}
+            <h3 className="text-xs text-gray-400 tracking-wider font-medium">cloud connections</h3>
             <button
               onClick={() => {
                 setShowAddAccount(true);
@@ -739,7 +747,9 @@ export function SettingsPage() {
           {/* Connection List */}
           {cloudConnections.length === 0 && !showAddAccount ? (
             <p className="text-faint text-sm">
-              No cloud accounts configured. Add one to enable identity-federated deployments.
+              No cloud connections configured. Add one to enable identity-federated
+              deployments — this is separate from the credential-based cloud
+              accounts on the <Link to={`/projects/${projectId}/cloud-accounts`} className="text-cyan-400 hover:underline">Cloud tab</Link>.
             </p>
           ) : (
             <div className="space-y-1">

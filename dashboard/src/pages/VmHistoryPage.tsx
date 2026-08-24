@@ -104,6 +104,9 @@ export function VmHistoryPage() {
     () => void fetchFirstPage(true),
     30_000,
     !!projectId && rows.length <= PAGE_SIZE,
+    null,
+    // useAsyncEffect above owns the first load; this only keeps it fresh.
+    { immediate: false },
   );
 
   const loadMore = useCallback(async () => {

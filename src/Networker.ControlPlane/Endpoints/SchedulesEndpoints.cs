@@ -65,7 +65,7 @@ public static class SchedulesEndpoints
                     && s.Timezone == timezone);
             if (existing is not null)
             {
-                return Results.Ok(ToDto(existing));
+                return Results.Ok(ToDto(existing, await ConfigNameAsync(db, existing.TestConfigId)));
             }
 
             var row = new Data.Entities.TestSchedule
@@ -85,7 +85,7 @@ public static class SchedulesEndpoints
             db.TestSchedules.Add(row);
             await db.SaveChangesAsync();
 
-            return Results.Ok(ToDto(row));
+            return Results.Ok(ToDto(row, await ConfigNameAsync(db, row.TestConfigId)));
         }).RequireAuthorization(AuthPolicies.ProjectOperator);
 
         // GET /api/v2/projects/{projectId}/schedules — list.
@@ -98,9 +98,10 @@ public static class SchedulesEndpoints
                 .AsNoTracking()
                 .Where(s => s.ProjectId == projectId)
                 .OrderByDescending(s => s.CreatedAt)
+                .Select(s => new { Schedule = s, ConfigName = (string?)s.TestConfig.Name })
                 .ToListAsync();
 
-            return Results.Ok(rows.Select(ToDto));
+            return Results.Ok(rows.Select(r => ToDto(r.Schedule, r.ConfigName)));
         }).RequireAuthorization(AuthPolicies.ProjectMember);
 
         // GET /api/v2/schedules/{id} — detail (incl. next_fire_at).
@@ -117,16 +118,18 @@ public static class SchedulesEndpoints
             ProjectAccessChecker access,
             CancellationToken ct) =>
         {
-            var row = await db.TestSchedules
+            var found = await db.TestSchedules
                 .AsNoTracking()
-                .FirstOrDefaultAsync(s => s.Id == id, ct);
+                .Where(s => s.Id == id)
+                .Select(s => new { Schedule = s, ConfigName = (string?)s.TestConfig.Name })
+                .FirstOrDefaultAsync(ct);
 
-            if (row is null || !await access.HasRoleAsync(ctx, row.ProjectId, ProjectRole.Viewer, ct))
+            if (found is null || !await access.HasRoleAsync(ctx, found.Schedule.ProjectId, ProjectRole.Viewer, ct))
             {
                 return Results.NotFound();
             }
 
-            return Results.Ok(ToDto(row));
+            return Results.Ok(ToDto(found.Schedule, found.ConfigName));
         }).RequireAuthorization();
 
         // PATCH /api/v2/schedules/{id} — update cron_expr / timezone / enabled.
@@ -163,7 +166,7 @@ public static class SchedulesEndpoints
 
             await db.SaveChangesAsync();
 
-            return Results.Ok(ToDto(row));
+            return Results.Ok(ToDto(row, await ConfigNameAsync(db, row.TestConfigId)));
         }).RequireAuthorization();
 
         // DELETE /api/v2/schedules/{id} — 204 on success, 404 if absent.
@@ -233,10 +236,30 @@ public static class SchedulesEndpoints
 
     // Shape a TestSchedule entity into the snake_case wire DTO matching the Rust
     // networker_common::TestSchedule.
-    private static object ToDto(Data.Entities.TestSchedule s) => new
+    /// <summary>The config's display name, for the handlers that hold a schedule
+    /// row but no projection (create / patch). One indexed lookup by primary key;
+    /// without it those responses come back with config_name null and the UI
+    /// shows "Unnamed" until the next list refresh.</summary>
+    private static Task<string?> ConfigNameAsync(
+        NetworkerDbContext db, Guid testConfigId, CancellationToken ct = default) =>
+        db.TestConfigs
+            .AsNoTracking()
+            .Where(c => c.Id == testConfigId)
+            .Select(c => (string?)c.Name)
+            .FirstOrDefaultAsync(ct);
+
+    // configName is passed in rather than read off s.TestConfig: these handlers
+    // query AsNoTracking without Include, so the navigation property is null and
+    // touching it here would silently yield null (or, with lazy loading, an N+1).
+    private static object ToDto(Data.Entities.TestSchedule s, string? configName = null) => new
     {
         id = s.Id,
         test_config_id = s.TestConfigId,
+        // The schedules list renders `config_name || 'Unnamed'`, and this field
+        // was never in the payload — so EVERY schedule on EVERY deployment read
+        // "Unnamed" and no operator could tell what a schedule actually runs
+        // (reported from prod 2026-08-24).
+        config_name = configName,
         project_id = s.ProjectId,
         cron_expr = s.CronExpr,
         timezone = s.Timezone,

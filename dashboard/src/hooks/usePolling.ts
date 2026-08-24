@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent } from 'react';
+import { useEffect, useEffectEvent, useRef } from 'react';
 import { setRequestSource } from '../lib/requestSource';
 
 /**
@@ -16,9 +16,24 @@ import { setRequestSource } from '../lib/requestSource';
  *
  * @param resetKey Optional value that restarts the poll loop (and fires an
  *                 immediate tick) when it changes — used by retry buttons.
+ * @param options  `immediate: false` suppresses the mount tick for a page that
+ *                 already loads once itself.
  */
-export function usePolling(fn: () => void, intervalMs: number, enabled = true, resetKey: unknown = null) {
+export function usePolling(
+  fn: () => void,
+  intervalMs: number,
+  enabled = true,
+  resetKey: unknown = null,
+  options?: { immediate?: boolean },
+) {
   const onTick = useEffectEvent(fn);
+  // Default true: the mount tick IS the initial load for most callers.
+  const immediate = options?.immediate ?? true;
+  // `immediate: false` must suppress ONLY the mount tick. Later re-runs of this
+  // effect are meaningful events — a resetKey bump is the Refresh button, and an
+  // enabled flip is un-pausing — and both must still fire at once, or those
+  // controls appear dead.
+  const startedRef = useRef(false);
 
   useEffect(() => {
     if (!enabled) return;
@@ -31,7 +46,18 @@ export function usePolling(fn: () => void, intervalMs: number, enabled = true, r
       // user-triggered calls are tagged correctly
       queueMicrotask(() => setRequestSource('user'));
     };
-    run();
+    // Pages that pair this with their own initial load (useAsyncEffect) were
+    // issuing EVERY request twice on mount — confirmed in prod 2026-08-24,
+    // where one Infrastructure page load fired testers / deployments /
+    // vm-history / cloud-accounts two times each. Those pages opt out here
+    // rather than dropping their own load, because their poll is deliberately
+    // SILENT (it never re-raises the loading flag) — making it the first load
+    // would cost the page its initial spinner.
+    const isMountTick = !startedRef.current;
+    startedRef.current = true;
+    if (immediate || !isMountTick) {
+      run();
+    }
     const id = setInterval(run, intervalMs);
     // Refresh immediately on return to the tab — the interval keeps running
     // while hidden but its data is up to intervalMs stale the moment the user
@@ -45,5 +71,5 @@ export function usePolling(fn: () => void, intervalMs: number, enabled = true, r
       clearInterval(id);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [intervalMs, enabled, resetKey]);
+  }, [intervalMs, enabled, resetKey, immediate]);
 }
