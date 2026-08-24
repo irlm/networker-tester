@@ -428,3 +428,34 @@ test.describe('responsive audit screenshots', () => {
     await context.close();
   });
 });
+
+/**
+ * The desktop perf-log panel must never slide under the sidebar.
+ *
+ * It is `fixed right-0` at a fixed width, so capping it against the VIEWPORT is
+ * not enough: the sidebar (`w-48`, 192 px) occupies the left edge and paints
+ * over it, and at ~1080 px a 900 px panel lost exactly the first character of
+ * "API", "Filter" and "Time" — visible only in a real render, which is why this
+ * is a geometry assertion and not a snapshot.
+ */
+const SIDEBAR_PX = 192;
+
+for (const width of [1024, 1080, 1280, 1440, 1920]) {
+  test(`perf-log panel clears the sidebar at ${width}px`, async ({ page }) => {
+    const failures = watchForFatalErrors(page);
+    await page.setViewportSize({ width, height: 860 });
+    await stubRuntime(page);
+    await seedSession(page);
+    await expectRouteToRender(page, `/projects/${PID}/runs`, failures);
+
+    await page.getByRole('button', { name: 'Open performance log' }).click();
+    const panel = page.getByRole('region', { name: /performance log/i }).first();
+    const box = await panel.boundingBox();
+    expect(box, 'the panel should be on screen').not.toBeNull();
+    expect(
+      box!.x,
+      `panel starts at ${box!.x}px and would be clipped by the ${SIDEBAR_PX}px sidebar`,
+    ).toBeGreaterThanOrEqual(SIDEBAR_PX);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(width + 1);
+  });
+}

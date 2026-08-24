@@ -30,6 +30,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - No column was given up for this: Method and Status stay. The panel widens
     (760 → 900 px at `lg`) and the clock drops to 24-hour so nothing wraps.
 
+### Fixed
+
+- **The perf-log panel no longer slides under the sidebar.** `fixed right-0` at
+  a fixed width is capped against the viewport, which is not enough: the
+  sidebar (`w-48`, 192 px) owns the left edge and paints over the panel. At
+  ~1080 px the widened panel lost exactly the first character of "API",
+  "Filter" and "Time". It is now also capped at `calc(100vw - 13rem)` on `md+`,
+  so it shrinks rather than disappearing behind the nav. Guarded by a geometry
+  assertion at five widths in `responsive.spec.ts` — verified to fail at 1024
+  and 1080 without the cap.
+- **Byte sizes stopped wrapping onto two lines.** The `whitespace-nowrap` added
+  with the new columns never applied (it targeted a class string the tables do
+  not use), so "104.7 KB" broke across two rows. The tables no longer wrap, the
+  Size column is wider, and sizes render to three significant figures
+  ("105 KB", not "104.7 KB") to fit the column.
+
 ### Changed
 
 - **The perf-log page leads with p95 instead of the average.** Both numbers were

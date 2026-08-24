@@ -11,8 +11,10 @@ function formatBytes(bytes: number | null): string {
   if (bytes === null) return '—';
   if (bytes === 0) return 'from cache';
   if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb < 100 ? kb.toFixed(1) : Math.round(kb)} KB`;
+  const mb = kb / 1024;
+  return `${mb < 100 ? mb.toFixed(1) : Math.round(mb)} MB`;
 }
 
 /**
@@ -194,7 +196,7 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
 
   return (
     <div
-      className="fixed bottom-0 right-0 z-30 min-w-0 max-w-full w-full md:w-[720px] lg:w-[900px] max-h-[80dvh] md:max-h-[60vh] bg-[var(--bg-surface)] border-t border-l border-gray-700 rounded-tl-lg flex flex-col"
+      className="fixed bottom-0 right-0 z-30 min-w-0 max-w-full w-full md:w-[720px] lg:w-[900px] md:max-w-[calc(100vw-13rem)] max-h-[80dvh] md:max-h-[60vh] bg-[var(--bg-surface)] border-t border-l border-gray-700 rounded-tl-lg flex flex-col"
       role="region"
       aria-label="Performance log"
     >
@@ -297,7 +299,7 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
               {entries.length === 0 ? 'No API calls recorded yet' : 'No entries match filter'}
             </div>
           ) : (
-            <table className="w-full">
+            <table className="w-full whitespace-nowrap">
               <thead>
                 <tr className="text-faint text-left border-b border-gray-800/50 sticky top-0 bg-[var(--bg-surface)]">
                   <th className="px-2 py-1 font-normal">Time</th>
@@ -307,7 +309,7 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
                   <th className="px-2 py-1 font-normal w-16 text-right">Total</th>
                   <th className="px-2 py-1 font-normal w-16 text-right">Server</th>
                   <th className="px-2 py-1 font-normal w-16 text-right">Network</th>
-                  <th className="px-2 py-1 font-normal w-16 text-right" title="Bytes received — wire size, compressed if the response was compressed. 'cache' means it never left the browser.">Size</th>
+                  <th className="px-2 py-1 font-normal w-20 text-right" title="Bytes received — wire size, compressed if the response was compressed. 'cache' means it never left the browser.">Size</th>
                   <th className="px-2 py-1 font-normal w-16 text-right" title="Time the body was actually arriving (responseEnd − responseStart). This is measured, not bytes divided by the network leg — that leg is mostly round-trip latency.">Transfer</th>
                   <th className="px-2 py-1 font-normal w-20">Breakdown</th>
                 </tr>
@@ -347,7 +349,7 @@ export const ApiLogPanel = memo(function ApiLogPanel() {
               {renderEntries.length === 0 ? 'No render events recorded yet — interact with filters to see data' : 'No entries match filter'}
             </div>
           ) : (
-            <table className="w-full">
+            <table className="w-full whitespace-nowrap">
               <thead>
                 <tr className="text-faint text-left border-b border-gray-800/50 sticky top-0 bg-[var(--bg-surface)]">
                   <th className="px-2 py-1 font-normal">Time</th>
