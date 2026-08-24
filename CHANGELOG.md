@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.297]
+
+### Fixed
+
+- **Every runner in the list showed "v?" while the drawer knew its version.**
+  `src/api/testers.ts` declares `installer_version` on the list row type and
+  `TesterRegionGroup` renders `v{installer_version ?? '?'}`, but the field lived
+  only on the DETAIL DTO — so the Infrastructure list reported every runner as
+  un-versioned while opening the drawer for the same row showed the real number
+  (production had 0.28.293 and 0.28.259 stored the whole time). `ToListDto` now
+  carries `installer_version` and `last_installed_at`.
+
+  TypeScript could not catch this: the type promised a field the server never
+  sent, and nothing validates JSON at that boundary. The regression test is
+  server-side for that reason, and it distinguishes *present-and-null* (a runner
+  genuinely never installed, where "v?" is correct) from *absent*, which is what
+  made every row look un-versioned.
+
+---
+
 ## [0.28.296]
 
 ### Fixed

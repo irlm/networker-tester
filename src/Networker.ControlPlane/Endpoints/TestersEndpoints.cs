@@ -395,6 +395,13 @@ public static class TestersEndpoints
         next_shutdown_at = t.NextShutdownAt,
         shutdown_deferral_count = t.ShutdownDeferralCount,
         last_used_at = t.LastUsedAt,
+        // The runner LIST renders `v{installer_version ?? '?'}`, and these two
+        // lived only on the detail DTO — so every row in the list read "v?"
+        // while the drawer for the same runner showed the real version
+        // (prod 2026-08-24: the rows were 0.28.293 and 0.28.259 all along).
+        // A genuinely never-installed runner still reads "v?", which is true.
+        installer_version = t.InstallerVersion,
+        last_installed_at = t.LastInstalledAt,
         api_key_last_used_at = agent != null ? agent.ApiKeyLastUsedAt : null,
         api_key_last_used_ip = agent != null ? agent.ApiKeyLastUsedIp : null,
         api_key_expires_at = agent != null ? agent.ApiKeyExpiresAt : null,
