@@ -57,6 +57,27 @@ export interface PendingProject {
   invited_at: string;
 }
 
+/** One operational secret's age and rotation status. Carries NO secret value —
+ *  the API deliberately serves identity + age only (see SecretsEndpoints). */
+export interface SecretAge {
+  key: string;
+  name: string;
+  description: string;
+  max_age_days: number;
+  automated: boolean;
+  risk: string | null;
+  rotated_at: string | null;
+  rotated_by: string | null;
+  age_days: number | null;
+  status: 'ok' | 'due' | 'overdue' | 'never';
+}
+
+export interface SecretAgeReport {
+  generated_at: string;
+  needs_attention: number;
+  secrets: SecretAge[];
+}
+
 export const api = {
   // ── Auth (NOT project-scoped) ─────────────────────────────────────────
   login: (email: string, password: string) =>
@@ -508,6 +529,11 @@ export const api = {
 
   getWorkspaceUsage: () =>
     request<WorkspaceUsage[]>('/admin/workspaces'),
+
+  /** Read-only secret ages. Rotation itself is scripts/rotate-secrets.sh —
+   *  deliberately not an API, so a control-plane compromise cannot rotate. */
+  getSecretAges: () =>
+    request<SecretAgeReport>('/admin/secrets'),
 
   getSystemLogs: (params?: { level?: string; service?: string; search?: string; limit?: number; config_id?: string }) => {
     const search = new URLSearchParams();

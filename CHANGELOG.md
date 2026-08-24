@@ -11,6 +11,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.294]
+
+### Added
+
+- **Secret age panel (System → Secrets) and an operator rotation script.**
+  On 2026-08-24 a storage-account key was found in plaintext in a world-readable
+  script on the prod VM and nobody could say how old it was, because nothing
+  recorded rotations — the same shape as the backup gap found the same day: the
+  information needed to notice existed nowhere.
+
+  The work is deliberately split. **Visibility** is in the UI
+  (`GET /api/admin/secrets`, platform-admin only): each secret's age, policy and
+  status (`never` → `ok` → `due` → `overdue`). **Action** is in
+  `scripts/rotate-secrets.sh`, run by an operator. There is no rotate button:
+  the control plane is internet-facing, so an endpoint that can rotate turns any
+  single compromise — XSS, an auth bypass, a stolen operator token — into total
+  credential compromise, and rotation is far too rare for that trade to pay.
+
+  **The API never returns secret material** — not a value, not a hash, not a
+  prefix. A test boots the host with a sentinel signing key and fails if that
+  string ever appears in the response.
+
+  The inventory is static in code rather than derived from the rotation table, so
+  a secret nobody has ever rotated still appears — as `never`, counted under
+  "needs attention". That is the case that matters most, and a design keyed off
+  the table alone would hide exactly it.
+
+  `DASHBOARD_CREDENTIAL_KEY` is marked **not automated** and the script refuses
+  it with exit 2. It is a data-encryption key, not a password: replacing it
+  without re-encrypting makes every stored cloud credential permanently
+  unreadable, with no error at the moment of damage. A test asserts the flag
+  stays `false`, so it cannot be flipped quietly. Procedure and reasoning:
+  `docs/secret-rotation.md`.
+
+  New migration **V055** adds `secret_rotation`, which stores no secret material
+  — only which secret was rotated, when, and by whom.
+
+---
+
 ## [0.28.293]
 
 ### Fixed

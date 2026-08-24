@@ -328,6 +328,7 @@ app.MapIntegratedReportEndpoints();
 app.MapSystemHealthEndpoints();
 app.MapLogsEndpoints();
 app.MapPerfLogEndpoints();
+app.MapSecretsEndpoints();
 app.MapUpdateEndpoints();
 app.MapBenchTokensEndpoints();
 app.MapUrlTestsEndpoints();
