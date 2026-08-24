@@ -163,6 +163,16 @@ if (builder.Configuration["NETWORKER_RUN_MIGRATIONS"] != "0")
         "Schema migrations: {Applied} applied, {Existing} already recorded (latest V{Latest:D3})",
         migrationResult.Applied.Count, migrationResult.AlreadyApplied.Count, SchemaMigrator.LatestVersion);
 
+    // The tester-owned probe schema (TestRun/RequestAttempt/...), which lives in
+    // a SEPARATE chain from the V0NN one above: it is generated from the Rust
+    // crate and shipped as shared/tester-schema.postgres.sql. Ensured HERE, at
+    // startup, rather than only on first attempt ingest — until v0.28.292
+    // install.sh seeded these tables with its own hand-maintained copy of the
+    // DDL, and deleting that copy is only safe if something creates them before
+    // a read path asks. Idempotent, and never fatal.
+    var testerSchemaStatus = await AttemptPersister.EnsureSchemaAtStartupAsync(connString);
+    app.Logger.LogInformation("Tester probe schema: {Status}", testerSchemaStatus);
+
     // First-admin bootstrap — immediately after migrations, so dash_user exists.
     // There is no signup route: a fresh self-hosted install would otherwise come
     // up with an empty dash_user and no way to log in. Seeds ONE admin, and only

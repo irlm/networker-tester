@@ -1097,7 +1097,7 @@ dependencies = [
 
 [[package]]
 name = "networker-log"
-version = "0.28.292"
+version = "0.28.293"
 dependencies = [
  "anyhow",
  "chrono",

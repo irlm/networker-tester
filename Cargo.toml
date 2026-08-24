@@ -8,7 +8,7 @@ resolver = "2"
 exclude = ["benchmarks/orchestrator", "benchmarks/metrics-agent"]
 
 [workspace.package]
-version     = "0.28.292"
+version     = "0.28.293"
 edition     = "2021"
 authors     = ["NetworkerTester Contributors"]
 license     = "MIT"
