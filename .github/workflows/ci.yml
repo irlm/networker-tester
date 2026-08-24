@@ -416,8 +416,21 @@ jobs:
         with:
           key: cargo-vet
           cache-on-failure: "true"
+      # A self-hosted CI host keeps CARGO_HOME between jobs, so a cargo-vet that
+      # an earlier run left behind at a DIFFERENT version makes a plain
+      # `cargo install` fail outright — "error: binary `cargo-vet` already
+      # exists in destination" — and took main red on 2026-08-24. A hosted
+      # runner never hits it because its CARGO_HOME is new every time.
+      # Install only when the pinned version is not already there (fast on a
+      # warm host), and --force past a stale one instead of failing on it.
       - name: Install cargo-vet
-        run: cargo install cargo-vet --locked --version 0.10.2
+        run: |
+          want=0.10.2
+          if cargo-vet --version 2>/dev/null | grep -qw "$want"; then
+            echo "cargo-vet $want already present"
+          else
+            cargo install cargo-vet --locked --version "$want" --force
+          fi
       - name: Vet dependencies (main workspace)
         run: cargo vet --locked
 

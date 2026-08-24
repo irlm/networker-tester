@@ -13,6 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.28.282] - 2026-08-23
 
+### Fixed
+
+- **`cargo install cargo-vet` failed on a warm CI host and took main red.** A
+  self-hosted host keeps `CARGO_HOME` between jobs, so a `cargo-vet` an earlier
+  run left at a different version made a plain `cargo install` fail outright —
+  `error: binary cargo-vet already exists in destination`. A GitHub-hosted
+  runner never hits it, because its `CARGO_HOME` is new every time. The step now
+  installs only when the pinned version is absent and `--force`s past a stale
+  one. (`mutation.yml` and `rust-audit.yml` install unpinned tools the same way
+  and carry the same latent risk; left alone as neither is failing.)
+
 ### Added
 
 - **A CI host can now run containerised, on a machine that is not dedicated
