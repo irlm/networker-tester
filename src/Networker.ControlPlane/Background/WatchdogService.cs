@@ -163,6 +163,12 @@ public sealed class WatchdogService : BackgroundService
     /// </summary>
     private static readonly TimeSpan ProvisioningOrphanCutoff = TimeSpan.FromMinutes(30);
 
+    /// <summary>How long a 'starting' runner still counts as "waking" for the
+    /// purpose of holding off stuck-run reaping. Generous enough for a cold VM
+    /// boot plus agent connect, short enough that a runner whose agent never
+    /// arrives cannot suppress the reaper forever.</summary>
+    private static readonly TimeSpan WakeInFlightGrace = TimeSpan.FromMinutes(15);
+
     /// <summary>User-facing message for a provisioning run whose deployment is gone.</summary>
     private const string ProvisioningOrphanError =
         "Provisioning stalled — the deployment was lost or never finished; no VM was provisioned";
@@ -349,8 +355,19 @@ public sealed class WatchdogService : BackgroundService
         // takes a few minutes to boot + connect — no agent is online during
         // that window, but the queued runs are about to be claimable. Don't
         // reap while a wake is in flight.
+        //
+        // BOUNDED BY TIME, deliberately. 'starting' only becomes 'running' when
+        // the agent heartbeats, so a runner whose agent never connects sits in
+        // 'starting' indefinitely — and an unbounded check here read that as "a
+        // wake is permanently in flight" and silently disabled stuck-queued-run
+        // reaping for the WHOLE deployment (found on prod 2026-08-24: a runner
+        // had been showing 'starting' since its last auto-wake). A wake that has
+        // not completed within the grace window is not in flight, it is stuck,
+        // and AutoShutdownService's sweep resolves it separately.
+        var wakeFloor = now - WakeInFlightGrace;
         var anyWaking = !anyAgentOnline
-            && await db.ProjectTesters.AnyAsync(t => t.PowerState == "starting", ct)
+            && await db.ProjectTesters
+                .AnyAsync(t => t.PowerState == "starting" && t.UpdatedAt >= wakeFloor, ct)
                 .ConfigureAwait(false);
         var queuedCutoff = now - QueuedCutoff;
         var stuckQueued = anyAgentOnline || anyWaking

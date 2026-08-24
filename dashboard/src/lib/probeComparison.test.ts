@@ -139,6 +139,63 @@ describe('why a ranking is withheld', () => {
     expect(notRankedReason(mode({ ranked: false, ranking_verdict: 'too_few_urls' }), 168))
       .toMatch(/Fewer than two/);
   });
+
+  // Reported from prod 2026-08-24: a user compared two URLs, saw ONE line on the
+  // chart, and had no idea why. The report knew exactly why — the page just
+  // whispered it. These pin the specifics into the message itself.
+  it('names the URL that fell short, with its samples, coverage and the threshold', () => {
+    const reason = notRankedReason(
+      mode({
+        ranked: false,
+        ranking_verdict: 'too_few_urls',
+        coverage: [
+          { url: 'https://www.cloudflare.com/', qualifying_buckets: 3, total_samples: 18, eligible: false, excluded_reason: 'under_sampled' },
+          { url: 'https://www.microsoft.com/', qualifying_buckets: 69, total_samples: 346, eligible: true, excluded_reason: null },
+        ],
+      }),
+      168,
+      0.3,
+    )!;
+
+    expect(reason).toContain('cloudflare');       // WHICH url
+    expect(reason).toContain('18 samples');       // how much it had
+    expect(reason).toContain('3/168');            // out of how many buckets
+    expect(reason).toContain('30%');              // the bar it had to clear
+    expect(reason).toContain('microsoft');        // what it would have raced
+    expect(reason).toMatch(/same schedule AND in the same modes/);
+  });
+
+  it('says a single sample is a sample, not samples', () => {
+    const reason = notRankedReason(
+      mode({
+        ranked: false,
+        ranking_verdict: 'too_few_urls',
+        coverage: [
+          { url: 'https://a.example/', qualifying_buckets: 0, total_samples: 1, eligible: false, excluded_reason: 'under_sampled' },
+          { url: 'https://b.example/', qualifying_buckets: 60, total_samples: 300, eligible: true, excluded_reason: null },
+        ],
+      }),
+      168,
+      0.3,
+    )!;
+    expect(reason).toContain('1 sample in');
+  });
+
+  it('omits the threshold when the caller does not know it', () => {
+    const reason = notRankedReason(
+      mode({
+        ranked: false,
+        ranking_verdict: 'too_few_urls',
+        coverage: [
+          { url: 'https://a.example/', qualifying_buckets: 1, total_samples: 4, eligible: false, excluded_reason: 'under_sampled' },
+          { url: 'https://b.example/', qualifying_buckets: 60, total_samples: 300, eligible: true, excluded_reason: null },
+        ],
+      }),
+      168,
+    )!;
+    expect(reason).toContain('4 samples');
+    expect(reason).not.toContain('needed');
+  });
 });
 
 describe('formatting', () => {

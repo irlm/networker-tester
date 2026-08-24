@@ -57,6 +57,12 @@ public sealed class AutoShutdownService : BackgroundService
     /// tester. Mirrors the Rust <c>DEFERRAL_DELAY_MINUTES = 5</c>.</summary>
     private static readonly TimeSpan DeferralDelay = TimeSpan.FromMinutes(5);
 
+    /// <summary>How long a runner may sit in 'starting' before the sweep decides
+    /// the wake failed and releases it. Must exceed
+    /// <c>WatchdogService.WakeInFlightGrace</c> so the watchdog gives up waiting
+    /// on the wake before this cancels it.</summary>
+    internal static TimeSpan StuckStartingTimeout = TimeSpan.FromMinutes(20);
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<AutoShutdownService> _logger;
     private readonly PgAdvisoryLeaderLock? _leader;
@@ -121,6 +127,40 @@ public sealed class AutoShutdownService : BackgroundService
         var cipher = sp.GetService<CredentialCipher>();
 
         var now = DateTime.UtcNow;
+
+        // ── Release a wake that never completed ─────────────────────────────
+        // 'starting' is a TRANSIENT state with no self-imposed exit: it becomes
+        // 'running' only when the agent heartbeats. If the VM never boots, or
+        // boots without a working agent, the row sits in 'starting' forever —
+        // the UI shows a runner permanently "starting" (prod, 2026-08-24), it
+        // can never be started by hand (that path requires 'stopped'), and the
+        // watchdog used to read it as a wake permanently in flight.
+        //
+        // Released to 'stopped', not 'error', on purpose: 'stopped' is the state
+        // a manual start accepts, the auto-wake arm below can retry it in this
+        // same tick, and if the agent does turn up late its heartbeat flips the
+        // row to 'running' anyway. 'error' would need an operator to clear it,
+        // turning a transient failure into a dead runner.
+        //
+        // Longer than WatchdogService.WakeInFlightGrace (15m) by design: the
+        // watchdog stops *waiting* on the wake before this sweep *cancels* it,
+        // so the two never race to interpret the same row.
+        var stuckStartingFloor = now - StuckStartingTimeout;
+        var released = await db.ProjectTesters
+            .Where(t => t.PowerState == "starting" && t.UpdatedAt < stuckStartingFloor)
+            .ExecuteUpdateAsync(st => st
+                .SetProperty(t => t.PowerState, "stopped")
+                .SetProperty(t => t.StatusMessage,
+                    "start did not complete within " + (int)StuckStartingTimeout.TotalMinutes
+                    + "m — agent never connected; released so it can be started again")
+                .SetProperty(t => t.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+        if (released > 0)
+        {
+            _logger.LogWarning(
+                "Released {Count} runner(s) stuck in 'starting' for over {Minutes}m — the agent never connected",
+                released, (int)StuckStartingTimeout.TotalMinutes);
+        }
 
         // ── Auto-wake: queued work targeting a stopped runner powers it on ──
         // The inverse of the shutdown policy ("only shut down when idle"):
@@ -441,7 +481,17 @@ public sealed class AutoShutdownService : BackgroundService
         var prior = tester.PowerState;
         var claimed = await db.ProjectTesters
             .Where(t => t.TesterId == tester.TesterId && t.PowerState == prior)
-            .ExecuteUpdateAsync(s => s.SetProperty(t => t.PowerState, "starting"), ct)
+            // StatusMessage moves WITH PowerState. Setting only the state left
+            // the previous lifecycle's message in place, so a woken runner read
+            // "starting" next to "auto-shutdown completed" — the two halves of
+            // the badge disagreeing about what the machine was doing (reported
+            // from prod, 2026-08-24). The manual start path already stamps
+            // "Start requested"; this is the same courtesy for the automatic one,
+            // and it also carries the REASON, which the manual path has no need of.
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(t => t.PowerState, "starting")
+                .SetProperty(t => t.StatusMessage, $"auto-wake: {reason}")
+                .SetProperty(t => t.UpdatedAt, DateTime.UtcNow), ct)
             .ConfigureAwait(false);
         if (claimed == 0)
         {
@@ -464,7 +514,10 @@ public sealed class AutoShutdownService : BackgroundService
         {
             await db.ProjectTesters
                 .Where(t => t.TesterId == tester.TesterId && t.PowerState == "starting")
-                .ExecuteUpdateAsync(s => s.SetProperty(t => t.PowerState, prior), ct)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(t => t.PowerState, prior)
+                    .SetProperty(t => t.StatusMessage, "auto-wake failed — start was not accepted")
+                    .SetProperty(t => t.UpdatedAt, DateTime.UtcNow), ct)
                 .ConfigureAwait(false);
             _logger.LogWarning(
                 "Auto-wake failed for {Name} ({TesterId}): {Err}",

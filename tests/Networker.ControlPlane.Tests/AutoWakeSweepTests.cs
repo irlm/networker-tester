@@ -399,4 +399,140 @@ public class AutoWakeSweepTests
 
         Assert.Equal(0, prov.StartCalls); // a wake is already in flight
     }
+
+    // ── Stuck 'starting' ──────────────────────────────────────────────────
+    // 'starting' has no self-imposed exit: only the agent's heartbeat promotes
+    // it to 'running'. A runner whose agent never connects therefore sat in
+    // 'starting' forever — visible on prod 2026-08-24 as a runner permanently
+    // "starting", which ALSO made the watchdog treat a wake as permanently in
+    // flight and suppressed stuck-queued-run reaping deployment-wide.
+
+    /// <summary>Age a tester's row so the sweep sees it as long-stuck.</summary>
+    private static void BackdateTester(NetworkerDbContext db, Guid testerId, TimeSpan age)
+    {
+        var t = db.ProjectTesters.First(x => x.TesterId == testerId);
+        t.PowerState = "starting";
+        t.StatusMessage = "auto-shutdown completed";   // the stale message from the prod report
+        t.UpdatedAt = DateTime.UtcNow - age;
+        db.SaveChanges();
+    }
+
+    [Fact]
+    public async Task A_wake_that_never_completed_is_released_back_to_stopped()
+    {
+        var (sp, conn, _) = BuildHost(nameof(A_wake_that_never_completed_is_released_back_to_stopped));
+        using var _c = conn;
+        Guid testerId;
+        using (var db = Db(sp))
+        {
+            testerId = SeedStoppedTesterWithQueuedRun(db);
+            // Drop the queued run: with work still pending the wake arm further
+            // down the SAME sweep immediately restarts it (asserted separately
+            // in A_released_runner_is_woken_again_in_the_same_sweep). Removing it
+            // isolates the release itself.
+            db.TestRuns.RemoveRange(db.TestRuns.Where(r => r.TesterId == testerId));
+            db.SaveChanges();
+            BackdateTester(db, testerId, AutoShutdownService.StuckStartingTimeout + TimeSpan.FromMinutes(5));
+        }
+
+        await RunSweepOnceAsync(sp);
+
+        using var check = Db(sp);
+        var tester = await check.ProjectTesters.AsNoTracking().FirstAsync(t => t.TesterId == testerId);
+        // 'stopped', not 'error': this is the state a manual start accepts, so a
+        // transient wake failure must not leave a runner nobody can start.
+        Assert.Equal("stopped", tester.PowerState);
+        Assert.Contains("agent never connected", tester.StatusMessage ?? "");
+        // And the stale message that contradicted the badge is gone.
+        Assert.DoesNotContain("auto-shutdown completed", tester.StatusMessage ?? "");
+    }
+
+    [Fact]
+    public async Task A_wake_still_within_the_grace_window_is_left_alone()
+    {
+        // The guard that keeps the release from cancelling healthy boots. A cold
+        // VM plus agent connect legitimately takes minutes.
+        var (sp, conn, _) = BuildHost(nameof(A_wake_still_within_the_grace_window_is_left_alone));
+        using var _c = conn;
+        Guid testerId;
+        using (var db = Db(sp))
+        {
+            testerId = SeedStoppedTesterWithQueuedRun(db);
+            BackdateTester(db, testerId, AutoShutdownService.StuckStartingTimeout - TimeSpan.FromMinutes(5));
+        }
+
+        await RunSweepOnceAsync(sp);
+
+        using var check = Db(sp);
+        var tester = await check.ProjectTesters.AsNoTracking().FirstAsync(t => t.TesterId == testerId);
+        Assert.Equal("starting", tester.PowerState);
+    }
+
+    [Fact]
+    public async Task A_released_runner_is_woken_again_in_the_same_sweep()
+    {
+        // The release runs BEFORE the wake arms precisely so a stuck runner with
+        // outstanding work recovers in one tick instead of waiting for the next.
+        var (sp, conn, prov) = BuildHost(nameof(A_released_runner_is_woken_again_in_the_same_sweep));
+        using var _c = conn;
+        Guid testerId;
+        using (var db = Db(sp))
+        {
+            testerId = SeedStoppedTesterWithQueuedRun(db);   // queued run still pending
+            BackdateTester(db, testerId, AutoShutdownService.StuckStartingTimeout + TimeSpan.FromMinutes(5));
+        }
+
+        await RunSweepOnceAsync(sp);
+
+        using var check = Db(sp);
+        var tester = await check.ProjectTesters.AsNoTracking().FirstAsync(t => t.TesterId == testerId);
+        Assert.Equal(1, prov.StartCalls);
+        Assert.Equal("starting", tester.PowerState);
+    }
+
+    [Fact]
+    public async Task Auto_wake_stamps_its_own_status_message()
+    {
+        // The badge and the message must agree. Before this, the wake set only
+        // power_state, so a woken runner read "starting" beside the PREVIOUS
+        // lifecycle's "auto-shutdown completed".
+        var (sp, conn, _) = BuildHost(nameof(Auto_wake_stamps_its_own_status_message));
+        using var _c = conn;
+        Guid testerId;
+        using (var db = Db(sp))
+        {
+            testerId = SeedStoppedTesterWithQueuedRun(db);
+            var t = db.ProjectTesters.First(x => x.TesterId == testerId);
+            t.StatusMessage = "auto-shutdown completed";
+            db.SaveChanges();
+        }
+
+        await RunSweepOnceAsync(sp);
+
+        using var check = Db(sp);
+        var tester = await check.ProjectTesters.AsNoTracking().FirstAsync(t => t.TesterId == testerId);
+        Assert.Equal("starting", tester.PowerState);
+        Assert.StartsWith("auto-wake:", tester.StatusMessage ?? "");
+        Assert.DoesNotContain("auto-shutdown completed", tester.StatusMessage ?? "");
+    }
+
+    [Fact]
+    public async Task A_failed_wake_replaces_the_message_too_when_it_rolls_back()
+    {
+        var (sp, conn, prov) = BuildHost(nameof(A_failed_wake_replaces_the_message_too_when_it_rolls_back));
+        using var _c = conn;
+        prov.StartBehavior = () => new ProvisionResult(false, 1, "", "az exploded");
+        Guid testerId;
+        using (var db = Db(sp))
+        {
+            testerId = SeedStoppedTesterWithQueuedRun(db);
+        }
+
+        await RunSweepOnceAsync(sp);
+
+        using var check = Db(sp);
+        var tester = await check.ProjectTesters.AsNoTracking().FirstAsync(t => t.TesterId == testerId);
+        Assert.Equal("stopped", tester.PowerState);
+        Assert.Contains("auto-wake failed", tester.StatusMessage ?? "");
+    }
 }

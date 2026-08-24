@@ -82,14 +82,48 @@ export function headToHeadSentence(h: ProbeComparisonHeadToHead): string {
  * Why a mode carries no ranking, in the reader's terms — and what to do about
  * it. Returns null when the mode IS ranked.
  */
-export function notRankedReason(mode: ProbeComparisonMode, windowBuckets: number): string | null {
+export function notRankedReason(
+  mode: ProbeComparisonMode,
+  windowBuckets: number,
+  minCoverageRatio?: number,
+): string | null {
   if (mode.ranked) return null;
   const verdict: ProbeRankingVerdict = mode.ranking_verdict;
   if (verdict === 'no_data') {
     return 'No probe data for these URLs in this window.';
   }
   if (verdict === 'too_few_urls') {
-    return 'Fewer than two of these URLs have enough data in this window to be compared.';
+    // "Fewer than two URLs qualified" is true but useless on its own — the
+    // reader is staring at a chart with one line on it and wants to know WHICH
+    // url fell short and by how much. Reported from prod 2026-08-24: two URLs
+    // that had never been probed the same way rendered as a single series with
+    // only a faint note to explain it.
+    const excluded = mode.coverage.filter((c) => !c.eligible);
+    const eligible = mode.coverage.filter((c) => c.eligible);
+    const floor =
+      minCoverageRatio === undefined ? '' : `, under the ${formatPercent(minCoverageRatio)} needed`;
+
+    let msg = 'Fewer than two of these URLs have enough data in this window to be compared.';
+    if (excluded.length > 0) {
+      msg +=
+        ' Not enough here: ' +
+        excluded
+          .map(
+            (c) =>
+              `${shortLabel(c.url)} (${c.total_samples} ${c.total_samples === 1 ? 'sample' : 'samples'} in ` +
+              `${c.qualifying_buckets}/${windowBuckets} buckets — ` +
+              `${formatPercent(c.qualifying_buckets / windowBuckets)}${floor})`,
+          )
+          .join(', ') +
+        '.';
+    }
+    if (eligible.length === 1) {
+      msg += ` Only ${shortLabel(eligible[0].url)} qualifies, so there is nothing to compare it against.`;
+    }
+    msg +=
+      ' A URL only counts in a bucket once it has enough samples there, and each mode is compared' +
+      ' separately — probe them on the same schedule AND in the same modes to rank them.';
+    return msg;
   }
   return (
     `Insufficient overlap — these URLs were measured together in only ${mode.shared_buckets} ` +

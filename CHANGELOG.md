@@ -11,6 +11,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.295]
+
+### Fixed
+
+- **A runner could sit in `starting` forever, and that silently disabled
+  stuck-run reaping for the whole deployment.** `starting` has no self-imposed
+  exit — only an agent heartbeat promotes it to `running` — so a VM whose agent
+  never connects stayed `starting` indefinitely. Beyond the misleading badge, it
+  could never be started by hand (that path requires `stopped`), and
+  `WatchdogService` read *any* tester in `starting` as "a wake is in flight" and
+  held off reaping stuck queued runs. One stuck runner therefore switched off
+  that safety net globally.
+
+  Two independent bounds now: the watchdog only counts a wake as in flight for
+  15 minutes, and `AutoShutdownService` releases a runner stuck in `starting`
+  for over 20 minutes back to `stopped` with a message saying why. Released to
+  `stopped` rather than `error` deliberately — that is the state a manual start
+  accepts, the wake arm can retry it in the same sweep, and a late agent
+  heartbeat still promotes it to `running`; `error` would turn a transient
+  failure into a runner nobody can start without operator help.
+
+- **A woken runner showed "starting" beside "auto-shutdown completed".** The
+  auto-wake path set `power_state` without touching `status_message`, leaving
+  the previous lifecycle's text in place so the two halves of the badge
+  contradicted each other. The message now moves with the state — and carries
+  the wake reason — on both the claim and the roll-back-on-failure path. The
+  manual start path already did this.
+
+- **The URL comparison report now says which URL fell short, and by how much.**
+  Comparing two URLs that had never been probed comparably rendered as a single
+  series with only a faint note underneath. The report always knew why; the page
+  whispered it. The withheld-ranking message now names the excluded URL, its
+  sample count, its bucket coverage and the threshold it missed, states which
+  URL it would have raced, and points at the two things that actually fix it —
+  probing on the same schedule *and* in the same modes, since each mode is
+  ranked separately.
+
+---
+
 ## [0.28.294]
 
 ### Added
