@@ -296,6 +296,33 @@ Verified after both fixes, inside the container: the exact failing job boots
 while `docker ps -a` from the runner still shows **nothing** of the machine's
 own containers or images.
 
+### A container is not a machine: the `bare-metal` label
+
+Two self-hosted job classes cannot run in a container, and routing them there
+fails the PR on the *host* rather than on the change — which is worse than not
+having the host at all (it cost two red runs on #862 before the cause was
+obvious):
+
+| job | needs | why a container cannot |
+|---|---|---|
+| `Measurement accuracy (netem ground truth)` (ci.yml) | `tc netem` | NET_ADMIN; and a nested netns on Wi-Fi is poor ground truth anyway |
+| `Reinstall script execution` (dotnet.yml) | `systemctl` | **no init system at all** — unfixable in-container |
+
+GitHub has no *negative* label selector, so the split is additive: every
+VM/bare-metal host also carries **`bare-metal`**, `pick-ci-hosts` exposes a
+`linux_bare` output alongside `linux`, and exactly those two jobs use it. The
+containerised host keeps the plain `self-hosted,linux,networker-ci` triple and
+therefore takes everything else. `linux_bare` falls back to `ubuntu-latest`
+when no bare-metal host is online, like every other routing decision here.
+
+Adding the label to a host is cheap and needs no reinstall: edit `LABELS=` in
+`/etc/ci-host/env`, then `systemctl restart ci-host` — the ephemeral loop
+re-registers with the new set on its next cycle. **Kill the old Listener with a
+bracket-safe pattern** (`pkill -f '[R]unner[.]Listener'`): a plain
+`pkill -f Runner.Listener` matches its own command line and kills the shell
+before the restart runs, which looks exactly like the restart silently doing
+nothing.
+
 **Fidelity gaps.** Jobs that install system services (`stack-exec`,
 `linux-bench-exec`) are pinned to hosted runners anyway, so nothing is lost
 there. Nested Docker is slower for image-heavy jobs than a native daemon, and
