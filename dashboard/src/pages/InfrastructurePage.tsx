@@ -238,7 +238,10 @@ export function InfrastructurePage() {
   // bumps resetKey (restarts the loop with an immediate tick).
   const [paused, setPaused] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
-  usePolling(() => void loadAll(), 10000, !!projectId && !paused, refreshTick);
+  usePolling(() => void loadAll(), 10000, !!projectId && !paused, refreshTick,
+    // useAsyncEffect above already loads on mount; without this every request
+    // on this page went out twice (prod, 2026-08-24).
+    { immediate: false });
 
   // Keep an open runner drawer synced to live (polled) data instead of the
   // snapshot captured on open — so an async delete's outcome is visible: the

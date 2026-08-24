@@ -74,4 +74,47 @@ describe('usePolling', () => {
     setVisibility('visible');
     expect(fn).not.toHaveBeenCalled();
   });
+
+  // `immediate: false` — for pages that already load once themselves. Before
+  // this option those pages issued EVERY request twice on mount; a prod
+  // Infrastructure page load fired testers / deployments / vm-history /
+  // cloud-accounts two times each (2026-08-24).
+  describe('immediate: false', () => {
+    it('skips the mount tick but still polls on the interval', () => {
+      const fn = vi.fn();
+      renderHook(() => usePolling(fn, 30_000, true, null, { immediate: false }));
+      expect(fn).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(30_000);
+      expect(fn).toHaveBeenCalledTimes(1);
+    });
+
+    it('STILL fires at once when resetKey changes — that is the Refresh button', () => {
+      const fn = vi.fn();
+      const { rerender } = renderHook(
+        ({ key }) => usePolling(fn, 30_000, true, key, { immediate: false }),
+        { initialProps: { key: 0 } },
+      );
+      expect(fn).not.toHaveBeenCalled();   // mount suppressed
+      rerender({ key: 1 });
+      expect(fn).toHaveBeenCalledTimes(1); // refresh is not suppressed
+    });
+
+    it('STILL fires at once when enabled flips on — that is un-pausing', () => {
+      const fn = vi.fn();
+      const { rerender } = renderHook(
+        ({ on }) => usePolling(fn, 30_000, on, null, { immediate: false }),
+        { initialProps: { on: true } },
+      );
+      expect(fn).not.toHaveBeenCalled();
+      rerender({ on: false });
+      rerender({ on: true });
+      expect(fn).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves the default untouched — omitting the option still ticks on mount', () => {
+      const fn = vi.fn();
+      renderHook(() => usePolling(fn, 30_000, true, null, {}));
+      expect(fn).toHaveBeenCalledTimes(1);
+    });
+  });
 });

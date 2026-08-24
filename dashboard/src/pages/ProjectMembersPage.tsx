@@ -98,7 +98,9 @@ export function ProjectMembersPage() {
   // Invites are accepted/denied by OTHER users — without a poll a pending
   // row never flips for a viewer who keeps the page open. 60s: membership
   // churn is slow, this is a staleness bound not a live feed.
-  usePolling(() => void loadData(true), 60_000, !!projectId);
+  usePolling(() => void loadData(true), 60_000, !!projectId, null,
+    // useAsyncEffect above owns the first (non-silent) load.
+    { immediate: false });
 
   const handleInvite = async () => {
     if (!projectId || !newEmail.trim()) return;

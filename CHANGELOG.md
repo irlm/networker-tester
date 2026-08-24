@@ -11,6 +11,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.296]
+
+### Fixed
+
+- **Every schedule displayed as "Unnamed".** The schedules API never returned
+  `config_name`, and the page renders `config_name || 'Unnamed'` — so on every
+  deployment, every schedule showed the same placeholder and no operator could
+  tell what one actually runs. The field was simply absent from the payload,
+  which is why staring at the UI never explained it. The list and detail routes
+  now project it, and create/patch resolve it too so a row does not read
+  "Unnamed" until the next refresh.
+
+- **Polled pages issued every request twice on mount.** `usePolling` fires an
+  immediate tick, and five pages paired it with their own `useAsyncEffect`
+  initial load — one production Infrastructure page load fired
+  `testers`, `deployments`, `vm-history` and `cloud-accounts` **two times each**.
+  `usePolling` takes an `{ immediate: false }` option and those pages opt out.
+
+  They opt out rather than dropping their own load because their poll is
+  deliberately *silent* (it never re-raises the loading flag); making it the
+  first load would have cost the page its initial spinner. The suppression
+  applies to the mount tick **only** — a `resetKey` bump (the Refresh button)
+  and an `enabled` flip (un-pausing) still fire at once, or those controls
+  would appear dead.
+
+- **Settings → General claimed "No cloud accounts configured" while three were
+  configured.** Two different things were both labelled "cloud accounts": the
+  General tab lists identity-federated `CloudConnection` rows
+  (`/cloud-connections`, genuinely zero), while the Cloud tab lists
+  credential-based `CloudAccount` rows (`/cloud-accounts`, three). The General
+  section is now labelled "cloud connections", says what it is, and links to the
+  Cloud tab for accounts.
+
+---
+
 ## [0.28.295]
 
 ### Fixed

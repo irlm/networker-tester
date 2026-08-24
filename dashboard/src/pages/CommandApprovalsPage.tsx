@@ -93,7 +93,9 @@ export function CommandApprovalsPage() {
   // latency-sensitive page would otherwise freeze silently. 30s is a
   // worst-case staleness bound, not the update path. Silent by construction —
   // fetchPending never re-raises the loading flag after the first load.
-  usePolling(() => void fetchPending(), 30_000, !!projectId);
+  usePolling(() => void fetchPending(), 30_000, !!projectId, null,
+    // useAsyncEffect above already fetched once on mount.
+    { immediate: false });
 
   const handleApprove = async (approvalId: string) => {
     setDeciding(approvalId);
