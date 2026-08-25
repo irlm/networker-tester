@@ -112,6 +112,12 @@ pub use real::{run_http3_probe, run_http3_request_probe};
 #[cfg(feature = "http3")]
 pub(crate) use real::quic_stats_from;
 
+// Connection-error classification shared with the pageload3 runner, which
+// reaches the SAME peer over the SAME handshake and so must file a rejection
+// the same way. Feature-gated for the same reason as `quic_stats_from`.
+#[cfg(feature = "http3")]
+pub(crate) use real::classify_quic_connection_error;
+
 #[cfg(feature = "http3")]
 mod real {
     use crate::metrics::{
@@ -223,26 +229,64 @@ mod real {
         }
     }
 
+    /// QUIC carries a TLS alert as a transport error code in the range
+    /// 0x0100-0x01ff (`0x100 | alert`, RFC 9000 §20.1 CRYPTO_ERROR). A close
+    /// in that range is a handshake failure however it reached us, so the
+    /// numeric code decides rather than the rendered text.
+    fn is_quic_crypto_error(code: quinn::TransportErrorCode) -> bool {
+        (0x0100..0x0200).contains(&u64::from(code))
+    }
+
     /// Classify a QUIC connection failure. QUIC has no TCP phase — a failure
     /// to establish the connection is the connect-equivalent (`Tcp`), unless
-    /// it is a handshake/crypto failure (`Tls`) or an idle/handshake timeout
-    /// (`Timeout`). (Trust audit V10.)
-    fn classify_quic_connection_error(e: &quinn::ConnectionError) -> ErrorCategory {
+    /// it is a handshake/crypto failure (`Tls`), a close from the peer's
+    /// HTTP/3 layer (`Http`), or an idle/handshake timeout (`Timeout`).
+    /// (Trust audit V10.)
+    ///
+    /// Every variant is spelled out on purpose. A catch-all `_` arm is what
+    /// used to file `ConnectionClosed` — how a server that does NOT serve
+    /// HTTP/3 rejects the handshake — under `Tcp`, so an attempt whose own
+    /// message read "the cryptographic handshake failed" was stored as a
+    /// connect failure. Listing the variants makes the compiler flag any new
+    /// one instead of letting it inherit that default.
+    pub(crate) fn classify_quic_connection_error(e: &quinn::ConnectionError) -> ErrorCategory {
         match e {
             quinn::ConnectionError::TimedOut => ErrorCategory::Timeout,
+            // Raised locally, or decoded inline from the peer.
             quinn::ConnectionError::TransportError(te) => {
-                let msg = te.to_string().to_ascii_lowercase();
-                if msg.contains("crypto")
-                    || msg.contains("tls")
-                    || msg.contains("certificate")
-                    || msg.contains("handshake")
-                {
+                if is_quic_crypto_error(te.code) {
+                    ErrorCategory::Tls
+                } else {
+                    // Kept as a fallback: a non-CRYPTO_ERROR code can still
+                    // name TLS in its reason string (e.g. a PROTOCOL_VIOLATION
+                    // raised while parsing the handshake).
+                    let msg = te.to_string().to_ascii_lowercase();
+                    if msg.contains("crypto")
+                        || msg.contains("tls")
+                        || msg.contains("certificate")
+                        || msg.contains("handshake")
+                    {
+                        ErrorCategory::Tls
+                    } else {
+                        ErrorCategory::Tcp
+                    }
+                }
+            }
+            // The peer's QUIC stack aborted us with CONNECTION_CLOSE.
+            quinn::ConnectionError::ConnectionClosed(f) => {
+                if is_quic_crypto_error(f.error_code) {
                     ErrorCategory::Tls
                 } else {
                     ErrorCategory::Tcp
                 }
             }
-            _ => ErrorCategory::Tcp,
+            // Closed by the peer's HTTP/3 layer, above the transport.
+            quinn::ConnectionError::ApplicationClosed(_) => ErrorCategory::Http,
+            // The rest are genuine failures to establish the connection.
+            quinn::ConnectionError::VersionMismatch
+            | quinn::ConnectionError::Reset
+            | quinn::ConnectionError::LocallyClosed
+            | quinn::ConnectionError::CidsExhausted => ErrorCategory::Tcp,
         }
     }
 
@@ -1314,6 +1358,77 @@ mod real {
                 classify_quic_connection_error(&quinn::ConnectionError::Reset),
                 ErrorCategory::Tcp
             );
+        }
+
+        /// The production failure this arm was written for: www.microsoft.com
+        /// does not serve HTTP/3, and the peer on UDP/443 answers the Initial
+        /// then aborts the TLS handshake with CRYPTO_ERROR carrying alert 80
+        /// (`internal_error`). The attempt used to be stored as `Tcp` even
+        /// though its own message said the handshake failed.
+        #[test]
+        fn classify_quic_peer_crypto_close_is_tls() {
+            let e = quinn::ConnectionError::ConnectionClosed(quinn::ConnectionClose {
+                error_code: quinn::TransportErrorCode::crypto(80),
+                frame_type: None,
+                reason: bytes::Bytes::from_static(b"200:internal error"),
+            });
+
+            // Pin the rendering too: this is byte-for-byte what the failing
+            // production attempts carry, so the category below is the category
+            // those rows should have had.
+            assert_eq!(
+                format!("QUIC connect: {e}"),
+                concat!(
+                    "QUIC connect: aborted by peer: ",
+                    "the cryptographic handshake failed: error 80: 200:internal error",
+                ),
+            );
+            assert_eq!(classify_quic_connection_error(&e), ErrorCategory::Tls);
+        }
+
+        #[test]
+        fn classify_quic_peer_transport_close_stays_connectish() {
+            // A peer close OUTSIDE the CRYPTO_ERROR range is a genuine refusal
+            // to establish the connection, not a handshake failure.
+            let e = quinn::ConnectionError::ConnectionClosed(quinn::ConnectionClose {
+                error_code: quinn::TransportErrorCode::CONNECTION_REFUSED,
+                frame_type: None,
+                reason: bytes::Bytes::new(),
+            });
+            assert_eq!(classify_quic_connection_error(&e), ErrorCategory::Tcp);
+        }
+
+        #[test]
+        fn classify_quic_application_close_is_http() {
+            // Closed by the peer's HTTP/3 layer — above the transport, so it
+            // is neither a connect nor a handshake failure.
+            let e = quinn::ConnectionError::ApplicationClosed(quinn::ApplicationClose {
+                error_code: quinn::VarInt::from_u32(0x0102),
+                reason: bytes::Bytes::from_static(b"H3_INTERNAL_ERROR"),
+            });
+            assert_eq!(classify_quic_connection_error(&e), ErrorCategory::Http);
+        }
+
+        #[test]
+        fn quic_crypto_error_range_matches_rfc9000() {
+            // Both ends of 0x0100-0x01ff are crypto; the named transport codes
+            // below it are not. quinn exposes no u64 constructor, so the codes
+            // reachable here are exactly `crypto()` plus the named constants —
+            // a transport code above 0x01ff cannot be built to assert on.
+            assert!(is_quic_crypto_error(quinn::TransportErrorCode::crypto(
+                0x00
+            )));
+            assert!(is_quic_crypto_error(quinn::TransportErrorCode::crypto(
+                0xff
+            )));
+            for code in [
+                quinn::TransportErrorCode::NO_ERROR,
+                quinn::TransportErrorCode::INTERNAL_ERROR,
+                quinn::TransportErrorCode::CONNECTION_REFUSED,
+                quinn::TransportErrorCode::NO_VIABLE_PATH,
+            ] {
+                assert!(!is_quic_crypto_error(code), "{code:?} is not a TLS alert");
+            }
         }
 
         #[test]

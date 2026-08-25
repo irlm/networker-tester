@@ -38,6 +38,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The under-sampled footer note no longer counts rows that show no number.**
   "N points had fewer than 3 usable samples — those numbers are readings, not
   medians" counted metric-less points, so the caption described empty cells.
+- **QUIC handshake rejections are no longer filed as connect failures.**
+  `classify_quic_connection_error` inspected the crypto keywords only inside
+  `ConnectionError::TransportError`; a CONNECTION_CLOSE sent by the peer
+  arrives as `ConnectionError::ConnectionClosed` and fell through a catch-all
+  `_` arm to `ErrorCategory::Tcp`. So an attempt whose own message read
+  "aborted by peer: the cryptographic handshake failed: error 80" was stored
+  as a TCP connect failure. This is the every-run failure mode for a target
+  that does not serve HTTP/3 — the peer answers the Initial, then aborts the
+  handshake with CRYPTO_ERROR — so the misfiling hit every h3 probe against
+  such a host. The classifier now reads the numeric transport error code
+  (`0x0100-0x01ff` = a TLS alert, RFC 9000 §20.1) rather than the rendered
+  text, maps a peer close from the HTTP/3 layer (`ApplicationClosed`) to
+  `Http`, and spells out every `ConnectionError` variant so a future addition
+  cannot silently inherit the `Tcp` default the way this one did.
+- **`pageload3` misfiled the same rejection, harder.** Both of its QUIC
+  handshake sites (cold `run_pageload3_probe`, warm `warmup_pageload3`)
+  hardcoded `ErrorCategory::Tcp` for every handshake failure with no
+  classification at all. They reach the same peer over the same handshake as
+  the h3 runner, so they now share its classifier rather than keeping a second
+  answer. The synchronous `endpoint.connect()` sites are unchanged: those
+  return `ConnectError` (a local/config failure), not a handshake result.
 
 ### Notes
 
