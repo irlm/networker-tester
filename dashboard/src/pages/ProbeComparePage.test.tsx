@@ -131,6 +131,10 @@ describe('ProbeComparePage', () => {
         urls: [A, B],
         window: '24h',
         bucket: '15m',
+        // The axis defaults to comparing URLs, and hidden entries stay hidden
+        // until the picker asks for them.
+        groupBy: 'url',
+        includeHidden: false,
       }),
     );
   });
@@ -274,5 +278,45 @@ describe('ProbeComparePage', () => {
     renderPage();
 
     expect(await screen.findByText('mostly timeout')).toBeInTheDocument();
+  });
+
+  // ── Comparison axis ───────────────────────────────────────────────────
+  // Same measurements, different question: which SITE is faster, or which
+  // VANTAGE POINT. Until v0.28.298 the report pooled every runner into one
+  // series, so the second question could not be asked at all.
+
+  it('asks for the runner axis when group_by=runner', async () => {
+    renderPage(`?urls=${encodeURIComponent(A)}&group_by=runner`);
+
+    await waitFor(() =>
+      expect(getProbeComparison).toHaveBeenCalledWith(
+        'p-1',
+        expect.objectContaining({ groupBy: 'runner', urls: [A] }),
+      ),
+    );
+  });
+
+  it('does NOT call the server for a runner comparison of two URLs', async () => {
+    // The server 400s on that by design (pooling two sites per runner is the
+    // same blending inverted). Asking anyway would render an error where the
+    // picker should be telling the user what to do.
+    renderPage(`?urls=${encodeURIComponent(`${A},${B}`)}&group_by=runner`);
+
+    await waitFor(() =>
+      expect(getProbeComparison).toHaveBeenCalledWith(
+        'p-1',
+        expect.objectContaining({ groupBy: 'runner', urls: [] }),
+      ),
+    );
+    // Match the WARNING's unique phrase: the section header also says
+    // "exactly one URL", so a looser matcher finds two elements.
+    expect(await screen.findByText(/deselect the others/i)).toBeInTheDocument();
+  });
+
+  it('offers to hide a URL from the picker', async () => {
+    renderPage();
+    // Hiding is presentation-only and reversible — the control says "hide",
+    // never "delete", because the probe history is untouched.
+    expect(await screen.findByLabelText(/^Hide a\.example$/)).toBeInTheDocument();
   });
 });

@@ -2090,5 +2090,10 @@ export interface ProbeComparisonReport {
   min_coverage_ratio: number;
   methodology: ProbeComparisonMethodology;
   available: ProbeComparisonAvailable[];
+  /** Hidden URLs that DO have data in the window — lets the picker offer
+   *  "show N hidden" instead of pretending they never existed. Optional so a
+   *  control plane older than v0.28.299 (which does not send it) still parses
+   *  during a rollout. */
+  hidden?: string[];
   modes: ProbeComparisonMode[];
 }

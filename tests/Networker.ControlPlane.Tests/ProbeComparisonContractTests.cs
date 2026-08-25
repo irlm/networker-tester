@@ -33,6 +33,9 @@ public sealed class ProbeComparisonContractTests
         [
             new ProbeComparisonAvailable("https://a.example/", 840, 2, T0),
         ],
+        // Hidden URLs that still have data — the picker offers them back rather
+        // than pretending they never existed.
+        Hidden: [],
         Modes:
         [
             new ProbeComparisonMode(
