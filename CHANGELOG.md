@@ -11,6 +11,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.300] - 2026-08-25
+
+### Fixed
+
+- **The run detail page no longer reports successful modes as total failures.**
+  The "Median & spread per point" table rendered "no usable sample — every
+  sample failed" for any point whose `stats` came back null, but null `stats`
+  only means "no usable *metric*" — which is not the same as a failure. On a
+  real diagnostic run that made TLSRESUME, BROWSER1 and BROWSER2 read as
+  wholly failed while all three were 5/5 successful. The row now distinguishes
+  the three cases it was collapsing: every sample failed (unchanged), some
+  failed and the rest carried no metric, and — the false one — every sample
+  succeeded but the mode reported no metric, which now renders in muted text
+  as "no <metric> recorded — all N samples succeeded" rather than in red.
+  `SamplePoint` already tracked `failedCount` separately from
+  `sampleCount - usableCount` for exactly this reason; only the render
+  conflated them.
+- **`tlsresume` reports its handshake time again instead of no metric.** The
+  frontend metric map mirrors `metrics.rs::primary_metric_value`, where
+  `Tls | TlsResume` both read `tls.handshake_duration_ms`, but the TypeScript
+  side listed only `tls`. `tlsresume` fell through to the HTTP default
+  (`http.total_duration_ms`), which a TLS-only probe never carries, so every
+  tlsresume point looked metric-less and hit the bug above. The mode's metric
+  label was drifting the same way ("Total ms" instead of "Handshake ms").
+- **The under-sampled footer note no longer counts rows that show no number.**
+  "N points had fewer than 3 usable samples — those numbers are readings, not
+  medians" counted metric-less points, so the caption described empty cells.
+- **QUIC handshake rejections are no longer filed as connect failures.**
+  `classify_quic_connection_error` inspected the crypto keywords only inside
+  `ConnectionError::TransportError`; a CONNECTION_CLOSE sent by the peer
+  arrives as `ConnectionError::ConnectionClosed` and fell through a catch-all
+  `_` arm to `ErrorCategory::Tcp`. So an attempt whose own message read
+  "aborted by peer: the cryptographic handshake failed: error 80" was stored
+  as a TCP connect failure. This is the every-run failure mode for a target
+  that does not serve HTTP/3 — the peer answers the Initial, then aborts the
+  handshake with CRYPTO_ERROR — so the misfiling hit every h3 probe against
+  such a host. The classifier now reads the numeric transport error code
+  (`0x0100-0x01ff` = a TLS alert, RFC 9000 §20.1) rather than the rendered
+  text, maps a peer close from the HTTP/3 layer (`ApplicationClosed`) to
+  `Http`, and spells out every `ConnectionError` variant so a future addition
+  cannot silently inherit the `Tcp` default the way this one did.
+- **`pageload3` misfiled the same rejection, harder.** Both of its QUIC
+  handshake sites (cold `run_pageload3_probe`, warm `warmup_pageload3`)
+  hardcoded `ErrorCategory::Tcp` for every handshake failure with no
+  classification at all. They reach the same peer over the same handshake as
+  the h3 runner, so they now share its classifier rather than keeping a second
+  answer. The synchronous `endpoint.connect()` sites are unchanged: those
+  return `ConnectError` (a local/config failure), not a handshake result.
+
+### Notes
+
+- Browser modes still show "no load ms recorded" for completed runs loaded over
+  REST: `AttemptView` carries no `browser` block and no browser phase table
+  exists, so the metric is genuinely absent rather than lost in the UI. The
+  page now says so honestly. Surfacing a real median there needs a schema
+  migration plus a DTO widening, which is out of scope here.
+
+---
+
 ## [0.28.299]
 
 ### Added

@@ -1632,7 +1632,11 @@ pub async fn run_pageload3_probe(run_id: Uuid, seq: u32, cfg: &PageLoadConfig) -
                 seq,
                 started_at,
                 Protocol::PageLoad3,
-                ErrorCategory::Tcp,
+                // Same classifier as the h3 runner: a peer that answers the
+                // Initial and then aborts with CRYPTO_ERROR (how a host that
+                // does not serve HTTP/3 rejects us) is a TLS failure, not a
+                // connect failure.
+                crate::runner::http3::classify_quic_connection_error(&e),
                 format!("QUIC connect: {e}"),
             );
         }
@@ -2805,7 +2809,7 @@ pub async fn warmup_pageload3(
                     seq,
                     started_at,
                     Protocol::PageLoad3,
-                    crate::metrics::ErrorCategory::Tcp,
+                    crate::runner::http3::classify_quic_connection_error(&e),
                     format!("QUIC: {e}"),
                 ),
                 None,

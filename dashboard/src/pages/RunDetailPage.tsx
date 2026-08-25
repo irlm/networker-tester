@@ -740,7 +740,10 @@ export function RunDetailPage() {
 function BurstSamplingTable({ points }: { points: SamplePoint[] }) {
   const multiUrl = new Set(points.map((p) => p.targetUrl)).size > 1;
   const burst = usedBurstSampling(points);
-  const underSampled = points.filter((p) => p.underSampled).length;
+  // Only points that actually render a number: a metric-less point is
+  // under-sampled by the letter of the flag, but the footer's "those
+  // numbers are readings" caption would be describing an empty cell.
+  const underSampled = points.filter((p) => p.underSampled && p.stats).length;
 
   return (
     <div className="table-container mb-4">
@@ -817,9 +820,19 @@ function BurstSamplingTable({ points }: { points: SamplePoint[] }) {
                         {ratio == null ? '-' : `${ratio.toFixed(2)}\u00D7`}
                       </td>
                     </>
-                  ) : (
+                  ) : point.failedCount === point.sampleCount ? (
                     <td className="py-1.5 px-4 text-right text-red-400" colSpan={5}>
                       no usable sample {'\u2014'} every sample failed
+                    </td>
+                  ) : point.failedCount > 0 ? (
+                    <td className="py-1.5 px-4 text-right text-red-400" colSpan={5}>
+                      no usable sample {'\u2014'} {point.failedCount} failed, the rest reported no{' '}
+                      {point.metricLabel.toLowerCase()}
+                    </td>
+                  ) : (
+                    <td className="py-1.5 px-4 text-right text-faint" colSpan={5}>
+                      no {point.metricLabel.toLowerCase()} recorded {'\u2014'} all {point.sampleCount}{' '}
+                      sample{point.sampleCount === 1 ? '' : 's'} succeeded
                     </td>
                   )}
                 </tr>
