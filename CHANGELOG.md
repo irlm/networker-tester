@@ -11,6 +11,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.298]
+
+### Fixed
+
+- **The URL comparison report pooled every runner into one series.** It grouped
+  by URL alone, so samples from different vantage points were averaged together
+  and presented as a property of the site. Measured on production 2026-08-24:
+  `www.microsoft.com`'s median came from 349 attempts across two runners whose
+  own medians were **35 ms** (azure/eastus) and **76 ms** (gcp/us-east1) — with
+  **321 of the 349 from the slower one**, so the published number described the
+  runner, not the URL. Every URL in that project already had two runners' data
+  pooled this way.
+
+  This is the same trap the bucket rule exists to prevent ("a window-wide
+  aggregate would reward a URL for being probed at quiet hours"), one dimension
+  over. The query now carries the runner, and every bucket reports
+  `runner_count` and the contributing `runners`.
+
+### Added
+
+- **`group_by=runner` on the comparison report** — races vantage points against
+  each other for a single URL, answering "is the site slow, or is it slow *from
+  here*". `group_by=url` remains the default, so existing callers are unchanged.
+
+  Runner mode **refuses more than one URL** rather than averaging across sites:
+  pooling two different URLs into one per-runner series would recreate exactly
+  the blending this mode exists to fix, rotated ninety degrees.
+
+  Covered by tests against a real PostgreSQL, because the changed logic lives
+  entirely in SQL — the runner join, the `$6` series key and the appended
+  columns are invisible to unit tests over `ProbeComparisonLogic`, which start
+  from rows the query already produced.
+
+---
+
 ## [0.28.297]
 
 ### Fixed
