@@ -68,24 +68,39 @@ export function ProbeComparePage() {
   );
   const window_ = params.get('window') ?? '7d';
   const bucket = params.get('bucket') ?? '1h';
+  // What is being raced. 'runner' compares vantage points for ONE url —
+  // "is the site slow, or slow from here" — and the server rejects more than
+  // one, because pooling two sites per runner is the same blending inverted.
+  const groupBy = (params.get('group_by') === 'runner' ? 'runner' : 'url') as 'url' | 'runner';
+  const [showHidden, setShowHidden] = useState(false);
+  const [hiding, setHiding] = useState(false);
 
   const refresh = useCallback(() => {
     if (!projectId) return;
     setLoading(true);
     api
-      .getProbeComparison(projectId, { urls: selected, window: window_, bucket })
+      .getProbeComparison(projectId, {
+        // Runner mode with != 1 url is a 400 by design; don't ask for it and
+        // then render the error — the picker below says what to do instead.
+        urls: groupBy === 'runner' && selected.length !== 1 ? [] : selected,
+        window: window_,
+        bucket,
+        groupBy,
+        includeHidden: showHidden,
+      })
       .then((r) => {
         setReport(r);
         setError(null);
       })
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
-  }, [projectId, selected, window_, bucket]);
+  }, [projectId, selected, window_, bucket, groupBy, showHidden]);
 
   // Refetch on every control change (resetKey) and keep the comparison live
   // while it is open — a probe schedule ticks under it. usePolling fires an
   // immediate tick, so this is also the initial load.
-  usePolling(refresh, 60_000, true, `${selected.join(',')}|${window_}|${bucket}`);
+  usePolling(refresh, 60_000, true,
+    `${selected.join(',')}|${window_}|${bucket}|${groupBy}|${showHidden}`);
 
   // Follow the data: when the selection changes, the mode that was open may no
   // longer exist. Fall back to the mode with the most shared coverage — the one
@@ -120,6 +135,29 @@ export function ProbeComparePage() {
   };
 
   const available = report?.available ?? [];
+  const hidden = report?.hidden ?? [];
+
+  /** Whole-list PUT, then refetch. Hiding is presentation-only — the probe
+   *  history is untouched, so anything hidden can be brought straight back. */
+  const applyHidden = async (urls: string[]) => {
+    if (!projectId) return;
+    setHiding(true);
+    try {
+      await api.setHiddenProbeUrls(projectId, urls);
+      refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setHiding(false);
+    }
+  };
+  const hideUrl = (url: string) => {
+    // Drop it from the selection too, or the report keeps rendering a series
+    // whose chip has just vanished from the picker.
+    if (selected.includes(url)) setSelection(selected.filter((u) => u !== url));
+    void applyHidden([...hidden, url]);
+  };
+  const unhideUrl = (url: string) => void applyHidden(hidden.filter((u) => u !== url));
   const exportQuery = new URLSearchParams({
     urls: selected.join(','),
     window: window_,
@@ -151,11 +189,35 @@ export function ProbeComparePage() {
       {/* ── Controls: what to compare, over what, at what resolution ───────── */}
       <section aria-labelledby="compare-controls" className="mb-6 rounded-lg border border-gray-800">
         <div className="border-b border-gray-800 bg-[var(--bg-surface)] p-4">
-          <h2 id="compare-controls" className="text-sm font-bold text-gray-100">
-            URLs to compare
-          </h2>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 id="compare-controls" className="text-sm font-bold text-gray-100">
+              {groupBy === 'runner' ? 'Runners to compare' : 'URLs to compare'}
+            </h2>
+            {/* The axis. Same measurements, different question: which SITE is
+                faster, or which VANTAGE POINT is. */}
+            <div className="flex items-center gap-1 text-xs" role="group" aria-label="Comparison axis">
+              <span className="text-gray-400">Compare</span>
+              {(['url', 'runner'] as const).map((g) => (
+                <button
+                  key={g}
+                  type="button"
+                  aria-pressed={groupBy === g}
+                  onClick={() => setParam('group_by', g)}
+                  className={`rounded px-2 py-1 transition-colors ${
+                    groupBy === g
+                      ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/40'
+                      : 'border border-gray-800 text-gray-400 hover:text-gray-200'
+                  }`}
+                >
+                  {g === 'url' ? 'URLs' : 'Runners'}
+                </button>
+              ))}
+            </div>
+          </div>
           <p className="mt-1 text-xs text-gray-400">
-            Pick at least two of the URLs this project has probed. Up to {MAX_URLS}.
+            {groupBy === 'runner'
+              ? 'Pick exactly one URL. Every runner that probed it becomes a contestant — this answers whether a site is slow, or slow from a particular vantage point.'
+              : `Pick at least two of the URLs this project has probed. Up to ${MAX_URLS}.`}
           </p>
         </div>
 
@@ -195,7 +257,7 @@ export function ProbeComparePage() {
                         disabled={atCap}
                         onChange={() => toggleUrl(a.url)}
                       />
-                      <span className="min-w-0">
+                      <span className="min-w-0 flex-1">
                         <span className="block truncate text-gray-200" title={a.url}>
                           {shortLabel(a.url)}
                         </span>
@@ -204,11 +266,54 @@ export function ProbeComparePage() {
                           {a.mode_count} mode{a.mode_count === 1 ? '' : 's'}
                         </span>
                       </span>
+                      {/* Hide, not delete: the probe history stays, so this is
+                          always undoable from "show hidden" below. Inside the
+                          label, so stopPropagation keeps it from toggling the
+                          checkbox it sits on. */}
+                      <button
+                        type="button"
+                        title={`Hide ${a.url} from this list`}
+                        aria-label={`Hide ${shortLabel(a.url)}`}
+                        disabled={hiding}
+                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); hideUrl(a.url); }}
+                        className="shrink-0 rounded px-1.5 py-0.5 text-faint hover:bg-gray-800 hover:text-gray-200 disabled:opacity-40"
+                      >
+                        ✕
+                      </button>
                     </label>
                   </li>
                 );
               })}
             </ul>
+          )}
+
+          {(hidden.length > 0 || showHidden) && (
+            <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
+              <button
+                type="button"
+                onClick={() => setShowHidden((v) => !v)}
+                className="rounded border border-gray-800 px-2 py-1 text-gray-400 hover:text-gray-200"
+              >
+                {showHidden ? 'Hide hidden URLs' : `Show hidden (${hidden.length})`}
+              </button>
+              {showHidden && hidden.length > 0 && (
+                <span className="flex flex-wrap items-center gap-2 text-faint">
+                  hidden:
+                  {hidden.map((u) => (
+                    <button
+                      key={u}
+                      type="button"
+                      disabled={hiding}
+                      onClick={() => unhideUrl(u)}
+                      title={`Restore ${u} to the list`}
+                      className="rounded border border-gray-800 px-2 py-0.5 text-gray-300 hover:border-cyan-500/40 hover:text-cyan-300 disabled:opacity-40"
+                    >
+                      {shortLabel(u)} ↩
+                    </button>
+                  ))}
+                </span>
+              )}
+            </div>
           )}
 
           <div className="mt-4 flex flex-wrap items-center gap-4">
@@ -235,8 +340,15 @@ export function ProbeComparePage() {
             {selected.length > 0 && (
               <Button size="sm" onClick={() => setSelection([])}>Clear selection</Button>
             )}
-            {selected.length === 1 && (
+            {groupBy === 'url' && selected.length === 1 && (
               <span className="text-xs text-yellow-400">Pick one more URL to compare.</span>
+            )}
+            {groupBy === 'runner' && selected.length !== 1 && (
+              <span className="text-xs text-yellow-400">
+                {selected.length === 0
+                  ? 'Pick one URL — its runners become the contestants.'
+                  : 'Runner comparison takes exactly one URL; deselect the others.'}
+              </span>
             )}
           </div>
         </div>

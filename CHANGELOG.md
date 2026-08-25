@@ -11,6 +11,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.299]
+
+### Added
+
+- **A comparison axis on the URL comparison page — URLs or Runners.** The
+  backend gained `group_by=runner` in v0.28.298; the page can now use it. Same
+  measurements, different question: which *site* is faster, or which *vantage
+  point* is. Runner mode takes exactly one URL and makes every runner that
+  probed it a contestant; picking more than one shows the reason rather than
+  firing a request the server rejects by design.
+
+- **Hide URLs from the comparison picker, reversibly.** An × on each entry
+  removes it from the list, and "Show hidden (N)" brings any of them back. The
+  hidden list lives in `project.settings`, so it follows the project rather than
+  the browser, and is shared by everyone working in it.
+
+  **Hiding never touches probe data.** A hidden URL keeps its full history and
+  still reports when compared explicitly — so hiding cannot blank a comparison
+  someone has open, and a URL hidden today can be restored next month with its
+  measurements intact. Deleting the attempts would also silently rewrite every
+  historical report that covered them. `GET` gained `include_hidden`, and the
+  report returns the hidden URLs that still have data so the page can offer them
+  back instead of pretending they never existed.
+
+  The write is a whole-list `PUT`: the client always holds the full set, so a
+  replace is idempotent and two operators toggling at once cannot interleave
+  into a state neither asked for. It merges into `project.settings` rather than
+  overwriting, since that key is a shared bag.
+
+---
+
 ## [0.28.298]
 
 ### Fixed

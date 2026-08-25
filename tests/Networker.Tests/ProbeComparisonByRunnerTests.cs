@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.EntityFrameworkCore;
@@ -217,5 +218,121 @@ public sealed class ProbeComparisonByRunnerTests(ControlPlaneFixture fx) : IClas
         var resp = await fx.CreateAuthenticatedClient().GetAsync(
             $"/api/projects/{ControlPlaneFixture.SeededProjectId}/reports/probe-comparison?group_by=sideways");
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    // ── Hiding URLs from the picker ───────────────────────────────────────
+    // Reversible by construction: hiding writes a list into project.settings and
+    // touches no probe data, so a URL hidden today still has its history next
+    // month. Deleting the attempts would also silently rewrite every historical
+    // report that covered them.
+
+    private async Task<HttpResponseMessage> SetHiddenAsync(params string[] urls)
+    {
+        var body = new StringContent(
+            JsonSerializer.Serialize(new { urls }), Encoding.UTF8, "application/json");
+        return await fx.CreateAuthenticatedClient().PutAsync(
+            $"/api/projects/{ControlPlaneFixture.SeededProjectId}/reports/probe-comparison/hidden", body);
+    }
+
+    private static List<string> AvailableUrls(JsonDocument doc) =>
+        doc.RootElement.GetProperty("available").EnumerateArray()
+           .Select(e => e.GetProperty("url").GetString()!).ToList();
+
+    [Fact]
+    public async Task A_hidden_url_leaves_the_picker_but_is_still_listed_as_hidden()
+    {
+        await SeedAsync();
+        Assert.Equal(HttpStatusCode.OK, (await SetHiddenAsync(Url)).StatusCode);
+        try
+        {
+            using var doc = await GetAsync("window=24h&bucket=1h");
+            Assert.DoesNotContain(Url, AvailableUrls(doc));
+
+            // Not pretended out of existence — the page can offer "show hidden".
+            var hidden = doc.RootElement.GetProperty("hidden").EnumerateArray()
+                .Select(e => e.GetString()).ToList();
+            Assert.Contains(Url, hidden);
+        }
+        finally
+        {
+            await SetHiddenAsync();   // leave the shared fixture as we found it
+        }
+    }
+
+    [Fact]
+    public async Task include_hidden_brings_it_back()
+    {
+        await SeedAsync();
+        await SetHiddenAsync(Url);
+        try
+        {
+            using var doc = await GetAsync("window=24h&bucket=1h&include_hidden=true");
+            Assert.Contains(Url, AvailableUrls(doc));
+        }
+        finally
+        {
+            await SetHiddenAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Hiding_never_touches_the_probe_data()
+    {
+        // The property that makes this reversible. A hidden URL still reports in
+        // full when explicitly compared, so hiding cannot blank a comparison
+        // somebody has open, and unhiding restores everything.
+        await SeedAsync();
+        await SetHiddenAsync(Url);
+        try
+        {
+            using var doc = await GetAsync(
+                $"urls={Uri.EscapeDataString(Url)}&group_by=runner&window=24h&bucket=1h");
+            var http2 = doc.RootElement.GetProperty("modes").EnumerateArray()
+                .Single(m => m.GetProperty("mode").GetString() == "http2");
+            Assert.Equal("fast-runner", http2.GetProperty("crowns").GetProperty("fastest").GetString());
+        }
+        finally
+        {
+            await SetHiddenAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Unhiding_restores_the_picker_entry()
+    {
+        await SeedAsync();
+        await SetHiddenAsync(Url);
+        await SetHiddenAsync();      // empty list = nothing hidden
+        using var doc = await GetAsync("window=24h&bucket=1h");
+        Assert.Contains(Url, AvailableUrls(doc));
+    }
+
+    [Fact]
+    public async Task Hiding_preserves_other_keys_in_project_settings()
+    {
+        // settings is a shared bag; rewriting it wholesale would drop whatever
+        // else lives there.
+        using (var scope = fx.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<NetworkerDbContext>();
+            var proj = db.Projects.First(p => p.ProjectId == ControlPlaneFixture.SeededProjectId);
+            proj.Settings = """{"unrelated_key":"keep-me"}""";
+            db.SaveChanges();
+        }
+
+        await SetHiddenAsync("https://x.example/");
+        try
+        {
+            using var scope = fx.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<NetworkerDbContext>();
+            var settings = db.Projects.First(p => p.ProjectId == ControlPlaneFixture.SeededProjectId).Settings;
+            using var doc = JsonDocument.Parse(settings);
+            Assert.Equal("keep-me", doc.RootElement.GetProperty("unrelated_key").GetString());
+            Assert.Single(doc.RootElement.GetProperty("hidden_probe_urls").EnumerateArray());
+        }
+        finally
+        {
+            await SetHiddenAsync();
+        }
     }
 }

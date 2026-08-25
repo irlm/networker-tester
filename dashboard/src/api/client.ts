@@ -828,16 +828,32 @@ export const api = {
    */
   getProbeComparison: (
     projectId: string,
-    opts: { urls?: string[]; window?: string; bucket?: string; minSamples?: number } = {},
+    opts: {
+      urls?: string[]; window?: string; bucket?: string; minSamples?: number;
+      /** 'runner' races vantage points for ONE url; the server 400s on more. */
+      groupBy?: 'url' | 'runner';
+      includeHidden?: boolean;
+    } = {},
   ) => {
     const qs = new URLSearchParams();
     if (opts.urls?.length) qs.set('urls', opts.urls.join(','));
     if (opts.window) qs.set('window', opts.window);
     if (opts.bucket) qs.set('bucket', opts.bucket);
     if (opts.minSamples !== undefined) qs.set('min_samples', String(opts.minSamples));
+    if (opts.groupBy) qs.set('group_by', opts.groupBy);
+    if (opts.includeHidden) qs.set('include_hidden', 'true');
     const q = qs.toString();
     return request<import('./types').ProbeComparisonReport>(
       projectUrl(projectId, `reports/probe-comparison${q ? `?${q}` : ''}`),
     );
   },
+
+  /** Replace the project's hidden-URL list. Whole-list PUT: the client always
+   *  holds the full set, so a replace is idempotent and two operators toggling
+   *  at once cannot interleave into a state neither asked for. */
+  setHiddenProbeUrls: (projectId: string, urls: string[]) =>
+    request<{ hidden: string[] }>(
+      projectUrl(projectId, 'reports/probe-comparison/hidden'),
+      { method: 'PUT', body: JSON.stringify({ urls }) },
+    ),
 };

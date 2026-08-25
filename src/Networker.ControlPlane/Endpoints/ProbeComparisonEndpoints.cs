@@ -1,3 +1,6 @@
+using Microsoft.EntityFrameworkCore;
+using Networker.Data;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Networker.ControlPlane.Auth;
 using Networker.ControlPlane.Reports;
@@ -74,6 +77,7 @@ public static class ProbeComparisonEndpoints
             string? bucket,
             int? min_samples,
             string? group_by,
+            bool? include_hidden,
             string? format,
             NpgsqlDataSource dataSource,
             ReportExporterResolver exporters,
@@ -137,7 +141,8 @@ public static class ProbeComparisonEndpoints
 
             var report = await BuildReportAsync(
                 dataSource, projectId, selected, from, to,
-                window ?? DefaultWindow, bucket ?? DefaultBucket, bucketSeconds, minSamples, groupBy, ct);
+                window ?? DefaultWindow, bucket ?? DefaultBucket, bucketSeconds, minSamples, groupBy,
+                include_hidden ?? false, ct);
 
             if (reportFormat == ReportFormat.Json)
             {
@@ -149,8 +154,71 @@ public static class ProbeComparisonEndpoints
                 fileBase: $"url-comparison-{ReportExport.SafeFileBase(projectId)}", requested: format);
         }).RequireAuthorization(AuthPolicies.ProjectMember);
 
+        // PUT .../probe-comparison/hidden — replace the hidden-URL list.
+        //
+        // A whole-list PUT rather than add/remove verbs: the client always holds
+        // the full set, and a replace is idempotent, so two operators toggling at
+        // once cannot interleave into a state neither asked for.
+        //
+        // Operator, not Member: hiding changes what every member of the project
+        // sees in the picker.
+        app.MapPut("/api/projects/{projectId}/reports/probe-comparison/hidden", async (
+            string projectId,
+            HiddenUrlsRequest body,
+            NetworkerDbContext db,
+            CancellationToken ct) =>
+        {
+            var project = await db.Projects.FirstOrDefaultAsync(p => p.ProjectId == projectId, ct);
+            if (project is null)
+            {
+                return Results.NotFound();
+            }
+
+            var urls = (body.urls ?? [])
+                .Select(u => u?.Trim() ?? string.Empty)
+                .Where(u => u.Length > 0)
+                .Distinct(StringComparer.Ordinal)
+                .Take(MaxHiddenUrls)
+                .ToList();
+
+            // Merge into the existing settings object — settings is a shared bag,
+            // and rewriting it wholesale would drop every other key in it.
+            var settings = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+            if (!string.IsNullOrWhiteSpace(project.Settings))
+            {
+                try
+                {
+                    using var existing = JsonDocument.Parse(project.Settings);
+                    if (existing.RootElement.ValueKind == JsonValueKind.Object)
+                    {
+                        foreach (var prop in existing.RootElement.EnumerateObject())
+                        {
+                            settings[prop.Name] = prop.Value.Clone();
+                        }
+                    }
+                }
+                catch (JsonException)
+                {
+                    // Unparseable settings: start clean rather than 500.
+                }
+            }
+            settings[HiddenUrlsKey] = JsonSerializer.SerializeToElement(urls);
+
+            project.Settings = JsonSerializer.Serialize(settings);
+            project.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync(ct);
+
+            return Results.Ok(new { hidden = urls });
+        }).RequireAuthorization(AuthPolicies.ProjectOperator);
+
         return app;
     }
+
+    /// <summary>Bound so a runaway client cannot grow project.settings without
+    /// limit; well above any real picker.</summary>
+    internal const int MaxHiddenUrls = 200;
+
+    public sealed record HiddenUrlsRequest(List<string>? urls);
 
     /// <summary>Comma-separated URL list, trimmed, blank-free and de-duplicated
     /// while keeping the caller's order (the page's column order).</summary>
@@ -174,9 +242,21 @@ public static class ProbeComparisonEndpoints
         int bucketSeconds,
         int minSamples,
         string groupBy,
+        bool includeHidden,
         CancellationToken ct)
     {
         var available = await LoadAvailableAsync(dataSource, projectId, from, to, ct);
+
+        // Hidden URLs leave the PICKER but never the data: a URL already chosen
+        // (or still on a schedule) keeps reporting, so hiding can't silently
+        // blank a comparison someone is looking at.
+        var hidden = await LoadHiddenUrlsAsync(dataSource, projectId, ct);
+        var hiddenPresent = available.Where(a => hidden.Contains(a.Url))
+                                     .Select(a => a.Url).ToList();
+        if (!includeHidden && hiddenPresent.Count > 0)
+        {
+            available = available.Where(a => !hidden.Contains(a.Url)).ToList();
+        }
 
         // The number of buckets the window COULD hold — the denominator every
         // coverage figure is honest about. Not "buckets we saw data in", which
@@ -227,6 +307,7 @@ public static class ProbeComparisonEndpoints
                 Crowns: "fastest = lowest median of per-bucket p50s; most reliable = highest success rate; most consistent = lowest p95/p50; phase crowns are the lowest median DNS / TCP / TLS / TTFB. A tie awards no crown, and a phase nothing measured never wins one",
                 Modes: "modes are compared separately — an http1 probe and an http3 probe of the same URL are not the same race"),
             Available: available,
+            Hidden: hiddenPresent,
             Modes: modes);
     }
 
@@ -448,6 +529,58 @@ public static class ProbeComparisonEndpoints
 
     private sealed record ModePoint(string Mode, ProbeComparisonLogic.BucketPoint Point);
 
+
+    /// <summary>Key inside <c>project.settings</c> (jsonb) holding the URLs the
+    /// picker should stop offering.</summary>
+    internal const string HiddenUrlsKey = "hidden_probe_urls";
+
+    /// <summary>
+    /// URLs this project has hidden from the comparison picker.
+    ///
+    /// <para>Hiding is presentation-only and reversible ON PURPOSE: the probe
+    /// history stays exactly where it is, so a URL hidden today can be brought
+    /// back next month with its measurements intact. Deleting the attempts would
+    /// also silently change every historical report that covered them.</para>
+    ///
+    /// <para>Stored in project.settings rather than a new table: it is a handful
+    /// of strings per project, and settings is already the jsonb bag for exactly
+    /// this kind of per-project preference.</para>
+    /// </summary>
+    internal static async Task<HashSet<string>> LoadHiddenUrlsAsync(
+        NpgsqlDataSource dataSource, string projectId, CancellationToken ct)
+    {
+        var hidden = new HashSet<string>(StringComparer.Ordinal);
+        try
+        {
+            await using var cmd = dataSource.CreateCommand(
+                "SELECT settings FROM project WHERE project_id = $1");
+            cmd.Parameters.AddWithValue(projectId);
+            var raw = await cmd.ExecuteScalarAsync(ct) as string;
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                return hidden;
+            }
+            using var doc = JsonDocument.Parse(raw);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty(HiddenUrlsKey, out var arr)
+                && arr.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var e in arr.EnumerateArray())
+                {
+                    if (e.ValueKind == JsonValueKind.String && e.GetString() is { Length: > 0 } u)
+                    {
+                        hidden.Add(u);
+                    }
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            // Malformed settings must not take the report down: nothing hidden.
+        }
+        return hidden;
+    }
+
     private static async Task<List<ProbeComparisonAvailable>> LoadAvailableAsync(
         NpgsqlDataSource dataSource, string projectId, DateTime from, DateTime to, CancellationToken ct)
     {
@@ -567,6 +700,10 @@ public sealed record ProbeComparisonReport(
     [property: JsonPropertyName("min_coverage_ratio")] double MinCoverageRatio,
     [property: JsonPropertyName("methodology")] ProbeComparisonMethodology Methodology,
     [property: JsonPropertyName("available")] IReadOnlyList<ProbeComparisonAvailable> Available,
+    /// <summary>URLs this project has hidden that DO have data in the window —
+    /// so the page can offer "show N hidden" instead of pretending they never
+    /// existed.</summary>
+    [property: JsonPropertyName("hidden")] IReadOnlyList<string> Hidden,
     [property: JsonPropertyName("modes")] IReadOnlyList<ProbeComparisonMode> Modes);
 
 public sealed record ProbeComparisonMethodology(
