@@ -67,7 +67,11 @@ export function primaryMetricValue(a: LiveAttempt): number | null {
       return a.udp?.rtt_avg_ms ?? null;
     case 'dns':
       return a.dns?.duration_ms ?? null;
-    case 'tls':
+    // tlsresume reports the RESUMED handshake, same field as tls — mirrors
+    // metrics.rs primary_metric_value (Tls | TlsResume => tls.handshake_ms).
+    // Omitting it here dropped the mode to the http default, which a TLS-only
+    // probe never carries, so every tlsresume point looked metric-less.
+    case 'tls': case 'tlsresume':
       return a.tls?.handshake_duration_ms ?? null;
     case 'download': case 'download1': case 'download2': case 'download3':
     case 'upload': case 'upload1': case 'upload2': case 'upload3':
@@ -102,7 +106,7 @@ export function primaryMetricLabel(protocol: string): string {
     case 'tcp': return 'Connect ms';
     case 'udp': return 'RTT avg ms';
     case 'dns': return 'Resolve ms';
-    case 'tls': return 'Handshake ms';
+    case 'tls': case 'tlsresume': return 'Handshake ms';
     case 'download': case 'download1': case 'download2': case 'download3':
     case 'upload': case 'upload1': case 'upload2': case 'upload3':
     case 'webdownload': case 'webupload':

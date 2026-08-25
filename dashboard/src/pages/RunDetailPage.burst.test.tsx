@@ -84,6 +84,26 @@ function burstSample(sampleIndex: number, ms: number): LiveAttempt {
   };
 }
 
+/** A mode whose primary metric the REST /attempts endpoint does not carry:
+ *  browser1's number lives in `browser.load_ms`, and AttemptView has no
+ *  `browser` block (no browser phase table exists), so a completed run loads
+ *  these as successes with no metric. */
+function metriclessSample(sampleIndex: number, success = true): LiveAttempt {
+  return {
+    attempt_id: `a-browser1-${sampleIndex}`,
+    run_id: RUN_ID,
+    protocol: 'browser1',
+    sequence_num: sampleIndex,
+    started_at: '2026-08-20T12:00:00Z',
+    finished_at: '2026-08-20T12:00:01Z',
+    success,
+    retry_count: 0,
+    sample_index: sampleIndex,
+    target_url: 'https://example.com/',
+    ...(success ? {} : { error_message: 'navigation failed' }),
+  };
+}
+
 function mockAll(attempts: LiveAttempt[], current: TestRun = run()) {
   mocks.useTestRunQuery.mockReturnValue({ data: current, isPending: false, error: null, refetch: vi.fn() });
   mocks.useRunAttemptsQuery.mockReturnValue({ data: attempts, isPending: false, error: null, refetch: vi.fn() });
@@ -198,6 +218,61 @@ describe('RunDetailPage — burst sampling median & spread', () => {
     // The healthy URL still gets its median — one dead URL does not blank the
     // whole section.
     expect(within(section).getByText('11.00ms')).toBeInTheDocument();
+  });
+
+  // A success is not a failure. Three modes on the real run detail (TLSRESUME,
+  // BROWSER1, BROWSER2) were 5/5 successful yet the row asserted "every sample
+  // failed", because a null `stats` was read as total failure when it really
+  // means "no usable metric". The two causes are distinct and both tested.
+  it('does not claim failure when every sample succeeded but carried no metric', () => {
+    mockAll([0, 1, 2, 3, 4].map((i) => metriclessSample(i)));
+    renderPage();
+
+    const section = burstSection();
+    expect(within(section).queryByText(/every sample failed/)).not.toBeInTheDocument();
+    expect(within(section).queryByText(/\d+ failed/)).not.toBeInTheDocument();
+    expect(
+      within(section).getByText(/no load ms recorded .* all 5 samples succeeded/),
+    ).toBeInTheDocument();
+  });
+
+  it('separates the failed samples from the metric-less ones when both occur', () => {
+    mockAll([
+      ...[0, 1, 2].map((i) => metriclessSample(i)),
+      ...[3, 4].map((i) => metriclessSample(i, false)),
+    ]);
+    renderPage();
+
+    const section = burstSection();
+    expect(within(section).queryByText(/every sample failed/)).not.toBeInTheDocument();
+    expect(
+      within(section).getByText(/2 failed, the rest reported no load ms/),
+    ).toBeInTheDocument();
+  });
+
+  it('gives tlsresume a real median instead of treating it as metric-less', () => {
+    // tlsresume reports the resumed handshake in `tls`, the same field as tls.
+    // The TS metric map omitted it, dropping the mode to the http default that
+    // a TLS-only probe never carries — so the row read as metric-less.
+    mockAll(
+      [8, 10, 9].map((ms, i) => ({
+        ...burstSample(i, ms),
+        attempt_id: `a-tlsresume-${i}`,
+        protocol: 'tlsresume',
+        http: undefined,
+        tls: {
+          handshake_duration_ms: ms,
+          protocol_version: 'TLSv1.3',
+          cipher_suite: 'TLS_AES_128_GCM_SHA256',
+        },
+      })),
+    );
+    renderPage();
+
+    const section = burstSection();
+    expect(within(section).queryByText(/no usable sample/)).not.toBeInTheDocument();
+    expect(within(section).getByText('9.00ms')).toBeInTheDocument();
+    expect(within(section).getByText(/handshake ms/i)).toBeInTheDocument();
   });
 
   it('renders no median section for a run whose points ran once each', () => {
