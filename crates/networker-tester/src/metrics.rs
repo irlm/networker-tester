@@ -3746,6 +3746,12 @@ pub enum ErrorCategory {
     Udp,
     Timeout,
     Config,
+    /// The target does not offer this protocol at all, so the probe was not
+    /// run — distinct from a probe that ran and failed. Currently set by the
+    /// HTTP/3 pre-flight when the origin advertises no h3 (see
+    /// `runner::h3_offer`). A not-offered sample is still an unsuccessful
+    /// sample; it is never counted as a success.
+    Unsupported,
     Other,
 }
 
@@ -3759,6 +3765,7 @@ impl std::fmt::Display for ErrorCategory {
             ErrorCategory::Udp => "udp",
             ErrorCategory::Timeout => "timeout",
             ErrorCategory::Config => "config",
+            ErrorCategory::Unsupported => "unsupported",
             ErrorCategory::Other => "other",
         };
         write!(f, "{s}")

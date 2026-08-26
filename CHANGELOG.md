@@ -11,6 +11,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.301] - 2026-08-25
+
+### Added
+
+- **HTTP/3 pre-flight: h3 modes are no longer dispatched at targets that do not
+  offer HTTP/3.** A raw URL's h3 support cannot be known statically, so the
+  control-plane gate could never decide it: `http3` and `browser3` are
+  `requires: any` in `shared/modes.json`, an arbitrary URL has no proxy stack
+  for the stack rule, and there is no `/health` self-report for the live rule.
+  A "Full" mode set aimed at a third-party URL therefore always enqueued h3,
+  and against a host without HTTP/3 every h3 sample failed with a QUIC
+  handshake rejection that said nothing about the network.
+
+  The tester now asks the target first. Over the web an origin advertises h3
+  with `Alt-Svc: h3=":443"` (RFC 9114 §3.1); without it no client can discover
+  h3 at all. This is the same signal `install.sh` already uses to decide
+  whether a stack came up with QUIC, and every h3-capable stack the installer
+  configures sets the header (nginx :8444, caddy :8454, IIS :8445, and the bare
+  networker-endpoint). When the origin answers and advertises no h3, the h3
+  modes are recorded as `unsupported` — an unsuccessful sample, never a
+  success, but one that does not blame the network — with the reason spelled
+  out. The mode list comes from `shared/http-stacks.json` `h3_modes`, the same
+  list the control plane gates on, so the two sides cannot drift.
+
+  **It fails open.** Only a target that answered AND advertised no h3 is
+  skipped; a timeout, a connection error, or any other uncertainty runs the
+  probe exactly as before. A pre-flight must never invent a failure the network
+  did not produce. The check costs at most one HTTP/1.1 request per origin per
+  run (memoised), and it stays runner-side, so the control plane never fetches
+  a user-supplied URL.
+
+- **`ErrorCategory::Unsupported`** (`"unsupported"`) — the target does not offer
+  this protocol, so the probe was not run. Distinct from a probe that ran and
+  failed.
+
+### Fixed
+
+- **`advertised_alt_svc` is populated instead of always being null.** The field
+  existed end to end — Rust struct, DB column, C# API, frontend type — but
+  every construction site set it to `None`, so a URL diagnostic never recorded
+  what the origin advertised. It is now derived from the response headers the
+  protocol probes already capture, the same way `security_headers` is.
+
+### Notes
+
+- The REST attempts DTO (`AttemptView`) carries `error_message` but no error
+  category, so the run detail's aggregate table still counts a not-offered
+  sample among the failures; the per-attempt reason is visible because the
+  message is carried. The category IS persisted (`ErrorRecord.ErrorCategory`,
+  indexed), so surfacing it needs a DTO widening plus UI work and no migration.
+- An origin can also publish h3 through a DNS HTTPS/SVCB record (RFC 9460) with
+  no `Alt-Svc` header. Such a target reads as not-offered here; the cost is the
+  previous behaviour (the probe runs and fails), not a wrong measurement.
+
+---
+
 ## [0.28.300] - 2026-08-25
 
 ### Fixed

@@ -130,6 +130,19 @@ pub async fn dispatch_once(
     throughput_cfg: &ThroughputConfig,
     pageload_cfg: &PageLoadConfig,
 ) -> RequestAttempt {
+    // HTTP/3 pre-flight. A target that advertises no h3 cannot serve these
+    // modes to any client, so dispatching them only produces a QUIC handshake
+    // rejection that says nothing about the network. Fails OPEN: only a target
+    // that answered AND offered no h3 is skipped (see `runner::h3_offer`).
+    if crate::http_stacks::is_h3_mode(&proto.to_string())
+        && matches!(
+            crate::runner::h3_offer::discover(run_id, target, cfg).await,
+            crate::runner::h3_offer::H3Offer::NotOffered
+        )
+    {
+        return not_offered_attempt(proto, run_id, seq);
+    }
+
     let mut attempt = match attempt_cap(proto, cfg) {
         Some(cap) => {
             let started_at = Utc::now();
@@ -177,6 +190,24 @@ pub async fn dispatch_once(
     // each streamed attempt to its URL by this field.
     attempt.target_url = Some(target.to_string());
     attempt
+}
+
+/// The attempt recorded for an h3 mode the target does not offer. It is NOT a
+/// success — nothing was measured — but its category says "not offered" rather
+/// than blaming the network, and the run reads honestly.
+fn not_offered_attempt(proto: &Protocol, run_id: Uuid, seq: u32) -> RequestAttempt {
+    crate::runner::pageload::error_attempt_proto(
+        Uuid::new_v4(),
+        run_id,
+        seq,
+        Utc::now(),
+        proto.clone(),
+        ErrorCategory::Unsupported,
+        format!(
+            "{proto} not run: the target advertises no HTTP/3 (no `Alt-Svc: h3=\"...\"` \
+             on its response), so it offers no HTTP/3 for a client to discover"
+        ),
+    )
 }
 
 /// The failed attempt recorded when a short diagnostic probe blows its cap —
@@ -1114,7 +1145,7 @@ mod attempt_stream_tests {
 
 #[cfg(test)]
 mod attempt_cap_tests {
-    use super::{attempt_cap, stalled_attempt};
+    use super::{attempt_cap, not_offered_attempt, stalled_attempt};
     use crate::metrics::{ErrorCategory, Protocol};
     use crate::runner::http::RunConfig;
     use chrono::Utc;
@@ -1173,6 +1204,51 @@ mod attempt_cap_tests {
             attempt_cap(&Protocol::Path, &cfg),
             Some(Duration::from_secs(120))
         );
+    }
+
+    #[test]
+    fn not_offered_attempt_is_an_unsuccessful_but_unblamed_sample() {
+        // The production case: a "Full" mode set aimed at a target that does
+        // not serve HTTP/3. The sample must NOT count as a success (nothing
+        // was measured) but must not blame the network either.
+        let a = not_offered_attempt(&Protocol::Http3, Uuid::nil(), 3);
+        assert!(!a.success, "nothing was measured, so this is not a success");
+        assert_eq!(a.protocol, Protocol::Http3);
+        assert_eq!(a.sequence_num, 3);
+        let err = a.error.expect("a skipped attempt still explains itself");
+        assert_eq!(err.category, ErrorCategory::Unsupported);
+        assert!(
+            err.message.contains("Alt-Svc"),
+            "the reason must name the missing advertisement: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn every_h3_mode_in_the_shared_manifest_is_gated() {
+        // Drift guard: the pre-flight keys off shared/http-stacks.json, the
+        // SAME list the control plane gates on. A new h3 mode added there must
+        // be recognised here without touching this file.
+        for mode in crate::http_stacks::h3_modes() {
+            assert!(
+                crate::http_stacks::is_h3_mode(mode),
+                "{mode} is in the manifest but not recognised"
+            );
+        }
+        assert!(crate::http_stacks::is_h3_mode("http3"));
+        assert!(crate::http_stacks::is_h3_mode("browser3"));
+        // Modes that ride TCP must never be pre-flighted away.
+        for mode in [
+            "http1",
+            "http2",
+            "tls",
+            "tlsresume",
+            "curl",
+            "browser1",
+            "dns",
+        ] {
+            assert!(!crate::http_stacks::is_h3_mode(mode), "{mode} is not h3");
+        }
     }
 
     #[test]
