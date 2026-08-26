@@ -17,6 +17,12 @@ on:
 permissions:
   contents: write
   actions: write
+  # auto-tag verifies the merged PR's required checks by querying
+  # repository.pullRequest over GraphQL. On a PRIVATE repo the default token
+  # cannot read that without pull-requests:read -- it fails with "Resource not
+  # accessible by integration", the guard exits 1, and NOTHING gets tagged or
+  # deployed. While the repo was public the same query needed no scope.
+  pull-requests: read
 
 env:
   CARGO_TERM_COLOR: always
