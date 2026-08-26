@@ -23,6 +23,11 @@ permissions:
   # accessible by integration", the guard exits 1, and NOTHING gets tagged or
   # deployed. While the repo was public the same query needed no scope.
   pull-requests: read
+  # ...and the check-runs REST call right after it
+  # (repos/{repo}/commits/{sha}/check-runs, ci.yml ~L1082) needs checks:read on
+  # a private repo. Granting only pull-requests:read moved the 403 one line
+  # down rather than fixing it.
+  checks: read
 
 env:
   CARGO_TERM_COLOR: always
