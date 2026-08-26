@@ -441,6 +441,12 @@ jobs:
     timeout-minutes: 30
     if: success()
     environment: production
+    # Narrowed from the workflow-level contents:write — this job publishes
+    # nothing, and its token is embedded in the script that runs on the VM to
+    # pull release assets (a private repo serves them no other way). Read-only
+    # and job-scoped keeps that exposure as small as it can be.
+    permissions:
+      contents: read
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
@@ -452,7 +458,38 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      # A PRIVATE repo's releases/download/ URLs 404 for EVERY caller — a
+      # Bearer token on them does not help (proved 2026-08-24). Assets are only
+      # reachable through the API by numeric id, so resolve the ids here, on the
+      # runner, where the workflow token already works.
+      - name: Resolve release asset ids (private-repo download)
+        id: assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ids="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" \
+                   --jq '.assets[] | "\(.name) \(.id)"')"
+          need() {
+            id="$(printf '%s\n' "$ids" | awk -v n="$1" '$1==n{print $2}')"
+            if [ -z "$id" ]; then
+              echo "::error::release ${RELEASE_TAG} has no asset named $1" >&2
+              exit 1
+            fi
+            echo "$2=$id" >> "$GITHUB_OUTPUT"
+          }
+          need networker-controlplane-linux-x64.tar.gz              controlplane
+          need networker-endpoint-x86_64-unknown-linux-musl.tar.gz  endpoint
+          need networker-tester-x86_64-unknown-linux-musl.tar.gz    tester
+          need alethabench-x86_64-unknown-linux-musl.tar.gz         alethabench
+          need dashboard-frontend.tar.gz                            frontend
+
       - name: Deploy control plane, endpoint, tester, frontend
+        env:
+          # Substituted into the run-command script so the VM can pull release
+          # assets from the API. Job-scoped, contents:read, and invalid the
+          # moment this job ends.
+          ASSET_TOKEN: ${{ github.token }}
         run: |
           VERSION="${RELEASE_TAG#v}"
           echo "Deploying v${VERSION} to alethedash-vm..."
@@ -463,15 +500,32 @@ jobs:
             --command-id RunShellScript \
             --scripts "
               set -e
-              RELEASE_BASE='https://github.com/irlm/networker-tester/releases/download/v${VERSION}'
+              ASSET_API='https://api.github.com/repos/irlm/networker-tester/releases/assets'
 
               # ── Download artifacts ──────────────────────────────────────
+              # By asset id + Authorization, NOT releases/download/: the repo is
+              # private and that path 404s for every caller. The token is the
+              # job's own contents:read GITHUB_TOKEN and dies with the job.
+              # -f fails the command on an HTTP error, -S still prints why, -L
+              # follows GitHub's 302 to storage (curl drops the Authorization
+              # header across hosts, which is exactly what that redirect wants).
               echo '>> Downloading v${VERSION} artifacts...'
-              curl -fsSL \"\${RELEASE_BASE}/networker-controlplane-linux-x64.tar.gz\" -o /tmp/controlplane.tar.gz
-              curl -fsSL \"\${RELEASE_BASE}/networker-endpoint-x86_64-unknown-linux-musl.tar.gz\" | tar xz -C /tmp/
-              curl -fsSL \"\${RELEASE_BASE}/networker-tester-x86_64-unknown-linux-musl.tar.gz\" | tar xz -C /tmp/
-              curl -fsSL \"\${RELEASE_BASE}/alethabench-x86_64-unknown-linux-musl.tar.gz\" | tar xz -C /tmp/
-              curl -fsSL \"\${RELEASE_BASE}/dashboard-frontend.tar.gz\" -o /tmp/dashboard-frontend.tar.gz
+              dl() {
+                curl -fSL --retry 3 --retry-delay 2 \
+                  -H \"Authorization: Bearer ${ASSET_TOKEN}\" \
+                  -H 'Accept: application/octet-stream' \
+                  \"\${ASSET_API}/\$1\" -o \"\$2\"
+              }
+              dl ${{ steps.assets.outputs.controlplane }} /tmp/controlplane.tar.gz
+              dl ${{ steps.assets.outputs.endpoint }}     /tmp/endpoint.tar.gz
+              dl ${{ steps.assets.outputs.tester }}       /tmp/tester.tar.gz
+              dl ${{ steps.assets.outputs.alethabench }}  /tmp/alethabench.tar.gz
+              dl ${{ steps.assets.outputs.frontend }}     /tmp/dashboard-frontend.tar.gz
+              # Was 'curl | tar xz'; the download is now a separate step so a
+              # failed fetch cannot be silently swallowed by the pipe.
+              tar -xzf /tmp/endpoint.tar.gz -C /tmp/
+              tar -xzf /tmp/tester.tar.gz -C /tmp/
+              tar -xzf /tmp/alethabench.tar.gz -C /tmp/
 
               # ── C# control plane (the /api + /ws backend) ───────────────
               # Secrets guard (audit F2): fail LOUDLY while the old build is
