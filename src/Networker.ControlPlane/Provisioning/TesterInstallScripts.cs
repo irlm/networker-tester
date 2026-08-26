@@ -154,9 +154,12 @@ public static class TesterInstallScripts
     /// </summary>
     public static string DownloadBinaryCommand(string binary, string tag, string target)
     {
-        var url = $"https://github.com/{Repo}/releases/download/{tag}/{binary}-{target}.tar.gz";
+        // Private repo: resolve through gh, which handles the asset-id lookup
+        // that a plain download URL can no longer do.
+        var fetch = $"gh release download {tag} --repo {Repo} "
+                    + $"--pattern {binary}-{target}.tar.gz --output /tmp/{binary}.tar.gz --clobber";
         return
-            $"set -e; curl -fsSL --retry 2 --retry-delay 2 --max-time 120 {url} -o /tmp/{binary}.tar.gz < /dev/null " +
+            $"set -e; {fetch} < /dev/null " +
             $"&& tar xzf /tmp/{binary}.tar.gz -C /tmp " +
             $"&& sudo install -m 0755 /tmp/{binary} /usr/local/bin/{binary} " +
             $"&& rm -f /tmp/{binary}.tar.gz /tmp/{binary}";
@@ -314,22 +317,48 @@ public static class TesterInstallScripts
     /// run-command payloads -- the v0.28.26 em-dash incident); IsAsciiOnly guards
     /// it and the arg-shape test asserts it.
     /// </summary>
-    public static string ReinstallScript(string tag, string testerTarget)
+    public static string ReinstallScript(
+        string tag, string testerTarget, string? artifactBase = null, string? apiKey = null)
     {
+        // Two authenticated sources, in order. The repo is PRIVATE, so its
+        // release download URLs 404 for every caller and the old unauthenticated
+        // BASE= could not work at all.
+        //   1. the control plane (production): the VM already holds an agent
+        //      api-key, and no GitHub credential has to exist on the VM;
+        //   2. `gh` (CI, and humans with gh logged in): resolves the asset id
+        //      itself, so the script needs no JSON parsing.
+        var hasCp = !string.IsNullOrWhiteSpace(artifactBase)
+                    && !string.IsNullOrWhiteSpace(apiKey);
+
+        var fetch = hasCp
+            ? string.Join('\n',
+                "fetch() {  # $1 = asset name, $2 = output",
+                "  curl -fsSL --retry 3 --retry-delay 2 --max-time 180 \\",
+                "    -H \"X-Agent-Key: ${AGENT_KEY}\" \\",
+                "    \"${ARTIFACT_BASE}/api/artifacts/$1\" -o \"$2\"",
+                "}")
+            : string.Join('\n',
+                "fetch() {  # $1 = asset name, $2 = output",
+                "  gh release download \"${TAG}\" --repo irlm/networker-tester \\",
+                "    --pattern \"$1\" --output \"$2\" --clobber",
+                "}");
+
         return string.Join('\n',
             "#!/usr/bin/env bash",
             "set -euo pipefail",
             "TAG=" + tag,
             "TARGET=" + testerTarget,
-            "BASE=https://github.com/irlm/networker-tester/releases/download/${TAG}",
+            hasCp ? "ARTIFACT_BASE=" + artifactBase : "# no control plane: using gh",
+            hasCp ? "AGENT_KEY=" + apiKey : "# no agent key: using gh",
+            fetch,
             "cd /tmp",
-            "curl -fsSL \"${BASE}/networker-tester-${TARGET}.tar.gz\" -o nwt.tgz",
+            "fetch \"networker-tester-${TARGET}.tar.gz\" nwt.tgz",
             "tar xzf nwt.tgz",
             "sudo install -m 0755 networker-tester /usr/local/bin/networker-tester",
-            "if curl -fsSL \"${BASE}/networker-agent-cs-linux-x64.tar.gz\" -o nwa.tgz; then",
+            "if fetch networker-agent-cs-linux-x64.tar.gz nwa.tgz; then",
             "  tar xzf nwa.tgz",
             "  sudo install -m 0755 networker-agent /usr/local/bin/networker-agent",
-            "elif curl -fsSL \"${BASE}/networker-agent-${TARGET}.tar.gz\" -o nwa.tgz; then",
+            "elif fetch \"networker-agent-${TARGET}.tar.gz\" nwa.tgz; then",
             "  tar xzf nwa.tgz",
             "  sudo install -m 0755 networker-agent /usr/local/bin/networker-agent",
             "fi",

@@ -15,7 +15,12 @@ on:
       - install.sh
       - install.ps1
 
-permissions: {}
+# checkout needs contents:read now the repo is PRIVATE. While it was public,
+# actions/checkout could clone anonymously and an empty block was harmless;
+# private turns that into `remote: Repository not found` and the Gist silently
+# stops tracking install.sh (it is the only unauthenticated install URL).
+permissions:
+  contents: read
 
 jobs:
   sync:

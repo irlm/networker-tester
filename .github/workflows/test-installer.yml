@@ -288,6 +288,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
 
       - name: Deploy csharp-net9 (framework-dependent) and assert health
+        env:
+          # install.sh clones this repo for the reference APIs, and it is
+          # PRIVATE: an anonymous clone exits 128. `sudo -E` keeps this in the
+          # environment so gh can authenticate.
+          GH_TOKEN: ${{ github.token }}
         run: |
           sudo -E bash install.sh --benchmark-server csharp-net9 --benchmark-port 8085 < /dev/null
           curl -sf http://127.0.0.1:8085/health | grep -q '"runtime":"csharp-net9"'
@@ -295,6 +300,11 @@ jobs:
           echo "csharp-net9 healthy on :8085"
 
       - name: Deploy csharp-net9-aot (Native AOT) and assert health
+        env:
+          # install.sh clones this repo for the reference APIs, and it is
+          # PRIVATE: an anonymous clone exits 128. `sudo -E` keeps this in the
+          # environment so gh can authenticate.
+          GH_TOKEN: ${{ github.token }}
         run: |
           sudo -E bash install.sh --benchmark-server csharp-net9-aot --benchmark-port 8086 < /dev/null
           curl -sf http://127.0.0.1:8086/health | grep -q '"runtime":"csharp-net9-aot"'
