@@ -833,7 +833,7 @@ public static class TestRunsEndpoints
         // detect the column once and select it as a uniform alias — NULL when
         // the column (or the key) is absent. Appended LAST so every tier's
         // positional ordinals stay untouched.
-        var (extraCol, hasUrlCol, hasSampleCol) = await GetAttemptShapeAsync(dataSource, ct);
+        var (extraCol, hasUrlCol, hasSampleCol, hasErrorRecord) = await GetAttemptShapeAsync(dataSource, ct);
         var targetSelA = (hasUrlCol, extraCol) switch
         {
             // V006 column first, older extra-json rows as fallback.
@@ -858,6 +858,13 @@ public static class TestRunsEndpoints
         var sampleSelA = SampleIndexSelect("a.", hasSampleCol, extraCol);
         var sampleSelFlat = SampleIndexSelect(string.Empty, hasSampleCol, extraCol);
 
+        // error_category: same append-and-read-by-name discipline as
+        // target_url / sample_index. A correlated scalar subquery rather than
+        // another LEFT JOIN LATERAL so the flat fallback tier — which has no
+        // table alias — takes the identical fragment.
+        var errCatSelA = ErrorCategorySelect("a.AttemptId", hasErrorRecord);
+        var errCatSelFlat = ErrorCategorySelect("RequestAttempt.AttemptId", hasErrorRecord);
+
         // V005 tier: everything in richSql PLUS ServerTimingResult.SrvCpuMs
         // and the MthroughputResult capacity columns (appended, so the shared
         // reader ordinals are a strict prefix). Testers on pre-V005 schemas
@@ -878,7 +885,7 @@ public static class TestRunsEndpoints
                    st.ProcessingMs, st.RecvBodyMs, st.TotalServerMs,
                    st.SrvCpuMs,
                    mt.CapacityDownMbps, mt.CapacityUpMbps, mt.ConnsDown, mt.ConnsUp,
-                   mt.FairShareSpreadDownPct, mt.FairShareSpreadUpPct{targetSelA}{sampleSelA}
+                   mt.FairShareSpreadDownPct, mt.FairShareSpreadUpPct{targetSelA}{sampleSelA}{errCatSelA}
             FROM RequestAttempt a
             LEFT JOIN LATERAL (SELECT * FROM DnsResult  x WHERE x.AttemptId = a.AttemptId LIMIT 1) d  ON TRUE
             LEFT JOIN LATERAL (SELECT * FROM TcpResult  x WHERE x.AttemptId = a.AttemptId LIMIT 1) t  ON TRUE
@@ -905,7 +912,7 @@ public static class TestRunsEndpoints
                    h.BodySizeBytes, h.RedirectCount, h.PayloadBytes, h.ThroughputMbps,
                    u.RttAvgMs, u.RttMinMs, u.RttP95Ms, u.JitterMs, u.LossPercent,
                    u.ProbeCount, u.SuccessCount,
-                   st.ProcessingMs, st.RecvBodyMs, st.TotalServerMs{targetSelA}{sampleSelA}
+                   st.ProcessingMs, st.RecvBodyMs, st.TotalServerMs{targetSelA}{sampleSelA}{errCatSelA}
             FROM RequestAttempt a
             LEFT JOIN LATERAL (SELECT * FROM DnsResult  x WHERE x.AttemptId = a.AttemptId LIMIT 1) d  ON TRUE
             LEFT JOIN LATERAL (SELECT * FROM TcpResult  x WHERE x.AttemptId = a.AttemptId LIMIT 1) t  ON TRUE
@@ -923,7 +930,7 @@ public static class TestRunsEndpoints
         // the flat rows it used to instead of degrading to an empty list.
         var flatSql = $"""
             SELECT AttemptId, Protocol, SequenceNum, StartedAt, FinishedAt,
-                   Success, ErrorMessage, RetryCount{targetSelFlat}{sampleSelFlat}
+                   Success, ErrorMessage, RetryCount{targetSelFlat}{sampleSelFlat}{errCatSelFlat}
             FROM RequestAttempt
             WHERE RunId = $1
             ORDER BY SequenceNum, StartedAt
@@ -996,6 +1003,7 @@ public static class TestRunsEndpoints
                 // get clean data (audit F8).
                 ErrorMessage: reader.IsDBNull(6) ? null : AnsiText.Strip(reader.GetString(6)),
                 RetryCount: reader.GetInt32(7),
+                ErrorCategory: ReadErrorCategory(reader),
                 TargetUrl: ReadTargetUrl(reader),
                 SampleIndex: ReadSampleIndex(reader),
                 Dns: rich ? ReadDns(reader) : null,
@@ -1037,6 +1045,32 @@ public static class TestRunsEndpoints
             : $", {fromJson} AS sample_index";
     }
 
+    /// <summary>
+    /// The <c>error_category</c> select fragment: the attempt's stored
+    /// <c>ErrorRecord.ErrorCategory</c> (earliest record wins when a retry
+    /// wrote more than one), or a NULL literal when the tester schema has no
+    /// ErrorRecord table. The category is what distinguishes a probe that ran
+    /// and failed from one that was never run because the target does not
+    /// offer the protocol (<c>unsupported</c>, v0.28.301 h3 pre-flight) — the
+    /// message alone cannot be classified by a UI.
+    /// </summary>
+    /// <param name="outerAttemptId">Qualified AttemptId of the outer row.</param>
+    private static string ErrorCategorySelect(string outerAttemptId, bool hasErrorRecord) =>
+        hasErrorRecord
+            ? $", (SELECT er.ErrorCategory FROM ErrorRecord er "
+              + $"WHERE er.AttemptId = {outerAttemptId} "
+              + "ORDER BY er.OccurredAt LIMIT 1) AS error_category"
+            : ", NULL::varchar AS error_category";
+
+    /// <summary>error_category is selected under a stable alias as the LAST
+    /// column of every tier, so it is read by name — the positional phase
+    /// ordinals stay untouched.</summary>
+    private static string? ReadErrorCategory(NpgsqlDataReader r)
+    {
+        var i = r.GetOrdinal("error_category");
+        return r.IsDBNull(i) ? null : r.GetString(i);
+    }
+
     /// <summary>sample_index is selected under a stable alias as the LAST
     /// column of every tier (0 where the V007 column and the extra-json key
     /// are both absent), so it is read by name — the positional phase ordinals
@@ -1052,11 +1086,11 @@ public static class TestRunsEndpoints
     /// per process — the same divergence AttemptPersistence handles on the
     /// write side. Null means target_url cannot be recovered for DB-read
     /// attempts (pre-#782 tester schemas); the live stream still carries it.</summary>
-    private static (string? ExtraJsonColumn, bool HasTargetUrl, bool HasSampleIndex)? _attemptShape;
+    private static (string? ExtraJsonColumn, bool HasTargetUrl, bool HasSampleIndex, bool HasErrorRecord)? _attemptShape;
 
     internal static void ResetExtraJsonColumnCacheForTests() => _attemptShape = null;
 
-    private static async Task<(string? ExtraJsonColumn, bool HasTargetUrl, bool HasSampleIndex)> GetAttemptShapeAsync(
+    private static async Task<(string? ExtraJsonColumn, bool HasTargetUrl, bool HasSampleIndex, bool HasErrorRecord)> GetAttemptShapeAsync(
         NpgsqlDataSource dataSource, CancellationToken ct)
     {
         if (_attemptShape is { } cached)
@@ -1078,7 +1112,20 @@ public static class TestRunsEndpoints
         var found = cols.Contains("extrajson") ? "extrajson"
             : cols.Contains("extra_json") ? "extra_json"
             : null;
-        var shape = (found, cols.Contains("targeturl"), cols.Contains("sampleindex"));
+        // ErrorRecord is a separate tester-owned table (1:N with the attempt),
+        // so the category needs its own probe — a partially-created schema can
+        // have RequestAttempt without it, and selecting from a missing table
+        // would fail the WHOLE attempts query including the flat fallback tier.
+        var hasErrorRecord = false;
+        await using (var cmd = dataSource.CreateCommand(
+            "SELECT 1 FROM information_schema.tables " +
+            "WHERE lower(table_name) = 'errorrecord' LIMIT 1"))
+        await using (var reader = await cmd.ExecuteReaderAsync(ct))
+        {
+            hasErrorRecord = await reader.ReadAsync(ct);
+        }
+
+        var shape = (found, cols.Contains("targeturl"), cols.Contains("sampleindex"), hasErrorRecord);
         _attemptShape = shape;
         return shape;
     }
@@ -1199,6 +1246,17 @@ public sealed record AttemptView(
     [property: JsonPropertyName("success")] bool Success,
     [property: JsonPropertyName("error_message")] string? ErrorMessage,
     [property: JsonPropertyName("retry_count")] int RetryCount,
+    /// <summary>The attempt's stored <c>ErrorRecord.ErrorCategory</c> —
+    /// <c>dns</c> / <c>tcp</c> / <c>tls</c> / <c>http</c> / <c>udp</c> /
+    /// <c>timeout</c> / <c>config</c> / <c>unsupported</c> / <c>other</c>.
+    /// Omitted (not null) for a successful attempt, for a tester schema with
+    /// no ErrorRecord table, and for pre-0.28.305 rows, keeping the wire shape
+    /// additive. <c>unsupported</c> means the probe was never run because the
+    /// target does not offer the protocol (h3 pre-flight) — a UI must not
+    /// count it as a network failure.</summary>
+    [property: JsonPropertyName("error_category"),
+     JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? ErrorCategory = null,
     [property: JsonPropertyName("target_url"),
      JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? TargetUrl = null,

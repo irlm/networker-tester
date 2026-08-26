@@ -16,6 +16,30 @@
 // Pure functions; rendered by RunDetailPage's BurstSamplingTable.
 
 import type { LiveAttempt } from '../../api/types';
+
+/**
+ * The attempt's failure class, from whichever transport carried it: the live
+ * stream nests it under `error.category`, the REST attempts endpoint returns
+ * it flat as `error_category` (since v0.28.302). Null when the attempt
+ * succeeded or the payload predates the field.
+ */
+export function attemptErrorCategory(a: LiveAttempt): string | null {
+  return a.error?.category ?? a.error_category ?? null;
+}
+
+/**
+ * The category the tester writes when it did NOT run a probe because the
+ * target does not offer the protocol — today only the HTTP/3 pre-flight
+ * (v0.28.301), which skips h3 modes at an origin advertising no `Alt-Svc:
+ * h3=`. Such a sample is unsuccessful (nothing was measured) but it is NOT a
+ * failure of the target or the network, and must never be counted as one.
+ */
+export const NOT_OFFERED = 'unsupported';
+
+/** Whether this attempt was skipped as not-offered rather than actually run. */
+export function isNotOffered(a: LiveAttempt): boolean {
+  return !a.success && attemptErrorCategory(a) === NOT_OFFERED;
+}
 import {
   attemptPayloadBytes,
   computeStats,
@@ -44,9 +68,15 @@ export interface SamplePoint {
   sampleCount: number;
   /** Samples that succeeded and carried the point's primary metric. */
   usableCount: number;
-  /** Samples that failed. sampleCount - usableCount also counts successes
-   *  whose metric was absent, so this is reported separately. */
+  /** Samples that actually ran and failed. EXCLUDES not-offered samples (see
+   *  {@link notOfferedCount}), which were never run — counting those as
+   *  failures is what made an h3 point against a target without HTTP/3 read as
+   *  a network fault. `sampleCount - usableCount` also counts successes whose
+   *  metric was absent, so this is reported separately. */
   failedCount: number;
+  /** Samples the tester declined to run because the target does not offer the
+   *  protocol (`unsupported`). Unsuccessful, but not a failure of anything. */
+  notOfferedCount: number;
   /** Burst width the tester used for this point: max(sample_index) + 1.
    *  1 = the repeats came from `--runs`, not from a `--samples` burst. */
   burstSize: number;
@@ -99,7 +129,8 @@ export function buildSamplePoints(attempts: LiveAttempt[]): SamplePoint[] {
       metricLabel: primaryMetricLabel(first.protocol),
       sampleCount: group.length,
       usableCount: values.length,
-      failedCount: group.filter((a) => !a.success).length,
+      failedCount: group.filter((a) => !a.success && !isNotOffered(a)).length,
+      notOfferedCount: group.filter(isNotOffered).length,
       burstSize: group.reduce((max, a) => Math.max(max, (a.sample_index ?? 0) + 1), 1),
       stats,
       underSampled: values.length < MIN_SAMPLES_FOR_MEDIAN,

@@ -89,6 +89,41 @@ public sealed class TestRunsContractTests
     }
 
     [Fact]
+    public void Error_category_is_omitted_when_the_attempt_has_none()
+    {
+        // v0.28.305 widening: a successful attempt, and every pre-0.28.302
+        // row, must keep the byte-identical wire shape asserted above. The
+        // exact-field-set test covers the key set; this pins the intent.
+        var json = JsonSerializer.Serialize(SampleAttempt(), WebOptions);
+        var item = JsonNode.Parse(json)!.AsObject();
+
+        Assert.False(item.ContainsKey("error_category"));
+    }
+
+    [Fact]
+    public void Error_category_is_emitted_when_the_attempt_carries_one()
+    {
+        // The category is what lets a UI tell a probe that RAN AND FAILED from
+        // one that was never run because the target does not offer the
+        // protocol. `unsupported` is the h3 pre-flight's (v0.28.301) marker and
+        // must never be rendered as a network failure.
+        var skipped = SampleAttempt() with
+        {
+            Protocol = "http3",
+            ErrorCategory = "unsupported",
+            ErrorMessage = "http3 not run: the target advertises no HTTP/3",
+        };
+        var item = JsonNode.Parse(JsonSerializer.Serialize(skipped, WebOptions))!.AsObject();
+
+        Assert.Equal("unsupported", item["error_category"]!.GetValue<string>());
+        // Additive: it joins the existing set rather than displacing anything.
+        Assert.Equal("http3", item["protocol"]!.GetValue<string>());
+        Assert.Equal(
+            "http3 not run: the target advertises no HTTP/3",
+            item["error_message"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void Absent_phase_objects_are_omitted_not_null()
     {
         // Backward compatibility: an attempt without persisted phase rows must

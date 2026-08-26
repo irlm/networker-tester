@@ -104,6 +104,29 @@ function metriclessSample(sampleIndex: number, success = true): LiveAttempt {
   };
 }
 
+/** An h3 sample the tester DECLINED to run: the target advertises no
+ *  `Alt-Svc: h3=`, so the pre-flight (v0.28.301) records `unsupported`
+ *  instead of dispatching QUIC. Unsuccessful, but not a failure. */
+function notOfferedSample(sampleIndex: number, viaRest = true): LiveAttempt {
+  const base: LiveAttempt = {
+    attempt_id: `a-http3-${sampleIndex}`,
+    run_id: RUN_ID,
+    protocol: 'http3',
+    sequence_num: sampleIndex,
+    started_at: '2026-08-20T12:00:00Z',
+    finished_at: '2026-08-20T12:00:00Z',
+    success: false,
+    retry_count: 0,
+    sample_index: sampleIndex,
+    target_url: 'https://example.com/',
+    error_message: 'http3 not run: the target advertises no HTTP/3',
+  };
+  // REST carries the class flat; the live stream nests it. Both must work.
+  return viaRest
+    ? { ...base, error_category: 'unsupported' }
+    : { ...base, error: { category: 'unsupported', message: 'not offered' } };
+}
+
 function mockAll(attempts: LiveAttempt[], current: TestRun = run()) {
   mocks.useTestRunQuery.mockReturnValue({ data: current, isPending: false, error: null, refetch: vi.fn() });
   mocks.useRunAttemptsQuery.mockReturnValue({ data: attempts, isPending: false, error: null, refetch: vi.fn() });
@@ -273,6 +296,53 @@ describe('RunDetailPage — burst sampling median & spread', () => {
     expect(within(section).queryByText(/no usable sample/)).not.toBeInTheDocument();
     expect(within(section).getByText('9.00ms')).toBeInTheDocument();
     expect(within(section).getByText(/handshake ms/i)).toBeInTheDocument();
+  });
+
+  // The h3 pre-flight only pays off if the UI stops calling a skipped sample a
+  // failure. These pin that, for BOTH transports of the category.
+  it('reports h3 as not offered rather than failed when the target has no HTTP/3', () => {
+    mockAll([0, 1, 2, 3, 4].map((i) => notOfferedSample(i)));
+    renderPage();
+
+    const section = burstSection();
+    expect(within(section).queryByText(/every sample failed/)).not.toBeInTheDocument();
+    expect(within(section).queryByText(/\d+ failed/)).not.toBeInTheDocument();
+    expect(within(section).getByText(/5 not offered/)).toBeInTheDocument();
+    expect(
+      within(section).getByText(/not run .* this target does not offer HTTP\/3/),
+    ).toBeInTheDocument();
+  });
+
+  it('reads the category from the live stream shape too', () => {
+    mockAll([0, 1, 2].map((i) => notOfferedSample(i, false)));
+    renderPage();
+
+    const section = burstSection();
+    expect(within(section).queryByText(/\d+ failed/)).not.toBeInTheDocument();
+    expect(within(section).getByText(/3 not offered/)).toBeInTheDocument();
+  });
+
+  it('keeps real failures separate from not-offered samples in one point', () => {
+    // A genuinely broken h3 target: some samples skipped, some hard-failed.
+    mockAll([
+      ...[0, 1, 2].map((i) => notOfferedSample(i)),
+      ...[3, 4].map((i) => ({
+        ...notOfferedSample(i),
+        error_category: 'tls',
+        error_message: 'QUIC connect: aborted by peer',
+      })),
+    ]);
+    renderPage();
+
+    const section = burstSection();
+    // "2 failed" appears in the Samples cell AND the summary cell; both are
+    // correct, so assert presence rather than uniqueness.
+    expect(within(section).getAllByText(/2 failed/).length).toBeGreaterThan(0);
+    expect(within(section).getByText(/3 not offered/)).toBeInTheDocument();
+    // Not ALL samples were skipped, so the not-offered headline must not win.
+    expect(
+      within(section).queryByText(/this target does not offer/),
+    ).not.toBeInTheDocument();
   });
 
   it('renders no median section for a run whose points ran once each', () => {
