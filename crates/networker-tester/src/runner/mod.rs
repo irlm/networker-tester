@@ -2,6 +2,7 @@ pub mod browser;
 pub mod curl;
 pub mod dns;
 pub mod dualstack;
+pub mod h3_offer;
 pub mod http;
 pub mod http3;
 pub mod load_gen;

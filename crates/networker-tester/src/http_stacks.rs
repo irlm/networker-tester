@@ -33,6 +33,8 @@ pub struct StackPorts {
 #[derive(serde::Deserialize)]
 struct Manifest {
     stacks: Vec<StackPorts>,
+    #[serde(default)]
+    h3_modes: Vec<String>,
 }
 
 /// All known stacks, in manifest order.
@@ -45,6 +47,26 @@ pub fn all() -> &'static [StackPorts] {
                 .stacks
         })
         .as_slice()
+}
+
+/// The modes that ride HTTP/3, from the manifest's `h3_modes` — the SAME list
+/// the control plane gates on (`HttpStackCatalog.IsH3Mode`). Manifest-driven so
+/// the two sides cannot drift.
+pub fn h3_modes() -> &'static [String] {
+    static MODES: OnceLock<Vec<String>> = OnceLock::new();
+    MODES
+        .get_or_init(|| {
+            serde_json::from_str::<Manifest>(MANIFEST)
+                .expect("shared/http-stacks.json is embedded and must be valid")
+                .h3_modes
+        })
+        .as_slice()
+}
+
+/// Whether `mode` needs HTTP/3 on the target (case-insensitive).
+pub fn is_h3_mode(mode: &str) -> bool {
+    let m = mode.trim().to_ascii_lowercase();
+    h3_modes().contains(&m)
 }
 
 /// Look a stack up by (case-insensitive) id.

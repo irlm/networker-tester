@@ -344,6 +344,19 @@ impl UrlDiagnosticOrchestrator {
                             );
                     }
                 }
+                // The origin's HTTP/3 advertisement, from the same captured
+                // headers. Recorded verbatim so a report can say WHY an h3
+                // mode did or did not run; absent means the target advertised
+                // no alternative service at all.
+                if run.advertised_alt_svc.is_none() {
+                    if let Some(http) = attempt.http.as_ref() {
+                        run.advertised_alt_svc = http
+                            .response_headers
+                            .iter()
+                            .find(|(k, _)| k.eq_ignore_ascii_case("alt-svc"))
+                            .map(|(_, v)| v.clone());
+                    }
+                }
                 self.add_protocol_run(
                     run,
                     protocol_probe_from_attempt(run.id, mode, run_number, attempt),
