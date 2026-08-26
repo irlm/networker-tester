@@ -97,13 +97,18 @@ public sealed class TesterInstallScriptsTests
     }
 
     [Fact]
-    public void DownloadBinary_builds_release_url()
+    public void DownloadBinary_resolves_through_gh_not_a_plain_release_url()
     {
+        // The repo is private: releases/download/ URLs 404 for every caller, so
+        // a plain URL cannot work regardless of credentials. gh resolves the
+        // asset id itself, which keeps JSON parsing out of the shell.
         var cmd = TesterInstallScripts.DownloadBinaryCommand(
             "networker-agent", "v0.28.13", "x86_64-unknown-linux-musl");
-        Assert.Contains(
-            "https://github.com/irlm/networker-tester/releases/download/v0.28.13/networker-agent-x86_64-unknown-linux-musl.tar.gz",
-            cmd);
+
+        Assert.DoesNotContain("releases/download", cmd);
+        Assert.Contains("gh release download v0.28.13", cmd);
+        Assert.Contains("--repo irlm/networker-tester", cmd);
+        Assert.Contains("--pattern networker-agent-x86_64-unknown-linux-musl.tar.gz", cmd);
         Assert.Contains("sudo install -m 0755 /tmp/networker-agent /usr/local/bin/networker-agent", cmd);
     }
 

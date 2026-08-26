@@ -12037,7 +12037,25 @@ deploy_benchmark_server() {
     # Always fresh clone to ensure latest code (shallow clones + git pull can be unreliable)
     echo ">> Fetching latest reference APIs"
     rm -rf "$REPO_DIR"
-    git clone --depth 1 "$REPO" "$REPO_DIR" 2>/dev/null < /dev/null
+    # The repo is PRIVATE: an anonymous clone fails with exit 128
+    # ("Repository not found"). Prefer gh, which carries its own auth; fall
+    # back to a token from the environment, then to a plain clone so a public
+    # fork still works. Bash 3.2: no arrays of options, keep it flat.
+    if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1 </dev/null; then
+        gh repo clone "$REPO_GH" "$REPO_DIR" -- --depth 1 >/dev/null 2>&1 < /dev/null
+    elif [ -n "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]; then
+        git clone --depth 1 \
+            "https://x-access-token:${GH_TOKEN:-$GITHUB_TOKEN}@github.com/${REPO_GH}.git" \
+            "$REPO_DIR" 2>/dev/null < /dev/null
+    else
+        git clone --depth 1 "$REPO" "$REPO_DIR" 2>/dev/null < /dev/null
+    fi
+    if [ ! -d "$REPO_DIR" ]; then
+        echo ">> ERROR: could not fetch the reference APIs from ${REPO_GH}." >&2
+        echo "   The repository is private: run 'gh auth login', or export" >&2
+        echo "   GH_TOKEN with contents:read, then re-run." >&2
+        return 1
+    fi
 
     local API_DIR="$REPO_DIR/benchmarks/reference-apis"
 

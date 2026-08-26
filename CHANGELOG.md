@@ -44,6 +44,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already in that user-data is a different risk class: per-agent, revocable on
   its own, and useless against GitHub.
 
+- **Provisioning and reinstall scripts fetch through an authenticated path.**
+  `TesterInstallScripts` built plain `releases/download/` URLs, which 404 on a
+  private repo — this broke the tester `/upgrade` path, the agent auto-upgrade,
+  and CI's reinstall job. The reinstall script now takes the control plane's
+  artifact base plus the agent key and fetches from there; with neither it
+  falls back to `gh release download`, which resolves the asset id itself and
+  keeps JSON parsing out of the shell. `DownloadBinaryCommand` uses `gh` for
+  the same reason.
+- **`install.sh --benchmark-server` can fetch the reference APIs again.** It
+  cloned the repo anonymously and exited 128 (`Repository not found`) once the
+  repo was private. It now prefers `gh`, then a `GH_TOKEN`/`GITHUB_TOKEN`
+  clone, then a plain clone, and says exactly what to do when all three fail
+  instead of dying on a bare git error.
 - **The Gist sync works again.** `sync-gist.yml` declared `permissions: {}`,
   which gives `GITHUB_TOKEN` no scopes. That was harmless while the repo was
   public (`actions/checkout` could clone anonymously) and fatal once it was not

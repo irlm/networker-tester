@@ -178,6 +178,10 @@ jobs:
       - name: Execute the reinstall script
         env:
           NETWORKER_REINSTALL_EXEC: "1"
+          # The script now pulls assets with `gh` (the repo is private, so a
+          # plain release URL 404s). gh needs a token; the workflow's own is
+          # enough for contents:read on this repo.
+          GH_TOKEN: ${{ github.token }}
         run: |
           dotnet test tests/Networker.ControlPlane.Tests/Networker.ControlPlane.Tests.csproj \
             --configuration Release \
