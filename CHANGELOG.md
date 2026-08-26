@@ -11,6 +11,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.305] - 2026-08-26
+
+### Added
+
+- **`error_category` on the REST attempts DTO** (`GET /api/v2/test-runs/{id}/attempts`).
+  The category was ALWAYS persisted — `ErrorRecord.ErrorCategory`, indexed —
+  but `AttemptView` returned only `error_message`, so a UI could read the
+  reason a probe failed but could not classify it. **No migration:** the data
+  was already there, just never selected.
+
+  Selected under a stable alias as the last column of every query tier and read
+  by name, the same discipline `target_url` and `sample_index` use, so the
+  positional phase ordinals are untouched on all three tiers. Guarded by a
+  table probe: a partially-created tester schema without `ErrorRecord` gets a
+  `NULL` literal rather than a failed query. Omitted (not null) for a
+  successful attempt and for pre-0.28.305 rows, keeping the wire shape
+  additive.
+
+### Fixed
+
+- **The run detail no longer counts a not-offered sample as a failure.** With
+  the v0.28.301 HTTP/3 pre-flight, an h3 mode at a target advertising no
+  `Alt-Svc: h3=` is recorded `unsupported` — the probe was never run. Without
+  the category on the wire the UI could not tell that from a real failure, so
+  the aggregate table still read "5 failed" and the point looked like a network
+  fault. The samples cell now reports the two separately ("3 failed · 2 not
+  offered"), and a point whose every sample was skipped says "not run — this
+  target does not offer HTTP/3" in muted text instead of red.
+
+  `SamplePoint.failedCount` now means *samples that actually ran and failed*;
+  the new `notOfferedCount` carries the skipped ones. A not-offered sample is
+  still unsuccessful and still excluded from the timing stats — nothing is
+  counted as a success that was not measured.
+
+  The mode name in that message comes from the canonical `isH3Mode`
+  (`shared/http-stacks.json` `h3_modes`), not a guess at the protocol string.
+
+### Notes
+
+- The category reaches the UI by two routes and both are handled: the live
+  stream nests it under `error.category`, REST returns it flat as
+  `error_category`. Read it through `attemptErrorCategory()` rather than
+  either field directly.
+- `ErrorRecord.AttemptId` carries no index — the same as the seven phase
+  tables the attempts query already joins laterally, so the cost profile is
+  unchanged. Indexing the attempt-keyed lookups is a possible follow-up for
+  large runs.
+
 ## [0.28.304] - 2026-08-26
 
 ### Added

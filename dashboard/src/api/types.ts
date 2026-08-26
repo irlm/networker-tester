@@ -864,10 +864,18 @@ export interface LiveAttempt {
   mthroughput?: { capacity_down_mbps?: number; capacity_up_mbps?: number; conns_down: number; conns_up?: number; fair_share_spread_down_pct?: number; fair_share_spread_up_pct?: number };
   /** Structured failure — live attempt stream only (the tester's raw JSON). */
   error?: { category: string; message: string; detail?: string };
-  /** Flat failure reason — GET /test-runs/{id}/attempts (RequestAttempt.ErrorMessage;
-   *  the tester schema stores no per-attempt category, so this is the whole
-   *  reason for REST-loaded rows, #824). May carry raw ANSI on old rows. */
+  /** Flat failure reason — GET /test-runs/{id}/attempts
+   *  (RequestAttempt.ErrorMessage). May carry raw ANSI on old rows. */
   error_message?: string | null;
+  /** Failure CLASS for REST-loaded rows — the attempt's stored
+   *  ErrorRecord.ErrorCategory, surfaced by the attempts endpoint since
+   *  v0.28.302 (it was always persisted, just never selected). Absent on a
+   *  successful attempt and on pre-0.28.302 payloads. `unsupported` means the
+   *  probe was NEVER RUN because the target does not offer the protocol (the
+   *  h3 pre-flight) — never render it as a network failure. Use
+   *  `attemptErrorCategory()` rather than reading this directly: the live
+   *  stream carries the same value under `error.category`. */
+  error_category?: string | null;
   page_load?: { total_ms: number; ttfb_ms?: number; asset_count: number; assets_fetched: number; total_bytes?: number; connections_opened?: number; tls_setup_ms?: number; tls_overhead_ratio?: number; cpu_time_ms?: number; connection_reused?: boolean };
   browser?: { load_ms: number; dom_content_loaded_ms?: number; ttfb_ms?: number; resource_count?: number; transferred_bytes?: number; protocol?: string };
   // ── Measurement-depth result types (v0.28.78, live stream only — the REST

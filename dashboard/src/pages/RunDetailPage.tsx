@@ -10,6 +10,7 @@ import { ExportMenu } from '../components/common/ExportMenu';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { RunResult } from '../components/common/RunResult';
 import { RunEnvelopeBlock } from '../components/RunEnvelopeBlock';
+import { isH3Mode } from '../lib/http-stacks';
 import { runDisplayStatus } from '../lib/runStatus';
 import { ShareDialog } from '../components/ShareDialog';
 import { usePageTitle } from '../hooks/usePageTitle';
@@ -792,6 +793,11 @@ function BurstSamplingTable({ points }: { points: SamplePoint[] }) {
                     {point.failedCount > 0 && (
                       <span className="text-red-400"> {'\u00B7'} {point.failedCount} failed</span>
                     )}
+                    {point.notOfferedCount > 0 && (
+                      <span className="text-faint">
+                        {' \u00B7'} {point.notOfferedCount} not offered
+                      </span>
+                    )}
                   </td>
                   {point.stats ? (
                     <>
@@ -820,6 +826,11 @@ function BurstSamplingTable({ points }: { points: SamplePoint[] }) {
                         {ratio == null ? '-' : `${ratio.toFixed(2)}\u00D7`}
                       </td>
                     </>
+                  ) : point.notOfferedCount === point.sampleCount ? (
+                    <td className="py-1.5 px-4 text-right text-faint" colSpan={5}>
+                      not run {'\u2014'} this target does not offer{' '}
+                      {isH3Mode(point.protocol) ? 'HTTP/3' : point.protocol.toUpperCase()}
+                    </td>
                   ) : point.failedCount === point.sampleCount ? (
                     <td className="py-1.5 px-4 text-right text-red-400" colSpan={5}>
                       no usable sample {'\u2014'} every sample failed
