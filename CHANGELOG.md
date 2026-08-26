@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.306] - 2026-08-26
+
+### Fixed
+
+- **Auto-tag works again — nothing had deployed since v0.28.301.** The
+  `auto-tag` job verifies the merged PR's required checks by querying
+  `repository.pullRequest` over GraphQL. On a PRIVATE repo the default
+  `GITHUB_TOKEN` cannot read that without `pull-requests: read`, so the query
+  failed with `Resource not accessible by integration`, the guard exited 1, and
+  **no tag was created for v0.28.302, v0.28.304 or v0.28.305**. While the repo
+  was public the same query needed no scope, which is why this only appeared
+  after the visibility flip.
+
+  Same shape as the `sync-gist.yml` `permissions: {}` bug: a permissions block
+  that was sufficient for a public repo and silently insufficient for a private
+  one. `ci.yml` is the only workflow that touches the PR API — audited the rest.
+
+### Notes
+
+- The three merged-but-untagged versions do not need back-filling: the next
+  merge tags from `Cargo.toml`, so this release carries all of that code.
+
+---
+
 ## [0.28.305] - 2026-08-26
 
 ### Added
