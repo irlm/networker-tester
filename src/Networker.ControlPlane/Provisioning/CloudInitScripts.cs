@@ -107,6 +107,30 @@ public static class CloudInitScripts
     }
 
     /// <summary>
+    /// The https base the VM fetches artifacts from, derived from the same
+    /// dashboard URL the agent already dials: <c>wss://host/ws/agent</c> →
+    /// <c>https://host</c>. ws→http so one configured value drives both, and
+    /// the VM never needs a second setting that could drift.
+    /// </summary>
+    internal static string ArtifactBaseFrom(string dashboardUrl)
+    {
+        var u = (dashboardUrl ?? string.Empty).Trim();
+        var scheme = "https";
+        var rest = u;
+        var sep = u.IndexOf("://", StringComparison.Ordinal);
+        if (sep >= 0)
+        {
+            var s0 = u[..sep].ToLowerInvariant();
+            scheme = s0 is "ws" or "http" ? "http" : "https";
+            rest = u[(sep + 3)..];
+        }
+
+        var slash = rest.IndexOf('/');
+        var host = slash >= 0 ? rest[..slash] : rest;
+        return $"{scheme}://{host}";
+    }
+
+    /// <summary>
     /// Render the Linux cloud-init bootstrap (Rust <c>render_linux_bootstrap</c>).
     /// Validates inputs, then substitutes the three placeholders into
     /// <see cref="LinuxTemplate"/>.
@@ -116,6 +140,7 @@ public static class CloudInitScripts
         ValidateInputs(dashboardUrl, apiKey, targetTriple);
         return LinuxTemplate
             .Replace("__TARGET_TRIPLE__", targetTriple)
+            .Replace("__ARTIFACT_BASE__", ArtifactBaseFrom(dashboardUrl))
             .Replace("__DASHBOARD_URL__", dashboardUrl)
             .Replace("__API_KEY__", apiKey);
     }
@@ -133,6 +158,7 @@ public static class CloudInitScripts
         ValidateInputs(dashboardUrl, apiKey, targetTriple);
         return WindowsTemplate
             .Replace("__TARGET_TRIPLE__", targetTriple)
+            .Replace("__ARTIFACT_BASE__", ArtifactBaseFrom(dashboardUrl))
             .Replace("__DASHBOARD_URL__", dashboardUrl)
             .Replace("__API_KEY__", apiKey);
     }
@@ -217,31 +243,28 @@ sysctl -p /etc/sysctl.d/99-networker-ping.conf || true
 #    there is no pipe-close race. Retry the API call up to 5x (GitHub
 #    rate-limits unauthenticated calls from shared cloud egress IPs).
 TARGET="__TARGET_TRIPLE__"
-TAG=""
-for attempt in 1 2 3 4 5; do
-    TAG=$(curl -fsSL --retry 3 --retry-delay 3 --max-time 30 \
-        -H 'Accept: application/vnd.github+json' \
-        https://api.github.com/repos/irlm/networker-tester/releases/latest \
-        | grep -m1 '"tag_name":' \
-        | cut -d'"' -f4 || true)
-    if [ -n "$TAG" ]; then break; fi
-    echo "networker-bootstrap: GitHub API attempt $attempt returned empty tag; retrying..." >&2
-    sleep $((attempt * 5))
-done
-if [ -z "$TAG" ]; then
-    echo "networker-bootstrap: could not resolve latest release tag after 5 attempts" >&2
-    exit 1
-fi
-echo "networker-bootstrap: resolved TAG=$TAG TARGET=$TARGET"
+
+# Artifacts come from the CONTROL PLANE, not from GitHub. The repo is private,
+# so its release download URLs 404 for every caller. The alternative was a
+# GitHub token in this user-data -- which any process on the VM can read, and
+# which the cloud metadata service will hand to anything that can reach it.
+# The agent api-key below is already here, is scoped to THIS agent, and is
+# revocable on its own.
+ARTIFACT_BASE="__ARTIFACT_BASE__"
+
+fetch_artifact() {
+    NAME="$1"; OUT="$2"
+    # --retry-connrefused covers VMs still finishing network bring-up; the
+    # control plane resolves "latest" itself, so there is no tag to look up.
+    curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused --max-time 180 \
+        -H "X-Agent-Key: __API_KEY__" \
+        "${ARTIFACT_BASE}/api/artifacts/${NAME}" -o "$OUT" \
+        || { echo "networker-bootstrap: failed to download ${NAME} from ${ARTIFACT_BASE}" >&2; return 1; }
+}
 
 download_bin() {
     BIN="$1"
-    URL="https://github.com/irlm/networker-tester/releases/download/${TAG}/${BIN}-${TARGET}.tar.gz"
-    # --retry-connrefused handles VMs that haven't finished DNS/network bring-up
-    # yet. --retry-all-errors (curl >= 7.71) retries on every HTTP failure too.
-    curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused --max-time 180 \
-        "$URL" -o "/tmp/${BIN}.tar.gz" \
-        || { echo "networker-bootstrap: failed to download $URL" >&2; return 1; }
+    fetch_artifact "${BIN}-${TARGET}.tar.gz" "/tmp/${BIN}.tar.gz" || return 1
     tar xzf "/tmp/${BIN}.tar.gz" -C /tmp \
         || { echo "networker-bootstrap: failed to extract ${BIN}.tar.gz" >&2; return 1; }
     install -m 0755 "/tmp/${BIN}" "/usr/local/bin/${BIN}" \
@@ -249,17 +272,14 @@ download_bin() {
     rm -f "/tmp/${BIN}.tar.gz" "/tmp/${BIN}"
 }
 
-# C# agent download: the agent is the self-contained C# Networker.Agent
-# (published from the ubuntu runner as networker-agent-cs-linux-x64.tar.gz;
-# the binary inside is still named networker-agent -- drop-in). Falls back to
-# the legacy Rust asset name so a bootstrap that resolves an OLDER release
-# (predating the -cs- assets) still provisions.
+# C# agent: networker-agent-cs-linux-x64.tar.gz (the binary inside is still
+# named networker-agent -- drop-in). Falls back to the legacy Rust asset name
+# so an older release still provisions.
 download_agent() {
-    URL="https://github.com/irlm/networker-tester/releases/download/${TAG}/networker-agent-cs-linux-x64.tar.gz"
-    curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused --max-time 180 \
-        "$URL" -o /tmp/networker-agent.tar.gz \
-        || { echo "networker-bootstrap: C# agent asset unavailable at $URL; falling back to legacy Rust agent" >&2; \
-             download_bin networker-agent; return $?; }
+    if ! fetch_artifact networker-agent-cs-linux-x64.tar.gz /tmp/networker-agent.tar.gz; then
+        echo "networker-bootstrap: C# agent asset unavailable; falling back to legacy Rust agent" >&2
+        download_bin networker-agent; return $?
+    fi
     tar xzf /tmp/networker-agent.tar.gz -C /tmp \
         || { echo "networker-bootstrap: failed to extract networker-agent.tar.gz" >&2; return 1; }
     install -m 0755 /tmp/networker-agent /usr/local/bin/networker-agent \
@@ -360,10 +380,13 @@ if (Test-Path $wireshark) {
     }
 }
 
-# 3. Resolve latest release tag and download binaries
+# 3. Download binaries from the CONTROL PLANE, not from GitHub. The repo is
+# private, so its release download URLs 404 for every caller. The alternative
+# was a GitHub token in this user-data -- readable by any process on the VM and
+# via the instance metadata service. The agent api-key is already here, is
+# scoped to THIS agent, and is revocable on its own.
 $TARGET = '__TARGET_TRIPLE__'
-$TAG = (Invoke-RestMethod 'https://api.github.com/repos/irlm/networker-tester/releases/latest').tag_name
-if (-not $TAG) { throw 'could not resolve latest release tag' }
+$ArtifactBase = '__ARTIFACT_BASE__'
 
 $BinDir = 'C:\Program Files\Networker'
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
@@ -373,25 +396,26 @@ New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 #   networker-agent-cs-win-x64.zip (fallback: networker-agent-__TARGET_TRIPLE__.zip)
 # Windows release artefacts are zipped. Unpacked with Expand-Archive (native
 # on Windows, no tar shim needed).
-function Install-NetworkerZip($name, $url) {
+function Install-NetworkerZip($name, $asset) {
     $zip = "$env:TEMP\$name.zip"
     $extract = "$env:TEMP\$name-extract"
-    Invoke-WebRequest -Uri $url -OutFile $zip
+    Invoke-WebRequest -Uri "$ArtifactBase/api/artifacts/$asset" `
+        -Headers @{ 'X-Agent-Key' = '__API_KEY__' } -OutFile $zip
     if (Test-Path $extract) { Remove-Item -Recurse -Force $extract }
     Expand-Archive -Path $zip -DestinationPath $extract -Force
     Copy-Item -Force "$extract\$name.exe" "$BinDir\$name.exe"
     Remove-Item -Force $zip
     Remove-Item -Recurse -Force $extract
 }
-Install-NetworkerZip 'networker-tester' "https://github.com/irlm/networker-tester/releases/download/$TAG/networker-tester-$TARGET.zip"
+Install-NetworkerZip 'networker-tester' "networker-tester-$TARGET.zip"
 # The agent is the self-contained C# Networker.Agent (published from the
 # ubuntu runner; the exe inside is still networker-agent.exe -- drop-in).
 # Fall back to the legacy Rust asset if the resolved release predates it.
 try {
-    Install-NetworkerZip 'networker-agent' "https://github.com/irlm/networker-tester/releases/download/$TAG/networker-agent-cs-win-x64.zip"
+    Install-NetworkerZip 'networker-agent' 'networker-agent-cs-win-x64.zip'
 } catch {
     Write-Host 'networker-bootstrap: C# agent asset unavailable; falling back to legacy Rust agent'
-    Install-NetworkerZip 'networker-agent' "https://github.com/irlm/networker-tester/releases/download/$TAG/networker-agent-$TARGET.zip"
+    Install-NetworkerZip 'networker-agent' "networker-agent-$TARGET.zip"
 }
 
 # 4. Set machine env vars + install service via sc.exe

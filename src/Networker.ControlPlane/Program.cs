@@ -242,6 +242,10 @@ app.MapTestConfigsEndpoints();
 app.MapAgentsEndpoints();
 app.MapDeploymentsEndpoints();
 app.MapPlatformEndpoints();
+// Installers (anonymous, the curl|bash URL) + release binaries for machines
+// holding an agent api-key. Keeps the GitHub token in ONE place now the repo
+// is private — see ArtifactEndpoints for why not in every VM's cloud-init.
+app.MapArtifactEndpoints();
 
 // M3 write path — create/patch/delete + launch configs, cancel runs, and
 // schedules + comparison-groups CRUD (trigger/launch shells wired to the

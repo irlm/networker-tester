@@ -23,6 +23,71 @@ public sealed class CloudInitScriptsTests
         Assert.Equal(expected, CloudInitScripts.AgentWsUrl(input));
     }
 
+    [Theory]
+    [InlineData("https://alethedash.com", "https://alethedash.com")]
+    [InlineData("wss://laghound.com/ws/agent", "https://laghound.com")]
+    [InlineData("http://localhost:3000", "http://localhost:3000")]
+    [InlineData("ws://localhost:5030/ws/agent", "http://localhost:5030")]
+    [InlineData("https://alethedash.com/api", "https://alethedash.com")]
+    public void ArtifactBase_maps_ws_to_http_and_drops_path(string input, string expected)
+    {
+        // One configured value drives both the agent socket and the artifact
+        // fetch, so a VM can never end up with the two pointing at different
+        // hosts.
+        Assert.Equal(expected, CloudInitScripts.ArtifactBaseFrom(input));
+    }
+
+    [Fact]
+    public void Linux_bootstrap_pulls_artifacts_from_the_control_plane_not_github()
+    {
+        // The repo is private: releases/download/ 404s for every caller, and a
+        // GitHub token must NOT be planted in user-data (readable on the VM and
+        // through the instance metadata service).
+        var script = CloudInitScripts.RenderLinuxBootstrap(GoodUrl, GoodKey, GoodTriple);
+
+        Assert.DoesNotContain("releases/download", script);
+        Assert.DoesNotContain("api.github.com/repos", script);
+        // Base and path are not adjacent literals: the script holds the base
+        // in a variable and interpolates the asset name at the call site.
+        Assert.Contains("ARTIFACT_BASE=\"https://alethedash.com\"", script);
+        Assert.Contains("/api/artifacts/", script);
+        Assert.Contains("X-Agent-Key: " + GoodKey, script);
+        Assert.Contains("networker-tester-" + GoodTriple + ".tar.gz", script);
+        Assert.Contains("networker-agent-cs-linux-x64.tar.gz", script);
+    }
+
+    [Fact]
+    public void Windows_bootstrap_pulls_artifacts_from_the_control_plane_not_github()
+    {
+        var script = CloudInitScripts.RenderWindowsBootstrap(
+            GoodUrl, GoodKey, "x86_64-pc-windows-msvc");
+
+        Assert.DoesNotContain("releases/download", script);
+        Assert.DoesNotContain("api.github.com/repos", script);
+        Assert.Contains("$ArtifactBase = 'https://alethedash.com'", script);
+        Assert.Contains("/api/artifacts/", script);
+        Assert.Contains("'X-Agent-Key' = '" + GoodKey + "'", script);
+        Assert.Contains("networker-agent-cs-win-x64.zip", script);
+    }
+
+    [Fact]
+    public void No_placeholder_survives_rendering()
+    {
+        // A missed __PLACEHOLDER__ would ship a VM that fetches from a literal
+        // string; assert every one is substituted on both platforms.
+        foreach (var script in new[]
+                 {
+                     CloudInitScripts.RenderLinuxBootstrap(GoodUrl, GoodKey, GoodTriple),
+                     CloudInitScripts.RenderWindowsBootstrap(GoodUrl, GoodKey, "x86_64-pc-windows-msvc"),
+                 })
+        {
+            Assert.DoesNotContain("__ARTIFACT_BASE__", script);
+            Assert.DoesNotContain("__TARGET_TRIPLE__", script);
+            Assert.DoesNotContain("__DASHBOARD_URL__", script);
+            Assert.DoesNotContain("__API_KEY__", script);
+        }
+    }
+
     [Fact]
     public void ValidateInputs_rejects_bad_url()
     {

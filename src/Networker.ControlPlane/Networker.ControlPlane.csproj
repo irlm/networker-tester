@@ -21,6 +21,18 @@
                       Link="shared\cloud-costs.json"
                       LogicalName="Networker.ControlPlane.shared.cloud-costs.json" />
 
+    <!-- The installers, served by GET /install.sh and /install.ps1 (the
+         `curl | bash` URL). Embedded rather than copied at deploy time so the
+         script laghound.com hands out ALWAYS matches the control plane that is
+         running: one artifact, no drift, nothing extra for the deploy to ship.
+         The repo-root copies stay the editable source of truth. -->
+    <EmbeddedResource Include="..\..\install.sh"
+                      Link="install.sh"
+                      LogicalName="Networker.ControlPlane.install.sh" />
+    <EmbeddedResource Include="..\..\install.ps1"
+                      Link="install.ps1"
+                      LogicalName="Networker.ControlPlane.install.ps1" />
+
     <!-- Canonical HTTP-stack layout + capabilities (Endpoints/HttpStackCatalog.cs):
          which proxy stacks the installers configure with HTTP/3, and which
          probe modes need it. Served by GET /api/http-stacks (+ /api/modes

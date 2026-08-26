@@ -11,6 +11,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.304] - 2026-08-26
+
+### Added
+
+- **laghound.com serves the installers and the release binaries.** Now the repo
+  is private, its release download URLs 404 for every caller. Rather than hand
+  a GitHub token to every machine that needs a binary, the control plane holds
+  one and everything else asks it.
+  - `GET /install.sh` and `GET /install.ps1` — anonymous by design (this is the
+    `curl | bash` URL), served from a copy embedded in the control-plane
+    assembly, so the script handed out always matches the control plane that is
+    running. No extra deploy plumbing, and no drift.
+  - `GET /api/artifacts/{name}` — authenticated with the **agent api-key the
+    VM already holds**, streaming the release asset. `RELEASE_ASSET_TOKEN`
+    (a token with `contents:read`) must be set on the control plane; without it
+    the route answers **503**, never a misleading 404.
+  - The asset name is checked against an **allow-list**. The name arrives from
+    a VM and must never be able to steer the upstream request.
+
+### Fixed
+
+- **New tester VMs can provision again.** Both cloud-init templates (Linux and
+  Windows) fetched from GitHub and had been broken since the repo went private.
+  They now fetch from the control plane with `X-Agent-Key`, which also deletes
+  the release-tag lookup they used to do.
+
+  **Why not just put a GitHub token in cloud-init:** user-data is readable by
+  any process on the VM and, on Azure/AWS/GCP, through the instance metadata
+  service — a standard SSRF target. A repo-scoped GitHub token there would
+  expose the whole private repo from every ephemeral runner. The agent api-key
+  already in that user-data is a different risk class: per-agent, revocable on
+  its own, and useless against GitHub.
+
+- **The Gist sync works again.** `sync-gist.yml` declared `permissions: {}`,
+  which gives `GITHUB_TOKEN` no scopes. That was harmless while the repo was
+  public (`actions/checkout` could clone anonymously) and fatal once it was not
+  — `remote: Repository not found` — so the Gist silently stopped tracking
+  `install.sh` while still being the only unauthenticated install URL. Now
+  `contents: read`.
+
+### Notes
+
+- **`RELEASE_ASSET_TOKEN` must be set on the control plane before new tester
+  VMs will provision.** It is the one place a GitHub credential now lives.
+- Still on GitHub: `install.sh` / `install.ps1` fetch binaries from release
+  URLs when run by hand, and `VersionRefreshService.cs:70` polls
+  `releases/latest`. Both now have a served alternative to point at.
+- The 13 GitHub-hosted scheduled workflows still bill Actions minutes. Not a
+  bulk edit: `ci-hosts-watchdog.yml:49` is marked *"never self-hosted: this is
+  what rescues them"*, and `release.yml`'s deploy is kept on GitHub
+  infrastructure by `docs/self-hosted-ci.md`'s security model.
+
+---
+
 ## [0.28.302] - 2026-08-26
 
 ### Fixed
