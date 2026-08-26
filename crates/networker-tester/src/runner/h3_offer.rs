@@ -1,7 +1,7 @@
 //! HTTP/3 pre-flight: does this target actually offer h3?
 //!
 //! A raw URL's HTTP/3 support cannot be known statically. The control plane's
-//! config-create gate ([`ModeTargetCompatibility`] on the C# side) can only
+//! config-create gate (`ModeTargetCompatibility` on the C# side) can only
 //! decide it for LagHound-managed targets, where the proxy stack is known from
 //! `shared/http-stacks.json`; for an arbitrary third-party URL it has nothing
 //! to go on, so the h3 modes are dispatched and fail.
