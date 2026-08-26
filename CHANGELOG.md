@@ -11,6 +11,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.302] - 2026-08-26
+
+### Fixed
+
+- **The deploy can fetch release assets again now the repo is private.** A
+  private repo's `releases/download/` URLs return **404 to every caller** — a
+  Bearer token on them does not help; assets are reachable only through the
+  API by numeric id. `release.yml`'s deploy step pulled all five artifacts with
+  plain `curl -fsSL` on the Azure VM under `set -e`, so the first deploy after
+  the visibility flip would have died at the download and rolled back.
+
+  The workflow now resolves the asset ids on the runner (where the workflow
+  token already works), fails loudly and by name if the release is missing an
+  expected asset, and hands the VM id-addressed API URLs plus a token. The
+  deploy job's token is narrowed from the workflow-level `contents: write` to
+  a job-scoped **`contents: read`**, since it is embedded in the script that
+  runs on the VM and a private repo offers no other way in. It expires with the
+  job.
+
+  `curl | tar xz` became download-then-extract at the same time: a failed
+  fetch inside a pipe could be swallowed rather than failing the deploy.
+
+### Notes
+
+- **This fixes ONE of four paths broken by going private.** Still broken, each
+  needing its own change:
+  - `CloudInitScripts.cs` (`:224`, `:239`, `:258` Linux; `:365`, `:386`,
+    `:391` Windows) — **every new tester VM fails to provision.** Needs the
+    control plane to resolve asset ids and inject a token into the cloud-init,
+    so it needs a token on the control plane too.
+  - `install.sh` / `install.ps1` — the `curl | bash` bootstrap. The
+    `gh release download` fast paths (`install.sh:2947`, `:3639`, `:4194`)
+    still work when `gh` is authenticated; the plain-curl fallbacks 404.
+  - `VersionRefreshService.cs:70` — polls `releases/latest`, now 404.
+- The 13 GitHub-hosted scheduled workflows bill Actions minutes on a private
+  repo. Routing them to self-hosted runners is deliberately NOT bulk work:
+  `ci-hosts-watchdog.yml:49` is marked *"never self-hosted: this is what
+  rescues them"*, and `release.yml`'s deploy is the only job holding prod
+  credentials and is kept on GitHub infrastructure by
+  `docs/self-hosted-ci.md`'s security model.
+
+---
+
 ## [0.28.301] - 2026-08-25
 
 ### Added
