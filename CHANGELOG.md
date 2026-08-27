@@ -33,6 +33,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `retention-days`, so all inherited the repo default of **90 days**. They now
   set `retention-days: 1`. `coverage-report` drops from 30 days to 7.
 
+- **Release assets now mirror to Azure Blob, in a storage account of their
+  own.** `release.yml` uploads every artifact to
+  `alethedashreleases/releases/v{VERSION}/` after publishing the GitHub
+  release. The account is separate from `alethedashbackups` so release traffic
+  and database backups do not share a blast radius; public blob access is
+  **disabled**, HTTPS-only, TLS 1.2 minimum.
+
+  `GET /api/artifacts/{name}` now **302s to a container-scoped, read-only SAS
+  URL** instead of streaming from GitHub. Three things improve at once: the
+  bytes stop passing through the process that also serves the API and the
+  agent WS hubs; the credential on prod becomes a SAS that can read one
+  container and nothing else, instead of a GitHub token that can read the whole
+  private repo; and artifact distribution stops touching the Actions storage
+  quota entirely. With no `?tag=`, the version defaults to the running control
+  plane's own build — a VM gets the tester from the release that provisioned
+  it, not whatever is newest. The GitHub-token path remains as a fallback.
+
 ### Notes
 
 - Self-hosted runners do **not** help here. They eliminate billed *minutes*;
