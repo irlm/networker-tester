@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.307] - 2026-08-26
+
+### Fixed
+
+- **auto-tag: the second missing scope.** v0.28.306 added `pull-requests: read`
+  so the guard could query the merged PR — which worked, and moved the 403 one
+  line down. The very next call,
+  `repos/{repo}/commits/{sha}/check-runs` (`ci.yml` ~L1082), needs
+  **`checks: read`** on a private repo. Still no tag, still nothing deployed.
+
+  This time the rest of the job was audited rather than assumed: `gh release
+  view`, `git push` of the tag, and `gh workflow run release.yml` are covered
+  by the `contents: write` / `actions: write` already granted, so this should
+  be the last gap.
+
+### Notes
+
+- Five versions are now merged and untagged (0.28.302 through 0.28.306). None
+  needs back-filling — the next successful tag comes from `Cargo.toml` and
+  carries all of that code.
+
+---
+
 ## [0.28.306] - 2026-08-26
 
 ### Fixed
