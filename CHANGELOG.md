@@ -11,6 +11,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.308] - 2026-08-27
+
+### Fixed
+
+- **Actions artifact storage was 138x over the allowance.** Measured: **69.2 GB
+  across 4021 artifacts** against the 0.5 GB included, which put the account at
+  100% and into billed usage. 97% of it is release build output:
+
+  | artifact | size | copies |
+  |---|---|---|
+  | `dist-csharp` | 32.6 GB | 276 |
+  | `dist-x86_64-unknown-linux-musl` | 9.7 GB | 402 |
+  | `dist-x86_64-apple-darwin` | 8.5 GB | 406 |
+  | `dist-aarch64-apple-darwin` | 8.1 GB | 407 |
+  | `dist-x86_64-pc-windows-msvc` | 7.9 GB | 406 |
+  | `coverage-report` | 2.1 GB | 1636 |
+
+  Every `dist-*` upload is a **same-run handoff** — `build-*` uploads it, the
+  `release` job downloads it, and nothing reads it again — but none set
+  `retention-days`, so all inherited the repo default of **90 days**. They now
+  set `retention-days: 1`. `coverage-report` drops from 30 days to 7.
+
+### Notes
+
+- Self-hosted runners do **not** help here. They eliminate billed *minutes*;
+  artifact *storage* is charged the same wherever the job ran. The two limits
+  are independent, and only the minutes one is addressed by routing jobs to
+  the local CI hosts.
+- This stops the growth. It does not reclaim the 69 GB already stored —
+  existing artifacts keep their original expiry and have to be deleted
+  explicitly.
+
 ## [0.28.307] - 2026-08-26
 
 ### Fixed

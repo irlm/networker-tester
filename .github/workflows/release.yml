@@ -177,6 +177,10 @@ jobs:
         with:
           name: dist-x86_64-unknown-linux-musl
           path: dist/
+          # Same-run handoff only: build-* uploads, release downloads, done.
+          # Left unset these inherited the repo default of 90 days and piled
+          # up to 66 GB against a 0.5 GB allowance.
+          retention-days: 1
 
   # ── Native builds: mac x2 + windows (start at t=0, gate the release) ───────
   # GitHub releases are immutable once published (assets can no longer be
@@ -311,6 +315,10 @@ jobs:
         with:
           name: dist-${{ matrix.target }}
           path: dist/
+          # Same-run handoff only: build-* uploads, release downloads, done.
+          # Left unset these inherited the repo default of 90 days and piled
+          # up to 66 GB against a 0.5 GB allowance.
+          retention-days: 1
 
   # ── Publish the C# control plane (self-contained linux-x64) ──────────────
   # This is the deployable that serves alethedash.com since the cutover. Built
@@ -374,6 +382,10 @@ jobs:
         with:
           name: dist-csharp
           path: dist/
+          # Same-run handoff only: build-* uploads, release downloads, done.
+          # Left unset these inherited the repo default of 90 days and piled
+          # up to 66 GB against a 0.5 GB allowance.
+          retention-days: 1
 
   # ── Create GitHub release and attach all archives ────────────────────────
   release:
