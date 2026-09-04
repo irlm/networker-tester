@@ -931,7 +931,10 @@ jobs:
           path: |
             lcov.info
             coverage-html/
-          retention-days: 30
+          # 1636 coverage artifacts had accumulated to 2 GB against a 0.5 GB
+          # allowance. A coverage report is read within days of the run that
+          # produced it, if at all.
+          retention-days: 7
 
   # ──────────────────────────────────────────────────────────────────────────
   sql-integration:
