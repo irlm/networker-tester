@@ -34,9 +34,20 @@ namespace Networker.ControlPlane.Endpoints;
 public static class ArtifactEndpoints
 {
     /// <summary>Env var holding a GitHub token with <c>contents:read</c> on
-    /// this repo. Without it the artifact proxy reports 503 rather than
-    /// pretending an asset is missing.</summary>
+    /// this repo. Only the FALLBACK path uses it; prefer
+    /// <see cref="BlobSasEnv"/>. Without either the proxy reports 503 rather
+    /// than pretending an asset is missing.</summary>
     public const string TokenEnv = "RELEASE_ASSET_TOKEN";
+
+    /// <summary>Env var holding a container-scoped, READ-ONLY SAS query string
+    /// for the release blob container (no leading '?'). Preferred over
+    /// <see cref="TokenEnv"/>: it can read one container and nothing else,
+    /// anywhere, whereas a GitHub token can read the whole private repo.</summary>
+    public const string BlobSasEnv = "RELEASE_BLOB_SAS";
+
+    /// <summary>Base URL of the release container, e.g.
+    /// <c>https://alethedashreleases.blob.core.windows.net/releases</c>.</summary>
+    public const string BlobBaseEnv = "RELEASE_BLOB_BASE";
 
     private const string Repo = "irlm/networker-tester";
 
@@ -114,12 +125,36 @@ public static class ArtifactEndpoints
             return Results.Unauthorized();
         }
 
+        // Preferred path: hand back a redirect to blob storage. The bytes never
+        // pass through this process -- it also serves the API and the agent WS
+        // hubs, and a fleet provisioning in parallel would otherwise contend
+        // with them for the same NIC on a latency-measurement product.
+        var sas = Environment.GetEnvironmentVariable(BlobSasEnv);
+        var blobBase = Environment.GetEnvironmentVariable(BlobBaseEnv);
+        if (!string.IsNullOrWhiteSpace(sas) && !string.IsNullOrWhiteSpace(blobBase))
+        {
+            // No tag means "the build that goes with this control plane".
+            // A tester VM should run the tester from the release it was
+            // provisioned by, not whatever happens to be newest.
+            var version = string.IsNullOrWhiteSpace(tag) ? OwnVersion() : tag!.TrimStart('v');
+            if (version is null)
+            {
+                return Results.Problem(
+                    "could not determine the release version to serve", statusCode: 500);
+            }
+
+            var url = BlobUrlFor(blobBase, sas, name, version);
+            // 302, not a proxy: the SAS is read-only and container-scoped, and
+            // the caller already proved it holds an agent key to get here.
+            return Results.Redirect(url, permanent: false);
+        }
+
         var token = Environment.GetEnvironmentVariable(TokenEnv);
         if (string.IsNullOrWhiteSpace(token))
         {
             return Results.Problem(
-                $"{TokenEnv} is not configured; the control plane cannot reach "
-                + "release assets for a private repo.",
+                $"neither {BlobSasEnv}+{BlobBaseEnv} nor {TokenEnv} is configured; "
+                + "the control plane cannot reach release assets.",
                 statusCode: 503);
         }
 
@@ -175,6 +210,24 @@ public static class ArtifactEndpoints
         return Results.Stream(
             await assetResp.Content.ReadAsStreamAsync(ct), "application/octet-stream");
     }
+
+    /// <summary>
+    /// The versioned blob URL for one asset. Version-scoped so a release can
+    /// never serve another's binary, and the SAS is appended verbatim (it is a
+    /// query string, with or without a leading '?').
+    /// </summary>
+    internal static string BlobUrlFor(string blobBase, string sas, string name, string version) =>
+        $"{blobBase.TrimEnd('/')}/v{version}/{Uri.EscapeDataString(name)}?{sas.TrimStart('?')}";
+
+    /// <summary>The release version this control plane belongs to
+    /// (Major.Minor.Build of the running assembly), or null if unreadable.</summary>
+    internal static string? OwnVersion() =>
+        Assembly.GetExecutingAssembly().GetName().Version is { } v
+            ? $"{v.Major}.{v.Minor}.{v.Build}"
+            : null;
+
+    /// <summary>Whether the proxy will serve this asset name.</summary>
+    internal static bool IsAllowedAsset(string name) => Allowed.Contains(name);
 
     /// <summary>
     /// True when the request carries an api-key belonging to a registered

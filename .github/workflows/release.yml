@@ -177,6 +177,10 @@ jobs:
         with:
           name: dist-x86_64-unknown-linux-musl
           path: dist/
+          # Same-run handoff only: build-* uploads, release downloads, done.
+          # Left unset these inherited the repo default of 90 days and piled
+          # up to 66 GB against a 0.5 GB allowance.
+          retention-days: 1
 
   # ── Native builds: mac x2 + windows (start at t=0, gate the release) ───────
   # GitHub releases are immutable once published (assets can no longer be
@@ -311,6 +315,10 @@ jobs:
         with:
           name: dist-${{ matrix.target }}
           path: dist/
+          # Same-run handoff only: build-* uploads, release downloads, done.
+          # Left unset these inherited the repo default of 90 days and piled
+          # up to 66 GB against a 0.5 GB allowance.
+          retention-days: 1
 
   # ── Publish the C# control plane (self-contained linux-x64) ──────────────
   # This is the deployable that serves alethedash.com since the cutover. Built
@@ -374,6 +382,10 @@ jobs:
         with:
           name: dist-csharp
           path: dist/
+          # Same-run handoff only: build-* uploads, release downloads, done.
+          # Left unset these inherited the repo default of 90 days and piled
+          # up to 66 GB against a 0.5 GB allowance.
+          retention-days: 1
 
   # ── Create GitHub release and attach all archives ────────────────────────
   release:
@@ -423,6 +435,36 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           NOTES: ${{ steps.notes.outputs.notes }}
+
+      # Mirror the same assets to Azure Blob. Two reasons, both load-bearing:
+      #   * GitHub Actions ARTIFACT storage is 0.5 GB and these builds blew
+      #     through it; blob storage is pennies and is not that quota.
+      #   * a PRIVATE repo serves release assets only through the API by id,
+      #     so every consumer needed a GitHub token. A container-scoped
+      #     read-only SAS replaces that with a credential that can read
+      #     nothing else, anywhere.
+      # The container has public access DISABLED -- reads are SAS-only.
+      - name: Azure Login (release mirror)
+        uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Mirror release assets to Azure Blob
+        env:
+          ACCOUNT: alethedashreleases
+          CONTAINER: releases
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          KEY="$(az storage account keys list -n "$ACCOUNT" -g alethedash-rg \
+                   --query '[0].value' -o tsv)"
+          # --overwrite so re-running a release is idempotent; the destination
+          # is version-scoped so one release can never clobber another's.
+          az storage blob upload-batch \
+            --account-name "$ACCOUNT" --account-key "$KEY" \
+            --destination "$CONTAINER" --destination-path "v${VERSION}" \
+            --source dist/ --overwrite true --output none
+          echo "Mirrored $(ls dist/ | wc -l) assets to ${ACCOUNT}/${CONTAINER}/v${VERSION}"
 
   # ── Deploy to the Azure VM (laghound.com; alethedash.com bridge) ─────────
   # Post-cutover deploy: swaps the C# control plane (alethedash-cs), the Rust
