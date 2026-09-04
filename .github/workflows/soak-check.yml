@@ -49,7 +49,7 @@ jobs:
           [ "$FINAL" = "200" ]
 
       - name: Azure Login
-        uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v2
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
