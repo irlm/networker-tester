@@ -5,17 +5,27 @@
 ///   [4 bytes: seq u32 BE] [8 bytes: timestamp_us i64 BE] [payload...]
 ///
 /// The server does not need to interpret the format; it just echoes bytes.
+///
+/// Replies leave from the address the request arrived on (see
+/// `pktinfo_socket.rs`) so a client on a multihomed host's "other" interface,
+/// or behind a stateful firewall, actually gets its echo back.
+use crate::pktinfo_socket::PktInfoSocket;
 use tracing::{debug, warn};
 
 pub async fn run_udp_echo(socket: tokio::net::UdpSocket) {
-    debug!("UDP echo listening on {:?}", socket.local_addr().ok());
+    let socket = PktInfoSocket::new(socket);
+    debug!(
+        "UDP echo listening on {:?} (reply-source pinning: {})",
+        socket.local_addr().ok(),
+        socket.tracks_destination()
+    );
 
     let mut buf = vec![0u8; 65_535];
     loop {
         match socket.recv_from(&mut buf).await {
-            Ok((n, addr)) => {
-                debug!("UDP echo: {n} bytes from {addr}");
-                if let Err(e) = socket.send_to(&buf[..n], addr).await {
+            Ok(rx) => {
+                debug!("UDP echo: {} bytes from {}", rx.len, rx.from);
+                if let Err(e) = socket.send_to(&buf[..rx.len], rx.from, rx.dst_ip).await {
                     warn!("UDP echo send error: {e}");
                 }
             }
@@ -56,6 +66,30 @@ mod tests {
             .unwrap();
 
         assert_eq!(&recv[..n], msg, "echo must be verbatim");
+        task.abort();
+    }
+
+    /// Multihomed regression (home lab, 2026-09-02): a wildcard-bound server
+    /// addressed on one of its addresses must echo FROM that address, or a
+    /// connected client never sees the reply. Linux routes all of
+    /// 127.0.0.0/8 to `lo`, so 127.0.0.2 stands in for the "other" interface.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn udp_echo_replies_from_the_address_it_was_reached_on() {
+        let server_sock = UdpSocket::bind("0.0.0.0:0").await.unwrap();
+        let port = server_sock.local_addr().unwrap().port();
+        let task = tokio::spawn(run_udp_echo(server_sock));
+
+        let client = UdpSocket::bind("127.0.0.3:0").await.unwrap();
+        client.connect(("127.0.0.2", port)).await.unwrap();
+        client.send(b"via-secondary-address").await.unwrap();
+
+        let mut recv = vec![0u8; 64];
+        let n = tokio::time::timeout(std::time::Duration::from_secs(5), client.recv(&mut recv))
+            .await
+            .expect("echo never arrived — it was sent from the wrong source address")
+            .unwrap();
+        assert_eq!(&recv[..n], b"via-secondary-address");
         task.abort();
     }
 }

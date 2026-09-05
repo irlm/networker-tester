@@ -30,6 +30,7 @@
 //!   received TTL here; 255 is the documented "unknown" fallback.)
 //! - Error Estimate is reported as S=0 (unsynchronized), multiplier 1.
 
+use crate::pktinfo_socket::PktInfoSocket;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -132,12 +133,16 @@ pub async fn run_stamp_reflector(socket: tokio::net::UdpSocket) {
 /// Reflector loop on an already-bound socket (tests bind `127.0.0.1:0`
 /// directly, avoiding learn-a-port/rebind races).
 async fn run_stamp_reflector_on(socket: tokio::net::UdpSocket) {
+    // Reflect from the address the test packet arrived on — a reflector on a
+    // multihomed host must not answer from its other interface (pktinfo_socket.rs).
+    let socket = PktInfoSocket::new(socket);
     let mut sessions: HashMap<SocketAddr, Session> = HashMap::new();
     let mut last_sweep = Instant::now();
     let mut buf = vec![0u8; 2048];
     loop {
         match socket.recv_from(&mut buf).await {
-            Ok((n, addr)) => {
+            Ok(rx) => {
+                let (n, addr) = (rx.len, rx.from);
                 let t2 = ntp_now();
                 if n < STAMP_PACKET_LEN {
                     debug!("STAMP: runt packet ({n} bytes) from {addr} — ignored");
@@ -155,7 +160,7 @@ async fn run_stamp_reflector_on(socket: tokio::net::UdpSocket) {
 
                 let t3 = ntp_now();
                 let reply = build_reflected_packet(&buf[..n], reflector_seq, t2, t3);
-                if let Err(e) = socket.send_to(&reply, addr).await {
+                if let Err(e) = socket.send_to(&reply, addr, rx.dst_ip).await {
                     warn!("STAMP reflector send error: {e}");
                 }
             }

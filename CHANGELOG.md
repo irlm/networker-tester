@@ -11,6 +11,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.309] - 2026-09-02
+
+### Fixed
+
+- **Endpoint: UDP replies now leave from the address the request arrived on.**
+  The echo (9999), STAMP reflector (9997) and UDP throughput (9998) servers
+  bind `0.0.0.0` and answered with a plain `send_to`, so on a multihomed
+  target the kernel chose the reply's source address from its routing table.
+  Home lab, 2026-09-02: a Raspberry Pi with ethernet and wifi on the same
+  subnet — probes sent to the wifi address, echoes came back from the ethernet
+  address. The tester's UDP probes use *connected* sockets, which silently
+  drop datagrams from any other source, so `udp`, `stamp` and `rpm` reported
+  100% loss while `tcp`/`http*`/`http3` against the same host were fine, and
+  nothing in either log said why (`tcpdump` did). Stateful firewalls and NATs
+  drop such replies for the same reason. New `pktinfo_socket.rs` wraps the
+  server sockets with IP_PKTINFO / IP_RECVDSTADDR receive + pinned-source send
+  (via `quinn-udp`, already in the tree for HTTP/3; its QUIC-oriented
+  don't-fragment and GRO settings are switched back off so a large echo still
+  fragments and one receive is one datagram). Falls back to the old behaviour
+  with a warning if the platform setup fails. Linux regression tests reproduce
+  the bug on loopback (`127.0.0.2` vs `127.0.0.1`). The C# endpoint port
+  (`Networker.Endpoint`) has the same `UdpClient` pattern and is NOT changed
+  here — .NET exposes no pinned-source send; follow-up.
+
+- **Tester: "Client network" now describes the interface the probes actually
+  use.** `NetworkContext` took the default-route interface, so on a
+  dual-homed client (ethernet default route, wifi to the lab subnet) the
+  report said `iface=enp3s0 (ethernet) gw=172.16.48.1` while every packet
+  left over `wlo1`. The interface, kind, MTU and VPN verdict now come from a
+  longest-prefix-match route lookup toward the resolved target (Linux
+  `/proc/net/route`, macOS `route -n get <ip>`); `gateway_ip` is the next hop
+  of THAT route and is empty for an on-link target. Default route stays the
+  fallback (IPv6 targets on Linux, Windows). JSON field names are unchanged.
+  The "Client network" log line prints `gw=on-link` instead of `gw=?` for a
+  gateway-less route.
+
+### Notes
+
+- `.markdownlint.json` (new) sets `MD024: siblings_only` — the standard
+  Keep-a-Changelog setting — so the `markdown` lint section stops flagging
+  every `### Fixed` heading in this file (86 of its 99 findings).
+
+---
 ## [0.28.308] - 2026-08-27
 
 ### Fixed

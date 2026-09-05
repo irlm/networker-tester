@@ -24,9 +24,10 @@
 /// [4..8]  total_seqs as u32 LE
 /// [8..]   payload (up to CHUNK_SIZE bytes)
 /// ```
+use crate::pktinfo_socket::PktInfoSocket;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tracing::{debug, info};
@@ -46,7 +47,10 @@ const CHUNK_SIZE: usize = 1400;
 ///
 /// Separate from the UDP echo server so the two protocols never interfere.
 pub async fn run_udp_throughput(socket: UdpSocket) {
-    let sock = Arc::new(socket);
+    // Every ACK, data packet and report goes back out from the address the
+    // client addressed (pktinfo_socket.rs) — a multihomed target otherwise
+    // answers from its other interface and the connected client drops it all.
+    let sock = Arc::new(PktInfoSocket::new(socket));
     info!("UDP throughput → {:?}", sock.local_addr().ok());
 
     let mut buf = vec![0u8; 65536];
@@ -55,8 +59,8 @@ pub async fn run_udp_throughput(socket: UdpSocket) {
     let mut pkt_counter: u64 = 0;
 
     loop {
-        let (n, src) = match sock.recv_from(&mut buf).await {
-            Ok(r) => r,
+        let (n, src, local_ip) = match sock.recv_from(&mut buf).await {
+            Ok(rx) => (rx.len, rx.from, rx.dst_ip),
             Err(e) => {
                 debug!("UDP throughput recv_from error: {e}");
                 continue;
@@ -74,11 +78,11 @@ pub async fn run_udp_throughput(socket: UdpSocket) {
                 CMD_DOWNLOAD => {
                     debug!("UDP throughput: CMD_DOWNLOAD {value} bytes from {src}");
                     let ack = make_ctrl(CMD_ACK, 0);
-                    let _ = sock.send_to(&ack, src).await;
+                    let _ = sock.send_to(&ack, src, local_ip).await;
                     // Spawn a task to blast data packets to the client.
                     let sock_clone = sock.clone();
                     tokio::spawn(async move {
-                        send_download(sock_clone, src, value).await;
+                        send_download(sock_clone, src, local_ip, value).await;
                     });
                 }
                 CMD_UPLOAD => {
@@ -93,7 +97,7 @@ pub async fn run_udp_throughput(socket: UdpSocket) {
                         },
                     );
                     let ack = make_ctrl(CMD_ACK, 0);
-                    let _ = sock.send_to(&ack, src).await;
+                    let _ = sock.send_to(&ack, src, local_ip).await;
                 }
                 CMD_DONE => {
                     if let Some(state) = upload_states.remove(&src) {
@@ -105,7 +109,7 @@ pub async fn run_udp_throughput(socket: UdpSocket) {
                             state.received_seqs.len()
                         );
                         let report = make_ctrl(CMD_REPORT, state.received_bytes as u32);
-                        let _ = sock.send_to(&report, src).await;
+                        let _ = sock.send_to(&report, src, local_ip).await;
                     } else {
                         debug!("UDP throughput: CMD_DONE from {src} without prior CMD_UPLOAD");
                     }
@@ -161,10 +165,16 @@ fn reap_stale_uploads(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Send `total_bytes` worth of zero-filled data packets to `dst`, then CMD_DONE.
-async fn send_download(sock: Arc<UdpSocket>, dst: SocketAddr, total_bytes: usize) {
+/// `src_ip` is the address the request arrived on (the reply source).
+async fn send_download(
+    sock: Arc<PktInfoSocket>,
+    dst: SocketAddr,
+    src_ip: Option<IpAddr>,
+    total_bytes: usize,
+) {
     if total_bytes == 0 {
         let done = make_ctrl(CMD_DONE, 0);
-        let _ = sock.send_to(&done, dst).await;
+        let _ = sock.send_to(&done, dst, src_ip).await;
         return;
     }
 
@@ -177,7 +187,7 @@ async fn send_download(sock: Arc<UdpSocket>, dst: SocketAddr, total_bytes: usize
         pkt[..4].copy_from_slice(&seq.to_le_bytes());
         pkt[4..8].copy_from_slice(&total_seqs.to_le_bytes());
         // payload remains zeros
-        if sock.send_to(&pkt, dst).await.is_err() {
+        if sock.send_to(&pkt, dst, src_ip).await.is_err() {
             break;
         }
         sent_bytes += payload_size;
@@ -185,7 +195,7 @@ async fn send_download(sock: Arc<UdpSocket>, dst: SocketAddr, total_bytes: usize
 
     // Signal end of download stream.
     let done = make_ctrl(CMD_DONE, total_bytes as u32);
-    let _ = sock.send_to(&done, dst).await;
+    let _ = sock.send_to(&done, dst, src_ip).await;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
