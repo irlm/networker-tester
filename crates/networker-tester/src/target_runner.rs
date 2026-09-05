@@ -81,7 +81,14 @@ pub(crate) async fn run_for_target(
             ctx.interface_kind.as_deref().unwrap_or("unknown"),
             ctx.mtu.map(|m| m.to_string()).as_deref().unwrap_or("?"),
             ctx.local_ip.as_deref().unwrap_or("?"),
-            ctx.gateway_ip.as_deref().unwrap_or("?"),
+            // No next hop on a known interface means the target is on-link.
+            ctx.gateway_ip
+                .as_deref()
+                .unwrap_or(if ctx.default_interface.is_some() {
+                    "on-link"
+                } else {
+                    "?"
+                }),
             ctx.vpn_detected
                 .map(|v| if v { "yes" } else { "no" })
                 .unwrap_or("?"),

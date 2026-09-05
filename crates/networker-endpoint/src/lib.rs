@@ -1,4 +1,5 @@
 mod http3_server;
+mod pktinfo_socket;
 mod routes;
 mod stamp;
 mod udp_echo;

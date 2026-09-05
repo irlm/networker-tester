@@ -59,25 +59,29 @@ pub struct HostInfo {
 /// Collection lives in [`crate::network_context`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetworkContext {
-    /// Name of the interface owning the default route (e.g. `en0`, `eth0`).
+    /// Name of the interface the OS routes to the target through (e.g.
+    /// `en0`, `wlo1`); the default-route interface only when that per-target
+    /// lookup is unavailable. The field name predates the per-target lookup
+    /// and is kept for the JSON contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_interface: Option<String>,
-    /// Classification of the default interface: `ethernet` | `wifi` |
+    /// Classification of that interface: `ethernet` | `wifi` |
     /// `virtual` | `unknown`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interface_kind: Option<String>,
-    /// MTU of the default interface.
+    /// MTU of that interface.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mtu: Option<u32>,
     /// Local source address of a UDP socket connect()ed to the target — the
     /// egress address actually used for this run (no packets are sent).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_ip: Option<String>,
-    /// Default gateway address.
+    /// Next-hop gateway toward the target; `None` when the target is on-link
+    /// (same subnet) or the route could not be read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gateway_ip: Option<String>,
-    /// Conservative VPN heuristic: `Some(true)` only when the default route
-    /// goes through a tunnel-like interface (utun/tun/wg/tap/ppp/...).
+    /// Conservative VPN heuristic: `Some(true)` only when the route to the
+    /// target goes through a tunnel-like interface (utun/tun/wg/tap/ppp/...).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vpn_detected: Option<bool>,
     /// Tunnel interface name when `vpn_detected` is `Some(true)`.

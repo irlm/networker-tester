@@ -1,8 +1,80 @@
 
 # cargo-vet audits file
 
+[[audits.crc32fast]]
+who = "Igor L Marques <igor.marques@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "1.5.0 -> 1.5.1"
+notes = "Reviewed delta: SIMD performance only (wider x86 folds, ARM 3-way). No API or logic changes."
+
+[[audits.deadpool]]
+who = "Igor L Marques <igor.marques@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.12.3 -> 0.13.1"
+notes = "Reviewed delta: removed SpawnBlockingError re-export (breaking, unused here), dropped num_cpus/lazy_static deps, MSRV 1.85/edition 2024, itertools 0.15. No unsafe additions."
+
+[[audits.deadpool-postgres]]
+who = "Igor L Marques <igor.marques@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.14.1 -> 0.14.2"
+notes = "Reviewed delta: coalesces concurrent PREPARE statements, MSRV 1.85, tokio-postgres 0.7.14, deadpool 0.13.1. Beneficial; no security concerns."
+
+[[audits.deadpool-runtime]]
+who = "Igor L Marques <igor.marques@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.1.4 -> 0.3.1"
+notes = "Reviewed delta: Runtime enum methods became functions + non_exhaustive (breaking, transitive/unused here), smol 2.0, SpawnBlockingError::Cancelled. No unsafe."
+
+[[audits.flate2]]
+who = "Igor L Marques <igor.marques@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "1.1.9 -> 1.1.10"
+notes = "Reviewed delta: security hardening (fixes gzip header/footer infinite loop, rejects oversized extra fields and incomplete deflate streams), drops cloudflare-zlib, bumps miniz_oxide to 0.9."
+
+[[audits.hyper]]
+who = "Igor L Marques <igor.marques@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "1.11.0 -> 1.11.1"
+notes = "Reviewed delta: four HTTP/1 bug fixes (TE trailers case-insensitive, head terminator recognition, write-buffer flush, connection-pool eviction on Connection: close). No breaking/security regressions."
+
+[[audits.maxminddb]]
+who = "Igor L Marques <igor.marques@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.30.0 -> 0.30.3"
+notes = "Reviewed delta: robustness fixes returning InvalidDatabase instead of panicking on malformed/overflowing extended types (upstream #122). No API break."
+
+[[audits.miniz_oxide]]
+who = "Igor L Marques <igor.marques@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.8.9 -> 0.9.1"
+notes = "Reviewed delta: enums made non_exhaustive (mild), rejects incomplete Huffman trees (DEFLATE hardening, #190), MSRV 1.60. No unsafe additions."
+
+[[audits.pem]]
+who = "Igor L Marques <igor.marques@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "3.0.6 -> 4.0.0"
+notes = "Reviewed delta: major bump is solely base64 0.22->0.23 in the public API plus MSRV 1.71; no changes to PEM parsing/encoding logic."
+
+[[audits.rcgen]]
+who = "Igor L Marques <igor.marques@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.14.9 -> 0.14.10"
+notes = "Reviewed delta: X.509 spec-compliance bug fixes and stable ML-DSA support in aws-lc-rs (rustls team). Security-positive."
+
 [[audits.rust_xlsxwriter]]
 who = "Igor L Marques <igor.marques@gmail.com>"
 criteria = "safe-to-deploy"
 delta = "0.98.2 -> 0.99.0"
 notes = "Reviewed 0.98.2->0.99.0: XlsxError::TableNameReused renamed to NameReused, added Table/Defined name validation and two name-handling bug fixes (upstream #189). No unsafe/security-relevant changes."
+
+[[audits.tower-http]]
+who = "Igor L Marques <igor.marques@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.7.0 -> 0.7.1"
+notes = "Reviewed delta: compression EOF safety fix (reject non-empty frames after codec EOF), removed Clone from SetMultipleResponseHeader* types, const request-id constructor, fs header tweaks."
+
+[[audits.uuid]]
+who = "Igor L Marques <igor.marques@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "1.24.1 -> 1.26.0"
+notes = "Reviewed delta: additive only - serde::bytes module and ContextV7::with_additional_precision_bits. No breaking changes."

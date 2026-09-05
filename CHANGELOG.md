@@ -11,6 +11,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.309] - 2026-09-02
+
+### Fixed
+
+- **Endpoint: UDP replies now leave from the address the request arrived on.**
+  The echo (9999), STAMP reflector (9997) and UDP throughput (9998) servers
+  bind `0.0.0.0` and answered with a plain `send_to`, so on a multihomed
+  target the kernel chose the reply's source address from its routing table.
+  Home lab, 2026-09-02: a Raspberry Pi with ethernet and wifi on the same
+  subnet — probes sent to the wifi address, echoes came back from the ethernet
+  address. The tester's UDP probes use *connected* sockets, which silently
+  drop datagrams from any other source, so `udp`, `stamp` and `rpm` reported
+  100% loss while `tcp`/`http*`/`http3` against the same host were fine, and
+  nothing in either log said why (`tcpdump` did). Stateful firewalls and NATs
+  drop such replies for the same reason. New `pktinfo_socket.rs` wraps the
+  server sockets with IP_PKTINFO / IP_RECVDSTADDR receive + pinned-source send
+  (via `quinn-udp`, already in the tree for HTTP/3; its QUIC-oriented
+  don't-fragment and GRO settings are switched back off so a large echo still
+  fragments and one receive is one datagram). Falls back to the old behaviour
+  with a warning if the platform setup fails. Linux regression tests reproduce
+  the bug on loopback (`127.0.0.2` vs `127.0.0.1`). The C# endpoint port
+  (`Networker.Endpoint`) has the same `UdpClient` pattern and is NOT changed
+  here — .NET exposes no pinned-source send; follow-up.
+
+- **Tester: "Client network" now describes the interface the probes actually
+  use.** `NetworkContext` took the default-route interface, so on a
+  dual-homed client (ethernet default route, wifi to the lab subnet) the
+  report said `iface=enp3s0 (ethernet) gw=172.16.48.1` while every packet
+  left over `wlo1`. The interface, kind, MTU and VPN verdict now come from a
+  longest-prefix-match route lookup toward the resolved target (Linux
+  `/proc/net/route`, macOS `route -n get <ip>`); `gateway_ip` is the next hop
+  of THAT route and is empty for an on-link target. Default route stays the
+  fallback (IPv6 targets on Linux, Windows). JSON field names are unchanged.
+  The "Client network" log line prints `gw=on-link` instead of `gw=?` for a
+  gateway-less route.
+
+### Notes
+
+- `.markdownlint.json` (new) sets `MD024: siblings_only` — the standard
+  Keep-a-Changelog setting — so the `markdown` lint section stops flagging
+  every `### Fixed` heading in this file (86 of its 99 findings).
+
+---
+## [0.28.308] - 2026-08-27
+
+### Fixed
+
+- **Actions artifact storage was 138x over the allowance.** Measured: **69.2 GB
+  across 4021 artifacts** against the 0.5 GB included, which put the account at
+  100% and into billed usage. 97% of it is release build output:
+
+  | artifact | size | copies |
+  |---|---|---|
+  | `dist-csharp` | 32.6 GB | 276 |
+  | `dist-x86_64-unknown-linux-musl` | 9.7 GB | 402 |
+  | `dist-x86_64-apple-darwin` | 8.5 GB | 406 |
+  | `dist-aarch64-apple-darwin` | 8.1 GB | 407 |
+  | `dist-x86_64-pc-windows-msvc` | 7.9 GB | 406 |
+  | `coverage-report` | 2.1 GB | 1636 |
+
+  Every `dist-*` upload is a **same-run handoff** — `build-*` uploads it, the
+  `release` job downloads it, and nothing reads it again — but none set
+  `retention-days`, so all inherited the repo default of **90 days**. They now
+  set `retention-days: 1`. `coverage-report` drops from 30 days to 7.
+
+- **Release assets now mirror to Azure Blob, in a storage account of their
+  own.** `release.yml` uploads every artifact to
+  `alethedashreleases/releases/v{VERSION}/` after publishing the GitHub
+  release. The account is separate from `alethedashbackups` so release traffic
+  and database backups do not share a blast radius; public blob access is
+  **disabled**, HTTPS-only, TLS 1.2 minimum.
+
+  `GET /api/artifacts/{name}` now **302s to a container-scoped, read-only SAS
+  URL** instead of streaming from GitHub. Three things improve at once: the
+  bytes stop passing through the process that also serves the API and the
+  agent WS hubs; the credential on prod becomes a SAS that can read one
+  container and nothing else, instead of a GitHub token that can read the whole
+  private repo; and artifact distribution stops touching the Actions storage
+  quota entirely. With no `?tag=`, the version defaults to the running control
+  plane's own build — a VM gets the tester from the release that provisioned
+  it, not whatever is newest. The GitHub-token path remains as a fallback.
+
+### Notes
+
+- Self-hosted runners do **not** help here. They eliminate billed *minutes*;
+  artifact *storage* is charged the same wherever the job ran. The two limits
+  are independent, and only the minutes one is addressed by routing jobs to
+  the local CI hosts.
+- This stops the growth. It does not reclaim the 69 GB already stored —
+  existing artifacts keep their original expiry and have to be deleted
+  explicitly.
+
 ## [0.28.307] - 2026-08-26
 
 ### Fixed

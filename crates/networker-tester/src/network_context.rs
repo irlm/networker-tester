@@ -1,7 +1,15 @@
-//! Best-effort collection of the client's SOURCE network context: default
-//! route interface + gateway, interface kind (WiFi vs ethernet vs virtual),
-//! MTU, actual egress IP toward the target, a conservative VPN heuristic and
-//! IPv6 availability.
+//! Best-effort collection of the client's SOURCE network context: the
+//! interface + gateway of the route the OS actually takes toward the target
+//! (default route as the fallback), interface kind (WiFi vs ethernet vs
+//! virtual), MTU, actual egress IP toward the target, a conservative VPN
+//! heuristic and IPv6 availability.
+//!
+//! Why the route TO THE TARGET and not the default route: on a multihomed
+//! client (laptop on ethernet with wifi up, a box with a lab VLAN and an
+//! uplink) the default route is often not the path the probes take. Home
+//! lab, 2026-09-02: the report said `iface=enp3s0 (ethernet) gw=172.16.48.1`
+//! while every packet left over `wlo1` (wifi) to an on-link target — the
+//! interface kind, MTU and VPN verdict were all about the wrong interface.
 //!
 //! Everything here is best-effort: any failure yields `None` fields and never
 //! aborts a run. The collection idiom mirrors `HostInfo::collect_local()` in
@@ -15,14 +23,21 @@
 //! * Windows — gateway + local IP only (interface name/kind/MTU stay `None`).
 
 use crate::metrics::NetworkContext;
-use std::net::{IpAddr, Ipv4Addr, ToSocketAddrs, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs, UdpSocket};
 
 impl NetworkContext {
     /// Collect the source-network context toward `target_host:target_port`.
     ///
     /// Never panics; fields that cannot be determined are left `None`.
     pub fn collect(target_host: &str, target_port: u16) -> Self {
-        let (default_interface, gateway_ip) = detect_default_route();
+        let remote = resolve_target(target_host, target_port);
+        // The route the kernel picks for THIS target; the default route only
+        // when that lookup is unavailable (IPv6 target on Linux, Windows, or
+        // no routing table to read).
+        let (default_interface, gateway_ip) = remote
+            .map(|r| detect_route_to(r.ip()))
+            .filter(|(iface, _)| iface.is_some())
+            .unwrap_or_else(detect_default_route);
         let interface_kind = default_interface
             .as_deref()
             .map(|iface| detect_interface_kind(iface).to_string());
@@ -32,7 +47,7 @@ impl NetworkContext {
             default_interface,
             interface_kind,
             mtu,
-            local_ip: detect_local_ip(target_host, target_port).map(|ip| ip.to_string()),
+            local_ip: remote.and_then(detect_local_ip).map(|ip| ip.to_string()),
             gateway_ip,
             vpn_detected,
             vpn_interface,
@@ -45,14 +60,19 @@ impl NetworkContext {
 // Egress (local) IP toward the target
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Source address of a UDP socket connect()ed to the target. `connect` on a
-/// UDP socket only performs a route lookup — no packets are sent — so this is
-/// the address of the interface the OS would actually egress from for the run.
-fn detect_local_ip(target_host: &str, target_port: u16) -> Option<IpAddr> {
+/// Resolve `target_host:target_port` to the first socket address, the same
+/// way the probes will.
+fn resolve_target(target_host: &str, target_port: u16) -> Option<SocketAddr> {
     // `url::Url::host_str()` keeps brackets around IPv6 literals; strip them
     // so `ToSocketAddrs` can parse the address directly.
     let host = target_host.trim_start_matches('[').trim_end_matches(']');
-    let remote = (host, target_port).to_socket_addrs().ok()?.next()?;
+    (host, target_port).to_socket_addrs().ok()?.next()
+}
+
+/// Source address of a UDP socket connect()ed to the target. `connect` on a
+/// UDP socket only performs a route lookup — no packets are sent — so this is
+/// the address of the interface the OS would actually egress from for the run.
+fn detect_local_ip(remote: SocketAddr) -> Option<IpAddr> {
     let bind_addr = if remote.is_ipv6() {
         "[::]:0"
     } else {
@@ -64,7 +84,97 @@ fn detect_local_ip(target_host: &str, target_port: u16) -> Option<IpAddr> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Default route (interface + gateway)
+// Route toward the target (interface + next-hop gateway)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Returns `(interface, gateway)` for the route the OS takes toward `target`.
+/// The gateway is `None` for an on-link target (same subnet, no next hop).
+/// `(None, None)` when the lookup is not possible on this platform — callers
+/// fall back to [`detect_default_route`].
+fn detect_route_to(target: IpAddr) -> (Option<String>, Option<String>) {
+    #[cfg(target_os = "linux")]
+    {
+        // The main IPv4 table; IPv6 targets fall back to the default route.
+        let IpAddr::V4(v4) = target else {
+            return (None, None);
+        };
+        match std::fs::read_to_string("/proc/net/route") {
+            Ok(content) => parse_proc_net_route_to(&content, v4),
+            Err(_) => (None, None),
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let out = match std::process::Command::new("route")
+            .args(["-n", "get", &target.to_string()])
+            .output()
+        {
+            Ok(out) => out,
+            Err(_) => return (None, None),
+        };
+        parse_route_get_output(&String::from_utf8_lossy(&out.stdout))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = target;
+        (None, None)
+    }
+}
+
+/// Longest-prefix match over Linux `/proc/net/route` for `target`: the up
+/// route whose `Destination/Mask` covers the target with the most specific
+/// mask wins; ties go to the lowest metric (the kernel's main-table lookup,
+/// minus policy routing). Addresses are little-endian hex u32. The gateway is
+/// `None` when the winning route has no next hop (on-link).
+pub fn parse_proc_net_route_to(
+    content: &str,
+    target: Ipv4Addr,
+) -> (Option<String>, Option<String>) {
+    const RTF_UP: u32 = 0x1;
+    let target = u32::from(target);
+    // (prefix_len, metric, iface, gateway)
+    let mut best: Option<(u32, u32, String, Option<String>)> = None;
+    for line in content.lines().skip(1) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 8 {
+            continue;
+        }
+        let (Ok(dest), Ok(gw), Ok(flags), Ok(mask)) = (
+            u32::from_str_radix(fields[1], 16),
+            u32::from_str_radix(fields[2], 16),
+            u32::from_str_radix(fields[3], 16),
+            u32::from_str_radix(fields[7], 16),
+        ) else {
+            continue;
+        };
+        if flags & RTF_UP == 0 {
+            continue;
+        }
+        let (dest, gw, mask) = (dest.swap_bytes(), gw.swap_bytes(), mask.swap_bytes());
+        if target & mask != dest & mask {
+            continue;
+        }
+        let prefix_len = mask.count_ones();
+        let metric: u32 = fields[6].parse().unwrap_or(u32::MAX);
+        let better = match &best {
+            None => true,
+            Some((best_len, best_metric, _, _)) => {
+                prefix_len > *best_len || (prefix_len == *best_len && metric < *best_metric)
+            }
+        };
+        if better {
+            let gateway = (gw != 0).then(|| Ipv4Addr::from(gw).to_string());
+            best = Some((prefix_len, metric, fields[0].to_string(), gateway));
+        }
+    }
+    match best {
+        Some((_, _, iface, gw)) => (Some(iface), gw),
+        None => (None, None),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Default route (interface + gateway) — fallback
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Returns `(default_interface, gateway_ip)`, both best-effort.
@@ -405,6 +515,73 @@ docker0\t000011AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0
         assert_eq!(iface.as_deref(), Some("eth0"));
         // 0102A8C0 little-endian → 192.168.2.1
         assert_eq!(gw.as_deref(), Some("192.168.2.1"));
+    }
+
+    /// Real `/proc/net/route` from a dual-homed dev box: wired default via
+    /// enp3s0 (metric 100), wifi default via wlo1 (metric 600), the lab /23
+    /// on-link over wifi, docker bridges.
+    const DUAL_HOMED_ROUTE_TABLE: &str = "\
+Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT
+enp3s0\t00000000\t013010AC\t0003\t0\t0\t100\t00000000\t0\t0\t0
+wlo1\t00000000\t010A0A0A\t0003\t0\t0\t600\t00000000\t0\t0\t0
+wlo1\t000A0A0A\t00000000\t0001\t0\t0\t600\t00FEFFFF\t0\t0\t0
+wlo1\t010A0A0A\t00000000\t0005\t0\t0\t600\tFFFFFFFF\t0\t0\t0
+enp3s0\t003010AC\t00000000\t0001\t0\t0\t100\t00FFFFFF\t0\t0\t0
+enp3s0\t013010AC\t00000000\t0005\t0\t0\t100\tFFFFFFFF\t0\t0\t0
+docker0\t000011AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0
+tun0\t000014AC\t00000000\t0000\t0\t0\t0\t0000FFFF\t0\t0\t0
+";
+
+    fn v4(s: &str) -> Ipv4Addr {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn route_to_on_link_lab_target_is_the_wifi_interface_without_gateway() {
+        // The 2026-09-02 report bug: default route said enp3s0, packets went
+        // out wlo1 to the on-link 10.10.10.0/23 target.
+        assert_eq!(
+            parse_proc_net_route_to(DUAL_HOMED_ROUTE_TABLE, v4("10.10.10.110")),
+            (Some("wlo1".into()), None)
+        );
+    }
+
+    #[test]
+    fn route_to_internet_target_is_the_lowest_metric_default_with_its_gateway() {
+        assert_eq!(
+            parse_proc_net_route_to(DUAL_HOMED_ROUTE_TABLE, v4("1.1.1.1")),
+            (Some("enp3s0".into()), Some("172.16.48.1".into()))
+        );
+    }
+
+    #[test]
+    fn route_to_prefers_the_most_specific_prefix() {
+        // /32 host route beats the /23 it sits inside; /24 beats the default.
+        assert_eq!(
+            parse_proc_net_route_to(DUAL_HOMED_ROUTE_TABLE, v4("10.10.10.1")).0,
+            Some("wlo1".into())
+        );
+        assert_eq!(
+            parse_proc_net_route_to(DUAL_HOMED_ROUTE_TABLE, v4("172.16.48.7")),
+            (Some("enp3s0".into()), None)
+        );
+        assert_eq!(
+            parse_proc_net_route_to(DUAL_HOMED_ROUTE_TABLE, v4("172.17.5.5")).0,
+            Some("docker0".into())
+        );
+    }
+
+    #[test]
+    fn route_to_ignores_down_routes_and_empty_tables() {
+        // tun0 covers 172.20/16 but is not UP — falls through to the default.
+        assert_eq!(
+            parse_proc_net_route_to(DUAL_HOMED_ROUTE_TABLE, v4("172.20.0.9")).0,
+            Some("enp3s0".into())
+        );
+        assert_eq!(
+            parse_proc_net_route_to("Iface\tDestination\n", v4("10.0.0.1")),
+            (None, None)
+        );
     }
 
     #[test]
