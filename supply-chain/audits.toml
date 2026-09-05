@@ -61,6 +61,12 @@ criteria = "safe-to-deploy"
 delta = "0.14.9 -> 0.14.10"
 notes = "Reviewed delta: X.509 spec-compliance bug fixes and stable ML-DSA support in aws-lc-rs (rustls team). Security-positive."
 
+[[audits.rust_xlsxwriter]]
+who = "Igor L Marques <igor.marques@gmail.com>"
+criteria = "safe-to-deploy"
+delta = "0.98.2 -> 0.99.0"
+notes = "Reviewed 0.98.2->0.99.0: XlsxError::TableNameReused renamed to NameReused, added Table/Defined name validation and two name-handling bug fixes (upstream #189). No unsafe/security-relevant changes."
+
 [[audits.tower-http]]
 who = "Igor L Marques <igor.marques@gmail.com>"
 criteria = "safe-to-deploy"
