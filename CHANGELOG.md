@@ -11,6 +11,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.310] - 2026-09-05
+
+### Fixed
+
+- **Run-execution canary wedged since 2026-08-28 by a leaked runner row**
+  (#890). The canary provisioned its ephemeral runner under the fixed name
+  `soak-canary`, but tester names are `UNIQUE(project_id, name)`. The run on
+  08-27 failed mid-flight and left the row behind, so every night after it the
+  create returned 409, the script aborted in ~11s, and the alert declared "a
+  run did NOT complete end-to-end" — when in fact no run had been launched at
+  all. Nine consecutive nights of prod run-execution coverage were reported as
+  failures of the thing being watched rather than of the watcher. The runner
+  name is now per-run unique (matching the probe config, fixed the same way in
+  the #728 class), leaked `soak-canary*` runners are force-deleted at startup
+  after `CANARY_RUNNER_TTL_HOURS` (default 3) so live VMs stop billing, and a
+  create that returns no id now echoes the server's response instead of a bare
+  "returned no tester id".
+- **Canary alerting could not name the failing step** — `soak-canary.yml`
+  granted `contents: read` + `issues: write` but the alert step lists the run's
+  jobs, which needs `actions: read`. Every comment since 08-28 carried a raw
+  403 body. The fallback was also unsound: `$(cmd || echo 'canary')`
+  concatenates the failed command's stdout with the fallback, which is why the
+  error JSON appeared glued to the word `canary`.
+- **A healthy endurance soak filed a bug against itself** (#896). The artifact
+  storage quota was full, `Upload samples` failed, and `if: failure()` fired
+  the issue-opening step — despite the trend being fine (memory -0.5%, latency
+  0.80x). The upload is now `continue-on-error` and the alert is gated on the
+  soak step's own outcome, so only a real trend failure can raise an issue.
+
+### Changed
+
+- Bounded artifact retention everywhere it was still unbounded: `benchmark`
+  and `microbench-dotnet` results 90d → 14d, the endurance soak TSV 90d → 14d,
+  and CI's `measurement-accuracy-baseline` (which had no `retention-days` at
+  all, so it inherited GitHub's 90d default) → 7d. Every `upload-artifact` in
+  the tree now has an explicit bound.
+
+---
+
 ## [0.28.309] - 2026-09-02
 
 ### Fixed

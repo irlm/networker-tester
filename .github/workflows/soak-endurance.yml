@@ -99,19 +99,28 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # The VERDICT is the soak's output; the TSV is a convenience. Uploading it
+      # must never decide the job's colour — on 2026-08-30 the artifact storage
+      # quota was full, this step failed, and a soak whose trend was healthy
+      # (memory -0.5%, latency 0.80x) filed a bug against itself (issue #896).
       - name: Upload samples
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: soak-endurance-${{ github.run_id }}
           path: soak-endurance.tsv
-          retention-days: 90
+          # A weekly 4-hour TSV is a few KB, but 90d of them is 90d of quota
+          # for data nobody reads after the trend is judged.
+          retention-days: 14
           if-no-files-found: warn
 
       # A trend failure is worth a human's attention but must not spam: one
       # open issue, reused. Same pattern as the daily soak check.
       - name: Open or update an issue on failure
-        if: failure()
+        # Specifically the SOAK's outcome, not the job's: a failed artifact
+        # upload or summary step must not manufacture a trend alert (#896).
+        if: failure() && steps.soak.outcome == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

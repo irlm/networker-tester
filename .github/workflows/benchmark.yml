@@ -251,7 +251,10 @@ jobs:
         with:
           name: benchmark-results-${{ github.run_id }}
           path: benchmarks/results/
-          retention-days: 90
+          # The trend that matters is committed to benchmarks/baselines and
+          # summarised in the job; the raw per-run dump is for debugging the
+          # week it ran. 90d of these is what exhausted the storage quota.
+          retention-days: 14
 
       # ── Optional: upload to dashboard ──────────────────────────────────────
       - name: Upload to dashboard

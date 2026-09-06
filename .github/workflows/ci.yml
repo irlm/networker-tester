@@ -837,6 +837,9 @@ jobs:
         with:
           name: measurement-accuracy-baseline
           path: benchmarks/baselines/measurement-accuracy.json
+          # No retention-days meant GitHub's 90d default on an artifact
+          # produced by every qualifying CI run.
+          retention-days: 7
           if-no-files-found: warn
 
   # ──────────────────────────────────────────────────────────────────────────
