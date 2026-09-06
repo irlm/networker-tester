@@ -11,6 +11,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.313] - 2026-09-05
+
+### Fixed
+
+- **CI capacity decayed to one host because the VM power policy was a one-way
+  door.** `ci-vm-idle-stop` runs on the Proxmox node every 5 minutes and shuts
+  down CI VMs idle for 45 minutes — and *nothing ever started them again*. All
+  five `ci-linux` VMs stopped themselves on 2026-09-05 between 00:57 and 01:15
+  UTC, after which every job queued behind the single always-on containerised
+  host (`ci-turing-1`). Adds `ci-vm-start`, the missing counterpart, with a RAM
+  headroom guard so it cannot overcommit the node.
+
+- **`ci-vm-idle-stop` measured CPU by accident.** `local id="$1"
+  pidf=".../${id}.pid"` expands `${id}` *before* the builtin assigns, so it
+  reads the caller's `id`, not `$1`. It works today only because bash scopes
+  dynamically and `main`'s loop variable happens to share the name — rename it
+  and every VM silently reads 0% CPU, looks permanently idle, and is shut down
+  mid-job. Split into two `local`s so it means what it says. (Latent, not the
+  cause of the outage above.)
+
+- **An operator's environment could not override the config.** Both scripts
+  assigned built-in defaults and *then* sourced `/etc/default/ci-vm-idle-stop`,
+  so `DRY_RUN=1 ci-vm-idle-stop` silently ran for real. Precedence is now
+  built-in default < `/etc/default` < environment.
+
+### Added
+
+- `infra/ci-hosts/proxmox/` now version-controls the whole VM power policy:
+  `ci-vm-idle-stop` (previously hand-installed on the node and tracked
+  nowhere — a node rebuild lost it silently), `ci-vm-start`, the systemd
+  service + timer, a `/etc/default` example, and `install-vm-power.sh` to
+  install the lot idempotently.
+- `setup-ci-hosts.sh` gains `start-linux [N]`, `stop-linux` and
+  `install-power`, so powering the existing fleet is the same entry point that
+  builds it. `add-linux` makes NEW hosts; these drive the ones already there.
+
+---
+
 ## [0.28.310] - 2026-09-05
 
 ### Fixed

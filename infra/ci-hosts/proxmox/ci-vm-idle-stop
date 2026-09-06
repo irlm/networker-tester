@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# ci-vm-idle-stop — gracefully shut down idle CI VMs on this Proxmox host to
+# free RAM. A CI VM is any VM whose name starts with CI_NAME_PREFIX (default
+# "ci-"). "Idle" = host-side CPU use below IDLE_CPU_PCT for IDLE_MINUTES of
+# consecutive checks. A VM is NEVER stopped while its keep-alive file exists:
+#     /run/ci-vm-keep/<vmid>
+# so a CI job holds a VM up with:  mkdir -p /run/ci-vm-keep && touch /run/ci-vm-keep/<vmid>
+# and releases it by removing that file at job end (a reboot clears them all).
+#
+# Config via /etc/default/ci-vm-idle-stop (all optional):
+#   CI_NAME_PREFIX=ci-    IDLE_CPU_PCT=4    IDLE_MINUTES=45    SHUTDOWN_TIMEOUT=120
+#   EXCLUDE_VMIDS="400 401"   DRY_RUN=0
+set -euo pipefail
+
+# `${VAR:-default}` rather than a plain assignment: a bare `IDLE_MINUTES=45`
+# here would clobber the value an operator put in the environment before the
+# capture below ever sees it, so `DRY_RUN=1 ci-vm-idle-stop` silently did
+# nothing of the sort.
+CI_NAME_PREFIX="${CI_NAME_PREFIX:-ci-}"
+IDLE_CPU_PCT="${IDLE_CPU_PCT:-4}"            # below this %CPU counts as idle
+IDLE_MINUTES="${IDLE_MINUTES:-45}"           # idle this long (across runs) before stopping
+SHUTDOWN_TIMEOUT="${SHUTDOWN_TIMEOUT:-120}"  # graceful grace, then give up (never hard-kill)
+EXCLUDE_VMIDS="${EXCLUDE_VMIDS:-}"           # extra VMIDs to never touch
+SAMPLE_SEC="${SAMPLE_SEC:-3}"                # CPU sampling window
+DRY_RUN="${DRY_RUN:-0}"
+STATE_DIR="/run/ci-vm-idle-stop"
+KEEP_DIR="/run/ci-vm-keep"
+# Precedence: built-in default < /etc/default < an explicit environment
+# variable. Sourcing the file would otherwise silently beat `DRY_RUN=1 ci-vm-idle-stop`
+# on the command line, which is exactly how an operator expects to force a
+# one-off run — so remember what the environment set and re-apply it after.
+_env_CI_NAME_PREFIX="${CI_NAME_PREFIX-}"
+_env_IDLE_CPU_PCT="${IDLE_CPU_PCT-}"
+_env_IDLE_MINUTES="${IDLE_MINUTES-}"
+_env_SHUTDOWN_TIMEOUT="${SHUTDOWN_TIMEOUT-}"
+_env_EXCLUDE_VMIDS="${EXCLUDE_VMIDS-}"
+_env_SAMPLE_SEC="${SAMPLE_SEC-}"
+_env_DRY_RUN="${DRY_RUN-}"
+# shellcheck source=/dev/null  # node-local config; never present in the repo
+[ -r /etc/default/ci-vm-idle-stop ] && . /etc/default/ci-vm-idle-stop
+[ -n "${_env_CI_NAME_PREFIX}" ] && CI_NAME_PREFIX="${_env_CI_NAME_PREFIX}"
+[ -n "${_env_IDLE_CPU_PCT}" ] && IDLE_CPU_PCT="${_env_IDLE_CPU_PCT}"
+[ -n "${_env_IDLE_MINUTES}" ] && IDLE_MINUTES="${_env_IDLE_MINUTES}"
+[ -n "${_env_SHUTDOWN_TIMEOUT}" ] && SHUTDOWN_TIMEOUT="${_env_SHUTDOWN_TIMEOUT}"
+[ -n "${_env_EXCLUDE_VMIDS}" ] && EXCLUDE_VMIDS="${_env_EXCLUDE_VMIDS}"
+[ -n "${_env_SAMPLE_SEC}" ] && SAMPLE_SEC="${_env_SAMPLE_SEC}"
+[ -n "${_env_DRY_RUN}" ] && DRY_RUN="${_env_DRY_RUN}"
+
+log() { echo "[ci-vm-idle-stop] $*"; }
+mkdir -p "$STATE_DIR"
+
+# vm_cpu_pct VMID — %CPU of the VM's QEMU process over SAMPLE_SEC (host-side,
+# no guest agent needed). Prints an integer 0-100xN; 0 if not running.
+vm_cpu_pct() {
+  # Two statements on purpose. In `local a="$1" b="${a}..."` the arguments are
+  # expanded BEFORE the builtin assigns, so ${a} is NOT "$1" — it is whatever
+  # `a` already meant in the caller. This happens to work today only because
+  # bash scopes dynamically and main()'s loop variable is also called `id`, so
+  # the callee reads the caller's VMID by coincidence. Rename that loop
+  # variable and every VM silently reads 0% CPU, looks permanently idle, and
+  # gets shut down mid-job. Two `local`s make it mean what it says.
+  local id="$1"
+  local pidf="/run/qemu-server/${id}.pid" pid
+  [ -r "$pidf" ] || { echo 0; return; }
+  pid="$(cat "$pidf")"
+  [ -d "/proc/$pid" ] || { echo 0; return; }
+  local c1 c2
+  c1="$(awk '{print $14+$15}' "/proc/$pid/stat" 2>/dev/null || echo 0)"
+  sleep "$SAMPLE_SEC"
+  c2="$(awk '{print $14+$15}' "/proc/$pid/stat" 2>/dev/null || echo 0)"
+  local hz; hz="$(getconf CLK_TCK)"
+  # %CPU across all vcpus = (delta_ticks / hz) / window * 100
+  awk -v d="$((c2 - c1))" -v hz="$hz" -v w="$SAMPLE_SEC" 'BEGIN{printf "%d", (d/hz)/w*100}'
+}
+
+excluded() { case " $EXCLUDE_VMIDS " in *" $1 "*) return 0;; esac; return 1; }
+
+# List running CI VMIDs by name prefix.
+ci_vmids() {
+  qm list | awk -v p="$CI_NAME_PREFIX" 'NR>1 && $3=="running" && index($2,p)==1 {print $1}'
+}
+
+main() {
+  # Idle *time* is tracked in a per-VM stamp file (first-seen-idle timestamp),
+  # so the timer interval can change without affecting the threshold.
+  local id cpu stamp now idle_since idle_for
+  now="$(date +%s)"
+  for id in $(ci_vmids); do
+    excluded "$id" && { log "VM $id excluded"; continue; }
+    if [ -e "${KEEP_DIR}/${id}" ]; then
+      log "VM $id held by keep-alive — skipping"
+      rm -f "${STATE_DIR}/${id}.idle_since"
+      continue
+    fi
+    cpu="$(vm_cpu_pct "$id")"
+    stamp="${STATE_DIR}/${id}.idle_since"
+    if [ "$cpu" -ge "$IDLE_CPU_PCT" ]; then
+      # busy — reset the idle clock
+      [ -e "$stamp" ] && log "VM $id busy (${cpu}%) — idle clock reset"
+      rm -f "$stamp"
+      continue
+    fi
+    # idle right now
+    if [ ! -e "$stamp" ]; then echo "$now" > "$stamp"; log "VM $id idle (${cpu}%) — starting idle clock"; continue; fi
+    idle_since="$(cat "$stamp")"
+    idle_for=$(( (now - idle_since) / 60 ))
+    if [ "$idle_for" -ge "$IDLE_MINUTES" ]; then
+      if [ "$DRY_RUN" = "1" ]; then
+        log "VM $id idle ${idle_for}min (>= ${IDLE_MINUTES}) — WOULD shut down (dry-run)"
+      else
+        log "VM $id idle ${idle_for}min — graceful shutdown (timeout ${SHUTDOWN_TIMEOUT}s)"
+        qm shutdown "$id" --timeout "$SHUTDOWN_TIMEOUT" --forceStop 0 || log "VM $id shutdown failed/timed out — left running"
+        rm -f "$stamp"
+      fi
+    else
+      log "VM $id idle ${idle_for}/${IDLE_MINUTES}min"
+    fi
+  done
+}
+main "$@"
