@@ -223,6 +223,17 @@ while :; do
     "https://api.github.com/repos/${REPO}/actions/runners/registration-token" | jq -r '.token // empty')"
   unset pat
   if [ -z "$reg" ]; then echo "registration token mint failed — retrying in 60s" >&2; sleep 60; continue; fi
+  # A Listener killed mid-flight (host reboot, operator restart, SIGTERM)
+  # never reaches the cleanup at the bottom of this loop, so it leaves its
+  # registration files behind and config.sh then refuses with "already
+  # configured" FOREVER -- the loop keeps retrying every 30s and the host is
+  # simply absent from CI. That is not hypothetical: ci-macos-1 died this way
+  # on 2026-08-20 (exit code 143) and sat retrying for 16 days while every
+  # darwin build fell back to GitHub-hosted macos-latest at 10x the price.
+  # The registration is ephemeral and --replace handles the server side, so
+  # start every cycle clean. (linux/ and windows/ already do this; macOS was
+  # the one platform the fix was never back-ported to.)
+  rm -f "$RUNNER_DIR/.runner" "$RUNNER_DIR/.credentials" "$RUNNER_DIR/.credentials_rsaparams"
   if ! "$RUNNER_DIR/config.sh" --unattended --ephemeral --replace \
         --url "https://github.com/${REPO}" --token "$reg" \
         --name "$NAME" --labels "$LABELS" --work _work ${GROUP:+--runnergroup "$GROUP"} >/dev/null; then
