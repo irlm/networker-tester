@@ -53,6 +53,10 @@
 #   CANARY_CONFIG_TTL_DAYS days before a leftover `soak-canary*` config is
 #                          reaped at startup (default 7; "0" disables). Only
 #                          the canary's own rows are ever matched.
+#   CANARY_RUNNER_TTL_HOURS hours before a leftover `soak-canary*` RUNNER is
+#                          force-deleted at startup (default 3; "0" disables).
+#                          Each leaked row is a live billing VM. Only the
+#                          canary's own rows are ever matched.
 #   CANARY_KEEP_CONFIGS    "1" → never delete this run's configs, even on green
 #                          (default "0"; failures always keep them)
 #   CANARY_WINDOWS         "1" → PHASE 5: provision ONE Windows Server + IIS
@@ -133,6 +137,36 @@ ACCT=$(api GET "/api/projects/$PID/cloud-accounts" \
   | jq -r '[.[]|select(.provider=="azure" and .status=="active")][0].account_id // empty')
 [ -n "$ACCT" ] || fail "no active azure cloud account in project $PID"
 
+# ── reap canary runners leaked by earlier runs ───────────────────────────────
+# Only ever touches rows this script created: every canary runner is named
+# `soak-canary*`, and the workflow's `concurrency: soak-canary` group forbids
+# two runs overlapping — so any such row already present at startup is garbage
+# from a night that failed before its teardown trap could delete it. Those rows
+# are not merely untidy: each one is a live Azure VM still billing, and under
+# the OLD fixed name a single survivor made every later create collide with
+# UNIQUE(project_id, name) forever (issue #890, five weeks of red).
+#
+# Age-gated so a run can never delete a runner a concurrent human action just
+# made — hours, not minutes, because a canary run takes ~8 min end to end.
+# A row with no readable created_at is SKIPPED rather than reaped: `"" < cutoff`
+# is true, so treating missing age as "old" would force-delete a runner that
+# might have been created seconds ago.
+RUNNER_TTL_HOURS="${CANARY_RUNNER_TTL_HOURS:-3}"
+if [ "$RUNNER_TTL_HOURS" != "0" ]; then
+  RCUTOFF=$(date -u -d "${RUNNER_TTL_HOURS} hours ago" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || date -u -v-"${RUNNER_TTL_HOURS}"H +%Y-%m-%dT%H:%M:%SZ)
+  RREAPED=0
+  for stale in $(api GET "/api/projects/$PID/testers" \
+      | jq -r --arg c "$RCUTOFF" \
+        '[ .[]? | select((.name // "") | startswith("soak-canary"))
+                | select((.created_at // "") != "")
+                | select(.created_at < $c) | .tester_id ] | .[]' 2>/dev/null); do
+    note "reaping leaked canary runner $stale"
+    api DELETE "/api/projects/$PID/testers/${stale}?force=true" >/dev/null 2>&1 && RREAPED=$((RREAPED + 1))
+  done
+  [ "$RREAPED" -gt 0 ] && note "reaped $RREAPED leaked canary runner(s) older than ${RUNNER_TTL_HOURS}h"
+fi
+
 # ── ensure a runner ──────────────────────────────────────────────────────────
 PROVISIONED=""
 APIBENCH_CGS=""  # space-separated apibench comparison-group ids to reap (phase 2)
@@ -143,11 +177,25 @@ RUNNER_ID=$(api GET "/api/projects/$PID/testers" \
 if [ "$REUSE_RUNNER" = "1" ] && [ -n "$RUNNER_ID" ]; then
   note "reusing online idle runner $RUNNER_ID"
 else
-  note "provisioning an ephemeral canary runner (azure/eastus/B1s)…"
-  RUNNER_ID=$(api POST "/api/projects/$PID/testers" \
-    "$(jq -nc --arg a "$ACCT" '{name:"soak-canary",cloud:"azure",region:"eastus",vm_size:"Standard_B1s",cloud_account_id:$a,requested_os:"linux",auto_probe_enabled:true}')" \
-    | jq -r '.tester_id // .id // empty')
-  [ -n "$RUNNER_ID" ] || fail "provision request returned no tester id"
+  # Per-run unique name. This used to be the fixed literal "soak-canary",
+  # which is unsound for exactly the reason the probe config below is
+  # timestamped: tester names are UNIQUE(project_id, name), so ONE leaked row
+  # — a teardown that lost the race, a create whose HTTP call timed out after
+  # the INSERT landed, a VM stuck mid-provision — makes every later create
+  # return 409 forever, with no recovery path. That wedged this canary from
+  # 2026-08-28 (issue #890): the run failed in ~11s, long before it probed
+  # anything, so the alert claimed "a run did NOT complete end-to-end" when in
+  # truth no run was ever launched. The reaper above drains the leaked rows;
+  # a unique name means a leak can never wedge the next night in the first
+  # place.
+  RUNNER_NAME="soak-canary-$(date -u +%Y%m%dT%H%M%SZ)"
+  note "provisioning an ephemeral canary runner ${RUNNER_NAME} (azure/eastus/B1s)…"
+  PROV_BODY=$(api POST "/api/projects/$PID/testers" \
+    "$(jq -nc --arg a "$ACCT" --arg n "$RUNNER_NAME" '{name:$n,cloud:"azure",region:"eastus",vm_size:"Standard_B1s",cloud_account_id:$a,requested_os:"linux",auto_probe_enabled:true}')")
+  RUNNER_ID=$(jq -r '.tester_id // .id // empty' <<<"$PROV_BODY" 2>/dev/null || echo '')
+  # Echo the server's response when it carried no id — "returned no tester id"
+  # on its own cost days of guessing which of a dozen causes it was.
+  [ -n "$RUNNER_ID" ] || fail "provision request returned no tester id; response: $(head -c 400 <<<"$PROV_BODY")"
   PROVISIONED="$RUNNER_ID"
   note "provisioning runner $RUNNER_ID; waiting up to ${PROVISION_TIMEOUT}s for it to come online…"
   deadline=$((SECONDS + PROVISION_TIMEOUT))

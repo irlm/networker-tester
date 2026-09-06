@@ -61,6 +61,7 @@ on:
 permissions:
   contents: read
   issues: write   # failure alerting creates/comments the pinned issue
+  actions: read   # the alert step lists this run's jobs to name the failing step
 
 # Never overlap: an ephemeral runner + real run must finish before the next.
 concurrency:
@@ -96,8 +97,13 @@ jobs:
         run: |
           TITLE='Run-execution canary failing'
           RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          # NB: `$(cmd || echo fallback)` would CONCATENATE cmd's stdout with the
+          # fallback — a 403 error body got glued to "canary" in every comment
+          # from 2026-08-28 on. Capture first, then substitute only if empty.
           FAILED=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
-            --jq '[.jobs[].steps[] | select(.conclusion=="failure") | .name] | join(", ")' 2>/dev/null || echo 'canary')
+            --jq '[.jobs[].steps[] | select(.conclusion=="failure") | .name] | join(", ")' \
+            2>/dev/null) || FAILED=''
+          [ -n "$FAILED" ] || FAILED='(could not list jobs)'
           {
             echo "The prod run-execution canary failed — a run did NOT complete end-to-end."
             echo ""

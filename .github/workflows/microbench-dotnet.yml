@@ -59,4 +59,6 @@ jobs:
         with:
           name: microbench-dotnet-${{ github.run_id }}
           path: BenchmarkDotNet.Artifacts/results/
-          retention-days: 90
+          # BenchmarkDotNet writes a full report set per run; the summary is in
+          # the job. 14d is long enough to compare against last week's run.
+          retention-days: 14
