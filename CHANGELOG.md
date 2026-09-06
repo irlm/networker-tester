@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.311] - 2026-09-05
+
+### Fixed
+
+- **The Azure Blob mirror blocked every deploy, leaving prod two releases
+  behind.** The mirror added in v0.28.308 ran as two steps at the end of the
+  `release` job, which runs on a **self-hosted** CI host — where the `az` CLI
+  is not installed. `azure/login` therefore failed with *"Unable to locate
+  executable file: az"*, and because those steps run AFTER `gh release create`,
+  the release was published and then the job went red. `deploy` is
+  `needs: release` + `if: success()`, so it was skipped every time.
+  v0.28.308 and v0.28.309 were tagged and released but never shipped;
+  laghound.com sat on v0.28.307 while three versions accumulated. The mirror is
+  now its own `mirror` job on a **GitHub-hosted** runner (where `az` is
+  preinstalled), running in parallel with `deploy` off the same `release`
+  dependency — so nothing depends on it and a mirror failure can no longer stop
+  a deploy. It re-downloads the published assets by tag with the job token
+  rather than relying on the release runner's `dist/`.
+
+---
+
 ## [0.28.310] - 2026-09-05
 
 ### Fixed
