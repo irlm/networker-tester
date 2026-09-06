@@ -11,6 +11,9 @@
 #   setup-ci-hosts.sh [setup]            full flow (re-runnable; finished work is skipped)
 #   setup-ci-hosts.sh status             runner table from the API + VM/ssh reachability
 #   setup-ci-hosts.sh add-linux N        clone N more Linux CI hosts
+#   setup-ci-hosts.sh start-linux [N]    power ON stopped Linux CI VMs (RAM-guarded)
+#   setup-ci-hosts.sh stop-linux         run the idle stopper once, now
+#   setup-ci-hosts.sh install-power      (re)install the VM power scripts + timer
 #   setup-ci-hosts.sh destroy            deregister + `qm destroy` every CI host VM (asks first)
 #   setup-ci-hosts.sh verify             list CI hosts, offer the smoke workflow, print next steps
 #   --non-interactive                    answer everything from infra/ci-hosts/ci-hosts.env
@@ -38,7 +41,7 @@ while [ $# -gt 0 ]; do
     --env) ENV_FILE="$2"; shift ;;
     --env=*) ENV_FILE="${1#--env=}" ;;
     -h|--help) sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    setup|status|add-linux|destroy|verify) CMD="$1" ;;
+    setup|status|add-linux|destroy|verify|start-linux|stop-linux|install-power) CMD="$1" ;;
     *) ARGS+=("$1") ;;
   esac
   shift
@@ -551,10 +554,47 @@ cmd_destroy() {
   ok "done"
 }
 
+# ── VM power ────────────────────────────────────────────────────────────────
+# `add-linux` builds NEW hosts; these three drive the ones that already exist.
+# Needed because ci-vm-idle-stop is a one-way door: it stops idle CI VMs to
+# free RAM and, until v0.28.313, nothing ever started them again — so Linux CI
+# capacity decayed to zero and every job queued behind the one always-on
+# containerised host. `start-linux` is the counterpart.
+cmd_install_power() {
+  say "installing the VM power scripts on $PVE_HOST"
+  # Clear the staging dir first: `scp -r src dest` copies src INTO dest when
+  # dest already exists, so a second run lands the files at
+  # /tmp/ci-vm-power/proxmox/ and re-runs the STALE installer beside them —
+  # silently deploying the previous version. Caught doing exactly that.
+  pve "rm -rf /tmp/ci-vm-power" || die "could not clear the staging dir on $PVE_HOST"
+  scp -q "${SSH_OPTS[@]}" -r "$HERE/proxmox" "$PVE_HOST:/tmp/ci-vm-power" \
+    || die "could not copy the power scripts to $PVE_HOST"
+  pve "chmod +x /tmp/ci-vm-power/install-vm-power.sh && /tmp/ci-vm-power/install-vm-power.sh"
+}
+
+cmd_start_linux() {
+  local n="${ARGS[0]:-}"
+  pve "test -x /usr/local/sbin/ci-vm-start" 2>/dev/null \
+    || { warn "ci-vm-start is not installed on $PVE_HOST — running install-power first"; cmd_install_power; }
+  say "starting stopped Linux CI VMs on $PVE_HOST${n:+ (at most $n)}"
+  pve "/usr/local/sbin/ci-vm-start ${n}"
+  say "each VM registers with GitHub once its boot service is up — 'setup-ci-hosts.sh status' to watch"
+}
+
+cmd_stop_linux() {
+  pve "test -x /usr/local/sbin/ci-vm-idle-stop" 2>/dev/null \
+    || die "ci-vm-idle-stop is not installed on $PVE_HOST — run: setup-ci-hosts.sh install-power"
+  say "running the idle stopper once on $PVE_HOST (only VMs past the idle threshold stop)"
+  pve "/usr/local/sbin/ci-vm-idle-stop"
+}
+
 case "$CMD" in
   setup)  step_github; step_proxmox; step_mac; step_windows; step_verify ;;
   status) cmd_status ;;
   add-linux) cmd_add_linux ;;
+  start-linux) cmd_start_linux ;;
+  stop-linux) cmd_stop_linux ;;
+  install-power) cmd_install_power ;;
   destroy) cmd_destroy ;;
   verify) step_github_quiet; step_verify ;;
 esac

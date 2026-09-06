@@ -217,6 +217,44 @@ from the template in ~15 minutes while `auto` routes to hosted.
   pull request even under `CI_HOSTS_MODE=self-hosted`. Keep "Require approval
   for all outside collaborators" on while the repo is public.
 
+## VM power: the fleet turns itself off
+
+`ci-vm-idle-stop` runs on the Proxmox node every 5 minutes and gracefully
+shuts down any CI VM whose host-side CPU stayed under `IDLE_CPU_PCT` for
+`IDLE_MINUTES` (defaults 4% / 45 min). That is deliberate — idle CI VMs are
+pure RAM cost.
+
+**It used to be a one-way door.** Nothing started them again, so Linux CI
+capacity only ever decreased. On 2026-09-05 all five `ci-linux` VMs stopped
+themselves between 00:57 and 01:15 UTC and every job for the next day queued
+behind the one always-on containerised host. `ci-vm-start` is the counterpart
+(v0.28.313); it starts stopped CI VMs newest-first while keeping `RESERVE_MB`
+of host RAM free, so it cannot overcommit the node.
+
+Both scripts, the systemd units and the `/etc/default` example live in
+`infra/ci-hosts/proxmox/` and install with `install-vm-power.sh`. Before that
+they existed only on the node, hand-installed and tracked nowhere — a rebuild
+would have taken the whole policy with it.
+
+```bash
+setup-ci-hosts.sh install-power     # (re)install scripts + timer on the node
+setup-ci-hosts.sh start-linux 3     # power ON up to 3 stopped Linux CI VMs
+setup-ci-hosts.sh stop-linux        # run the stopper once, now
+ssh pve 'DRY_RUN=1 ci-vm-idle-stop'  # preview only
+```
+
+A job can pin a VM up regardless of idleness by touching its keep-alive file,
+which the stopper checks first:
+
+```bash
+# create to pin the VM up; delete to release it
+mkdir -p /run/ci-vm-keep && touch /run/ci-vm-keep/<vmid>
+```
+
+Nothing in this repo writes that file yet — the ephemeral runner keeps a VM
+busy enough that CPU alone has been sufficient — but it is the intended hook
+if a long, mostly-idle job ever needs protecting.
+
 ## Containerised hosts — for a machine that is not dedicated CI
 
 `infra/ci-hosts/container/` runs a CI host inside Docker, for a machine that is
