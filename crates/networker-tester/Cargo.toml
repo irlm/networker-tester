@@ -91,7 +91,7 @@ reqwest  = { version = "0.13", default-features = false, features = ["json", "ru
 #     matching the version axum's ws feature already pulls into the lockfile) ---
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 # --- offline GeoIP enrichment (reader only; user supplies GeoLite2 .mmdb files) ---
-maxminddb = { version = "0.30", default-features = false }
+maxminddb = { version = "0.31", default-features = false }
 
 # --- Windows probe backends: ping (IcmpSendEcho) + pmtud (IP_DONTFRAGMENT)
 #     + tester CPU busy% (GetSystemTimes -> Win32_System_Threading).
