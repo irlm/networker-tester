@@ -1792,7 +1792,7 @@ dependencies = [
  "networker-log",
  "proptest",
  "quinn",
- "quinn-udp",
+ "quinn-udp 0.6.2",
  "rand 0.10.2",
  "rcgen",
  "regex",
@@ -2218,7 +2218,7 @@ dependencies = [
  "futures-io",
  "pin-project-lite",
  "quinn-proto",
- "quinn-udp",
+ "quinn-udp 0.5.15",
  "rustc-hash",
  "rustls 0.23.43",
  "socket2",
@@ -2262,6 +2262,19 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
+ "socket2",
+ "tracing",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "quinn-udp"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ca72c3f2792761ab5fa848490694cbc728c7f659669ed4320c4c79c12150966"
+dependencies = [
+ "cfg_aliases",
+ "libc",
  "socket2",
  "tracing",
  "windows-sys 0.61.2",
