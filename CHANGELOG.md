@@ -27,7 +27,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   control plane. The dashboard's artifacts carry no CPU share or peak memory,
   so the scorecard compares throughput per server core and leaves memory out.
   Opt-in: the link only appears when the dashboard is built with
-  `VITE_INFRA_SCORECARD_URL` set to an http(s) URL (see `dashboard/.env.example`).
+  `VITE_INFRA_SCORECARD_URL` set to an http(s) URL or a same-site path (see
+  `dashboard/.env.example`).
+- **infra-scorecard served at `/scorecard/`.** When the `INFRA_SCORECARD_TOKEN`
+  secret is set (a fine-grained token with read-only Contents on
+  irlm/infra-scorecard), the release job builds infra-scorecard and ships it
+  inside `dashboard-frontend.tar.gz` at `/scorecard/` (no source maps), and
+  bakes the link as the relative `/scorecard/`, so it works on laghound.com
+  and on every self-hosted install; nginx's existing `try_files $uri $uri/`
+  serves it. Without the secret the steps are skipped and the link stays
+  hidden (or points at `vars.INFRA_SCORECARD_URL` when that is set).
 
 ## [0.28.310] - 2026-09-05
 

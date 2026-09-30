@@ -61,4 +61,15 @@ describe('scorecard link', () => {
     vi.stubEnv('VITE_INFRA_SCORECARD_URL', 'https://scorecard.example/');
     expect(scorecardBaseUrl()).toBe('https://scorecard.example');
   });
+
+  it('accepts a path on this site (the release bundles the scorecard at /scorecard/), never a protocol-relative one', () => {
+    vi.stubEnv('VITE_INFRA_SCORECARD_URL', '/scorecard/');
+    expect(scorecardBaseUrl()).toBe('/scorecard/');
+    vi.stubEnv('VITE_INFRA_SCORECARD_URL', '/scorecard');
+    expect(scorecardBaseUrl()).toBe('/scorecard/');
+    vi.stubEnv('VITE_INFRA_SCORECARD_URL', '//evil.example/x');
+    expect(scorecardBaseUrl()).toBeUndefined();
+    const run = { id: 'g', results: [{ language: 'go', environment: {}, network: { rps: 1 } }] };
+    expect(scorecardHref('/scorecard/', run)).toMatch(/^\/scorecard\/#laghound=/);
+  });
 });

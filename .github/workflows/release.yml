@@ -154,6 +154,32 @@ jobs:
         with:
           node-version: 22
 
+      # infra-scorecard (github.com/irlm/infra-scorecard, private) ships inside
+      # the dashboard bundle at /scorecard/, so comparison results can hand a
+      # run to it ("Open in infra-scorecard", #915) on laghound.com and on
+      # every self-hosted install. It needs the INFRA_SCORECARD_TOKEN secret (a
+      # fine-grained token with read-only Contents on that repo); while the
+      # secret is unset these steps are skipped and the link stays hidden.
+      - name: Is infra-scorecard available?
+        id: scorecard
+        env:
+          TOKEN: ${{ secrets.INFRA_SCORECARD_TOKEN }}
+        run: |
+          if [ -n "${TOKEN}" ]; then echo "enabled=true" >> "$GITHUB_OUTPUT"; else echo "enabled=false" >> "$GITHUB_OUTPUT"; echo "::notice::INFRA_SCORECARD_TOKEN unset: the dashboard ships without /scorecard/ and the link stays hidden"; fi
+
+      - name: Check out infra-scorecard
+        if: steps.scorecard.outputs.enabled == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+        with:
+          repository: irlm/infra-scorecard
+          token: ${{ secrets.INFRA_SCORECARD_TOKEN }}
+          path: infra-scorecard
+          persist-credentials: false
+
+      - name: Build infra-scorecard
+        if: steps.scorecard.outputs.enabled == 'true'
+        run: cd infra-scorecard && npm ci --ignore-scripts && npm run web:build
+
       - name: Build dashboard frontend
         # The SDK Endpoints page's reference-app cards (SdkExamplesPanel) light
         # up — "Live on Azure" + Open live app + one-click Use example — only
@@ -168,10 +194,17 @@ jobs:
           VITE_LAGHOUND_CSHARP_DEMO_URL: ${{ vars.LAGHOUND_CSHARP_DEMO_URL }}
           VITE_LAGHOUND_RUST_DEMO_URL: ${{ vars.LAGHOUND_RUST_DEMO_URL }}
           VITE_LAGHOUND_PUBLIC_DEMO_TOKEN: ${{ vars.LAGHOUND_PUBLIC_DEMO_TOKEN }}
-          # "Open in infra-scorecard" on comparison results (#915): hidden while unset.
-          VITE_INFRA_SCORECARD_URL: ${{ vars.INFRA_SCORECARD_URL }}
+          # "Open in infra-scorecard" (#915): the bundled /scorecard/ when it was
+          # built above, else an external URL from the repo variable, else hidden.
+          VITE_INFRA_SCORECARD_URL: ${{ steps.scorecard.outputs.enabled == 'true' && '/scorecard/' || vars.INFRA_SCORECARD_URL }}
         run: |
           cd dashboard && npm ci --ignore-scripts && npm run build
+          if [ -d ../infra-scorecard/web/dist ]; then
+            mkdir -p dist/scorecard
+            cp -R ../infra-scorecard/web/dist/. dist/scorecard/
+            # Source maps stay out of the public bundle.
+            find dist/scorecard -name '*.map' -delete
+          fi
           tar czf "../dist/dashboard-frontend.tar.gz" -C dist .
 
       - name: Upload build artifacts

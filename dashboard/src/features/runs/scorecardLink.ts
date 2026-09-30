@@ -14,9 +14,16 @@ import { normalizeHttpUrl } from '../../lib/url';
 import type { BenchmarkSummary } from '../../api/types';
 import type { CellResult } from './compare';
 
-/** Where infra-scorecard is deployed (build-time `VITE_INFRA_SCORECARD_URL`); undefined hides the button. */
+/**
+ * Where infra-scorecard is deployed (build-time `VITE_INFRA_SCORECARD_URL`):
+ * an absolute http(s) URL, or a path on this site such as `/scorecard/` (the
+ * release bundles it there). Anything else, or nothing, hides the link.
+ */
 export function scorecardBaseUrl(): string | undefined {
-  return normalizeHttpUrl(import.meta.env.VITE_INFRA_SCORECARD_URL);
+  const raw = import.meta.env.VITE_INFRA_SCORECARD_URL?.trim();
+  // Same-site path; `//host` would be protocol-relative, i.e. another site.
+  if (raw && /^\/(?!\/)[A-Za-z0-9._~\-/]*$/.test(raw)) return raw.endsWith('/') ? raw : `${raw}/`;
+  return normalizeHttpUrl(raw);
 }
 
 export interface ScorecardResult {
