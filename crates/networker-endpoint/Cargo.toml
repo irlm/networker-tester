@@ -46,7 +46,7 @@ h3-quinn = { version = "0.0.10", optional = true }
 # --- destination-aware UDP replies (pktinfo_socket.rs) ---
 # Not optional: the echo / STAMP / throughput servers need the per-platform
 # recvmsg+sendmsg plumbing (IP_PKTINFO & co.) regardless of the http3 feature.
-quinn-udp = "0.5"
+quinn-udp = "0.6"
 
 # --- shared workspace ---
 serde.workspace       = true
