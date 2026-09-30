@@ -7,6 +7,7 @@ import { errorMessage } from '../api/client';
 import { stripAnsi } from '../lib/ansi';
 import { Breadcrumb } from '../components/common/Breadcrumb';
 import { Button } from '../components/common/Button';
+import { buttonClassName } from '../components/common/button-styles';
 import { ConfirmDialog } from '../components/common/ConfirmDialog';
 import { PageShell } from '../components/common/PageShell';
 import { StatusBadge } from '../components/common/StatusBadge';
@@ -36,6 +37,7 @@ import {
   type LanguageSection,
 } from '../features/runs/compare';
 import type { RunStatus } from '../api/types';
+import { scorecardBaseUrl, scorecardHref, scorecardRun } from '../features/runs/scorecardLink';
 
 type Pivot = 'environment' | 'language';
 
@@ -174,21 +176,37 @@ function CaseMatrixTable({ projectId, cells }: { projectId: string; cells: CellR
 
 // ── Pivot 1: environment sections ─────────────────────────────────────────────
 
-function EnvironmentSection({ projectId, section }: { projectId: string; section: EnvSection }) {
+function EnvironmentSection({ projectId, groupId, section }: { projectId: string; groupId: string; section: EnvSection }) {
   const groups = useMemo(
     () => boxGroupsFor(section.cells, cellDisplayName),
     [section.cells],
   );
   const fastest = section.cells.find((c) => c.stats.total);
+  // Languages in one environment compare fairly; hand them to infra-scorecard when it is configured.
+  const scorecardBase = scorecardBaseUrl();
+  const scorecard = scorecardBase ? scorecardRun(section.cells, `${groupId.slice(0, 8)} ${section.label}`) : undefined;
 
   return (
     <section className="space-y-3">
-      <h2 className={sectionHeadingClass}>
-        {section.label}
-        <span className="ml-2 text-faint normal-case tracking-normal font-normal">
-          {section.cells.length} cell{section.cells.length !== 1 ? 's' : ''}
-        </span>
-      </h2>
+      <div className="flex items-center gap-3 flex-wrap">
+        <h2 className={sectionHeadingClass}>
+          {section.label}
+          <span className="ml-2 text-faint normal-case tracking-normal font-normal">
+            {section.cells.length} cell{section.cells.length !== 1 ? 's' : ''}
+          </span>
+        </h2>
+        {scorecardBase && scorecard && (
+          <a
+            href={scorecardHref(scorecardBase, scorecard)}
+            target="_blank"
+            rel="noreferrer"
+            className={buttonClassName({ variant: 'secondary', size: 'xs', className: 'ml-auto' })}
+            title="Price these languages on your own estate in infra-scorecard (the results travel in the link, not to a server)"
+          >
+            Open in infra-scorecard ↗
+          </a>
+        )}
+      </div>
 
       {groups.length > 0 && (
         <HorizontalBoxWhiskerChart groups={groups} unit="ms" title="HTTP total duration" />
@@ -597,7 +615,7 @@ export function ComparisonResultsPage() {
           {pivot === 'environment' && (
             <div className="space-y-10">
               {envSections.map((section) => (
-                <EnvironmentSection key={section.key} projectId={projectId} section={section} />
+                <EnvironmentSection key={section.key} projectId={projectId} groupId={gid} section={section} />
               ))}
             </div>
           )}
