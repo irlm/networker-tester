@@ -168,6 +168,8 @@ jobs:
           VITE_LAGHOUND_CSHARP_DEMO_URL: ${{ vars.LAGHOUND_CSHARP_DEMO_URL }}
           VITE_LAGHOUND_RUST_DEMO_URL: ${{ vars.LAGHOUND_RUST_DEMO_URL }}
           VITE_LAGHOUND_PUBLIC_DEMO_TOKEN: ${{ vars.LAGHOUND_PUBLIC_DEMO_TOKEN }}
+          # "Open in infra-scorecard" on comparison results (#915): hidden while unset.
+          VITE_INFRA_SCORECARD_URL: ${{ vars.INFRA_SCORECARD_URL }}
         run: |
           cd dashboard && npm ci --ignore-scripts && npm run build
           tar czf "../dist/dashboard-frontend.tar.gz" -C dist .
