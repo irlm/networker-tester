@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.315] - 2026-09-30
+
+### Added
+
+- **"Open in infra-scorecard" on application-benchmark comparisons.** Each
+  environment section of a comparison group (`/benchmarks/compare/:id`, "By
+  environment") that has results for at least two languages gets a link that
+  opens [infra-scorecard](https://github.com/irlm/infra-scorecard) with those
+  results loaded. infra-scorecard prices what each language/runtime would cost
+  to run a real estate on (servers, licences, migration effort, break-even).
+  The results travel in the URL fragment (`#laghound=<base64url JSON>`: per
+  language the busiest case's rps, p50/p99, server cores and scenario), which
+  the browser never sends to a server, so the scorecard needs no access to the
+  control plane. The dashboard's artifacts carry no CPU share or peak memory,
+  so the scorecard compares throughput per server core and leaves memory out.
+  Opt-in: the link only appears when the dashboard is built with
+  `VITE_INFRA_SCORECARD_URL` set to an http(s) URL (see `dashboard/.env.example`).
+
 ## [0.28.310] - 2026-09-05
 
 ### Fixed
