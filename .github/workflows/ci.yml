@@ -54,14 +54,23 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   changes:
     name: Detect changed areas
-    runs-on: ubuntu-latest
+    # The picker itself must run SOMEWHERE, and it used to be pinned to
+    # ubuntu-latest ("the hop that decides"). That made GitHub-hosted a hard
+    # dependency of every routed workflow: when the account hit 100% of its
+    # 2,000 included minutes on 2026-09-07, hosted jobs stopped starting
+    # entirely ("The job was not started because ... spending limit"), this
+    # job failed in 3 s with zero steps, and every self-hosted job downstream
+    # was skipped. CI was fully down despite eight idle on-prem runners.
+    # Self-hosted minutes are free, so the deciding hop now runs on-prem too.
+    # Escape hatch: set the repo variable CI_PICKER_HOST to a JSON array
+    # (e.g. '["ubuntu-latest"]') to move it back without editing workflows.
+    runs-on: ${{ vars.CI_PICKER_HOST && fromJSON(vars.CI_PICKER_HOST) || fromJSON('["self-hosted","linux","networker-ci"]') }}
     timeout-minutes: 10
     outputs:
       rust: ${{ steps.detect.outputs.rust }}
       frontend: ${{ steps.detect.outputs.frontend }}
       orchestrator: ${{ steps.detect.outputs.orchestrator }}
       # Where the rest of this workflow runs (docs/self-hosted-ci.md).
-      # This job itself stays on ubuntu-latest: it is the hop that decides.
       linux_host: ${{ steps.ci_hosts.outputs.linux }}
       # For jobs that need a real machine (systemd / tc netem) — a
       # containerised CI host has neither. See pick-ci-hosts.

@@ -19,7 +19,12 @@ permissions:
 jobs:
   microbench:
     name: BenchmarkDotNet (exporters + contracts)
-    runs-on: ubuntu-latest
+    # On-prem: scheduled workflows are what exhausted the account's 2,000
+    # included Actions minutes (this one ~80 min/month). Self-hosted minutes are
+    # free. docs/self-hosted-ci.md called routing these a PRECONDITION for
+    # going private; it was never done, and the bill arrived on 2026-09-07.
+    # Escape hatch: repo variable CI_SCHEDULED_HOST (JSON array).
+    runs-on: ${{ vars.CI_SCHEDULED_HOST && fromJSON(vars.CI_SCHEDULED_HOST) || fromJSON('["self-hosted","linux","networker-ci"]') }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5

@@ -36,7 +36,12 @@ concurrency:
 jobs:
   lab:
     name: lab.sh up + validate
-    runs-on: ubuntu-latest
+    # On-prem: scheduled workflows are what exhausted the account's 2,000
+    # included Actions minutes (this one ~100 min/month). Self-hosted minutes are
+    # free. docs/self-hosted-ci.md called routing these a PRECONDITION for
+    # going private; it was never done, and the bill arrived on 2026-09-07.
+    # Escape hatch: repo variable CI_SCHEDULED_HOST (JSON array).
+    runs-on: ${{ vars.CI_SCHEDULED_HOST && fromJSON(vars.CI_SCHEDULED_HOST) || fromJSON('["self-hosted","linux","networker-ci"]') }}
     timeout-minutes: 60
     env:
       TARGETS: ${{ inputs.targets || 'rust,nginx' }}
