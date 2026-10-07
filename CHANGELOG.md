@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.28.314] - 2026-09-07
+## [0.28.316] - 2026-10-07
 
 ### Fixed
 
@@ -44,6 +44,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on them), `release.yml`'s `deploy` (holds the prod secrets), the three
   `test-installer` execution jobs (they install system services as root, and
   the leftovers broke later jobs on a persistent host), and `wiki-setup`.
+
+---
+
+## [0.28.315] - 2026-09-30
+
+### Added
+
+- **"Open in infra-scorecard" on application-benchmark comparisons.** Each
+  environment section of a comparison group (`/benchmarks/compare/:id`, "By
+  environment") that has results for at least two languages gets a link that
+  opens [infra-scorecard](https://github.com/irlm/infra-scorecard) with those
+  results loaded. infra-scorecard prices what each language/runtime would cost
+  to run a real estate on (servers, licences, migration effort, break-even).
+  The results travel in the URL fragment (`#laghound=<base64url JSON>`: per
+  language the busiest case's rps, p50/p99, server cores and scenario), which
+  the browser never sends to a server, so the scorecard needs no access to the
+  control plane. The dashboard's artifacts carry no CPU share or peak memory,
+  so the scorecard compares throughput per server core and leaves memory out.
+  Opt-in: the link only appears when the dashboard is built with
+  `VITE_INFRA_SCORECARD_URL` set to an http(s) URL or a same-site path (see
+  `dashboard/.env.example`).
+- **infra-scorecard served at `/scorecard/`.** When the `INFRA_SCORECARD_TOKEN`
+  secret is set (a fine-grained token with read-only Contents on
+  irlm/infra-scorecard), the release job builds infra-scorecard and ships it
+  inside `dashboard-frontend.tar.gz` at `/scorecard/` (no source maps), and
+  bakes the link as the relative `/scorecard/`, so it works on laghound.com
+  and on every self-hosted install; nginx's existing `try_files $uri $uri/`
+  serves it. Without the secret the steps are skipped and the link stays
+  hidden (or points at `vars.INFRA_SCORECARD_URL` when that is set).
 
 ---
 

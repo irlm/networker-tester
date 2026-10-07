@@ -370,7 +370,7 @@ hosted minutes.
 > account hit 100% of its 2,000 included minutes and GitHub stopped starting
 > hosted jobs at all — *"The job was not started because ... your spending
 > limit needs to be increased"*, zero steps, 3 s. Every workflow in the table
-> is routed on-prem as of v0.28.314.
+> is routed on-prem as of v0.28.316.
 
 ### The picker was a hosted single point of failure
 
