@@ -24,7 +24,10 @@ permissions:
 
 jobs:
   sync:
-    runs-on: ubuntu-latest
+    # On-prem: a `gh api` call needs no hosted VM, and while hosted runners
+    # are blocked this is the difference between the installer Gist tracking
+    # main and going stale. Escape hatch: repo variable CI_SCHEDULED_HOST.
+    runs-on: ${{ vars.CI_SCHEDULED_HOST && fromJSON(vars.CI_SCHEDULED_HOST) || fromJSON('["self-hosted","linux","networker-ci"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
 

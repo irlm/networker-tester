@@ -290,3 +290,35 @@ describe('ComparisonResultsPage', () => {
     expect(mocks.deleteMutate).toHaveBeenCalledWith(GROUP_ID, expect.anything());
   });
 });
+
+describe('ComparisonResultsPage: Open in infra-scorecard', () => {
+  const art = (rps: number) =>
+    ({
+      environment: { server_info: { os: 'linux', arch: 'x86_64', cpu_cores: 2 } },
+      methodology: { scenario: 'warm' },
+      summaries: [{ case_id: 'c', rps, latency_p50_ms: 2, latency_p99_ms: 9 }],
+    }) as unknown as BenchmarkArtifact;
+
+  beforeEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('offers each environment with two languages to infra-scorecard when it is configured', () => {
+    vi.stubEnv('VITE_INFRA_SCORECARD_URL', 'https://scorecard.example');
+    mockQueries({ artifacts: { 'run-go-nginx': art(5000), 'run-py-nginx': art(900) } });
+    renderPage();
+    const links = screen.getAllByRole('link', { name: /Open in infra-scorecard/ });
+    // Only the nginx environment has results for two languages.
+    expect(links).toHaveLength(1);
+    expect(links[0]?.getAttribute('href')).toMatch(/^https:\/\/scorecard\.example#laghound=[A-Za-z0-9_-]+$/);
+    expect(links[0]?.getAttribute('target')).toBe('_blank');
+    expect(links[0]?.getAttribute('rel')).toBe('noreferrer');
+  });
+
+  it('shows no link when infra-scorecard is not configured', () => {
+    vi.stubEnv('VITE_INFRA_SCORECARD_URL', '');
+    mockQueries({ artifacts: { 'run-go-nginx': art(5000), 'run-py-nginx': art(900) } });
+    renderPage();
+    expect(screen.queryByRole('link', { name: /Open in infra-scorecard/ })).toBeNull();
+  });
+});

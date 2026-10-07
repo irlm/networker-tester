@@ -1770,7 +1770,7 @@ checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
 
 [[package]]
 name = "networker-endpoint"
-version = "0.28.313"
+version = "0.28.319"
 dependencies = [
  "anyhow",
  "axum",
@@ -1811,7 +1811,7 @@ dependencies = [
 
 [[package]]
 name = "networker-log"
-version = "0.28.313"
+version = "0.28.319"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1827,7 +1827,7 @@ dependencies = [
 
 [[package]]
 name = "networker-tester"
-version = "0.28.313"
+version = "0.28.319"
 dependencies = [
  "anyhow",
  "async-trait",

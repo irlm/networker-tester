@@ -27,7 +27,12 @@ permissions:
 jobs:
   soak:
     name: Soak checklist
-    runs-on: ubuntu-latest
+    # On-prem: scheduled workflows are what exhausted the account's 2,000
+    # included Actions minutes (this one ~240 min/month). Self-hosted minutes are
+    # free. docs/self-hosted-ci.md called routing these a PRECONDITION for
+    # going private; it was never done, and the bill arrived on 2026-09-07.
+    # Escape hatch: repo variable CI_SCHEDULED_HOST (JSON array).
+    runs-on: ${{ vars.CI_SCHEDULED_HOST && fromJSON(vars.CI_SCHEDULED_HOST) || fromJSON('["self-hosted","linux","networker-ci"]') }}
     steps:
       - name: Public health (200)
         run: |
@@ -49,7 +54,7 @@ jobs:
           [ "$FINAL" = "200" ]
 
       - name: Azure Login
-        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v2
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 

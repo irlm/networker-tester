@@ -403,6 +403,39 @@ uptime monitor in particular belongs on a self-hosted Linux host or on the
 independent monitoring plane (`docs/monitoring-plane-design.md`), not on
 hosted minutes.
 
+> **This precondition was not met, and the bill arrived.** The repo went
+> private with all of the above still on hosted runners; on 2026-09-07 the
+> account hit 100% of its 2,000 included minutes and GitHub stopped starting
+> hosted jobs at all — *"The job was not started because ... your spending
+> limit needs to be increased"*, zero steps, 3 s. Every workflow in the table
+> is routed on-prem as of v0.28.316.
+
+### The picker was a hosted single point of failure
+
+Worse than the bill: the routing itself depended on hosted runners. Every
+routed workflow starts with a picker job (`Detect changed areas` /
+`Pick CI hosts`) that was pinned to `ubuntu-latest` — "the hop that decides".
+When hosted stopped starting, the picker failed and every self-hosted job
+downstream was skipped. **CI was completely down while eight on-prem runners
+sat idle.** The picker now runs on-prem too (`CI_PICKER_HOST` overrides).
+
+Take the general lesson: a fallback path must not route through the thing it
+is a fallback for.
+
+### What legitimately stays hosted
+
+- `ci-hosts-watchdog` → `sweep` — it is what rescues the CI hosts, so it
+  must not depend on them.
+- `release.yml` → `deploy` — holds the prod secrets (see § Security model).
+- `test-installer` → `stack-exec`, `linux-bench-exec`, `windows-exec` — they
+  install system services as root, and the leftovers broke later jobs on a
+  persistent host.
+- `wiki-setup` → `init-wiki` — manual, once.
+
+These stay blocked while the allowance is exhausted — so **prod deploys and
+installer execution tests cannot run until it resets or the spending limit is
+raised**. Everything else runs on-prem for free.
+
 ## Windows licensing
 
 - **Windows Server 2025 Evaluation** is what `windows-latest` runs, so it is
