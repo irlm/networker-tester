@@ -11,6 +11,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.28.318] - 2026-10-07
+
+### Fixed
+
+- **`ci-macos-1` was absent from CI for 16 days on a stale registration file.**
+  The macOS ephemeral loop cleared `.runner` / `.credentials` only **after**
+  `run.sh` returned. The Listener took a SIGTERM mid-flight on 2026-08-20
+  (`Exiting with unknown error code: 143`), never reached that cleanup, and
+  `config.sh` then refused with *"Cannot configure the runner because it is
+  already configured"* — retrying every 30 s ever since. The Mac was up the
+  whole time (16 days' uptime, on the tailnet, answering ssh, LaunchDaemon
+  `state = running`), which is why it never looked broken. Because the runner
+  is `--ephemeral`, a runner that cannot register is **absent** from the API
+  list rather than `offline`, so it did not show up as a down host either.
+  `linux/` and `windows/` already cleared those files *before* `config.sh`,
+  with a comment describing this exact failure; macOS was the one platform the
+  fix was never back-ported to. Now fixed there too.
+
+  Cost: every `x86_64-apple-darwin` / `aarch64-apple-darwin` build since
+  2026-08-20 fell back to GitHub-hosted `macos-latest`, billed at ~10x the
+  Linux minute rate — on a private repo, against the minute allowance.
+
+### Documentation
+
+- `docs/self-hosted-ci.md` § "The Mac and reboots" claimed a missing Mac means
+  the LaunchAgent never started after a reboot. That is one cause; this outage
+  was a different one on a Mac that was already `--daemon` and had not
+  rebooted. Added the stale-registration failure mode, how to tell them apart
+  (`loop.err` says "already configured"), and the recovery.
+
 ## [0.28.317] - 2026-10-07
 
 ### Fixed
@@ -29,6 +59,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dependency — so nothing depends on it and a mirror failure can no longer stop
   a deploy. It re-downloads the published assets by tag with the job token
   rather than relying on the release runner's `dist/`.
+
+---
 
 ## [0.28.316] - 2026-10-07
 
