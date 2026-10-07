@@ -490,7 +490,7 @@ jobs:
       #     nothing else, anywhere.
       # The container has public access DISABLED -- reads are SAS-only.
       - name: Azure Login (release mirror)
-        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v2
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
@@ -541,7 +541,7 @@ jobs:
           ref: ${{ env.RELEASE_TAG }}
 
       - name: Azure Login
-        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v2
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
