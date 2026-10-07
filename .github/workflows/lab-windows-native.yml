@@ -61,7 +61,12 @@ concurrency:
 jobs:
   lab:
     name: lab-native.ps1 build + up + validate (windows-latest)
-    runs-on: windows-latest
+    # On-prem: scheduled workflows are what exhausted the account's 2,000
+    # included Actions minutes (this one ~320 min/month). Self-hosted minutes are
+    # free. docs/self-hosted-ci.md called routing these a PRECONDITION for
+    # going private; it was never done, and the bill arrived on 2026-09-07.
+    # Escape hatch: repo variable CI_SCHEDULED_WINDOWS_HOST (JSON array).
+    runs-on: ${{ vars.CI_SCHEDULED_WINDOWS_HOST && fromJSON(vars.CI_SCHEDULED_WINDOWS_HOST) || fromJSON('["self-hosted","windows","networker-ci"]') }}
     timeout-minutes: 75
     defaults:
       run:

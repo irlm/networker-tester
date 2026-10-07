@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.28.312] - 2026-09-05
+## [0.28.318] - 2026-10-07
 
 ### Fixed
 
@@ -40,6 +40,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was a different one on a Mac that was already `--daemon` and had not
   rebooted. Added the stale-registration failure mode, how to tell them apart
   (`loop.err` says "already configured"), and the recovery.
+
+## [0.28.316] - 2026-10-07
+
+### Fixed
+
+- **CI was fully down despite eight idle on-prem runners, because the job that
+  routes to them was itself pinned to GitHub-hosted.** The account hit 100% of
+  its 2,000 included Actions minutes on 2026-09-07 and hosted jobs stopped
+  starting at all — *"The job was not started because recent account payments
+  have failed or your spending limit needs to be increased"*, zero steps, 3
+  seconds. Every routed workflow begins with a picker job (`Detect changed
+  areas` / `Pick CI hosts`) that was deliberately pinned to `ubuntu-latest`
+  ("the hop that decides"), so the picker failed and every self-hosted job
+  downstream was skipped. GitHub-hosted was a hard dependency of the entire
+  self-hosted design. The picker now runs on-prem as well, with the repo
+  variable `CI_PICKER_HOST` as an escape hatch.
+
+### Changed
+
+- **Moved the scheduled workflows on-prem** — the precondition
+  `docs/self-hosted-ci.md` set for going private, which was never done and is
+  what exhausted the allowance. `uptime-monitor` (every 10 min, ~4,400
+  min/month on its own), `soak-canary`, `soak-endurance`, `mutation`,
+  `benchmark`, `soak-check`, `lab-smoke`, `microbench-dotnet`,
+  `release-gap-check`, `lab-windows-native` and `sync-gist` now route to
+  self-hosted, where minutes are free. Escape hatches: `CI_SCHEDULED_HOST` and
+  `CI_SCHEDULED_WINDOWS_HOST`.
+
+  Six jobs stay GitHub-hosted **on purpose**, and remain blocked until the
+  allowance resets or the spending limit is raised:
+  `ci-hosts-watchdog` (it is what rescues the CI hosts, so it must not depend
+  on them), `release.yml`'s `deploy` (holds the prod secrets), the three
+  `test-installer` execution jobs (they install system services as root, and
+  the leftovers broke later jobs on a persistent host), and `wiki-setup`.
+
+---
+
+## [0.28.315] - 2026-09-30
+
+### Added
+
+- **"Open in infra-scorecard" on application-benchmark comparisons.** Each
+  environment section of a comparison group (`/benchmarks/compare/:id`, "By
+  environment") that has results for at least two languages gets a link that
+  opens [infra-scorecard](https://github.com/irlm/infra-scorecard) with those
+  results loaded. infra-scorecard prices what each language/runtime would cost
+  to run a real estate on (servers, licences, migration effort, break-even).
+  The results travel in the URL fragment (`#laghound=<base64url JSON>`: per
+  language the busiest case's rps, p50/p99, server cores and scenario), which
+  the browser never sends to a server, so the scorecard needs no access to the
+  control plane. The dashboard's artifacts carry no CPU share or peak memory,
+  so the scorecard compares throughput per server core and leaves memory out.
+  Opt-in: the link only appears when the dashboard is built with
+  `VITE_INFRA_SCORECARD_URL` set to an http(s) URL or a same-site path (see
+  `dashboard/.env.example`).
+- **infra-scorecard served at `/scorecard/`.** When the `INFRA_SCORECARD_TOKEN`
+  secret is set (a fine-grained token with read-only Contents on
+  irlm/infra-scorecard), the release job builds infra-scorecard and ships it
+  inside `dashboard-frontend.tar.gz` at `/scorecard/` (no source maps), and
+  bakes the link as the relative `/scorecard/`, so it works on laghound.com
+  and on every self-hosted install; nginx's existing `try_files $uri $uri/`
+  serves it. Without the secret the steps are skipped and the link stays
+  hidden (or points at `vars.INFRA_SCORECARD_URL` when that is set).
+
+---
 
 ---
 
