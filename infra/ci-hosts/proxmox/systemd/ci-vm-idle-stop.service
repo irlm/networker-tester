@@ -1,0 +1,7 @@
+[Unit]
+Description=Shut down idle CI VMs to free host RAM
+After=pve-guests.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ci-vm-idle-stop

@@ -1,0 +1,11 @@
+# /etc/default/ci-vm-idle-stop — settings for BOTH ci-vm-idle-stop and
+# ci-vm-start. See each script's header for the full list.
+CI_NAME_PREFIX=ci-
+IDLE_CPU_PCT=4
+IDLE_MINUTES=45
+SHUTDOWN_TIMEOUT=120
+# VMIDs neither script ever touches.
+EXCLUDE_VMIDS="400 401"
+DRY_RUN=0
+# ci-vm-start only: host RAM (MiB) to leave free when starting VMs.
+RESERVE_MB=4096
