@@ -481,14 +481,47 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           NOTES: ${{ steps.notes.outputs.notes }}
 
-      # Mirror the same assets to Azure Blob. Two reasons, both load-bearing:
-      #   * GitHub Actions ARTIFACT storage is 0.5 GB and these builds blew
-      #     through it; blob storage is pennies and is not that quota.
-      #   * a PRIVATE repo serves release assets only through the API by id,
-      #     so every consumer needed a GitHub token. A container-scoped
-      #     read-only SAS replaces that with a credential that can read
-      #     nothing else, anywhere.
-      # The container has public access DISABLED -- reads are SAS-only.
+  # ── Mirror release assets to Azure Blob ──────────────────────────────────
+  # Two reasons this mirror exists, both load-bearing:
+  #   * GitHub Actions ARTIFACT storage is 0.5 GB and these builds blew
+  #     through it; blob storage is pennies and is not that quota.
+  #   * a PRIVATE repo serves release assets only through the API by id, so
+  #     every consumer needed a GitHub token. A container-scoped read-only SAS
+  #     replaces that with a credential that can read nothing else, anywhere.
+  # The container has public access DISABLED -- reads are SAS-only.
+  #
+  # WHY ITS OWN JOB, on a GITHUB-HOSTED runner: it started life as two steps
+  # at the end of `release`, which runs on a SELF-HOSTED host where `az` is not
+  # installed. `azure/login` then failed with "Unable to locate executable file:
+  # az", which failed the whole `release` job AFTER the GitHub release had
+  # already been created -- and `deploy` is `needs: release`, so it was skipped.
+  # v0.28.308 and v0.28.309 were tagged and released but never reached prod,
+  # which sat on v0.28.307 for two releases. A convenience mirror must never be
+  # able to block the deploy, so it now runs after `release`, in parallel with
+  # `deploy`, and nothing depends on it.
+  mirror:
+    name: Mirror assets to Azure Blob
+    needs: release
+    runs-on: ubuntu-latest      # hosted: `az` is preinstalled here, not on the CI hosts
+    timeout-minutes: 15
+    if: success()
+    permissions:
+      contents: read            # only to re-download the assets it mirrors
+
+    steps:
+      # The assets live on the release `release` just published rather than on
+      # this runner, so fetch them back by tag. Works on a private repo with
+      # the job token.
+      - name: Download the published release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh release download "${RELEASE_TAG}" --dir dist --clobber
+          echo "downloaded $(find dist -type f | wc -l) asset(s)"
+
       - name: Azure Login (release mirror)
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v2
         with:
@@ -509,7 +542,7 @@ jobs:
             --account-name "$ACCOUNT" --account-key "$KEY" \
             --destination "$CONTAINER" --destination-path "v${VERSION}" \
             --source dist/ --overwrite true --output none
-          echo "Mirrored $(ls dist/ | wc -l) assets to ${ACCOUNT}/${CONTAINER}/v${VERSION}"
+          echo "Mirrored $(find dist -type f | wc -l) assets to ${ACCOUNT}/${CONTAINER}/v${VERSION}"
 
   # ── Deploy to the Azure VM (laghound.com; alethedash.com bridge) ─────────
   # Post-cutover deploy: swaps the C# control plane (alethedash-cs), the Rust

@@ -484,6 +484,39 @@ boot, runs as the invoking user, and needs one sudo at install time. The
 installer refuses to leave both registered — two loops would fight over the
 same runner name, each `--replace`-ing the other.
 
+### A daemon-mode Mac can still go missing: stale registration files
+
+Converting to `--daemon` fixes *reboots*, not everything. The ephemeral loop
+registers with `config.sh` and only clears `.runner` / `.credentials` **after**
+`run.sh` returns. A Listener killed mid-flight never reaches that cleanup, and
+`config.sh` then refuses with *"Cannot configure the runner because it is
+already configured"* — every 30 s, forever. The host is not `offline` in the
+API; an ephemeral runner that never registers is **absent from the list
+entirely** (`total_count` simply does not include it), which is a very
+different thing to look for.
+
+Seen for real: `ci-macos-1` took `Exiting with unknown error code: 143`
+(SIGTERM) at 2026-08-20 23:32Z and retried for **16 days**, up the whole time,
+on the tailnet, answering ssh, with the LaunchDaemon `state = running`. Every
+darwin build in that window fell back to GitHub-hosted `macos-latest` at ~10x
+the Linux minute rate. `linux/` and `windows/` had already been fixed to clear
+those files *before* `config.sh`; macOS had not (fixed v0.28.312).
+
+Diagnosing it:
+
+```bash
+# "state = running" is NOT enough on its own
+launchctl print system/com.networker.ci-host | head
+# "already configured" here means exactly this bug
+tail -5 ~/ci-host/logs/loop.err
+# a stale file, dated at the moment of the kill
+ls -la ~/ci-host/actions-runner/.runner
+```
+
+Recovery on a host running the old loop: delete `.runner`, `.credentials` and
+`.credentials_rsaparams` in `~/ci-host/actions-runner`; the next 30 s retry
+registers. The loop deletes exactly those files itself on every normal cycle.
+
 To convert a Mac that already has the agent:
 
 ```bash
