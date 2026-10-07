@@ -1061,15 +1061,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           # Keep in lock-step with branch protection (CLAUDE.md § Git Workflow).
+          # "<check name>|<workflow file>". The workflow is consulted only when
+          # the check is ABSENT: a path-filtered workflow that never triggered
+          # for this change cannot produce its check, and that is not a failure.
+          # Treating it as one is why nothing was tagged between v0.28.310 and
+          # v0.28.316 — rust-audit.yml does not run on a docs/frontend PR, so
+          # "cargo audit (RUSTSEC advisories)" was absent and every merge was
+          # refused. A check missing while its workflow DID run is still fatal.
           REQUIRED_CHECKS: |
-            Test (ubuntu-latest)
-            Test (windows-latest)
-            Detect changed areas
-            Build & audit (C#)
-            bats (installer unit tests)
-            shellcheck
-            cargo audit (RUSTSEC advisories)
-            Orchestrator lint & test
+            Test (ubuntu-latest)|ci.yml
+            Test (windows-latest)|ci.yml
+            Detect changed areas|ci.yml
+            Build & audit (C#)|dotnet.yml
+            bats (installer unit tests)|test-installer.yml
+            shellcheck|test-installer.yml
+            cargo audit (RUSTSEC advisories)|rust-audit.yml
+            Orchestrator lint & test|ci.yml
         run: |
           set -euo pipefail
           subject="$(git log -1 --format=%s "${GITHUB_SHA}")"
@@ -1105,12 +1112,26 @@ jobs:
           echo "check-runs on ${head}:"
           jq -r '.[] | "  \(.name)\t\(.status)\t\(.conclusion // "-")"' <<<"${runs}"
 
+          # Which workflows produced ANY run for this head. A path-filtered
+          # workflow that did not trigger is absent here, which is how an
+          # inapplicable required check is told apart from a lost one.
+          ran_workflows="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${head}&per_page=100" --paginate \
+            --jq '.workflow_runs[].path' | sed 's|^.*/||' | sort -u)"
+          echo "workflows that ran on ${head}:"
+          printf '%s\n' "${ran_workflows}" | sed 's/^/  /'
+
           failed=0
-          while IFS= read -r name; do
-            [ -n "${name}" ] || continue
+          while IFS= read -r spec; do
+            [ -n "${spec}" ] || continue
+            name="${spec%%|*}"
+            wf="${spec##*|}"
             entry="$(jq -c --arg n "${name}" '.[] | select(.name == $n)' <<<"${runs}")"
             if [ -z "${entry}" ]; then
-              echo "::error::Required check '${name}' never ran on PR #${pr} head ${head}."
+              if ! printf '%s\n' "${ran_workflows}" | grep -qxF "${wf}"; then
+                echo "  n/a  ${name} (${wf} did not trigger for this change)"
+                continue
+              fi
+              echo "::error::Required check '${name}' never ran on PR #${pr} head ${head}, although ${wf} did trigger for it."
               failed=1; continue
             fi
             status="$(jq -r '.status' <<<"${entry}")"
