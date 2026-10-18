@@ -113,13 +113,13 @@ jobs:
 
       - name: Setup Node.js
         if: contains(steps.langs.outputs.languages, 'nodejs') || contains(steps.langs.outputs.languages, 'node')
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
 
       - name: Setup Java
         if: contains(steps.langs.outputs.languages, 'java')
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v4
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v4
         with:
           distribution: "temurin"
           java-version: "21"
@@ -142,7 +142,7 @@ jobs:
 
       - name: Setup Ruby
         if: contains(steps.langs.outputs.languages, 'ruby')
-        uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1
+        uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1
         with:
           ruby-version: "3.3"
 
@@ -252,7 +252,7 @@ jobs:
 
       - name: Upload results artifact
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: benchmark-results-${{ github.run_id }}
           path: benchmarks/results/
