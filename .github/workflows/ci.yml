@@ -303,7 +303,7 @@ jobs:
       # section was failing on pristine main (12 TS18046/TS2571) with nobody
       # to see it. A baseline that only runs on some paths is not a baseline —
       # so it runs here, unconditionally, like json/version/workflows.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           cache: 'npm'
@@ -337,7 +337,7 @@ jobs:
       # compilation-unit cache there.
       - name: Cache cargo
         if: runner.environment == 'github-hosted'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.1
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.1
         with:
           key: lint
           cache-on-failure: "true"
@@ -383,7 +383,7 @@ jobs:
       # compilation-unit cache there.
       - name: Cache cargo
         if: runner.environment == 'github-hosted'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.1
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.1
         with:
           key: musl-check
           cache-on-failure: "true"
@@ -435,7 +435,7 @@ jobs:
       # compilation-unit cache there.
       - name: Cache cargo
         if: runner.environment == 'github-hosted'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.1
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.1
         with:
           key: cargo-vet
           cache-on-failure: "true"
@@ -482,7 +482,7 @@ jobs:
       # compilation-unit cache there.
       - name: Cache cargo
         if: runner.environment == 'github-hosted'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.1
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.1
         with:
           key: orchestrator
           workspaces: benchmarks/orchestrator
@@ -549,7 +549,7 @@ jobs:
       # compilation-unit cache there.
       - name: Cache cargo
         if: runner.environment == 'github-hosted'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.1
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.1
         with:
           key: ubuntu-test
           cache-on-failure: "true"
@@ -640,7 +640,7 @@ jobs:
       # compilation-unit cache there.
       - name: Cache cargo
         if: runner.environment == 'github-hosted'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.1
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.1
         with:
           key: windows-test
           cache-on-failure: "true"
@@ -688,7 +688,7 @@ jobs:
       # compilation-unit cache there.
       - name: Cache cargo
         if: runner.environment == 'github-hosted'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.1
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.1
         with:
           key: macos-test
           cache-on-failure: "true"
@@ -715,7 +715,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           cache: 'npm'
@@ -794,7 +794,7 @@ jobs:
 
       - name: Upload Playwright report
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-report-${{ github.run_id }}
           path: dashboard/playwright-report/
@@ -826,7 +826,7 @@ jobs:
       # compilation-unit cache there.
       - name: Cache cargo
         if: runner.environment == 'github-hosted'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.1
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.1
 
       - name: Build tester + endpoint
         run: cargo build -p networker-tester -p networker-endpoint
@@ -842,7 +842,7 @@ jobs:
 
       - name: Upload the recorded baseline
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: measurement-accuracy-baseline
           path: benchmarks/baselines/measurement-accuracy.json
@@ -901,7 +901,7 @@ jobs:
       # compilation-unit cache there.
       - name: Cache cargo
         if: runner.environment == 'github-hosted'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.1
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.1
         with:
           key: ubuntu-coverage
           cache-on-failure: "true"
@@ -937,7 +937,7 @@ jobs:
             --ignore-filename-regex 'main\.rs'
 
       - name: Upload coverage report
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-report
           path: |
@@ -979,7 +979,7 @@ jobs:
       # compilation-unit cache there.
       - name: Cache cargo
         if: runner.environment == 'github-hosted'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.1
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.1
         with:
           key: sql-integration
           cache-on-failure: "true"
@@ -1021,7 +1021,7 @@ jobs:
       # compilation-unit cache there.
       - name: Cache cargo
         if: runner.environment == 'github-hosted'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.1
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.1
         with:
           key: postgres-integration
           cache-on-failure: "true"
